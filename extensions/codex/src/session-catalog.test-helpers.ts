@@ -66,7 +66,7 @@ import {
   runCatalogListInline,
 } from "./session-catalog-list-operation.js";
 import { readCodexSessionTranscript as readCodexSessionTranscriptRuntime } from "./session-catalog-listing.js";
-export { catalogError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
+export { CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 export {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
@@ -124,8 +124,10 @@ type ControlFactoryParams = Omit<
   "resolveRuntimeOptions"
 >;
 
-function createControlFactory(params: ControlFactoryParams) {
+function createControlFactory(params: Partial<ControlFactoryParams> = {}) {
   const factory = catalog.createCodexSessionCatalogControl({
+    getPluginConfig: () => ({ supervision: { enabled: true } }),
+    getRuntimeConfig: () => config,
     ...params,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
   });
@@ -145,10 +147,10 @@ function createCodexCatalogHomeResolver(
   });
 }
 
-export function createCodexSessionCatalogControl(params: ControlFactoryParams) {
-  const config = params.getRuntimeConfig() ?? {};
+export function createCodexSessionCatalogControl(params: Partial<ControlFactoryParams> = {}) {
+  const runtimeConfig = params.getRuntimeConfig?.() ?? config;
   return createControlFactory(params).forRequest(
-    resolveSessionAgentIdsStrict({ config }).sessionAgentId,
+    resolveSessionAgentIdsStrict({ config: runtimeConfig }).sessionAgentId,
   );
 }
 
@@ -445,6 +447,31 @@ export function supervisionSessionKey(threadId: string, sourceHomeId?: string): 
   return `agent:main:${supervisionSessionInputKey(threadId, sourceHomeId)}`;
 }
 
+export function supervisionBinding(
+  sourceThreadId: string,
+  pending = false,
+  patch: Partial<CodexAppServerThreadBinding> = {},
+): CodexAppServerThreadBinding {
+  return {
+    threadId: pending ? sourceThreadId : `${sourceThreadId}-branch`,
+    connectionScope: "supervision",
+    supervisionSourceThreadId: sourceThreadId,
+    cwd: "/workspace/project",
+    conversationSourceTransferComplete: true,
+    preserveNativeModel: true,
+    historyCoveredThrough: new Date().toISOString(),
+    ...(pending
+      ? {
+          pendingSupervisionBranch: {
+            sourceThreadId,
+            connectionFingerprint: "catalog-connection",
+          },
+        }
+      : { model: "gpt-5.4", modelProvider: "openai" }),
+    ...patch,
+  };
+}
+
 export async function seedSupervisionBinding(params: {
   bindingStore: CodexAppServerBindingStore;
   sessionId: string;
@@ -452,23 +479,7 @@ export async function seedSupervisionBinding(params: {
   sourceThreadId: string;
   pending?: boolean;
 }): Promise<void> {
-  const binding: CodexAppServerThreadBinding = {
-    threadId: params.pending ? params.sourceThreadId : `${params.sourceThreadId}-branch`,
-    connectionScope: "supervision",
-    supervisionSourceThreadId: params.sourceThreadId,
-    cwd: "/workspace/project",
-    conversationSourceTransferComplete: true,
-    preserveNativeModel: true,
-    historyCoveredThrough: new Date().toISOString(),
-    ...(params.pending
-      ? {
-          pendingSupervisionBranch: {
-            sourceThreadId: params.sourceThreadId,
-            connectionFingerprint: "catalog-connection",
-          },
-        }
-      : { model: "gpt-5.4", modelProvider: "openai" }),
-  };
+  const binding = supervisionBinding(params.sourceThreadId, params.pending);
   const stored = await params.bindingStore.mutate(
     sessionBindingIdentity({
       sessionId: params.sessionId,
@@ -621,6 +632,22 @@ export function createGatewayApi(runtime: PluginRuntime, apiConfig: OpenClawConf
   return { api, getProvider: () => provider, registerSessionCatalog };
 }
 
+export function createCatalogTestProvider({
+  runtime = createRuntime().runtime,
+  startupConfig = {},
+  bindingStore = createCodexTestBindingStore(),
+  control = createControl(),
+  getRuntimeConfig = () => config,
+  ...options
+}: Partial<Omit<Parameters<typeof registerCodexSessionCatalog>[0], "api">> & {
+  runtime?: PluginRuntime;
+  startupConfig?: OpenClawConfig;
+} = {}) {
+  const { api, getProvider } = createGatewayApi(runtime, startupConfig);
+  registerCodexSessionCatalog({ api, bindingStore, control, getRuntimeConfig, ...options });
+  return getProvider()!;
+}
+
 export {
   commandRpcMocks,
   pinnedConnectionMocks,
@@ -632,7 +659,6 @@ export {
   path,
   resolveSessionAgentIdsStrict,
   resolveCodexAppServerUserHomeDir,
-  resolveStorePath,
   sessionBindingIdentity,
   createCodexCatalogHomeResolver,
   createCodexTestBindingStore,

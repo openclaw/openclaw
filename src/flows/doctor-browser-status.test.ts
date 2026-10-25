@@ -5,12 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { maybeRepairOwnedChromeExtensionNativeHosts } from "../commands/doctor-browser.js";
+import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import { useAutoCleanupTempDirTracker } from "../plugin-sdk/test-env.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import { runBrowserHealth } from "./doctor-health-contribution-runners.gateway.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
-import { createDoctorHealthFlowContext } from "./doctor-health-contributions.test-support.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
 
 const capture = vi.hoisted(() => ({ note: vi.fn(), load: vi.fn(), surface: {} }));
@@ -28,19 +28,18 @@ vi.mock("openclaw/plugin-sdk/text-utility-runtime", async (importOriginal) => {
     },
   };
 });
+// Load the real public artifact through the shared test loader, keeping plugin
+// implementation types out of the core typecheck graph.
 const browserDoctor = await loadBundledPluginFacade<typeof import("../commands/doctor-browser.js")>(
   { pluginId: "browser", artifactBasename: "browser-doctor.js" },
 );
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-const privateFiles = new Set(["Local State", "Preferences", "Secure Preferences", "Cookies"]);
-const noRepair = { changes: [], effects: [] };
 
 afterEach(() => {
   Object.defineProperty(process, "platform", platformDescriptor);
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  expect(accesses).toEqual([]);
 });
 
 beforeEach(() => {
@@ -62,11 +61,14 @@ beforeEach(() => {
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
   accesses = [];
   const deny = (target: unknown) => {
-    if (!privateFiles.has(path.basename(String(target)))) {
-      return;
+    if (
+      ["Local State", "Preferences", "Secure Preferences", "Cookies"].includes(
+        path.basename(String(target)),
+      )
+    ) {
+      accesses.push(String(target));
+      throw Object.assign(new Error("synthetic permission denial"), { code: "EACCES" });
     }
-    accesses.push(String(target));
-    throw Object.assign(new Error("synthetic permission denial"), { code: "EACCES" });
   };
   const syncRead = fs.readFileSync;
   vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
@@ -86,11 +88,20 @@ beforeEach(() => {
     }
     return await readdir(...args);
   });
-  ctx = createDoctorHealthFlowContext({
-    cfg: { browser: { extensionRelay: { allowLegacyAuth: false } } },
+  const cfg = { browser: { extensionRelay: { allowLegacyAuth: false } } };
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const options = { nonInteractive: true };
+  ctx = {
+    cfg,
+    cfgForPersistence: cfg,
+    runtime,
+    options,
+    prompter: createDoctorPrompter({ runtime, options }),
+    configResult: { cfg },
+    sourceConfigValid: true,
     configPath: path.join(configDir, "openclaw.json"),
     env: { HOME: home, OPENCLAW_STATE_DIR: configDir },
-  });
+  };
 });
 
 let ctx: DoctorHealthFlowContext;
@@ -101,35 +112,106 @@ function repairContext() {
 }
 
 it.each([false, true])(
-  "preserves full/facade/structured browser skip (import %s)",
+  "reports browser setup once without inspecting profiles or inventing failed repair (import %s)",
   async (allowSystemProfileImport) => {
-    ctx.cfg = { browser: { ...ctx.cfg.browser, allowSystemProfileImport } };
+    ctx.cfg = {
+      browser: {
+        ...ctx.cfg.browser,
+        allowSystemProfileImport,
+        ...(allowSystemProfileImport
+          ? {
+              profiles: {
+                manual: { driver: "existing-session", userDataDir: "/synthetic/browser-profile" },
+              },
+            }
+          : {}),
+      },
+    };
     await runBrowserHealth(ctx);
     expect(accesses).toEqual([]);
-    const notes = capture.note.mock.calls.map(([message]) => String(message)).join("\n");
-    expect(notes).toContain("profile discovery skipped");
-    expect(notes).toContain("native bootstrap was not inspected");
+    expect(capture.note).not.toHaveBeenCalled();
+    expect(ctx.healthFindings).toEqual([]);
     const findings = await check.detect(repairContext());
-    const findingText = findings
-      .map((finding) => [finding.message, finding.fixHint].join("\n"))
-      .join("\n");
-    expect(findingText).toContain("profile discovery skipped");
-    expect(findingText).toContain("native bootstrap was not inspected");
-    const result = await check.repair?.(repairContext(), findings);
-    expect(result).toMatchObject({ changes: [], status: "skipped" });
-    expect(result?.warnings?.join("\n")).toContain("native-host repair skipped");
-    expect(result?.reason).toContain("Doctor does not inspect personal browser profiles");
-    await expect(maybeRepairOwnedChromeExtensionNativeHosts()).resolves.toEqual(result);
+    expect(findings).toHaveLength(allowSystemProfileImport ? 2 : 1);
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        severity: "info",
+        category: "recommended",
+        message: expect.stringContaining("native bootstrap was not inspected"),
+        fixHint: expect.stringContaining("openclaw browser extension status --json"),
+      }),
+    );
+    if (allowSystemProfileImport) {
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          severity: "info",
+          message: expect.stringContaining("explicit Chromium user data directory"),
+          fixHint: expect.stringContaining("No action needed"),
+        }),
+      );
+    }
+    expect("repair" in check).toBe(true);
     const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
-    expect(run).toMatchObject(noRepair);
+    expect(run).toMatchObject({
+      changes: [],
+      effects: [],
+      warnings: expect.arrayContaining([expect.stringContaining("repair skipped")]),
+    });
     expect(run.remainingFindings).toEqual(run.findings);
-    expect(run.warnings).toEqual([
-      ...result!.warnings!,
-      `core/doctor/browser repair skipped: ${result!.reason}`,
-    ]);
+    expect(accesses).toEqual([]);
   },
 );
 
+it("retains an actionable inspection gap when the bundled browser surface cannot load", async () => {
+  capture.load.mockImplementation(() => {
+    throw new Error("synthetic browser unavailable");
+  });
+  await runBrowserHealth(ctx);
+  expect(ctx.healthFindings).toEqual([
+    expect.objectContaining({
+      category: "fix-now",
+      message: expect.stringContaining("synthetic browser unavailable"),
+      fixHint: expect.stringContaining("bundled browser plugin"),
+    }),
+  ]);
+  const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
+  expect(run.remainingFindings).toEqual(ctx.healthFindings);
+  expect(accesses).toEqual([]);
+});
+
+it("names a configured missing executable and gives its repair instead of a plugin-load failure", async () => {
+  ctx.cfg = {
+    browser: {
+      headless: true,
+      extensionRelay: { allowLegacyAuth: false },
+      profiles: {
+        work: { driver: "openclaw", cdpPort: 18877, executablePath: "/synthetic/missing-browser" },
+      },
+    },
+  };
+  await runBrowserHealth(ctx);
+  expect(ctx.healthFindings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        category: "fix-now",
+        message: expect.stringContaining("/synthetic/missing-browser"),
+        fixHint: expect.stringContaining("browser.profiles.work.executablePath"),
+      }),
+    ]),
+  );
+  expect(ctx.healthFindings?.map((finding) => finding.fixHint).join("\n")).not.toContain(
+    "bundled browser plugin",
+  );
+  expect(ctx.healthFindings?.map((finding) => finding.message).join("\n")).toContain(
+    "A configured browser executable could not be used",
+  );
+  expect(ctx.healthFindings?.map((finding) => finding.message).join("\n")).not.toContain(
+    "No Chromium-based browser executable was found on this host",
+  );
+  expect(accesses).toEqual([]);
+});
+
+const noRepair = { changes: [], effects: [] };
 const skippedWarning = "native-host repair skipped: invalid registration";
 const integrityFailure = "registration integrity failure";
 it.each([

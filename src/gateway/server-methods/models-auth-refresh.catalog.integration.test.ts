@@ -9,6 +9,10 @@ import {
   waitForCatalogPublication,
 } from "./models-auth-catalog.test-support.js";
 import {
+  catalogDiscoverySource,
+  writeCatalogPlugin,
+} from "./models-catalog-fixture.test-support.js";
+import {
   closeModelsEndpoint,
   createModelsTestState,
   listenModelsEndpoint,
@@ -74,39 +78,16 @@ it("models.authRefresh retains same-account rows while renewing and discovers a 
   });
   try {
     const baseUrl = await listenModelsEndpoint(discovery);
-    await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-      id: provider,
-      providers: [provider],
-      configSchema: { type: "object", additionalProperties: false },
-    });
-    const pluginPath = await state.writeText(
-      "catalog-plugin/index.cjs",
+    const pluginPath = await writeCatalogPlugin(
+      state,
+      provider,
       `module.exports = {
           id: ${JSON.stringify(provider)},
           register(api) {
             api.registerProvider({
               id: ${JSON.stringify(provider)}, label: "Renewal fixture", auth: [],
               formatApiKey: (credential) => credential.access,
-              catalog: {
-                order: "profile",
-                async run(ctx) {
-                  const auth = ctx.resolveProviderAuth(${JSON.stringify(provider)});
-                  if (!auth.discoveryApiKey) return null;
-                  const response = await fetch(${JSON.stringify(`${baseUrl}/models`)}, {
-                    headers: { Authorization: "Bearer " + auth.discoveryApiKey },
-                  });
-                  if (!response.ok) throw new Error("Fixture discovery rejected credentials");
-                  const rows = await response.json();
-                  return { provider: {
-                    baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
-                    models: rows.map((row) => ({
-                      ...row, reasoning: false, input: ["text"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      contextWindow: 32768, maxTokens: 4096,
-                    })),
-                  } };
-                },
-              },
+              ${catalogDiscoverySource(provider, baseUrl, { error: "Fixture discovery rejected credentials" })},
             });
           },
         };`,

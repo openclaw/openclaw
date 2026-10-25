@@ -34,13 +34,17 @@ async function openStream(
   const output = createAssistantOutput(model);
   const activity: boolean[] = [];
   const onTimeout = vi.fn<(error: Error) => void>();
+  let onChunkActivity: (() => void) | undefined;
   let requestSignal: AbortSignal | undefined;
   const providerStreamFn: StreamFn = (_model, _context, options) => {
     requestSignal = options?.signal;
     if (!requestSignal) {
       throw new Error("Missing request signal");
     }
-    const unsubscribe = onLlmRequestActivity(requestSignal, (progress) => activity.push(progress));
+    const unsubscribe = onLlmRequestActivity(requestSignal, (progress) => {
+      activity.push(progress);
+      onChunkActivity?.();
+    });
     const stopChunks = () => chunks.end(true);
     requestSignal.addEventListener("abort", stopChunks, { once: true });
     const stream = createAssistantMessageEventStream();
@@ -90,7 +94,12 @@ async function openStream(
     completion,
     requestSignal,
     async send(chunk: ChatCompletionChunk) {
+      const observed = Promise.withResolvers<void>();
+      onChunkActivity = observed.resolve;
       chunks.push(chunk);
+      // Advance the fake clock only after the real stream consumes this chunk.
+      await observed.promise;
+      onChunkActivity = undefined;
       await vi.advanceTimersByTimeAsync(0);
     },
     async close() {

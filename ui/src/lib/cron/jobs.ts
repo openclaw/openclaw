@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -7,6 +8,14 @@ import {
 import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import type { CronJobsState } from "./types.ts";
+
+function clearCronJobsSnapshot(state: CronJobsState<unknown>) {
+  state.cronJobs = [];
+  state.cronJobsSnapshotRevision = null;
+  state.cronJobsTotal = 0;
+  state.cronJobsHasMore = false;
+  state.cronJobsNextOffset = null;
+}
 
 function queueCronJobsSnapshotRecovery<Row>(state: CronJobsState<Row>, tableFilters: boolean) {
   if (state.cronJobsReloadPending) {
@@ -40,6 +49,8 @@ type CronRuntimeState = Pick<
   | "autoDisabled"
   | "lastError"
   | "lastDurationMs"
+  | "lastMeaningfulResult"
+  | "lastTriggerEvalAtMs"
 >;
 
 export type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean; event?: unknown };
@@ -83,6 +94,9 @@ const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
       lastRunStatus: lastRunStatus ?? lastStatus ?? null,
       runningAtMs,
       autoDisabled,
+      lastDurationMs: runtime.lastDurationMs,
+      lastMeaningfulResult: runtime.lastMeaningfulResult,
+      lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
       ...(finished ? { lastRunError: runtime.lastError ?? null } : {}),
     });
     return true;
@@ -141,6 +155,9 @@ function applyCronJobsEvent<Row extends CronInventoryJob>(
       lastStatus,
       runningAtMs,
       autoDisabled,
+      lastDurationMs: runtime.lastDurationMs,
+      lastMeaningfulResult: runtime.lastMeaningfulResult,
+      lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
       ...(finished
         ? {
             lastError: typeof payload.error === "string" ? payload.error : undefined,
@@ -178,11 +195,7 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
   // An editor can survive scope hydration; its inventory cannot. Retire both
   // retained rows and late responses before a failed replacement can expose them.
   if (cronInventoryScopes.has(state) && cronInventoryScopes.get(state) !== scope) {
-    state.cronJobs = [];
-    state.cronJobsSnapshotRevision = null;
-    state.cronJobsTotal = 0;
-    state.cronJobsHasMore = false;
-    state.cronJobsNextOffset = null;
+    clearCronJobsSnapshot(state);
   }
   cronInventoryScopes.set(state, scope);
   const append = opts?.append === true;
@@ -200,6 +213,7 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
   cronInventoryRequests.set(state, request);
   state[loadingKey] = true;
   state.cronJobsError = null;
+  state.cronJobsReadDenied = false;
   try {
     const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
     const res = await state.client.request<CronJobsListResult<Row>>("cron.list", {
@@ -246,6 +260,14 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
   } catch (err) {
     if (isCurrentScope()) {
       state.cronJobsError = formatUiError(err);
+      state.cronJobsReadDenied =
+        err instanceof GatewayProtocolRequestError && err.gatewayCode === "FORBIDDEN";
+      if (state.cronJobsReadDenied) {
+        clearCronJobsSnapshot(state);
+        // A queued invalidation cannot extend a read that was authoritatively refused.
+        state.cronJobsReloadPending = false;
+        state.cronJobsReloadPendingTableFilters = false;
+      }
     }
   } finally {
     if (cronInventoryRequests.get(state) === request) {

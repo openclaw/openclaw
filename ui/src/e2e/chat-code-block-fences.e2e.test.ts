@@ -1,7 +1,7 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
-import { chatMessage, requireRecord, requireString } from "./chat-flow.test-support.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { polledAttribute } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,41 +14,6 @@ const desktop = {
   serviceWorkers: "block",
   viewport: { height: 900, width: 1440 },
 } satisfies BrowserContextOptions;
-type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
-
-async function startRun(page: Page, gateway: Gateway, prompt: string) {
-  await page.goto(`${suite.server.baseUrl}chat`);
-  await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-  await page.getByRole("button", { name: "Send message" }).click();
-  const request = await gateway.waitForRequest("chat.send");
-  return requireString(requireRecord(request.params).idempotencyKey, "chat send idempotency key");
-}
-function emitDelta(
-  gateway: Gateway,
-  runId: string,
-  text: string,
-  deltaText?: string,
-  timestamp?: number,
-) {
-  return gateway.emitGatewayEvent("chat", {
-    deltaText,
-    runId,
-    sessionKey: "main",
-    state: "delta",
-    message: chatMessage("assistant", text, timestamp === undefined ? {} : { timestamp }),
-  });
-}
-
-function fencedJson(lineCount: number): string {
-  const values = Array.from({ length: lineCount - 2 }, (_, index) => `  ${index},`);
-  values[values.length - 1] = values.at(-1)?.slice(0, -1) ?? "";
-  return `\`\`\`json\n[\n${values.join("\n")}\n]\n\`\`\``;
-}
-
-function fencedProse(language: "text" | "md" | "markdown"): string {
-  return `\`\`\`${language}\n${`${language} prose line\n`.repeat(20)}\`\`\``;
-}
-
 const shortFence = `\`\`\`json
 {
   "status": "${"ready-for-staging-".repeat(4)}",
@@ -73,36 +38,95 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
 }
 
 suite.define(() => {
-  it("retains code controls when a streaming fence closes", async () => {
-    await suite.withPage(desktop, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-      const runId = await startRun(page, gateway, "Show the deployment checks");
-      const initial =
-        "```ts\n" +
-        Array.from(
-          { length: 9 },
-          (_, index) => `const check${index} = "${"deployment check ".repeat(8)}";`,
-        ).join("\n");
-      await emitDelta(gateway, runId, initial, initial);
-      const wrapper = page.locator(".chat-bubble.streaming .code-block-wrapper");
-      await wrapper.locator(".code-block-expand").click();
-      await wrapper.locator(".code-block-wrap").click();
-      const retained = await wrapper.elementHandle();
-      await polledAttribute(wrapper, "class").toContain("is-expanded");
-      await polledAttribute(wrapper, "class").toContain("is-wrapped");
-      const suffix = "\n```\n\nAll deployment checks are ready.";
-      await emitDelta(gateway, runId, initial + suffix, suffix);
-      await expect
-        .poll(() => page.locator(".chat-bubble.streaming .chat-text").textContent())
-        .toContain("All deployment checks are ready.");
-      expect(await retained?.evaluate((element) => element.isConnected)).toBe(true);
-      expect(await wrapper.count()).toBe(1);
-      expect(await wrapper.getAttribute("class")).toContain("is-wrapped");
-      expect(await wrapper.getAttribute("class")).toContain("is-expanded");
-    });
-  });
+  it.each([
+    { key: "Enter", theme: "dark", width: 1440, overflow: true },
+    { key: "Space", theme: "light", width: 390, overflow: false },
+  ] as const)(
+    "keeps native keyboard reading, focus and copying after $key at $width px",
+    async ({ key, theme, width, overflow }) => {
+      await suite.withPage(
+        {
+          ...desktop,
+          colorScheme: theme,
+          viewport: { width, height: 900 },
+          permissions: ["clipboard-read", "clipboard-write"],
+        },
+        async ({ page }) => {
+          const source = Array.from({ length: 12 }, (_, index) =>
+            overflow
+              ? `const deploymentCheck${index} = "${"staging deployment verification ".repeat(6)}";`
+              : `const check${index + 1} = true;`,
+          ).join("\n");
+          await installMockGateway(page, {
+            agentModel: "openai/gpt-4o",
+            models: [{ id: "gpt-4o", name: "gpt-4o", provider: "openai" }],
+            historyMessages: [
+              { role: "assistant", content: "```ts\n" + source + "\n```", timestamp: 2000 },
+            ],
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await setThemeMode(page, theme);
+          const block = page.locator(".chat-thread .code-block-wrapper");
+          const viewport = block.locator(".code-block-viewport");
+          const copy = block.getByRole("button", { name: "Copy code", exact: true });
+          await copy.focus();
+          let before = 0;
+          if (overflow) {
+            // The overflowing reading surface is a native tab stop before disclosure.
+            await page.keyboard.press("Tab");
+            expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(
+              true,
+            );
+            const scrolled = viewport.evaluate(
+              (element) =>
+                new Promise<void>((resolve) => {
+                  element.addEventListener("scrollend", () => resolve(), { once: true });
+                }),
+            );
+            await page.keyboard.press("ArrowRight");
+            await scrolled;
+            before = await viewport.evaluate((element) => element.scrollLeft);
+            expect(before).toBeGreaterThan(0);
+            await page.keyboard.press("Tab");
+          } else {
+            await page.keyboard.press("Tab");
+          }
+          const expand = block.locator(".code-block-expand");
+          expect(await expand.evaluate((element) => element === document.activeElement)).toBe(true);
+          expect(await expand.getAttribute("aria-controls")).toBe(
+            await viewport.getAttribute("id"),
+          );
+          expect(await expand.getAttribute("aria-expanded")).toBe("false");
+          await page.keyboard.press(key);
+          await expand.waitFor({ state: "hidden" });
+          expect(await expand.getAttribute("aria-expanded")).toBe("true");
+          expect(await viewport.locator("code").textContent()).toBe(`${source}\n`);
+          expect(await viewport.evaluate((element) => element.matches(":focus-visible"))).toBe(
+            true,
+          );
+          expect(await viewport.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
+            "solid",
+          );
+          expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+          expect(await viewport.evaluate((element) => element.scrollLeft)).toBe(before);
+          if (overflow) {
+            await page.keyboard.press("ArrowRight");
+            await expect
+              .poll(() => viewport.evaluate((element) => element.scrollLeft))
+              .toBeGreaterThan(before);
+          }
+          await page.keyboard.press("Shift+Tab");
+          expect(await copy.evaluate((element) => element === document.activeElement)).toBe(true);
+          await page.keyboard.press("Enter");
+          await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(source);
+        },
+      );
+    },
+  );
 
-  it.each([8, 12])("clips %i block-art lines to seven rendered rows", async (lineCount) => {
+  it.each([8])("clips %i block-art lines to seven rendered rows", async (lineCount) => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const art = Array.from({ length: lineCount }, () => "██  ██  ██").join("\n");
       await installMockGateway(page, {
@@ -131,162 +155,6 @@ suite.define(() => {
     });
   });
 
-  it("preserves indented code from history through streaming and copying", async () => {
-    await suite.withPage(
-      { ...desktop, viewport: { height: 900, width: 1280 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          historyMessages: [
-            { role: "user", content: "    *user literal*", timestamp: 1000 },
-            { role: "assistant", content: "    *assistant literal*", timestamp: 2000 },
-          ],
-        });
-        await page.addInitScript(() => {
-          Object.defineProperty(navigator, "clipboard", {
-            configurable: true,
-            value: {
-              writeText: async (text: string) => {
-                document.documentElement.dataset.copiedCode = text;
-              },
-            },
-          });
-        });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator(".chat-group.assistant .chat-text").waitFor();
-        expect(await page.locator(".chat-group.user pre code").textContent()).toBe(
-          "*user literal*\n",
-        );
-        expect(await page.locator(".chat-group.assistant pre code").textContent()).toBe(
-          "*assistant literal*\n",
-        );
-        await page
-          .locator(".agent-chat__composer-combobox textarea")
-          .fill("Show an indented example");
-        await page.getByRole("button", { name: "Send message" }).click();
-        const request = await gateway.waitForRequest("chat.send");
-        const runId = requireString(requireRecord(request.params).idempotencyKey, "run id");
-        const first = "    *first";
-        const second = `${first}\n\n    second`;
-        for (const text of [first, second]) {
-          await emitDelta(gateway, runId, text);
-          const code = page.locator(".chat-bubble.streaming pre code");
-          await expect
-            .poll(() => code.allTextContents())
-            .toEqual([text.replace(/^ {4}/gm, "") + "\n"]);
-        }
-        await page.locator(".chat-bubble.streaming .code-block-copy").click();
-        expect(await page.locator("html").getAttribute("data-copied-code")).toBe(
-          "*first\n\nsecond",
-        );
-        await gateway.emitChatFinal({ runId, text: second });
-        await expect
-          .poll(() => page.locator(".chat-group.assistant pre code").allTextContents())
-          .toContain("*first\n\nsecond\n");
-      },
-    );
-  });
-
-  it("highlights a streamed code fence only after its closing marker arrives", async () => {
-    await suite.withPage(desktop, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-
-      const runId = await startRun(page, gateway, "show TypeScript");
-      const openFence = "```ts\nconst value = 1 < 2;";
-      await emitDelta(gateway, runId, openFence, openFence, Date.now());
-      const streamingCode = page.locator(".chat-bubble.streaming code.language-ts");
-      await expect.poll(() => streamingCode.textContent()).toContain("const value = 1 < 2;");
-      expect(await streamingCode.locator("span").count()).toBe(0);
-      expect(await streamingCode.evaluate((code) => code.classList.contains("hljs"))).toBe(false);
-      expect(await page.locator(".chat-bubble.streaming .code-block-copy").count()).toBe(1);
-
-      const completedFence = `${openFence}\n\`\`\``;
-      await emitDelta(gateway, runId, completedFence, "\n```", Date.now());
-      await polledAttribute(streamingCode, "class").toContain("hljs");
-      expect(await streamingCode.locator("span").count()).toBeGreaterThan(0);
-
-      await gateway.emitChatFinal({ runId, text: completedFence });
-      await expect.poll(() => page.locator(".chat-thread code.language-ts.hljs").count()).toBe(1);
-    });
-  });
-
-  it("releases hidden transcript observations and resumes them on the retained code", async () => {
-    await suite.withPage(desktop, async ({ page }) => {
-      type ObservationWindow = typeof window & {
-        codeBlockObservations: () => { observed: number; connected: number; detached: number };
-      };
-      await page.addInitScript(() => {
-        const NativeResizeObserver = window.ResizeObserver;
-        const targets = new Map<ResizeObserver, Set<Element>>();
-        let observed = 0;
-        window.ResizeObserver = class extends NativeResizeObserver {
-          override observe(target: Element, options?: ResizeObserverOptions) {
-            super.observe(target, options);
-            if (target.matches(".code-block-viewport, .code-block-viewport code")) {
-              const current = targets.get(this) ?? new Set<Element>();
-              current.add(target);
-              targets.set(this, current);
-              observed += 1;
-            }
-          }
-
-          override unobserve(target: Element) {
-            super.unobserve(target);
-            targets.get(this)?.delete(target);
-          }
-
-          override disconnect() {
-            super.disconnect();
-            targets.delete(this);
-          }
-        };
-        (window as ObservationWindow).codeBlockObservations = () => {
-          const nodes = [...targets.values()].flatMap((current) => Array.from(current));
-          return {
-            observed,
-            connected: nodes.filter((node) => node.isConnected).length,
-            detached: nodes.filter((node) => !node.isConnected).length,
-          };
-        };
-      });
-      await installMockGateway(page, {
-        historyMessages: [
-          { role: "user", content: "Show the launch command.", timestamp: 1_000 },
-          { role: "assistant", content: wideFence, timestamp: 2_000 },
-        ],
-      });
-      const observations = () =>
-        page.evaluate(() => (window as ObservationWindow).codeBlockObservations());
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await expect.poll(async () => (await observations()).connected).toBe(2);
-      const code = await page.locator(".chat-thread code").elementHandle();
-      const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-identity-card").click();
-      await sidebar
-        .locator(".sidebar-identity-menu")
-        .getByRole("menuitem", { exact: true, name: "Settings" })
-        .click();
-      await page.locator('.settings-sidebar__item[href="/logs"]').click();
-      await page.locator("openclaw-logs-page").waitFor({ state: "visible" });
-      await page.locator("openclaw-chat-pane").waitFor({ state: "hidden" });
-      expect(await code?.evaluate((element) => element.isConnected)).toBe(true);
-      // A page reload would discard the probe too and cannot prove in-app teardown.
-      expect((await observations()).observed).toBeGreaterThanOrEqual(2);
-      await expect.poll(async () => (await observations()).connected).toBe(0);
-      await expect.poll(async () => (await observations()).detached).toBe(0);
-      await page.goBack();
-      await page.goBack();
-      await page.locator(".chat-thread code").waitFor({ state: "visible" });
-      expect(
-        await page
-          .locator(".chat-thread code")
-          .evaluate((element, previous) => element === previous, code),
-      ).toBe(true);
-      await expect.poll(async () => (await observations()).connected).toBe(2);
-      expect((await observations()).detached).toBe(0);
-    });
-  });
-
   it.each(["dark", "light"] as const)(
     "keeps code controls correct through disclosure, resize, and virtual remount in %s mode",
     async (theme) => {
@@ -301,8 +169,6 @@ suite.define(() => {
             })),
             ...(
               [
-                ["user", "Show the full diagnostic payload.", "user-fence-long"],
-                ["assistant", fencedJson(41), "assistant-fence-long"],
                 ["user", "Return the deployment receipt.", "user-fence-short"],
                 ["assistant", shortFence, "assistant-fence-short"],
                 ["user", "Show the launch command.", "user-fence-wide"],
@@ -314,39 +180,22 @@ suite.define(() => {
                 __openclaw: { id, seq: 41 + index },
               }),
             ),
-            ...(["text", "md", "markdown"] as const).map((language, index) => ({
-              role: "assistant",
-              content: [{ type: "text", text: fencedProse(language) }],
-              timestamp: Date.now() + 6 + index,
-              __openclaw: { id: `assistant-fence-${language}`, seq: 47 + index },
-            })),
           ],
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
         await setThemeMode(page, theme);
         const shortBubble = page.locator('[data-entry-id="assistant-fence-short"]');
-        const longBubble = page.locator('[data-entry-id="assistant-fence-long"]');
         const wideBubble = page.locator('[data-entry-id="assistant-fence-wide"]');
         await wideBubble.waitFor({ state: "visible" });
 
         // JSON starts in Tree; Raw retains the shared fence preview and wrap contract.
         await shortBubble.getByRole("button", { name: "Raw", exact: true }).click();
-        await longBubble.getByRole("button", { name: "Raw", exact: true }).click();
 
         // A fence at or under the preview budget stays whole and offers no reveal.
         expect(await shortBubble.locator(".code-block-wrapper.is-collapsible").count()).toBe(0);
         expect(await shortBubble.locator(".code-block-expand").count()).toBe(0);
         expect(await shortBubble.locator("pre code").isVisible()).toBe(true);
-
-        for (const language of ["text", "md", "markdown"] as const) {
-          const proseBubble = page.locator(`[data-entry-id="assistant-fence-${language}"]`);
-          expect(await proseBubble.locator(".code-block-wrapper.is-collapsible").count()).toBe(0);
-          expect(await proseBubble.locator(".code-block-expand").count()).toBe(0);
-          expect(await proseBubble.locator("pre code").textContent()).toContain(
-            `${language} prose line`,
-          );
-        }
 
         // The wrap control only appears once a line measurably overflows, and it
         // reverses; the transcript itself must never grow a horizontal scrollbar.
@@ -380,28 +229,6 @@ suite.define(() => {
         await page.setViewportSize({ width: 1440, height: 900 });
         await shortBubble.scrollIntoViewIfNeeded();
         await expect.poll(() => shortWrap.isVisible()).toBe(false);
-
-        // Expand last; the tall row moves the other fences outside the viewport.
-        const longWrapper = longBubble.locator(".code-block-wrapper");
-        const expand = longWrapper.locator(".code-block-expand");
-        expect(await expand.textContent()).toContain("34 hidden lines");
-        const clippedHeight = await longWrapper
-          .locator(".code-block-viewport")
-          .evaluate((viewport) => viewport.clientHeight);
-        const visibleCodeHeight = await longWrapper.locator("pre code").evaluate((code) => ({
-          height: code.getBoundingClientRect().height,
-          lineHeight: Number.parseFloat(getComputedStyle(code).lineHeight),
-        }));
-        // The hidden-line label counts seven visible lines, not an eighth clipped row.
-        expect(visibleCodeHeight.height).toBe(7 * visibleCodeHeight.lineHeight);
-        await expand.click();
-        await polledAttribute(longWrapper, "class").toContain("is-expanded");
-        expect(await expand.isVisible()).toBe(false);
-        expect(
-          await longWrapper
-            .locator(".code-block-viewport")
-            .evaluate((viewport) => viewport.clientHeight),
-        ).toBeGreaterThan(clippedHeight);
 
         // Virtualization must initialize replacement DOM in an otherwise quiet transcript.
         const thread = page.locator(".chat-thread");

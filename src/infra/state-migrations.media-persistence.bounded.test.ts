@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
+import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -12,9 +13,15 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "../state/openclaw-agent-schema-v25.test-support.js";
+import {
+  readPersistedQuarantineRow,
+  seedOpenClawDatabaseQuarantine,
+} from "../state/openclaw-quarantine-store.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
+import { prepareAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";
 import {
   cleanupMediaPersistenceFixtures,
   createEvent,
@@ -43,6 +50,259 @@ function readState(file: string) {
     entry: row("SELECT entry_json FROM session_nodes")?.entry_json,
   };
 }
+
+it("keeps entry state outside a precommitted version-only migration", async () => {
+  const stateDir = makeTempDir(tempDirs, "media-bounded-precommitted-version-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
+  const pathname = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  const legacyEntry = '{"sessionId":"retained","updatedAt":1,"memoryFlushCompactionCount":3}';
+  {
+    using database = openNodeSqliteDatabase(pathname);
+    database.exec(
+      fs.readFileSync(
+        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    database.exec("PRAGMA user_version = 26");
+    database
+      .prepare(
+        "INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at) VALUES ('primary', 'agent', 26, 'main', 1, 1)",
+      )
+      .run();
+    database
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES ('agent:main:retained', 'retained', ?, 1, 1)",
+      )
+      .run(legacyEntry);
+    database.exec(
+      "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES ('retained', 'agent:main:retained', 1, 1)",
+    );
+  }
+  fs.chmodSync(pathname, 0o600);
+  const target = { agentId: "main", path: pathname };
+  const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
+    env,
+    configuredAgentDatabaseTargets: [target],
+  });
+  const result = await withDoctorSqliteMaintenanceLock({
+    env,
+    operation: "bounded precommitted version migration",
+    run: async (authority) => {
+      const scope = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: () => authority.assertCurrent(),
+      });
+      try {
+        return await scope.run(async () => {
+          const prepared = await prepareDoctorDatabaseMigrations({
+            env,
+            check: "quick",
+            pendingDatabasePaths: [pathname],
+            pendingMigrations: [
+              {
+                kind: "agent",
+                ...target,
+                foundVersion: 26,
+                supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+              },
+            ],
+            databasePaths: [pathname],
+            agentDatabaseTargets: [
+              { ...target, realPath: fs.realpathSync.native(pathname), source: "configured" },
+            ],
+          });
+          preparedDiscovery.versionMigrations = prepared.versionMigrations;
+          const execution = await runLegacyStateMigrationSteps(
+            buildLegacyStateMigrationPreludeSteps({
+              mode: "doctor",
+              invocationPurpose: "doctor",
+              config: { agents: { ownership: "explicit", entries: { main: {} } } },
+              configPath: path.join(stateDir, "openclaw.json"),
+              configIncludedPaths: [],
+              stateDir,
+              env,
+              homedir: () => stateDir,
+              agentDatabaseTargets: [target],
+              agentDatabaseMigrationDiscovery: preparedDiscovery,
+              pluginSessionStoreAgentIds: [],
+              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+            }).filter((step) =>
+              [
+                "session-entry-state-preparation",
+                "media-persistence",
+                "session-entry-state",
+              ].includes(step.id),
+            ),
+          );
+          return { prepared, execution };
+        });
+      } finally {
+        await scope.close();
+      }
+    },
+  });
+
+  expect(result.prepared.versionMigrations).toEqual([
+    expect.objectContaining({ kind: "agent", path: pathname, foundVersion: 26 }),
+  ]);
+  expect(result.execution.receipts.map((receipt) => [receipt.id, receipt.outcome])).toEqual([
+    ["session-entry-state-preparation", "skipped"],
+    ["media-persistence", "skipped"],
+    ["session-entry-state", "skipped"],
+  ]);
+  expect(result.execution.sources.flatMap((source) => source.warnings)).toEqual([]);
+  using database = openNodeSqliteDatabase(pathname, { readOnly: true });
+  expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+    OPENCLAW_AGENT_SCHEMA_VERSION,
+  );
+  expect(database.prepare("SELECT entry_json FROM session_nodes").get()?.entry_json).toBe(
+    legacyEntry,
+  );
+  expect(
+    database
+      .prepare("SELECT 1 FROM schema_meta WHERE meta_key = 'media-persistence-rows-v1'")
+      .get(),
+  ).toBeUndefined();
+});
+
+it.each([
+  { name: "completes entry and media repair after quarantine recovery", malformedMedia: false },
+  { name: "reports committed entry repair when resumed media refuses", malformedMedia: true },
+])("$name", async ({ malformedMedia }) => {
+  const stateDir = makeTempDir(
+    tempDirs,
+    `media-bounded-quarantine-${malformedMedia ? "refusal" : "success"}-`,
+  );
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
+  const pathname = createLegacyDatabaseFixture({
+    agentId: "main",
+    env,
+    schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+    eventsBySession: {
+      "index-original": [
+        createEvent({
+          id: "index-original",
+          parentId: null,
+          timestamp: 1,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "[[reply_to_current]] recovered" }],
+            MediaPath: "/media/recovered.png",
+          },
+        }),
+      ],
+    },
+  });
+  const sessionKey = "agent:main:index-original";
+  {
+    using database = openNodeSqliteDatabase(pathname);
+    database
+      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+      .run(
+        '{"sessionId":"index-original","updatedAt":1,"memoryFlushCompactionCount":2}',
+        sessionKey,
+      );
+    if (malformedMedia) {
+      database.prepare("UPDATE transcript_events SET event_json = 'not json'").run();
+    }
+  }
+  const index = "sqlite_autoindex_session_nodes_1";
+  corruptSqliteIndexKey(pathname, index, "index-original", "index-damaged!");
+  seedOpenClawDatabaseQuarantine({
+    env,
+    kind: "agent",
+    path: pathname,
+    reason: `row 1 missing from index ${index}`,
+  });
+
+  const result = await withDoctorSqliteMaintenanceLock({
+    env,
+    operation: "bounded quarantined entry migration",
+    run: async (authority) => {
+      const scope = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: () => authority.assertCurrent(),
+      });
+      try {
+        return await scope.run(() =>
+          runLegacyStateMigrationSteps(
+            buildLegacyStateMigrationPreludeSteps({
+              mode: "doctor",
+              invocationPurpose: "doctor",
+              config: { agents: { ownership: "explicit", entries: { main: {} } } },
+              configPath: path.join(stateDir, "openclaw.json"),
+              configIncludedPaths: [],
+              stateDir,
+              env,
+              homedir: () => stateDir,
+              agentDatabaseTargets: [{ agentId: "main", path: pathname }],
+              pluginSessionStoreAgentIds: [],
+              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+            }).filter((step) =>
+              [
+                "session-entry-state-preparation",
+                "media-persistence",
+                "session-entry-state",
+              ].includes(step.id),
+            ),
+          ),
+        );
+      } finally {
+        await scope.close();
+      }
+    },
+  });
+
+  const mediaReceipt = result.receipts.find((receipt) => receipt.id === "media-persistence");
+  const entryReceipt = result.receipts.find((receipt) => receipt.id === "session-entry-state");
+  expect(result.receipts).toMatchObject([
+    { id: "session-entry-state-preparation", outcome: "skipped" },
+    { id: "media-persistence", outcome: malformedMedia ? "refused" : "completed" },
+    { id: "session-entry-state", outcome: malformedMedia ? "refused" : "skipped" },
+  ]);
+  expect(mediaReceipt?.changes).toContain(
+    `Warning: Rebuilt corrupt agent main SQLite indexes: ${index}. No table rows were removed.`,
+  );
+  expect(mediaReceipt?.changes).toContain(
+    "Canonicalized entry state for 1 durable session row(s).",
+  );
+  expect(entryReceipt?.changes).toEqual([]);
+  expect(readPersistedQuarantineRow(pathname, { env })).toBeUndefined();
+  using database = openNodeSqliteDatabase(pathname, { readOnly: true });
+  expect(database.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+  expect(
+    JSON.parse(String(database.prepare("SELECT entry_json FROM session_nodes").get()?.entry_json)),
+  ).toMatchObject({
+    sessionId: "index-original",
+    memoryFlush: { kind: "succeeded", compactionCount: 2 },
+  });
+  if (malformedMedia) {
+    expect(mediaReceipt?.warnings).not.toEqual([]);
+    expect(entryReceipt).toMatchObject({ originatingRefusal: { stepId: "media-persistence" } });
+    return;
+  }
+  expect(result.sources.flatMap((source) => source.warnings)).toEqual([]);
+  expect(
+    database
+      .prepare("SELECT 1 FROM schema_meta WHERE meta_key = 'media-persistence-rows-v1'")
+      .get(),
+  ).toBeDefined();
+  const migratedEvent = database
+    .prepare("SELECT event_json FROM transcript_events")
+    .get()?.event_json;
+  expect(content(migratedEvent)).toEqual([
+    { type: "text", text: "[[reply_to_current]] recovered" },
+  ]);
+  const message = JSON.parse(String(migratedEvent)).message;
+  expect(message).not.toHaveProperty("MediaPath");
+  expect(message["__openclaw"]).toMatchObject({
+    media: [expect.objectContaining({ path: "/media/recovered.png" })],
+  });
+});
 
 it("keeps unrelated legacy content and planner maintenance outside a version migration", async () => {
   const stateDir = makeTempDir(tempDirs, "media-bounded-version-");
@@ -142,7 +402,12 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
             });
             return runLegacyStateMigrationSteps(
               steps.filter(({ id }) =>
-                ["media-persistence", "session-entry-state", "transcript-directives"].includes(id),
+                [
+                  "session-entry-state-preparation",
+                  "media-persistence",
+                  "session-entry-state",
+                  "transcript-directives",
+                ].includes(id),
               ),
             );
           });

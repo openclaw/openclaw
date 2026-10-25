@@ -1,7 +1,10 @@
 import { For, Show } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 registerEnglishCatalog(registerChatComposerEnglish);
 

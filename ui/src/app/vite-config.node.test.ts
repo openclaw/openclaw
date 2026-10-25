@@ -17,8 +17,10 @@ import {
   readControlUiSourceCatalog,
 } from "../../../scripts/lib/control-ui-i18n-catalog.ts";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { controlUiLocaleModulesPlugin } from "../../config/control-ui-locales.ts";
+import { extractControlUiStartupAssetPaths } from "../../config/control-ui-startup-assets.ts";
 import controlUiViteConfig, {
   createControlUiPrecompressedAssetVariants,
   resolveControlUiBuildInfo,
@@ -211,11 +213,83 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   expect(brotliDecompressSync(variants[0]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(gunzipSync(variants[1]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
-    "32dab2f3598992a8a8b595f5da60f10907fc181c2abfa27380d562d9b539b85d",
+    "aabdc80dc704c3abc609a76c6ac3e9ae872cf023770c6ea5fbb29ffe56adfcab",
   );
+  // No timestamp, filename, or host OS field may make the pinned gzip bytes host-dependent.
+  expect(variants[1]!.source.subarray(0, 10).toString("hex")).toBe("1f8b08000000000002ff");
+  const repeated = await createControlUiPrecompressedAssetVariants(
+    "assets/app-AbCd1234.js",
+    Buffer.from(source),
+  );
+  expect(repeated).toEqual(variants);
   expect(await createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
   expect(await createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
   expect(await createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
+});
+
+it("precompresses assets starting at 4 KiB only when the encoding saves bytes", async () => {
+  expect(
+    await createControlUiPrecompressedAssetVariants("assets/small.js", "x".repeat(4095)),
+  ).toEqual([]);
+  const boundary = "é".repeat(2048);
+  const variants = await createControlUiPrecompressedAssetVariants("assets/boundary.js", boundary);
+  expect(variants.map((variant) => variant.fileName)).toEqual([
+    "assets/boundary.js.br",
+    "assets/boundary.js.gz",
+  ]);
+  for (const variant of variants) {
+    expect(variant.source.byteLength).toBeLessThan(Buffer.byteLength(boundary));
+  }
+  const incompressible = Buffer.concat(
+    Array.from({ length: 128 }, (_, index) => createHash("sha256").update(String(index)).digest()),
+  );
+  expect(
+    await createControlUiPrecompressedAssetVariants("assets/random.wasm", incompressible),
+  ).toEqual([]);
+  // These tails produce an exactly 4096-byte Brotli or gzip output, respectively.
+  incompressible.fill(0, 4096 - 29);
+  expect(
+    await createControlUiPrecompressedAssetVariants("assets/equal-br.wasm", incompressible),
+  ).toEqual([]);
+  incompressible.fill(0, 4096 - 66);
+  expect(
+    (await createControlUiPrecompressedAssetVariants("assets/equal-gzip.wasm", incompressible)).map(
+      (variant) => variant.fileName,
+    ),
+  ).toEqual(["assets/equal-gzip.wasm.br"]);
+});
+
+it("keeps small CSS and measured startup assets compressed, excluding deferred route preloads", async () => {
+  const html = `
+    <script type="module" src="./assets/entry.js"></script>
+    <link rel="modulepreload" href="/control/assets/runtime.js">
+    <template data-openclaw-route-preloads="chat">
+      <link rel="modulepreload" href="./assets/chat.js">
+    </template>`;
+  const startupAssets = new Set(
+    extractControlUiStartupAssetPaths(selectControlUiRoutePreloads(html, null)),
+  );
+  const source = "export const value = 123;\n".repeat(20);
+  for (const fileName of ["assets/entry.js", "assets/runtime.js", "assets/lazy.css"]) {
+    const variants = await createControlUiPrecompressedAssetVariants(
+      fileName,
+      source,
+      startupAssets,
+    );
+    expect(variants.map((variant) => variant.fileName)).toEqual([
+      `${fileName}.br`,
+      `${fileName}.gz`,
+    ]);
+  }
+  expect(
+    await createControlUiPrecompressedAssetVariants("assets/chat.js", source, startupAssets),
+  ).toEqual([]);
+  expect(
+    await createControlUiPrecompressedAssetVariants("assets/tiny.css", "x", startupAssets),
+  ).toEqual([]);
+  expect(
+    await createControlUiPrecompressedAssetVariants("assets/entry.js", "x", startupAssets),
+  ).toEqual([]);
 });
 
 it("uses the supplied artifact identity without reading Git metadata", () => {

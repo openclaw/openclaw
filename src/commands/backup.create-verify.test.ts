@@ -94,21 +94,7 @@ describe("backupCreateCommand verification", () => {
   });
 
   it("verifies the archive and settles outcome recording before reporting completion", async () => {
-    createBackupArchiveMock.mockResolvedValue({
-      archivePath: "/tmp/openclaw-backup.tar.gz",
-      archiveRoot: "openclaw-backup",
-      createdAt: "2026-04-07T00:00:00.000Z",
-      runtimeVersion: "test",
-      assetCount: 1,
-      entryCount: 2,
-      assets: [],
-      skipped: [],
-      skippedVolatileCount: 0,
-      verified: false,
-      dryRun: false,
-      includeWorkspace: false,
-      onlyConfig: false,
-    });
+    createBackupArchiveMock.mockResolvedValue(makeBackupResult({ verified: false }));
     verifyBackupArchiveMock.mockResolvedValue({
       ok: true,
       archivePath: "/tmp/openclaw-backup.tar.gz",

@@ -35,6 +35,70 @@ function scan(
 }
 
 describe("doctor empty allowlist policy scan", () => {
+  it("projects malformed selected fields without falling through to inherited hook values", async () => {
+    const contexts: unknown[] = [];
+    const warnings = await scan(
+      {
+        "legacy-channel": {
+          dmPolicy: "allowlist",
+          allowFrom: ["parent"],
+          accounts: {
+            work: {
+              dmPolicy: 42,
+              allowFrom: "not-a-list",
+              dm: { policy: "allowlist", allowFrom: ["nested"] },
+            },
+          },
+        },
+      },
+      {
+        extraWarningsForAccount: ({ prefix, dmPolicy, effectiveAllowFrom }) => {
+          contexts.push({ prefix, dmPolicy, effectiveAllowFrom });
+          return [];
+        },
+      },
+    );
+
+    expect(warnings).toEqual([]);
+    expect(contexts).toEqual([
+      {
+        prefix: "channels.legacy-channel",
+        dmPolicy: "allowlist",
+        effectiveAllowFrom: ["parent"],
+      },
+      {
+        prefix: "channels.legacy-channel.accounts.work",
+        dmPolicy: undefined,
+        effectiveAllowFrom: undefined,
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      channelName: "imessage",
+      skip: false,
+      expected: [
+        '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to channels.imessage.groupAllowFrom, or set groupPolicy to "open".',
+      ],
+    },
+    { channelName: "zalouser", skip: true, expected: [] },
+    { channelName: "discord", skip: false, expected: [] },
+  ])(
+    "retains $channelName group warnings and subsequent plugin warnings",
+    async ({ channelName, skip, expected }) => {
+      expect(
+        await scan(
+          { [channelName]: { groupPolicy: "allowlist" } },
+          {
+            shouldSkipDefaultEmptyGroupAllowlistWarning: () => skip,
+            extraWarningsForAccount: ({ prefix }) => [`extra:${prefix}`],
+          },
+        ),
+      ).toStrictEqual([...expected, `extra:channels.${channelName}`]);
+    },
+  );
+
   it("does not warn on empty parent groupAllowFrom when active accounts have effective group allowlists", async () => {
     const warnings = await scan({
       telegram: {

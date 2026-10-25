@@ -1,13 +1,10 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
-import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import {
   readSessionMethodAccess,
-  readSessionMethodScopeAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -24,7 +21,10 @@ import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
+import {
+  readChatModelCatalogState,
+  refreshChatModelCatalogOnDemand,
+} from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
@@ -71,24 +71,6 @@ export function createChatPaneQueuedEditProps(
   };
 }
 
-export function readChatPaneComposerAccess(
-  snapshot: Pick<ApplicationGatewaySnapshot, "hello">,
-  session: GatewaySessionRow | undefined,
-  catalog: boolean,
-): boolean {
-  const auth = snapshot.hello?.auth ?? null;
-  return (
-    hasOperatorWriteAccess(auth) ||
-    (!catalog &&
-      readSessionMethodScopeAccess(auth, {
-        method: "chat.send",
-        requiredScope: "operator.write",
-        sessionScope: true,
-        session,
-      }).allowed)
-  );
-}
-
 export function readChatPaneMutationAccess(
   snapshot: ApplicationGatewaySnapshot,
   sessionKey: string,
@@ -110,24 +92,6 @@ export function readChatPaneMutationAccess(
     }),
     permission: scopedPatchAccess({ permissionMode: "guarded" }),
     unarchive: scopedPatchAccess({ archived: false }),
-  };
-}
-
-export function readChatPublicationAccess(
-  snapshot: ApplicationGatewaySnapshot,
-  session: GatewaySessionRow,
-  participationBlocked: boolean,
-) {
-  const canMutate = !session.archived && !participationBlocked;
-  return {
-    canPublishShared:
-      canMutate &&
-      readSessionMethodAccess(snapshot, {
-        method: "sessions.github.publish",
-        requiredScope: "operator.sessions.write",
-        session,
-      }).allowed,
-    canPublishPersonal: canMutate && hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
   };
 }
 
@@ -216,21 +180,7 @@ export function renderChatPaneComposerControls(params: {
   const permissionPending = Boolean(
     (currentChange && !currentChange.retainWhileCurrent) || selectedSession?.permissionModePending,
   );
-  const modelCatalogState = resolveModelCatalogState(
-    {
-      models: state.chatModelCatalog,
-      refreshFailed: state.chatModelCatalogRefreshFailed,
-      pendingProviders: state.chatModelCatalogPendingProviders,
-      modelSelectionPolicy: state.chatModelSelectionPolicy,
-    },
-    {
-      connected: state.connected,
-      loading: state.chatModelsLoading,
-      error: state.chatModelCatalogError,
-      retired: state.chatModelCatalogRetired,
-      initialized: state.chatModelCatalogInitialized,
-    },
-  );
+  const modelCatalogState = readChatModelCatalogState(state);
   const thinkingLevelOverride = state.sessions.think(sessionKey, agentScope.agentId);
   const settingsPreview = state.sessions.settingsPreview(sessionKey, agentScope.agentId);
   const settingsSession =
@@ -323,7 +273,7 @@ export function renderChatPaneComposerControls(params: {
         },
         onModelSelect: (next, targetSessionKey, agentRuntime) =>
           modelAccess.allowed && canPatch({ model: next, agentRuntime }, targetSessionKey)
-            ? switchChatModel(state, next, targetSessionKey, agentRuntime)
+            ? switchChatModel(state, next, targetSessionKey, agentRuntime, agentDefaultModel)
             : Promise.resolve(false),
         onThinkingSelect: (next, targetSessionKey) =>
           effortAccess.allowed && canPatch({ thinkingLevel: next }, targetSessionKey)

@@ -80,6 +80,7 @@ import {
   scheduleDeliveredSourceReplyTranscriptMirror,
 } from "./message-operation-result.js";
 import { withMessageOperationRoute } from "./message-operation-route.js";
+import { respondError } from "./response.js";
 import {
   resolveGatewayOutboundTarget,
   resolveMessageActionRuntimeConfig,
@@ -173,13 +174,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           (!plugin?.actions?.handleAction ||
             plugin.actions.supportsAction?.({ action: request.action }) === false);
         if (!plugin || (!plugin.actions?.handleAction && !canonicalAction)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Channel ${channel} does not support action ${request.action}.`,
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `Channel ${channel} does not support action ${request.action}.`,
           );
           return undefined;
         }
@@ -487,10 +485,10 @@ export const sendHandlers: GatewayRequestHandlers = {
     const mediaUrls = normalizeArrayBackedTrimmedStringList(request.mediaUrls);
     const buffer = readStringValue(request.buffer);
     if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0 && !buffer) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid send params: text or media is required"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "invalid send params: text or media is required",
       );
       return;
     }
@@ -538,11 +536,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const { cfg, channel } = resolved;
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         if (!plugin) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`);
           return undefined;
         }
         return { cfg, channel, plugin };
@@ -841,23 +835,16 @@ export const sendHandlers: GatewayRequestHandlers = {
           ["isAnonymous", "supportsAnonymousPolls"],
         ] as const) {
           if (request[parameter] !== undefined && outbound?.[capability] !== true) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                `${parameter} is not supported for ${channel} polls`,
-              ),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              `${parameter} is not supported for ${channel} polls`,
             );
             return undefined;
           }
         }
         if (!plugin || !outbound?.sendPoll) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`);
           return undefined;
         }
         return { cfg, channel, plugin, outbound, sendPoll: outbound.sendPoll };

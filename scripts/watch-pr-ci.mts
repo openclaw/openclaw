@@ -365,7 +365,7 @@ function readPr(
     readMetadata(pr, ["state", "mergeable", "headRefOid"], () => ghReadOptions(readDeadline)),
   );
 }
-export const buildFindRunArgs = (repo: string, sha: string) =>
+const buildFindRunArgs = (repo: string, sha: string) =>
   workflowRunsApiArgs(repo, sha, "pull_request", 20);
 export const selectRunAfter = (runs: RunListItem[], after?: number) =>
   runs.find((run) => run.conclusion !== "skipped" && (after === undefined || run.id > after));

@@ -213,6 +213,10 @@ Apply narrow mutations without freeform page surgery:
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
 
+For `apply synthesis`, pass the summary with `--body <text>` or `--body-file <path>`.
+Body files must contain nonempty UTF-8 text. Blank files and invalid UTF-8 are
+rejected before changing the existing synthesis page.
+
 ### `wiki bridge import`
 
 Import public memory artifacts from the active memory plugin into bridge-backed source pages. Use this in `bridge` mode to pull the latest exported memory artifacts into the wiki vault.

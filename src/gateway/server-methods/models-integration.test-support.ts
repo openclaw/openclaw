@@ -104,6 +104,18 @@ export async function closeModelsEndpoint(server: Server) {
   await promisify(server.close.bind(server))();
 }
 
+export async function serveModelsEndpoint(server: Server, rejectErrors = false) {
+  const baseUrl = await listenModelsEndpoint(server);
+  return {
+    baseUrl,
+    async [Symbol.asyncDispose]() {
+      server.closeAllConnections();
+      const closed = closeModelsEndpoint(server);
+      await (rejectErrors ? closed : closed.catch(() => {}));
+    },
+  };
+}
+
 // A separate writer supplies no in-process Gateway receipt; refresh must load the durable change.
 export async function writeAuthStoreExternally(
   state: OpenClawTestState,

@@ -12,7 +12,6 @@ import { waitForExecScope } from "../agents/bash-process-registry.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../agents/cli-runner.test-helpers.js";
 import * as cliExecution from "../agents/cli-runner/execute.js";
-import { createCliRunCurrentAssertion } from "../agents/cli-runner/execution-target.js";
 import { setRawCliBackendForPrepareTest } from "../agents/cli-runner/prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "../agents/cli-runner/prepare.js";
 import * as preparation from "../agents/cli-runner/prepare.test-support.js";
@@ -30,7 +29,6 @@ import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as testState from "../test-utils/openclaw-test-state.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 import * as mcp from "./mcp-http.test-support.js";
 
 type ToolSurface = { native: string[] | undefined; mcp: string[] };
@@ -83,14 +81,7 @@ beforeAll(async () => {
     hostOwnedTools: ["exec", "process", "apply_patch"],
     resolveExecutionArgs: ({ baseArgs }) => baseArgs,
   });
-  preparation.setCliRunnerPrepareTestDeps({
-    isWorkspaceBootstrapPending: async () => false,
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
-    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
-    loadManifestModelCatalog: () => [],
-  });
+  mcp.setMinimalCliPrepareDeps(preparation.setCliRunnerPrepareTestDeps);
   const enqueue = sessionEvents.enqueueSessionEventForHost;
   vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((...args) => {
     const receipt = enqueue(...args);
@@ -116,36 +107,14 @@ afterAll(async () => {
   await state?.cleanup();
 });
 
-function connectPreparedTurn(context: PreparedCliRunContext, signal: AbortSignal) {
-  const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "isolated MCP runtime");
-  const token = expectDefined(context.preparedBackend.env?.OPENCLAW_MCP_TOKEN, "CLI grant");
-  const captureKey = `capture-${context.params.runId}`;
-  context.preparedBackend.mcpClientGrantCapture?.activate(
-    captureKey,
-    createCliRunCurrentAssertion(context.params),
-  );
-  return async (
-    method: "tools/list" | "tools/call",
-    args?: Record<string, unknown>,
-    toolName = "exec",
-  ) => {
-    const response = await mcp.sendRaw({
-      port: runtime.port,
-      token,
-      signal,
-      headers: mcp.jsonHeaders({ "x-openclaw-cli-capture-key": captureKey }),
-      body: JSON.stringify(
-        method === "tools/call"
-          ? mcp.mcpToolCallMessage(toolName, args)
-          : { jsonrpc: "2.0", id: 1, method },
-      ),
-    });
-    return { status: response.status, body: (await response.json()) as mcp.McpToolResultPayload };
-  };
+async function connectPreparedTurn(context: PreparedCliRunContext, signal: AbortSignal) {
+  const { rpc } = await mcp.connectPreparedCliTurn(context, signal);
+  return (method: "tools/list" | "tools/call", args?: Record<string, unknown>, name = "exec") =>
+    rpc(method, method === "tools/call" ? { name, arguments: args ?? {} } : undefined);
 }
 
 async function readToolSurface(context: PreparedCliRunContext, signal: AbortSignal) {
-  const response = await connectPreparedTurn(context, signal)("tools/list");
+  const response = await (await connectPreparedTurn(context, signal))("tools/list");
   expect(response.status).toBe(200);
   return {
     native: context.params.cliToolAvailability?.native,
@@ -217,7 +186,7 @@ it.for<[string, string, string, string, string[] | undefined]>([
         expect(wake.params.sessionKey).toBe(sessionKey);
         expect(wake.params.prompt).toContain("exec-completion-proof");
         completionSurfaces.push(await readToolSurface(wake, signal));
-        const call = connectPreparedTurn(wake, signal);
+        const call = await connectPreparedTurn(wake, signal);
         const launches = vi.spyOn(getProcessSupervisor(), "spawn");
         const allowedName = `allowed-${sessionId}.txt`;
         const deniedName = `denied-${sessionId}.txt`;
@@ -265,7 +234,9 @@ it.for<[string, string, string, string, string[] | undefined]>([
       });
     const receiptIndex = receipts.length;
     try {
-      const response = await connectPreparedTurn(original, signal)("tools/call", {
+      const response = await (
+        await connectPreparedTurn(original, signal)
+      )("tools/call", {
         command: "echo exec-completion-proof",
         background: true,
       });

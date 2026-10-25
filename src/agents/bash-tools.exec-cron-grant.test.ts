@@ -7,6 +7,7 @@ import { bindCronJobAdmittedRun, resetCronActiveJobs } from "../cron/active-jobs
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { prepareCronRunAdmission } from "../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../cron/scheduled-occurrence.test-support.js";
 import { markServiceCronJobActive } from "../cron/service/run-receipts.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import {
@@ -26,11 +27,7 @@ import {
   resolveOperatorApproval,
 } from "../gateway/operator-approval-store.js";
 import { registerCronRunExecSource } from "../infra/cron-run-exec-source.js";
-import {
-  onInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { readExecApprovalsSnapshot, updateExecApprovals } from "../infra/exec-approvals-store.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -51,6 +48,7 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import * as cronGrant from "./bash-tools.exec-cron-grant.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { captureSecurityEvents } from "./test-helpers/security-events.js";
 
 const commitExecAuthorizationMock = vi.hoisted(() =>
   vi.fn<typeof import("../infra/exec-approvals.js").commitExecAuthorizationLocked>(),
@@ -107,16 +105,6 @@ vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: callGatewayToolMock,
   readGatewayCallOptions: () => ({}),
 }));
-
-function captureSecurityEvents() {
-  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
-  const stop = onInternalDiagnosticEvent((event, metadata) => {
-    if (metadata.trusted && event.type === "security.event") {
-      events.push(event);
-    }
-  });
-  return { events, stop };
-}
 
 const CRON_STORE_KEY = "/tmp/openclaw-exec-host-cron-store";
 const grantCommand =
@@ -258,13 +246,13 @@ async function prepareCronRun(mintGrant = true, expiresAtMs: number | null = nul
       cronEnabled: true,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     }),
     job,
     receipt,
   );
   runOwner = prepareCronRunAdmission({
+    scheduledExecution: TEST_SCHEDULED_EXECUTION,
     cfg: {},
     agentId: "main",
     runId: "cron-run-1",

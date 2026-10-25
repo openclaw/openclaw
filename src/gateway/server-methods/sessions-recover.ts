@@ -52,11 +52,18 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
       authorizedPluginId: client?.internal?.pluginRuntimeOwnerId,
       ...(commitGuard ? { commitGuard } : {}),
       workerPlacementContext: resolveSessionWorkerPlacementContext(context),
-      launchContinuation: async (continuation) =>
-        await launchSessionRecoveryContinuation({
+      launchContinuation: async (continuation) => {
+        const continuationGuard =
+          commitGuard || continuation.assertRecoveryCurrent
+            ? () => {
+                commitGuard?.();
+                continuation.assertRecoveryCurrent?.();
+              }
+            : undefined;
+        return await launchSessionRecoveryContinuation({
           ...continuation,
           client,
-          ...(commitGuard ? { commitGuard } : {}),
+          ...(continuationGuard ? { commitGuard: continuationGuard } : {}),
           assertAdmittedSourceCurrent: () => {
             authority.commitGuard?.();
             // The input commit replaces recovery state; its old row guard ends at admission.
@@ -69,7 +76,8 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
           ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
           req,
           sessionScope: readGatewayRequestMutationAuthority(options).sessionScope,
-        }),
+        });
+      },
     }).catch((error: unknown) => authority.handleClosedError(error));
     if (!recovered) {
       return;

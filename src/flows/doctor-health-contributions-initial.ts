@@ -1,3 +1,4 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
@@ -85,6 +86,17 @@ export function resolveInitialDoctorHealthContributions(params: {
       async run(ctx) {
         const { runCoreHealthFindingNote } = await import("./doctor-health-contribution-core.js");
         await runCoreHealthFindingNote(ctx, "core/doctor/node-runtime");
+      },
+    }),
+    createDoctorHealthContribution("doctor:runtime-capabilities", "Runtime capabilities", {
+      healthCheckIds: ["core/doctor/runtime-capabilities"],
+      async run() {
+        const { collectRuntimeCapabilities, formatRuntimeCapabilities } =
+          await import("../infra/runtime-capabilities.js");
+        note(
+          formatRuntimeCapabilities(collectRuntimeCapabilities()),
+          "Runtime capabilities (Doctor process)",
+        );
       },
     }),
     createDoctorHealthContribution("doctor:gateway-config", "Gateway config", {
@@ -281,7 +293,6 @@ export function resolveInitialDoctorHealthContributions(params: {
           }
           const { maybeRunConfiguredPluginInstallReleaseStep } =
             await import("../commands/doctor/shared/release-configured-plugin-installs.js");
-          const { note } = await import("../../packages/terminal-core/src/note.js");
           const { VERSION } = await import("../version.js");
           const result = await maybeRunConfiguredPluginInstallReleaseStep({
             cfg: ctx.cfg,
@@ -295,7 +306,7 @@ export function resolveInitialDoctorHealthContributions(params: {
           if (result.postInstallDoctorResult) {
             ctx.postInstallDoctorResult = result.postInstallDoctorResult;
           }
-          noteDoctorRepairResult(result, note);
+          noteDoctorRepairResult(result);
           if (!result.touchedConfig) {
             return;
           }
@@ -407,10 +418,10 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthChecks: {
         description: "Low disk space around the OpenClaw state directory is a finding.",
         defaultEnabled: false,
-        async detect() {
+        async detect(ctx) {
           const { collectDiskSpaceHealthFindings } =
             await import("../commands/doctor-disk-space.js");
-          return collectDiskSpaceHealthFindings();
+          return collectDiskSpaceHealthFindings(ctx.env);
         },
       },
       async run() {

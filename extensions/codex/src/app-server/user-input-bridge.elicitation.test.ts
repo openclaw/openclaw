@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
-import {
-  claimPendingAgentQuestionAnswer,
-  type AgentHarnessQuestionGatewayCall,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { claimPendingAgentQuestionAnswer } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { isJsonObject } from "./protocol.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { createCodexUserInputTestParams as createParams } from "./user-input-bridge.test-support.js";
+import { createUserInputGateway } from "./user-input-gateway.test-support.js";
 
 function formParams(overrides: Record<string, unknown> = {}) {
   return {
@@ -37,36 +35,17 @@ function createGateway(
   waitAnswer: (id: string) => unknown,
   cancel: (id: string) => void = () => {},
 ) {
-  const calls: string[] = [];
-  const questions: Array<{ id: string; questions: unknown[] }> = [];
-  const call: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
-    calls.push(method);
-    assert(isJsonObject(params) && typeof params.id === "string");
-    const id = params.id;
-    if (method === "question.request") {
-      assert(Array.isArray(params.questions));
-      questions.push({ id, questions: params.questions });
-      return { id };
-    }
-    if (method === "question.waitAnswer") {
-      return await waitAnswer(id);
-    }
-    if (method !== "question.resolve") {
-      throw new Error(`unexpected gateway method ${method}`);
-    }
-    cancel(id);
-    return { status: "cancelled" };
-  };
+  const gateway = createUserInputGateway(waitAnswer, cancel);
   const params = createParams();
   const bridge = createCodexUserInputBridge({
     paramsForRun: params,
     threadId: "thread-1",
     turnId: "turn-1",
-    gatewayCall: call,
+    gatewayCall: gateway.call,
   });
   const request = (id: string, input = formParams(), signal?: AbortSignal) =>
     bridge.handleElicitationRequest({ id, params: input }, signal);
-  return { call, calls, questions, params, request, cancelPending: () => bridge.cancelPending() };
+  return { ...gateway, params, request, cancelPending: () => bridge.cancelPending() };
 }
 
 function createAnsweringGateway(answerBatches: Array<Record<string, string[]>>) {
@@ -93,7 +72,9 @@ function createControlledGateway() {
     ...gateway,
     async waitForAnswers(count: number) {
       await vi.waitFor(() =>
-        expect(gateway.calls.filter((rpc) => rpc === "question.waitAnswer")).toHaveLength(count),
+        expect(gateway.calls.filter(({ method }) => method === "question.waitAnswer")).toHaveLength(
+          count,
+        ),
       );
     },
     answer(questionId: string, answers: Record<string, string[]>) {

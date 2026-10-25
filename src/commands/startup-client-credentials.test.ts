@@ -36,6 +36,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import * as doctorMaintenance from "./doctor-maintenance.js";
@@ -246,6 +247,23 @@ describe("automatic client credential preparation", () => {
     const fixture = target();
     await prepareStartupClientCredentials({ env: fixture.env, runtime });
     expect(fs.readdirSync(fixture.root)).toEqual([]);
+  });
+
+  it("prepares admitted credentials without main-thread SQL, including restart", async () => {
+    const fixture = await bootstrap();
+    const sql = observeMainThreadSql();
+    try {
+      sql.calibrate();
+      await prepareStartupClientCredentials({ env: fixture.env, runtime });
+      sql.expectIdle();
+      await closeOpenClawStateDatabaseAsync();
+      sql.clear();
+      await prepareStartupClientCredentials({ env: fixture.env, runtime });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
   });
 
   it("recovers a remounted fresh bootstrap without changing credentials or another root", async () => {
@@ -460,7 +478,7 @@ describe("automatic client credential preparation", () => {
     expect(fs.readFileSync(fixture.local)).toEqual(refusedBytes);
   });
 
-  it("does not replace missing credentials after the source has retired them", async () => {
+  it("does not replace missing SQLite credentials", async () => {
     const fixture = await bootstrap();
     fs.unlinkSync(fixture.local);
     await expect(prepareStartupClientCredentials({ env: fixture.env, runtime })).rejects.toThrow(

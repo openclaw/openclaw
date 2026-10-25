@@ -13,10 +13,11 @@ Cold catalog listing waits up to one second per provider, concurrently. Provider
 finish within that budget return normally. When a page is already available for
 the same caller and query, listing returns it promptly while discovery refreshes
 in the background; an already-settled refresh returns its fresh page instead.
-A slow provider returns
-`catalog.error.code: "catalog_pending"`; when available, its latest available page
-for the same caller and query is included with hosts marked `pending: true` and
-a stale-results message. A failed catalog enumeration can likewise return that page with
+A slow provider returns `catalog.pending: true` without treating healthy discovery
+as an error; when available, its latest available page for the same caller and query
+is included with hosts marked `pending: true`. A pending refresh retains the last
+catalog failure until a successful enumeration clears it, including an empty result.
+A failed catalog enumeration can return that page with
 `catalog.error.code: "catalog_stale"` and the underlying error in its message.
 Completed host results are authoritative, including offline or unavailable hosts;
 the Gateway does not replace those results with older rows, even while another
@@ -91,8 +92,9 @@ Import preserves the catalog's projected transcript text, not the original nativ
 files or raw provider records. Each import retains up to 50,000 transcript items
 or 64 MiB of projected history, whichever comes first, starting with the most
 recent history. Provider truncation and the existing per-item text limit still
-apply. If the history ceiling omits older items,
-the result has `complete: false` and the CLI warns that the copy is incomplete.
+apply. Pagination also stops on a repeated continuation cursor or after 50,000
+page requests. If these bounds omit older items, the result has `complete: false`
+and the CLI warns that the copy is incomplete.
 `importedItems` counts newly appended source items; `totalItems` counts source
 items read during this import, including items already preserved. Claude and
 Codex supply stable item IDs; for catalogs whose items lack IDs, re-import

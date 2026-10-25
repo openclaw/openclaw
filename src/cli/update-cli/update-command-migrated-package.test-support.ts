@@ -308,10 +308,7 @@ export async function expectMigratedPackageFinalization(
     expect(settled).toBe(continuedResult);
   }
   const outcome = continuedResult!;
-  expect(outcome).toMatchObject({
-    exitCode,
-    result: { status, reason },
-  });
+  expect(outcome).toMatchObject({ exitCode, result: { status, reason } });
   expect(outcome.candidateStartAttempted).toBe(candidateStartAttempted);
   expect(outcome.databaseRollbackAvailable).toBe(handback ? true : undefined);
   if (handback) {

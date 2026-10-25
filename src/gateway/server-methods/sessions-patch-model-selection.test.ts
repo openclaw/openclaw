@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveModelFallbackOptions } from "../../auto-reply/reply/agent-runner-run-params.js";
 import { handleDirectiveOnly } from "../../auto-reply/reply/directive-handling.impl.js";
 import { parseInlineSessionDirectives } from "../../auto-reply/reply/directive-handling.parse.js";
@@ -22,18 +23,24 @@ import {
 import { createTypingController } from "../../auto-reply/reply/typing.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  createSessionEntryWithTranscript,
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as transcriptReports from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as sessionMailbox from "../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
+import {
+  createSessionMutationCatalog,
+  startSessionMutationRequest,
+} from "./sessions-mutations.native-consent.test-support.js";
 import { createSessionMutationTestContext } from "./sessions-mutations.owner.test-support.js";
 import { setupSessionMutationState } from "./sessions-mutations.state.test-support.js";
 import * as catalogPreparation from "./sessions-patch-catalog-preparation.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext } from "./types.js";
 
 // mock-isolation: Provider discovery is outside this synthetic session/queue preference boundary.
 vi.mock("../../plugins/provider-thinking.js", () => ({
@@ -47,7 +54,6 @@ vi.mock("../../auto-reply/reply/agent-runner-memory.js", () => ({
 // mock-isolation: Use the fixture config without ambient runtime or secret-Gateway state.
 vi.mock("../../auto-reply/reply/agent-runner-utils.js", () => ({
   resolveQueuedReplyExecutionConfig: async (config: OpenClawConfig) => config,
-  resolveQueuedReplyRuntimeConfig: (config: OpenClawConfig) => config,
 }));
 
 const withState = setupSessionMutationState();
@@ -127,35 +133,87 @@ async function seedSession(thinkingLevel = "low", overrides: Partial<SessionEntr
 
 async function patchSession(patch: Record<string, unknown>, config = cfg) {
   const params = { key: sessionKey, ...patch };
-  const responses: Parameters<RespondFn>[] = [];
   const context = {
     ...createSessionMutationTestContext(config),
-    loadGatewayModelCatalogSnapshot: async () => ({
-      agentId: "main",
-      agentDir: "/fixture/agent",
-      workspaceDir: "/fixture/workspace",
-      config,
-      catalogComplete: true,
-      entries: catalog,
-      routeVariants: catalog,
-    }),
+    loadGatewayModelCatalogSnapshot: async () =>
+      createSessionMutationCatalog(
+        config,
+        { agentDir: () => "/fixture/agent", workspaceDir: "/fixture/workspace" },
+        catalog,
+      ),
     getSessionEventSubscriberConnIds: () => new Set(),
     dedupe: new Map(),
   } satisfies GatewayRequestContext;
-  await expectDefined(
-    sessionMutationHandlers["sessions.patch"],
-    "patch handler",
-  )({
+  const { responses, running } = startSessionMutationRequest("sessions.patch", params, {
     req: { type: "req", id: "selection-patch", method: "sessions.patch", params },
-    params,
     client: null,
     context,
-    isWebchatConnect: () => true,
-    respond: (...response) => responses.push(response),
   });
+  await running;
   expect(responses).toHaveLength(1);
   return expectDefined(responses[0], "patch response");
 }
+
+it.each([false, true])(
+  "records accepted model changes outside model context (incognito: %s)",
+  (incognito) =>
+    withState(async (state) => {
+      const target = {
+        ...scope,
+        sessionKey: incognito ? "agent:main:dashboard:incognito-model-selection" : sessionKey,
+        sessionId,
+        storePath: incognito
+          ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
+          : path.join(state.sessionsDir(), "sessions.json"),
+      };
+      if (incognito) {
+        await createSessionEntryWithTranscript(target, () => ({
+          ok: true,
+          entry: {
+            sessionId,
+            updatedAt: 1,
+            incognito: true,
+            providerOverride: "fixture",
+            modelOverride: "x",
+            modelOverrideSource: "user",
+          },
+        }));
+      } else {
+        await seedSession();
+      }
+      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      const message = { role: "user" as const, content: "Keep the conversation.", timestamp: 1 };
+      await manager.appendMessageAsync(message);
+      for (const [model, accepted] of [
+        ["fixture/y", true],
+        ["fixture/y", true],
+        ["fixture/not-allowed", false],
+        ["fixture/x", true],
+      ] as const) {
+        expect((await patchSession({ key: target.sessionKey, model }))[0]).toBe(accepted);
+      }
+      const followup = { role: "user" as const, content: "Continue.", timestamp: 2 };
+      await manager.appendMessageAsync(followup);
+      const reopened = await SessionManager.openAsync(target, state.workspaceDir);
+      expect(reopened.getEntries()).toMatchObject([
+        { type: "message", message },
+        { customType: "session-model-change", display: true, details: { from: "x", to: "y" } },
+        { customType: "session-model-change", display: true, details: { from: "y", to: "x" } },
+        { type: "message", message: followup },
+      ]);
+      expect(reopened.buildSessionContext().messages).toEqual([message, followup]);
+    }),
+);
+
+it("keeps an accepted model when its history notice cannot be saved", () =>
+  withState(async () => {
+    await seedSession();
+    vi.spyOn(transcriptReports, "appendSessionTranscriptReport").mockRejectedValueOnce(
+      new Error("fixture notice write failed"),
+    );
+    expect((await patchSession({ model: "fixture/y" }))[0]).toBe(true);
+    expect(loadSessionEntry(scope)?.modelOverride).toBe("y");
+  }));
 
 it("preserves requested thinking when switching away from and back to a reasoning model", () =>
   withState(async () => {

@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { listAgentEntries } from "../../agents/agent-roster.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
@@ -20,7 +19,10 @@ import type { SessionEntrySummary } from "../../config/sessions/session-accessor
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveHeartbeatSummariesForAgents } from "../../infra/heartbeat-summary-projection.js";
+import {
+  projectHeartbeatSummary,
+  readHeartbeatSummarySnapshot,
+} from "../../infra/heartbeat-summary-snapshot.js";
 import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -137,19 +139,19 @@ async function prepareHealthAgentSummaries(
   cfg: OpenClawConfig,
   { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
   projection?: SessionRowProjection,
+  cronStorePath?: string,
 ) {
   const { prepareStatusSessionStores } = await import("../../status/session-stores.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
-  const heartbeats = resolveHeartbeatSummariesForAgents(
-    cfg,
-    ordered.map(({ id }) => id),
+  // Receipts list the primary job first; retain it when converted siblings share an agent.
+  const heartbeatJobs = new Map(
+    (await readHeartbeatSummarySnapshot(cfg, cronStorePath))
+      .toReversed()
+      .map((job) => [job.agentId, job]),
   );
-  const prepared = await prepareStatusSessionStores(
+  const sessionStores = await prepareStatusSessionStores(
     cfg,
-    ordered.map((agent, index) => ({
-      ...agent,
-      heartbeat: expectDefined(heartbeats[index], "heartbeat summary"),
-    })),
+    ordered,
     HEALTH_RECENT_SESSION_LIMIT,
     {
       projection,
@@ -158,14 +160,13 @@ async function prepareHealthAgentSummaries(
         if (!isTransientSqliteError(error)) {
           throw error;
         }
-        // Health is best-effort for transient locks; unrelated failures still surface.
         return { count: 0, recent: [], byAgent: new Map() };
       },
     },
   );
   return {
     publish() {
-      const stores = prepared.publish();
+      const stores = sessionStores.publish();
       // A deleted configured default hands the display flag to the first surviving row.
       const displayDefaultId =
         defaultAgentId && !stores.byAgent.some(({ agent }) => agent.id === defaultAgentId)
@@ -175,7 +176,7 @@ async function prepareHealthAgentSummaries(
         agentId: agent.id,
         name: agent.name,
         isDefault: agent.id === displayDefaultId,
-        heartbeat: agent.heartbeat,
+        heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id)),
         sessions: projectHealthSessions(store.path, store),
       }));
       return {
@@ -313,31 +314,26 @@ async function buildHealthAccountRecord(params: {
     (params.accountId === params.defaultAccountId
       ? params.runtimeSnapshot?.channels[params.plugin.id]
       : undefined);
-  if (params.runtimeOnly && runtimeAccount) {
-    const snapshot = buildChannelAccountSnapshotFromRuntime(runtimeAccount);
-    const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
-      channelId: params.plugin.id,
-      accountId: params.accountId,
-      runtime: snapshot,
-    });
-    if (unavailable) {
-      return unavailable;
-    }
-    const healthState = resolveChannelHealthState(snapshot, {
+  const runtimeOnlySnapshot =
+    params.runtimeOnly && runtimeAccount
+      ? buildChannelAccountSnapshotFromRuntime(runtimeAccount)
+      : undefined;
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
+    channelId: params.plugin.id,
+    accountId: params.accountId,
+    runtime: runtimeOnlySnapshot ?? runtimeSnapshot,
+  });
+  if (unavailable) {
+    return unavailable;
+  }
+  if (runtimeOnlySnapshot) {
+    const healthState = resolveChannelHealthState(runtimeOnlySnapshot, {
       channelId: params.plugin.id,
       now: Date.now(),
       staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
       channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
     });
-    return { ...snapshot, ...(healthState !== undefined ? { healthState } : {}) };
-  }
-  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
-    channelId: params.plugin.id,
-    accountId: params.accountId,
-    runtime: runtimeSnapshot,
-  });
-  if (unavailable) {
-    return unavailable;
+    return { ...runtimeOnlySnapshot, ...(healthState !== undefined ? { healthState } : {}) };
   }
   const { probeAccount, inspectedAccount, enabled, configured, diagnostics } =
     await resolveHealthAccountContext({
@@ -514,6 +510,7 @@ export async function collectGatewayHealthSnapshot(params: {
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
   sessionRowProjection?: SessionRowProjection;
+  cronStorePath?: string;
 }): Promise<HealthSummary> {
   const stateContext = captureDeliveryQueueHealthContext();
   const start = performance.now();
@@ -525,6 +522,7 @@ export async function collectGatewayHealthSnapshot(params: {
     cfg,
     { defaultAgentId, ordered },
     params.sessionRowProjection,
+    params.cronStorePath,
   );
 
   const includeSensitive = params.audience === "admin";
@@ -639,19 +637,7 @@ export async function collectGatewayHealthSnapshot(params: {
   const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(stateContext);
   const { agents, sessions } = agentSummaries.publish();
   const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
-  const configuredHeartbeatAgentId = normalizeOptionalString(
-    cfg.agents?.defaults?.heartbeat?.agentId,
-  );
-  const heartbeatSummaryAgent =
-    (configuredHeartbeatAgentId
-      ? agents.find(
-          (agent) =>
-            agent.heartbeat.enabled &&
-            agent.agentId === normalizeAgentId(configuredHeartbeatAgentId),
-        )
-      : undefined) ??
-    agents.find((agent) => agent.heartbeat.enabled) ??
-    summaryAgent;
+  const heartbeatSummaryAgent = agents.find((agent) => agent.heartbeat.enabled) ?? summaryAgent;
   const heartbeatSeconds = heartbeatSummaryAgent?.heartbeat.everyMs
     ? Math.round(heartbeatSummaryAgent.heartbeat.everyMs / 1000)
     : 0;

@@ -88,38 +88,33 @@ describe("resolveGroupToolPolicy group context validation", () => {
     return resolveGroupToolPolicy({ config, messageProvider: "whatsapp", ...params });
   }
 
-  it("rejects forged groupId when the session has no group context", () => {
-    expect(
-      groupPolicy({ sessionKey: "agent:main:main", groupId: "trusted-group" }),
-    ).toBeUndefined();
-  });
-
-  it("uses session-derived group policy when caller groupId disagrees", () => {
-    expect(
-      groupPolicy({
-        sessionKey: "agent:main:whatsapp:group:safe-room",
-        groupId: "trusted-group",
-      }),
-    ).toEqual({ allow: ["read"] });
-  });
-
-  it("accepts caller groupId when spawnedBy provides the trusted group context", () => {
-    expect(
-      groupPolicy({
-        sessionKey: "agent:main:main",
-        spawnedBy: "agent:main:whatsapp:group:trusted-group",
-        groupId: "trusted-group",
-      }),
-    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
-  });
-
-  it("keeps specific session group policy ahead of trusted parent caller groupId", () => {
-    expect(
-      groupPolicy({
-        sessionKey: "agent:main:whatsapp:group:room:sender:alice",
-        groupId: "room",
-      }),
-    ).toEqual({ allow: ["read"] });
+  it.each([
+    ["rejects forged groupId without group context", "main", "trusted-group", undefined, undefined],
+    [
+      "prefers the session over a conflicting caller",
+      "whatsapp:group:safe-room",
+      "trusted-group",
+      undefined,
+      ["read"],
+    ],
+    [
+      "trusts a spawnedBy group",
+      "main",
+      "trusted-group",
+      "agent:main:whatsapp:group:trusted-group",
+      ["exec", "read", "write", "edit"],
+    ],
+    [
+      "prefers the specific session over its parent",
+      "whatsapp:group:room:sender:alice",
+      "room",
+      undefined,
+      ["read"],
+    ],
+  ] as const)("%s", (_name, session, groupId, spawnedBy, allow) => {
+    expect(groupPolicy({ sessionKey: `agent:main:${session}`, groupId, spawnedBy })).toEqual(
+      allow ? { allow } : undefined,
+    );
   });
 
   it("trusts the session channel, not the caller", () => {

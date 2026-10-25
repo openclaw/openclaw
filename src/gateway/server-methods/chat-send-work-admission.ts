@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
@@ -29,7 +29,6 @@ import {
 import type { registerChatAbortController } from "../chat-abort.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
-import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
@@ -51,6 +50,7 @@ import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
 import type { ChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { withCurrentChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
+import { respondError } from "./response.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -99,16 +99,12 @@ export function consumeChatSendAdmissionRetry(
     const pending = readPreRegisteredRun({
       key: params.session.pendingChatSendKey,
       entry: params.context.dedupe.get(params.session.pendingChatSendKey),
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
     if (pending?.payload.goalFingerprint) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Run ID is reserved by a Goal request; use a new ID.",
-        ),
+      respondError(
+        params.respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Run ID is reserved by a Goal request; use a new ID.",
       );
       return false;
     }

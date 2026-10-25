@@ -115,39 +115,26 @@ async function createFixture() {
 }
 
 describe("cron reload loading", { concurrent: false }, () => {
-  it.each(["lazy load", "monitor retry"] as const)("rebuilds cron with %s", async (mode) => {
+  it("loads cron only when its configuration requires a rebuild", async () => {
     const load = vi.fn(() => ({ buildGatewayCronService }));
-    if (mode === "lazy load") {
-      vi.doMock("./server-cron.js", load);
-    }
+    vi.doMock("./server-cron.js", load);
     using fixture = await createFixture();
-    if (mode === "lazy load") {
-      await fixture.handlers.applyHotReload(
-        { ...fixture.plan, restartCron: false, reconcileSystemJobs: false },
-        fixture.nextConfig,
-      );
-      expect(load).not.toHaveBeenCalled();
-      expect(buildGatewayCronService).not.toHaveBeenCalled();
-    } else {
-      vi.mocked(fixture.next.reconcileSystemJobs).mockResolvedValue("retry-scheduled");
-    }
-    await expect(
-      fixture.handlers.applyHotReload(
-        mode === "monitor retry" ? { ...fixture.plan, reconcileSystemJobs: true } : fixture.plan,
-        fixture.nextConfig,
-      ),
-    ).resolves.toBe("applied");
+    await fixture.handlers.applyHotReload(
+      { ...fixture.plan, restartCron: false },
+      fixture.nextConfig,
+    );
+    expect(load).not.toHaveBeenCalled();
+    expect(buildGatewayCronService).not.toHaveBeenCalled();
+    await expect(fixture.handlers.applyHotReload(fixture.plan, fixture.nextConfig)).resolves.toBe(
+      "applied",
+    );
     expect(fixture.setState).toHaveBeenLastCalledWith(
       expect.objectContaining({ cronState: fixture.next }),
     );
     expect(fixture.nextCron.start).toHaveBeenCalledOnce();
-    if (mode === "lazy load") {
-      expect(load).toHaveBeenCalledOnce();
-      expect(buildGatewayCronService).toHaveBeenCalledOnce();
-      expect(fixture.previousCron.stop).toHaveBeenCalledOnce();
-    } else {
-      expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
-    }
+    expect(load).toHaveBeenCalledOnce();
+    expect(buildGatewayCronService).toHaveBeenCalledOnce();
+    expect(fixture.previousCron.stop).toHaveBeenCalledOnce();
   });
 
   // Each await rechecks the same ownership guard; cover every cause and await point.

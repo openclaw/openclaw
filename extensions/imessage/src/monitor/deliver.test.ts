@@ -45,6 +45,10 @@ describe("deliverIMessageReply", () => {
   const remember = vi.fn();
   const destination = { target: "chat_id:20", accountId: "acct-2" };
   const deliveryDefaults = { cfg, runtime, textLimit: 4000, maxBytes: 2048, ...destination };
+  const deliver = (
+    payload: Parameters<typeof deliverIMessageReply>[0]["payload"],
+    options: Partial<Parameters<typeof deliverIMessageReply>[0]> = {},
+  ) => deliverIMessageReply({ ...deliveryDefaults, payload, ...options });
 
   beforeAll(async () => {
     ({ createIMessageEchoCachingSend, deliverIMessageReply } = await import("./deliver.js"));
@@ -62,11 +66,10 @@ describe("deliverIMessageReply", () => {
   });
 
   it("forwards voice-note payloads to the canonical iMessage media sender", async () => {
-    await deliverIMessageReply({
-      ...deliveryDefaults,
-      payload: { mediaUrl: "https://example.com/voice.caf", audioAsVoice: true },
-      maxBytes: 8192,
-    });
+    await deliver(
+      { mediaUrl: "https://example.com/voice.caf", audioAsVoice: true },
+      { maxBytes: 8192 },
+    );
 
     expect(sendMessageIMessageMock).toHaveBeenCalledWith(
       "chat_id:20",
@@ -112,11 +115,7 @@ describe("deliverIMessageReply", () => {
       .mockResolvedValueOnce(sentText("imsg-1", "first"))
       .mockResolvedValueOnce(sentText("imsg-2", "second"));
 
-    await deliverIMessageReply({
-      ...deliveryDefaults,
-      payload: { text: "first|second" },
-      sentMessageCache: { remember },
-    });
+    await deliver({ text: "first|second" }, { sentMessageCache: { remember } });
 
     expect(remember.mock.calls).toStrictEqual([
       ["acct-2:chat_id:20", { text: "first", messageId: "imsg-1" }],
@@ -132,11 +131,7 @@ describe("deliverIMessageReply", () => {
       receipt: createTestIMessageReceipt("imsg-media-1", "media"),
     });
 
-    await deliverIMessageReply({
-      ...deliveryDefaults,
-      payload: { mediaUrls: ["https://example.com/a.jpg"] },
-      sentMessageCache: { remember },
-    });
+    await deliver({ mediaUrls: ["https://example.com/a.jpg"] }, { sentMessageCache: { remember } });
 
     expect(remember).toHaveBeenCalledWith("acct-2:chat_id:20", {
       media: { contentType: "image/jpeg", kind: "image" },
@@ -161,15 +156,14 @@ describe("deliverIMessageReply", () => {
         }),
       );
 
-    const observed: unknown = await deliverIMessageReply({
-      ...deliveryDefaults,
-      payload: {
+    const observed: unknown = await deliver(
+      {
         text: "visible caption",
         mediaUrls: ["https://example.com/first.jpg", "https://example.com/second.jpg"],
         replyToId: "unsupported-thread",
       },
-      maxBytes: 4096,
-    }).catch((error: unknown) => error);
+      { maxBytes: 4096 },
+    ).catch((error: unknown) => error);
 
     if (!isChannelPartialDeliveryError(observed)) {
       throw new Error("expected canonical partial delivery error");
@@ -186,11 +180,10 @@ describe("deliverIMessageReply", () => {
   });
 
   it("returns a recorded non-visible outcome when sanitization removes the complete reply", async () => {
-    const delivered = await deliverIMessageReply({
-      ...deliveryDefaults,
-      payload: { text: "<thinking>private reasoning</thinking>" },
-      maxBytes: 4096,
-    });
+    const delivered = await deliver(
+      { text: "<thinking>private reasoning</thinking>" },
+      { maxBytes: 4096 },
+    );
 
     expect(sendMessageIMessageMock).not.toHaveBeenCalled();
     expect(delivered).toEqual({

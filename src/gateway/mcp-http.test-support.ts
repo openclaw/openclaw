@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, vi } from "vitest";
+import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { activateMcpLoopbackClientGrantCapture } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
@@ -21,11 +22,52 @@ export type MockGatewayScopedTools = {
 
 export type McpToolResultPayload = {
   result?: {
+    instructions?: string;
     tools?: Array<{ name: string; inputSchema?: Record<string, unknown> }>;
-    content?: Array<Record<string, unknown>>;
+    content?: Array<{ text?: string; [key: string]: unknown }>;
     isError?: boolean;
   };
 };
+
+export function setMinimalCliPrepareDeps(
+  setDeps: typeof import("../agents/cli-runner/prepare.test-support.js").setCliRunnerPrepareTestDeps,
+) {
+  setDeps({
+    isWorkspaceBootstrapPending: async () => false,
+    makeBootstrapWarn: () => () => {},
+    resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
+    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
+    prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
+    loadManifestModelCatalog: () => [],
+  });
+}
+
+export async function connectPreparedCliTurn(context: PreparedCliRunContext, signal: AbortSignal) {
+  const { createCliRunCurrentAssertion } = await import("../agents/cli-runner/execution-target.js");
+  const runtime = getActiveMcpLoopbackRuntime();
+  const token = context.preparedBackend.env?.OPENCLAW_MCP_TOKEN;
+  if (!runtime || !token) {
+    throw new Error("Expected prepared CLI grant and MCP loopback runtime");
+  }
+  const captureKey = `capture-${context.params.runId}`;
+  context.preparedBackend.mcpClientGrantCapture?.activate(
+    captureKey,
+    createCliRunCurrentAssertion(context.params),
+  );
+  return {
+    token,
+    rpc: async (method: string, params?: Record<string, unknown>) => {
+      const response = await sendRaw({
+        port: runtime.port,
+        token,
+        signal,
+        headers: jsonHeaders({ "x-openclaw-cli-capture-key": captureKey }),
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, ...(params ? { params } : {}) }),
+      });
+      return { status: response.status, body: await readMcpPayload(response) };
+    },
+  };
+}
 
 export function scopedToolFixture<T>(tools: T[], workspaceDir: string) {
   return { agentId: "main", workspaceDir, captureFinalCronCreatorTools: undefined, tools };
@@ -38,7 +80,7 @@ export function captureGrant(token: string, captureKey: string, runtimeOwnerToke
 }
 
 export async function startLoopbackServerForTest() {
-  await ensureMcpLoopbackServer(0);
+  await ensureMcpLoopbackServer();
   const runtime = getActiveMcpLoopbackRuntime();
   if (!runtime) {
     throw new Error("expected active MCP loopback runtime");

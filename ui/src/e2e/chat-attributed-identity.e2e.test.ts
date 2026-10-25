@@ -682,7 +682,11 @@ suite.define(() => {
 
       await gateway.deferNext("chat.send");
       await group.getByRole("button", { name: "Retry queued message" }).click();
-      await expect(group.locator(".chat-send-status")).toHaveCount(0);
+      await expect(group.locator(".chat-send-status")).toHaveAttribute(
+        "data-send-state",
+        "sending",
+      );
+      await expect(group.getByRole("button", { name: "Retry queued message" })).toHaveCount(0);
       await expect(group).toBeVisible();
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
       const sends = await gateway.getRequests("chat.send");
@@ -691,6 +695,7 @@ suite.define(() => {
       );
       expect(retryRunId).not.toBe(firstRunId);
       await gateway.resolveDeferred("chat.send", { runId: retryRunId, status: "started" });
+      await expect(group.locator(".chat-send-status")).toHaveCount(0);
     });
   });
 

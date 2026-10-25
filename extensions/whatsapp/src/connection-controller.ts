@@ -173,21 +173,6 @@ function stoppedControllerError(): Error {
   return new Error("WhatsApp connection controller is shutting down");
 }
 
-export function closeWaSocketSoon(
-  sock:
-    | {
-        end?: (error: Error | undefined) => void;
-        ws?: { close?: () => void };
-      }
-    | null
-    | undefined,
-  delayMs = 500,
-): void {
-  setTimeout(() => {
-    closeWaSocket(sock);
-  }, delayMs);
-}
-
 type WhatsAppLoginWaitResult =
   | {
       outcome: "connected";

@@ -60,9 +60,10 @@ export function resolveReplySessionRolloverState(
           subagentControlScope: entry.subagentControlScope,
         }
       : {}),
-    // Native worktrees belong to the logical session, not its conversation context.
-    // Plain New Chat detaches separately through clearSpawnedCwd and lifecycle cleanup.
-    ...(entry.worktree
+    // Native worktrees and registered projects belong to the logical session, not its
+    // conversation context. Plain New Chat detaches separately through clearSpawnedCwd
+    // and lifecycle cleanup.
+    ...(entry.worktree || entry.projectId
       ? {
           worktree: entry.worktree,
           projectId: entry.projectId,

@@ -530,7 +530,6 @@ describe("maybeRepairPluginRegistryState", () => {
     await markRetainedManagedNpmInstall({
       packageDir: managed.packageDir,
       pluginId: "bundled-demo",
-      retainedAt: "2026-04-25T00:00:00.000Z",
       reason: "test-retained-generation",
     });
     await writePersistedInstalledPluginIndex(

@@ -29,6 +29,7 @@ export function pullRequest(
 
 export function publication(overrides: Partial<GitHubPublicationView> = {}): GitHubPublicationView {
   return {
+    readiness: { read: null, retired: new Promise(() => {}) },
     activity: null,
     canPublishShared: true,
     canPublishPersonal: true,

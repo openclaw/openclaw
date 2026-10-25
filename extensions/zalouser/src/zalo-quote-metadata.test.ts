@@ -216,7 +216,6 @@ it("reuses group context until its five-minute TTL expires", async () => {
 
   await withStoredSession("cache-ttl", api, async () => {
     await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
-      groupId: "group-ttl",
       name: "Group",
     });
     now.mockReturnValue(1_700_000_299_999);

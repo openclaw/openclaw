@@ -268,6 +268,7 @@ function* openOpenClawAgentDatabaseSteps(
     throw new Error("Prepared agent database lease belongs to another store");
   }
   let reuseIntegrity = false;
+  let liveOwnerAdmitted = false;
   let integrityRevoked = false;
   const diagnostics: SqliteIntegrityDiagnostics = {};
   const validation = pending?.validation ?? preparedLease?.validation;
@@ -275,8 +276,10 @@ function* openOpenClawAgentDatabaseSteps(
     runtimeIntegrityAllowed,
     invalidated,
     because,
+    admittedByLiveOwner = false,
   ) => {
     reuseIntegrity = runtimeIntegrityAllowed;
+    liveOwnerAdmitted = admittedByLiveOwner;
     // A host refusal may have no positive validation receipt to transfer.
     integrityRevoked =
       invalidated || preparedLease?.integrityRevoked === true || pending?.integrityRevoked === true;
@@ -442,7 +445,8 @@ function* openOpenClawAgentDatabaseSteps(
           pathname,
           diagnostics,
           verification,
-          isValidatedReopen && reuseAdmittedIntegrity,
+          (isValidatedReopen && reuseAdmittedIntegrity) ||
+            (liveOwnerAdmitted && diagnostics.integrityGateReason === "lease-class"),
           reusedSchema,
           integrityCheck,
           repairAdmission?.integrityTables ?? [],
@@ -571,6 +575,9 @@ function* openOpenClawAgentDatabaseSteps(
     releaseCreationAdmission?.();
     return database;
   } catch (error) {
+    // The host releases a refused prepared worker's lease after native exit.
+    const deferLeaseRelease =
+      preparedLease !== undefined && !isMainThread && error instanceof SqliteWorkerOpenRefusedError;
     let closeError: unknown;
     if (openedDatabase) {
       try {
@@ -621,7 +628,7 @@ function* openOpenClawAgentDatabaseSteps(
         closeMaintenanceAgentDatabase(retainedDatabase),
       );
       cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
-    } else {
+    } else if (!deferLeaseRelease) {
       const closeOutcome = error instanceof SqliteWorkerOpenRefusedError ? "read-only" : undefined;
       try {
         releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions, closeOutcome);

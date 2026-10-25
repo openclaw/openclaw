@@ -1,7 +1,5 @@
 // Keep plugin transport proof outside core gateway tests.
-import { once } from "node:events";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { text } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as registries from "openclaw/plugin-sdk/channel-test-helpers";
@@ -24,6 +22,11 @@ import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../src/gateway/
 import * as toolResolution from "../src/gateway/tool-resolution.js";
 import { createDeferredCore } from "../src/shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
@@ -57,9 +60,8 @@ async function startTelegramAskUserLoopback() {
       .then((body) => {
         const entry = { body, url: request.url ?? "" };
         requests.push(entry);
-        response.writeHead(200, { "content-type": "application/json" });
         const result = { message_id: requests.length, chat: { id: 1, type: "private" } };
-        response.end(JSON.stringify({ ok: true, result }));
+        respondJson(response, { ok: true, result });
         if (entry.url.includes("sendMessage")) {
           promptRequest.resolve(entry);
         }
@@ -68,16 +70,12 @@ async function startTelegramAskUserLoopback() {
         response.destroy(error instanceof Error ? error : new Error(String(error)));
       });
   });
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const { port } = server.address() as AddressInfo;
+  const apiRoot = await listenLoopback(server);
   return {
-    apiRoot: `http://127.0.0.1:${port}`,
+    apiRoot,
     requests,
     promptRequest: promptRequest.promise,
-    close: async () => {
-      server.closeAllConnections();
-      await server[Symbol.asyncDispose]();
-    },
+    close: () => closeHttpServer(server),
   };
 }
 

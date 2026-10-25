@@ -2307,6 +2307,7 @@ private data class AboutLink(
 
 private val aboutLinks =
   listOf(
+    AboutLink("Support", "community.openclaw.ai", "https://community.openclaw.ai/"),
     AboutLink("Website", "openclaw.ai", "https://openclaw.ai"),
     AboutLink("Docs", "docs.openclaw.ai", "https://docs.openclaw.ai"),
     AboutLink("GitHub", "github.com/openclaw/openclaw", "https://github.com/openclaw/openclaw"),
@@ -2404,6 +2405,7 @@ internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): St
 
 internal fun aboutLinkTitle(title: String): String =
   when (title) {
+    "Support" -> nativeString("Support")
     "Website" -> nativeString("Website")
     "Docs" -> nativeString("Docs")
     else -> title

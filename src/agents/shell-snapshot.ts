@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -138,7 +138,7 @@ function buildSnapshotKey(opts: ShellSnapshotWrapOptions): string {
         home: getTrustedShellHome(),
         stateDir: resolveStateDir(process.env),
         env: buildSafeEnvSignature(process.env),
-        startup: buildStartupSignature(opts.shell),
+        zdotdir: process.env.ZDOTDIR?.trim() || getTrustedShellHome(),
       }),
     )
     .digest("hex");
@@ -152,37 +152,13 @@ function buildSafeEnvSignature(
     .map((key): [string, string | null] => [key, env[key] ?? null]);
 }
 
-function buildStartupSignature(shell: string): Array<[string, number, number] | [string, null]> {
-  const shellName = path.basename(shell);
-  const home = getTrustedShellHome();
-  const zdotdir = process.env.ZDOTDIR?.trim() || home;
-  const candidates =
-    shellName === "zsh"
-      ? [path.join(zdotdir, ".zshrc")]
-      : shellName === "bash"
-        ? [path.join(home, ".bashrc")]
-        : [];
-  return candidates.map((candidate) => {
-    try {
-      const stat = statSync(candidate);
-      return [candidate, stat.mtimeMs, stat.size];
-    } catch {
-      return [candidate, null];
-    }
-  });
-}
-
-function readNonBlankPathEnv(value: string | undefined): string | undefined {
-  return value?.trim() ? value : undefined;
-}
-
 function getTrustedShellHome(): string {
   const configuredHome =
-    readNonBlankPathEnv(process.env.HOME) ?? readNonBlankPathEnv(process.env.USERPROFILE);
+    readNonBlankString(process.env.HOME) ?? readNonBlankString(process.env.USERPROFILE);
   if (configuredHome) {
     return configuredHome;
   }
-  const accountHome = readNonBlankPathEnv(os.userInfo().homedir);
+  const accountHome = readNonBlankString(os.userInfo().homedir);
   if (!accountHome) {
     throw new Error("Unable to resolve the current user's home directory");
   }

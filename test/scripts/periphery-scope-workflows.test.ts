@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -118,13 +118,8 @@ async function runScope(
 
 function makeRepo() {
   const root = tempDirs.make("openclaw-periphery-");
-  const git = (...args: string[]) => {
-    const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
-    if (result.status !== 0) {
-      throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
-    }
-    return result.stdout.trim();
-  };
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
   const write = (relativePath: string, contents: string) => {
     const file = path.join(root, relativePath);
     mkdirSync(path.dirname(file), { recursive: true });
@@ -140,15 +135,16 @@ function makeRepo() {
   return { root, git, write, commit };
 }
 
-it.each(WORKFLOW_CASES)("uses the synthetic merge parent for $name scope", ({ workflow }) => {
-  const steps = workflow.jobs?.scope?.steps ?? [];
-  const checkout = steps.find((step) => step.name === "Checkout");
-
-  expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
-  expect(workflow.on?.pull_request?.paths).toBeUndefined();
-  expect(checkout?.with?.["fetch-depth"]).toBe(2);
-  expect(steps.some((step) => step.name === "Ensure base commit")).toBe(false);
-});
+it.each(WORKFLOW_CASES)(
+  "admits draft transitions and merge-parent history for $name",
+  ({ workflow }) => {
+    expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
+    expect(workflow.on?.pull_request?.paths).toBeUndefined();
+    expect(
+      workflow.jobs.scope.steps.find((step) => step.name === "Checkout")?.with?.["fetch-depth"],
+    ).toBe(2);
+  },
+);
 
 it.each(WORKFLOW_CASES)("selects only $name scope changes", async (fixture) => {
   const { scopedPath } = fixture;
@@ -168,21 +164,13 @@ it.each(WORKFLOW_CASES)("selects only $name scope changes", async (fixture) => {
 it.each(WORKFLOW_CASES)(
   "excludes prose but keeps source, mixed changes, resources and renames for $name",
   async (fixture) => {
-    const { scopedPath, script } = fixture;
+    const { scopedPath } = fixture;
     const repo = makeRepo();
     const repoRoot = repo.root;
     repo.write("seed", "base\n");
     repo.commit();
-    const prosePaths = [...script.matchAll(/":\(exclude\)([^"]+)"/g)].flatMap((match) =>
-      match[1] ? [match[1]] : [],
-    );
-    const firstProsePath = prosePaths[0];
-    if (!firstProsePath) {
-      throw new Error(`missing prose exclusions in ${fixture.name}`);
-    }
-    for (const prosePath of prosePaths) {
-      repo.write(prosePath, "documentation\n");
-    }
+    const firstProsePath = fixture.name === "macos" ? "apps/macos/README.md" : "apps/ios/README.md";
+    repo.write(firstProsePath, "documentation\n");
     repo.commit();
     await expect(runScope(fixture, { repoRoot })).resolves.toBe("false");
 

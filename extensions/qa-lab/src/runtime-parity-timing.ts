@@ -11,8 +11,6 @@ type QaRuntimeSpeedComparison = {
   speedupPercent: number | null;
 };
 
-export type QaRuntimeTiming = ReturnType<typeof summarizeRuntimeParityTiming>;
-
 export type QaRuntimeParityCellTiming = ReturnType<typeof measureRuntimeParityCellTiming>;
 
 export function measureRuntimeParityCellTiming(params: {

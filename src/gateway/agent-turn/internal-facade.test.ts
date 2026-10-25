@@ -1,4 +1,6 @@
+import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -123,6 +125,35 @@ function registerRun(
     timeoutMs: 60_000,
     target: captureSessionTarget({ storeScope: "/synthetic/facade.db", sessionKey, incarnation }),
   });
+}
+
+async function startOwnerFixture(assertContextCurrent?: () => void) {
+  const request = {
+    agentId: "main",
+    message: "resume",
+    idempotencyKey: "owned-start",
+    sessionKey: "agent:main:owned-start",
+    expectedExistingSessionId: "owned-session",
+  };
+  const register = () =>
+    registerRun(
+      request.idempotencyKey,
+      request.expectedExistingSessionId,
+      request.sessionKey,
+      request.agentId,
+      request.expectedExistingSessionId,
+    );
+  const registration = register();
+  assert(registration.registered, "expected startup registration");
+  onTestFinished(registration.cleanup);
+  const onStartOwner = vi.fn<(owner: AgentTurnStartOwner) => void>();
+  startTurn.mockImplementation(async ({ io }) => {
+    io.emitStartOwner?.(request.idempotencyKey, registration.entry);
+    accept(io, request.idempotencyKey, { runId: request.idempotencyKey });
+  });
+  await createFacade(createContext(), assertContextCurrent).dispatch(request, { onStartOwner });
+  const owner = expectDefined(onStartOwner.mock.calls[0]?.[0], "captured startup owner");
+  return { request, register, registration, onStartOwner, owner };
 }
 
 beforeEach(() => {
@@ -470,48 +501,12 @@ it.each([
   "gateway closed",
   "request mutated",
 ] as const)("keeps startup ownership bound to its registration through %s", async (change) => {
-  const context = createContext();
   let gatewayCurrent = true;
-  let owner: AgentTurnStartOwner | undefined;
-  const onStartOwner = vi.fn((value: AgentTurnStartOwner) => {
-    owner = value;
+  const { request, register, registration, onStartOwner, owner } = await startOwnerFixture(() => {
+    if (!gatewayCurrent) {
+      throw new Error("gateway closed");
+    }
   });
-  const request = {
-    agentId: "main",
-    message: "resume",
-    idempotencyKey: "owned-start",
-    sessionKey: "agent:main:owned-start",
-    expectedExistingSessionId: "owned-session",
-  };
-  const register = () =>
-    registerRun(
-      request.idempotencyKey,
-      request.expectedExistingSessionId,
-      request.sessionKey,
-      request.agentId,
-      request.expectedExistingSessionId,
-    );
-  const registration = register();
-  if (!registration.registered) {
-    throw new Error("expected startup registration");
-  }
-  startTurn.mockImplementation(async ({ io }) => {
-    io.emitStartOwner?.(request.idempotencyKey, registration.entry);
-    accept(io, request.idempotencyKey, { runId: request.idempotencyKey });
-  });
-  const facade = createInternalAgentTurnFacade({
-    client: createSyntheticPluginRuntimeClient(),
-    getContext: () => context,
-    assertContextCurrent: () => {
-      if (!gatewayCurrent) {
-        throw new Error("gateway closed");
-      }
-    },
-  });
-  await facade.dispatch(request, { onStartOwner });
-  if (!owner) {
-    throw new Error("expected captured startup owner");
-  }
   const observation = owner.observe();
   expect(observation).toEqual({ executionStarted: false });
   expect(() => Reflect.get(observation ?? {}, "expiresAtMs")).toThrowError(
@@ -561,6 +556,37 @@ it.each([
   expect(onStartOwner).toHaveBeenCalledOnce();
   replacement?.cleanup();
   registration.cleanup();
+});
+
+it("observes a started owner without reentering its watchdog authority", async () => {
+  const { owner, registration } = await startOwnerFixture();
+  expect(owner.observe()).toMatchObject({ executionStarted: false });
+  await claimRpcSourceForTest(registration.entry);
+  const operation = expectDefined(registration.entry.input.claim?.operation, "claimed operation");
+  let policyCurrent = true;
+  let validatingPolicy = false;
+  const assertCurrent = vi.fn(() => {
+    assert(!validatingPolicy, "Start observation reentered effect authority");
+    validatingPolicy = true;
+    try {
+      assert(policyCurrent, "Recovery operator policy revoked");
+      expect(owner.observe()).toMatchObject({ executionStarted: true });
+    } finally {
+      validatingPolicy = false;
+    }
+  });
+  const attempt = operation.watchdog.attachAttempt({ assertCurrent });
+  using cleanup = new DisposableStack();
+  cleanup.defer(() => attempt.close());
+  assertCurrent.mockClear();
+  expect(owner.observe()).toMatchObject({ executionStarted: true });
+  expect(assertCurrent).not.toHaveBeenCalled();
+  expect(owner.abort()).toBe(false);
+  expect(attempt.isCurrent()).toBe(true);
+  expect(assertCurrent).toHaveBeenCalledOnce();
+  policyCurrent = false;
+  expect(attempt.isCurrent()).toBe(false);
+  expect(assertCurrent).toHaveBeenCalledTimes(2);
 });
 
 it.each([false, true])(

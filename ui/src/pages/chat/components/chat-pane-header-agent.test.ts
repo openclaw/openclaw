@@ -110,7 +110,7 @@ it("uses the pane agent on direct navigation and retained agent switches, only i
 
   state.settings = { ...state.settings, sidebarAgentsMode: "chip" };
   draw();
-  expect(leading().textContent).toContain("workspace-research");
+  expect(leading().textContent).not.toContain("workspace-research");
   expect(leading().textContent).toContain("What can you do?");
   expect(centered()).toBeNull();
   expect(find(leading(), "agent-identity")).toBeNull();

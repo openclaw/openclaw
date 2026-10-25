@@ -14,7 +14,7 @@ import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { admitStoredChatComposerQueueItem } from "./composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
@@ -197,12 +197,12 @@ describe("chat history cursor revalidation", () => {
       sender: { id: "bob-profile", name: "Bob Proof" },
     };
     expect(
-      admitStoredChatComposerQueueItem(
+      admitStoredChatComposerQueueItemResult(
         state,
         captureChatOutboxAdmission(state, sessionKey, queued.agentId),
         queued,
       ),
-    ).toBe(true);
+    ).toBe("admitted");
     state.chatQueue = [queued];
     const renderedBobMessages = () =>
       buildChatItems({
@@ -330,43 +330,84 @@ describe("chat history cursor revalidation", () => {
     });
   });
 
-  it("retires a missed terminal failure after a newer successful cursor catch-up", async () => {
-    const cached = message("user", "cached", "cached-user", 1);
-    const handler = vi.fn(async (_params?: unknown): Promise<unknown> =>
-      delta("cursor-2", [], {
+  it.each(["delta", "full"] as const)(
+    "retires a missed failure after successful %s history and rejects stale replay",
+    async (kind) => {
+      const cached = message("user", "cached", "cached-user", 1, {
+        idempotencyKey: "run-first:user",
+      });
+      const history = (
+        cursor: string,
+        messages: ReturnType<typeof message>[],
+        row: Partial<GatewaySessionRow>,
+      ) =>
+        kind === "delta"
+          ? delta(
+              cursor,
+              messages.map((entry) => persisted(entry, { runId: "run-retry" })),
+              row,
+            )
+          : { messages: [cached, ...messages], sessionInfo: sessionInfo(row) };
+      const failed = history("cursor-2", [], {
         status: "failed",
         hasActiveRun: false,
         lastRunId: "run-first",
         lastRunError:
           "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
-      }),
-    );
-    const state = createState(handler);
-    seedCachedHistory(state, [cached], "cursor-1");
+      });
+      const handler = vi.fn(async (_params?: unknown): Promise<unknown> => failed);
+      const state = createState(handler);
+      if (kind === "delta") {
+        seedCachedHistory(state, [cached], "cursor-1");
+      }
 
-    await loadChatHistory(state);
+      await loadChatHistory(state);
 
-    expect(state.chatMessages).toEqual([cached]);
-    expect(state.chatRunError?.summary).toContain(
-      "Check the Gateway network connection and retry.",
-    );
-    expect(cachedSnapshot(state)?.deltaCursor).toBe("cursor-2");
+      expect(state.chatMessages).toEqual([cached]);
+      expect(state.chatRunError?.summary).toContain(
+        "Check the Gateway network connection and retry.",
+      );
+      if (kind === "delta") {
+        expect(cachedSnapshot(state)?.deltaCursor).toBe("cursor-2");
+      }
 
-    const reply = message("assistant", "Recovery completed.", "retry-answer", 2);
-    handler.mockResolvedValueOnce(
-      delta("cursor-3", [persisted(reply, { runId: "run-retry" })], {
-        updatedAt: 3,
-        status: "done",
-        hasActiveRun: false,
-        lastRunId: "run-retry",
-      }),
-    );
-    await loadChatHistory(state);
+      const reply = message("assistant", "Recovery completed.", "retry-answer", 3, {
+        idempotencyKey: "run-retry",
+        runId: "run-retry",
+      });
+      const recovered =
+        kind === "delta"
+          ? [reply]
+          : [
+              message("user", "Try again", "retry-user", 2, { idempotencyKey: "run-retry:user" }),
+              reply,
+            ];
+      handler.mockResolvedValueOnce(
+        history("cursor-3", recovered, {
+          updatedAt: 3,
+          status: "done",
+          hasActiveRun: false,
+          lastRunId: "run-retry",
+        }),
+      );
+      await loadChatHistory(state);
 
-    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "cursor-2" }));
-    expect(state.chatMessages.map(extractText)).toEqual(["cached", "Recovery completed."]);
-    expect(state.chatRunError).toBeNull();
-  });
+      if (kind === "delta") {
+        expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "cursor-2" }));
+      }
+      expect(state.chatMessages).toEqual([cached, ...recovered]);
+      expect(state.currentSessionId).toBe("session-cursor");
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatRunError).toBeNull();
+      expect(getChatSessionProjection(state).runs["run-first"]).toMatchObject({
+        status: "error",
+        errorMessage: failed.sessionInfo?.lastRunError,
+      });
+      handler.mockResolvedValueOnce(failed);
+      await loadChatHistory(state);
+      expect(state.chatRunError).toBeNull();
+    },
+  );
 
   it.each([
     { kind: "delta", persistedRunId: "run-other" },
@@ -402,6 +443,13 @@ describe("chat history cursor revalidation", () => {
               progressText: "Checking the workspace",
             }),
             toolEvent("call-restored"),
+            {
+              ...event(3, "usage", {
+                outputTokens: 695,
+                context: { totalTokens: 1500, contextWindow: 8000 },
+              }),
+              ts: 1100,
+            },
           ],
         },
       }));
@@ -413,6 +461,7 @@ describe("chat history cursor revalidation", () => {
       await loadHistoryWithBrowserTimers(state);
 
       expect(state.chatRunId).toBe("run-live");
+      expect(state.chatRunUsageById?.get("run-live")?.outputTokens).toBe(695);
       if (persistedRunId === "run-live") {
         expect(state.chatStreamSegments).toEqual([]);
       } else {
@@ -421,12 +470,17 @@ describe("chat history cursor revalidation", () => {
             itemId: "preamble-restored",
             runId: "run-live",
             text: "Checking the workspace",
+            ts: 900,
           }),
         );
       }
       expect(state.chatMessages).toEqual(cachedMessages);
       expect(state.chatToolMessages).toContainEqual(
-        expect.objectContaining({ runId: "run-live", toolCallId: "call-restored" }),
+        expect.objectContaining({
+          runId: "run-live",
+          toolCallId: "call-restored",
+          content: [expect.objectContaining({ type: "toolcall", name: "read" })],
+        }),
       );
     },
   );

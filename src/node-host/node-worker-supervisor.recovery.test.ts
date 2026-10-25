@@ -112,6 +112,34 @@ function fixture(label: string) {
   return writeNodeWorkerFixture(tempDirs.make(label));
 }
 
+function observeCapacity(
+  options: Parameters<typeof createNodeWorkerSupervisor>[0] & { capacity: number },
+) {
+  const snapshots: Array<{ total: number; available: number }> = [];
+  const unavailable = createDeferred();
+  const released = createDeferred();
+  const supervisor = createNodeWorkerSupervisor({
+    ...options,
+    onCapacityChanged: (snapshot) => {
+      snapshots.push(snapshot);
+      if (snapshot.available === 0) {
+        unavailable.resolve();
+      }
+      if (snapshot.available === options.capacity) {
+        released.resolve();
+      }
+    },
+  });
+  return {
+    supervisor,
+    snapshots,
+    unavailable: unavailable.promise,
+    released: released.promise,
+    expectCapacity: (available: number) =>
+      expect(snapshots.at(-1)).toEqual({ total: options.capacity, available }),
+  };
+}
+
 function launchStore(env: NodeJS.ProcessEnv) {
   return new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
 }
@@ -156,24 +184,9 @@ describe("node worker supervisor recovery", () => {
       expect(receipt.workerCleanupMode).toBe(mode);
       const anchor = receipt.worker!;
       ownedProcessGroups.push(anchor);
-      const capacitySnapshots: Array<{ total: number; available: number }> = [];
       const totalCapacity = operation === "environment-stop" ? 2 : 1;
-      const capacityUnavailable = createDeferred();
-      const capacityReleased = createDeferred();
-      const replacement = createNodeWorkerSupervisor({
-        bundleRoot,
-        env,
-        capacity: totalCapacity,
-        onCapacityChanged: (capacity) => {
-          capacitySnapshots.push(capacity);
-          if (capacity.available === 0) {
-            capacityUnavailable.resolve();
-          }
-          if (capacity.available === totalCapacity) {
-            capacityReleased.resolve();
-          }
-        },
-      });
+      const capacity = observeCapacity({ bundleRoot, env, capacity: totalCapacity });
+      const { supervisor: replacement, snapshots: capacitySnapshots } = capacity;
       let initialization: Promise<void> | undefined;
       let closing: Promise<void> | undefined;
       let initialized = false;
@@ -225,8 +238,8 @@ describe("node worker supervisor recovery", () => {
           initialized = true;
         });
         void initialization.catch(() => undefined);
-        await racePromiseWithAbortSignal(capacityUnavailable.promise, testSignal);
-        expect(capacitySnapshots.at(-1)).toEqual({ total: totalCapacity, available: 0 });
+        await racePromiseWithAbortSignal(capacity.unavailable, testSignal);
+        capacity.expectCapacity(0);
         expect(initialized).toBe(false);
         if (operation !== "close" && operation !== "anchor-lost") {
           await initialization;
@@ -239,10 +252,7 @@ describe("node worker supervisor recovery", () => {
             ...(mode === "linux-subreaper" ? { workerDescendantsReaped: false } : {}),
           });
           expect(inspectNodeWorkerProcessIdentity(anchor)).toBe("live");
-          expect(capacitySnapshots.at(-1)).toEqual({
-            total: totalCapacity,
-            available: totalCapacity - 1,
-          });
+          capacity.expectCapacity(totalCapacity - 1);
           expect(await replacement.hasActiveWork()).toBe(true);
 
           if (operation === "environment-stop") {
@@ -268,7 +278,7 @@ describe("node worker supervisor recovery", () => {
               state: "cancelled",
               ...completedCleanupProof(mode),
             });
-            expect(capacitySnapshots.at(-1)).toEqual({ total: 2, available: 2 });
+            capacity.expectCapacity(2);
             expect(await replacement.hasActiveWork()).toBe(false);
             return;
           }
@@ -308,7 +318,7 @@ describe("node worker supervisor recovery", () => {
               workerLineageSettled: false,
               ...(mode === "linux-subreaper" ? { workerDescendantsReaped: false } : {}),
             });
-            expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
+            capacity.expectCapacity(0);
             return;
           }
           const reconcile = () =>
@@ -318,25 +328,19 @@ describe("node worker supervisor recovery", () => {
           const [reconciled] = await Promise.all([reconcile(), replacement.status(input.launchId)]);
           expect(reconciled).toMatchObject(completed ?? { state: "running" });
           expect(inspectNodeWorkerProcessIdentity(anchor)).toBe("live");
-          expect(capacitySnapshots.at(-1)).toEqual({
-            total: totalCapacity,
-            available: totalCapacity - 1,
-          });
+          capacity.expectCapacity(totalCapacity - 1);
 
           process.kill(anchor.pid, "SIGCONT");
           await waitForIdentityDeath(anchor);
           // Anchor exit can precede group extinction; recovery publishes capacity after both.
-          await racePromiseWithAbortSignal(capacityReleased.promise, testSignal);
+          await racePromiseWithAbortSignal(capacity.released, testSignal);
           expect(inspectOwnedNodeWorkerTree(anchor)).toBe("dead");
           const terminalState = operation === "cancel-running" ? "cancelled" : "interrupted";
           expect(await store.get(input.launchId)).toMatchObject({
             state: terminalState,
             ...completedCleanupProof(mode),
           });
-          expect(capacitySnapshots.at(-1)).toEqual({
-            total: totalCapacity,
-            available: totalCapacity,
-          });
+          capacity.expectCapacity(totalCapacity);
           expect(await reconcile()).toMatchObject(
             completed ? { ...completed, ...completedCleanupProof(mode) } : { state: terminalState },
           );
@@ -355,7 +359,7 @@ describe("node worker supervisor recovery", () => {
           });
           expect(inspectOwnedNodeWorkerTree(anchor)).toBe("live");
           expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("live");
-          expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
+          capacity.expectCapacity(0);
           expect(await replacement.hasActiveWork()).toBe(true);
           return;
         }
@@ -371,7 +375,7 @@ describe("node worker supervisor recovery", () => {
           state: "running",
           worker: anchor,
         });
-        expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
+        capacity.expectCapacity(0);
         expect(await replacement.hasActiveWork()).toBe(true);
         await expect(replacement.launch(input, TEST_WORKER_ENDPOINT)).rejects.toThrow(
           "node worker supervisor is closed",
@@ -449,13 +453,8 @@ describe("node worker supervisor recovery", () => {
       ownedProcessGroups.push(anchor);
       const descendant = await descendantIdentity(workspaceDir);
       ownedProcessGroups.push(descendant);
-      const capacitySnapshots: Array<{ total: number; available: number }> = [];
-      const replacement = createNodeWorkerSupervisor({
-        bundleRoot,
-        env,
-        capacity: 1,
-        onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
-      });
+      const capacity = observeCapacity({ bundleRoot, env, capacity: 1 });
+      const replacement = capacity.supervisor;
       try {
         // Freeze the old observer before losing its anchor so it cannot settle this row.
         process.kill(owner.pid!, "SIGSTOP");
@@ -474,7 +473,7 @@ describe("node worker supervisor recovery", () => {
           workerCleanupMode: mode,
           workerLineageSettled: false,
         });
-        expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
+        capacity.expectCapacity(0);
         expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("live");
         expect(await replacement.hasActiveWork()).toBe(true);
       } finally {
@@ -485,12 +484,10 @@ describe("node worker supervisor recovery", () => {
 
   it("coalesces failed initialization and retries reconciliation on the next attempt", async () => {
     const { bundleRoot, env } = fixture("node-worker-initialization-retry-");
-    const capacitySnapshots: Array<{ total: number; available: number }> = [];
-    const supervisor = createNodeWorkerSupervisor({
+    const { supervisor, snapshots: capacitySnapshots } = observeCapacity({
       bundleRoot,
       env,
       capacity: 2,
-      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
     const reconciliation = vi
       .spyOn(NodeWorkerJournalWorker.prototype, "execute")
@@ -570,15 +567,14 @@ describe("node worker supervisor recovery", () => {
       await vi.waitFor(() => expect(fs.readFileSync(marker, "utf8")).toMatch(/^[1-9]\d*$/u));
       const grandchild = requireNodeWorkerProcessIdentity(Number(fs.readFileSync(marker, "utf8")));
       const input = testWorkerLaunchInput(workspaceDir, "stale-running-launch", "wait");
-      const capacitySnapshots: Array<{ total: number; available: number }> = [];
       const workspace = new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env });
-      const supervisor = createNodeWorkerSupervisor({
+      const capacity = observeCapacity({
         bundleRoot,
         env,
         workspace,
         capacity: operation === "environment stop" ? 4 : 1,
-        onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
       });
+      const supervisor = capacity.supervisor;
       await launchStore(env).get("schema-probe");
       if (operation !== "initialize") {
         await supervisor.initialize();
@@ -706,10 +702,7 @@ describe("node worker supervisor recovery", () => {
         await waitForIdentityDeath(worker);
         await waitForIdentityDeath(grandchild);
         expect((await supervisor.status(input.launchId))?.worker).toEqual(worker);
-        expect(capacitySnapshots.at(-1)).toEqual({
-          total: operation === "environment stop" ? 4 : 1,
-          available: operation === "environment stop" ? 2 : 1,
-        });
+        capacity.expectCapacity(operation === "environment stop" ? 2 : 1);
         expect(await supervisor.hasActiveWork()).toBe(operation === "environment stop");
       } finally {
         await supervisor.close();
@@ -837,13 +830,8 @@ describe("node worker supervisor recovery", () => {
         ...completedCleanupProof(mode),
       });
 
-      const capacities: Array<{ total: number; available: number }> = [];
-      const restarted = createNodeWorkerSupervisor({
-        bundleRoot,
-        env,
-        capacity: 1,
-        onCapacityChanged: (capacity) => capacities.push(capacity),
-      });
+      const capacity = observeCapacity({ bundleRoot, env, capacity: 1 });
+      const restarted = capacity.supervisor;
       const reconciled = await restarted.status(input.launchId);
       expect(reconciled).toMatchObject({
         state: "interrupted",
@@ -852,7 +840,7 @@ describe("node worker supervisor recovery", () => {
         workerCleanupMode: mode,
         ...completedCleanupProof(mode),
       });
-      expect(capacities.at(-1)).toEqual({ total: 1, available: 1 });
+      capacity.expectCapacity(1);
       await restarted.close();
     },
   );

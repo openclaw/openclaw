@@ -3,7 +3,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { clampText } from "../lib/format.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
@@ -48,12 +48,10 @@ export function renderSidebarOutboxItem(
       ? `${clampText(normalizeAgentLabel(agent), 60)} · ${conversation}`
       : conversation;
     const label = t(
-      entry.command
-        ? entry.unconfirmed
-          ? "attention.outbox.commandUnconfirmed"
-          : "attention.outbox.commandFailed"
-        : entry.unconfirmed
-          ? "attention.outbox.unconfirmed"
+      entry.held
+        ? "attention.outbox.held"
+        : entry.command
+          ? "attention.outbox.commandFailed"
           : "attention.outbox.failed",
     );
     const target = sessionNavigationTarget({
@@ -66,13 +64,7 @@ export function renderSidebarOutboxItem(
     });
     const offline = context.gateway.snapshot.phase !== "connected";
     const guidance = [
-      t(
-        entry.unconfirmed
-          ? entry.command
-            ? "attention.outbox.checkCommandBeforeRetry"
-            : "attention.outbox.checkBeforeRetry"
-          : "attention.outbox.reviewHint",
-      ),
+      t("attention.outbox.reviewHint"),
       ...(offline ? [t("attention.outbox.offlineHint")] : []),
     ].join(" ");
     return { label, scope, target, offline, guidance, entry };
@@ -117,31 +109,29 @@ export function renderSidebarOutboxItem(
             href={view().target.href}
             aria-label={t("attention.outbox.review")}
             data-issue-row-focus
-            onClick={(event) => {
-              if (!shouldHandleNavigationClick(event)) {
-                return;
-              }
-              event.preventDefault();
-              // A retained DOM handler cannot navigate a retired Gateway or delivery row.
-              if (
-                context.gateway.connectionRevision !== connectionRevision ||
-                context.gateway.snapshot.client?.recoveryScope !== recoveryScope ||
-                !context.sidebarAttention.entries.some(
-                  (current) =>
-                    current.type === "outbox" &&
-                    current.id === initialEntry.id &&
-                    current.sessionKey === initialEntry.sessionKey &&
-                    current.agentId === initialEntry.agentId,
-                )
-              ) {
-                return;
-              }
-              const intent = view();
-              params.onNavigate("chat", intent.target.options);
-              if (intent.entry.dismissal) {
-                context.sidebarAttention.dismiss(intent.entry.dismissal);
-              }
-            }}
+            onClick={(event) =>
+              handleNavigationClick(event, () => {
+                // A retained DOM handler cannot navigate a retired Gateway or delivery row.
+                if (
+                  context.gateway.connectionRevision !== connectionRevision ||
+                  context.gateway.snapshot.client?.recoveryScope !== recoveryScope ||
+                  !context.sidebarAttention.entries.some(
+                    (current) =>
+                      current.type === "outbox" &&
+                      current.id === initialEntry.id &&
+                      current.sessionKey === initialEntry.sessionKey &&
+                      current.agentId === initialEntry.agentId,
+                  )
+                ) {
+                  return;
+                }
+                const intent = view();
+                params.onNavigate("chat", intent.target.options);
+                if (intent.entry.dismissal) {
+                  context.sidebarAttention.dismiss(intent.entry.dismissal);
+                }
+              })
+            }
           >
             {t("attention.outbox.reviewShort")}
           </a>

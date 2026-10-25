@@ -1,3 +1,4 @@
+import { commonPrefixLength } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { RealtimeTalkTranscript } from "./shared.ts";
 
@@ -366,15 +367,6 @@ function transcriptWords(value: string): string[] {
 
 function normalizeTranscriptText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function commonPrefixLength(left: string, right: string): number {
-  const max = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < max && left[index] === right[index]) {
-    index += 1;
-  }
-  return index;
 }
 
 function findTextOverlap(base: string, next: string): number {

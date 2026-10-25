@@ -19,6 +19,8 @@ function installColdLoadProbes(
     requestBytes: number;
     responseBytes: number;
     ms: number;
+    requestMs: number;
+    responseMs: number;
     dispatchMs?: number;
     responseAtMs?: number;
     abandoned?: true;
@@ -32,13 +34,14 @@ function installColdLoadProbes(
       method: string;
       bytes: number;
       at: number;
-      params: unknown;
+      params: Record<string, unknown>;
       stack: string | undefined;
     }
   >();
   let lastActivity = performance.now();
   let queued = 0;
   let nextFrameAt = 0;
+  let nextWireAt = 0;
   const eventStream = createEventStream(input);
   const liveOrigins = new Map<string, number>();
   let liveInvalidatorOwner: ProbeInit.SessionDataProbeOwner | undefined;
@@ -229,6 +232,7 @@ function installColdLoadProbes(
     },
   };
   let solidSidebarOwner: ProbeInit.SolidSidebarProbeOwner | undefined;
+  const sidebarHandoffs: Array<{ atMs: number; durationMs: number; frameMs?: number }> = [];
   let originalPublicationGate:
     | ProbeInit.SolidSidebarProbeOwner["shouldPublishSessionData"]
     | undefined;
@@ -282,8 +286,21 @@ function installColdLoadProbes(
       );
     },
     capture(host: WeakKey, owner: unknown) {
-      if (sidebarRegistration.matches(host, owner)) {
+      if (sidebarRegistration.matches(host, owner) && owner !== solidSidebarOwner) {
         solidSidebarOwner = owner;
+        const release = owner.releaseSidebarSnapshot.bind(owner);
+        owner.releaseSidebarSnapshot = () => {
+          const atMs = performance.now();
+          release();
+          const handoff: { atMs: number; durationMs: number; frameMs?: number } = {
+            atMs,
+            durationMs: performance.now() - atMs,
+          };
+          sidebarHandoffs.push(handoff);
+          requestAnimationFrame(() => {
+            handoff.frameMs = performance.now() - atMs;
+          });
+        };
       }
       if (host instanceof HTMLElement && chatProbe.matches(host, owner)) {
         chatOwners.set(host, {
@@ -347,6 +364,8 @@ function installColdLoadProbes(
               requestBytes: request.bytes,
               responseBytes: 0,
               ms: performance.now() - request.at,
+              requestMs: request.at,
+              responseMs: performance.now(),
               abandoned: true,
             });
           }
@@ -360,17 +379,6 @@ function installColdLoadProbes(
         if (typeof data === "string") {
           const frame = JSON.parse(data);
           if (frame.type === "req") {
-            const connectDelay = (input.connectNotBeforeMs ?? 0) - performance.now();
-            if (frame.method === "connect" && connectDelay > 0) {
-              queued++;
-              window.setTimeout(() => {
-                queued--;
-                if (socket.readyState === WebSocket.OPEN) {
-                  socket.send(data);
-                }
-              }, connectDelay);
-              return;
-            }
             pending.set(frame.id, {
               socket,
               method: frame.method,
@@ -388,55 +396,103 @@ function installColdLoadProbes(
         if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
           return dispatch(event);
         }
+        let deliveredEvent = event;
         const frame = JSON.parse(event.data);
         const responseBytes = new TextEncoder().encode(event.data).length;
         const liveEvent = eventStream.emitting;
         // A single wire delivers one message task at a time, including concurrent RPC replies.
         nextFrameAt = Math.max(performance.now() + input.latencyMs, nextFrameAt + input.frameGapMs);
         const queuedRequest = pending.get(frame.id);
+        if (input.omitHelloSelfPresence && queuedRequest?.method === "connect") {
+          const client = queuedRequest.params.client;
+          const instanceId =
+            client && typeof client === "object" && "instanceId" in client
+              ? client.instanceId
+              : undefined;
+          const presence = frame.payload?.snapshot?.presence;
+          if (Array.isArray(presence)) {
+            frame.payload.snapshot.presence = presence.filter(
+              (entry) => entry.instanceId !== instanceId,
+            );
+            deliveredEvent = new MessageEvent("message", { data: JSON.stringify(frame) });
+          }
+        }
+        const query = queuedRequest?.params;
+        const queryKind =
+          queuedRequest?.method !== "sessions.list"
+            ? undefined
+            : query?.ownerFirst
+              ? "ownerFirst"
+              : query?.involvingMe
+                ? "involvingMe"
+                : query?.includeOwnerSessionCounts
+                  ? "ownerCounts"
+                  : query?.spawnedBy
+                    ? "children"
+                    : undefined;
         // Per-method delay models a queued RPC without holding unrelated replies.
         const deliverAt = Math.max(
           nextFrameAt,
+          // Delay the challenge so initialConnectSent still means the request left.
+          frame.type === "event" && frame.event === "connect.challenge"
+            ? (input.connectNotBeforeMs ?? 0)
+            : 0,
           queuedRequest
-            ? queuedRequest.at + (input.methodLatencyMs?.[queuedRequest.method] ?? 0)
+            ? queuedRequest.at +
+                ((queryKind && input.sidebarQueryLatencyMs?.[queryKind]) ??
+                  input.methodLatencyMs?.[queuedRequest.method] ??
+                  0)
             : 0,
         );
         queued++;
+        const deliver = () => {
+          queued--;
+          const request = pending.get(frame.id);
+          const rpcIndex = rpcs.length;
+          if (request) {
+            pending.delete(frame.id);
+            rpcs.push({
+              method: request.method,
+              params: request.params,
+              stack: request.stack,
+              requestBytes: request.bytes,
+              responseBytes,
+              ms: performance.now() - request.at,
+              requestMs: request.at,
+              responseMs: performance.now(),
+              ...(liveStartedAt ? { responseAtMs: performance.now() - liveStartedAt } : {}),
+            });
+          }
+          const responseMark = request && `cold-load-rpc:${rpcIndex}:${request.method}`;
+          const delivery = liveEvent
+            ? { ...liveEvent, deliveredAtMs: performance.now() - liveStartedAt }
+            : null;
+          if (delivery) {
+            liveKind = delivery.kind;
+            liveEvents.set(delivery.kind, (liveEvents.get(delivery.kind) ?? 0) + 1);
+          }
+          const dispatchStarted = performance.now();
+          if (responseMark) {
+            performance.mark(`${responseMark}:start`);
+          }
+          frameProbe.withDelivery(delivery, () => dispatch(deliveredEvent));
+          if (request) {
+            rpcs[rpcIndex]!.dispatchMs = performance.now() - dispatchStarted;
+            performance.mark(`${responseMark}:end`);
+          }
+          lastActivity = performance.now();
+        };
         window.setTimeout(
           () => {
-            queued--;
-            const request = pending.get(frame.id);
-            const rpcIndex = rpcs.length;
-            if (request) {
-              pending.delete(frame.id);
-              rpcs.push({
-                method: request.method,
-                params: request.params,
-                stack: request.stack,
-                requestBytes: request.bytes,
-                responseBytes,
-                ms: performance.now() - request.at,
-                ...(liveStartedAt ? { responseAtMs: performance.now() - liveStartedAt } : {}),
-              });
+            if (input.downloadKbps) {
+              // Reserve the wire only once the reply is ready, so server delay
+              // cannot hold unrelated replies behind it.
+              nextWireAt =
+                Math.max(performance.now(), nextWireAt) + (responseBytes * 8) / input.downloadKbps;
+              window.setTimeout(deliver, Math.max(0, nextWireAt - performance.now()));
+            } else {
+              deliver();
             }
-            const responseMark = request && `cold-load-rpc:${rpcIndex}:${request.method}`;
-            const delivery = liveEvent
-              ? { ...liveEvent, deliveredAtMs: performance.now() - liveStartedAt }
-              : null;
-            if (delivery) {
-              liveKind = delivery.kind;
-              liveEvents.set(delivery.kind, (liveEvents.get(delivery.kind) ?? 0) + 1);
-            }
-            const dispatchStarted = performance.now();
-            if (responseMark) {
-              performance.mark(`${responseMark}:start`);
-            }
-            frameProbe.withDelivery(delivery, () => dispatch(event));
-            if (request) {
-              rpcs[rpcIndex]!.dispatchMs = performance.now() - dispatchStarted;
-              performance.mark(`${responseMark}:end`);
-            }
-            lastActivity = performance.now();
           },
           Math.max(0, deliverAt - performance.now()),
         );
@@ -589,6 +645,7 @@ function installColdLoadProbes(
         idleMs: performance.now() - lastActivity,
         rpcs,
         longTasks,
+        sidebarHandoffs,
       };
     },
   });

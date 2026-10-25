@@ -33,6 +33,12 @@ export type ReplyOperationResult =
       code: "aborted_by_user" | "aborted_for_restart" | "aborted_for_supersession";
     };
 
+/** Observe exact operation liveness without importing queue or backend contracts. */
+export type ReplyOperationObservation = Readonly<{
+  abortSignal: AbortSignal;
+  result: Exclude<ReplyOperationResult, { kind: "yielded" }> | null;
+}>;
+
 export type ReplyOperationState = Readonly<{
   phase: ReplyOperationPhase;
   phaseBeforeGlobalLaneWait?: "queued" | "running";

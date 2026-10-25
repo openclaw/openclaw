@@ -7,7 +7,7 @@ import type {
   CronStreamLogger,
 } from "./cron-stream-output.js";
 
-type DisableStop = "disabled" | "trust-disabled" | "cron-disabled";
+type DisableStop = "disabled" | "trust-disabled" | "cron-disabled" | "host-execution-disabled";
 type LifecycleStop =
   | "removed"
   | "shutdown"

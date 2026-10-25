@@ -10,6 +10,43 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI composer picker layout" });
 
 suite.define(() => {
+  it("centers the composer plus and close icons on mobile and desktop", async () => {
+    const offsets: number[] = [];
+    for (const width of [393, 1280]) {
+      await suite.withPage({ viewport: { width, height: 852 } }, async ({ page }) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await installMockGateway(page);
+        for (const route of ["new?agent=main", "chat"]) {
+          await page.goto(suite.server.baseUrl + route);
+          const composer = page.locator(".agent-chat__input");
+          const trigger = composer.locator(".agent-chat__input-btn--attach");
+          await trigger.waitFor();
+          for (const open of [false, true]) {
+            if (open) {
+              await trigger.click();
+              await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+              await page.locator(".agent-chat__capability-menu-panel").waitFor();
+            }
+            const offset = await trigger.evaluate((button) => {
+              const target = button.getBoundingClientRect();
+              const icon = button.querySelector("svg")!.getBoundingClientRect();
+              return Math.max(
+                Math.abs(icon.x + icon.width / 2 - target.x - target.width / 2),
+                Math.abs(icon.y + icon.height / 2 - target.y - target.height / 2),
+              );
+            });
+            offsets.push(offset);
+            if (open) {
+              await page.keyboard.press("Escape");
+              await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+            }
+          }
+        }
+      });
+    }
+    expect(Math.max(...offsets), JSON.stringify(offsets)).toBeLessThanOrEqual(0.5);
+  });
+
   it("fits a tall model catalog above the mobile new-session composer", async () => {
     await suite.withPage(
       { viewport: { width: 393, height: 500 }, isMobile: true, hasTouch: true },
@@ -33,7 +70,6 @@ suite.define(() => {
         expect(panel!.y).toBeGreaterThanOrEqual(0);
         expect(panel!.y + panel!.height).toBeLessThan(composer!.y);
         expect(panel!.height).toBeGreaterThan(200);
-        // Filtering and selection remain reachable without dismissing the picker.
         await search.fill("Model 23");
         await page.locator('[data-chat-model-option="example/model-23"]').click();
         expect(await trigger.textContent()).toContain("Model 23");

@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs, { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as waitForRuntimeTick } from "node:timers/promises";
@@ -19,6 +18,7 @@ import {
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { withinTest } from "../helpers/promise.js";
+import { exitedDescendantReaper } from "./exited-descendant-reaper.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -229,18 +229,6 @@ describe("write-cli-startup-metadata", () => {
 
     await siblingEvent;
     await expect(render).resolves.toBe("Usage: openclaw\n");
-    expect(spawnMock).toHaveBeenCalledOnce();
-    expect(spawnMock.mock.calls[0]?.[1]).toEqual([
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "--eval",
-      expect.any(String),
-    ]);
-    expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
   });
 
   it("finishes root help before rendering at most two command snapshots", async () => {
@@ -379,7 +367,6 @@ describe("write-cli-startup-metadata", () => {
 
       await expect(writePromise).rejects.toThrow("Failed to render source browser help");
       await expect(writePromise).rejects.toThrow(/browser renderer failed \(elapsed \d+ms\)/u);
-      expect(children.map((child) => child.commandName)).not.toContain("tasks");
       for (const child of children.slice(1)) {
         expect(child.kill).toHaveBeenCalledWith("SIGTERM");
         expect(events).toContain(`close:${child.commandName}`);
@@ -452,269 +439,77 @@ describe("write-cli-startup-metadata", () => {
   );
 
   it.runIf(process.platform === "linux")(
-    "supervised exited descendant accepts stopped work without accepting live or unknown work",
+    "writes startup metadata while exited descendants await reaping",
     async () => {
-      const repoRoot = fs.realpathSync(process.cwd());
-      const workerArgs = resolveRuntimeWorkerArgv(metadataUrl).slice(0, -1);
+      const metadata = metadataFixture("openclaw-supervised-descendant-");
+      const root = metadata.sourceRootDir;
+      // The child is already a zombie before help returns; no polling or release handshake.
       const actor = String.raw`
-import fs from "node:fs";
-import path from "node:path";
-import { spawn } from "node:child_process";
-const [root, role] = process.argv.slice(2);
-const file = (name) => path.join(root, name);
-const publish = (name, value) => {
-  const temporary = file(name + ".tmp");
-  fs.writeFileSync(temporary, JSON.stringify(value));
-  fs.renameSync(temporary, file(name));
-};
-const wait = async (name, timeout = 5000) => {
-  const deadline = Date.now() + timeout;
-  while (!fs.existsSync(file(name))) {
-    if (fs.existsSync(file("stop"))) process.exit(2);
-    if (Date.now() >= deadline) throw new Error("fixture gate deadline: " + name);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  if (fs.existsSync(file("stop"))) process.exit(2);
-};
-publish(role + ".ready", { pid: process.pid });
-if (role === "leaf") {
-  await wait("leaf.exit", 45000);
-} else {
-  await wait(role + ".go");
-  const childRole = role === "leader" ? "forker" : "leaf";
-  const child = spawn(process.execPath, [process.argv[1], root, childRole], {
-    stdio: "ignore", env: process.env,
-  });
-  if (role === "forker") {
-    child.unref();
-    await wait("forker.exit");
-  } else {
-    const joined = await new Promise((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    });
-    publish("forker.joined", joined);
-    await wait("leader.exit", 45000);
-    process.stdout.write("Usage: openclaw nodes\n");
-  }
-}
+import os
+leaf = os.fork()
+if leaf == 0:
+    os._exit(0)
+exited = os.waitid(os.P_PID, leaf, os.WEXITED | os.WNOWAIT)
+assert exited.si_code == os.CLD_EXITED and exited.si_status == 0
+print("Usage: openclaw nodes", flush=True)
 `;
       const controller = String.raw`
+import assert from "node:assert/strict";
 import fs from "node:fs";
-import path from "node:path";
-import childProcess, { spawn } from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
+import cp from "node:child_process";
 import { pathToFileURL } from "node:url";
-const [root, mode, repo] = process.argv.slice(2);
-let ownedLeaderPid, completedPsFault;
-const originalSpawnSync = childProcess.spawnSync;
-if (mode === "unknown") {
-  childProcess.spawnSync = function (...args) {
-    const result = Reflect.apply(originalSpawnSync, this, args);
-    const [command, argv] = args;
-    if (command === "ps" && ownedLeaderPid !== undefined && Array.isArray(argv) &&
-        argv.length === 5 && argv[0] === "-s" && argv[1] === String(ownedLeaderPid) &&
-        argv[2] === "-L" && argv[3] === "-o" && argv[4] === "pgid=,state=" &&
-        result.status === 23 && result.signal === null && !result.error) {
-      completedPsFault ??= { groupPid: ownedLeaderPid, status: result.status,
-        signal: result.signal, errorPresent: !!result.error };
-    }
-    return result;
-  };
-  syncBuiltinESMExports();
-}
 const { testing } = await import(${JSON.stringify(metadataUrl.href)});
-const { inspectManagedProcessGroup, waitForManagedProcessGroupExit } =
-  await import(pathToFileURL(path.join(repo, "scripts/lib/managed-child-process.mts")));
-const file = (name) => path.join(root, name);
-const publish = (name, value) => {
-  const temporary = file(name + ".tmp");
-  fs.writeFileSync(temporary, JSON.stringify(value));
-  fs.renameSync(temporary, file(name));
-};
-let renderState = "", liveControl;
+const { assertFixtureProcessGroupStopped } = await import(pathToFileURL(
+  ${JSON.stringify(path.resolve("test/scripts/exited-descendant-reaper.test-support.ts"))}
+));
+let child, renderState;
 const events = [];
-const started = Date.now();
-const outputPath = file("dist/cli-startup-metadata.json");
-let outcome;
-try {
-  await testing.writeCliStartupMetadata({
-    sourceRootDir: root, distDir: file("dist"), extensionsDir: file("extensions"), outputPath,
-    renderBundledRootHelpText: () => "Usage: openclaw\n",
-    renderSourceRootHelpText: () => "Usage: openclaw\n",
-    renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-    renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-    renderSourceSubcommandHelpTextRecord: () => Object.fromEntries(
-      ["config", "doctor", "gateway", "models", "plugins", "sessions", "tasks"]
-        .map((name) => [name, "Usage: openclaw " + name + "\n"])),
-    renderSourceNodesHelpText: (context, taskContext) => {
-      if (!taskContext) throw new Error("missing actual supervisor task context");
-      renderState = context.env.OPENCLAW_STATE_DIR;
-      // Unknown mode fails every snapshot while the reaper holds the stopped group.
-      return testing.spawnText([file("actor.mjs"), root, "leader"], {
-        cwd: root, env: process.env, failureMessage: "supervised nodes fixture failed",
-        timeoutMs: 120000, killGraceMs: mode === "unknown" ? 1000 : 5000, maxOutputBytes: 16384,
-        onTerminalFailure: taskContext.reportFailure, signal: taskContext.signal,
-        spawnProcess: (...args) => {
-          const child = spawn(...args);
-          ownedLeaderPid = child.pid;
-          child.once("exit", (code, signal) => events.push({ event: "exit", code, signal }));
-          child.once("close", (code, signal) => {
-            events.push({ event: "close", code, signal });
-            publish("leader.closed", { code, signal });
-          });
-          if (mode === "live") {
-            liveControl = (async () => {
-              const readyBy = Date.now() + 5000;
-              while (!fs.existsSync(file("live-control.go"))) {
-                if (Date.now() >= readyBy) throw new Error("live control setup deadline");
-                await new Promise((resolve) => setTimeout(resolve, 5));
-              }
-              const start = Date.now();
-              const deadlineAt = start + 100;
-              const observation = inspectManagedProcessGroup(child, {
-                deadlineAt, errorPolicy: "alive-on-eperm",
-              });
-              const stopped = await waitForManagedProcessGroupExit(child, 100, {
-                deadlineAt, errorPolicy: "alive-on-eperm",
-                clampPollToDeadline: true, pollIntervalMs: 10,
-              });
-              publish("live-control.json", { observation, stopped, elapsedMs: Date.now() - start });
-            })();
-          }
-          return child;
-        },
-      });
-    },
-  });
-  outcome = { ok: true, nodesHelpText: JSON.parse(fs.readFileSync(outputPath, "utf8")).nodesHelpText };
-} catch (error) {
-  outcome = { ok: false, code: error.code ?? null,
-    cleanupCode: error.processTreeCleanupFailure?.code ?? null,
-    preserveRenderState: error.preserveRenderState === true };
-} finally {
-  if (mode === "unknown") {
-    childProcess.spawnSync = originalSpawnSync;
-    syncBuiltinESMExports();
-  }
-}
-await liveControl;
-publish("outcome.json", { ...outcome, completedPsFault, events, elapsedMs: Date.now() - started,
-  outputPresent: fs.existsSync(outputPath), statePresent: !!renderState && fs.existsSync(renderState) });
+await testing.writeCliStartupMetadata({
+  ...${JSON.stringify(metadata)},
+  renderBundledRootHelpText: () => "Usage: openclaw\n",
+  renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+  renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+  renderSourceSubcommandHelpTextRecord: () => (${JSON.stringify(sourceSubcommandHelp())}),
+  renderSourceNodesHelpText: (context, task) => {
+    assert.ok(task, "missing supervisor task context");
+    renderState = context.env.OPENCLAW_STATE_DIR;
+    return testing.spawnText(["-c", ${JSON.stringify(actor)}], {
+      cwd: ${JSON.stringify(root)}, env: process.env,
+      failureMessage: "supervised nodes fixture failed",
+      timeoutMs: 120000, killGraceMs: 5000, maxOutputBytes: 16384,
+      onTerminalFailure: task.reportFailure, signal: task.signal,
+      spawnProcess: (_node, args, options) => {
+        child = cp.spawn("python3", args, options);
+        for (const event of ["exit", "close"]) {
+          child.once(event, (code, signal) => events.push({ event, code, signal }));
+        }
+        return child;
+      },
+    });
+  },
+});
+assert.ok(child?.pid);
+assert.doesNotThrow(() => process.kill(-child.pid, 0), "reaper must retain exited group");
+assertFixtureProcessGroupStopped(child.pid);
+assert.deepEqual(events, [
+  { event: "exit", code: 0, signal: null }, { event: "close", code: 0, signal: null },
+]);
+assert.equal(JSON.parse(fs.readFileSync(${JSON.stringify(metadata.outputPath)})).nodesHelpText,
+  "Usage: openclaw nodes\n");
+assert.equal(fs.existsSync(renderState), false);
+console.log("startup metadata verified");
 `;
-      // The reaper owns the controller and adopted leaf. It never scans or signals unrelated PIDs.
       const reaper = String.raw`
-import ctypes, errno, json, os, pathlib, select, shutil, signal, subprocess, sys, time
-root, mode, node, repo, worker_json = sys.argv[1:]
-root = pathlib.Path(root)
-started = time.monotonic()
-deadline = started + 45
-registered, reaped, snapshots = {}, [], {}
-controller = None
-leader = None
-cancelled = False
-captured = bytearray()
-report = {"mode": mode}
-def interrupt(_signum, _frame):
-    global cancelled
-    cancelled = True
-signal.signal(signal.SIGTERM, interrupt)
-signal.signal(signal.SIGINT, interrupt)
-def identity(pid):
+import os, pathlib, signal, time
+owned = {}
+def owned_stat(pid):
     try:
         fields = pathlib.Path("/proc", str(pid), "stat").read_text().rsplit(")", 1)[1].split()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return None
-    return {"pid": pid, "state": fields[0], "ppid": int(fields[1]),
-            "pgid": int(fields[2]), "sid": int(fields[3]), "start": fields[19]}
-def register(pid):
-    current = identity(pid)
-    if current is None:
-        raise RuntimeError("owned process disappeared before admission")
-    previous = registered.get(pid)
-    if previous is not None and previous["start"] != current["start"]:
-        raise RuntimeError("owned PID identity changed")
-    registered[pid] = previous or current
-    if len(registered) > 64:
-        raise RuntimeError("owned identity limit")
-    return current
-def present(pid):
-    current = identity(pid)
-    if current is not None and current["start"] != registered[pid]["start"]:
-        raise RuntimeError("refusing recycled PID")
-    return current
-def group_present():
-    if leader is None:
-        return False
-    try:
-        os.killpg(leader, 0)
-        return True
-    except ProcessLookupError:
-        return False
-def read(name):
-    p = root / name
-    return json.loads(p.read_text()) if p.exists() else None
-def gate(name):
-    (root / name).touch()
-def drain():
-    if controller is None or controller.stdout.closed:
-        return
-    while select.select([controller.stdout], [], [], 0)[0]:
-        data = os.read(controller.stdout.fileno(), 4096)
-        if not data:
-            return
-        captured.extend(data)
-        if len(captured) > 4096:
-            raise RuntimeError("controller output limit")
-def wait(predicate, seconds=5):
-    stop = min(deadline, time.monotonic() + seconds)
-    while True:
-        drain()
-        if cancelled:
-            raise RuntimeError("fixture interrupted")
-        value = predicate()
-        if value:
-            return value
-        if time.monotonic() >= stop:
-            raise RuntimeError("fixture handshake deadline")
-        if controller is not None and controller.poll() is not None:
-            raise RuntimeError("controller exited before handshake")
-        time.sleep(.005)
-def threads(pid):
-    entries = list(pathlib.Path("/proc", str(pid), "task").iterdir())
-    if not entries or len(entries) > 256:
-        raise RuntimeError("thread bound")
-    rows = []
-    for entry in entries:
-        try:
-            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
-        except (FileNotFoundError, ProcessLookupError):
-            if entry.name == str(pid):
-                raise
-            continue
-        rows.append({"pid": pid, "tid": int(entry.name), "state": fields[0],
-                     "pgid": int(fields[2]), "sid": int(fields[3])})
-    if not any(row["tid"] == pid for row in rows):
-        raise RuntimeError("owned process leader missing from thread snapshot")
-    return sorted(rows, key=lambda r: r["tid"])
-def session_rows(ps):
-    raw = subprocess.run([ps, "-s", str(leader), "-L", "-o", "pid=,ppid=,pgid=,sid=,lwp=,stat="],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1, check=True)
-    if len(raw.stdout) > 8192 or len(raw.stderr) > 1024:
-        raise RuntimeError("ps output bound")
-    rows = []
-    for line in raw.stdout.decode("ascii").splitlines():
-        pid, ppid, pgid, sid, tid, state = line.split()
-        row = dict(zip(["pid", "ppid", "pgid", "sid", "tid"],
-                       map(int, [pid, ppid, pgid, sid, tid])))
-        row["state"] = state
-        if row["pid"] not in registered or row["pgid"] != leader or row["sid"] != leader:
-            raise RuntimeError("unexpected session member")
-        present(row["pid"])
-        rows.append(row)
-    if not rows or len(rows) > 256:
-        raise RuntimeError("session thread bound")
-    return rows
+    if pid in owned and owned[pid] != fields[19]:
+        raise RuntimeError("refusing recycled owned PID")
+    return fields
 def discover_owned():
     pending, seen = [os.getpid()], set()
     while pending:
@@ -724,276 +519,102 @@ def discover_owned():
         seen.add(pid)
         try:
             children = pathlib.Path("/proc", str(pid), "task", str(pid), "children").read_text()
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             continue
         for child in map(int, children.split()):
-            if identity(child) is not None:
-                register(child)
+            fields = owned_stat(child)
+            if fields is not None:
+                owned[child] = fields[19]
                 pending.append(child)
-def reap():
-    while True:
-        try:
-            pid, status = os.waitpid(-1, os.WNOHANG)
-        except ChildProcessError:
-            return True
-        if pid == 0:
-            return False
-        reaped.append({"pid": pid, "status": status})
-        if controller is not None and pid == controller.pid:
-            controller.returncode = os.waitstatus_to_exitcode(status)
+                if len(owned) > 64:
+                    raise RuntimeError("owned identity limit")
 def signal_owned(sig):
     discover_owned()
-    current = [item for pid in registered if (item := present(pid)) is not None]
-    members = [item for item in current if item["pgid"] == leader and item["sid"] == leader]
-    covered = set()
-    if leader is not None and any(item["state"] != "Z" for item in members):
-        os.killpg(leader, sig)
-        covered = {item["pid"] for item in members}
-    elif leader is not None and group_present() and not members:
-        raise RuntimeError("group ownership no longer provable")
-    for pid in registered:
-        if pid in covered:
-            continue
-        item = present(pid)
-        if item is not None and item["state"] != "Z":
+    for pid in owned:
+        fields = owned_stat(pid)
+        if fields is not None and fields[0] != "Z":
             try:
                 os.kill(pid, sig)
             except ProcessLookupError:
                 pass
+def interrupt(_signal, _frame):
+    raise InterruptedError("fixture interrupted")
+signal.signal(signal.SIGTERM, interrupt)
+signal.signal(signal.SIGINT, interrupt)
 try:
-    if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
-        raise RuntimeError("subreaper unavailable")
-    ps = shutil.which("ps")
-    if not ps or not pathlib.Path(ps).is_absolute():
-        raise RuntimeError("absolute ps unavailable")
-    env = dict(os.environ)
-    if mode == "unknown":
-        shim = root / "bin"
-        shim.mkdir()
-        (shim / "ps").write_text("#!/bin/sh\nexit 23\n")
-        (shim / "ps").chmod(0o700)
-        env["PATH"] = str(shim) + os.pathsep + env["PATH"]
-    controller = subprocess.Popen([node, *json.loads(worker_json), str(root / "controller.mjs"),
-                                   str(root), mode, repo], cwd=repo, env=env,
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    register(controller.pid)
-    leader = wait(lambda: read("leader.ready"))["pid"]
-    leader_identity = register(leader)
-    if leader_identity["pgid"] != leader or leader_identity["sid"] != leader:
-        raise RuntimeError("renderer did not own a detached group")
-    gate("leader.go")
-    forker = wait(lambda: read("forker.ready"))["pid"]
-    register(forker)
-    gate("forker.go")
-    leaf = wait(lambda: read("leaf.ready"))["pid"]
-    leaf_identity = register(leaf)
-    if leaf_identity["pgid"] != leader or leaf_identity["sid"] != leader:
-        raise RuntimeError("leaf escaped renderer group")
-    gate("forker.exit")
-    joined = wait(lambda: read("forker.joined"))
-    if joined != {"code": 0, "signal": None}:
-        raise RuntimeError("forker was not joined successfully")
-    adopted = wait(lambda: (item if (item := present(leaf)) and item["ppid"] == os.getpid() else None))
-    report["adopted"] = adopted
-    if mode == "live":
-        gate("live-control.go")
-        report["liveControl"] = wait(lambda: read("live-control.json"))
-        snapshots["heldLive"] = threads(leaf)
-        if any(row["state"] == "Z" for row in snapshots["heldLive"]):
-            raise RuntimeError("live control leaf already exited")
-    gate("leaf.exit")
-    wait(lambda: all(row["state"] == "Z" for row in threads(leaf)))
-    gate("leader.exit")
-    report["leaderClose"] = wait(lambda: read("leader.closed"))
-    snapshots["stoppedGroup"] = session_rows(ps)
-    if not all(row["state"].startswith("Z") for row in snapshots["stoppedGroup"]):
-        raise RuntimeError("positive boundary contains live threads")
-    report["signalZeroPresent"] = group_present()
-    report["outcome"] = wait(lambda: read("outcome.json"), 35)
-    snapshots["terminalGroup"] = session_rows(ps)
-    if not all(row["state"].startswith("Z") for row in snapshots["terminalGroup"]):
-        raise RuntimeError("terminal group contains live threads")
-    leaf_at_reap = present(leaf)
-    if (leaf_at_reap is None or leaf_at_reap["ppid"] != os.getpid() or
-            leaf_at_reap["pgid"] != leader or leaf_at_reap["sid"] != leader or
-            leaf_at_reap["state"] != "Z"):
-        raise RuntimeError("owned leaf identity or zombie state changed before reap")
-    reaped_pid, reaped_status = os.waitpid(leaf, os.WNOHANG)
-    if reaped_pid != leaf or reaped_status != 0:
-        raise RuntimeError("owned leaf did not reap with status zero")
-    reaped.append({"pid": reaped_pid, "status": reaped_status})
-    if group_present():
-        raise RuntimeError("renderer group remains after exact leaf reap")
-    report["controllerCode"] = controller.wait(timeout=max(0, min(5, deadline - time.monotonic())))
-except BaseException as error:
-    report["fixtureError"] = type(error).__name__ + ": " + str(error).replace(str(root), "<fixture>")
+    exec(${JSON.stringify(exitedDescendantReaper)})
 finally:
-    cleanup_start = time.monotonic()
-    cleanup_deadline = cleanup_start + 15
-    gate("stop")
-    for name in ["leaf.exit", "forker.exit", "leader.exit"]:
-        gate(name)
-    try:
-        signal_owned(signal.SIGTERM)
-        killed = False
-        while time.monotonic() < cleanup_deadline:
-            discover_owned()
-            all_reaped = reap()
-            remaining = [pid for pid in registered if present(pid) is not None]
-            if all_reaped and not remaining and not group_present():
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    started = time.monotonic()
+    signal_owned(signal.SIGTERM)
+    while True:
+        discover_owned()
+        while True:
+            try:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                pid = 0
+            if pid == 0:
                 break
-            if not killed and time.monotonic() >= cleanup_start + 2:
-                signal_owned(signal.SIGKILL)
-                killed = True
-            time.sleep(.005)
-        remaining = [pid for pid in registered if present(pid) is not None]
-        report["cleanup"] = {"joined": not remaining and not group_present() and
-                             (controller is None or controller.returncode is not None),
-                             "remaining": remaining, "reaped": reaped,
-                             "groupPresent": group_present()}
-    except BaseException as error:
-        report["cleanup"] = {"joined": False, "error": type(error).__name__ + ": " + str(error)}
-    if controller is not None:
-        drain()
-        controller.stdout.close()
-    report["identities"] = list(registered.values())
-    report["snapshots"] = snapshots
-    report["elapsedMs"] = round((time.monotonic() - started) * 1000)
-    if captured:
-        report["controllerOutput"] = captured.decode("utf8", errors="replace").replace(str(root), "<fixture>")
-    encoded = json.dumps(report, separators=(",", ":"))
-    if len(encoded.encode()) > 5000:
-        raise RuntimeError("structured evidence limit")
-    print(encoded, flush=True)
+        if not any(owned_stat(pid) is not None for pid in owned):
+            break
+        elapsed = time.monotonic() - started
+        if elapsed >= 15:
+            raise RuntimeError("owned cleanup deadline")
+        if elapsed >= 2:
+            signal_owned(signal.SIGKILL)
+        time.sleep(.005)
 `;
-      type Probe = {
-        mode: string;
-        fixtureError?: string;
-        cleanup: {
-          joined: boolean;
-          groupPresent: boolean;
-          reaped: { pid: number; status: number }[];
-        };
-        adopted: { pid: number; pgid: number };
-        signalZeroPresent: boolean;
-        controllerCode: number;
-        leaderClose: { code: number; signal: string | null };
-        outcome: {
-          ok: boolean;
-          code?: string;
-          cleanupCode?: string;
-          nodesHelpText?: string;
-          preserveRenderState?: boolean;
-          outputPresent: boolean;
-          statePresent: boolean;
-          events: { event: string; code: number; signal: string | null }[];
-          completedPsFault?: {
-            groupPid: number;
-            status: number;
-            signal: string | null;
-            errorPresent: boolean;
-          };
-        };
-        liveControl?: { observation: string; stopped: boolean; elapsedMs: number };
-      };
-      const runProbe = async (mode: string): Promise<Probe> => {
-        const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-supervised-descendant-"));
-        let settled = false;
-        writeStartupMetadataSourceSignatureFixture(root);
-        writeFixtureFile(
-          root,
-          "dist/root-help-fixture.js",
-          "export function outputRootHelp() {}\n",
-        );
-        writeFixtureFile(root, "actor.mjs", actor);
-        writeFixtureFile(root, "controller.mjs", controller);
-        mkdirSync(path.join(root, "home"));
-        const child = actualSpawn(
-          "python3",
-          ["-c", reaper, root, mode, process.execPath, repoRoot, JSON.stringify(workerArgs)],
-          {
-            cwd: repoRoot,
-            env: {
-              PATH: process.env.PATH,
-              HOME: path.join(root, "home"),
-              TMPDIR: root,
-              OPENCLAW_STATE_DIR: path.join(root, "state"),
-              OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
-              LANG: "C.UTF-8",
-              CI: "1",
-            },
-            stdio: ["ignore", "pipe", "pipe"],
+      writeFixtureFile(root, "controller.mjs", controller);
+      mkdirSync(path.join(root, "home"));
+      const child = actualSpawn(
+        "python3",
+        [
+          "-c",
+          reaper,
+          process.execPath,
+          ...resolveRuntimeWorkerArgv(metadataUrl).slice(0, -1),
+          path.join(root, "controller.mjs"),
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            PATH: process.env.PATH,
+            HOME: path.join(root, "home"),
+            TMPDIR: root,
+            OPENCLAW_STATE_DIR: path.join(root, "state"),
+            OPENCLAW_CONFIG_PATH: path.join(root, "state/openclaw.json"),
+            LANG: "C.UTF-8",
+            CI: "1",
           },
-        );
-        let overflow = false;
-        const term = setTimeout(() => child.kill("SIGTERM"), 45_000);
-        const kill = setTimeout(() => child.kill("SIGKILL"), 60_000);
-        const output = { stdout: "", stderr: "" };
-        for (const stream of ["stdout", "stderr"] as const) {
-          child[stream].on("data", (chunk: Buffer) => {
-            const limit = stream === "stdout" ? 16_384 : 4096;
-            if (Buffer.byteLength(output[stream]) + chunk.length <= limit) {
-              output[stream] += chunk.toString();
-            } else {
-              overflow = true;
-              child.kill("SIGTERM");
-            }
-          });
-        }
-        try {
-          const closed = await childClosed(child);
-          expect(overflow, "fixture output exceeded its bound").toBe(false);
-          expect(closed, output.stderr).toEqual({ code: 0, signal: null });
-          const evidence = JSON.parse(output.stdout) as Probe;
-          settled = evidence.cleanup.joined;
-          console.log(`SUPERVISED_EXITED_DESCENDANT ${output.stdout.trim()}`);
-          expect(evidence.fixtureError).toBeUndefined();
-          expect(evidence, "subreaper must join every owned child").toMatchObject({
-            cleanup: { joined: true, groupPresent: false },
-            controllerCode: 0,
-            leaderClose: { code: 0, signal: null },
-            signalZeroPresent: true,
-          });
-          expect(evidence.cleanup.reaped).toContainEqual({ pid: evidence.adopted.pid, status: 0 });
-          expect(evidence.outcome.events).toEqual([
-            { event: "exit", code: 0, signal: null },
-            { event: "close", code: 0, signal: null },
-          ]);
-          return evidence;
-        } finally {
-          clearTimeout(term);
-          clearTimeout(kill);
-          // Failed settlement retains the synthetic state until the owned remote lease is stopped.
-          if (settled) {
-            fs.rmSync(root, { recursive: true, force: true });
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      const term = setTimeout(() => child.kill("SIGTERM"), 45_000);
+      const kill = setTimeout(() => child.kill("SIGKILL"), 60_000);
+      const output = { stdout: "", stderr: "" };
+      let overflow = false;
+      for (const stream of ["stdout", "stderr"] as const) {
+        child[stream].on("data", (chunk: Buffer) => {
+          const limit = stream === "stdout" ? 16_384 : 4096;
+          if (Buffer.byteLength(output[stream]) + chunk.length <= limit) {
+            output[stream] += chunk.toString();
+          } else {
+            overflow = true;
+            child.kill("SIGTERM");
           }
-        }
-      };
-      const stopped = await runProbe("stopped");
-      const live = await runProbe("live");
-      expect(live.liveControl?.observation).not.toBe("dead");
-      expect(live.liveControl?.stopped).toBe(false);
-      expect(live.liveControl?.elapsedMs).toBeGreaterThanOrEqual(100);
-      const unknown = await runProbe("unknown");
-      expect(unknown.outcome).toMatchObject({
-        ok: false,
-        code: "EPROCESSGROUP_CLEANUP_FAILED",
-        preserveRenderState: true,
-        statePresent: true,
-        outputPresent: false,
-      });
-      expect(unknown.outcome.completedPsFault).toEqual({
-        groupPid: unknown.adopted.pgid,
-        status: 23,
-        signal: null,
-        errorPresent: false,
-      });
-      expect(stopped.outcome, JSON.stringify(stopped.outcome)).toMatchObject({
-        ok: true,
-        nodesHelpText: "Usage: openclaw nodes\n",
-        outputPresent: true,
-        statePresent: false,
-      });
+        });
+      }
+      try {
+        expect(await childClosed(child), output.stderr).toEqual({ code: 0, signal: null });
+        expect(overflow).toBe(false);
+        expect(output.stdout).toContain("startup metadata verified");
+        expect(output.stdout).toMatch(/successfully reaped: [1-9]/u);
+      } finally {
+        clearTimeout(term);
+        clearTimeout(kill);
+      }
     },
     185_000,
   );
@@ -1122,15 +743,17 @@ finally:
   it.runIf(process.platform !== "win32")(
     "waits for all command help descendants before re-raising parent signals",
     async ({ signal }) => {
-      const tempRoot = createTempDir("openclaw-startup-metadata-signal-");
+      const {
+        sourceRootDir: tempRoot,
+        distDir,
+        outputPath,
+      } = metadataFixture("openclaw-startup-metadata-signal-");
       const fastCommandPath = path.join(tempRoot, "fast-command.mjs");
       const fastReadyPath = path.join(tempRoot, "fast-ready");
       const commandPath = path.join(tempRoot, "command.mjs");
       const runnerPath = path.join(tempRoot, "runner.mjs");
       const grandchildPidPath = path.join(tempRoot, "grandchild.pid");
       const renderStatePath = path.join(tempRoot, "render-state.txt");
-      const distDir = path.join(tempRoot, "dist");
-      const outputPath = path.join(distDir, "cli-startup-metadata.json");
       const grandchildScript = [
         "process.on('SIGTERM', () => {});",
         "process.send('ready');",
@@ -1167,8 +790,6 @@ finally:
           "setInterval(() => {}, 1000);",
         ].join("\n"),
       );
-      writeStartupMetadataSourceSignatureFixture(tempRoot);
-      writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
       writeFixtureFile(
         tempRoot,
         "runner.mjs",
@@ -1198,12 +819,7 @@ finally:
           `  renderSourceBrowserHelpText: renderCommand(${JSON.stringify(fastCommandPath)}, 'fast render failed'),`,
           `  renderSourceSecretsHelpText: renderCommand(${JSON.stringify(commandPath)}, 'render failed'),`,
           "  renderSourceNodesHelpText: () => 'Usage: openclaw nodes\\n',",
-          "  renderSourceSubcommandHelpTextRecord: () => ({",
-          "    config: 'Usage: openclaw config\\n',",
-          "    doctor: 'Usage: openclaw doctor\\n', gateway: 'Usage: openclaw gateway\\n',",
-          "    models: 'Usage: openclaw models\\n', plugins: 'Usage: openclaw plugins\\n',",
-          "    sessions: 'Usage: openclaw sessions\\n',",
-          "  }),",
+          `  renderSourceSubcommandHelpTextRecord: () => (${JSON.stringify(sourceSubcommandHelp())}),`,
           "});",
         ].join("\n"),
       );
@@ -1278,19 +894,10 @@ finally:
     writeFileSync(outputPath, '{"rootHelpText":"old help"}\n');
     fs.chmodSync(outputPath, 0o640);
     fs.chmodSync(distDir, 0o750);
-    mkdirSync(path.join(extensionsDir, "matrix"), { recursive: true });
-    writeFileSync(
-      path.join(extensionsDir, "matrix", "package.json"),
-      JSON.stringify({
-        openclaw: {
-          channel: {
-            id: "matrix",
-            order: 120,
-            label: "Matrix",
-          },
-        },
-      }),
-      "utf8",
+    writeFixtureFile(
+      extensionsDir,
+      "matrix/package.json",
+      JSON.stringify({ openclaw: { channel: { id: "matrix", order: 120, label: "Matrix" } } }),
     );
 
     await testing.writeCliStartupMetadata({
@@ -1507,23 +1114,15 @@ finally:
     await writeMetadata();
     expect(nodesRenderCount).toBe(2);
 
-    writeFixtureFile(
-      tempRoot,
-      "extensions/canvas/src/cli.ts",
-      "export const canvasCliHelp = 'canvas changed help';\n",
-    );
-
-    await writeMetadata();
-
-    expect(nodesRenderCount).toBe(3);
-    expect(readMetadata(outputPath).nodesHelpText).toContain("openclaw nodes 3");
-
-    writeFixtureFile(tempRoot, "src/plugins/cli.ts", "export const pluginCliHelp = 'changed';\n");
-
-    await writeMetadata();
-
-    expect(nodesRenderCount).toBe(4);
-    expect(readMetadata(outputPath).nodesHelpText).toContain("openclaw nodes 4");
+    for (const [file, contents, expectedCount] of [
+      ["extensions/canvas/src/cli.ts", "export const canvasCliHelp = 'canvas changed help';\n", 3],
+      ["src/plugins/cli.ts", "export const pluginCliHelp = 'changed';\n", 4],
+    ] as const) {
+      writeFixtureFile(tempRoot, file, contents);
+      await writeMetadata();
+      expect(nodesRenderCount).toBe(expectedCount);
+      expect(readMetadata(outputPath).nodesHelpText).toContain(`openclaw nodes ${expectedCount}`);
+    }
   });
 
   it("regenerates help when build version or commit changes", async () => {

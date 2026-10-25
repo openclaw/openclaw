@@ -209,7 +209,6 @@ export async function installPluginFromNpmSpec(
             requestedSpecifier: spec,
             source: npmInstallPolicySource,
             sourcePath: policyMetadataPath,
-            sourcePathKind: "file",
           }),
       });
     },

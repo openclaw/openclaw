@@ -1,6 +1,7 @@
 import {
   capturePluginRegistration,
   createRuntimeEnv,
+  requireRegisteredProvider,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
@@ -28,8 +29,12 @@ installProviderHttpMockCleanup();
 afterEach(clearRuntimeConfigSnapshot);
 
 async function generateVideo(request: Request = {}) {
-  const { buildRunwayVideoGenerationProvider } = await import("./video-generation-provider.js");
-  return buildRunwayVideoGenerationProvider().generateVideo({ ...defaults, cfg: {}, ...request });
+  const { default: plugin } = await import("./index.js");
+  const provider = requireRegisteredProvider(
+    capturePluginRegistration(plugin).videoGenerationProviders,
+    "runway",
+  );
+  return provider.generateVideo({ ...defaults, cfg: {}, ...request });
 }
 
 function mockSubmission(reply = Response.json({ id: "task-1" })) {
@@ -184,7 +189,7 @@ it("keeps the resolved proxy and private-network route while polling", async () 
   };
   resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => ({
     baseUrl: params.defaultBaseUrl,
-    headers: new Headers(params.defaultHeaders),
+    headers: new Headers(omitNullRequestHeaders(params.defaultHeaders)),
     allowPrivateNetwork: true,
     dispatcherPolicy,
   }));
@@ -246,3 +251,4 @@ testVideoGenerationDeadlines({
   pendingStatus: "RUNNING",
   loadPlugin: async () => (await import("./index.js")).default,
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

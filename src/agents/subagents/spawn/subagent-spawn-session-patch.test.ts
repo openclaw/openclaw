@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
+  appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as sessionStorePaths from "../../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
@@ -73,28 +73,19 @@ it.each(["creation", "fork"] as const)(
           updatedAt: 1,
         });
         if (operation === "fork") {
-          await replaceTranscriptEvents(
-            { agentId, sessionKey, sessionId, storePath: database.path },
-            [
-              { type: "session", version: 3, id: sessionId, timestamp: "2026-09-26T00:00:00Z" },
-              {
-                type: "message",
-                id: "user-message",
-                parentId: null,
-                message: { role: "user", content: `${source} context` },
-              },
-              {
-                type: "message",
-                id: "assistant-message",
-                parentId: "user-message",
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: `${source} reply` }],
-                  stopReason: "stop",
-                },
-              },
-            ],
-          );
+          for (const message of [
+            { role: "user", content: `${source} context` },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: `${source} reply` }],
+              stopReason: "stop",
+            },
+          ]) {
+            await appendTranscriptMessage(
+              { agentId, sessionKey, sessionId, storePath: database.path },
+              { message },
+            );
+          }
         }
       }
       if (operation === "fork") {

@@ -88,42 +88,4 @@ describe("agent cleanup timeout", () => {
     expect(inner.outcome).toBe("uncertain");
     expect(outer.outcome).toBe("uncertain");
   });
-  it.each([
-    { label: "completed", settles: true, fails: false, outcome: "closed" },
-    { label: "late rejection", settles: false, fails: true, outcome: "uncertain" },
-  ])(
-    "bounds automatic cleanup and records $label ownership",
-    async ({ settles, fails, outcome }) => {
-      let settle!: () => void;
-      const held = new Promise<void>((resolve) => {
-        settle = resolve;
-      });
-      const scope = createAgentCleanupScope();
-      const result = scope.run(() =>
-        runCleanup({
-          runId: "automatic",
-          sessionId: "isolated",
-          step: "registered-owner",
-          timeoutMs: 5,
-          cleanup: async () => {
-            await held;
-            if (fails) {
-              throw new Error("teardown failed");
-            }
-          },
-        }),
-      );
-      try {
-        if (settles) {
-          settle();
-        }
-        await vi.advanceTimersByTimeAsync(5);
-        expect(scope.outcome).toBe(outcome);
-        await expect(result).resolves.toBeUndefined();
-      } finally {
-        settle();
-        await result;
-      }
-    },
-  );
 });

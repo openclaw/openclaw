@@ -3,6 +3,7 @@ import path from "node:path";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { loadGitHubDetail } from "./detail.js";
+import { requestUrl } from "./preview.test-support.js";
 import { parseGitHubLinkParams, parseGitHubReadParams, type GitHubJobTarget } from "./targets.js";
 
 const target: GitHubJobTarget = {
@@ -18,8 +19,6 @@ const url = `https://github.com/octocat/reader/actions/runs/${target.runId}/job/
 const storage = "https://productionresultssa10.blob.core.windows.net/logs/job.txt?sig=synthetic";
 const token = "synthetic-reader-token";
 const revision = "a".repeat(40);
-const requestUrl = (input: Parameters<typeof fetch>[0]) =>
-  input instanceof Request ? input.url : String(input);
 function setup(
   text = "Build started\nTest failed\n",
   overrides: Record<string, unknown> = {},

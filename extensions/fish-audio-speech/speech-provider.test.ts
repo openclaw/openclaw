@@ -1,6 +1,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import { buildFishAudioSpeechProvider } from "./speech-provider.js";
 
 const fetchMock = vi.hoisted(() => vi.fn());
@@ -220,16 +221,7 @@ it.each([
   { key: "topp", value: "1", overrides: { topP: 1 } },
   { key: "speed", value: "0.5", overrides: { speed: 0.5 } },
 ])("accepts the $key=$value directive boundary", ({ key, value, overrides }) => {
-  const policy = {
-    enabled: true,
-    allowText: true,
-    allowProvider: true,
-    allowVoice: true,
-    allowModelId: true,
-    allowVoiceSettings: true,
-    allowNormalization: true,
-    allowSeed: true,
-  };
+  const policy = createSpeechDirectivePolicy();
   expect(provider.parseDirectiveToken?.({ key, value, policy })).toEqual({
     handled: true,
     overrides,

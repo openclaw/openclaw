@@ -105,3 +105,27 @@ export function* readQaMessageToolCalls(
     };
   }
 }
+
+export function* readQaAssistantToolCalls(
+  message: Record<string, unknown>,
+  readType: (value: unknown) => string | undefined = String,
+) {
+  for (const block of Array.isArray(message.content) ? message.content : []) {
+    if (!isRecord(block)) {
+      continue;
+    }
+    const type = readType(block.type);
+    if (type !== "toolCall" && type !== "toolUse" && type !== "tool_use") {
+      continue;
+    }
+    const name = normalizeOptionalString(block.name);
+    if (name) {
+      yield {
+        block,
+        arguments: block.arguments ?? block.input,
+        id: normalizeOptionalString(block.id),
+        name,
+      };
+    }
+  }
+}

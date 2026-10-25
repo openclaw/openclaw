@@ -12,6 +12,7 @@ import {
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { resolvePluginWebContentExtractors } from "./web-content-extractors.runtime.js";
 import {
   resolvePluginWebFetchProviders,
@@ -48,7 +49,6 @@ function environment(marker: string) {
   const pluginDir = path.join(bundledDir, PLUGIN_ID);
   const workspaceDir = path.join(root, "workspace");
   const evaluationsPath = path.join(root, "evaluations.log");
-  fs.mkdirSync(pluginDir, { recursive: true });
   fs.mkdirSync(workspaceDir);
   fs.writeFileSync(evaluationsPath, "");
   const manifest = {
@@ -62,15 +62,12 @@ function environment(marker: string) {
       webContentExtractors: [PLUGIN_ID],
     },
   };
-  fs.writeFileSync(path.join(pluginDir, "openclaw.plugin.json"), JSON.stringify(manifest));
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({ type: "commonjs", openclaw: { extensions: ["./index.js"] } }),
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "index.js"),
-    "throw new Error('Public artifact resolution must not activate the runtime entry');\n",
-  );
+  writeArtifacts(pluginDir, {
+    "openclaw.plugin.json": manifest,
+    "package.json": { type: "commonjs", openclaw: { extensions: ["./index.js"] } },
+    "index.js":
+      "throw new Error('Public artifact resolution must not activate the runtime entry');\n",
+  });
   for (const [basename, suffix] of artifacts) {
     fs.writeFileSync(
       path.join(pluginDir, basename),

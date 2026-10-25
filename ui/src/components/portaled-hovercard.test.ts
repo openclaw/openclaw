@@ -71,10 +71,8 @@ it("keeps a Solid card open while its links hold focus and closes after focus le
   const { controller, trigger, dismiss } = fixture();
   const card = createPortaledHovercard("solid-preview", "preview");
   const content = document.createElement("div");
-  const first = document.createElement("a");
-  first.href = "#first";
-  const second = document.createElement("a");
-  second.href = "#second";
+  const first = Object.assign(document.createElement("a"), { href: "#first" });
+  const second = Object.assign(document.createElement("a"), { href: "#second" });
   content.append(first, second);
   const controls = controlsForHovercard(card);
   onTestFinished(controls.registerSource(() => [first]));

@@ -12,6 +12,7 @@ import {
 import {
   MessageInjectionAcceptedUnconfirmedError,
   MessageInjectionAuthorityError,
+  MessageInjectionPolicyMismatchError,
   MessageInjectionTargetUnavailableError,
   MessageInjectionWithdrawnError,
 } from "../auto-reply/reply/message-injection-authority.js";
@@ -30,6 +31,7 @@ export function resolveReplyBackendQueueMessageMismatch(
     ReplyBackendHandle,
     | "sourceReplyDeliveryMode"
     | "terminalReplyExpectation"
+    | "supportsUserReplyPromotion"
     | "supportsQueueMessageImages"
     | "taskSuggestionDeliveryMode"
     | "toolAuthorityFingerprint"
@@ -55,7 +57,12 @@ export function resolveReplyBackendQueueMessageMismatch(
   }
   if (
     options?.terminalReplyExpectation !== undefined &&
-    options.terminalReplyExpectation !== (backend.terminalReplyExpectation ?? "required")
+    options.terminalReplyExpectation !== (backend.terminalReplyExpectation ?? "required") &&
+    !(
+      options.isInboundUserMessage === true &&
+      options.terminalReplyExpectation !== "optional" &&
+      backend.supportsUserReplyPromotion === true
+    )
   ) {
     return "reply_expectation_mismatch";
   }
@@ -110,22 +117,31 @@ export function resolveReplyMessageInjectionFailure(
       errorMessage: toErrorObject(completionError, "Message injection completion failed").message,
     };
   }
-  const rejectUnavailable = (): ReplyMessageInjectionOutcome => {
-    try {
-      assertCurrent?.();
-    } catch (sourceError) {
-      return {
-        status: "failed",
-        error: toErrorObject(sourceError, "Message source authority is no longer current"),
-      };
-    }
-    return { status: "rejected", reason: "injection_unavailable" };
-  };
+  // A pre-acceptance refusal may return to follow-up custody only while its source is valid.
+  // Check even unknown runtime failures: their wrapper type cannot establish live authority.
+  try {
+    assertCurrent?.();
+  } catch (sourceError) {
+    return {
+      status: "failed",
+      error: toErrorObject(sourceError, "Message source authority is no longer current"),
+    };
+  }
   const targetUnavailable = candidates.findLast(
     (candidate) => candidate instanceof MessageInjectionTargetUnavailableError,
   );
   if (targetUnavailable) {
-    return rejectUnavailable();
+    return { status: "rejected", reason: "injection_unavailable" };
+  }
+  const policyMismatch = candidates.findLast(
+    (candidate) => candidate instanceof MessageInjectionPolicyMismatchError,
+  );
+  if (policyMismatch) {
+    return {
+      status: "rejected",
+      reason: "tool_authority_mismatch",
+      errorMessage: policyMismatch.message,
+    };
   }
   const refusal = candidates.findLast(
     (candidate) =>
@@ -136,7 +152,7 @@ export function resolveReplyMessageInjectionFailure(
           candidate instanceof SessionPendingInputCustodyError)),
   );
   if (unsupported && !refusal) {
-    return rejectUnavailable();
+    return { status: "rejected", reason: "injection_unavailable" };
   }
   const authorityError = refusal ?? unsupported;
   if (authorityError instanceof Error) {

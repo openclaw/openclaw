@@ -8,7 +8,10 @@ import {
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
-import { waitForGatewayRecoveryScope } from "./new-session-page.test-support.ts";
+import {
+  replaceGatewayClient,
+  waitForGatewayRecoveryScope,
+} from "./new-session-page.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -47,16 +50,8 @@ suite.define(() => {
       await dialog.waitFor({ state: "detached" });
       await expect.poll(() => row.textContent()).toContain("Renamed offline");
       const connectionStatus = footer.locator(".gateway-status");
-      await connectionStatus
-        .getByRole("button", { name: "Reconnecting… · 1 queued — Retry now", exact: true })
-        .waitFor();
-      await gateway.closeLatest(1006, "synthetic failed attempt");
-      await connectionStatus.getByRole("button").click();
-      await waitForControlUiGatewayReconnecting(page);
-      await expect.poll(() => row.textContent()).toContain("Renamed offline");
-      await connectionStatus
-        .getByRole("button", { name: "Reconnecting… · 1 queued — Retry now", exact: true })
-        .waitFor();
+      await connectionStatus.getByText("Reconnecting… · 1 queued", { exact: true }).waitFor();
+      expect(await connectionStatus.getByRole("button").count()).toBe(0);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       const queued = await takeControlUiScreenshotFrame(page, footer, [row, connectionStatus], {
         elements: [footer, connectionStatus],
@@ -123,15 +118,17 @@ suite.define(() => {
       const ownerFilter = sidebar.locator("#sidebar-session-owner-title");
       await expect.poll(() => ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
       await expect.poll(() => rows.count()).toBe(2);
+      const socketCount = await gateway.getSocketCount();
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      const reconnectSocketCount = await gateway.getSocketCount();
+      await replaceGatewayClient(page);
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(reconnectSocketCount);
       await expect.poll(() => rows.count()).toBe(2);
       for (const key of ownKeys) {
         await sidebar.locator('[data-session-key="' + key + '"]').waitFor({ state: "visible" });
       }
-      await page.locator(".sidebar-identity-card").click();
-      await gateway.closeLatest(1006, "synthetic failed attempt");
-      await page.locator('.sidebar-identity-menu [data-value="command:retry-connect"]').click();
       await expect.poll(() => rows.count()).toBe(2);
       expect(await ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
       expect(await sidebar.locator('[data-session-key="agent:main:foreign"]').count()).toBe(0);

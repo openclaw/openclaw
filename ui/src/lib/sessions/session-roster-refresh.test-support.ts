@@ -13,6 +13,16 @@ import type { SessionGateway, SessionListScope } from "./session-capability.ts";
 type PendingList = ReturnType<typeof createDeferred<SessionsListResult>>;
 type Cleanup = () => unknown;
 
+export function rosterPage(rows: GatewaySessionRow[], totalCount: number, limit: number, ts = 1) {
+  return {
+    ...sessionsResult(rows, ts),
+    totalCount,
+    hasMore: true,
+    nextOffset: limit,
+    limitApplied: limit,
+  };
+}
+
 export function ownRoster(
   gateway: SessionGateway,
   bootstrap?: ReturnType<typeof createConnectionBootstrapCoordinator>,

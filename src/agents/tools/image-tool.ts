@@ -27,7 +27,7 @@ import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { optionalFiniteNumberSchema, optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
-import { readFiniteNumberParam, readPositiveIntegerParam, type AnyAgentTool } from "./common.js";
+import { readPositiveIntegerParam, type AnyAgentTool } from "./common.js";
 import {
   coerceImageModelConfig,
   decodeDataUrl,
@@ -48,7 +48,7 @@ import {
   resolveMediaToolSandboxConfig,
   resolveMediaToolInboundRoots,
   resolveMediaToolReferenceAccess,
-  resolvePromptAndModelOverride,
+  resolveMediaAnalysisParams,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import {
@@ -62,6 +62,20 @@ import { textResult } from "./tool-results.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
+
+const ImageToolSchema = Type.Object({
+  prompt: Type.Optional(Type.String()),
+  path: Type.Optional(Type.String({ description: "One local image path or permitted URL." })),
+  paths: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Local image paths or permitted URLs; maxImages default 20.",
+    }),
+  ),
+  model: Type.Optional(Type.String()),
+  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
+  maxImages: optionalPositiveIntegerSchema(),
+});
+const NativeVisionImageToolSchema = Type.Omit(ImageToolSchema, ["model"]);
 
 type LoadedImageForTool = {
   buffer: Buffer;
@@ -95,7 +109,6 @@ function resolveImageModelConfigForTool(params: {
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): ImageModelConfig | null {
   // Native-vision runs route post-prompt image bytes to the active model, not fallback config.
@@ -224,7 +237,6 @@ function resolveImageModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    authProfileStoreSource: params.authProfileStoreSource,
     candidates: [...primaryAliasCandidates, ...primaryCandidates, ...remainingAutoCandidates],
     isProviderConfigured: (provider) =>
       verifiedSubstituteProvider && provider === verifiedSubstituteProvider ? true : undefined,
@@ -277,18 +289,7 @@ export function createImageTool(options?: {
     name: "view_image",
     description,
     ...(modelHasVision ? { catalogMode: "direct-only" as const } : {}),
-    parameters: Type.Object({
-      prompt: Type.Optional(Type.String()),
-      path: Type.Optional(Type.String({ description: "One local image path or permitted URL." })),
-      paths: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "Local image paths or permitted URLs; maxImages default 20.",
-        }),
-      ),
-      ...(modelHasVision ? {} : { model: Type.Optional(Type.String()) }),
-      maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
-      maxImages: optionalPositiveIntegerSchema(),
-    }),
+    parameters: modelHasVision ? NativeVisionImageToolSchema : ImageToolSchema,
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
         const record = asRecord(args);
@@ -328,18 +329,15 @@ export function createImageTool(options?: {
           );
         }
 
-        const { prompt: promptRaw, modelOverride } = resolvePromptAndModelOverride(
-          record,
-          DEFAULT_PROMPT,
-        );
-        const maxBytesMb =
-          readFiniteNumberParam(record, "maxBytesMb", {
-            min: 0,
-            minExclusive: true,
-            message: "maxBytesMb must be greater than 0",
-          }) ?? asPositiveFiniteNumber(options?.config?.agents?.defaults?.mediaMaxMb);
+        const {
+          prompt: promptRaw,
+          modelOverride,
+          maxBytesMb,
+        } = resolveMediaAnalysisParams(record, DEFAULT_PROMPT);
+        const maxBytesMbLimit =
+          maxBytesMb ?? asPositiveFiniteNumber(options?.config?.agents?.defaults?.mediaMaxMb);
         const maxBytes =
-          maxBytesMb === undefined ? undefined : Math.floor(maxBytesMb * 1024 * 1024);
+          maxBytesMbLimit === undefined ? undefined : Math.floor(maxBytesMbLimit * 1024 * 1024);
         let imageRoute:
           | { kind: "native" }
           | {

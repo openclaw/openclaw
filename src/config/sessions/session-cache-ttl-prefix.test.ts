@@ -9,6 +9,7 @@ import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcile.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 it.each([false, true])(
   "selects cache-TTL dependencies without scanning messages (analyzed=%s)",
@@ -26,12 +27,12 @@ it.each([false, true])(
           frozenToolResults: [],
         },
       };
-      const messages = Array.from({ length: 1_000 }, (_, index) => ({
-        type: "message",
-        id: `message-${index}`,
-        parentId: index === 0 ? checkpoint.id : `message-${index - 1}`,
-        message: { role: "user", content: `synthetic-${index}` },
-      }));
+      const messages = Array.from({ length: 1_000 }, (_, index) =>
+        messageEvent(`message-${index}`, index === 0 ? checkpoint.id : `message-${index - 1}`, {
+          role: "user",
+          content: `synthetic-${index}`,
+        }),
+      );
       runOpenClawAgentWriteTransaction(
         () => {
           appendTranscriptEventsInTransaction(
@@ -139,12 +140,10 @@ it("decodes only the live cache-TTL prefix after sorting obsolete checkpoints", 
       customType: "openclaw.cache-ttl",
       data: { timestamp: 1 },
     };
-    const anchor = {
-      type: "message",
-      id: "current-message",
-      parentId: touch.id,
-      message: { role: "user", content: "synthetic request" },
-    };
+    const anchor = messageEvent("current-message", touch.id, {
+      role: "user",
+      content: "synthetic request",
+    });
     runOpenClawAgentWriteTransaction(
       () =>
         appendTranscriptEventsInTransaction(
@@ -210,12 +209,10 @@ it("hydrates a checkpoint-heavy transcript within the native worker heap limit",
       customType: "openclaw.cache-ttl",
       data,
     };
-    const anchor = {
-      type: "message",
-      id: "current-message",
-      parentId: checkpoint.id,
-      message: { role: "user", content: "synthetic request" },
-    };
+    const anchor = messageEvent("current-message", checkpoint.id, {
+      role: "user",
+      content: "synthetic request",
+    });
     runOpenClawAgentWriteTransaction(
       () =>
         appendTranscriptEventsInTransaction(

@@ -228,6 +228,23 @@ export async function runStatusAllReport(
   return stripAnsi(String(log.mock.calls[0]?.[0])).split("\n");
 }
 
+export async function reportText(params: Parameters<typeof runStatusAllReport>[0] = {}) {
+  return (await runStatusAllReport(params)).join("\n");
+}
+
+export function expectReport(
+  output: string,
+  contains: readonly string[],
+  excludes: readonly string[] = [],
+) {
+  for (const text of contains) {
+    expect(output).toContain(text);
+  }
+  for (const text of excludes) {
+    expect(output).not.toContain(text);
+  }
+}
+
 export function setupStatusAllReportTest() {
   beforeEach(() => {
     const { progress, ...functions } = mocks;

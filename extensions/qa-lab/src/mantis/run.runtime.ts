@@ -4,7 +4,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { ensureRepoBoundDirectory, resolveTimestampedQaOutputDir } from "../cli-paths.js";
 import {
   copyMantisLaneArtifacts,
   publishMantisRunOutput,
@@ -115,11 +115,6 @@ function normalizeRequiredLiteral<T extends string>(
   return normalized;
 }
 
-function defaultOutputDir(repoRoot: string, startedAt: Date) {
-  const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
-  return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `run-${stamp}`);
-}
-
 function formatMantisFailure(error: unknown): string {
   const lines: string[] = [];
   const append = (entry: unknown, pathParts: number[]) => {
@@ -140,7 +135,7 @@ export async function runMantisBeforeAfter(
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir = await ensureRepoBoundDirectory(
     repoRoot,
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ?? defaultOutputDir(repoRoot, startedAt),
+    resolveTimestampedQaOutputDir(repoRoot, opts.outputDir, startedAt, "mantis/run"),
     "Mantis before/after output directory",
     { mode: 0o755 },
   );
@@ -236,12 +231,6 @@ export async function runMantisBeforeAfter(
         worktreeOwnership = await captureMantisDirectoryOwnership({
           directoryPath: worktreeDir,
           repoRoot,
-        });
-        assertMantisCommandNotAborted({
-          command: "git",
-          args: worktreeAddArgs,
-          execution: worktreeAddExecution,
-          lane,
         });
         await runMantisCommand({
           command: "git",

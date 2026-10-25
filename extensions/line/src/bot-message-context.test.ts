@@ -12,8 +12,8 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
+import { linePlugin } from "./channel.js";
 import { resolveLineQuoteToken } from "./quote-tokens.js";
 import type { ResolvedLineAccount } from "./types.js";
 
@@ -57,7 +57,7 @@ type PostbackEvent = webhook.PostbackEvent;
 
 const lineBindingsPlugin = {
   id: "line",
-  bindings: lineBindingsAdapter,
+  bindings: linePlugin.bindings,
   conversationBindings: {
     defaultTopLevelPlacement: "current",
     supportsCurrentConversationBinding: true,
@@ -163,6 +163,15 @@ describe("buildLineMessageContext", () => {
       retryDelay: 50,
     });
   });
+
+  const imageEvent = () =>
+    createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
 
   const stickerEvent = (sticker: Partial<Record<string, unknown>>) =>
     createMessageEvent({ type: "user", userId: "user-1" }, {
@@ -285,13 +294,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("keeps failed media-only command text empty and preserves its native media fact", async () => {
-    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
-      message: {
-        id: "image-1",
-        type: "image",
-        contentProvider: { type: "line" },
-      },
-    } as Partial<MessageEvent>);
+    const event = imageEvent();
 
     const context = await buildMessageContext(event, {
       mediaUnavailable: true,
@@ -309,13 +312,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("tells the agent how much of a multi-image send never arrived", async () => {
-    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
-      message: {
-        id: "image-1",
-        type: "image",
-        contentProvider: { type: "line" },
-      },
-    } as Partial<MessageEvent>);
+    const event = imageEvent();
 
     const context = await buildMessageContext(event, {
       allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
@@ -330,13 +327,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("counts a single missing image in the singular", async () => {
-    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
-      message: {
-        id: "image-1",
-        type: "image",
-        contentProvider: { type: "line" },
-      },
-    } as Partial<MessageEvent>);
+    const event = imageEvent();
 
     const context = await buildMessageContext(event, {
       allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
@@ -475,7 +466,9 @@ describe("buildLineMessageContext", () => {
   });
 
   it("normalizes canonical LINE targets through the plugin bindings surface", () => {
-    const compiled = lineBindingsAdapter.compileConfiguredBinding({
+    const binding = { agentId: "main", match: { channel: "line" } };
+    const compiled = linePlugin.bindings!.compileConfiguredBinding({
+      binding,
       conversationId: "line:U1234567890abcdef1234567890abcdef",
     });
 
@@ -483,14 +476,16 @@ describe("buildLineMessageContext", () => {
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      lineBindingsAdapter.resolveCommandConversation({
+      linePlugin.bindings!.resolveCommandConversation!({
+        accountId: "default",
         originatingTo: "line:U1234567890abcdef1234567890abcdef",
       }),
     ).toEqual({
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      lineBindingsAdapter.matchInboundConversation({
+      linePlugin.bindings!.matchInboundConversation({
+        binding,
         compiledBinding: compiled!,
         conversationId: "U1234567890abcdef1234567890abcdef",
       }),
@@ -500,44 +495,73 @@ describe("buildLineMessageContext", () => {
     });
   });
 
-  it("routes LINE conversations through active ACP session bindings", async () => {
-    const userId = "U1234567890abcdef1234567890abcdef";
-    const bindingService = getSessionBindingService();
-    await bindingService.bind({
-      targetSessionKey: "agent:codex:acp:binding:line:default:test123",
-      targetKind: "session",
-      conversation: {
-        channel: "line",
-        accountId: "default",
-        conversationId: userId,
-      },
-      placement: "current",
-      metadata: {
-        agentId: "codex",
-      },
-    });
-    const touchAsync = vi.spyOn(bindingService, "touchAsync").mockImplementation(async () => {});
+  it.each(["message", "postback"])(
+    "routes LINE %s through active ACP session bindings",
+    async (kind) => {
+      const userId = "U1234567890abcdef1234567890abcdef";
+      const bindingService = getSessionBindingService();
+      await bindingService.bind({
+        targetSessionKey: "agent:codex:acp:binding:line:default:test123",
+        targetKind: "session",
+        conversation: {
+          channel: "line",
+          accountId: "default",
+          conversationId: userId,
+        },
+        placement: "current",
+        metadata: {
+          agentId: "codex",
+        },
+      });
+      const touchAsync = vi.spyOn(bindingService, "touchAsync").mockImplementation(async () => {});
 
-    try {
-      const event = createMessageEvent({ type: "user", userId });
-      const context = await buildMessageContext(event);
+      try {
+        const buildBoundContext = (
+          resolveChannelIngress?: Parameters<
+            typeof buildLineMessageContext
+          >[0]["resolveChannelIngress"],
+        ) =>
+          kind === "message"
+            ? buildMessageContext(createMessageEvent({ type: "user", userId }), {
+                resolveChannelIngress,
+              })
+            : buildPostbackContext(createPostbackEvent({ type: "user", userId }), {
+                resolveChannelIngress,
+              });
+        const context = await buildBoundContext();
 
-      expect(context?.route.agentId).toBe("codex");
-      expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
-      expect(context?.route.matchedBy).toBe("binding.channel");
-      if (!context) {
-        throw new Error("expected a bound LINE message context");
+        expect(context?.route.agentId).toBe("codex");
+        expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
+        expect(context?.route.matchedBy).toBe("binding.channel");
+        if (!context) {
+          throw new Error("expected a bound LINE message context");
+        }
+        const routeMetadataKeys = Object.getOwnPropertySymbols(context.route);
+        expect(routeMetadataKeys).not.toHaveLength(0);
+        for (const key of routeMetadataKeys) {
+          expect(Reflect.get(context.ctxPayload, key)).toBe(Reflect.get(context.route, key));
+        }
+        expect(touchAsync).toHaveBeenCalledOnce();
+        getUserProfileMock.mockClear();
+        getLineGroupNameMock.mockClear();
+        const rejected = new Error("ingress refused");
+        const resolveChannelIngress = vi.fn(async () => {
+          throw rejected;
+        });
+        await expect(buildBoundContext(resolveChannelIngress)).rejects.toBe(rejected);
+        expect(resolveChannelIngress).toHaveBeenCalledExactlyOnceWith({
+          agentId: "codex",
+          sessionKey: "agent:codex:acp:binding:line:default:test123",
+          messageId: kind === "message" ? "1" : "postback:reply-token",
+          inboundEventKind: "user_request",
+        });
+        expect(getUserProfileMock).not.toHaveBeenCalled();
+        expect(getLineGroupNameMock).not.toHaveBeenCalled();
+      } finally {
+        touchAsync.mockRestore();
       }
-      const routeMetadataKeys = Object.getOwnPropertySymbols(context.route);
-      expect(routeMetadataKeys).not.toHaveLength(0);
-      for (const key of routeMetadataKeys) {
-        expect(Reflect.get(context.ctxPayload, key)).toBe(Reflect.get(context.route, key));
-      }
-      expect(touchAsync).toHaveBeenCalledOnce();
-    } finally {
-      touchAsync.mockRestore();
-    }
-  });
+    },
+  );
 
   it("gives the agent the sender's and the group's name instead of their ids", async () => {
     getUserProfileMock.mockResolvedValueOnce({ displayName: "Sora" });

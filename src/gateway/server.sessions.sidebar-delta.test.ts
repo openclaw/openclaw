@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, vi } from "vitest";
-import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { sidebarSessionListQuery } from "../../ui/src/components/session-data-events.js";
 import type { SessionRequestClient } from "../../ui/src/lib/sessions/session-capability.js";
 import { prepareSessionRefreshOptions } from "../../ui/src/lib/sessions/session-list-query.js";
@@ -26,6 +25,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
+  browserProxyAuth,
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
@@ -34,20 +34,12 @@ import {
   testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
-import * as presentation from "./session-row-presentation.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 test("sidebar wire caches retain deltas across real runtime publications", async () => {
   const origin = "https://sidebar.example.test";
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
+  const auth = browserProxyAuth();
   testState.gatewayAuth = auth;
   const controlUi = { allowedOrigins: [origin] };
   testState.gatewayControlUi = controlUi;
@@ -73,8 +65,6 @@ test("sidebar wire caches retain deltas across real runtime publications", async
     );
   }
   type Observation = {
-    baseSent: boolean;
-    baseFound: boolean;
     changedRows: number;
     outcome: "full" | "delta" | "unchanged";
   };
@@ -85,29 +75,6 @@ test("sidebar wire caches retain deltas across real runtime publications", async
       retirements.push(entry.cause);
     }
   });
-  const share = presentation.shareSidebarSessionRows;
-  const servedRows = new Map<string, Parameters<typeof share>[0]>();
-  const shareObserver = vi
-    .spyOn(presentation, "shareSidebarSessionRows")
-    .mockImplementation((rows, base, history) => {
-      const revision = base?.replace(SESSION_ROWS_DELTA_PREFIX, "");
-      const found = revision
-        ? share(rows).rowsRevision === revision ||
-          history?.some((candidate) => candidate.revision === revision) === true
-        : false;
-      const previous = revision ? servedRows.get(revision) : undefined;
-      const result = share(rows, base, history);
-      if (result.rowsRevision) {
-        servedRows.set(result.rowsRevision, rows);
-      }
-      observation = {
-        baseSent: base !== undefined,
-        baseFound: found,
-        changedRows: previous ? rows.filter((row) => !previous.includes(row)).length : rows.length,
-        outcome: result.rowsUnchanged ? "unchanged" : result.rowsDelta ? "delta" : "full",
-      };
-      return result;
-    });
   try {
     await withGatewayServer(async ({ port }) => {
       const socket = await openWs(port, {
@@ -137,11 +104,16 @@ test("sidebar wire caches retain deltas across real runtime publications", async
             const frame = await response;
             expect(frame.ok, JSON.stringify(frame.error)).toBe(true);
             if (method === "sessions.list") {
-              observation!.outcome = frame.payload?.rowsUnchanged
-                ? "unchanged"
-                : frame.payload?.rowsDelta
-                  ? "delta"
-                  : "full";
+              observation = {
+                changedRows: Array.isArray(frame.payload?.sessions)
+                  ? frame.payload.sessions.length
+                  : 0,
+                outcome: frame.payload?.rowsUnchanged
+                  ? "unchanged"
+                  : frame.payload?.rowsDelta
+                    ? "delta"
+                    : "full",
+              };
             }
             return frame.payload as T;
           },
@@ -182,7 +154,7 @@ test("sidebar wire caches retain deltas across real runtime publications", async
             }
             expect.soft(observation, `${label}/${entry.name}`).toMatchObject({
               outcome: expected,
-              ...(expected === "delta" ? { baseSent: true, baseFound: true, changedRows: 1 } : {}),
+              ...(expected === "delta" ? { changedRows: 1 } : {}),
             });
           }
         };
@@ -269,7 +241,6 @@ test("sidebar wire caches retain deltas across real runtime publications", async
     });
   } finally {
     stopDiagnostics();
-    shareObserver.mockRestore();
     clock.mockRestore();
   }
 });

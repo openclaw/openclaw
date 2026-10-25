@@ -1,7 +1,6 @@
-/** Tests materializing MCP catalog tools into agent tool definitions and results. */
-
-import "../test-utils/prepare-compiled-subprocesses.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+/** Tests materializing MCP catalog tools into agent tool definitions and results. */
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +8,11 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
+import {
+  catalogTool,
+  fixtureCatalog,
+  fixtureRuntime,
+} from "./agent-bundle-mcp-fixture.test-support.js";
 import {
   buildBundleMcpToolsFromCatalog,
   createBundleMcpToolRuntime,
@@ -20,6 +24,7 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
@@ -29,21 +34,6 @@ const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 function firstTool(runtime: Pick<BundleMcpToolRuntime, "tools">) {
   return expectDefined(runtime.tools[0], "first materialized tool");
-}
-
-function catalogTool(
-  serverName: string,
-  toolName: string,
-  overrides: Partial<McpCatalogTool> = {},
-): McpCatalogTool {
-  return {
-    serverName,
-    safeServerName: serverName,
-    toolName,
-    inputSchema: { type: "object", properties: {} },
-    fallbackDescription: toolName,
-    ...overrides,
-  };
 }
 
 function knowledgeCatalog(server: Partial<McpToolCatalog["servers"][string]> = {}): McpToolCatalog {
@@ -80,27 +70,19 @@ function makeToolRuntime(
       fallbackDescription: "Bundle probe",
     }),
   ];
-  const peekCatalog = (): McpToolCatalog => ({
-    version: 1,
-    generatedAt: 0,
-    servers: {
-      [serverName]: {
-        serverName,
-        launchSummary: serverName,
-        toolCount: tools.length,
-        supportsParallelToolCalls: params.supportsParallelToolCalls ?? false,
-      },
-    },
-    tools,
-  });
-  return {
+  const peekCatalog = (): McpToolCatalog => {
+    const catalog = fixtureCatalog(serverName, tools);
+    catalog.servers[serverName]!.supportsParallelToolCalls =
+      params.supportsParallelToolCalls ?? false;
+    return catalog;
+  };
+  return fixtureRuntime(peekCatalog, {
     sessionId: "session-collision",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
     createdAt: 0,
     lastUsedAt: 0,
     markUsed: () => {},
-    getCatalog: async () => peekCatalog(),
     peekCatalog,
     callTool: async () =>
       params.result ?? {
@@ -109,7 +91,7 @@ function makeToolRuntime(
       },
     joinCleanup: async () => {},
     dispose: async () => {},
-  };
+  });
 }
 
 async function executeMcpToolResult(result: CallToolResult) {
@@ -126,18 +108,14 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("joins concurrent disposal without releasing the captured lease twice", async () => {
-    const closing = createDeferred();
-    const started = createDeferred();
+    const disposal = createEnteredGate();
     const releaseLease = vi.fn();
     const runtime = makeToolRuntime();
     runtime.acquireLease = () => releaseLease;
-    const disposeRuntime = vi.fn(async () => {
-      started.resolve();
-      await closing.promise;
-    });
+    const disposeRuntime = vi.fn(disposal.wait);
     const materialized = await materializeBundleMcpToolsForRun({ runtime, disposeRuntime });
     const first = materialized.dispose();
-    await started.promise;
+    await disposal.entered;
     let joined = false;
     const second = materialized.dispose().then(() => {
       joined = true;
@@ -149,7 +127,7 @@ describe("createBundleMcpToolRuntime", () => {
       expect(joined).toBe(false);
       expect(releaseLease).toHaveBeenCalledOnce();
     } finally {
-      closing.resolve();
+      disposal.release();
       await Promise.all([first, second]);
     }
     expect(disposeRuntime).toHaveBeenCalledOnce();
@@ -393,21 +371,7 @@ describe("createBundleMcpToolRuntime", () => {
 
   it("carries server instructions onto resource and prompt utility tools", () => {
     const tools = buildBundleMcpToolsFromCatalog({
-      catalog: {
-        version: 1,
-        generatedAt: 0,
-        servers: {
-          bundleProbe: {
-            serverName: "bundleProbe",
-            launchSummary: "bundleProbe",
-            toolCount: 0,
-            instructions: "Read the catalogue before citing a resource.",
-            resources: { listChanged: false },
-            prompts: { listChanged: false },
-          },
-        },
-        tools: [],
-      },
+      catalog: knowledgeCatalog({ instructions: "Read the catalogue before citing a resource." }),
     });
 
     expect(tools.map((tool) => getPluginToolMeta(tool)?.mcp?.operation)).toEqual([

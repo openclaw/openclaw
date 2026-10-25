@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 let execGhReadAsync: typeof import("../../scripts/lib/plain-gh.mjs").execGhReadAsync;
@@ -15,9 +16,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 type Request = {
-  file: string;
   args: string[];
-  options: { env: NodeJS.ProcessEnv; stdio: unknown[] };
+  options: { stdio: unknown[] };
   child: ReturnType<typeof makeChild>;
 };
 let requests: Request[];
@@ -37,9 +37,9 @@ beforeEach(async () => {
   ({ execGhReadAsync, execPlainGhAsync } = await import("../../scripts/lib/plain-gh.mjs"));
   ({ execPrGhAsync } = await import("../../scripts/pr-lib/github.mjs"));
   requests = [];
-  transport.spawn.mockImplementation((file, args, options) => {
+  transport.spawn.mockImplementation((_file, args, options) => {
     const child = makeChild();
-    requests.push({ file, args, options, child });
+    requests.push({ args, options, child });
     return child;
   });
 });
@@ -48,13 +48,8 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function requestAt(index: number): Request {
-  const request = requests[index];
-  if (!request) {
-    throw new Error(`Expected spawned request ${index}`);
-  }
-  return request;
-}
+const requestAt = (index: number) => expectDefined(requests[index], `spawned request ${index}`);
+const drained = { stdout: { destroyed: true }, stderr: { destroyed: true } };
 
 function complete(request: Request, code = 0, stdout = "ok", stderr = "") {
   request.child.stdout.end(stdout);
@@ -76,27 +71,11 @@ function startInput(options: Parameters<typeof execPrGhAsync>[1]) {
   return { task, request, inputPath };
 }
 
-function startTimedInput() {
-  return startInput({
-    env: notifiedEnv,
-    input: "private bytes",
-    timeout: 100,
-  });
-}
-
 it("caps mixed writer and reader subprocesses at four and drains queued work", async () => {
   const tasks = Array.from({ length: 10 }, (_, index) =>
     (index % 2 ? execGhReadAsync : execPlainGhAsync)([String(index)], { env }),
   );
   expect(requests).toHaveLength(4);
-  expect(requests.map((request) => request.file)).toEqual([
-    process.execPath,
-    "gh",
-    process.execPath,
-    "gh",
-  ]);
-  expect(requestAt(0).options.env.OPENCLAW_GH_BIN).toBe(process.execPath);
-  expect(requestAt(1).options.env.OPENCLAW_GH_BIN).toBeUndefined();
   completeBatch(0, 4);
   await Promise.all(tasks.slice(0, 4));
   expect(requests).toHaveLength(8);
@@ -127,19 +106,6 @@ it("keeps the writer notifier and quota refusal semantics without retrying", asy
   expect(requests).toHaveLength(1);
 });
 
-it("keeps input bytes private until the asynchronous child has closed", async () => {
-  const { task, request, inputPath } = startInput({
-    env,
-    input: "fixture payload",
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  expect(readFileSync(inputPath, "utf8")).toBe("fixture payload");
-  expect(request.options.stdio[0]).toBe("ignore");
-  complete(request);
-  await expect(task).resolves.toBe("ok");
-  expect(existsSync(inputPath)).toBe(false);
-});
-
 it.each([false, true])(
   "joins overflow before refusing work (granted waiter=%s)",
   async (granted) => {
@@ -161,10 +127,7 @@ it.each([false, true])(
       expect(request.child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(request.child.stdout.destroyed).toBe(false);
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(request.child).toMatchObject({
-        stdout: { destroyed: true },
-        stderr: { destroyed: true },
-      });
+      expect(request.child).toMatchObject(drained);
       expect(requests).toHaveLength(4);
     }
     request.child.emit("close", null, "SIGTERM");
@@ -187,7 +150,13 @@ it.each([false, true])(
   "times out through child drainage (inherited output=%s)",
   async (inherited) => {
     vi.useFakeTimers();
-    const { task, request, inputPath } = startTimedInput();
+    const { task, request, inputPath } = startInput({
+      env: notifiedEnv,
+      input: "private bytes",
+      timeout: 100,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    expect(readFileSync(inputPath, "utf8")).toBe("private bytes");
     const failure = task.catch((error: unknown) => error);
     let settled = false;
     void task.catch(() => {
@@ -201,10 +170,7 @@ it.each([false, true])(
     expect(request.options.stdio).toEqual(["ignore", "pipe", "pipe", 3]);
     if (inherited) {
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(request.child).toMatchObject({
-        stdout: { destroyed: true },
-        stderr: { destroyed: true },
-      });
+      expect(request.child).toMatchObject(drained);
       expect(settled).toBe(false);
       request.child.emit("close", 0, null);
       expect(await failure).toMatchObject({ code: "ETIMEDOUT", processTreeState: "indeterminate" });

@@ -5,6 +5,51 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 
 type Usage = Parameters<typeof resolveResponseUsageLine>[0]["usage"];
+
+it("renders a full footer from a reply usage snapshot", () => {
+  const replyUsageState = {
+    provider: "openai",
+    model: "claude-opus-4-6",
+    reasoningEffort: "medium",
+    fastMode: false,
+    fallbackUsed: false,
+    contextTokenBudget: 272000,
+    contextUsedTokens: 204000,
+    usage: { input: 204000, output: 15, cacheRead: 0, cacheWrite: 0, total: 204015 },
+    turnUsd: 0.03771985,
+  };
+  const pieces = [
+    { text: "{model.display_name|alias:models}" },
+    { map: "model.is_fallback", cases: { true: "🔄" } },
+    { text: " | " },
+    { when: "model.reasoning", text: "{model.reasoning|alias:reasoning}" },
+    { map: "state.fast_mode", cases: { true: "⚡", false: "🐌" } },
+    { text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}" },
+    { text: " | ${cost.turn_usd|fixed:4}" },
+  ];
+  const line = resolveResponseUsageLine({
+    config: {
+      messages: {
+        responseUsage: "full",
+        usageTemplate: {
+          scales: {
+            braille: "⠐⡀⡄⡆⡇⣇⣧⣷⣿",
+          },
+          aliases: {
+            models: { "claude-opus-4-6": "opus46" },
+            reasoning: { medium: "med" },
+          },
+          output: { sep: "", surfaces: { discord: pieces } },
+        },
+      },
+    },
+    agentDir: "/synthetic/usage-contract-agent",
+    channel: "discord",
+    usage: replyUsageState.usage,
+    replyUsageState,
+  });
+  expect(line).toBe("opus46 | med🐌 | 📚 [⣿⣿⣿⣧⠐]272k | $0.0377");
+});
 const usageLine = "Usage: 12 in / 3 out";
 
 it("marks a standalone usage footer as non-terminal status", () => {

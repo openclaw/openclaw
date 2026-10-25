@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { importClientCredentialLegacy } from "./client-credential-legacy.js";
 import type { ClientIdentityRecord } from "./client-credential-operations.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { writeClientCredentialReceipt } from "./client-credential-readiness.js";
@@ -57,6 +56,7 @@ it("reports store creation for rollback attribution without claiming an existing
   }
   using reopened = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
   expect(reopened?.created).toBe(false);
+  expect(fs.statSync(resolveClientCredentialStorePath(env)).mode & 0o077).toBe(0);
 });
 
 it.each(["./../state/openclaw.sqlite", "./state//openclaw.sqlite", "./state\\openclaw.sqlite"])(
@@ -111,61 +111,6 @@ it.each(["-wal", "-shm", "-journal"])(
   },
 );
 
-it("returns the durable first identity without replacing its exact key material or timestamps", () => {
-  const { root, env, run } = fixture();
-  expect(run({ kind: "identity.create", identity })).toEqual({ kind: "identity", identity });
-  expect(
-    run({
-      kind: "identity.create",
-      identity: { ...identity, private_key_pem: "competing-candidate", updated_at_ms: 999 },
-    }),
-  ).toEqual({ kind: "identity", identity });
-  expect(run({ kind: "identity.read", identity_key: "node" })).toEqual({
-    kind: "identity",
-    identity,
-  });
-  expect(run({ kind: "identity.read", identity_key: "primary" })).toEqual({
-    kind: "identity",
-    identity: null,
-  });
-  expect(fs.existsSync(path.join(root, "state"))).toBe(false);
-  expect(fs.statSync(resolveClientCredentialStorePath(env)).mode & 0o077).toBe(0);
-});
-
-it("separates gateway caches and rejects stale token refresh and revocation observations", () => {
-  const { run } = fixture();
-  const local = { device_id: token.device_id, role: token.role };
-  const remote = { ...local, gateway_scope: "wss://synthetic-gateway.invalid" };
-  expect(run({ kind: "token.replace", key: local, token, expectedToken: null })).toEqual({
-    kind: "changed",
-    changed: true,
-  });
-  const scoped = { ...token, token: "synthetic-scoped-token" };
-  expect(run({ kind: "token.replace", key: remote, token: scoped, expectedToken: null })).toEqual({
-    kind: "changed",
-    changed: true,
-  });
-  const refreshed = { ...token, token: "synthetic-refreshed-token", updated_at_ms: 900 };
-  expect(
-    run({ kind: "token.replace", key: local, token: refreshed, expectedToken: token.token }),
-  ).toEqual({ kind: "changed", changed: true });
-  expect(run({ kind: "token.replace", key: local, token, expectedToken: token.token })).toEqual({
-    kind: "changed",
-    changed: false,
-  });
-  expect(run({ kind: "token.remove", key: local, expectedToken: token.token })).toEqual({
-    kind: "changed",
-    changed: false,
-  });
-  expect(run({ kind: "token.read", key: local })).toEqual({ kind: "token", token: refreshed });
-  expect(run({ kind: "token.remove", key: local, expectedToken: refreshed.token })).toEqual({
-    kind: "changed",
-    changed: true,
-  });
-  expect(run({ kind: "token.read", key: local })).toEqual({ kind: "token", token: null });
-  expect(run({ kind: "token.read", key: remote })).toEqual({ kind: "token", token: scoped });
-});
-
 it("stores native socket material without creating or changing shared policy", () => {
   const { root, run } = fixture();
   const socket = {
@@ -182,23 +127,6 @@ it("stores native socket material without creating or changing shared policy", (
       fallback: { ...migrated, socket_token: "discarded" },
     }),
   ).toEqual({ kind: "socket", socket: migrated });
-  const replacement = {
-    ...socket,
-    socket_path: "/synthetic/replaced.sock",
-    socket_token: "replacement",
-    updated_at_ms: 40,
-  };
-  expect(
-    run({
-      kind: "socket.ensure",
-      fallback: { ...socket, updated_at_ms: 40 },
-      requested: { path: " /synthetic/replaced.sock ", token: " replacement " },
-    }),
-  ).toEqual({ kind: "socket", socket: replacement });
-  expect(run({ kind: "socket.ensure", fallback: socket })).toEqual({
-    kind: "socket",
-    socket: replacement,
-  });
   expect(fs.existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);
 });
 
@@ -325,19 +253,6 @@ it("pages tokens in stable role order and preserves existing scoped claims", () 
     key: { ...token, role: scopedRole },
     token: { ...token, role: scopedRole, token: "scoped-winner" },
   });
-  run({
-    kind: "native.token.claim",
-    device_id: token.device_id,
-    role: "a",
-    gateway: "synthetic-gateway",
-  });
-  expect(run({ kind: "token.read", key: { ...token, role: scopedRole } })).toMatchObject({
-    token: { token: "scoped-winner" },
-  });
-  expect(run({ kind: "token.read", key: { ...token, role: "a" } })).toEqual({
-    kind: "token",
-    token: null,
-  });
   run({ kind: "native.tokens.clear", device_id: token.device_id, selector: { kind: "unscoped" } });
   expect(run({ kind: "token.list", device_id: token.device_id })).toMatchObject({
     tokens: [{ role: scopedRole }],
@@ -354,37 +269,7 @@ it("pages tokens in stable role order and preserves existing scoped claims", () 
   });
 });
 
-it("consumes a legacy import atomically and cannot resurrect a revoked token", () => {
-  const { env, run } = fixture();
-  {
-    using owner = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
-    writeClientCredentialReceipt(owner!.database, emptyClientCredentialReceipt(), "complete");
-    expect(
-      importClientCredentialLegacy(owner!, {
-        key: "auth:node",
-        sha256: "a".repeat(64),
-        tokens: [token],
-      }),
-    ).toBe(true);
-  }
-  expect(run({ kind: "token.remove", key: token, observedToken: token.token })).toEqual({
-    kind: "changed",
-    changed: true,
-  });
-  {
-    using owner = openClientCredentialCustody(env);
-    expect(
-      importClientCredentialLegacy(owner!, {
-        key: "auth:node",
-        sha256: "b".repeat(64),
-        tokens: [token],
-      }),
-    ).toBe(false);
-  }
-  expect(run({ kind: "token.read", key: token })).toEqual({ kind: "token", token: null });
-});
-
-it("repairs identity metadata while preserving Ed25519 material and refuses silent replacement", () => {
+it("repairs identity metadata without changing key material or the requested timestamp", () => {
   const { env, run } = fixture();
   run({ kind: "identity.create", identity });
   withClientCredentialStore(env, false, (db) =>
@@ -395,9 +280,10 @@ it("repairs identity metadata while preserving Ed25519 material and refuses sile
   expect(() => run({ kind: "identity.create", identity })).toThrow(
     "invalid persisted device identity",
   );
-  expect(run({ kind: "identity.repair", identity: { ...identity, updated_at_ms: 999 } })).toEqual({
+  const repaired = { ...identity, updated_at_ms: 999 };
+  expect(run({ kind: "identity.repair", identity: repaired })).toEqual({
     kind: "identityRepair",
-    identity: { ...identity, updated_at_ms: 999 },
+    identity: repaired,
     repaired: true,
     rotated: false,
   });

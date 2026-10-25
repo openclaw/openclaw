@@ -19,7 +19,7 @@ export async function prepareSessionEventDelivery(
 ): Promise<
   (params: SessionEventDeliveryParams) => ReturnType<typeof import("./route-reply.js").routeReply>
 > {
-  const { isRoutableChannel, routeReply } = await import("./route-reply.js");
+  const { isRoutableChannel, routeReply, routePreparedReply } = await import("./route-reply.js");
   assertCurrent();
   if (!isRoutableChannel(route.channel) || !route.to) {
     throw new Error(
@@ -27,5 +27,20 @@ export async function prepareSessionEventDelivery(
     );
   }
   const { channel, to, accountId, threadId } = route;
-  return (params) => routeReply({ ...params, channel, to, accountId, threadId, mirror: false });
+  return async (params) => {
+    const { payload, ...delivery } = params;
+    const destination = { channel, to, accountId, threadId, mirror: false };
+    if (params.replyKind !== "final") {
+      return routeReply({ ...params, ...destination });
+    }
+    // Dispatch already applied final lane policy and normalized this payload.
+    // Preserve admitted reasoning without enabling raw tool or block reasoning.
+    const { createStructuredOutboundPayloadPlan } =
+      await import("../../infra/outbound/payloads.js");
+    const [plan] = createStructuredOutboundPayloadPlan([payload]);
+    if (!plan) {
+      return { ok: true, delivered: false, suppressed: true };
+    }
+    return routePreparedReply({ ...delivery, ...destination, plan });
+  };
 }

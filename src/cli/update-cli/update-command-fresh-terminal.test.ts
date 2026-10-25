@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
@@ -16,14 +15,18 @@ import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as shared from "./shared.js";
 import * as executorOwner from "./update-command-executor.js";
 import { allowPackageRuntime } from "./update-command-fresh-preview.test-support.js";
-import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
+import {
+  denyFreshLeaseRelease,
+  expectFreshStatePreserved,
+  expectNoFreshCalls,
+  installFreshUpdateFixture,
+} from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import { UnreportedUpdateAdmissionOutcome, UpdateCommandFailure } from "./update-command-result.js";
 import * as commandRun from "./update-command-run.js";
@@ -45,16 +48,7 @@ describe("fresh update terminal reporting", () => {
       vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", "  1c5a25f3-f46a-408b-a87f-a0f0d1f80ee7  ");
       vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockImplementationOnce(async () => {
         if (cleanup === "release") {
-          const db = new DatabaseSync(
-            path.join(tempRoot.resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite"),
-          );
-          try {
-            db.exec(
-              "CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture refusal release denied'); END",
-            );
-          } finally {
-            db.close();
-          }
+          denyFreshLeaseRelease("fixture refusal release denied");
         }
         return metadataRefusal;
       });
@@ -121,13 +115,11 @@ describe("fresh update terminal reporting", () => {
           reason: "runtime-verification-failed",
         });
       }
-      expect(fs.existsSync(fixture.databasePath)).toBe(false);
-      expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-      expect(doctor).not.toHaveBeenCalled();
+      expectFreshStatePreserved(fixture);
+      expectNoFreshCalls(doctor);
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("registry unavailable"),
       );
-      expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
     },
   );
 

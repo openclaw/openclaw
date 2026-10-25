@@ -170,21 +170,12 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
       apolo: http("https://apolo.example.com/mcp", { codex: { agents: ["apolo"] } }),
       global: { transport: "stdio", command: "node", args: ["global-mcp.js"] },
     } satisfies Record<string, McpServerConfig>;
-    const atlasPatch = await project(servers, {
-      agentId: "atlas",
-    });
-    expect(Object.keys(atlasPatch!.mcp_servers).toSorted()).toEqual(["atlas", "global"]);
-    expect(atlasPatch!.mcp_servers.atlas).toMatchObject({ url: "https://atlas.example.com/mcp" });
-    expect(atlasPatch!.mcp_servers.global).toMatchObject({
-      command: "node",
-      args: ["global-mcp.js"],
-    });
-
-    const apoloPatch = await project(servers, {
-      agentId: "apolo",
-    });
-    expect(Object.keys(apoloPatch!.mcp_servers).toSorted()).toEqual(["apolo", "global"]);
-    expect(apoloPatch!.mcp_servers.apolo).toMatchObject({ url: "https://apolo.example.com/mcp" });
+    for (const agentId of ["atlas", "apolo"]) {
+      expectProjection(await project(servers, { agentId }), {
+        [agentId]: { url: `https://${agentId}.example.com/mcp` },
+        global: { command: "node", args: ["global-mcp.js"] },
+      });
+    }
   });
 
   it("omits disabled user MCP servers from Codex app-server projection", async () => {

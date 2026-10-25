@@ -21,10 +21,6 @@ export const SESSION_NAVIGATION_KEY_PARAM = "__openclawSessionKey";
 export const SESSION_COMPOSER_FOCUS_PARAM = "__openclawComposerFocus";
 export const SESSION_DASHBOARD_EXPANDED_PARAM = "dashboard";
 
-export function composerDraftSearch(draft: string): string {
-  return `?${new URLSearchParams({ draft, [SESSION_COMPOSER_FOCUS_PARAM]: "1" }).toString()}`;
-}
-
 type SessionNavigationContext<TRouteId extends string> = Pick<
   ApplicationContext<TRouteId>,
   "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"

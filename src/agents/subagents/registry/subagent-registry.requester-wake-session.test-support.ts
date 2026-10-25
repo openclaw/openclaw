@@ -9,9 +9,16 @@ import { createRequestGatewayMethodRegistry } from "../../../gateway/server-meth
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { createGatewayRequestContext } from "../../../gateway/server-request-context.js";
 import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
+import type { onAgentEvent } from "../../../infra/agent-events.js";
+import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
+import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import * as announceRuntime from "../announce/subagent-announce.runtime.js";
-import type { SessionStoreEntry } from "./subagent-registry.lifecycle-fixture.test-support.js";
+import type {
+  GatewayRequest,
+  SessionStoreEntry,
+} from "./subagent-registry.lifecycle-fixture.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
 export function holdRequesterWakeResponses(
@@ -75,9 +82,31 @@ export function createGatewayContext() {
   return context;
 }
 
-export type PrepareRequesterWakeChildSession = ReturnType<
-  typeof createRequesterWakeSessionFixture
->["prepareChildSession"];
+export type RequesterWakeFixture = ReturnType<typeof createRequesterWakeSessionFixture> & {
+  requesterSessionKey: string;
+  createGatewayContext: typeof createGatewayContext;
+  getFixture: () => {
+    testState: OpenClawTestState;
+    sessionStore: Record<string, SessionStoreEntry>;
+    sessionStorePath: string;
+  };
+  emitCompleted: (
+    runId: string,
+    sessionKey: string,
+    text: string,
+    modelRouteChange?: string,
+  ) => void;
+  flushOwnedWork: () => Promise<void>;
+  waitForDeliveredCleanup: (
+    runId: string,
+    options?: { allowPendingRequesterSettleWake?: boolean },
+  ) => Promise<void>;
+  waitForAgentCallCount: (count: number) => Promise<void>;
+  getRequesterWakeCalls: () => GatewayRequest[];
+  getAgentCalls: () => GatewayRequest[];
+  getLifecycleHandler: () => Parameters<typeof onAgentEvent>[0] | undefined;
+  wakeRequester: typeof maybeWakeRequesterAfterAllChildrenSettled;
+};
 
 export function createRequesterWakeSessionFixture(params: {
   requesterSessionKey: string;
@@ -142,5 +171,25 @@ export function createRequesterWakeSessionFixture(params: {
     expect(result).toMatchObject({ status: "accepted", runId });
   };
 
-  return { prepareChildSession, spawnVisibleChild };
+  const settleTurn = async (
+    runId: string,
+    acceptedSessionSpawns: AcceptedSessionSpawn[],
+    yielded = true,
+  ) => {
+    const { withLocalSessionPlacementTurnSettlement } =
+      await import("../../session-placement-admission.js");
+    return withLocalSessionPlacementTurnSettlement(
+      { sessionId: "sess-main", sessionKey: params.requesterSessionKey, agentId: "main", runId },
+      async () => ({
+        payloads: [],
+        acceptedSessionSpawns,
+        meta: {
+          durationMs: 1,
+          yielded,
+          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
+        },
+      }),
+    );
+  };
+  return { prepareChildSession, spawnVisibleChild, settleTurn };
 }

@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import { beforeEach, expect, it, vi } from "vitest";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
@@ -48,7 +47,6 @@ import {
   setUserProfileRole,
   syncGitHubIdentity,
 } from "./user-profile-writes.worker.js";
-import { userProfilesDb } from "./user-profiles-internal.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
@@ -500,33 +498,14 @@ it("reads current roles and only canonical login identities, including the curre
   linkUserChannelIdentity(profile.id, identity, options);
   setUserProfileRole(profile.id, "admin", options);
   const { db } = openOpenClawStateDatabase(options);
-  executeSqliteQuerySync(
-    db,
-    userProfilesDb(db).insertInto("user_profile_emails").values({
-      email: "old-login@github",
-      profile_id: profile.id,
-      created_at: 1,
-    }),
-  );
-  executeSqliteQuerySync(
-    db,
-    userProfilesDb(db)
-      .insertInto("user_profile_identities")
-      .values(
-        (
-          [
-            ["123", "retired-login"],
-            ["456", null],
-          ] as const
-        ).map(([subject, canonical_login]) => ({
-          provider: "github-attribution",
-          subject,
-          profile_id: profile.id,
-          canonical_login,
-          created_at: 1,
-        })),
-      ),
-  );
+  db.prepare(
+    "INSERT INTO user_profile_emails (email, profile_id, created_at) VALUES (?, ?, 1)",
+  ).run("old-login@github", profile.id);
+  const insertAttribution = db.prepare(`INSERT INTO user_profile_identities
+    (provider, subject, profile_id, canonical_login, created_at)
+    VALUES ('github-attribution', ?, ?, ?, 1)`);
+  insertAttribution.run("123", profile.id, "retired-login");
+  insertAttribution.run("456", profile.id, null);
   sync(123, "new-login", false);
   expect(resolveUserChannelIdentity(identity, options)).toMatchObject({
     profileId: profile.id,

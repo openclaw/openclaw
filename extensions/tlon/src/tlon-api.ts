@@ -18,11 +18,9 @@ export type ClientConfig = {
 };
 
 type StorageConfiguration = {
-  buckets: string[];
   currentBucket: string;
   region: string;
   publicUrlBase: string;
-  presignedUrl: string;
   service: "presigned-url" | "credentials";
 };
 
@@ -30,12 +28,6 @@ type StorageCredentials = {
   endpoint: string;
   accessKeyId: string;
   secretAccessKey: string;
-};
-
-type UploadFileParams = {
-  blob: Blob;
-  fileName?: string;
-  contentType?: string;
 };
 
 const MEMEX_BASE_URL = "https://memex.tlon.network";
@@ -170,42 +162,12 @@ async function scryJson<T>(config: ClientConfig, cookie: string, path: string): 
   )) as T;
 }
 
-async function getStorageConfiguration(
-  config: ClientConfig,
-  cookie: string,
-): Promise<StorageConfiguration> {
-  const result = await scryJson<
-    { "storage-update"?: { configuration?: StorageConfiguration } } | StorageConfiguration
-  >(config, cookie, "/storage/configuration.json");
-
-  if ("storage-update" in result && result["storage-update"]?.configuration) {
-    return result["storage-update"].configuration;
-  }
-  if ("currentBucket" in result) {
-    return result;
-  }
-  throw new Error("Invalid storage configuration response");
-}
-
-async function getStorageCredentials(
-  config: ClientConfig,
-  cookie: string,
-): Promise<StorageCredentials | null> {
-  const result = await scryJson<
-    { "storage-update"?: { credentials?: StorageCredentials } } | StorageCredentials
-  >(config, cookie, "/storage/credentials.json");
-
-  if ("storage-update" in result) {
-    return result["storage-update"]?.credentials ?? null;
-  }
-  if (isStorageCredentials(result)) {
-    return result;
-  }
-  return null;
-}
-
 export async function uploadFile(
-  params: UploadFileParams,
+  params: {
+    blob: Blob;
+    fileName?: string;
+    contentType?: string;
+  },
   clientConfig: ClientConfig,
 ): Promise<{ url: string }> {
   const config: ClientConfig = {
@@ -220,9 +182,37 @@ export async function uploadFile(
     config.dangerouslyAllowPrivateNetwork,
   );
 
+  async function getStorageConfiguration(): Promise<StorageConfiguration> {
+    const result = await scryJson<
+      { "storage-update"?: { configuration?: StorageConfiguration } } | StorageConfiguration
+    >(config, cookie, "/storage/configuration.json");
+
+    if ("storage-update" in result && result["storage-update"]?.configuration) {
+      return result["storage-update"].configuration;
+    }
+    if ("currentBucket" in result) {
+      return result;
+    }
+    throw new Error("Invalid storage configuration response");
+  }
+
+  async function getStorageCredentials(): Promise<StorageCredentials | null> {
+    const result = await scryJson<
+      { "storage-update"?: { credentials?: StorageCredentials } } | StorageCredentials
+    >(config, cookie, "/storage/credentials.json");
+
+    if ("storage-update" in result) {
+      return result["storage-update"]?.credentials ?? null;
+    }
+    if (isStorageCredentials(result)) {
+      return result;
+    }
+    return null;
+  }
+
   const [storageConfig, credentials] = await Promise.all([
-    getStorageConfiguration(config, cookie),
-    getStorageCredentials(config, cookie),
+    getStorageConfiguration(),
+    getStorageCredentials(),
   ]);
 
   const contentType = params.contentType || params.blob.type || "application/octet-stream";

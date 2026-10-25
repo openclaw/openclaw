@@ -139,6 +139,37 @@ describe("main-session recovery run ownership", () => {
     });
   });
 
+  it.each(["end", "error"] as const)(
+    "settles the current run's %s when its fence still names an older generation",
+    (phase) => {
+      const entry = recoveryEntry();
+      entry.lifecycleRunId = "recovery";
+      entry.restartRecoveryRuns = [{ runId: "recovery", lifecycleGeneration: "generation-old" }];
+      const result = project(
+        entry,
+        current,
+        { phase, aborted: true, stopReason: "rpc" },
+        {
+          status: "killed",
+          abortedLastRun: true,
+        },
+      );
+      expect(result).toMatchObject({ action: "apply", patch: { status: "killed" } });
+      if (result.action === "apply") {
+        Object.assign(entry, result.patch);
+      }
+      expect(entry.restartRecoveryRuns).toBeUndefined();
+      expect(entry.mainRestartRecovery).toBeUndefined();
+    },
+  );
+
+  it("does not settle an old fence on behalf of another current lifecycle owner", () => {
+    const entry = recoveryEntry();
+    entry.lifecycleRunId = "replacement";
+    entry.restartRecoveryRuns = [{ runId: "recovery", lifecycleGeneration: "generation-old" }];
+    expect(project(entry)).toEqual({ action: "suppress" });
+  });
+
   it("suppresses a duplicate older terminal after its fence has been consumed", () => {
     const entry = recoveryEntry({ ownsDelivery: true });
     entry.restartRecoveryRuns = [{ runId: "recovery", lifecycleGeneration: "generation-current" }];

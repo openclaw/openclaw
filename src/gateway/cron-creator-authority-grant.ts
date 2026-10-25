@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../cron/runtime-authority.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
@@ -16,6 +18,13 @@ import type {
   CronAuthenticatedChannelRequester,
   CronCreatorAuthorityGrant,
 } from "./cron-creator-authority-grant.types.js";
+
+/** Resolve the deployment's automation scope when binding model tools or admitting RPCs. */
+export function isCronModelManagementAllowed(
+  config: OpenClawConfig | undefined = getRuntimeConfigSnapshot() ?? undefined,
+): boolean {
+  return config?.tools?.gatewayPolicy?.automations?.scope !== "caller";
+}
 
 export const CRON_MANAGEMENT_METHODS = [
   "cron.list",

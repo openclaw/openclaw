@@ -525,6 +525,7 @@ function createOperationAdmission(
         }
         inOwnerContext(() => {
           authority.lease ??= authority.acquireSchema();
+          authority.assertAccess();
           authority.lease.assertCurrent();
           grant();
         });

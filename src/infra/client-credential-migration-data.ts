@@ -68,7 +68,7 @@ export function resolveClientCredentialLegacyImportClaims(
 
 export function sourceRows(database: EngineConnection, nativeBootstrap: boolean) {
   const db = getNodeSqliteKysely<LegacyDatabase>(database);
-  return sortClientCredentialRows({
+  const rows = {
     identities:
       nativeBootstrap && !tableExists(database, "device_identities")
         ? []
@@ -88,7 +88,20 @@ export function sourceRows(database: EngineConnection, nativeBootstrap: boolean)
       nativeBootstrap && !tableExists(database, "exec_approvals_config")
         ? []
         : executeSqliteQuerySync(database, db.selectFrom("exec_approvals_config").selectAll()).rows,
-  });
+  };
+  // SQLite BINARY and PostgreSQL locale ordering must produce the same exact snapshot.
+  const compare = (left: string, right: string) =>
+    Buffer.compare(Buffer.from(left), Buffer.from(right));
+  rows.identities.sort((a, b) => compare(a.identity_key, b.identity_key));
+  rows.tokens.sort((a, b) => compare(a.device_id, b.device_id) || compare(a.role, b.role));
+  rows.origins.sort(
+    (a, b) =>
+      compare(a.gateway_scope, b.gateway_scope) ||
+      compare(a.device_id, b.device_id) ||
+      compare(a.role, b.role),
+  );
+  rows.approvals.sort((a, b) => compare(a.config_key, b.config_key));
+  return rows;
 }
 
 export function validateSource(
@@ -130,29 +143,6 @@ export function validateSource(
   if (rows.approvals.some((row) => row.config_key !== "current") || rows.approvals.length > 1) {
     throw new Error("Client credential migration found a noncanonical approval singleton.");
   }
-}
-
-/** SQLite BINARY and PostgreSQL locale ordering must produce the same exact snapshot. */
-function sortClientCredentialRows<
-  T extends {
-    identities: LegacyDatabase["device_identities"][];
-    tokens: LegacyDatabase["device_auth_tokens"][];
-    origins: LegacyDatabase["gateway_origin_device_tokens"][];
-    approvals: ApprovalRow[];
-  },
->(rows: T): T {
-  const compare = (left: string, right: string) =>
-    Buffer.compare(Buffer.from(left), Buffer.from(right));
-  rows.identities.sort((a, b) => compare(a.identity_key, b.identity_key));
-  rows.tokens.sort((a, b) => compare(a.device_id, b.device_id) || compare(a.role, b.role));
-  rows.origins.sort(
-    (a, b) =>
-      compare(a.gateway_scope, b.gateway_scope) ||
-      compare(a.device_id, b.device_id) ||
-      compare(a.role, b.role),
-  );
-  rows.approvals.sort((a, b) => compare(a.config_key, b.config_key));
-  return rows;
 }
 
 export function hashClientCredentialRows(

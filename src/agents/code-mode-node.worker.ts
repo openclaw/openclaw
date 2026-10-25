@@ -2,7 +2,6 @@ import { setImmediate } from "node:timers/promises";
 import { types } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import { createContext, Script, type Context } from "node:vm";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { observeGcSamples } from "../infra/gc-observer.js";
 import { publishWorkerGcStorm } from "../infra/worker-memory.js";
 import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-server.js";
@@ -561,17 +560,9 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
   }
 }
 
-serveWorkerTasks(
+serveWorkerTasks<NodeResult, NodeInput>(
   async (input, channel): Promise<NodeResult> => {
-    if (
-      !isRecord(input) ||
-      !isRecord(input.config) ||
-      (input.kind !== "exec" && input.kind !== "resume")
-    ) {
-      return failed("invalid_input", "invalid code mode worker input");
-    }
-    // SAFETY: The executor host supplies normalized start/resume inputs to its private worker.
-    const result = await run(input as NodeInput, channel);
+    const result = await run(input, channel);
     if (cell?.networkContentObserved) {
       result.networkContentObserved = true;
     }

@@ -8,7 +8,10 @@ import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import type { PortUsage } from "../../infra/ports-types.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../../process/exec-result.js";
 import type { OpenClawStateSchemaReadAdmission } from "../../state/openclaw-state-db-contract.js";
 import type { GatewayRestartDeadline } from "./restart-health-deadline.js";
 import {
@@ -33,6 +36,7 @@ export async function inspectGatewayRestart(params: {
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   timeoutMs?: number;
   /** Bound Gateway requests separately from native service/listener inspection. */
   probeTimeoutMs?: number;
@@ -66,12 +70,7 @@ export async function inspectGatewayRestart(params: {
       const command = await read(
         "service-command",
         async () =>
-          (await params.service.readCommand?.(env).catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            return null;
-          })) ?? null,
+          (await params.service.readCommand?.(env).catch(ignoreNonCleanupCommandError)) ?? null,
       );
       return resolveGatewayServiceProbeHosts({ env, command });
     }));
@@ -85,6 +84,7 @@ export async function inspectGatewayRestart(params: {
   const loadReachability = () =>
     read("gateway-health", () =>
       confirmGatewayReachable({
+        assertCurrent: params.assertCurrent,
         port: params.port,
         ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
@@ -210,6 +210,7 @@ export async function inspectGatewayRestart(params: {
     gatewayBuildId,
     probeError,
     authenticationError,
+    protocolMismatch,
     staleConnection,
     activatedPluginErrors,
     unavailablePlugins,
@@ -228,6 +229,7 @@ export async function inspectGatewayRestart(params: {
     ...(startupPhase ? { startupPhase } : {}),
     ...(probeError ? { probeError } : {}),
     ...(authenticationError ? { authenticationError } : {}),
+    ...(protocolMismatch ? { protocolMismatch } : {}),
     ...(staleConnection ? { staleConnection } : {}),
     ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
     ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),

@@ -1,4 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { collect } from "../../../../test/helpers/async-iterable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { Context, Model, StreamOptions } from "../types.js";
 
@@ -94,6 +98,7 @@ const sockets = vi.hoisted(() => {
 vi.mock("openai/resources/responses/ws.js", () => ({ ResponsesWS: sockets.ResponsesWS }));
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { ResponsesContinuationRequest } from "./openai-responses-continuation.js";
@@ -157,6 +162,7 @@ const makeToolResult = (call_id = "call_1") => ({
 const created = (id = "resp_1") => ({ type: "response.created", response: { id } });
 const createRequests = (socket: (typeof sockets.instances)[number]) =>
   socket.requests.filter((request) => request.type === "response.create");
+const runDetached = AsyncLocalStorage.snapshot();
 
 async function startTransport(context: Context, options: StreamOptions = {}) {
   const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
@@ -203,14 +209,6 @@ function createStream(
     steeringInput: (messages) =>
       messages.map((message) => ({ role: "user", content: message.content as string })),
   });
-}
-
-async function collect(stream: AsyncIterable<unknown>) {
-  const events: unknown[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
 }
 
 function expectPostDispatchError(error: unknown, cause: RegExp) {
@@ -264,6 +262,62 @@ afterEach(() => {
 });
 
 describe("Responses WebSocket steering handoff", () => {
+  it.each(["absent hook", "idle hook", "accepted steer"])(
+    "releases request-only callbacks after completion with %s",
+    async (mode) => {
+      const host = createAiTransportHost({ runInDetachedAsyncContext: runDetached });
+      const references: WeakRef<object>[] = [];
+      const completeTurn = async () => {
+        const caller = { content: "request-only callback state" };
+        const ready =
+          createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
+        const steeringInput = () => [user(caller.content)];
+        references.push(new WeakRef(caller), new WeakRef(steeringInput));
+        const first = createOpenAIResponsesWebSocketStream({
+          client: client as never,
+          request: { model: model.id, input: [initialUser] },
+          mode: "websocket-cached",
+          sessionId: "steering-retention",
+          steeringInput,
+          ...(mode === "absent hook"
+            ? {}
+            : { onActiveResponse: (control) => ready.resolve(control) }),
+        });
+        const events = collect(first.stream);
+        const socket = sockets.instances[0];
+        assert(socket);
+        socket.emit(created());
+        if (mode === "accepted steer") {
+          const control = await ready.promise;
+          const admission = control.steer([{ ...update, timestamp: 1 }]);
+          socket.emit(accepted);
+          assert.equal(await admission, true);
+        }
+        socket.emit(completed("resp_1"));
+        await events;
+        first.finish();
+      };
+      try {
+        // Keep completed request frames out of the collecting job while real cache timers live.
+        await new Promise<void>((resolve, reject) => {
+          void nextTurn()
+            .then(() => runWithAiTransportHost(host, completeTurn))
+            .then(() => resolve(), reject);
+        });
+        const control = new WeakRef({ unowned: true });
+        await nextTurn();
+        queryObjects(WeakRef);
+        await nextTurn();
+        queryObjects(WeakRef);
+        expect(control.deref()).toBeUndefined();
+        expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+        expect(sockets.instances[0]?.closed).toBe(false);
+      } finally {
+        cleanupSessionResources(undefined, host);
+      }
+    },
+  );
+
   it("keeps runtime context with its user through steering and the automatic successor", async () => {
     const context: Context = {
       messages: [

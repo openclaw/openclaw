@@ -311,10 +311,8 @@ describe("createSmsIngressSpool", () => {
 
   it("does not let a non-cooperative delivery block route replacement shutdown", async () => {
     const stateDir = await createStateDir();
-    let markDeliveryStarted!: () => void;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
+    const { promise: deliveryStarted, resolve: markDeliveryStarted } =
+      Promise.withResolvers<void>();
     let deliverySignal: AbortSignal | undefined;
     const spool = createTestSpool(stateDir, {
       deliver: vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {

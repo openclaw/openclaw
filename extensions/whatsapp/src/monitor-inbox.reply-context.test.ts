@@ -16,6 +16,20 @@ import {
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
 
+function quotedMessageUpsert(id: string, text: string, contextInfo: Record<string, unknown>) {
+  return {
+    type: "notify",
+    messages: [
+      {
+        key: { id, fromMe: false, remoteJid: "999@s.whatsapp.net" },
+        message: { extendedTextMessage: { text, contextInfo } },
+        messageTimestamp: 1_700_000_000,
+        pushName: "Tester",
+      },
+    ],
+  };
+}
+
 describe("web monitor inbox reply context", () => {
   installStreamsInboundMessageHooks();
 
@@ -25,30 +39,11 @@ describe("web monitor inbox reply context", () => {
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: nextMessageId("quoted"),
-            fromMe: false,
-            remoteJid: "999@s.whatsapp.net",
-          },
-          message: {
-            extendedTextMessage: {
-              text: "reply",
-              contextInfo: {
-                stanzaId: "q1",
-                participant: "111@s.whatsapp.net",
-                quotedMessage,
-              },
-            },
-          },
-          messageTimestamp: 1_700_000_000,
-          pushName: "Tester",
-        },
-      ],
-    };
+    const upsert = quotedMessageUpsert(nextMessageId("quoted"), "reply", {
+      stanzaId: "q1",
+      participant: "111@s.whatsapp.net",
+      quotedMessage,
+    });
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
@@ -220,29 +215,13 @@ describe("web monitor inbox reply context", () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
 
-    sock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: nextMessageId("quoted-unavailable"),
-            fromMe: false,
-            remoteJid: "999@s.whatsapp.net",
-          },
-          message: {
-            extendedTextMessage: {
-              text: "yes",
-              contextInfo: {
-                stanzaId: "original-message",
-                participant: "111@s.whatsapp.net",
-              },
-            },
-          },
-          messageTimestamp: 1_700_000_000,
-          pushName: "Tester",
-        },
-      ],
-    });
+    sock.ev.emit(
+      "messages.upsert",
+      quotedMessageUpsert(nextMessageId("quoted-unavailable"), "yes", {
+        stanzaId: "original-message",
+        participant: "111@s.whatsapp.net",
+      }),
+    );
 
     await waitForMessageCalls(onMessage, 1);
 

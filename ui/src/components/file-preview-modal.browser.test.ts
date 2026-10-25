@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawModalDialog } from "./modal-dialog.ts";
-import "./file-preview-modal-registration.ts";
+import { nextFrame } from "../test-helpers/modal-dialog.ts";
+import type { OpenClawModalDialog } from "./modal-dialog.tsx";
+import "./file-preview-modal.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 const initialFilePath =
@@ -28,7 +29,12 @@ async function resolveRenderedDialog(modal: OpenClawModalDialog) {
   const dialog = modal.querySelector("dialog");
   expect(dialog?.open).toBe(true);
   // The modal opens at 80% scale; measure the settled dialog, not its first animation frame.
-  await Promise.all(dialog!.getAnimations().map((animation) => animation.finished));
+  const animations = dialog!.getAnimations();
+  for (const animation of animations) {
+    animation.finish();
+  }
+  await Promise.all(animations.map((animation) => animation.finished));
+  await nextFrame();
   return dialog!;
 }
 
@@ -95,6 +101,33 @@ function expectFooter(preview: HTMLElement, dialogBounds: DOMRect) {
 }
 
 describe.runIf(browserMode)("file preview modal responsive layout", () => {
+  it("keeps shared copy feedback styling while hovered", async () => {
+    const { preview } = await mountPreview(1280);
+    const { userEvent } = await import("vitest/browser");
+    const button = preview.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
+    preview.style.setProperty("--ok", "rgb(0, 128, 0)");
+    preview.style.setProperty("--ok-subtle", "rgb(220, 255, 220)");
+    preview.style.setProperty("--danger", "rgb(192, 0, 0)");
+    preview.style.setProperty("--danger-subtle", "rgb(255, 220, 220)");
+    preview.style.setProperty("--text-strong", "rgb(32, 32, 32)");
+    await userEvent.hover(button);
+    for (const [state, color, background] of [
+      ["copied", "rgb(0, 128, 0)", "rgb(220, 255, 220)"],
+      ["error", "rgb(192, 0, 0)", "rgb(255, 220, 220)"],
+    ] as const) {
+      button.dataset.copyState = state;
+      expect(getComputedStyle(button).color).toBe(color);
+      expect(getComputedStyle(button).borderTopColor).toBe(background);
+      expect(getComputedStyle(button).backgroundColor).toBe(background);
+    }
+    button.dataset.copyState = "copying";
+    expect(getComputedStyle(button).opacity).toBe("0");
+    expect(getComputedStyle(button).pointerEvents).toBe("none");
+    delete button.dataset.copyState;
+    expect(getComputedStyle(button).color).toBe("rgb(32, 32, 32)");
+    expect(preview.querySelector(".chat-copy-btn__icon")?.getBoundingClientRect().width).toBe(16);
+  });
+
   it.each([320])("keeps source and copy visible at a %dpx viewport", async (width) => {
     const { preview, dialog } = await mountPreview(width);
     const search = preview.querySelector<HTMLInputElement>(".search");

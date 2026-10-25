@@ -45,6 +45,19 @@ function installRegistration(active = createWorker()) {
 }
 
 describe("Control UI service-worker reconnect refresh", () => {
+  it.each([
+    { saveData: true, effectiveType: "4g" },
+    { saveData: false, effectiveType: "2g" },
+  ])("sends browser download preferences with the worker probe: %j", async (connection) => {
+    const worker = createWorker();
+    installRegistration(worker);
+    Object.assign(navigator, { connection: Object.assign(new EventTarget(), connection) });
+    await refreshControlUiServiceWorker();
+    expect(worker.postMessage).toHaveBeenCalledWith(
+      { type: "sw-version-probe", offlinePrecache: connection },
+      expect.any(Array),
+    );
+  });
   it.each(["lookup", "update", "installing"] as const)(
     "releases reconnect after a stalled %s and ignores late completion",
     async (phase) => {
@@ -80,6 +93,29 @@ describe("Control UI service-worker reconnect refresh", () => {
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+  it("updates download policy on connection changes without an update check or duplicate listeners", async () => {
+    const worker = createWorker();
+    const registration = installRegistration(worker);
+    const connection = Object.assign(new EventTarget(), { saveData: false, effectiveType: "2g" });
+    Object.assign(navigator, { connection });
+    await refreshControlUiServiceWorker();
+    await refreshControlUiServiceWorker();
+    worker.postMessage.mockClear();
+    for (const preferences of [
+      { saveData: false, effectiveType: "4g" },
+      { saveData: true, effectiveType: "4g" },
+      { saveData: false, effectiveType: "2g" },
+    ]) {
+      Object.assign(connection, preferences);
+      connection.dispatchEvent(new Event("change"));
+      expect(worker.postMessage).toHaveBeenLastCalledWith(
+        { type: "sw-version-probe", offlinePrecache: preferences },
+        [],
+      );
+    }
+    expect(worker.postMessage).toHaveBeenCalledTimes(3);
+    expect(registration.update).toHaveBeenCalledTimes(2);
+  });
   it("recovers a document that missed the active worker's activation", async () => {
     const active = createWorker("already-active-build");
     const registration = installRegistration(active);

@@ -1,10 +1,10 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { loadHostEnvSecurityPolicy } from "./host-env-security-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -14,6 +14,7 @@ import {
   sanitizeHostExecEnv,
   sanitizeHostExecEnvWithDiagnostics,
   sanitizeSystemRunEnvOverrides,
+  setGatewayCredentialEnvKeys,
 } from "./host-env-security.js";
 
 const OPENCLAW_CLI_ENV_VALUE = "1";
@@ -34,36 +35,18 @@ function findSystemCommandPath(command: string) {
   return null;
 }
 
-function clearMarker(marker: string) {
-  try {
-    fs.unlinkSync(marker);
-  } catch {
-    // no-op
-  }
-}
-
 function listKeys(source: string): string[] {
   return source.trim().split(/\s+/u);
-}
-
-function expectEnvKeysUndefined(env: Record<string, string | undefined>, source: string): void {
-  for (const key of listKeys(source)) {
-    expect(env[key]).toBeUndefined();
-  }
 }
 
 async function runGitCommandExitCode(
   gitPath: string,
   args: string[],
-  options?: {
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-  },
+  env?: NodeJS.ProcessEnv,
 ): Promise<number | null> {
   return await new Promise<number | null>((resolve) => {
     const child = spawn(gitPath, args, {
-      cwd: options?.cwd,
-      env: options?.env,
+      env,
       stdio: "ignore",
     });
     child.once("error", () => resolve(null));
@@ -88,7 +71,6 @@ describe("sanitizeHostExecEnv", () => {
   });
 
   it("removes dangerous inherited keys while preserving PATH", () => {
-    // The reported-baseline case below checks every other inherited key from this fixture.
     const env = sanitizeHostExecEnv({
       baseEnv: {
         PATH: "/usr/bin:/bin",
@@ -105,6 +87,39 @@ describe("sanitizeHostExecEnv", () => {
       GIT_ALLOW_PROTOCOL: "",
       GIT_PROTOCOL_FROM_USER: "0",
     });
+  });
+
+  it("withholds the env sources of Gateway credentials from inherited host exec env", () => {
+    const baseEnv = {
+      PATH: "/usr/bin:/bin",
+      OPENCLAW_HOOK_TOKEN: "synthetic-hook-token",
+      OK: "1",
+    };
+    try {
+      setGatewayCredentialEnvKeys("test", ["openclaw_hook_token"]);
+      expect(sanitizeHostExecEnv({ baseEnv })).toEqual({
+        PATH: "/usr/bin:/bin",
+        OK: "1",
+        OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+      });
+      // A command's own requested value is not the Gateway credential and still applies.
+      expect(
+        sanitizeHostExecEnv({ baseEnv, overrides: { OPENCLAW_HOOK_TOKEN: "requested" } })
+          .OPENCLAW_HOOK_TOKEN,
+      ).toBe("requested");
+      // Owners publish independently; clearing one keeps the other withheld.
+      setGatewayCredentialEnvKeys("other", ["OK"]);
+      setGatewayCredentialEnvKeys("test", []);
+      expect(sanitizeHostExecEnv({ baseEnv })).toEqual({
+        PATH: "/usr/bin:/bin",
+        OPENCLAW_HOOK_TOKEN: "synthetic-hook-token",
+        OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+      });
+    } finally {
+      setGatewayCredentialEnvKeys("test", []);
+      setGatewayCredentialEnvKeys("other", []);
+    }
+    expect(sanitizeHostExecEnv({ baseEnv }).OPENCLAW_HOOK_TOKEN).toBe("synthetic-hook-token");
   });
 
   it("drops non-string inherited values while preserving non-portable inherited keys", () => {
@@ -129,7 +144,6 @@ describe("sanitizeHostExecEnv", () => {
 });
 
 it("reports blocked and invalid requested overrides", () => {
-  // All other exact blocked keys are exercised by the reported-baseline case.
   const blockedKeys = ["CARGO_REGISTRIES_CRATES_IO_INDEX", "PATH"];
   const result = sanitizeHostExecEnvWithDiagnostics({
     baseEnv: { PATH: "/usr/bin:/bin" },
@@ -143,7 +157,7 @@ it("reports blocked and invalid requested overrides", () => {
 
   expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
   expect(result.env).toMatchObject({ SAFE_KEY: "ok", PATH: "/usr/bin:/bin" });
-  expectEnvKeysUndefined(result.env, blockedKeys.filter((key) => key !== "PATH").join(" "));
+  expect(result.env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBeUndefined();
 });
 
 it("normalizes and validates keys", () => {
@@ -154,54 +168,50 @@ it("normalizes and validates keys", () => {
 });
 
 describe("sanitizeSystemRunEnvOverrides", () => {
-  it("keeps overrides for non-shell commands", () => {
-    const overrides = sanitizeSystemRunEnvOverrides({
-      shellWrapper: false,
-      overrides: { OPENCLAW_TEST: "1", TOKEN: "abc" },
-    });
-    expect(overrides).toEqual({ OPENCLAW_TEST: "1", TOKEN: "abc" });
-  });
-
-  it("drops non-allowlisted overrides for shell wrappers", () => {
-    const overrides = sanitizeSystemRunEnvOverrides({
-      shellWrapper: true,
-      overrides: { OPENCLAW_TEST: "1", TOKEN: "abc", LANG: "C", LC_ALL: "C", LC_TIME: "C" },
-    });
-    expect(overrides).toEqual({ LANG: "C", LC_ALL: "C", LC_TIME: "C" });
-  });
+  it.each([
+    [false, { OPENCLAW_TEST: "1", TOKEN: "abc", LANG: "C", LC_ALL: "C", LC_TIME: "C" }],
+    [true, { LANG: "C", LC_ALL: "C", LC_TIME: "C" }],
+  ] as const)(
+    "filters shell-wrapper overrides only when enabled (%s)",
+    (shellWrapper, expected) => {
+      expect(
+        sanitizeSystemRunEnvOverrides({
+          shellWrapper,
+          overrides: { OPENCLAW_TEST: "1", TOKEN: "abc", LANG: "C", LC_ALL: "C", LC_TIME: "C" },
+        }),
+      ).toEqual(expected);
+    },
+  );
 
   it("returns undefined when no shell-wrapper overrides survive", () => {
     expect(
-      sanitizeSystemRunEnvOverrides({
-        shellWrapper: true,
-        overrides: { TOKEN: "abc" },
-      }),
+      sanitizeSystemRunEnvOverrides({ shellWrapper: true, overrides: { TOKEN: "abc" } }),
     ).toBeUndefined();
     expect(sanitizeSystemRunEnvOverrides({ shellWrapper: true })).toBeUndefined();
   });
 });
 
 const gitEnv = { PATH: process.env.PATH ?? "/usr/bin:/bin", GIT_TERMINAL_PROMPT: "0" };
+type GitFixture = {
+  git: (args: string[], env?: NodeJS.ProcessEnv) => Promise<number | null>;
+  root: string;
+};
 
-async function withGitRepo(
-  run: (fixture: {
-    git: (args: string[], env?: NodeJS.ProcessEnv) => Promise<number | null>;
-    repoDir: string;
-    root: string;
-  }) => Promise<void>,
-) {
+async function withGitWorkspace(run: (fixture: GitFixture) => Promise<void>) {
   const gitPath = findSystemCommandPath("git");
   if (!gitPath) {
     return;
   }
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-git-protocol-"));
-  const repoDir = path.join(root, "source");
   const git = (args: string[], env?: NodeJS.ProcessEnv) =>
-    runGitCommandExitCode(gitPath, args, { env });
-  try {
-    await runGitCommandExitCode(gitPath, ["init", repoDir]);
-    await runGitCommandExitCode(
-      gitPath,
+    runGitCommandExitCode(gitPath, args, env);
+  await withTestDir({ prefix: "openclaw-git-protocol-" }, (root) => run({ git, root }));
+}
+
+async function withGitRepo(run: (fixture: GitFixture & { repoDir: string }) => Promise<void>) {
+  await withGitWorkspace(async ({ git, root }) => {
+    const repoDir = path.join(root, "source");
+    await git(["init", repoDir]);
+    await git(
       [
         "-C",
         repoDir,
@@ -214,58 +224,31 @@ async function withGitRepo(
         "-m",
         "init",
       ],
-      { env: { PATH: gitEnv.PATH } },
+      { PATH: gitEnv.PATH },
     );
     await run({ git, repoDir, root });
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  });
 }
 
 describe("git env exploit regression", () => {
   it("blocks inherited GIT_ALLOW_PROTOCOL so git cannot enable ext transport helpers", async () => {
-    const gitPath = findSystemCommandPath("git");
-    if (!gitPath) {
-      return;
-    }
-
-    const helperDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), `openclaw-git-allow-protocol-${process.pid}-${Date.now()}-`),
-    );
-    const helperPath = path.join(helperDir, "ext-helper.sh");
-    const marker = path.join(
-      os.tmpdir(),
-      `openclaw-git-allow-protocol-marker-${process.pid}-${Date.now()}`,
-    );
-
-    try {
-      clearMarker(marker);
+    await withGitWorkspace(async ({ git, root }) => {
+      const helperPath = path.join(root, "ext-helper.sh");
+      const marker = path.join(root, "marker");
       fs.writeFileSync(helperPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, "utf8");
       fs.chmodSync(helperPath, 0o755);
 
       const target = `ext::${helperPath}`;
       const unsafeEnv = {
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        ...gitEnv,
         GIT_ALLOW_PROTOCOL: "ext",
-        GIT_TERMINAL_PROMPT: "0",
       };
-
-      await runGitCommandExitCode(gitPath, ["ls-remote", target], { env: unsafeEnv });
-
+      await git(["ls-remote", target], unsafeEnv);
       expect(fs.existsSync(marker)).toBe(true);
-      clearMarker(marker);
-
-      const safeEnv = sanitizeHostExecEnv({
-        baseEnv: unsafeEnv,
-      });
-
-      await runGitCommandExitCode(gitPath, ["ls-remote", target], { env: safeEnv });
-
+      fs.unlinkSync(marker);
+      await git(["ls-remote", target], sanitizeHostExecEnv({ baseEnv: unsafeEnv }));
       expect(fs.existsSync(marker)).toBe(false);
-    } finally {
-      fs.rmSync(helperDir, { recursive: true, force: true });
-      fs.rmSync(marker, { force: true });
-    }
+    });
   });
 
   it("filters inherited GIT_ALLOW_PROTOCOL without widening file transport access", async () => {

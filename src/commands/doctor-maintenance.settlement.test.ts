@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { UpdateFinalizationLifecycle } from "../cli/update-cli/update-finalization-lifecycle.js";
 import { GatewayServiceStopUnsafeError } from "../daemon/service-inspection-error.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -32,6 +33,35 @@ import * as nocow from "./doctor-sqlite-nocow.js";
 
 const settlement = await import("./doctor-maintenance.settlement.test-support.js");
 const { begin, boundary, cleanupBarrier, root, tempDirs } = settlement;
+
+it.each([false, true])(
+  "settles interrupted original-state capture (restart fails: %s)",
+  async (restartFails) => {
+    let drain: Promise<unknown> | undefined;
+    const runtimeError = vi.fn();
+    if (restartFails) {
+      boundary.restart.mockRejectedValueOnce(new Error("synthetic service start failure"));
+    }
+    const admission = beginDoctorMaintenance({
+      root,
+      options: { repair: true, nonInteractive: true },
+      runtime: { log: boundary.log, error: runtimeError, exit: vi.fn() },
+      beforeStateMutation: async ({ signal }) => {
+        drain = waitForSignalExitBarriers("SIGINT").catch((error: unknown) => error);
+        signal.throwIfAborted();
+      },
+    });
+    await expect(admission).rejects.toThrow(
+      restartFails ? "synthetic service start failure" : "Doctor interrupted by SIGINT",
+    );
+    await drain;
+    expect(boundary.restart).toHaveBeenCalledOnce();
+    expect(boundary.health).toHaveBeenCalledTimes(restartFails ? 0 : 1);
+    if (restartFails) {
+      expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("openclaw gateway start"));
+    }
+  },
+);
 
 type BoundaryMock = Exclude<keyof typeof boundary, "scopeAssert">;
 

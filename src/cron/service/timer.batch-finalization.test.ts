@@ -20,10 +20,10 @@ import {
 import { createCronExecutionId } from "../run-id.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronJob, CronRunErrorClassification } from "../types.js";
+import type { CronEvent, CronJob, CronRunErrorClassification } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
-import type { CronEvent, CronServiceDeps, CronServiceState } from "./state.js";
+import type { CronServiceDeps, CronServiceState } from "./state.js";
 import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
 import { onTimer, runMissedJobs } from "./timer.test-support.js";
@@ -345,7 +345,7 @@ describe("cron batch outcome finalization", () => {
       const order: string[] = [];
       const deliveryContext = { channel: "discord", to: "channel-1", accountId: "default" };
       const resolveOriginDeliveryContext = vi.fn(async () => deliveryContext);
-      const enqueueSystemEvent = vi.fn<CronServiceDeps["enqueueSystemEvent"]>(() => {
+      const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(() => {
         expect(
           openOpenClawStateDatabase()
             .db.prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
@@ -353,17 +353,13 @@ describe("cron batch outcome finalization", () => {
         ).toMatchObject({ enabled: 0 });
         order.push("notify");
       });
-      const requestHeartbeat = vi.fn(() => {
-        order.push("heartbeat");
-      });
       const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
         async () => {},
       );
       const { state, storePath } = await fixture([job], {
         nowMs: () => DUE_AT + 10,
         defaultAgentId: "main",
-        enqueueSystemEvent,
-        requestHeartbeat,
+        enqueueSessionEvent,
         ...(routed ? { sendCronFailureAlert } : { resolveOriginDeliveryContext }),
       });
       const cause = routed ? "server_error" : "timeout";
@@ -373,7 +369,7 @@ describe("cron batch outcome finalization", () => {
       await finalizeError(state, job, error, undefined, { kind: "reason", reason: cause });
       const text = routed
         ? sendCronFailureAlert.mock.calls[0]?.[0].payload.text
-        : enqueueSystemEvent.mock.calls[0]?.[0];
+        : enqueueSessionEvent.mock.calls[0]?.[0];
       for (const fragment of [
         "Recurring report",
         job.id,
@@ -391,16 +387,16 @@ describe("cron batch outcome finalization", () => {
         });
         expect(text).toContain('Automation "Recurring report" was auto-disabled');
         expect(text).toContain(`Last error: ${error}`);
-        expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeat).not.toHaveBeenCalled();
+        expect(enqueueSessionEvent).not.toHaveBeenCalled();
       } else {
-        expect(order).toEqual(["notify", "heartbeat"]);
+        expect(order).toEqual(["notify"]);
         expect(text).not.toContain("/private/agent/work");
-        expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+        expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining(`openclaw automations enable ${job.id}`),
           {
             agentId: "main",
             sessionKey: undefined,
+            createIfMissing: true,
             contextKey: `cron:${job.id}:auto-disabled`,
             deliveryContext,
           },
@@ -409,14 +405,6 @@ describe("cron batch outcome finalization", () => {
           agentId: "main",
           sessionKey: undefined,
         });
-        expect(requestHeartbeat).toHaveBeenCalledWith(
-          expect.objectContaining({
-            source: "notifications-event",
-            intent: "immediate",
-            reason: "wake",
-            agentId: "main",
-          }),
-        );
       }
       expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
         enabled: false,

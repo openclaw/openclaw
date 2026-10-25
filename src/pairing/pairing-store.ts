@@ -255,7 +255,6 @@ export async function approveChannelPairingRequest(params: {
   channel: PairingChannel;
   requestId: string;
   accountId: string;
-  env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
 }): Promise<{ id: string; entry: PairingRequest } | null> {
   const requestId = normalizeOptionalString(params.requestId);
@@ -269,7 +268,6 @@ export async function dismissChannelPairingRequest(params: {
   channel: PairingChannel;
   requestId: string;
   accountId: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<{ id: string; entry: PairingRequest } | null> {
   const requestId = normalizeOptionalString(params.requestId);
   return requestId

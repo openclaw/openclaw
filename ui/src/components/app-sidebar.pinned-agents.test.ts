@@ -28,12 +28,21 @@ async function openMenu(sidebar: Element, value = "sessions") {
   await vi.waitFor(() => expect(menuItem(sidebar, value)).not.toBeNull());
   return menuItem(sidebar, value);
 }
+const rightClick = (element: Element) =>
+  element.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }),
+  );
+const menuLabels = (sidebar: Element) =>
+  [...sidebar.querySelectorAll('[role="menu"] [role="menuitem"]')].map((item) =>
+    item.textContent?.trim(),
+  );
 const modalButton = (text: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
     (button) => button.textContent === text,
   )!;
 
 it("pins an agent into a menu-less gallery above the roster and preserves the other agents", async () => {
+  const warnings = vi.spyOn(console, "warn");
   const { sidebar, context, provider } = await mountRoster(roster, reply());
   sidebar.sidebarAgentsMode = "roster";
   await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
@@ -46,6 +55,11 @@ it("pins an agent into a menu-less gallery above the roster and preserves the ot
   expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
   expect(loadSettings().pinnedAgentIds).toEqual(["main"]);
   expect(document.activeElement?.getAttribute("data-agent-id")).toBe("main");
+  expect(
+    warnings.mock.calls.filter(
+      ([message]) => typeof message === "string" && message.includes("[NO_OWNER_EFFECT]"),
+    ),
+  ).toEqual([]);
   provider.remove();
   const remounted = await mountRoster(roster, reply());
   remounted.sidebar.sidebarAgentsMode = "roster";
@@ -185,79 +199,83 @@ it("offers agent sessions and settings without a create action, and confirms age
   });
 });
 
-it("offers Create Claw from the agent-row menu when the Gateway supports creation", async () => {
-  const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
-  context.runtimeConfig.state.configForm = {
-    gateway: { controlUi: { experimental: { claws: true } } },
-  };
-  gatewayHarness.publish({
-    hello: gatewayHelloForMethods([
-      ...SESSION_MUTATION_TEST_METHODS,
-      "claws.drafts.create",
-      "chat.send",
-    ]),
-  });
-  sidebar.sidebarAgentsMode = "roster";
-  await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-  await settleRoster(sidebar);
-
-  const previousRequest = request.getMockImplementation()!;
-  request.mockImplementation((...args) =>
-    args[0] === "claws.drafts.create"
-      ? Promise.reject(new Error("The agent workspace is unavailable."))
-      : previousRequest(...args),
-  );
-  sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
-  await vi.waitFor(() =>
-    expect(sidebar.querySelector('[data-value="create-claw"]')).not.toBeNull(),
-  );
-  sidebar.querySelector<HTMLElement>('[data-value="create-claw"]')!.click();
-  await vi.waitFor(() =>
-    expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
-  );
-});
-
-it("keeps Create Claw available for pinned agents without restoring their full menu", async () => {
-  const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
-  context.runtimeConfig.state.configForm = {
-    gateway: { controlUi: { experimental: { claws: true } } },
-  };
+it("opens the same agent menu from a right-clicked pinned tile and unpins it", async () => {
+  const { sidebar, context } = await mountRoster(roster, reply());
   context.navigation.update({ pinnedAgentIds: ["main"] });
-  gatewayHarness.publish({
-    hello: gatewayHelloForMethods([
-      ...SESSION_MUTATION_TEST_METHODS,
-      "claws.drafts.create",
-      "chat.send",
-    ]),
-  });
   sidebar.sidebarAgentsMode = "roster";
-  await vi.waitFor(() =>
-    expect(sidebar.querySelector('[data-pinned-agent="main"]')).not.toBeNull(),
-  );
+  await vi.waitFor(() => expect(pinned(sidebar)).not.toBeNull());
   await settleRoster(sidebar);
+  expect(pinned(sidebar)!.querySelector("button")).toBeNull();
 
-  const previousRequest = request.getMockImplementation()!;
-  request.mockImplementation((...args) =>
-    args[0] === "claws.drafts.create"
-      ? Promise.reject(new Error("The agent workspace is unavailable."))
-      : previousRequest(...args),
-  );
-  const pinnedAgent = sidebar.querySelector('[data-pinned-agent="main"]')!;
-  const trigger = pinnedAgent.querySelector<HTMLButtonElement>(
-    'button[aria-label="Options for Harbor"]',
-  );
-  expect(trigger).not.toBeNull();
-  trigger!.click();
+  rightClick(pinned(sidebar)!.querySelector("a")!);
+  await vi.waitFor(() => expect(menuItem(sidebar, "pin")).not.toBeNull());
+  expect(menuLabels(sidebar)).toEqual(["Unpin", "Sessions", "Settings", "Delete"]);
+  expect(menuItem(sidebar, "pin").classList).toContain("sidebar-agent-roster__pin--pinned");
+  menuItem(sidebar, "pin").click();
+  await vi.waitFor(() => {
+    expect(pinned(sidebar)).toBeNull();
+    expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]);
+  });
+  expect(context.navigation.snapshot.pinnedAgentIds).toEqual([]);
   await vi.waitFor(() =>
-    expect(pinnedAgent.querySelector('[data-value="create-claw"]')).not.toBeNull(),
+    expect(document.activeElement?.getAttribute("data-agent-id")).toBe("main"),
   );
-  expect(pinnedAgent.querySelector('[data-value="pin"]')).toBeNull();
-  expect(pinnedAgent.querySelector('[data-value="sessions"]')).toBeNull();
-  expect(pinnedAgent.querySelector('[data-value="settings"]')).toBeNull();
-  expect(pinnedAgent.querySelector('[data-value="delete"]')).toBeNull();
-  pinnedAgent.querySelector<HTMLElement>('[data-value="create-claw"]')!.click();
-  await vi.waitFor(() =>
-    expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
-  );
-  expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
+
+  rightClick(sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__row')!);
+  await vi.waitFor(() => expect(menuItem(sidebar, "pin")?.textContent).toContain("Pin"));
+  expect(menuLabels(sidebar)).toEqual(["Pin", "Sessions", "Settings", "Delete"]);
+  expect(menuItem(sidebar, "pin").classList).not.toContain("sidebar-agent-roster__pin--pinned");
 });
+
+it.each([false, true])(
+  "offers the same agent actions and Create Claw with pinned=%s",
+  async (isPinned) => {
+    const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
+    context.runtimeConfig.state.configForm = {
+      gateway: { controlUi: { experimental: { claws: true } } },
+    };
+    if (isPinned) {
+      context.navigation.update({ pinnedAgentIds: ["main"] });
+    }
+    gatewayHarness.publish({
+      hello: gatewayHelloForMethods([
+        ...SESSION_MUTATION_TEST_METHODS,
+        "claws.drafts.create",
+        "chat.send",
+      ]),
+    });
+    sidebar.sidebarAgentsMode = "roster";
+    await vi.waitFor(() =>
+      isPinned ? expect(pinned(sidebar)).not.toBeNull() : expect(agentIds(sidebar)).toHaveLength(3),
+    );
+    await settleRoster(sidebar);
+
+    const previousRequest = request.getMockImplementation()!;
+    request.mockImplementation((...args) =>
+      args[0] === "claws.drafts.create"
+        ? Promise.reject(new Error("The agent workspace is unavailable."))
+        : previousRequest(...args),
+    );
+    if (isPinned) {
+      expect(pinned(sidebar)!.querySelector("button")).toBeNull();
+      rightClick(pinned(sidebar)!);
+    } else {
+      sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
+    }
+    await vi.waitFor(() => expect(menuItem(sidebar, "create-claw")).not.toBeNull());
+    expect(menuLabels(sidebar)).toEqual([
+      isPinned ? "Unpin" : "Pin",
+      "Sessions",
+      "Create Claw",
+      "Settings",
+      "Delete",
+    ]);
+    menuItem(sidebar, "create-claw").click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
+    );
+    if (isPinned) {
+      expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
+    }
+  },
+);

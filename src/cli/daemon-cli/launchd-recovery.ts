@@ -11,22 +11,16 @@ import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 const LAUNCH_AGENT_RECOVERY_MESSAGE =
   "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
 
-type LaunchAgentRecoveryAction = "started" | "restarted";
-
-type LaunchAgentRecoveryResult<TResult extends LaunchAgentRecoveryAction> = {
-  result: TResult;
-  loaded: true;
-  message: string;
-};
-
 /** Re-bootstrap an installed but unloaded LaunchAgent after a daemon start/restart command. */
-export async function recoverInstalledLaunchAgent<
-  TResult extends LaunchAgentRecoveryAction,
->(params: {
+export async function recoverInstalledLaunchAgent<TResult extends "started" | "restarted">(params: {
   result: TResult;
   deadline?: GatewayServiceControlArgs["deadline"];
   env?: Record<string, string | undefined>;
-}): Promise<LaunchAgentRecoveryResult<TResult> | null> {
+}): Promise<{
+  result: TResult;
+  loaded: true;
+  message: string;
+} | null> {
   if (process.platform !== "darwin") {
     return null;
   }

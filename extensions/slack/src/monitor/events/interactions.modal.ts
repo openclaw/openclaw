@@ -10,7 +10,10 @@ import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
 import { resolveSlackMonitorEventScope } from "../event-scope.js";
-import { enqueueSlackInteractionEvent } from "./interaction-event.js";
+import {
+  captureSlackInteractionEventRoute,
+  enqueueSlackInteractionEvent,
+} from "./interaction-event.js";
 import { summarizeSlackViewState } from "./modal-input-summary.js";
 
 type SlackModalBody = {
@@ -136,6 +139,10 @@ export function registerModalLifecycleHandler(params: {
       };
 
       const sessionRouting = await resolveModalSessionRouting();
+      const route = await captureSlackInteractionEventRoute(sessionRouting, runtimeCtx.runtime.log);
+      if (!runtimeCtx.isRuntimePolicyCurrent()) {
+        return;
+      }
       const stateValues = typedBody.view?.state?.values;
       const payload = {
         actionId: `view:${callbackId}`,
@@ -182,6 +189,9 @@ export function registerModalLifecycleHandler(params: {
       ) => {
         try {
           if (!pluginInteractiveData) {
+            return undefined;
+          }
+          if (!runtimeCtx.isRuntimePolicyCurrent()) {
             return undefined;
           }
 
@@ -291,22 +301,30 @@ export function registerModalLifecycleHandler(params: {
           })
         : undefined;
 
-      enqueueSlackInteractionEvent({ ...eventPayload, ...pluginEventFields }, sessionRouting, {
-        contextKey: [
-          isViewClosed ? "slack:interaction:view-closed" : "slack:interaction:view",
-          teamId,
-          callbackId,
-          viewId,
-          userId,
-        ]
-          .filter(Boolean)
-          .join(":"),
-        deliveryContext: {
-          channel: "slack",
-          ...(deferredTarget ? { to: deferredTarget.target } : {}),
-          accountId: runtimeCtx.accountId,
+      if (!route || !runtimeCtx.isRuntimePolicyCurrent()) {
+        return;
+      }
+      await enqueueSlackInteractionEvent(
+        { ...eventPayload, ...pluginEventFields },
+        route,
+        {
+          contextKey: [
+            isViewClosed ? "slack:interaction:view-closed" : "slack:interaction:view",
+            teamId,
+            callbackId,
+            viewId,
+            userId,
+          ]
+            .filter(Boolean)
+            .join(":"),
+          deliveryContext: {
+            channel: "slack",
+            ...(deferredTarget ? { to: deferredTarget.target } : {}),
+            accountId: runtimeCtx.accountId,
+          },
         },
-      });
+        runtimeCtx.runtime.log,
+      );
     },
   );
 }

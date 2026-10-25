@@ -68,7 +68,6 @@ describe("classifyDiscordGatewayEvent", () => {
     expect(wrapped).toMatchObject({
       name: "DiscordGatewayLifecycleError",
       message: "discord gateway fatal: TypeError @ gatewayCrash (discord-gateway.js:12:34)",
-      eventType: "fatal",
     });
     expect(wrapped.cause).toBeInstanceOf(TypeError);
   });

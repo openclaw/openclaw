@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { assert, beforeEach, describe, expect, it } from "vitest";
 import {
   addAgentTurnJob,
   createCronConfig,
@@ -58,7 +58,8 @@ describe("Gateway Cron session target routing", () => {
         expect(options.prepare).toBeTypeOf("function");
         expect(options.assertCurrent).toBeTypeOf("function");
       } finally {
-        state.cron.stop();
+        assert(typeof state.cron.stopAndDrain === "function", "Gateway cron drain is unavailable");
+        await state.cron.stopAndDrain();
       }
     },
   );
@@ -86,7 +87,8 @@ describe("Gateway Cron session target routing", () => {
       expect(runCronSessionTurnMock).not.toHaveBeenCalled();
       expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
     } finally {
-      state.cron.stop();
+      assert(typeof state.cron.stopAndDrain === "function", "Gateway cron drain is unavailable");
+      await state.cron.stopAndDrain();
     }
   });
 
@@ -108,7 +110,8 @@ describe("Gateway Cron session target routing", () => {
         );
         expect(options).toMatchObject({ trigger: "cron", sessionKey: `cron:${job.id}` });
       } finally {
-        state.cron.stop();
+        assert(typeof state.cron.stopAndDrain === "function", "Gateway cron drain is unavailable");
+        await state.cron.stopAndDrain();
       }
     },
   );

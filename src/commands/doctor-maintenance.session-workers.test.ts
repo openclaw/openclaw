@@ -32,15 +32,11 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 async function withMaintenance<T>(run: () => T) {
-  const maintenance = await beginDoctorMaintenance({
-    options: { repair: true, nonInteractive: true },
-    root: null,
-    runtime: { log() {}, error() {}, exit() {} },
-  });
+  const maintenance = await beginDoctorRepair();
   if (!maintenance) {
     throw new Error("Expected Doctor maintenance ownership");
   }

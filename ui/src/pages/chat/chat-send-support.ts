@@ -25,9 +25,8 @@ import {
   removeDeliveredQueuedChatSendForRun,
   updateQueuedMessage,
 } from "./chat-queue.ts";
-import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import type { ChatQueueAdmissionResult } from "./composer-persistence.ts";
+import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
   retireChatSubmissionDisplay,
@@ -41,9 +40,6 @@ import {
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
-
-export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -80,6 +76,9 @@ export function chatSendAdmissionHoldReason(
   sessionKey: string,
   agentId?: string,
 ): string | null {
+  if (sessionKey === host.sessionKey && host.isRouteSessionPending?.()) {
+    return t("chat.thread.loading");
+  }
   if (isExpiredIncognitoSession(host, sessionKey)) {
     return t("chat.incognitoExpiredTitle");
   }
@@ -97,6 +96,7 @@ export function chatSendHoldReason(
   agentId?: string,
 ): string | null {
   return (
+    (host.gatewayWorkPaused ? t("chat.queue.states.waitingForReconnect") : null) ??
     chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
     chatSendPendingReason(host, sessionKey, initialTurnPending)
   );
@@ -121,17 +121,6 @@ export function chatSendPendingReason(
       ? t("chat.queue.initialTurnPending")
       : null)
   );
-}
-
-export function formatTerminalChatSendAckError(
-  ack: TerminalFailureChatSendAck,
-  context: "chat" | "detached",
-): string {
-  return ack.status === "error"
-    ? "Chat failed before the run started; try again."
-    : context === "detached"
-      ? "The active run ended before the detached message was accepted."
-      : "The run ended before the message was accepted.";
 }
 
 function preserveDeliveredUserTurn(
@@ -292,11 +281,10 @@ export function retireDeliveredQueuedUserTurn(
       return "stale";
     }
     const reason = result.status === "failed" ? result.reason : "missing";
-    // Delivery proof must never become a fresh-send retry because local bytes
-    // were unavailable. Keep the same run identity and its no-replay barrier.
+    // Keep the same key if local projection fails after delivery.
     updateQueuedMessage(host, stored.id, (item) =>
       failOutboxPayload(
-        { ...item, sendState: item.sendState === "held" ? "held" : "unconfirmed" },
+        { ...item, sendState: item.sendState === "held" ? "held" : "failed" },
         reason,
       ),
     );

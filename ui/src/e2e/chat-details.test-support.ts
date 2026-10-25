@@ -121,30 +121,29 @@ export async function openChatDetailsPeople(page: Page | Locator): Promise<Locat
 
 /** Open publication review without invoking the publication action. */
 export async function openChatPublication(page: Page | Locator): Promise<Locator> {
-  const group = await openDetailsPullRequests(page);
-  const mobileEntry = group.locator('[data-details-destination="publication"]');
-  if (await group.evaluate((element) => element.closest(".chat-mobile-host") !== null)) {
-    await mobileEntry.click();
-    const review = visibleDetails(nativePane(page)).locator(
-      '.chat-mobile-details-page[data-details-page="publication"]',
-    );
+  const details = await openChatDetails(page);
+  if (await details.locator(".chat-mobile-host__details").count()) {
+    const group = await openDetailsPullRequests(page);
+    await group.locator('[data-details-destination="publication"]').click();
+    const review = details.locator('.chat-mobile-details-page[data-details-page="publication"]');
     await review.waitFor();
     return review;
   }
-  await group.locator(".chat-pr, .chat-pr__publication-history").first().waitFor();
-  const actions = group.locator('.chat-pr[data-state="branch"] .chat-pr__actions-trigger');
+  const environment = details.locator('[data-details-group="environment"]');
+  if ((await environment.getAttribute("open")) === null) {
+    await environment.locator(":scope > summary").click();
+  }
+  const branch = environment.locator(".chat-environment__branch");
+  await branch.waitFor();
+  await branch.locator(".chat-pr__publication-actions").waitFor();
+  const actions = branch.locator(".chat-pr__actions-trigger");
   if (await actions.count()) {
     if ((await actions.getAttribute("aria-expanded")) !== "true") {
       await actions.click();
     }
-    await group.locator(".chat-pr-branch-menu").waitFor();
-  } else {
-    const history = group.locator(".chat-pr__publication-history");
-    if ((await history.count()) > 0 && (await history.getAttribute("open")) === null) {
-      await history.locator(":scope > summary").click();
-    }
+    await environment.locator(".chat-pr-branch-menu").waitFor();
   }
-  return group;
+  return environment;
 }
 
 /** Navigate the desktop PR action menu while retaining the selected row's identity. */

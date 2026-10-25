@@ -6,6 +6,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
+  createPaneHeaderWorkspaceFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -18,6 +19,42 @@ type ChildRosterPane = TestChatPane & {
     target: { sessionKey: string; agentId?: string } | undefined,
   ) => SubagentRoster;
 };
+
+it("counts header subagents without projecting transcript history or child activity", () => {
+  const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+  let historyReads = 0;
+  state.chatMessages = new Proxy([{ role: "user", content: "Delegate the check." }], {
+    get(target, key, receiver) {
+      historyReads += 1;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  const readActivity = vi.fn(() => undefined);
+  const child: GatewaySessionRow = {
+    key: "agent:main:subagent:check",
+    kind: "direct",
+    spawnedBy: state.sessionKey,
+    hasActiveRun: true,
+    get observerDigest() {
+      return readActivity();
+    },
+  };
+  Reflect.set(pane.swarm, "hydrator", { rows: [child], hydrated: true, childrenRead: true });
+  const header = pane.renderPaneHeader(
+    createPaneHeaderWorkspaceFixture(state),
+    { key: state.sessionKey, kind: "direct", hasActiveSubagentRun: true, startedAt: 1, endedAt: 2 },
+    false,
+    undefined,
+    false,
+    null,
+  );
+  Reflect.set(pane.swarm, "hydrator", null);
+  expect(header.header.runningSubagentCount).toBe(1);
+  expect({ history: historyReads, activity: readActivity.mock.calls.length }).toEqual({
+    history: 0,
+    activity: 0,
+  });
+});
 
 it.each([
   { routeKey: "global", mainKey: "main", scope: "global", parentKey: "agent:work:global" },
@@ -57,7 +94,6 @@ it.each([
         subagentSessions: [child],
         subagentSessionsHydrated: true,
         subagentSessionsRead: true,
-        swarm: undefined,
       });
       const view = mountSolid(
         () => renderChatComposerNotices({ sessionKey: routeKey, messages: [], ...roster }),

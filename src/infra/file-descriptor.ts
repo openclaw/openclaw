@@ -37,10 +37,10 @@ export function sameFileMutationMetadata(
   left: FileMutationMetadata,
   right: FileMutationMetadata,
 ): boolean {
-  // Without statx, Linux libuv synthesizes birthtime from ctime. Real birthtime
+  // Without statx, Linux/Android libuv synthesizes birthtime from ctime. Real birthtime
   // changes still fail; this exact fallback shape requires the caller's byte proof.
   const derivedBirthtime =
-    process.platform === "linux" &&
+    (process.platform === "linux" || process.platform === "android") &&
     left.birthtimeNs === left.ctimeNs &&
     right.birthtimeNs === right.ctimeNs;
   return (

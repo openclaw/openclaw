@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 324900,
-  "reason": "Enterprise MCP auth config adds 338 B to measured startup JS; retain 100 B below the committed baseline cap.",
-  "updatedAt": "2026-10-20"
+  "startupJsGzipBytes": 272543,
+  "reason": "Measured dormant Chat runtime deferral with synchronous FIFO admission; startup baseline equals final production bundle",
+  "updatedAt": "2026-10-25"
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   parseInlineDirectives,
   sanitizeReplyDirectiveId,
@@ -28,31 +28,15 @@ describe("inline directives", () => {
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 
-  test("accepts a blank ID", () => {
-    const input = "[[reply_to:\n \n]]Visible reply";
-    const stripped = { text: "Visible reply", changed: true };
-    expect(stripInlineDirectiveTagsForDisplay(input)).toEqual(stripped);
-    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual(stripped);
-    expect(parseInlineDirectives(input)).toMatchObject({
-      text: "Visible reply",
-      hasReplyTag: true,
-      replyToCurrent: false,
-      replyToExplicitId: undefined,
-    });
-  });
+  test.each([stripInlineDirectiveTagsForDisplay, stripInlineDirectiveTagsForDelivery])(
+    "strips blank reply IDs with %s",
+    (strip) =>
+      expect(strip("[[reply_to:\n \n]]Visible")).toEqual({ text: "Visible", changed: true }),
+  );
 
-  test("preserves invalid complete syntax", () => {
-    expectUnchanged("[[reply_to:\n]]");
-  });
-
-  test("parses reply intent exposed by the audio stage", () => {
+  test("strips reply intent exposed by the audio stage for display", () => {
     const input = "[[reply_to:[[audio_as_voice]]id]]Visible";
     expect(stripInlineDirectiveTagsForDisplay(input)).toEqual({ text: "Visible", changed: true });
-    expect(parseInlineDirectives(input)).toMatchObject({
-      text: "Visible",
-      audioAsVoice: true,
-      replyToExplicitId: "id",
-    });
   });
   test("preserves long blank runs around literal markers without stalling", () => {
     const text = `before${"\n".repeat(60_000)}[[ordinary text]]after`;
@@ -65,50 +49,41 @@ describe("inline directives", () => {
     const input = "  keep leading and trailing whitespace  ";
     expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: input, changed: false });
   });
-  it("leaves directive examples inside inline and fenced code untouched", () => {
-    expectUnchanged(
+  test.each([
+    ["invalid complete syntax", "[[reply_to:\n]]"],
+    [
+      "inline and fenced code",
       "Use `[[reply_to_current]]` literally.\n```text\n[[audio_as_voice]]\n[[reply_to:example-id]]\n```",
-    );
+    ],
+  ])("leaves %s untouched", (_name, input) => {
+    expectUnchanged(input);
   });
-  test("sanitizes explicit reply directive ids", () => {
-    const result = parseInlineDirectives("hello [[reply_to: abc\u0000\r\u0085def ]]");
-
-    expect(result).toMatchObject({
-      hasReplyTag: true,
-      replyToExplicitId: "abcdef",
-      replyToId: "abcdef",
-      text: "hello",
-    });
-  });
-
-  test("preserves leading spaces after stripping a reply tag", () => {
-    const input = "[[reply_to_current]]    keep this indent\n        and this one";
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe("    keep this indent\n        and this one");
-  });
-
-  test("preserves nested quote code bytes after recording reply intent", () => {
-    const code = '> > Example\n> >\n> >     print("a  b")';
-    expect(parseInlineDirectives(`[[reply_to_current]]\n${code}`)).toMatchObject({
-      hasReplyTag: true,
-      replyToCurrent: true,
-      text: code,
-    });
-  });
-
-  test("keeps authored column spacing in HTML <pre> after a stripped reply tag", () => {
-    const pre = "<pre>#  Model    Index\n🥇 Opus     58     —      $5.98\n4  Fable    53</pre>";
-    expect(parseInlineDirectives(`[[reply_to_current]]\n<b>Top</b>\n${pre}`).text).toBe(
-      `<b>Top</b>\n${pre}`,
-    );
+  test.each`
+    name          | input                                          | expected
+    ${"blank ID"} | ${"[[reply_to:\n \n]]Visible"}                 | ${{ text: "Visible", hasReplyTag: true, replyToCurrent: false, replyToExplicitId: undefined }}
+    ${"audio"}    | ${"[[reply_to:[[audio_as_voice]]id]]Visible"}  | ${{ text: "Visible", audioAsVoice: true, replyToExplicitId: "id" }}
+    ${"safe ID"}  | ${"hello [[reply_to: abc\u0000\r\u0085def ]]"} | ${{ text: "hello", hasReplyTag: true, replyToExplicitId: "abcdef", replyToId: "abcdef" }}
+    ${"word gap"} | ${"Hello  [[reply_to_current]]  world"}        | ${{ text: "Hello world" }}
+    ${"line gap"} | ${"Hello\n\n[[audio_as_voice]]\n\n\nworld"}    | ${{ text: "Hello\n\nworld" }}
+  `("parses $name", ({ input, expected }) => {
+    expect(parseInlineDirectives(input)).toMatchObject(expected);
   });
 
   test.each([
-    ["between words", "Hello  [[reply_to_current]]  world", "Hello world"],
-    ["on its own line", "Hello\n\n[[audio_as_voice]]\n\n\nworld", "Hello\n\nworld"],
-  ])("closes only the gap left by a directive %s", (_name, input, expected) => {
-    expect(parseInlineDirectives(input).text).toBe(expected);
+    ["indentation", "", "    keep this indent\n        and this one"],
+    ["nested quote code", "\n", '> > Example\n> >\n> >     print("a  b")'],
+    [
+      "HTML columns",
+      "\n",
+      "<b>Top</b>\n<pre>#  Model    Index\n🥇 Opus     58     —      $5.98\n4  Fable    53</pre>",
+    ],
+    ["literal sentinel", "\n", "literal \uE0000\uE000 text\n```ts\n    const value = 1;\n```"],
+  ])("preserves %s after recording reply intent", (_name, separator, text) => {
+    expect(parseInlineDirectives(`[[reply_to_current]]${separator}${text}`)).toMatchObject({
+      hasReplyTag: true,
+      replyToCurrent: true,
+      text,
+    });
   });
 
   test.each([
@@ -123,13 +98,6 @@ describe("inline directives", () => {
     );
   });
 
-  test("preserves literal sentinel-like text while restoring masked code blocks", () => {
-    const sentinelLikeText = "\uE0000\uE000";
-    const body = `literal ${sentinelLikeText} text\n\`\`\`ts\n    const value = 1;\n\`\`\``;
-    const result = parseInlineDirectives(`[[reply_to_current]]\n${body}`);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(body);
-  });
   test("truncates long ids without splitting surrogate pairs", () => {
     const prefix = "a".repeat(255);
     expect(sanitizeReplyDirectiveId(`${prefix}😊tail`)).toBe(`${prefix}😊`);

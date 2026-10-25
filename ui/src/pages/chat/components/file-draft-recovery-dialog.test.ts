@@ -6,7 +6,7 @@ import {
   waitForRenderedModalDialog,
 } from "../../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { reviewFileDrafts } from "./file-draft-recovery-dialog-view.tsx";
+import { reviewFileDrafts } from "./file-draft-recovery-dialog-loading.tsx";
 
 type FileDraft = Parameters<typeof reviewFileDrafts>[0][number];
 
@@ -84,4 +84,21 @@ it("ignores a copy completion after the review is dismissed", async () => {
   finishCopy(true);
   await waitForSolid(() => expect(document.querySelector("openclaw-modal-dialog")).toBeNull());
   expect(entry.discard).not.toHaveBeenCalled();
+});
+
+it("removes one discarded draft without replacing the remaining draft controls", async () => {
+  const first = draft("first.md");
+  const second = draft("second.md");
+  const result = reviewFileDrafts([first, second]);
+  const { modal } = await waitForRenderedModalDialog(document.body);
+  const secondCopy = button(modal, "Copy second.md");
+  button(modal, "Discard first.md").click();
+  await waitForSolid(() => {
+    expect(first.discard).toHaveBeenCalledOnce();
+    expect(modal.textContent).not.toContain("first.md");
+    expect(button(modal, "Copy second.md")).toBe(secondCopy);
+  });
+  button(modal, "Discard second.md").click();
+  await result;
+  expect(second.discard).toHaveBeenCalledOnce();
 });

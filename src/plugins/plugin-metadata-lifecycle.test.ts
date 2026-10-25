@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler as createScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -36,16 +37,8 @@ const clearMemo = vi.fn();
 registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
 
 function gate() {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: () => released.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-  };
+  const { entered, release, wait } = createEnteredGate();
+  return { entered, release: () => release(), wait };
 }
 
 it("retains running metadata readers through Gateway close after package replacement", async () => {

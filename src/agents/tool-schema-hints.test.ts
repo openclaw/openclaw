@@ -102,13 +102,13 @@ describe("tool schema hints", () => {
   it("renders five structural union variants and rejects six", () => {
     const variant = (index: number) =>
       closedObject({ kind: Type.Literal(`variant-${index}`), value: Type.Number() });
-    const five = Type.Union(Array.from({ length: 5 }, (_unused, index) => variant(index)));
-    const six = Type.Union(Array.from({ length: 6 }, (_unused, index) => variant(index)));
+    const union = (count: number) =>
+      Type.Union(Array.from({ length: count }, (_, i) => variant(i)));
 
-    expect(outputHint(five)).toBe(
+    expect(outputHint(union(5))).toBe(
       '{ kind: "variant-0"; value: number } | { kind: "variant-1"; value: number } | { kind: "variant-2"; value: number } | { kind: "variant-3"; value: number } | { kind: "variant-4"; value: number }',
     );
-    expect(outputHint(six)).toBeUndefined();
+    expect(outputHint(union(6))).toBeUndefined();
   });
 
   it("keeps input hints small while allowing larger exact output contracts", () => {
@@ -163,32 +163,26 @@ describe("tool schema hints", () => {
     const cyclic: Record<string, unknown> = { type: "object", properties: {} };
     (cyclic.properties as Record<string, unknown>).self = cyclic;
 
-    expect(outputHint(cyclic)).toBeUndefined();
-    expect(outputHint({ $ref: "#/$defs/result" })).toBeUndefined();
-    expect(outputHint({ anyOf: [] })).toBeUndefined();
-    expect(outputHint({ ...closedIdSchema, oneOf: [] })).toBeUndefined();
-    expect(
-      outputHint({
+    for (const schema of [
+      cyclic,
+      { $ref: "#/$defs/result" },
+      { anyOf: [] },
+      { ...closedIdSchema, oneOf: [] },
+      {
         ...closedIdSchema,
         anyOf: Array.from({ length: 5 }, (_unused, index) => ({ const: index })),
-      }),
-    ).toBeUndefined();
-    expect(
-      outputHint({
-        ...closedIdSchema,
-        anyOf: [{ const: "a" }],
-        oneOf: [{ const: "b" }],
-      }),
-    ).toBeUndefined();
-    expect(outputHint(Type.Object({ id: Type.String() }))).toBeUndefined();
-    expect(
-      outputHint({
+      },
+      { ...closedIdSchema, anyOf: [{ const: "a" }], oneOf: [{ const: "b" }] },
+      Type.Object({ id: Type.String() }),
+      {
         type: "object",
         properties: {},
         patternProperties: { "^item_": { type: "number" } },
         additionalProperties: false,
-      }),
-    ).toBeUndefined();
+      },
+    ]) {
+      expect(outputHint(schema)).toBeUndefined();
+    }
 
     const oversized = fields(32, (i) => `field_${i}`);
     expect(outputHint(oversized)).toBeUndefined();

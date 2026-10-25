@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { Show, createSignal, type Setter } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { createSidebarRegionCallbackMocks as callbacks } from "../../test-helpers/sidebar-region-callbacks.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
@@ -37,19 +38,6 @@ function board(face: ResolvedBoardView["face"] = "dashboard") {
 
 const containers: HTMLElement[] = [];
 
-function callbacks() {
-  return {
-    activatePanel: vi.fn(),
-    togglePanelExpanded: vi.fn(),
-    setDock: vi.fn(),
-    closeSlot: vi.fn(),
-    openSlot: vi.fn(),
-    reorderPanel: vi.fn(),
-    resizePanel: vi.fn(),
-    setOpen: vi.fn(),
-  };
-}
-
 function DetailContent() {
   return (
     <aside data-detail>
@@ -76,7 +64,7 @@ type LayoutState = {
 
 const layouts = new Map<HTMLElement, Setter<LayoutState>>();
 
-function nativeCloseLayoutFixture() {
+async function nativeCloseLayoutFixture() {
   const [layout, setLayout] = createSignal(
     openSlot(openSlot({ columns: [] }, "workspace"), "detail"),
   );
@@ -105,10 +93,12 @@ function nativeCloseLayoutFixture() {
         narrow={false}
         panelDefinitions={panelDefinitions}
         primary={<main>Conversation</main>}
-        regionError={undefined}
       />
     );
   });
+  await waitForSolid(() =>
+    expect(container.querySelector("openclaw-chat-sidebar-region")).not.toBeNull(),
+  );
   return { container, layout };
 }
 
@@ -149,7 +139,6 @@ async function renderLayout(
                 <textarea />
               </main>
             }
-            regionError={undefined}
           />
         );
       },
@@ -157,7 +146,12 @@ async function renderLayout(
     );
   }
   flush();
-  await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+  if (layout.columns.length) {
+    await waitForSolid(() =>
+      expect(container.querySelector("openclaw-chat-sidebar-region")).not.toBeNull(),
+    );
+    await container.querySelector("openclaw-chat-sidebar-region")!.updateComplete;
+  }
 }
 
 afterEach(() => {
@@ -203,12 +197,14 @@ describe("chat pane sidebar layout", () => {
                 </>
               }
               primary={<main>Conversation</main>}
-              regionError={undefined}
             />
           </>
         );
       });
       containers.push(container);
+      await waitForSolid(() =>
+        expect(container.querySelector("openclaw-chat-sidebar-region")).not.toBeNull(),
+      );
       const region = container.querySelector("openclaw-chat-sidebar-region")!;
       await region.updateComplete;
       const opener = container.querySelector<HTMLButtonElement>("[data-opener]")!;
@@ -267,14 +263,16 @@ describe("chat pane sidebar layout", () => {
             narrow={false}
             panelDefinitions={definitions}
             primary={<main>Conversation</main>}
-            regionError={undefined}
           />
         );
       });
       const draw = async () => {
         setLayout(state.sidebarLayout);
         flush();
-        await mounted.container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+        await waitForSolid(() =>
+          expect(mounted.container.querySelector("openclaw-chat-sidebar-region")).not.toBeNull(),
+        );
+        await mounted.container.querySelector("openclaw-chat-sidebar-region")!.updateComplete;
       };
       await draw();
       const newTab = mounted.container.querySelector<HTMLButtonElement>(
@@ -376,7 +374,7 @@ describe("chat pane sidebar layout", () => {
   });
 
   it("restores focus to the surviving tab after its parent commits native Close", async () => {
-    const { container: parent, layout } = nativeCloseLayoutFixture();
+    const { container: parent, layout } = await nativeCloseLayoutFixture();
     containers.push(parent);
     flush();
     const region = parent.querySelector("openclaw-chat-sidebar-region")!;

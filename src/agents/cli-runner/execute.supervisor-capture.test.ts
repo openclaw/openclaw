@@ -41,7 +41,6 @@ import { createStubChildAdapter } from "../../process/supervisor/supervisor.test
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { findCliTerminalStopError } from "../failover-error.js";
@@ -55,8 +54,9 @@ import {
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
+import { createPreparedCliContext } from "./prepared-context.test-support.js";
 import { prepareCliRunTerminalReply } from "./terminal-reply.js";
-import { captureCliRunStartTime, type PreparedCliRunContext } from "./types.js";
+import type { PreparedCliRunContext } from "./types.js";
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 vi.mock("../../process/supervisor/adapters/child.js", () => ({ createChildAdapter: vi.fn() }));
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
@@ -213,44 +213,17 @@ function buildPreparedCliRunContext(params: {
     input: "stdin" as const,
     serialize: true,
   };
-  return {
-    params: {
-      admittedRunContext: createTestAdmittedRunContext(runId),
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      provider,
-      model: "model",
-      timeoutMs: 1_000,
-      runId,
+  return createPreparedCliContext(
+    { provider, model: "model", runId, agentId: "main", sessionKey: "agent:main:main" },
+    { id: provider, config: backend, bundleMcp: false, parseJsonlEvent: params.parseJsonlEvent },
+    {
+      preparedBackend: {
+        backend,
+        env: {},
+        ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
+      },
     },
-    ...captureCliRunStartTime(),
-    workspaceDir: "/tmp",
-    backendResolved: {
-      id: provider,
-      config: backend,
-      bundleMcp: false,
-      parseJsonlEvent: params.parseJsonlEvent,
-    },
-    executionTarget: { kind: "process" },
-    preparedBackend: {
-      backend,
-      env: {},
-      ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
-    },
-    reusableCliSession: { mode: "none" },
-    hadSessionFile: false,
-    contextEngineConfig: {},
-    modelId: "model",
-    normalizedModel: "model",
-    systemPrompt: "system",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPluginArgs: [],
-    authEpochVersion: 2,
-  };
+  );
 }
 
 function claudeJsonlContext() {
@@ -977,26 +950,26 @@ it("emits metadata-only lifecycle records for parsed CLI tools", async () => {
 
 it("binds a loopback call admitted before its parsed CLI identity", async () => {
   const toolEvents = captureToolEvents();
-  supervisorSpawnMock.mockImplementationOnce(async (input) => {
+  mockCaptureSpawn((input, captureKey) => {
+    const args = { action: "react", emoji: "early" };
     const captureHandle = markMcpLoopbackToolCallStarted({
-      captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+      captureKey,
       toolName: "message",
-      args: { action: "react", emoji: "early" },
+      args,
     });
     if (!captureHandle) {
       throw new Error("Expected early loopback capture handle");
     }
-    input.onStdout?.(assistant(messageUse("call-early", { action: "react", emoji: "early" })));
+    input.onStdout?.(assistant(messageUse("call-early", args)));
     recordMcpLoopbackToolCallResultForHandle({
       captureHandle,
       toolName: "message",
-      args: { action: "react", emoji: "early" },
+      args,
       outcome: "blocked",
       deniedReason: "plugin-approval",
     });
     markMcpLoopbackToolCallFinished(captureHandle);
     input.onStdout?.(`${user(toolResult("call-early", "blocked", true))}${terminal()}`);
-    return createManagedRun(createSuccessfulProcessExit());
   });
   const context = captureContext();
 
@@ -1086,13 +1059,11 @@ it("keeps identical parallel outcomes unknown with first tool finishes before se
 
 it("uses a loopback outcome that settles during the post-process drain", async () => {
   const toolEvents = captureToolEvents();
-  supervisorSpawnMock.mockImplementationOnce(async (input) => {
+  mockCaptureSpawn((input, captureKey) => {
     const toolArgs = { action: "react", emoji: "A" };
-    input.onStdout?.(
-      `${JSON.stringify(messageRecord("assistant", [messageUse("call-draining", toolArgs)]))}\n${terminal()}`,
-    );
+    input.onStdout?.(`${assistant(messageUse("call-draining", toolArgs))}${terminal()}`);
     const captureHandle = markMcpLoopbackToolCallStarted({
-      captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+      captureKey,
       toolName: "message",
       args: toolArgs,
     });
@@ -1109,7 +1080,6 @@ it("uses a loopback outcome that settles during the post-process drain", async (
       });
       markMcpLoopbackToolCallFinished(captureHandle);
     }, 10);
-    return createManagedRun(createSuccessfulProcessExit());
   });
   const context = captureContext();
 
@@ -1172,12 +1142,7 @@ it.each([
   },
 ] as const)("classifies an outstanding parsed $label when the run times out", async (fixture) => {
   const toolEvents = captureToolEvents();
-  const toolStart = assistant({
-    type: fixture.type,
-    id: fixture.toolCallId,
-    name: fixture.name,
-    input: {},
-  });
+  const toolStart = assistant(toolUse(fixture.toolCallId, fixture.name, {}, fixture.type));
   mockCaptureSpawn(
     (input, captureKey) => {
       input.onStdout?.(toolStart);
@@ -1326,20 +1291,18 @@ it("retains partial delivery from unknown MCP outcome", async () => {
     Object.assign(new Error("second chunk failed"), { sentBeforeError: true }),
     { outcome: "unknown" },
   );
-  expect(result).toEqual(
-    expect.objectContaining({
-      didSendViaMessagingTool: true,
-      messagingToolSentTargets: [
-        expect.objectContaining({
-          tool: "message",
-          provider: TEST_MESSAGE_CHANNEL,
-          to: "chat123",
-          text: message,
-          mediaUrls: ["https://example.com/photo.png"],
-        }),
-      ],
-    }),
-  );
+  expect(result).toMatchObject({
+    didSendViaMessagingTool: true,
+    messagingToolSentTargets: [
+      expect.objectContaining({
+        tool: "message",
+        provider: TEST_MESSAGE_CHANNEL,
+        to: "chat123",
+        text: message,
+        mediaUrls: ["https://example.com/photo.png"],
+      }),
+    ],
+  });
 });
 it("retains confirmed implicit reply current-target evidence", async () => {
   const result = await captureMessage(
@@ -1347,14 +1310,12 @@ it("retains confirmed implicit reply current-target evidence", async () => {
     { ok: true },
     { params: { messageChannel: TEST_MESSAGE_CHANNEL, currentChannelId: "chat123" } },
   );
-  expect(result).toEqual(
-    expect.objectContaining({
-      didSendViaMessagingTool: true,
-      messagingToolSentTargets: [
-        expect.objectContaining({ tool: "message", provider: TEST_MESSAGE_CHANNEL, to: "chat123" }),
-      ],
-    }),
-  );
+  expect(result).toMatchObject({
+    didSendViaMessagingTool: true,
+    messagingToolSentTargets: [
+      expect.objectContaining({ tool: "message", provider: TEST_MESSAGE_CHANNEL, to: "chat123" }),
+    ],
+  });
 });
 it("retains text and media evidence for repeated implicit sends", async () => {
   const mediaReply = { text: "implicit reply", mediaUrl: "https://example.com/implicit.png" };
@@ -1363,17 +1324,15 @@ it("retains text and media evidence for repeated implicit sends", async () => {
     sentSourceReply(mediaReply),
     { count: 2, params: { sourceReplyDeliveryMode: "message_tool_only" } },
   );
-  expect(result).toEqual(
-    expect.objectContaining({
-      didSendViaMessagingTool: true,
-      didDeliverSourceReplyViaMessageTool: true,
-      messagingToolSentTexts: [mediaReply.text],
-      messagingToolSentMediaUrls: [mediaReply.mediaUrl],
-      messagingToolSourceReplyPayloads: [0, 1].map(() =>
-        Object.assign({}, mediaReply, { sourceReplyFinal: true }),
-      ),
-    }),
-  );
+  expect(result).toMatchObject({
+    didSendViaMessagingTool: true,
+    didDeliverSourceReplyViaMessageTool: true,
+    messagingToolSentTexts: [mediaReply.text],
+    messagingToolSentMediaUrls: [mediaReply.mediaUrl],
+    messagingToolSourceReplyPayloads: [0, 1].map(() =>
+      Object.assign({}, mediaReply, { sourceReplyFinal: true }),
+    ),
+  });
   expect(result.messagingToolSentTargets).toBeUndefined();
   expect(result.sourceReplyDelivered).toBeUndefined();
 });

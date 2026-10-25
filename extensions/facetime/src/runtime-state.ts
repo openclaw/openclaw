@@ -33,7 +33,6 @@ export class ActiveFaceTimeCall {
   carrierCallUUID: string;
   readonly carrierPeers = new Map<number, FaceTimeHelperPeer>();
   readonly senderId: string;
-  readonly senderIsOwner: true = true;
   handle?: string;
   callStatus?: number;
   isSendingAudio?: boolean;
@@ -86,10 +85,6 @@ export class ActiveFaceTimeCall {
     if (params.peer) {
       this.carrierPeers.set(params.peer.processId, params.peer);
     }
-  }
-
-  captureGeneration(): number {
-    return this.generation;
   }
 
   assertCurrent(generation: number, allowClosing = false): void {

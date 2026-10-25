@@ -59,6 +59,8 @@ export function renderTranscriptSearch(paneId: string) {
 
 /** Retain native components between commits, including moves of session-owned row roots. */
 export function render(value: NativeContent, container: HTMLElement): void {
+  const transcript = value instanceof NativeFixture ? value.thread?.transcript : undefined;
+  transcript?.start();
   const existing = mounts.get(container);
   if (value == null) {
     existing?.dispose();
@@ -70,6 +72,17 @@ export function render(value: NativeContent, container: HTMLElement): void {
   } else {
     mounts.set(container, mountSolid(Content, { value }, container));
   }
+  transcript?.update();
+}
+
+export function mountChatThread(container: HTMLElement, transcript: ChatTranscript) {
+  return {
+    unmount: () => render(null, container),
+    render(next: ChatThreadProps | null) {
+      render(next ? renderChatThread({ ...next }, transcript) : null, container);
+      flush();
+    },
+  };
 }
 
 export class TranscriptTestHost extends HTMLElement {
@@ -128,10 +141,35 @@ export async function mountTestTranscript(
   transcript: ChatTranscript = createTestTranscript(paneId),
 ) {
   const container = document.body.appendChild(document.createElement("div"));
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, value: 600 },
+    scrollHeight: {
+      configurable: true,
+      get: () =>
+        Number.parseFloat(
+          container.querySelector<HTMLElement>(".chat-thread-inner")?.style.height ?? "0",
+        ) || 0,
+    },
+  });
+  container.scrollTo = (options?: ScrollToOptions | number) => {
+    if (typeof options === "object") {
+      container.scrollTop = Math.max(
+        0,
+        Math.min(
+          options.top ?? container.scrollTop,
+          container.scrollHeight - container.clientHeight,
+        ),
+      );
+    }
+  };
+  let currentRows = initialRows;
+  let renderQueued = false;
+  let active = true;
   let currentSession: ChatTranscriptSession;
   container.addEventListener("focusin", (event) => currentSession.handleFocusIn(event));
   container.addEventListener("focusout", (event) => currentSession.handleFocusOut(event));
   const renderRows = (rows: readonly TestContentRow[]) => {
+    currentRows = rows;
     render(
       transcript.renderSession(`agent:main:${paneId}`, (session) => {
         currentSession = session;
@@ -147,6 +185,21 @@ export async function mountTestTranscript(
     transcript.update();
     flush();
   };
+  const unsubscribe = transcript.subscribe(() => {
+    if (!renderQueued) {
+      renderQueued = true;
+      queueMicrotask(() => {
+        renderQueued = false;
+        if (active) {
+          renderRows(currentRows);
+        }
+      });
+    }
+  });
+  onTestFinished(() => {
+    active = false;
+    unsubscribe();
+  });
   transcript.start();
   renderRows(initialRows);
   await flushDeferredRowPrune();

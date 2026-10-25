@@ -11,7 +11,6 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import {
   activateChatHeaderPanelAction,
@@ -94,7 +93,7 @@ const suite = createControlUiE2eSuite({
       await writeSources(true);
       await owner.state.writeConfig({
         agents: {
-          defaults: { workspace, skipBootstrap: true, heartbeat: { every: "0m" } },
+          defaults: { workspace, skipBootstrap: true },
           entries: { main: { workspace, name: "Folding proof" } },
         },
         gateway: {
@@ -149,15 +148,6 @@ suite.define(() => {
       "gapped.ts",
       "large.ts",
     ]);
-    const report: { [key: string]: unknown } = {
-      files: diff.files.map((file: { path: string; additions: number; deletions: number }) => ({
-        path: file.path,
-        added: file.additions,
-        removed: file.deletions,
-      })),
-      profile,
-      port: instance.port,
-    };
     const handoff = await rpc("health", {}).then(() => instance.cli(["dashboard", "--json"]));
     expect(handoff.code).toBe(0);
     const dashboard = JSON.parse(handoff.stdout);
@@ -205,15 +195,6 @@ suite.define(() => {
         await expectLines(file, splitLeft, [before[1], before[3]]);
         await expectLines(file, splitRight, [after[1], after[3]]);
         expect(await file.locator(".chat-diff__change--add").count()).toBeGreaterThan(0);
-        const take = async (name: string) => {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            panel,
-            [file.locator(".session-diff__filename")],
-            { elements: [file], animations: "disabled" },
-          );
-          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-        };
         const otherFiles = panel
           .locator(".session-diff__file")
           .filter({ hasNotText: "example.ts" });
@@ -223,7 +204,6 @@ suite.define(() => {
             await toggle.click();
           }
         }
-        await take("before-expanded");
         await button("Collapse code at line 1").click();
         await placeholder.waitFor();
         expect(await file.locator(".session-diff-split__row").count()).toBe(1);
@@ -231,7 +211,6 @@ suite.define(() => {
         const foldedText = await placeholder.textContent();
         expect(foldedText).toContain("+2");
         expect(foldedText).toContain("-2");
-        await take("after-folded-split");
         await panel
           .getByRole("button", { name: "Diff mode: split. Switch to next mode", exact: true })
           .click();
@@ -239,7 +218,6 @@ suite.define(() => {
           .getByRole("button", { name: "Diff mode: auto. Switch to next mode", exact: true })
           .click();
         expect(await file.locator(".chat-diff__row").count()).toBe(1);
-        await take("after-folded-unified");
         for (const section of await otherFiles.all()) {
           await section.locator(".session-diff__file-toggle").click();
         }
@@ -292,22 +270,12 @@ suite.define(() => {
           path.join(workspace, "example.ts"),
           after.join("\n").replace('"empty"', '"nothing"') + "\n",
         );
-        const refreshStart = await page.evaluate(() => performance.now());
         await panel.getByRole("button", { name: "Refresh changes" }).click();
-        await expect.poll(() => panel.getAttribute("aria-busy")).toBe("false");
+        await expect.poll(() => fileToggle.locator(".chat-diffstat__add").textContent()).toBe("+3");
         expect(await fileToggle.getAttribute("aria-expanded")).toBe("false");
         await fileToggle.click();
         await file.getByText('return "nothing";', { exact: true }).waitFor();
         expect(await placeholder.count()).toBe(0);
-        report.changedPatchRefreshMs =
-          (await page.evaluate(
-            () =>
-              new Promise<number>((resolve) => {
-                requestAnimationFrame(() =>
-                  requestAnimationFrame(() => resolve(performance.now())),
-                );
-              }),
-          )) - refreshStart;
         await button("Collapse code at line 1").waitFor();
         await action("Collapse Code");
         expect(await file.locator(".session-diff-split__row").count()).toBe(1);
@@ -318,15 +286,6 @@ suite.define(() => {
           expect(sha256(built)).toBe(asset.sha256);
         }
         expect(servedAssets.length).toBeGreaterThan(0);
-        report.assets = servedAssets;
-        report.browser = page.context().browser()?.version();
-        report.assertions =
-          "default-collapsed; explicit file expansion; DOM absence; split/unified retention; source/highlight fidelity; nested state; real gap expansion; 64 long replacements; refresh retention; file-menu actions; real patch invalidation";
-        await writeFile(
-          path.join(suite.artifactDir, "proof.json"),
-          JSON.stringify(report, null, 2),
-        );
-        console.info("Session diff folding proof.json:", JSON.stringify(report));
       },
     );
   }, 120_000);

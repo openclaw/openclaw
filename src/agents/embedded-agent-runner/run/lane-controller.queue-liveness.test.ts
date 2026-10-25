@@ -339,76 +339,48 @@ describe("queued embedded run context liveness", () => {
     }
   });
 
-  test.each(["session", "global"] as const)(
-    "releases %s waiting context when its caller aborts",
-    async (queue) => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
-      const abort = new AbortController();
-      const blocked = blockQueue(queue);
-      const { controller, params } = createRunController({
-        sessionKey: blocked.sessionKey,
-        abortSignal: abort.signal,
-      });
-      registerAgentRunContext(params.runId, {
-        lifecycleGeneration: params.lifecycleGeneration,
-        registeredAt,
-      });
-      const execute = vi.fn(async () => createRunResult());
-      const run = controller.enqueueSession(() =>
-        controller.enqueueGlobal(execute, { onQueued: blocked.onQueued }),
-      );
-      const rejected = expect(run).rejects.toThrow("queued run canceled");
-      try {
-        await blocked.wait();
-        clock.mockReturnValue(registeredAt + CONTEXT_TTL_MS + 1);
-        expect(sweepStaleRunContexts()).toBe(0);
+  test.each([
+    ["session", "caller"],
+    ["global", "caller"],
+    ["session", "source owner"],
+    ["global", "source owner"],
+  ] as const)("releases %s waiting context when its %s cancels", async (queue, cancellation) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
+    const abort = new AbortController();
+    const blocked = blockQueue(queue);
+    const { controller, params } = createRunController({
+      sessionKey: blocked.sessionKey,
+      ...(cancellation === "caller" ? { abortSignal: abort.signal } : {}),
+    });
+    const execute = vi.fn(async () => createRunResult());
+    const run = controller.enqueueSession(() =>
+      controller.enqueueGlobal(execute, { onQueued: blocked.onQueued }),
+    );
+    const rejected =
+      cancellation === "caller"
+        ? expect(run).rejects.toThrow("queued run canceled")
+        : expect(run).rejects.toThrow();
+    try {
+      await blocked.wait();
+      clock.mockReturnValue(registeredAt + CONTEXT_TTL_MS + 1);
+      expect(sweepStaleRunContexts()).toBe(0);
+      if (cancellation === "caller") {
         expect(isAgentRunWaitingForCapacity(params.runId)).toBe(queue === "global");
         abort.abort(new Error("queued run canceled"));
-        expect(isAgentRunWaitingForCapacity(params.runId)).toBe(false);
-        await rejected;
-        expect(blocked.depth()).toBe(0);
-        expect(sweepStaleRunContexts()).toBe(1);
-        expect(getAgentRunContext(params.runId)).toBeUndefined();
-        expect(execute).not.toHaveBeenCalled();
-      } finally {
-        blocked.release();
-        await run.catch(() => {});
-      }
-    },
-  );
-
-  test.each(["session", "global"] as const)(
-    "releases %s waiting context when its source owner cancels pending work",
-    async (queue) => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
-      const blocked = blockQueue(queue);
-      const { controller, params } = createRunController({ sessionKey: blocked.sessionKey });
-      registerAgentRunContext(params.runId, {
-        lifecycleGeneration: params.lifecycleGeneration,
-        registeredAt,
-      });
-      const execute = vi.fn(async () => createRunResult());
-      const run = controller.enqueueSession(() =>
-        controller.enqueueGlobal(execute, { onQueued: blocked.onQueued }),
-      );
-      const rejected = expect(run).rejects.toThrow();
-      try {
-        await blocked.wait();
-        clock.mockReturnValue(registeredAt + CONTEXT_TTL_MS + 1);
-        expect(sweepStaleRunContexts()).toBe(0);
+      } else {
         expect(blocked.cancel()).toBe(1);
-        expect(isAgentRunWaitingForCapacity(params.runId)).toBe(false);
-        await rejected;
-        expect(blocked.depth()).toBe(0);
-        expect(sweepStaleRunContexts()).toBe(1);
-        expect(getAgentRunContext(params.runId)).toBeUndefined();
-        expect(execute).not.toHaveBeenCalled();
-      } finally {
-        blocked.release();
-        await run.catch(() => {});
       }
-    },
-  );
+      expect(isAgentRunWaitingForCapacity(params.runId)).toBe(false);
+      await rejected;
+      expect(blocked.depth()).toBe(0);
+      expect(sweepStaleRunContexts()).toBe(1);
+      expect(getAgentRunContext(params.runId)).toBeUndefined();
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      blocked.release();
+      await run.catch(() => {});
+    }
+  });
 
   test("releases ownership when a custom queue rejects admission synchronously", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
@@ -542,17 +514,7 @@ describe("scheduler capacity wait projection", () => {
           events.push(isAgentRunWaitingForCapacity(params.runId));
         }
       });
-      const placementEntered = createDeferred();
-      const resumePlacement = createDeferred();
-      const uninstallPlacement = installSessionPlacementAdmissionProvider({
-        assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
-        executeLocalTurn: async (_claim, runLocal) => await runLocal(),
-        executeTurn: async (_claim, _params, runLocal) => {
-          placementEntered.resolve();
-          await resumePlacement.promise;
-          return await runLocal();
-        },
-      });
+      const placement = placementGate();
       if (blockedLane) {
         setCommandLaneConcurrency(blockedLane, 0);
       }
@@ -565,18 +527,18 @@ describe("scheduler capacity wait projection", () => {
           expect(events).toEqual([true]);
           setCommandLaneConcurrency(blockedLane, 1);
         }
-        await placementEntered.promise;
+        await placement.entered;
         expect(isAgentRunWaitingForCapacity(params.runId)).toBe(false);
         expect(events).toEqual(blockedLane ? [true, false] : []);
       } finally {
         if (blockedLane) {
           setCommandLaneConcurrency(blockedLane, 1);
         }
-        resumePlacement.resolve();
+        placement.resume();
         try {
           await run;
         } finally {
-          uninstallPlacement();
+          placement.uninstall();
           unsubscribe();
         }
       }

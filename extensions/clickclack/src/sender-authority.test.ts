@@ -21,12 +21,7 @@ import { clickClackPlugin } from "../channel-plugin-api.js";
 
 const cfg = {
   channels: {
-    clickclack: {
-      accounts: {
-        alpha: accountConfig("alpha"),
-        beta: accountConfig("beta"),
-      },
-    },
+    clickclack: { accounts: { alpha: accountConfig("alpha"), beta: accountConfig("beta") } },
   },
 };
 
@@ -205,6 +200,20 @@ function expectAccountRequests(requests: HttpRequest[], account: Account) {
   }
 }
 
+function expectAccountConversation(requests: HttpRequest[], account: Account, sent: boolean) {
+  const owned = requests.filter(({ url }) => new URL(url).hostname === `${account}.example`);
+  expectAccountRequests(owned, account);
+  expect(requestPaths(owned)).toEqual([
+    "POST /api/dms",
+    ...(sent ? [`POST /api/dms/dcn_${account}/messages`] : []),
+  ]);
+  expect(owned[0]?.body).toEqual({
+    workspace_id: `wsp_${account}`,
+    member_ids: [`usr_${account}`],
+  });
+  return owned;
+}
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createMedia() {
@@ -358,23 +367,8 @@ it("keeps a revoked outbound sender independent from an active message account",
     expect(await first).toMatchObject(retiredSender);
     gates.beta.release();
     expect(await second).toMatchObject({ status: "fulfilled", value: { messageId: "msg_beta" } });
-    const alphaRequests = requests.filter(({ url }) => new URL(url).hostname === "alpha.example");
-    const betaRequests = requests.filter(({ url }) => new URL(url).hostname === "beta.example");
-    expectAccountRequests(alphaRequests, "alpha");
-    expectAccountRequests(betaRequests, "beta");
-    expect(requestPaths(alphaRequests)).toEqual(["POST /api/dms"]);
-    expect(requestPaths(betaRequests)).toEqual([
-      "POST /api/dms",
-      "POST /api/dms/dcn_beta/messages",
-    ]);
-    expect(alphaRequests[0]?.body).toEqual({
-      workspace_id: "wsp_alpha",
-      member_ids: ["usr_alpha"],
-    });
-    expect(betaRequests[0]?.body).toEqual({
-      workspace_id: "wsp_beta",
-      member_ids: ["usr_beta"],
-    });
+    expectAccountConversation(requests, "alpha", false);
+    const betaRequests = expectAccountConversation(requests, "beta", true);
     expect(betaRequests[1]?.body).toEqual({
       body: "Beta reply",
       quoted_message_id: "msg_quote",

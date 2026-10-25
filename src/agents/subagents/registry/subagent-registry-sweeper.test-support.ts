@@ -45,8 +45,9 @@ export function createArchivedSubagentSweeperRun(
 export function createSubagentSweeperHarness(
   runtime: { current?: GatewayRecoveryRuntime },
   entry = createSubagentSweeperRun(),
+  runs = new Map<string, SubagentRunRecord>(),
 ) {
-  const runs = new Map([[entry.runId, entry]]);
+  runs.set(entry.runId, entry);
   const execute = stateWorker.runOpenClawStateWorkerOperation;
   const worker = vi
     .spyOn(stateWorker, "runOpenClawStateWorkerOperation")

@@ -15,6 +15,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveUserPath } from "../../utils.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
@@ -44,7 +45,6 @@ import { withAdmittedCliCandidate } from "../embedded-agent-runner/run-entry-cli
 import { resolveRunEntryCliRuntime } from "../embedded-agent-runner/run-entry-runtime.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
-import { resolveWebchatPromptCacheKey } from "../embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { buildAgentInternalEventContext as buildEventContext } from "../internal-events.js";
@@ -65,6 +65,7 @@ import { withPreparedSessionCapabilityRead } from "../subagents/spawn/subagent-s
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
+  createCommandSuccessfulAuthProfileCallback,
   resolveCommandAuthProfileSelection,
   resolveHarnessAuthProfileSelection,
 } from "./attempt-auth-selection.js";
@@ -77,6 +78,7 @@ import {
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
+import { assertSandboxedDelegatedChildNotCli } from "./attempt-sandbox-cli-admission.js";
 import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -208,6 +210,18 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(params.sessionEntry),
       });
+  // Sandboxed delegated children never dispatch to host-executed CLI backends;
+  // spawn admission checks once the child model is resolved, and this run-seam
+  // guard owns the invariant for fallback candidates and post-spawn runtime
+  // overrides (the CLI runs on the host while the session is reported sandboxed).
+  assertSandboxedDelegatedChildNotCli({
+    useCliExecution: isCliExecutionProvider,
+    cliExecutionProvider,
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    sessionAgentId: params.sessionAgentId,
+    sessionEntry: params.sessionEntry,
+  });
   const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools } =
     resolveCompletionToolPolicy({
       run: params,
@@ -306,16 +320,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
-      // Internal continuations keep the affinity of the persisted webchat conversation.
-      promptCacheKey:
-        params.sessionEntry?.delivery?.kind === "internal" && params.sessionKey
-          ? resolveWebchatPromptCacheKey({
-              agentId: params.sessionAgentId,
-              provider: params.providerOverride,
-              model: params.modelOverride,
-              sessionKey: params.sessionKey,
-            })
-          : undefined,
       chatType: params.sessionEntry?.chatType,
       contextWindow: params.sessionEntry?.contextWindow,
       agentId: params.sessionAgentId,
@@ -741,17 +745,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     authProfileFailurePolicy: params.authProfileFailurePolicy,
     onCompactionAccounting: params.onCompactionAccounting,
     onCompactionRequestBudget: params.onCompactionRequestBudget,
-    onSuccessfulAuthProfile: params.onSuccessfulAuthProfile
-      ? (successfulProfileId) =>
-          params.onSuccessfulAuthProfile?.({
-            authProfileId: successfulProfileId,
-            authProfileIdSource: successfulProfileId
-              ? successfulProfileId === authProfileId
-                ? harnessAuthSelection.authProfileIdSource
-                : "auto"
-              : undefined,
-          })
-      : undefined,
+    onSuccessfulAuthProfile: createCommandSuccessfulAuthProfileCallback(params, {
+      authProfileId,
+      authProfileIdSource: harnessAuthSelection.authProfileIdSource,
+    }),
     onExecutionStarted: async (info) => {
       await params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {
@@ -760,6 +757,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     },
     onSessionIdChanged: params.opts.onSessionIdChanged,
   };
+  embeddedRunParams.joinObservation = captureReplyMessageJoinObservation({
+    run: { ...embeddedRunParams, sessionFile: params.sessionFile },
+    sessionEntry: params.sessionEntry,
+  });
   setChannelSourceTurnId(embeddedRunParams, readChannelSourceTurnId(params.runContext));
   setChannelSourceTurnSameThreadRequired(
     embeddedRunParams,

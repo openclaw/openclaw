@@ -66,16 +66,11 @@ const EXT_BY_MIME: Record<string, string> = {
   "application/xml": ".xml",
 };
 
-function buildMimeByExt(): Record<string, string> {
-  const byExt: Record<string, string> = {};
-  for (const [mime, ext] of Object.entries(EXT_BY_MIME)) {
-    byExt[ext] ??= mime;
-  }
-  return byExt;
+const MIME_BY_EXT: Record<string, string> = {};
+for (const [mime, ext] of Object.entries(EXT_BY_MIME)) {
+  MIME_BY_EXT[ext] ??= mime;
 }
-
-const MIME_BY_EXT: Record<string, string> = {
-  ...buildMimeByExt(),
+Object.assign(MIME_BY_EXT, {
   // Canonical extension mappings for common MIME aliases
   ".jpg": "image/jpeg",
   ".m2a": "audio/mpeg",
@@ -97,7 +92,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ".tsv": "text/tab-separated-values",
   ".xml": "text/xml",
   ".yml": "application/yaml",
-};
+});
 
 const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
   "audio/mp4": "video/mp4",

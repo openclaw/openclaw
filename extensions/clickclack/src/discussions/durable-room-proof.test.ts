@@ -2,6 +2,7 @@ import "./service-http-mock.test-support.js";
 import "./session-authority.test-support.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackAccount } from "../accounts.js";
 import { handleClickClackInbound } from "../inbound.js";
@@ -12,11 +13,7 @@ import { discussionChannel, MANAGED_CONTRACT_FIELDS } from "./service-test-suppo
 import { ClickClackDiscussionService } from "./service.js";
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  const text = Buffer.concat(chunks).toString("utf8");
+  const text = (await consumeBuffer(req)).toString("utf8");
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 }
 
@@ -155,8 +152,9 @@ describe("ClickClack durable room real-behavior proof", () => {
       }),
     );
 
-    sessionEntry = { ...sessionEntry!, archivedAt: 2 };
+    sessionEntry = { ...sessionEntry!, label: "Archived rename ignored", archivedAt: 2 };
     await service.reconcile(sessionKey);
+    expect(remote.patches).toHaveLength(0);
     sessionEntry = { sessionId: "session-reset", label: "Durable proof room", updatedAt: 3 };
     await service.reconcile(sessionKey);
     sessionEntry = undefined;

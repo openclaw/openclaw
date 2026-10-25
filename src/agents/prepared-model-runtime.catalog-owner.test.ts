@@ -60,11 +60,11 @@ function setCatalogApiKey(
   });
 }
 
-function holdCatalogWrite(agentDir: string) {
+function holdCatalogWrite() {
   const started = createDeferred();
-  const result = createDeferred<{ agentDir: string; wrote: false }>();
+  const result = createDeferred<Record<string, never>>();
   const pending: Promise<unknown>[] = [];
-  const release = () => result.resolve({ agentDir, wrote: false });
+  const release = () => result.resolve({});
   mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
     started.resolve();
     return await result.promise;
@@ -143,8 +143,8 @@ describe("prepared catalog owner lifecycle", () => {
     const workspaceDir = "/tmp/fresh-workspace";
     mocks.configuredWorkspaces.set("alpha", workspaceDir);
     const config = { plugins: {} };
-    await using source = holdCatalogWrite(agentDir);
-    await using auth = holdCatalogWrite(agentDir);
+    await using source = holdCatalogWrite();
+    await using auth = holdCatalogWrite();
     const phases: string[] = [];
     const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) =>
       phases.push(phase),
@@ -199,7 +199,7 @@ describe("prepared catalog owner lifecycle", () => {
     mocks.configuredAgentIds = ["beta"];
     mocks.configuredAgentDirs.set("beta", agentDir);
     const freshInput = { ...input, config: { plugins: {} } };
-    await using source = holdCatalogWrite(agentDir);
+    await using source = holdCatalogWrite();
     const fresh = source.track(publishPreparedModelRuntimeSnapshot(freshInput, { force: true }));
     void fresh.catch(() => undefined);
     await source.started;
@@ -295,7 +295,7 @@ describe("prepared build candidate lifetime", () => {
       } else {
         mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
           await wait();
-          return { agentDir: input.agentDir, wrote: false };
+          return {};
         });
       }
       using builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
@@ -347,7 +347,7 @@ describe("prepared build candidate lifetime", () => {
     "serializes conflicting %s publications for one catalog owner",
     async (kind) => {
       const agentDir = fixture.state.agentDir("serial-publication");
-      await using write = holdCatalogWrite(agentDir);
+      await using write = holdCatalogWrite();
       const workspace = kind === "workspace";
       const firstInput = {
         config: {},

@@ -145,14 +145,12 @@ describe("subagent registry sqlite store", () => {
     expect(loadSubagentRegistryFromSqlite().has(bound.runId)).toBe(false);
 
     saveSubagentRegistryChangesToSqlite(new Map([[bound.runId, bound]]), [bound.runId]);
-    expect(loadSubagentRegistryFromSqlite().get(bound.runId)).toMatchObject({
+    const stores = {
       requesterStorePath: bound.requesterStorePath,
       controllerStorePath: bound.controllerStorePath,
-    });
-    expect(readCompact().get(bound.runId)).toMatchObject({
-      requesterStorePath: bound.requesterStorePath,
-      controllerStorePath: bound.controllerStorePath,
-    });
+    };
+    expect(loadSubagentRegistryFromSqlite().get(bound.runId)).toMatchObject(stores);
+    expect(readCompact().get(bound.runId)).toMatchObject(stores);
     expect(loadSubagentRegistryFromSqlite().get(legacy.runId)?.requesterStorePath).toBeUndefined();
     const columns = current.db.prepare("PRAGMA table_info(subagent_runs)").all();
     for (const name of ["requester_store_path", "controller_store_path"]) {
@@ -606,19 +604,12 @@ describe("subagent registry sqlite store", () => {
     });
     saveRuns(run);
 
-    const { db } = openOpenClawStateDatabase();
-    const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .updateTable("subagent_runs")
-        .set({
-          payload_json: JSON.stringify({
-            ...run,
-            delivery: { status: "delivered", announcedAt: 300, deliveredAt: 300 },
-          }),
-        })
-        .where("run_id", "=", run.runId),
+    writePayload(
+      run.runId,
+      JSON.stringify({
+        ...run,
+        delivery: { status: "delivered", announcedAt: 300, deliveredAt: 300 },
+      }),
     );
 
     const restoredRun = loadSubagentRegistryFromSqlite().get(run.runId)!;

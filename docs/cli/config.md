@@ -82,7 +82,7 @@ openclaw config schema --json
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set browser.profiles.work '{"cdpPort":18801,"executablePath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}' --strict-json --merge
-openclaw config set agents.defaults.heartbeat.every "2h"
+openclaw config set agents.defaults.userTimezone "Europe/Vienna"
 openclaw config set logging.audit.executionIdentity true
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
@@ -242,7 +242,7 @@ the provider docs and verify behavior on the selected runtime and provider.
 Values parse as JSON5 when possible; otherwise they are treated as raw strings. Use `--strict-json` to require standard JSON with no string fallback (JSON5-only syntax such as comments, trailing commas, or unquoted keys is then rejected). `--json` is a legacy alias for `--strict-json` on `config set`.
 
 ```bash
-openclaw config set agents.defaults.heartbeat.every "0m"
+openclaw config set agents.defaults.typingMode "never"
 openclaw config set gateway.port 19001 --strict-json
 openclaw config set channels.whatsapp.groups '{"*":{"requireMention":true}}' --strict-json
 ```
@@ -254,6 +254,10 @@ For structured values that are awkward to quote in your shell, put a config-shap
 When a model uses string shorthand, setting its `fallbacks` or a supported tool-model `timeoutMs` preserves that string as `primary`. This also applies to chat `/config set`. Setting `primary` explicitly replaces the primary, and setting the whole model still replaces the whole value.
 
 When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured catalogs and the selected provider's model resolver before writing. Provider-supported exact `provider/model` pins are accepted even when absent from the curated picker; validation does not replace the selected model. Unknown model references are rejected without changing the active config. Refusals for newly authored per-agent references include the entered value and resolver reason; inherited values and environment-expanded details remain redacted. Run `openclaw models list` to browse the picker, or check the provider's documentation for an exact model ID. Successful validation does not prove that your account can call the model. [`openclaw models set`](/cli/models#common-commands) is deliberately more permissive for the same setting: it saves a model the local catalog cannot confirm and prints a warning instead of rejecting the write.
+
+Provider registration during model validation sees the full candidate config,
+including other values in the same patch. A provider-specific option and its
+supported model choice can therefore change atomically.
 
 <Note>
 Object assignment replaces the target path by default. Protected paths that commonly hold user-added entries refuse replacements that would remove existing entries unless you pass `--replace`: `agents.defaults.models`, `agents.entries`, `models.providers`, `models.providers.<id>`, `models.providers.<id>.models`, `plugins.entries`, and `auth.profiles`.

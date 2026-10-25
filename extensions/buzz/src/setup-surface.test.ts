@@ -10,11 +10,12 @@ import {
   type SecretInput,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { BuzzConfigInput } from "./config-schema.js";
 import { waitForBuzzRoomAccess } from "./room-access-wait.js";
 import { discoverBuzzRooms } from "./room-discovery.js";
+import { buzzSetupContract as setup } from "./setup-core.js";
 import { buzzSetupWizard } from "./setup-surface.js";
 import { verifyBuzzAfterSetup } from "./setup-verify.js";
 
@@ -90,7 +91,7 @@ function createCredentialConfig(
       ? { ...selectedAccount, accounts: { ada: healthyAccount } }
       : { ...healthyAccount, accounts: { ada: selectedAccount } },
   );
-  return { cfg, healthyAccount };
+  return { cfg, healthyAccount, selectedAccount };
 }
 
 async function createStoredCredentials(source: "env" | "file") {
@@ -176,7 +177,7 @@ it.each([false, true])(
     const root = {
       name: "Root",
       relayUrl: "wss://root.example.com",
-      privateKey: "11".repeat(32),
+      privateKey: { source: "env" as const, provider: "default", id: "BUZZ_EXISTING_KEY" },
       groups: { [ROOM_A]: {} },
     };
     const roomIds = named ? [ROOM_B] : [ROOM_A, ROOM_B];
@@ -215,7 +216,6 @@ it.each([false, true])(
       named ? { ...root, accounts: { ada: expected } } : expected,
     );
     expect(discoverRooms).toHaveBeenCalledWith({ relayUrl, privateKey: PRIVATE_KEY });
-    expect(result.cfg.channels?.buzz?.authTag).toBeUndefined();
     expect(
       vi.mocked(prompter.note).mock.calls.some(([message]) => message.includes(PRIVATE_KEY)),
     ).toBe(false);
@@ -251,10 +251,6 @@ it("keeps generated identities stable per account across wizard replay", async (
   expect(root).toEqual(cfg.channels!.buzz);
   expect(ada.cfg.channels?.buzz?.accounts?.ada?.groups).toEqual({
     [ROOM_B]: { enabled: true, requireMention: false },
-  });
-  expect(discoverRooms).toHaveBeenCalledWith({
-    relayUrl: "wss://buzz.example.com",
-    privateKey: PRIVATE_KEY,
   });
 });
 
@@ -318,15 +314,6 @@ it.each(["retry", "wait"] as const)(
       expect(prompter.note).toHaveBeenCalledWith(
         expect.stringContaining("Local `just dev` needs no separate community-member step"),
         "Buzz room access required",
-      );
-      expect(prompter.text).not.toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining("room UUID") }),
-      );
-      expect(prompter.select).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Buzz room access is not ready",
-          initialValue: "retry",
-        }),
       );
     }
   },
@@ -398,7 +385,7 @@ it.each([
     poisonAmbientCredentials();
     const stored = await createStoredCredentials(source);
     const configuredKey = stored.privateKey;
-    const { cfg, healthyAccount } = createCredentialConfig(
+    const { cfg, healthyAccount, selectedAccount } = createCredentialConfig(
       accountId,
       configuredKey,
       stored.authTag,
@@ -419,13 +406,9 @@ it.each([
     const { accounts, ...root } = result.cfg.channels!.buzz!;
     const selected = accountId === "default" ? root : accounts.ada;
     expect(accountId === "default" ? accounts.ada : root).toEqual(healthyAccount);
-    expect(selected).toMatchObject({
-      enabled: true,
-      privateKey: configuredKey,
-      authTag: stored.authTag,
-      groupPolicy: "allowlist",
-      groupAllowFrom: [],
-      groups: { [ROOM_A]: { enabled: true, requireMention: false, groupAllowFrom: [] } },
+    expect(selected).toEqual({
+      ...selectedAccount,
+      groups: { [ROOM_A]: { ...selectedAccount.groups[ROOM_A], enabled: true } },
       defaultTo: ROOM_A,
     });
     expect(cfg).toEqual(before);
@@ -471,3 +454,75 @@ it.each([
     expect(onPostWriteHook).not.toHaveBeenCalled();
   },
 );
+
+const ORIGINAL = { enabled: false, relayUrl: "wss://original.example.com", authTag: AUTH_TAG };
+const envInput = { relayUrl: "wss://buzz.example.com", useEnv: true };
+type SetupInput = Parameters<typeof setup.applyAccountConfig>[0]["input"];
+
+function identity(name: string, key: string) {
+  return { name, relayUrl: `wss://${name.toLowerCase()}.example.com`, privateKey: key.repeat(32) };
+}
+
+function apply(cfg: OpenClawConfig, input: SetupInput, accountId = "default") {
+  return setup.applyAccountConfig({ cfg, accountId, input });
+}
+
+describe("buzzSetupContract", () => {
+  it("rejects named environment-backed setup without changing the existing bot identity", () => {
+    const existingPrivateKey = "11".repeat(32);
+    vi.stubEnv("BUZZ_PRIVATE_KEY", existingPrivateKey);
+    const buzz = ORIGINAL;
+    const cfg = config(buzz);
+    const input = { relayUrl: "wss://new.example.com", useEnv: true };
+    const accountId = setup.resolveAccountId?.({ cfg, accountId: "ada", input }) ?? "ada";
+
+    expect(accountId).toBe("ada");
+    expect(setup.validateInput?.({ cfg, accountId, input })).toBe(
+      "Buzz --use-env is only supported for the root default identity; use an explicit private key or SecretRef for this account.",
+    );
+    expect(cfg.channels?.buzz).toEqual(buzz);
+    expect(process.env.BUZZ_PRIVATE_KEY).toBe(existingPrivateKey);
+  });
+
+  it("renames and reconfigures the explicit default identity without changing siblings", () => {
+    const root = identity("Root", "11");
+    const accounts = { ada: identity("Ada", "22"), default: identity("Default", "33") };
+    const cfg = config({ ...root, accounts });
+    const before = structuredClone(cfg);
+    const accountId = "default";
+    const renamed = setup.applyAccountName!({ cfg, accountId, name: " Renamed " });
+    const replacement = { relayUrl: "wss://new.example.com", privateKey: "44".repeat(32) };
+    expect(setup.validateInput?.({ cfg: renamed, accountId, input: replacement })).toBeNull();
+    const result = apply(renamed, replacement);
+    expect(result.channels?.buzz).toEqual({
+      ...root,
+      accounts: { ...accounts, [accountId]: { ...replacement, name: "Renamed", enabled: true } },
+    });
+    expect(cfg).toEqual(before);
+  });
+
+  it.each([
+    { name: "stored key", privateKey: "11".repeat(32) },
+    {
+      name: "unresolved SecretRef",
+      privateKey: { source: "env" as const, provider: "default", id: "OTHER_BUZZ_KEY" },
+    },
+  ])("replaces $name with the environment without storing credentials", ({ privateKey }) => {
+    expect(setup.validateInput?.({ cfg: {}, accountId: "default", input: envInput })).toBeNull();
+    vi.stubEnv("BUZZ_PRIVATE_KEY", "22".repeat(32));
+    const cfg = config({
+      enabled: true,
+      relayUrl: "wss://old.example.com",
+      privateKey,
+      authTag: AUTH_TAG,
+    });
+
+    const result = apply(cfg, { ...envInput, name: " Environment bot " });
+
+    expect(result.channels?.buzz).toEqual({
+      name: "Environment bot",
+      enabled: true,
+      relayUrl: "wss://buzz.example.com",
+    });
+  });
+});

@@ -58,12 +58,14 @@ import {
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
+import { serveWorkerMemorySamples } from "./worker-memory.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 if (!parentPort) {
   throw new Error("SQLite store worker requires its host port");
 }
 const port = parentPort;
+serveWorkerMemorySamples(port);
 // Results use the host port; diagnostics must preserve the caller's structured stdout.
 routeLogsToStderr();
 type PreparedPostgresBridge = ReturnType<
@@ -564,14 +566,14 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       };
     }
   } catch (error) {
-    const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
-    if (openNotEntered || refusedOpen) {
+    const refusedBeforeAgentOpen = error instanceof SqliteWorkerOpenRefusedError;
+    if (openNotEntered || (request.type === "open" && refusedBeforeAgentOpen)) {
       stateContexts.delete(request.actor);
     }
     transfers.cancel();
     pendingResult = undefined;
     pendingInput = undefined;
-    const originalError = refusedOpen ? error.originalError : error;
+    const originalError = refusedBeforeAgentOpen ? error.originalError : error;
     const admissionRefused =
       commandAdmissionRefused ||
       (operationAdmission?.actor === request.actor &&
@@ -590,7 +592,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       id: request.id,
       ok: false,
       ...(retire || (nativeCleanupFailure && executed) ? { retire: true } : {}),
-      ...(refusedOpen ? { openOutcome: "refused-before-agent-open" } : {}),
+      ...(refusedBeforeAgentOpen ? { openOutcome: "refused-before-agent-open" } : {}),
       ...(openNotEntered ? { openNotEntered: true } : {}),
       ...(admissionRefused ? { admissionRefused: true } : {}),
       error: {

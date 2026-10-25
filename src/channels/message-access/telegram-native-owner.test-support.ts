@@ -1,4 +1,4 @@
-import { beforeAll, expect, vi } from "vitest";
+import { beforeAll, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
   ModelsAuthLoginFlowOptions,
@@ -91,13 +91,12 @@ async function createFixture(asserted: boolean, state: OpenClawTestState) {
     ctx.assertOwnerCurrent?.();
     return { text: "TELEGRAM-OWNER-OK" };
   });
-  const registered = registerPluginCommand("owner-probe", {
+  registerPluginCommand("owner-probe", {
     name: "qaowner",
     description: "Owner authority probe",
     requiredScopes: ["operator.admin"],
     handler,
   });
-  expect(registered).toEqual({ ok: true });
   const runtime = createPluginRuntimeMock({
     channel: {
       inbound: {

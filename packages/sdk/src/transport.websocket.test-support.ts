@@ -1,12 +1,13 @@
 import { once } from "node:events";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, WebSocketServer } from "ws";
 
 type Request = { id: string; method: string; params: Record<string, unknown> };
 
-export async function createSdkWebSocketServer() {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+export async function createSdkWebSocketServer(port = 0) {
+  const server = new WebSocketServer({ host: "127.0.0.1", port });
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -33,7 +34,7 @@ export async function createSdkWebSocketServer() {
       if (request.method === "connect") {
         reply(socket, request.id, {
           type: "hello-ok",
-          protocol: 4,
+          protocol: PROTOCOL_VERSION,
           server: { version: "sdk-live", connId: "sdk-live-connection" },
           features: { methods: ["connect"], events: ["chat", "agent"] },
           snapshot: {

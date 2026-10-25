@@ -55,25 +55,6 @@ export function assignPositiveNumberAttr(
   }
 }
 
-function modelCallPromptTokens(usage: {
-  promptTokens?: number;
-  input?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-}): number | undefined {
-  const promptTokens = asNonNegativeFiniteNumber(usage.promptTokens);
-  if (promptTokens !== undefined) {
-    return promptTokens;
-  }
-  const input = asNonNegativeFiniteNumber(usage.input);
-  const cacheRead = asNonNegativeFiniteNumber(usage.cacheRead);
-  const cacheWrite = asNonNegativeFiniteNumber(usage.cacheWrite);
-  if (input === undefined && cacheRead === undefined && cacheWrite === undefined) {
-    return undefined;
-  }
-  return (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
-}
-
 export function assignModelCallPromptStatsAttrs(
   attrs: Record<string, string | number | boolean>,
   evt: Pick<Extract<DiagnosticEventPayload, { type: "model.call.started" }>, "promptStats">,
@@ -101,7 +82,20 @@ export function assignModelCallUsageAttrs(
   attrs: Record<string, string | number | boolean>,
   evt: Pick<ModelCallLifecycleDiagnosticEvent, "usage">,
 ): void {
-  assignModelUsageAttrs(attrs, evt.usage, evt.usage && modelCallPromptTokens(evt.usage));
+  const usage = evt.usage;
+  if (!usage) {
+    return;
+  }
+  let promptTokens = asNonNegativeFiniteNumber(usage.promptTokens);
+  if (promptTokens === undefined) {
+    const input = asNonNegativeFiniteNumber(usage.input);
+    const cacheRead = asNonNegativeFiniteNumber(usage.cacheRead);
+    const cacheWrite = asNonNegativeFiniteNumber(usage.cacheWrite);
+    if (input !== undefined || cacheRead !== undefined || cacheWrite !== undefined) {
+      promptTokens = (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+    }
+  }
+  assignModelUsageAttrs(attrs, usage, promptTokens);
 }
 
 export function assignModelResponseUsageAttrs(
@@ -124,6 +118,9 @@ function assignModelUsageAttrs(
     ["openclaw.model_call.usage.output_tokens", usage.output],
     ["openclaw.model_call.usage.cache_read_input_tokens", usage.cacheRead],
     ["openclaw.model_call.usage.cache_creation_input_tokens", usage.cacheWrite],
+    // Generic consumers add usage buckets, so TTL subsets stay OpenClaw-specific.
+    ["openclaw.model_call.usage.cache_creation_input_tokens_1h", usage.cacheWrite1h],
+    ["openclaw.model_call.usage.cache_creation_input_tokens_5m", usage.cacheWrite5m],
     ["openclaw.model_call.usage.reasoning_output_tokens", usage.reasoningTokens],
     ["openclaw.model_call.usage.prompt_tokens", promptTokens],
     ["openclaw.model_call.usage.total_tokens", usage.total],
@@ -136,17 +133,6 @@ function assignModelUsageAttrs(
     if (normalized !== undefined) {
       attrs[key] = normalized;
     }
-  }
-  // Langfuse prices these generic keys by TTL; preserve the provider's reported buckets verbatim.
-  const reportedCacheWrite1h = asNonNegativeFiniteNumber(usage.cacheWrite1h);
-  if (reportedCacheWrite1h !== undefined) {
-    attrs["gen_ai.usage.input_cache_creation_1h"] = reportedCacheWrite1h;
-    attrs["openclaw.model_call.usage.cache_creation_input_tokens_1h"] = reportedCacheWrite1h;
-  }
-  const reportedCacheWrite5m = asNonNegativeFiniteNumber(usage.cacheWrite5m);
-  if (reportedCacheWrite5m !== undefined) {
-    attrs["gen_ai.usage.input_cache_creation_5m"] = reportedCacheWrite5m;
-    attrs["openclaw.model_call.usage.cache_creation_input_tokens_5m"] = reportedCacheWrite5m;
   }
 }
 

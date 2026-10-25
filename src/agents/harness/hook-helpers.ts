@@ -36,7 +36,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
     await hookRunner.runAfterToolCall(
       {
         toolName: params.toolName,
-        params: resolvedArgs,
+        params: structuredClone(resolvedArgs),
         ...(params.runId ? { runId: params.runId } : {}),
         toolCallId: params.toolCallId,
         ...(params.result ? { result: params.result } : {}),

@@ -107,26 +107,20 @@ describe("memory index", () => {
     await manager.sync({ reason: "test", force: true });
     const first = await manager.search("orchid", { minScore: 0 });
     expect(first).toEqual(matchingHit({ path: "memory/published.md" }));
-    const reads = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexRead");
-    const keyword = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryKeywordSearch");
-    const state = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexState");
-    try {
-      expect(await manager.search("orchid", { minScore: 0 })).toEqual(first);
-      expect(await manager.search("orchid", { minScore: 0 })).toEqual(first);
-      expect(reads.mock.calls.filter(([, command]) => command.type === "index.facts")).toEqual([]);
-      expect(state).not.toHaveBeenCalled();
-      expect(keyword.mock.calls.map((call) => call[3])).toEqual([false, false]);
+    using reads = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexRead");
+    using keyword = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryKeywordSearch");
+    using state = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexState");
+    expect(await manager.search("orchid", { minScore: 0 })).toEqual(first);
+    expect(await manager.search("orchid", { minScore: 0 })).toEqual(first);
+    expect(reads.mock.calls.filter(([, command]) => command.type === "index.facts")).toEqual([]);
+    expect(state).not.toHaveBeenCalled();
+    expect(keyword.mock.calls.map((call) => call[3])).toEqual([false, false]);
 
-      await fs.writeFile(publishedPath, "iris publication canary");
-      await manager.sync({ reason: "test" });
-      expect(await manager.search("iris publication canary", { minScore: 0 })).toEqual(
-        matchingHit({ path: "memory/published.md" }),
-      );
-    } finally {
-      reads.mockRestore();
-      keyword.mockRestore();
-      state.mockRestore();
-    }
+    await fs.writeFile(publishedPath, "iris publication canary");
+    await manager.sync({ reason: "test" });
+    expect(await manager.search("iris publication canary", { minScore: 0 })).toEqual(
+      matchingHit({ path: "memory/published.md" }),
+    );
   });
 
   it("invalidates keyword snapshots before changing the fallback provider", async () => {
@@ -264,7 +258,7 @@ describe("memory index", () => {
     const caller = new AbortController();
     const abortReason = new Error("caller stopped keyword memory search");
     const runKeywordSearch = memoryCpuWorkerRuntime.runMemoryKeywordSearch;
-    const keywordSpy = vi
+    using keywordSpy = vi
       .spyOn(memoryCpuWorkerRuntime, "runMemoryKeywordSearch")
       .mockImplementationOnce((...args) => {
         const pending = runKeywordSearch(...args);
@@ -273,16 +267,12 @@ describe("memory index", () => {
       });
     const embeddingCalls = providerFixture.embedQueryCalls;
 
-    try {
-      await expect(
-        manager.search("zebra", { signal: caller.signal, lexicalOnly: false }),
-      ).rejects.toBe(abortReason);
-      expect(keywordSpy).toHaveBeenCalledTimes(1);
-      expect(providerFixture.embedQueryCalls).toBe(embeddingCalls);
-      expectFixtureHit(await manager.search("zebra", { lexicalOnly: false }));
-    } finally {
-      keywordSpy.mockRestore();
-    }
+    await expect(
+      manager.search("zebra", { signal: caller.signal, lexicalOnly: false }),
+    ).rejects.toBe(abortReason);
+    expect(keywordSpy).toHaveBeenCalledTimes(1);
+    expect(providerFixture.embedQueryCalls).toBe(embeddingCalls);
+    expectFixtureHit(await manager.search("zebra", { lexicalOnly: false }));
   });
 
   it.each(["bootstrap", "vector"])(
@@ -312,7 +302,7 @@ describe("memory index", () => {
       } else {
         occupyAdmission();
       }
-      const vectorSearch = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryVectorFallback");
+      using vectorSearch = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryVectorFallback");
       const query = mode === "vector" ? "alpha zebra" : "zebra";
       const embeddingCalls = providerFixture.embedQueryCalls;
       try {
@@ -328,7 +318,6 @@ describe("memory index", () => {
         }
       } finally {
         providerFixture.beforeEmbedQuery = null;
-        vectorSearch.mockRestore();
         const closed = capacityOwner.close();
         preparation.reject(new Error("release test capacity"));
         await closed;
@@ -362,18 +351,16 @@ describe("memory index", () => {
     const caller = new AbortController();
     const abortReason = new Error("caller stopped hybrid memory search");
     const runVectorFallback = memoryCpuWorkerRuntime.runMemoryVectorFallback;
-    const vectorSpy = vi
-      .spyOn(memoryCpuWorkerRuntime, "runMemoryVectorFallback")
-      .mockImplementationOnce((...args) => {
-        const pending = runVectorFallback(...args);
-        caller.abort(abortReason);
-        return pending;
-      });
-    try {
+    {
+      using vectorSpy = vi
+        .spyOn(memoryCpuWorkerRuntime, "runMemoryVectorFallback")
+        .mockImplementationOnce((...args) => {
+          const pending = runVectorFallback(...args);
+          caller.abort(abortReason);
+          return pending;
+        });
       await expect(manager.search("alpha", { signal: caller.signal })).rejects.toBe(abortReason);
       expect(vectorSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      vectorSpy.mockRestore();
     }
 
     expectFixtureHit(await manager.search("alpha"));
@@ -391,23 +378,19 @@ describe("memory index", () => {
   it("keeps zero-hit keyword fallback in one provider-backed worker request", async () => {
     const manager = await syncedManager({ minScore: 0.35 });
 
-    const keywordSpy = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryKeywordSearch");
+    using keywordSpy = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryKeywordSearch");
     const partialResults = vi.fn();
 
-    try {
-      const results = await manager.search(
-        "zebra project router gateway session transcript approval command owner workspace token budget retry queue",
-        { maxResults: 5, onPartialResults: partialResults },
-      );
+    const results = await manager.search(
+      "zebra project router gateway session transcript approval command owner workspace token budget retry queue",
+      { maxResults: 5, onPartialResults: partialResults },
+    );
 
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-      expect(results.length).toBeLessThanOrEqual(5);
-      expect(partialResults).toHaveBeenCalledWith(matchingHit());
-      expect(keywordSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      keywordSpy.mockRestore();
-    }
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.path).toContain("memory/2026-01-12.md");
+    expect(results.length).toBeLessThanOrEqual(5);
+    expect(partialResults).toHaveBeenCalledWith(matchingHit());
+    expect(keywordSpy).toHaveBeenCalledTimes(1);
   });
 
   it("keeps remember-only session transcripts out of ordinary manager searches", async () => {
@@ -589,7 +572,7 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps transient CLI search off the serving manager write path", async () => {
+  it("publishes transient CLI search maintenance before close, off the serving write path", async () => {
     const cfg = keywordConfig();
     const initialManager = await getFreshManager(cfg, "cli");
     await initialManager.sync({ reason: "test", force: true });
@@ -604,6 +587,16 @@ describe("memory index", () => {
     const servingSync = vi.spyOn(servingFields, "syncMemoryFiles");
     let closePromise: Promise<void> | undefined;
     const maintenance = pauseMaintenance();
+    const idleEntered = createDeferred<void>();
+    const awaitIdle = serving(manager).awaitManagerIdle.bind(manager);
+    const idleSettled = vi.fn();
+    using idle = vi.spyOn(serving(manager), "awaitManagerIdle");
+    idle.mockImplementation(() => {
+      const pending = awaitIdle();
+      void pending.then(idleSettled, idleSettled);
+      idleEntered.resolve();
+      return pending;
+    });
 
     try {
       const search = manager.search("zebra", {
@@ -615,17 +608,33 @@ describe("memory index", () => {
       expectFixtureHit(await search);
       expect(servingSync).not.toHaveBeenCalled();
       closePromise = manager.close();
-      let closeSettled = false;
-      void closePromise.then(() => {
-        closeSettled = true;
-      });
-      await vi.waitFor(() => expect(closeSettled).toBe(true));
+      // Teardown must not release the connection the paused maintenance writes through.
+      await idleEntered.promise;
+      expect(idleSettled).not.toHaveBeenCalled();
       expect(maintenance.state.closed).toBe(false);
+      maintenance.release();
+      await closePromise;
+      expect(maintenance.state.closed).toBe(true);
     } finally {
       maintenance.release();
       await closePromise;
       maintenance.spy.mockRestore();
       await manager.close?.();
+    }
+
+    // A standalone CLI process exits after close; the refresh it started is published.
+    const next = await getFreshManager(cfg, "cli");
+    try {
+      expect(
+        await next.search("transient", {
+          maxResults: 5,
+          minScore: 0,
+          sessionKey: "agent:main:cli:memory-search",
+        }),
+      ).toEqual(matchingHit({ path: "memory/cli-refresh.md" }));
+      expect(next.status().lastSyncError).toBeUndefined();
+    } finally {
+      await next.close?.();
     }
   });
 

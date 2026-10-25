@@ -386,7 +386,13 @@ it("normalizes negative agentTurn timeouts without inventing no-timeout", () => 
 });
 
 it("promotes implicit text payloads with agentTurn hints to agentTurn create jobs", () => {
-  const options = { timeoutSeconds: 45, lightContext: true, allowUnsafeExternalContent: true };
+  const options = {
+    timeoutSeconds: 45,
+    lightContext: true,
+    skipIfScratchEmpty: true,
+    includeReasoning: false,
+    allowUnsafeExternalContent: true,
+  };
   const normalized = createDefaulted({
     text: " summarize the build ",
     model: " openai/gpt-5 ",
@@ -409,6 +415,10 @@ it("promotes implicit text payloads with agentTurn hints to agentTurn create job
   expect(validateCronAddParams(normalized)).toBe(true);
 });
 it.each<[UnknownRecord, UnknownRecord]>([
+  [
+    { message: " \tCheck the inbox.\r\n  NO_REPLY when quiet.\n ", text: " text " },
+    { message: " \tCheck the inbox.\r\n  NO_REPLY when quiet.\n ", text: "text" },
+  ],
   [
     { message: 7, text: null, model: {}, thinking: false, fallbacks: [7], toolsAllow: "read" },
     { message: 7, text: null },

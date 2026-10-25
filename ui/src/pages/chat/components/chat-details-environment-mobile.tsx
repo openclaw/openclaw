@@ -1,13 +1,22 @@
 import { onSettled, createMemo, merge, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
-import { EnvironmentAction, EnvironmentChangeCounts } from "./chat-details-environment.tsx";
+import {
+  EnvironmentAction,
+  EnvironmentChangeCounts,
+  hasEnvironmentTextChanges,
+} from "./chat-details-environment.tsx";
 import type { ChatDetailsEnvironmentProps, ChatDetailsProps } from "./chat-details-types.ts";
 import {
   createChatMachinePresentation,
   type ChatPanePlacementProps,
 } from "./chat-pane-placement.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 export type ChatDetailsEnvironmentMobileProps = Omit<
   ChatDetailsEnvironmentProps,
@@ -42,7 +51,9 @@ export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobile
   );
   const changes = () => {
     const result = props.uncommitted;
-    return result && !result.unavailableReason && result.files.length > 0 ? result : undefined;
+    return result && !result.unavailableReason && hasEnvironmentTextChanges(result)
+      ? result
+      : undefined;
   };
   return [
     <Show when={requestUncommitted()} keyed>
@@ -104,7 +115,7 @@ export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobile
                     <>
                       <Icon name="diff" />
                       <span>{t("chat.sessionDetails.changes")}</span>
-                      <EnvironmentChangeCounts result={result()} mobile />
+                      <EnvironmentChangeCounts result={result()} />
                     </>
                   )}
                 </EnvironmentAction>

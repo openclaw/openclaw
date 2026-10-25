@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -310,7 +311,21 @@ async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }
     return params.body;
   }
   if (params.bodyFile?.trim()) {
-    return await fs.readFile(params.bodyFile, "utf8");
+    const bytes = await fs.readFile(params.bodyFile);
+    // Reject before mutation: blank files would wipe an existing synthesis, and
+    // replacement decoding would turn Latin-1 bytes into U+FFFD in the vault.
+    if (!isUtf8(bytes)) {
+      throw new Error(
+        `wiki apply synthesis --body-file must be valid UTF-8: ${params.bodyFile}. Save the file as UTF-8, then retry.`,
+      );
+    }
+    const text = bytes.toString("utf8");
+    if (!text.trim()) {
+      throw new Error(
+        `wiki apply synthesis --body-file is empty: ${params.bodyFile}. Supply nonempty UTF-8 text (or use --body), then retry.`,
+      );
+    }
+    return text;
   }
   throw new Error("wiki apply synthesis requires --body or --body-file.");
 }

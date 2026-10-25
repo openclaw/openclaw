@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { afterEach, expect, it, beforeEach, describe } from "vitest";
+import { afterEach, expect, it, beforeEach, describe, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -12,6 +12,8 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { installSqliteFtsTokenizerMismatch } from "./sqlite-index-corruption.test-support.js";
+import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
 import {
   UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
   resolveUpdateCandidateStatePath,
@@ -26,7 +28,10 @@ import {
   readUpdateCandidateStateInventoryInProcess,
   snapshotUpdateCandidateState,
 } from "./update-candidate-state.js";
-import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
+import {
+  createStateSnapshotInput,
+  runUpdateCandidateSnapshotWorker,
+} from "./update-candidate-state.test-support.js";
 
 describe("snapshot inventory", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -278,6 +283,7 @@ describe("snapshot inventory", () => {
 describe("snapshot execution approvals", () => {
   const dirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
+      vi.restoreAllMocks();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     });
@@ -356,17 +362,15 @@ describe("snapshot execution approvals", () => {
           : { version: 1, defaults: { security: "full" }, agents: {} },
       );
       await fs.writeFile(sourcePath, raw);
+      if (interrupted) {
+        vi.spyOn(LegacyMigrationSourceClaim.prototype, "remove").mockRejectedValueOnce(
+          new Error("synthetic interrupted cleanup"),
+        );
+      }
       const imported = await migrateLegacyExecApprovals({
         stateDir: source,
         env,
         detected: detectLegacyExecApprovals({ stateDir: source, doctorOnlyStateMigrations: true }),
-        ...(interrupted
-          ? {
-              removeSource: () => {
-                throw new Error("synthetic interrupted cleanup");
-              },
-            }
-          : {}),
       });
       if (interrupted) {
         expect(imported.warnings.join(" ")).toContain("cleanup failed");
@@ -429,19 +433,7 @@ describe("snapshot row identities", () => {
       db.close();
     }
     const original = await fs.readFile(source);
-    const input = {
-      stateDir,
-      targetStateDir,
-      candidateRoot: fileURLToPath(new URL("../../", import.meta.url)),
-      config: {},
-      env: {
-        ...process.env,
-        OPENCLAW_HOME: root,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-        OPENCLAW_WORKSPACE_DIR: path.join(root, "workspace"),
-      },
-    };
+    const input = createStateSnapshotInput(root, stateDir, targetStateDir);
     const inventory = await readUpdateCandidateStateInventoryInProcess(input);
     await snapshotUpdateCandidateState({
       ...input,
@@ -461,5 +453,77 @@ describe("snapshot row identities", () => {
       snapshot.close();
     }
     expect(await fs.readFile(source)).toEqual(original);
+  });
+});
+
+describe("snapshot FTS integrity", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const ftsTables = ["memory_index_chunks_fts", "session_transcript_fts"];
+  const malformed = ftsTables.map(
+    (table) => `malformed inverted index for FTS5 table main.${table}`,
+  );
+
+  async function snapshotAgentDatabase(staleTables: readonly string[]) {
+    const root = tempDirs.make("candidate-fts-");
+    const stateDir = path.join(root, "source");
+    const targetStateDir = path.join(root, "rehearsal");
+    const relative = path.join("agents", "main", "agent", "openclaw-agent.sqlite");
+    const source = path.join(stateDir, relative);
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.mkdir(targetStateDir);
+    const db = openNodeSqliteDatabase(source);
+    try {
+      for (const match of AGENT_FTS_SCHEMAS.join("\n").matchAll(/CREATE VIRTUAL TABLE[^;]+;/gu)) {
+        if (!match[0].includes("content =")) {
+          db.exec(match[0]);
+        }
+      }
+      for (const table of ftsTables) {
+        db.exec(`INSERT INTO ${table}(text) VALUES ('ab'||char(65534)||'cd')`);
+      }
+      db.exec(`
+        PRAGMA user_version = 3;
+        CREATE VIRTUAL TABLE unowned_fts USING fts5(text);
+        INSERT INTO unowned_fts(text) VALUES ('ab'||char(65534)||'cd');
+      `);
+    } finally {
+      db.close();
+    }
+    // Same findings a SQLite tokenizer change reports for a healthy index built by the old runtime.
+    for (const table of staleTables) {
+      installSqliteFtsTokenizerMismatch(source, table);
+    }
+    const original = await fs.readFile(source);
+    const input = createStateSnapshotInput(root, stateDir, targetStateDir);
+    const inventory = await readUpdateCandidateStateInventoryInProcess(input);
+    const snapshot = snapshotUpdateCandidateState({
+      ...input,
+      pluginPlanPath: path.join(targetStateDir, inventory.pluginPlan),
+      databaseInventory: [...inventory.databases.keys()],
+    });
+    return { snapshot, original, source, target: path.join(targetStateDir, relative) };
+  }
+
+  it("rehearses a database whose only findings are stale owned FTS indexes", async () => {
+    const { snapshot, original, source, target } = await snapshotAgentDatabase(ftsTables);
+    await snapshot;
+    const copy = openNodeSqliteDatabase(target, { readOnly: true });
+    try {
+      // The candidate's agent database admission owns the rebuild, not the snapshot.
+      expect(copy.prepare("PRAGMA integrity_check").all()).toEqual(
+        malformed.map((integrity_check) => ({ integrity_check })),
+      );
+      expect(copy.prepare("SELECT text FROM session_transcript_fts").all()).toEqual([
+        { text: "ab\ufffecd" },
+      ]);
+    } finally {
+      copy.close();
+    }
+    expect(await fs.readFile(source)).toEqual(original);
+  });
+
+  it("still refuses when a stale FTS index is not an owned definition", async () => {
+    const { snapshot } = await snapshotAgentDatabase([...ftsTables, "unowned_fts"]);
+    await expect(snapshot).rejects.toThrow(/cannot be snapshotted safely.*main\.unowned_fts/su);
   });
 });

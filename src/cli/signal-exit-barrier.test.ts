@@ -100,7 +100,12 @@ it.skipIf(process.platform === "win32").each([
     createNodeEvalArgs(
       `import { once } from 'node:events';
          import { installCliSignalExitHandlers, registerSignalExitBarrier } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
-         installCliSignalExitHandlers();
+         const releaseSignals = installCliSignalExitHandlers();
+         if (${JSON.stringify(kind)} === 'fallback') {
+           installCliSignalExitHandlers();
+           releaseSignals();
+           releaseSignals();
+         }
          const backstop = setTimeout(() => process.exit(99), 5000);
          registerSignalExitBarrier(async () => { clearTimeout(backstop); });
          process.once("beforeExit", () => {

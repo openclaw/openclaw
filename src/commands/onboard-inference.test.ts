@@ -22,52 +22,15 @@ const geminiCredential: cliCredentials.GeminiCliCredential = {
   expires: 1,
 };
 
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
-  policyHash: "onboard-inference-test-empty-plugin-policy",
-  configFingerprint: "onboard-inference-test-empty-plugin-metadata",
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "onboard-inference-test-empty-plugin-policy",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  },
-  registryDiagnostics: [],
-  manifestRegistry: { plugins: [], diagnostics: [] },
-  plugins: [],
-  diagnostics: [],
-  byPluginId: new Map(),
-  normalizePluginId: (pluginId: string) => pluginId,
-  owners: {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    providerAuthContributions: [],
-    modelIdNormalizationPolicies: new Map(),
-  },
-  metrics: {
-    registrySnapshotMs: 0,
-    manifestRegistryMs: 0,
-    ownerMapsMs: 0,
-    totalMs: 0,
-    indexPluginCount: 0,
-    manifestPluginCount: 0,
-  },
-}));
-
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
-}));
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { createEmptyPluginMetadataSnapshot } =
+    await import("../plugins/plugin-metadata-empty.test-support.js");
+  const snapshot = createEmptyPluginMetadataSnapshot();
+  return {
+    ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
+    getCurrentPluginMetadataSnapshot: () => snapshot,
+  };
+});
 
 afterAll(() => {
   vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
@@ -143,43 +106,37 @@ describe("detectInferenceBackends", () => {
   ] as const)(
     "detects the %s login file for %s without reading credential values",
     async (selection, authMode) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-passive-login-"));
-      try {
-        const selectedHome = path.join(root, "selected");
-        const codexHome =
-          selection === "home" ? path.join(selectedHome, ".codex") : path.join(root, "override");
-        await fs.mkdir(codexHome, { recursive: true });
-        const authPath = path.join(codexHome, "auth.json");
-        const raw = JSON.stringify({
-          auth_mode: authMode,
-          ...(authMode === "apikey" ? { OPENAI_API_KEY: "synthetic-api-key" } : {}),
-          tokens: {
-            access_token: "synthetic-access",
-            refresh_token: "synthetic-refresh",
-          },
-        });
-        await fs.writeFile(authPath, raw);
-        vi.stubEnv("HOME", selectedHome);
-        vi.stubEnv("CODEX_HOME", selection === "codex-home" ? codexHome : undefined);
-        vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-        vi.mocked(probes.probeLocalCommand).mockImplementation(probeDeps({ codex: true }));
-        vi.mocked(cliCredentials.hasCodexCliAuthFile).mockRestore();
-        const candidates = await detectInferenceBackends();
-        expect(candidates).toMatchObject([
-          {
-            kind: "codex-cli",
-            detail: "installed; stored credentials found; login status unverified",
-          },
-        ]);
-        expect(candidates[0]?.credentials).toBe(true);
-        expect(await fs.readFile(authPath, "utf8")).toBe(raw);
-        expect(JSON.stringify(candidates)).not.toContain("synthetic-");
-        expect(
-          facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule,
-        ).not.toHaveBeenCalled();
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
-      }
+      const root = tempDirs.make("openclaw-passive-login-");
+      const selectedHome = path.join(root, "selected");
+      const codexHome =
+        selection === "home" ? path.join(selectedHome, ".codex") : path.join(root, "override");
+      await fs.mkdir(codexHome, { recursive: true });
+      const authPath = path.join(codexHome, "auth.json");
+      const raw = JSON.stringify({
+        auth_mode: authMode,
+        ...(authMode === "apikey" ? { OPENAI_API_KEY: "synthetic-api-key" } : {}),
+        tokens: {
+          access_token: "synthetic-access",
+          refresh_token: "synthetic-refresh",
+        },
+      });
+      await fs.writeFile(authPath, raw);
+      vi.stubEnv("HOME", selectedHome);
+      vi.stubEnv("CODEX_HOME", selection === "codex-home" ? codexHome : undefined);
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      vi.mocked(probes.probeLocalCommand).mockImplementation(probeDeps({ codex: true }));
+      vi.mocked(cliCredentials.hasCodexCliAuthFile).mockRestore();
+      const candidates = await detectInferenceBackends();
+      expect(candidates).toMatchObject([
+        {
+          kind: "codex-cli",
+          detail: "installed; stored credentials found; login status unverified",
+        },
+      ]);
+      expect(candidates[0]?.credentials).toBe(true);
+      expect(await fs.readFile(authPath, "utf8")).toBe(raw);
+      expect(JSON.stringify(candidates)).not.toContain("synthetic-");
+      expect(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
     },
   );
 

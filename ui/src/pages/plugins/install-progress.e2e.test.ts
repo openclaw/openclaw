@@ -7,6 +7,7 @@ import {
   calendarPlugin,
   describeControlUiE2e,
   enabledWorkboardCapabilities,
+  initialInventory,
   installMockGateway,
   inventory,
   newContext,
@@ -20,6 +21,73 @@ import {
 describeControlUiE2e("plugin install button progress", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
+
+  it("shows a catalog card as installed when its install succeeds", async () => {
+    const evidence = createControlUiE2eArtifactDir("plugin-install-card-settle");
+    const context = await newContext();
+    const page = await context.newPage();
+    await page.emulateMedia({ colorScheme: "dark" });
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.catalog.browse": { items: [calendarDiscoveryPlugin] },
+      },
+    });
+    const installed = { ...calendarPlugin, catalogId: calendarDiscoveryPlugin.id };
+    try {
+      await page.goto(`${server.baseUrl}plugins`);
+      const cards = page.locator(
+        `.plugin-catalog-card[data-plugin-id="${calendarDiscoveryPlugin.id}"]`,
+      );
+      const install = cards.first().getByRole("button", { name: "Install Calendar Plus" });
+      await install.waitFor();
+      await gateway.deferNext("plugins.install");
+      await install.click();
+      await gateway.waitForRequest("plugins.install");
+      await gateway.setMethodResponse(
+        "plugins.list",
+        inventory([...initialInventory.plugins, installed], 1),
+      );
+      // Catalog pages come from ClawHub and can settle seconds after the local install.
+      // Hold every follow-up read so only the final install result can settle the card.
+      await gateway.deferNext("plugins.catalog.browse");
+      await gateway.deferNext("config.get");
+      const lists = (await gateway.getRequests("plugins.list")).length;
+      await gateway.resolveDeferred("plugins.install", {
+        ok: true,
+        plugin: installed,
+        restartRequired: false,
+      });
+      await gateway.waitForRequest("plugins.catalog.browse", { after: 1 });
+      await expect
+        .poll(() => cards.locator(".plugin-catalog-card__status").count())
+        .toBe(await cards.count());
+      expect(await cards.locator(".plugin-install-action__button").count()).toBe(0);
+      expect(await gateway.getRequests("plugins.list")).toHaveLength(lists);
+      await page.screenshot({ path: `${evidence}/after-install.png` });
+      await gateway.resolveDeferred("config.get");
+      await gateway.waitForRequest("plugins.list", { after: lists });
+      await gateway.resolveDeferred("plugins.catalog.browse", {
+        items: [
+          {
+            ...calendarDiscoveryPlugin,
+            local: {
+              present: true,
+              installed: true,
+              enabled: true,
+              state: "enabled",
+              pluginId: installed.id,
+              action: "manage",
+            },
+          },
+        ],
+      });
+      expect(await cards.locator(".plugin-catalog-card__status").count()).toBe(await cards.count());
+    } finally {
+      await context.close();
+    }
+  });
 
   it.each([
     ["success", "", "", 0],

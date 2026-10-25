@@ -38,7 +38,7 @@ export type GoogleMeetConferenceRecord = GoogleMeetTimedResource & {
   expireTime?: string;
 };
 
-export type GoogleMeetParticipant = {
+type GoogleMeetParticipant = {
   name: string;
   earliestStartTime?: string;
   latestEndTime?: string;

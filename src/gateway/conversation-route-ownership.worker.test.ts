@@ -63,6 +63,36 @@ function installReefPlugin(plugin: ChannelPlugin) {
   setActivePluginRegistry(createTestRegistry([{ pluginId: "reef", source: "test", plugin }]));
 }
 
+function seedConversation(peerId: string) {
+  const scope = { agentId: "main", databaseAgentId: "main", storePath };
+  const sessionKey = `agent:main:reef:channel:${peerId}`;
+  replaceSessionEntrySync(
+    { ...scope, sessionKey },
+    {
+      sessionId: `session-${peerId}`,
+      updatedAt: 100,
+      chatType: "channel",
+      delivery: {
+        kind: "external",
+        route: {
+          channel: "reef",
+          accountId: "default",
+          target: { to: `reef:${peerId}`, chatType: "channel" },
+        },
+        context: { channel: "reef", accountId: "default", to: `reef:${peerId}` },
+        origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
+      },
+    },
+  );
+  const conversationRef = buildConversationRef({
+    channel: "reef",
+    accountId: "default",
+    kind: "channel",
+    peerId,
+  });
+  return { scope, sessionKey, conversationRef };
+}
+
 it("expires plugin binding inspection when async route preparation settles", async () => {
   const conversation = {
     channel: "reef",
@@ -126,32 +156,7 @@ it("expires plugin binding inspection when async route preparation settles", asy
 it.each(["final", "queued"] as const)(
   "%s authority initiates current platform effects under its worker grant and joins accepted sends",
   async (phase) => {
-    const scope = { agentId: "main", databaseAgentId: "main", storePath };
-    const sessionKey = `agent:main:reef:channel:${phase}`;
-    replaceSessionEntrySync(
-      { ...scope, sessionKey },
-      {
-        sessionId: `session-${phase}`,
-        updatedAt: 100,
-        chatType: "channel",
-        delivery: {
-          kind: "external",
-          route: {
-            channel: "reef",
-            accountId: "default",
-            target: { to: `reef:${phase}`, chatType: "channel" },
-          },
-          context: { channel: "reef", accountId: "default", to: `reef:${phase}` },
-          origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
-        },
-      },
-    );
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "channel",
-      peerId: phase,
-    });
+    const { scope, sessionKey, conversationRef } = seedConversation(phase);
     const conversation = await readConversation(scope, conversationRef);
     expect(conversation).toMatchObject({ sessionKey, nativeChannelId: "native-original" });
     const routeFingerprint = resolveConversationRouteFingerprint(conversation!);
@@ -362,32 +367,13 @@ it.each(["final", "queued"] as const)(
 );
 
 it("allows no-op binding delivery and fences a retained grant after reassignment", async () => {
-  const scope = { agentId: "main", databaseAgentId: "main", storePath };
   const cfg: OpenClawConfig = {
     ...config,
     agents: { entries: { main: {}, other: {} } },
   };
   const peerId = "retained-binding-authority";
-  const sessionKey = `agent:main:reef:channel:${peerId}`;
+  const { scope, sessionKey, conversationRef } = seedConversation(peerId);
   const bindingRef = { channel: "reef", accountId: "default", conversationId: peerId };
-  replaceSessionEntrySync(
-    { ...scope, sessionKey },
-    {
-      sessionId: "session-retained-binding-authority",
-      updatedAt: 100,
-      chatType: "channel",
-      delivery: {
-        kind: "external",
-        route: {
-          channel: "reef",
-          accountId: "default",
-          target: { to: `reef:${peerId}`, chatType: "channel" },
-        },
-        context: { channel: "reef", accountId: "default", to: `reef:${peerId}` },
-        origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
-      },
-    },
-  );
   const sendText = vi.fn().mockResolvedValue({ channel: "reef", messageId: "allowed" });
   installReefPlugin({
     ...createOutboundTestPlugin({ id: "reef", outbound: { deliveryMode: "direct", sendText } }),
@@ -396,12 +382,6 @@ it("allows no-op binding delivery and fences a retained grant after reassignment
   openOpenClawStateDatabase();
   const identity = captureOpenClawStateWorkerContext().admission.identity.key;
   expect(identity).toMatch(/^file:/);
-  const conversationRef = buildConversationRef({
-    channel: "reef",
-    accountId: "default",
-    kind: "channel",
-    peerId,
-  });
   const conversation = await readConversation(scope, conversationRef);
   expect(conversation).toMatchObject({ sessionKey, nativeChannelId: "native-original" });
   const authority = {
@@ -440,20 +420,14 @@ it("allows no-op binding delivery and fences a retained grant after reassignment
     expect(await bindings.resolveByConversationAsync(missingRef)).toBeNull();
     expect(changes).toHaveLength(2);
     const [pending, settled] = changes;
-    if (
-      !pending ||
-      !("kind" in pending) ||
-      pending.kind !== "pending" ||
-      !settled ||
-      !("kind" in settled) ||
-      settled.kind !== "settled"
-    ) {
+    if (!pending || !settled || !("operation" in pending) || !("operation" in settled)) {
       throw new Error("Missing native pending/settled binding operation");
     }
-    expect(pending.identity).toBe(identity);
-    expect(settled.identity).toBe(identity);
+    expect(changes).toMatchObject([
+      { kind: "pending", identity },
+      { kind: "settled", identity, outcome: "unchanged" },
+    ]);
     expect(settled.operation).toBe(pending.operation);
-    expect(settled.outcome).toBe("unchanged");
     await expect(handler.sendText("allowed after no-op settlement")).resolves.toMatchObject({
       messageId: "allowed",
     });

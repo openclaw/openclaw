@@ -14,77 +14,69 @@ export function ingressFindings(
 ): readonly HealthFinding[] {
   const findings: HealthFinding[] = [];
   for (const target of policySectionTargets(policy, policyPath, policyDocName, "ingress")) {
+    const ingressPolicy = target.policy;
+    const requiredDmScope = readPolicyPathString(ingressPolicy, ["session", "requireDmScope"]);
+    const allowedDmPolicies = new Set(
+      readStringList(ingressPolicy, ["channels", "allowDmPolicies"]),
+    );
+    const entries = (evidence.ingress ?? []).filter(
+      (entry) =>
+        target.selectorId === undefined ||
+        normalizePolicyChannelId(entry.channel ?? "") === target.selectorId,
+    );
+    const groupPolicies = entries.filter((entry) => entry.kind === "channelGroupPolicy");
+    const rules = [
+      {
+        kind: "sessionDmScope",
+        enabled: requiredDmScope !== undefined,
+        violates: (entry) => entry.value !== requiredDmScope,
+        checkId: CHECK_IDS.policyIngressDmScopeUnapproved,
+        message: (entry) => `session.dmScope '${entry.value ?? ""}' does not match policy.`,
+        path: ["session", "requireDmScope"],
+        fixHint:
+          "Set session.dmScope to the required isolation scope or update policy after review.",
+      },
+      {
+        kind: "channelDmPolicy",
+        enabled: allowedDmPolicies.size > 0,
+        violates: (entry) =>
+          typeof entry.value === "string" && !allowedDmPolicies.has(entry.value.toLowerCase()),
+        checkId: CHECK_IDS.policyIngressDmPolicyUnapproved,
+        message: (entry) =>
+          `${ingressLabel(entry)} uses unapproved DM policy '${entry.value ?? ""}'.`,
+        path: ["channels", "allowDmPolicies"],
+        fixHint: "Set the channel DM policy to an allowed value or update policy after review.",
+      },
+      {
+        kind: "channelGroupPolicy",
+        enabled: readPolicyBoolean(ingressPolicy, ["channels", "denyOpenGroups"]) === true,
+        violates: (entry) => entry.value !== "allowlist" && entry.value !== "disabled",
+        checkId: CHECK_IDS.policyIngressOpenGroupsDenied,
+        message: (entry) => `${ingressLabel(entry)} allows open group ingress.`,
+        path: ["channels", "denyOpenGroups"],
+        fixHint: "Set groupPolicy to allowlist or disabled, or update policy after review.",
+      },
+      {
+        kind: "channelRequireMention",
+        enabled: readPolicyBoolean(ingressPolicy, ["channels", "requireMentionInGroups"]) === true,
+        violates: (entry) => !isGroupIngressDisabled(entry, groupPolicies) && entry.value !== true,
+        checkId: CHECK_IDS.policyIngressGroupMentionRequired,
+        message: (entry) => `${ingressLabel(entry)} does not require group mentions.`,
+        path: ["channels", "requireMentionInGroups"],
+        fixHint:
+          "Set requireMention=true for the channel/group entry or update policy after review.",
+      },
+    ] satisfies readonly (PolicyEvidenceRule<PolicyIngressEvidence> & { enabled: boolean })[];
     findings.push(
-      ...ingressFindingsForRule(
-        target.policy,
+      ...policyEvidenceRuleFindings(
+        entries,
+        rules.filter((rule) => rule.enabled),
         policyDocName,
         target.requirementBase,
-        evidence,
-        (entry) =>
-          target.selectorId === undefined || scopedIngressChannelMatches(entry, target.selectorId),
       ),
     );
   }
   return findings;
-}
-
-function ingressFindingsForRule(
-  ingressPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
-): readonly HealthFinding[] {
-  const requiredDmScope = readPolicyPathString(ingressPolicy, ["session", "requireDmScope"]);
-  const allowedDmPolicies = new Set(readStringList(ingressPolicy, ["channels", "allowDmPolicies"]));
-  const entries = (evidence.ingress ?? []).filter(evidenceFilter);
-  const groupPolicies = entries.filter((entry) => entry.kind === "channelGroupPolicy");
-  const rules = [
-    {
-      kind: "sessionDmScope",
-      enabled: requiredDmScope !== undefined,
-      violates: (entry) => entry.value !== requiredDmScope,
-      checkId: CHECK_IDS.policyIngressDmScopeUnapproved,
-      message: (entry) => `session.dmScope '${entry.value ?? ""}' does not match policy.`,
-      path: ["session", "requireDmScope"],
-      fixHint: "Set session.dmScope to the required isolation scope or update policy after review.",
-    },
-    {
-      kind: "channelDmPolicy",
-      enabled: allowedDmPolicies.size > 0,
-      violates: (entry) =>
-        typeof entry.value === "string" && !allowedDmPolicies.has(entry.value.toLowerCase()),
-      checkId: CHECK_IDS.policyIngressDmPolicyUnapproved,
-      message: (entry) =>
-        `${ingressLabel(entry)} uses unapproved DM policy '${entry.value ?? ""}'.`,
-      path: ["channels", "allowDmPolicies"],
-      fixHint: "Set the channel DM policy to an allowed value or update policy after review.",
-    },
-    {
-      kind: "channelGroupPolicy",
-      enabled: readPolicyBoolean(ingressPolicy, ["channels", "denyOpenGroups"]) === true,
-      violates: (entry) => entry.value !== "allowlist" && entry.value !== "disabled",
-      checkId: CHECK_IDS.policyIngressOpenGroupsDenied,
-      message: (entry) => `${ingressLabel(entry)} allows open group ingress.`,
-      path: ["channels", "denyOpenGroups"],
-      fixHint: "Set groupPolicy to allowlist or disabled, or update policy after review.",
-    },
-    {
-      kind: "channelRequireMention",
-      enabled: readPolicyBoolean(ingressPolicy, ["channels", "requireMentionInGroups"]) === true,
-      violates: (entry) => !isGroupIngressDisabled(entry, groupPolicies) && entry.value !== true,
-      checkId: CHECK_IDS.policyIngressGroupMentionRequired,
-      message: (entry) => `${ingressLabel(entry)} does not require group mentions.`,
-      path: ["channels", "requireMentionInGroups"],
-      fixHint: "Set requireMention=true for the channel/group entry or update policy after review.",
-    },
-  ] satisfies readonly (PolicyEvidenceRule<PolicyIngressEvidence> & { enabled: boolean })[];
-  return policyEvidenceRuleFindings(
-    entries,
-    rules.filter((rule) => rule.enabled),
-    policyDocName,
-    requirementBase,
-  );
 }
 
 function isGroupIngressDisabled(
@@ -112,13 +104,6 @@ function isGroupIngressDisabled(
 
 function ocPathParent(source: string): string {
   return source.slice(0, Math.max(0, source.lastIndexOf("/")));
-}
-
-function scopedIngressChannelMatches(
-  entry: PolicyIngressEvidence,
-  policyChannelId: string,
-): boolean {
-  return normalizePolicyChannelId(entry.channel ?? "") === policyChannelId;
 }
 
 function ingressLabel(entry: PolicyIngressEvidence): string {

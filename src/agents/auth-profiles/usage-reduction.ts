@@ -41,8 +41,8 @@ function applyWhamCooldownResult(params: {
   existing: ProfileUsageStats;
   computed: ProfileUsageStats;
   now: number;
+  reason: AuthProfileFailureReason;
   whamResult: WhamCooldownProbeResult;
-  retryAfterMs?: number;
 }): ProfileUsageStats {
   const existingActiveCooldownUntil = resolveActiveWindowUntil(
     params.existing.cooldownUntil,
@@ -70,13 +70,13 @@ function applyWhamCooldownResult(params: {
   const { cooldownClassification } = params.whamResult;
   if (
     !cooldownClassification &&
-    !params.whamResult.available &&
-    (params.computed.cooldownReason === "rate_limit" ||
-      (params.computed.blockedReason === "subscription_limit" &&
+    (params.reason === "rate_limit" ||
+      (!params.whamResult.available &&
+        params.computed.blockedReason === "subscription_limit" &&
         isBlockedWindowActiveForModel(params.computed, params.now)))
   ) {
-    // A failed or incomplete probe supplied no authoritative retry deadline.
-    // Keep the persisted local backoff instead of replacing it with a fixed delay.
+    // A probe without an exhausted window or auth evidence adds no local delay:
+    // a rate limit keeps only its provider deadline and a block keeps its reset.
     return {
       ...params.computed,
       lastProbeAt: params.now,
@@ -87,13 +87,6 @@ function applyWhamCooldownResult(params: {
     lastProbeAt: params.now,
     cooldownUntil: Math.max(
       existingActiveCooldownUntil,
-      // Available quota does not invalidate the request's rate-limit deadline.
-      params.whamResult.available &&
-        params.computed.cooldownReason === "rate_limit" &&
-        Number.isFinite(params.retryAfterMs) &&
-        (params.retryAfterMs ?? 0) > 0
-        ? (params.computed.cooldownUntil ?? 0)
-        : 0,
       resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
     ),
     cooldownReason: cooldownClassification
@@ -176,12 +169,6 @@ export function reduceAuthProfileFailure(
       : (previousStats ?? {});
   const computed = computeNextProfileUsageStats({ existing, now, reason, modelId, retryAfterMs });
   return currentWhamResult
-    ? applyWhamCooldownResult({
-        existing,
-        computed,
-        now,
-        whamResult: currentWhamResult,
-        retryAfterMs,
-      })
+    ? applyWhamCooldownResult({ existing, computed, now, reason, whamResult: currentWhamResult })
     : computed;
 }

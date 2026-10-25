@@ -54,6 +54,19 @@ it.skipIf(process.platform === "win32")(
         throw new Error("Worker auth observation requested a row child");
       };
       fs.watch = () => { throw new Error("synthetic unavailable watcher"); };
+      // macOS admits hosted watchers by opening their directory before spawning.
+      const watchDirectories = new Set();
+      for (let current = workerData.directory; ; current = path.dirname(current)) {
+        watchDirectories.add(current);
+        if (path.dirname(current) === current) break;
+      }
+      const openSync = fs.openSync;
+      fs.openSync = (file, ...args) => {
+        if (process.platform === "darwin" && watchDirectories.has(file)) {
+          throw new Error("synthetic unavailable watcher");
+        }
+        return openSync(file, ...args);
+      };
       syncBuiltinESMExports();
       (async () => {
         const { register } = await import(workerData.loader);

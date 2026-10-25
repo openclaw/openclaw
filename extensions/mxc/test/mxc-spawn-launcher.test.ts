@@ -22,10 +22,7 @@ const { decodePayload, forwardSignals, launchSandbox, signalExitCode } = createR
     spawnSandboxFromConfig: (config: unknown, options: unknown) => unknown,
     config: unknown,
     options: unknown,
-    bridges?: {
-      child?: (spawned: unknown) => void;
-      pty?: (spawned: unknown) => void;
-    },
+    bridges?: { child?: (spawned: unknown) => void; pty?: (spawned: unknown) => void },
   ) => Promise<void>;
   signalExitCode: (signal: number | string | undefined) => number;
 };

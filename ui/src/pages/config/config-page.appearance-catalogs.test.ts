@@ -6,8 +6,10 @@ import type {
   PluginsListResult,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ThemeCatalogSnapshot } from "../../app/theme-catalog.ts";
 import { setStoredSessionCatalogHidden } from "../../components/app-sidebar-session-types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -32,6 +34,128 @@ describe("ConfigPage model catalog lifecycle", () => {
   });
 
   describe("Appearance catalogs", () => {
+    it("recovers theme discovery without replacing the available theme controls", async () => {
+      const { view, context } = await mount(
+        createTestGatewayClient(
+          vi.fn(async (method: string) => (method === "models.list" ? { models: [] } : {})),
+        ),
+      );
+      const scope = {};
+      const first = deferred<ThemeCatalogSnapshot | undefined>();
+      const second = deferred<ThemeCatalogSnapshot | undefined>();
+      const publishCatalog = (result: Promise<ThemeCatalogSnapshot | undefined>) => {
+        Object.assign(context.theme, {
+          catalog: { themes: [], error: null, read: { scope, result } },
+        });
+        publishConfigSource(context.theme);
+      };
+      const retry = vi.fn(() => publishCatalog(second.promise));
+      Object.assign(context.theme, { retryCatalog: retry });
+      publishCatalog(first.promise);
+      const grid = expectDefined(view.page.querySelector(".settings-theme-grid"), "theme grid");
+      const builtin = expectDefined(
+        grid.querySelector<HTMLButtonElement>('[data-theme-id="claw"]'),
+        "built-in theme control",
+      );
+      await waitForSolid(() => expect(builtin.disabled).toBe(false));
+
+      first.resolve({ themes: [], error: "Theme catalog unavailable" });
+      await waitForSolid(() =>
+        expect(view.page.textContent).toContain("Theme catalog unavailable"),
+      );
+      const retryButton = expectDefined(
+        view.page.querySelector<HTMLButtonElement>(".settings-status--error button"),
+        "theme catalog retry",
+      );
+      retryButton.click();
+      expect(retry).toHaveBeenCalledOnce();
+      const recovered: ThemeCatalogSnapshot = {
+        themes: [
+          ...BUILTIN_THEMES,
+          {
+            id: "synthetic/nebula",
+            name: "Nebula",
+            description: "Synthetic palette",
+            source: "plugin",
+            modes: ["dark"],
+            pluginId: "synthetic",
+          },
+        ],
+        error: null,
+      };
+      Object.assign(context.theme, {
+        catalog: { ...recovered, read: { scope, result: second.promise } },
+      });
+      publishConfigSource(context.theme);
+      second.resolve(recovered);
+      await waitForSolid(() =>
+        expect(grid.querySelector('[data-theme-id="synthetic/nebula"]')).not.toBeNull(),
+      );
+      expect(view.page.querySelector(".settings-theme-grid")).toBe(grid);
+      expect(grid.querySelector('[data-theme-id="claw"]')).toBe(builtin);
+      await waitForSolid(() =>
+        expect(view.page.textContent).not.toContain("Theme catalog unavailable"),
+      );
+    });
+
+    it("does not expose a retired profile's theme catalog", async () => {
+      const { view, context } = await mount(
+        createTestGatewayClient(
+          vi.fn(async (method: string) => (method === "models.list" ? { models: [] } : {})),
+        ),
+      );
+      const first = deferred<ThemeCatalogSnapshot | undefined>();
+      const second = deferred<ThemeCatalogSnapshot | undefined>();
+      Object.assign(context.theme, {
+        catalog: { themes: [], error: null, read: { scope: {}, result: first.promise } },
+      });
+      publishConfigSource(context.theme);
+      flush();
+      const currentScope = {};
+      Object.assign(context.theme, {
+        catalog: { themes: [], error: null, read: { scope: currentScope, result: second.promise } },
+      });
+      publishConfigSource(context.theme);
+      const current: ThemeCatalogSnapshot = {
+        themes: [
+          {
+            id: "synthetic/current",
+            name: "Current",
+            description: "Current profile palette",
+            source: "plugin",
+            modes: ["dark"],
+            pluginId: "synthetic",
+          },
+        ],
+        error: null,
+      };
+      Object.assign(context.theme, {
+        catalog: { ...current, read: { scope: currentScope, result: second.promise } },
+      });
+      publishConfigSource(context.theme);
+      second.resolve(current);
+      await waitForSolid(() =>
+        expect(view.page.querySelector('[data-theme-id="synthetic/current"]')).not.toBeNull(),
+      );
+      first.resolve({
+        themes: [
+          {
+            id: "synthetic/retired",
+            name: "Retired",
+            description: "Retired profile palette",
+            source: "plugin",
+            modes: ["dark"],
+            pluginId: "synthetic",
+          },
+        ],
+        error: null,
+      });
+      await first.promise;
+      flush();
+      expect(view.page.querySelector('[data-theme-id="synthetic/retired"]')).toBeNull();
+      expect(view.page.querySelector('[data-theme-id="synthetic/current"]')).not.toBeNull();
+    });
+
     it("recovers plugin discovery without replacing the section or its manage link", async () => {
       const first = deferred<PluginsListResult>();
       const second = deferred<PluginsListResult>();
@@ -53,6 +177,7 @@ describe("ConfigPage model catalog lifecycle", () => {
         section.querySelector<HTMLAnchorElement>("a"),
         "manage plugins link",
       );
+      await waitForSolid(() => expect(pluginRequests).toBe(1));
       await waitForSolid(() => expect(section.textContent).toContain("Loading…"));
 
       first.reject(new Error("catalog unavailable"));

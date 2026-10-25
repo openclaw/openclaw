@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { issueFactoryGitHubProof } from "../factory-github-proof.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
 vi.mock("../../agents/github-host-runtime.js", async (importOriginal) => ({
@@ -41,22 +43,12 @@ function issue(assertCurrent = () => {}) {
 }
 
 function expectForbidden(respond: Awaited<ReturnType<typeof rpc>>) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "FORBIDDEN" }),
-  );
+  expectRpcError(respond, { code: "FORBIDDEN" });
 }
 
 const broker: GatewayClient = {
   connId: "broker-connection",
-  connect: {
-    minProtocol: 1,
-    maxProtocol: 1,
-    client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-    role: "operator",
-    scopes: ["operator.admin"],
-  },
+  connect: gatewayConnect(["operator.admin"], { id: "cli", mode: "cli" }),
   internal: {
     isLocalClient: true,
     authenticatedOperator: true,

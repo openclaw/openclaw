@@ -27,6 +27,44 @@ export type EmbeddedRunParams = Parameters<typeof runEmbeddedAgentType>[0];
 export type SpawnReceipt = { runId: string; childSessionKey: string };
 export type KillResponse = { status: number; body: unknown };
 
+export function findSubagentRecords(
+  value: unknown,
+  matches: (record: Record<string, unknown>) => boolean,
+): Record<string, unknown>[] {
+  if (typeof value === "string") {
+    try {
+      return findSubagentRecords(JSON.parse(value) as unknown, matches);
+    } catch {
+      return [];
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => findSubagentRecords(item, matches));
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  return [
+    ...(matches(record) ? [record] : []),
+    ...Object.values(record).flatMap((item) => findSubagentRecords(item, matches)),
+  ];
+}
+
+export function findSubagentSpawnReceipt(value: unknown): SpawnReceipt | undefined {
+  const record = findSubagentRecords(
+    value,
+    (entry) =>
+      entry.status === "accepted" &&
+      typeof entry.childSessionKey === "string" &&
+      typeof entry.runId === "string",
+  )[0];
+  if (record && typeof record.childSessionKey === "string" && typeof record.runId === "string") {
+    return { childSessionKey: record.childSessionKey, runId: record.runId };
+  }
+  return undefined;
+}
+
 export const completedEmbeddedRun: EmbeddedAgentRunResult = {
   payloads: [],
   meta: { durationMs: 1 },
@@ -34,39 +72,71 @@ export const completedEmbeddedRun: EmbeddedAgentRunResult = {
 
 const proxyUser = "subagent-stop-administrator@example.test";
 const operatorScopes = ["operator.admin", "operator.read", "operator.write"] as const;
-export const subagentStopProxyHeaders = {
+const subagentStopProxyHeaders = {
   "x-forwarded-for": "203.0.113.81",
   "x-forwarded-proto": "https",
   "x-forwarded-user": proxyUser,
 };
 
-export function buildSubagentStopConfig(
+export function subagentToolCallEvents(
+  name: string,
+  args: Record<string, unknown>,
+  sequence: number,
+) {
+  const item = {
+    type: "function_call",
+    id: `fc_subagent_${sequence}`,
+    call_id: `call_subagent_${sequence}`,
+    name,
+    arguments: JSON.stringify(args),
+  };
+  const response = { id: `resp_subagent_${sequence}`, object: "response" };
+  const argumentsEvent = (type: string, data: Record<string, unknown>) => ({
+    type: `response.function_call_arguments.${type}`,
+    item_id: item.id,
+    output_index: 0,
+    ...data,
+  });
+  return [
+    { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
+    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
+    argumentsEvent("delta", { delta: item.arguments }),
+    argumentsEvent("done", { arguments: item.arguments }),
+    { type: "response.output_item.done", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        ...response,
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
+      },
+    },
+  ];
+}
+
+export function createSubagentModelConfig(
   workspace: string,
-  tls: { certPath: string; keyPath: string },
+  options: { modelId?: string; name?: string; baseUrl?: string; runtime?: boolean } = {},
 ): OpenClawConfig {
+  const modelId = options.modelId ?? "stop-proof";
+  const runtime = options.runtime ? { agentRuntime: { id: "openclaw" as const } } : {};
   const { api, baseUrl, provider, ...model } = makeProviderModelFixture<"openai-responses">({
-    id: "stop-proof",
-    name: "Stop proof",
+    id: modelId,
+    name: options.name ?? "Stop proof",
     provider: "synthetic",
     api: "openai-responses",
-    baseUrl: "https://example.invalid/v1",
+    baseUrl: options.baseUrl ?? "https://example.invalid/v1",
     contextWindow: 4096,
     maxTokens: 1024,
   });
-  const trustedProxy = {
-    userHeader: "x-forwarded-user",
-    requiredHeaders: ["x-forwarded-proto"],
-    allowUsers: [proxyUser],
-    allowLoopback: true,
-    deviceAutoApprove: { enabled: true, scopes: [...operatorScopes] },
-  };
   return {
+    cron: { enabled: false },
     agents: {
       defaults: {
         workspace,
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
-        model: { primary: "synthetic/stop-proof" },
+        model: { primary: `synthetic/${modelId}` },
         subagents: { allowAgents: ["*"] },
       },
     },
@@ -77,12 +147,38 @@ export function buildSubagentStopConfig(
           api,
           baseUrl,
           apiKey: "synthetic-test-key",
-          models: [model],
+          ...runtime,
+          ...(options.baseUrl ? { request: { allowPrivateNetwork: true } } : {}),
+          models: [
+            {
+              ...model,
+              ...runtime,
+              ...(options.runtime
+                ? { api, params: { transport: "sse", openaiWsWarmup: false } }
+                : {}),
+            },
+          ],
         },
       },
     },
     plugins: { enabled: false, slots: { memory: "none" } },
     tools: { profile: "coding", toolSearch: false },
+  };
+}
+
+function buildSubagentStopConfig(
+  workspace: string,
+  tls: { certPath: string; keyPath: string },
+): OpenClawConfig {
+  const trustedProxy = {
+    userHeader: "x-forwarded-user",
+    requiredHeaders: ["x-forwarded-proto"],
+    allowUsers: [proxyUser],
+    allowLoopback: true,
+    deviceAutoApprove: { enabled: true, scopes: [...operatorScopes] },
+  };
+  return {
+    ...createSubagentModelConfig(workspace),
     gateway: {
       auth: {
         mode: "trusted-proxy",
@@ -166,18 +262,45 @@ export function postSubagentKill(port: number, sessionKey: string) {
   });
 }
 
+export async function createSubagentStopFixture(label: string, modelUrl?: string) {
+  const state = await createOpenClawTestState({ label });
+  setUserProfileRole(ensureProfileForEmail(proxyUser).id, "administrator");
+  const cfg = buildSubagentStopConfig(state.workspaceDir, {
+    certPath: await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM),
+    keyPath: await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM),
+  });
+  if (modelUrl) {
+    const provider = expectDefined(cfg.models?.providers?.synthetic, "Synthetic model provider");
+    provider.baseUrl = modelUrl;
+    provider.request = { allowPrivateNetwork: true };
+  }
+  return {
+    state,
+    cfg,
+    start: (onEvent?: Parameters<typeof startGatewayWithClient>[0]["onEvent"]) =>
+      startGatewayWithClient({
+        cfg,
+        configPath: state.configPath,
+        auth: cfg.gateway?.auth,
+        edgeAuthHeaders: subagentStopProxyHeaders,
+        secure: true,
+        tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
+        clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        origin: "https://control.example.com",
+        scopes: [...operatorScopes],
+        onEvent,
+      }),
+  };
+}
+
 /** Creates a natural Gateway parent whose real spawn reaches the supplied child adapter. */
 export async function createNaturalSubagentStopHarness(params: {
   label: string;
   runEmbeddedAgent: Mock<typeof runEmbeddedAgentType>;
   runChild: (params: EmbeddedRunParams) => Promise<EmbeddedAgentRunResult>;
 }) {
-  const state = await createOpenClawTestState({ label: params.label });
-  setUserProfileRole(ensureProfileForEmail(proxyUser).id, "administrator");
-  const cfg = buildSubagentStopConfig(state.workspaceDir, {
-    certPath: await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM),
-    keyPath: await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM),
-  });
+  const { state, cfg, start } = await createSubagentStopFixture(params.label);
   const spawned = createDeferred<SpawnReceipt>();
   params.runEmbeddedAgent.mockImplementation(async (run) => {
     await run.onExecutionStarted?.();
@@ -193,18 +316,7 @@ export async function createNaturalSubagentStopHarness(params: {
     state,
     cfg,
     async start() {
-      gateway = await startGatewayWithClient({
-        cfg,
-        configPath: state.configPath,
-        auth: cfg.gateway?.auth,
-        edgeAuthHeaders: subagentStopProxyHeaders,
-        secure: true,
-        tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
-        clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-        origin: "https://control.example.com",
-        scopes: [...operatorScopes],
-      });
+      gateway = await start();
       await gateway.server.startupSettled;
     },
     async spawn() {

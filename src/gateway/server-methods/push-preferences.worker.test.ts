@@ -10,6 +10,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import * as preferences from "../../state/user-preferences.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pushHandlers } from "./push.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -59,7 +60,7 @@ it("runs web-push preference get and set without preparing SQLite on the calling
     },
     respond,
     isWebchatConnect: () => false,
-    context: { getRuntimeConfig: () => ({}), broadcastToConnIds: vi.fn() },
+    context: createDirectChatContext({ getRuntimeConfig: () => ({}), broadcastToConnIds: vi.fn() }),
   };
   options.context.getClientConnIds = (predicate) =>
     options.client && (!predicate || predicate(options.client))
@@ -73,7 +74,7 @@ it("runs web-push preference get and set without preparing SQLite on the calling
     await release.promise;
     return write(...args);
   });
-  const pending = pushHandlers["push.web.preferences.set"](options);
+  const pending = Promise.resolve(pushHandlers["push.web.preferences.set"](options));
   let bindingMutation: Promise<void> | undefined;
   try {
     await awaitGateBeforeSettlement(entered.promise, pending, "preference worker was not reached");

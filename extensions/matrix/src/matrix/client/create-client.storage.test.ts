@@ -85,7 +85,7 @@ async function seedCursor(root: string, token: string, clean: boolean) {
 }
 
 async function acquire(auth: ReturnType<typeof authFor>, role?: "monitor") {
-  const lease = await acquireSharedMatrixClient({ auth, role, startClient: false });
+  const lease = await acquireSharedMatrixClient({ auth, role });
   leases.push(lease);
   return lease;
 }

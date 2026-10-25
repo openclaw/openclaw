@@ -110,6 +110,38 @@ function wakeParams() {
   };
 }
 
+function requesterFixture(children: SubagentRunRecord[], requesterTurnRunId: string) {
+  const runs = new Map(children.map((child) => [child.runId, child]));
+  registryRuntimeMock.listSubagentRunsForRequester.mockImplementation(() => [...runs.values()]);
+  return {
+    runs,
+    requesterTurn: holdLiveRequesterTurns(requesterTurnRunId),
+    requester: {
+      requesterSessionKey: REQUESTER,
+      requesterTurnRunId,
+      runs,
+      transfer: createRequesterInitialTransferFixture(runs, vi.fn()),
+    },
+  };
+}
+
+function settleChildren(
+  requester: ReturnType<typeof requesterFixture>["requester"],
+  children: SubagentRunRecord[],
+  requesterYielded: boolean,
+) {
+  return settleRequesterTurnAfterSessionSpawns({
+    ...requester,
+    requesterYielded,
+    acceptedSessionSpawns: children.map(({ runId, childSessionKey }) => ({
+      runId,
+      childSessionKey,
+      expectsCompletionMessage: true,
+    })),
+    schedule: vi.fn(),
+  });
+}
+
 beforeEach(() => {
   vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent").mockResolvedValue({
     readCurrent: () => ({ sessionId: "sess-main" }),
@@ -144,39 +176,18 @@ it("holds an adopted child's old wake until its current requester turn yields", 
     delivery: { status: "not_required" },
   });
   const oldWake = structuredClone(child.requesterSettleWake);
-  const requesterTurn = holdLiveRequesterTurns(requesterTurnRunId);
-  registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([quietChild, child]);
+  const { runs, requesterTurn, requester } = requesterFixture(
+    [quietChild, child],
+    requesterTurnRunId,
+  );
   expect(
     await maybeWakeRequesterAfterAllChildrenSettled({ ...wakeParams(), settledEntry: quietChild }),
   ).toBe(false);
   expect(deliverSpy).not.toHaveBeenCalled();
   expect(child.requesterSettleWake).toEqual(oldWake);
 
-  const runs = new Map([
-    [quietChild.runId, quietChild],
-    [child.runId, child],
-  ]);
-  const requester = {
-    requesterSessionKey: REQUESTER,
-    requesterTurnRunId,
-    runs,
-    transfer: createRequesterInitialTransferFixture(runs, vi.fn()),
-  };
   expect(await markRequesterTurnYieldedWithAuthority(requester)).toBe(1);
-  expect(
-    await settleRequesterTurnAfterSessionSpawns({
-      ...requester,
-      requesterYielded: true,
-      acceptedSessionSpawns: [
-        {
-          runId: child.runId,
-          childSessionKey: child.childSessionKey,
-          expectsCompletionMessage: true,
-        },
-      ],
-      schedule: vi.fn(),
-    }),
-  ).toBe(true);
+  expect(await settleChildren(requester, [child], true)).toBe(true);
   requesterTurn.end(requesterTurnRunId);
   // Settlement rearms the adopted wake for the new turn's complete child batch.
   const published = runs.get(child.runId)!;
@@ -195,13 +206,13 @@ it("holds an adopted child's old wake until its current requester turn yields", 
 });
 
 it.each([
-  { yielded: false, allDelivered: true },
-  { yielded: false, allDelivered: false },
-  { yielded: true, allDelivered: true },
-  { yielded: true, allDelivered: false },
+  [false, true],
+  [false, false],
+  [true, true],
+  [true, false],
 ])(
-  "does not repeat results consumed in a settle-wake turn (yielded=$yielded, allDelivered=$allDelivered)",
-  async ({ yielded, allDelivered }) => {
+  "does not repeat consumed results (yielded=%s, allDelivered=%s)",
+  async (yielded, allDelivered) => {
     const requesterTurnRunId = `announce:requester-settle:main:${REQUESTER}:earlier-child:yield-1`;
     const children = ["run-a", "run-b"].map((runId, index) =>
       makeChild({
@@ -212,33 +223,14 @@ it.each([
         completion: { required: true, resultText: `retry result ${index}` },
       }),
     );
-    const runs = new Map(children.map((child) => [child.runId, child]));
-    registryRuntimeMock.listSubagentRunsForRequester.mockImplementation(() => [...runs.values()]);
-    const requesterTurn = holdLiveRequesterTurns(requesterTurnRunId);
-    const requester = {
-      requesterSessionKey: REQUESTER,
-      requesterTurnRunId,
-      runs,
-      transfer: createRequesterInitialTransferFixture(runs, vi.fn()),
-    };
+    const { runs, requesterTurn, requester } = requesterFixture(children, requesterTurnRunId);
     try {
       expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
       expect(deliverSpy).not.toHaveBeenCalled();
       if (yielded) {
         expect(await markRequesterTurnYieldedWithAuthority(requester)).toBe(2);
       }
-      expect(
-        await settleRequesterTurnAfterSessionSpawns({
-          ...requester,
-          requesterYielded: yielded,
-          acceptedSessionSpawns: children.map((child) => ({
-            runId: child.runId,
-            childSessionKey: child.childSessionKey,
-            expectsCompletionMessage: true,
-          })),
-          schedule: vi.fn(),
-        }),
-      ).toBe(true);
+      expect(await settleChildren(requester, children, yielded)).toBe(true);
     } finally {
       requesterTurn.end(requesterTurnRunId);
       requesterTurn.restore();

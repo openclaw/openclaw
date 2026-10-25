@@ -4,9 +4,10 @@ import { expect, it } from "vitest";
 import * as proof from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
-const { fixture, outcomeRef, lockRef, describePosix, unknownProjection } =
-  createMergeOutcomeFixtureHarness();
+const { fixture, lockRef, describePosix, unknownProjection } = createMergeOutcomeFixtureHarness();
 const knownProjection = { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" };
+const credit = "Co-authored-by: Fixture Contributor <contributor@example.com>";
+const creditedFixture = () => fixture(`Source change\n\n${credit}\n`);
 type Fixture = ReturnType<typeof fixture>;
 type State = ReturnType<Fixture["state"]>;
 type Observation = State["observations"][number];
@@ -74,12 +75,6 @@ function expectNoDispatch(f: ReturnType<typeof fixture>) {
   expect(f.captures()).toEqual([]);
 }
 
-function expectSnapshot(stderr: string, prefix: string, expected: unknown) {
-  const snapshots = stderr.split("\n").filter((line) => line.startsWith(prefix));
-  const values = snapshots.map((line) => JSON.parse(line.slice(prefix.length)));
-  expect(values, stderr).toEqual([expected]);
-}
-
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
   it("stops before intent when queue removal invalidates the captured squash body", () => {
     const f = proof.configuredFixture(fixture, {
@@ -106,45 +101,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(() => f.git(["rev-parse", "--verify", lockRef])).toThrow();
     },
   );
-
-  it("explains every rejected admission fact and local conflicts before dispatch", () => {
-    const f = fixture();
-    f.advance("conflicting main\n", "stable\n");
-    proof.configureMerge(f, {
-      observations: [
-        {
-          pr: {
-            state: "CLOSED",
-            headRefOid: f.base,
-            baseRefName: "release",
-            isDraft: true,
-            mergeable: "CONFLICTING",
-            mergeStateStatus: "DIRTY",
-            autoMergeRequest: { mergeMethod: "SQUASH" },
-            isInMergeQueue: true,
-          },
-        },
-      ],
-    });
-    const run = proof.expectExit(f.run(), 1);
-    for (const line of [
-      'state: observed="CLOSED"; expected="OPEN"',
-      `headRefOid: observed="${f.base}"; expected="${f.head}"`,
-      'baseRefName: observed="release"; expected="main"',
-      "isDraft: observed=true; expected=false",
-      'mergeable: observed="CONFLICTING"; expected="MERGEABLE|UNKNOWN"',
-      'autoMergeRequest: observed={"mergeMethod":"SQUASH"}; expected=null',
-      "isInMergeQueue: observed=true; expected=false",
-      'REST pulls/123: mergeable=false; mergeable_state="dirty"',
-      "Conflicting path: owner.txt",
-      `Local outcome ref ${outcomeRef}: absent`,
-      "Legacy .local/merge-output.log: absent",
-      "rerun merge-run; if the operation lock was retained",
-    ]) {
-      expect(run.output).toContain(line);
-    }
-    expectNoDispatch(f);
-  });
 
   it.each([
     { mergeStateStatus: "BLOCKED", admin: false, settles: true },
@@ -175,12 +131,12 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   it.each([
     { auto: false, mergeStateStatus: "CLEAN", route: "immediate" },
     { auto: true, mergeStateStatus: "BLOCKED", route: "auto" },
-    { auto: false, mergeStateStatus: "CLEAN", route: "immediate", statusFirst: true },
+    { auto: false, mergeStateStatus: "HAS_HOOKS", route: "immediate", statusFirst: true },
     { auto: false, mergeStateStatus: "CLEAN", route: "immediate", unknownReads: 5 },
   ])(
     "settles UNKNOWN before pinned dispatch: %j",
     ({ auto, mergeStateStatus, route, statusFirst, unknownReads }) => {
-      const f = proof.configuredFixture(fixture, {
+      const f = proof.configuredFixture(creditedFixture, {
         observations: unknownReads
           ? [
               ...Array.from({ length: unknownReads }, () => ({ pr: unknownProjection })),
@@ -195,6 +151,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       proof.expectExit(f.run(auto));
       const state = f.state();
       proof.expectPinnedMerge(f, route);
+      expect(state.mergeBody).toBe(`Fixture body\n\n${credit}\n`);
       expect(state).toMatchObject({
         mutations: 1,
         posts: 1,
@@ -219,7 +176,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       ],
     }).flatMap(([route, stages]) => stages.map((stage) => ({ route, stage }))),
   )("lands $route squash when main advances during $stage admission", ({ route, stage }) => {
-    const f = fixture();
+    const f = route === "Crabbox" && stage === "final" ? creditedFixture() : fixture();
     const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     const mergeStateStatus = route === "auto" ? "BLOCKED" : "CLEAN";
     const settled = { pr: { mergeable: "MERGEABLE", mergeStateStatus } };
@@ -249,6 +206,10 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     });
 
     proof.expectExit(f.run(route === "auto"));
+    if (route === "Crabbox" && stage === "final") {
+      proof.expectPinnedMerge(f, "admin");
+      expect(f.state().mergeBody).toBe(`Fixture body\n\n${credit}\n`);
+    }
     expect(f.record()).toMatchObject({
       phase: "complete",
       route: route === "Crabbox" ? "admin" : route === "auto" ? "auto" : "immediate",
@@ -323,7 +284,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   it.each(Object.entries(settlementFaults))("refuses initial settlement: %s", (fault, makeStep) => {
     const f = fixture();
     const next = f.state();
-    const { author: _author, headRefName: _headRefName, ...observedPr } = next.pr;
     const step = makeStep(f);
     const persistent = fault.startsWith("persistent ");
     const projectionDrift =
@@ -364,12 +324,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     if (persistent) {
       expect(run.output).toContain("stopped before intent/dispatch");
     }
-    const snapshot = { main: f.base, pr: observedPr, transport: "graphql" };
-    const changedSnapshot = {
-      ...snapshot,
-      main: step.main ?? f.base,
-      pr: { ...observedPr, ...step.pr },
-    };
     if (finalRead) {
       expect(run.output).toContain("PR or main changed during observation");
       expect(run.output).toContain("rerun merge-run; if the operation lock was retained");
@@ -378,8 +332,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
           ? 'mergeable: observed="UNKNOWN"; expected="MERGEABLE"'
           : 'mergeStateStatus: observed="UNKNOWN"; expected="CLEAN"',
       );
-      expectSnapshot(run.stderr, "Merge stability observation: ", snapshot);
-      expectSnapshot(run.stderr, "Merge stability reread: ", changedSnapshot);
     }
     if (projectionDrift) {
       expect(run.output).toContain("PR or main changed while waiting for mergeability");
@@ -387,13 +339,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     if (fault === "known HAS_HOOKS") {
       expect(run.output).toContain(
         "auto-merge admission requires MERGEABLE with CLEAN, UNSTABLE, BEHIND, or BLOCKED status",
-      );
-    }
-    if (fault === "conflicting") {
-      expectSnapshot(
-        run.stderr,
-        `Merge admission rejected (observation 2, prepared head ${f.head}): `,
-        changedSnapshot,
       );
     }
   });

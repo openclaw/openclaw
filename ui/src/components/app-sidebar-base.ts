@@ -61,7 +61,6 @@ export type AppSidebarProps = {
   onNavigate:
     | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
     | undefined;
-  onPreloadRoute: ((routeId: NavigationRouteId) => Promise<void>) | undefined;
 };
 
 export const appSidebarProperties = {
@@ -100,7 +99,6 @@ export const appSidebarProperties = {
   onUpdateSidebarEntries: { default: undefined, attribute: false },
   onPairMobile: { default: undefined, attribute: false },
   onNavigate: { default: undefined, attribute: false },
-  onPreloadRoute: { default: undefined, attribute: false },
 } satisfies {
   [Key in keyof AppSidebarProps]: {
     default: AppSidebarProps[Key];
@@ -146,7 +144,6 @@ export abstract class AppSidebarBase {
   declare onUpdateSidebarEntries: AppSidebarProps["onUpdateSidebarEntries"];
   declare onPairMobile: AppSidebarProps["onPairMobile"];
   declare onNavigate: AppSidebarProps["onNavigate"];
-  declare onPreloadRoute: AppSidebarProps["onPreloadRoute"];
   get ownerDocument(): Document {
     return this.hostElement.ownerDocument;
   }
@@ -265,6 +262,12 @@ export abstract class AppSidebarBase {
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
+    if (this.sidebarSnapshot) {
+      // Keep the cached rows, but let explicit intent select the replacement query.
+      const selected = this.sessionOwnerFilter.read();
+      this.sidebarSnapshot.ownerId = selected.ownerId;
+      this.sidebarSnapshot.involvingMe = selected.involvingMe;
+    }
   };
 
   pluginNavigation() {

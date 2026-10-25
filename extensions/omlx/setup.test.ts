@@ -589,6 +589,26 @@ describe("oMLX setup through the inference catalog", () => {
     });
   });
 
+  it.each([
+    { name: "blank input uses the default", saved: undefined, baseUrl: localUrl },
+    {
+      name: "blank input keeps the saved URL, prefilled for editing",
+      saved: "https://omlx.example.test/v1/",
+      baseUrl: "https://omlx.example.test/v1",
+    },
+  ])("$name", async ({ saved, baseUrl }) => {
+    const fetchMock = fixture();
+    const ctx = interactiveContext("", "");
+    ctx.config = saved ? configWithProvider({ baseUrl: saved }) : {};
+    const result = await configureOmlxInteractive(ctx);
+    expect(vi.mocked(ctx.prompter.text).mock.calls[0]?.[0]).toMatchObject({
+      initialValue: saved,
+      placeholder: localUrl,
+    });
+    expect(fetchMock.mock.lastCall?.[0]).toBe(`${baseUrl}/models`);
+    expect(result.configPatch?.models?.providers?.omlx?.baseUrl).toBe(baseUrl);
+  });
+
   it("reports a non-string model option before discovery or credential persistence", async () => {
     const fetchMock = fixture();
     const ctx = nonInteractiveContext();

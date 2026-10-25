@@ -37,6 +37,7 @@ function clone(params: Partial<CloneParams>, models = [template("template-a")]) 
     ...params,
   });
 }
+const transport = { api: "anthropic-messages", baseUrl: "https://models.example" } as const;
 
 it("clones the first matching template and applies patches", () => {
   const model = clone(
@@ -51,14 +52,8 @@ it("clones the first matching template and applies patches", () => {
 });
 
 it("normalizes the patched transport", () => {
-  const model = clone({
-    patch: { api: "anthropic-messages", baseUrl: "https://models.example/v1" },
-  });
-  expect(model).toEqual(
-    template(modelId, {
-      api: "anthropic-messages",
-      baseUrl: "https://models.example",
-    }),
+  expect(clone({ patch: { ...transport, baseUrl: transport.baseUrl + "/v1" } })).toEqual(
+    template(modelId, transport),
   );
 });
 
@@ -110,17 +105,16 @@ it.each(["template", "synthetic"] as const)(
       match: (id) => id === modelId,
       templateIds: ["template-a"],
       patch: ({ normalizedModelId }) => ({
-        api: "anthropic-messages",
+        ...transport,
         provider,
-        baseUrl: "https://models.example/v1/",
+        baseUrl: transport.baseUrl + "/v1/",
         reasoning: normalizedModelId === modelId,
       }),
     };
     const model = family(source === "template" ? [original] : [], entry, { synthesize: true });
     expect(model).toMatchObject({
       ...identity,
-      api: "anthropic-messages",
-      baseUrl: "https://models.example",
+      ...transport,
       reasoning: true,
     });
     expect([original.api, original.baseUrl]).toEqual(["openai-completions", undefined]);
@@ -129,8 +123,8 @@ it.each(["template", "synthetic"] as const)(
 
 it.each([true, false])("preserves existing rows only after a family matches (%s)", (matches) => {
   const existing = template(modelId, {
-    api: "anthropic-messages",
-    baseUrl: "https://models.example/v1",
+    ...transport,
+    baseUrl: transport.baseUrl + "/v1",
   });
   const patch = vi.fn(() => ({ name: "must-not-replace-existing" }));
   const entry = { match: () => matches, patch };

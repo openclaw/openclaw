@@ -1,20 +1,23 @@
+import { createMemo } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
+import type { ChannelAccountSnapshot, CronJob, ToolsCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
-import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
+import { createInitialCronState } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
+import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import {
   createAgentViewTestProps as createProps,
@@ -64,11 +67,14 @@ function renderFiles(
       readData() {
         return { ...createProps().readData(), ...this };
       },
+      presentationRetired: createProps().presentationRetired,
       agentId: "alpha",
+      listRead: null,
       agentFileConflict: null,
       canWrite: true,
       agentFilesLoading: false,
-      agentFilesError: null,
+      agentFileRead: null,
+      agentFileOutcome: null,
       agentFileSaving: false,
       ...inertAgentFileControls,
       ...params,
@@ -111,21 +117,33 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
 }
 
 describe("renderAgents", () => {
-  it("renders the selected agent's tool catalog loading state", () => {
+  it("announces an agent list failure as an alert", async () => {
     const container = document.createElement("div");
-    const props = createProps();
-    renderView(
-      {
-        tools: { ...props.tools },
-        readData: () => ({
-          ...createProps().readData(),
-          agentsPanel: "tools",
-          toolsCatalogLoading: true,
-        }),
-      },
-      container,
+    renderView({ listRead: Promise.resolve({ error: "Agent list unavailable" }) }, container);
+    await waitForSolid(() =>
+      expect(
+        Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
+          alert.textContent?.trim(),
+        ),
+      ).toEqual(["Agent list unavailable"]),
     );
-    expect(container.querySelector('.settings-loading-skeleton[aria-busy="true"]')).not.toBeNull();
+  });
+
+  it("renders the selected agent's tool catalog loading state", () => {
+    const mounted = mountConnected(() => {
+      const readCatalog = createMemo(() => new Promise<ToolsCatalogResult>(() => {}));
+      const props = createProps();
+      return (
+        <Agents
+          {...props}
+          tools={{ ...props.tools, readCatalog }}
+          readData={() => ({ ...props.readData(), agentsPanel: "tools" })}
+        />
+      );
+    });
+    expect(
+      mounted.container.querySelector('.settings-loading-skeleton[aria-busy="true"]'),
+    ).not.toBeNull();
   });
 
   it("renders the active agent tab and selects a different panel", () => {
@@ -218,8 +236,12 @@ describe("renderAgents", () => {
   });
 
   it("shows a rejected agent jobs refresh beside retained jobs without hiding scheduler feedback", async () => {
-    const client = createTestGatewayClient(async () => {
-      throw new Error("Agent jobs could not be refreshed.");
+    const client = createTestGatewayClient(async (method) => {
+      throw new Error(
+        method === "cron.status"
+          ? "Scheduler status is unavailable."
+          : "Agent jobs could not be refreshed.",
+      );
     });
     const cronState = {
       ...createInitialCronState({ client, connected: true }),
@@ -228,15 +250,20 @@ describe("renderAgents", () => {
       cronJobs: [createCronJob("retained-job", { name: "Retained reminder" })],
     };
     const container = document.createElement("div");
+    const presenter = createAgentCronPresenter({
+      currentState: () => cronState,
+      readState: () => cronState,
+      canCall: () => true,
+      publish: () => renderCurrent(),
+    });
     const renderCurrent = (): void => {
       renderView(
         {
           selectedAgentId: "alpha",
           cron: {
             ...createProps().cron,
-            onRefresh: () => {
-              void loadCronJobsPage(cronState, { tableFilters: true }).then(renderCurrent);
-            },
+            read: presenter.read,
+            onRefresh: presenter.onRefresh,
           },
           readData: () => ({ ...createProps().readData(), agentsPanel: "cron", cron: cronState }),
         },
@@ -294,17 +321,20 @@ describe("renderAgents", () => {
       cronJobsNextOffset: 50,
     };
     const container = document.createElement("div");
+    const presenter = createAgentCronPresenter({
+      currentState: () => cronState,
+      readState: () => cronState,
+      canCall: () => true,
+      publish: () => renderCurrentPage(),
+    });
     const renderCurrentPage = (): void => {
       renderView(
         {
           selectedAgentId: "alpha",
           cron: {
             ...createProps().cron,
-            onLoadMore: () => {
-              const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
-              renderCurrentPage();
-              void nextPage.then(renderCurrentPage);
-            },
+            read: presenter.read,
+            onLoadMore: presenter.onLoadMore,
           },
           readData: () => ({
             ...createProps().readData(),
@@ -320,6 +350,7 @@ describe("renderAgents", () => {
               cronScopedNextWakeAtMs: null,
               cronLoading: cronState.cronLoading,
               cronError: cronState.cronError,
+              cronNotice: cronState.cronNotice,
             },
           }),
         },
@@ -550,8 +581,6 @@ describe("renderAgents", () => {
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          agentSkillsLoading: false,
-          agentSkillsError: null,
           agentSkillsAgentId: "alpha",
         }),
       },
@@ -573,8 +602,6 @@ describe("renderAgents", () => {
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          agentSkillsLoading: false,
-          agentSkillsError: null,
           agentSkillsAgentId: "beta",
         }),
       },
@@ -601,7 +628,7 @@ describe("renderAgents", () => {
           readChannels: () => ({
             ...createProps().readChannels(),
             channelsSnapshot: null,
-            channelsLoading: false,
+            channelsRead: null,
             channelsError: null,
             channelsLastSuccess: null,
           }),
@@ -656,7 +683,7 @@ describe("renderAgentChannels", () => {
             channelAccounts: { discord: accounts },
             channelDefaultAccountId: { discord: "default" },
           },
-          channelsLoading: false,
+          channelsRead: null,
           channelsError: null,
           channelsLastSuccess: Date.now(),
         }),
@@ -888,32 +915,37 @@ describe("renderAgentFiles", () => {
 });
 
 describe("renderAgents toolbar", () => {
-  it("keeps standalone agent creation available with no agents", () => {
-    const container = document.createElement("div");
-    const onCreateAgent = vi.fn();
-    renderView(
-      {
-        selectedAgentId: "alpha",
-        onCreateAgent,
-        readData: () => ({
-          ...createProps().readData(),
-          agentsList: {
-            defaultId: "alpha",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [],
-          },
-        }),
-      },
-      container,
-    );
+  it.each([false, true])(
+    "keeps standalone creation with no selectable agents (system: %s)",
+    (system) => {
+      const container = document.createElement("div");
+      const onCreateAgent = vi.fn();
+      renderView(
+        {
+          selectedAgentId: "alpha",
+          onCreateAgent,
+          readData: () => ({
+            ...createProps().readData(),
+            agentsList: {
+              defaultId: "alpha",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: system ? [{ id: "alpha", kind: "system" }] : [],
+            },
+          }),
+        },
+        container,
+      );
 
-    expect(container.querySelector("openclaw-agent-select")).toBeNull();
-    const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
-    expect(createButton?.textContent?.trim()).toBe(t("custodian.newAgent"));
-    createButton?.click();
-    expect(onCreateAgent).toHaveBeenCalledOnce();
-  });
+      expect(container.querySelector("openclaw-agent-select")).toBeNull();
+      expect(container.querySelector("#agent-panel")).toBeNull();
+      expect(container.textContent).toContain(t("agents.selectSubtitle"));
+      const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
+      expect(createButton?.textContent?.trim()).toBe(t("custodian.newAgent"));
+      createButton?.click();
+      expect(onCreateAgent).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps unavailable creation visible and disabled with a recovery reason", () => {
     const container = document.createElement("div");
@@ -958,24 +990,24 @@ describe("renderAgents toolbar", () => {
   });
 });
 
-it("surfaces agent config save errors in the active panel", () => {
+it("retires agent config errors during save and retains all owner error messages", () => {
   const container = document.createElement("div");
-  renderView(
-    {
-      config: {
-        configForm: { agents: { entries: { beta: {} } } },
-        configSnapshot: null,
-        configLoading: false,
-        configSaving: false,
-        configFormDirty: true,
-        lastError: "mock validation failure",
-      },
-    },
-    container,
-  );
-
-  const alert = container.querySelector('[role="alert"]');
-  expect(alert?.textContent).toContain("mock validation failure");
+  const failedConfig = {
+    configForm: { agents: { entries: { beta: {} } } },
+    configSnapshot: null,
+    configLoading: false,
+    configSaving: false,
+    configFormDirty: true,
+    lastError: "mock validation failure",
+  };
+  renderView({ config: failedConfig }, container);
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(failedConfig.lastError);
+  renderView({ config: { ...failedConfig, configSaving: true, lastError: null } }, container);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  for (const lastError of [failedConfig.lastError, "Config could not be loaded"]) {
+    renderView({ config: { ...failedConfig, lastError } }, container);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(lastError);
+  }
 });
 
 it.each([

@@ -19,6 +19,14 @@ import {
   PackageIntegrityTimeoutError,
 } from "./package-update-integrity.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import {
+  captureSwap,
+  expectInstallation,
+  expectNoCalls,
+  expectVersion,
+  readText,
+  retain,
+} from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -29,6 +37,34 @@ afterEach(() => {
 });
 
 describe("package verification bounds", () => {
+  it.each(["presence", "root", "tree"] as const)(
+    "continues with a warning when the baseline %s stat exceeds its deadline",
+    async (operation) => {
+      await withTestDir({ prefix: "openclaw-baseline-stat-deadline-" }, async (base) => {
+        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const target = operation === "tree" ? path.join(packageRoot, "dist") : packageRoot;
+        const lstat = fs.lstat.bind(fs);
+        let now = performance.now();
+        vi.spyOn(performance, "now").mockImplementation(() => now);
+        let reads = 0;
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          const stat = await lstat(...args);
+          if (String(args[0]) === target && ++reads === (operation === "root" ? 2 : 1)) {
+            now += 1_001;
+          }
+          return stat;
+        });
+        const { result, transaction } = await captureSwap({ ...params, timeoutMs: 1_000 });
+        expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+        expect(result.step.advisory?.message).toContain("Package rollback verification timed out");
+        expect(result.step.stderrTail ?? "").not.toContain("Installation recovery is unverified");
+        await expectInstallation(packageRoot, launcher, true);
+        expect((await transaction.rollback(() => {})).exitCode).toBe(0);
+        await expectInstallation(packageRoot, launcher);
+      });
+    },
+  );
+
   it("keeps a fresh reader usable after a wall-clock jump forward", async () => {
     await withTestDir({ prefix: "openclaw-integrity-clock-forward-" }, async (base) => {
       const reader = createPackageIntegrityReader(1_000);
@@ -233,13 +269,8 @@ describe("package verification bounds", () => {
         expect(result.step.advisory).toBeUndefined();
         expect(settled).toBe(true);
         expect(hash.mock.calls.some(([file]) => file === second)).toBe(false);
-        expect(beforeActivate).not.toHaveBeenCalled();
-        expect(onLiveMutation).not.toHaveBeenCalled();
-        expect(onTransaction).not.toHaveBeenCalled();
-        expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
-          '"version":"1.0.0"',
-        );
-        expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
+        expectNoCalls(beforeActivate, onLiveMutation, onTransaction);
+        await expectInstallation(packageRoot, launcher);
       } finally {
         release.resolve();
         await update;
@@ -256,14 +287,10 @@ describe("package verification bounds", () => {
         const payload = path.join(packageRoot, "runtime-payload.bin");
         await fs.writeFile(payload, "");
         await fs.truncate(payload, 8 * 1024 * 1024 * 1024 + 1);
-        let transaction: PackageUpdateTransaction | undefined;
         const beforeActivate = vi.fn();
-        const result = await swapStagedPackageInstall({
+        const { result, transaction } = await captureSwap({
           ...params,
           beforeActivate,
-          onTransaction: (value) => {
-            transaction = value;
-          },
         });
         expect(result.status, result.step.stderrTail ?? "").toBe("committed");
         expect(beforeActivate).toHaveBeenCalledOnce();
@@ -272,10 +299,7 @@ describe("package verification bounds", () => {
         expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
           expect.objectContaining({ step: "warning:package-swap", status: "completed" }),
         );
-        expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
-        if (!transaction) {
-          throw new Error("Missing package transaction");
-        }
+        expect(await readText(launcher)).toBe("candidate launcher\n");
         if (outcome === "changed identity") {
           const originalRoot = `${transaction.backupRoot}.original`;
           await fs.rename(transaction.backupRoot, originalRoot);
@@ -288,7 +312,7 @@ describe("package verification bounds", () => {
           expect(refused.exitCode).toBe(1);
           expect(refused.advisory).toBeUndefined();
           expect(refused.stderrTail).toContain("retained package tree changed");
-          expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
+          expect(await readText(launcher)).toBe("candidate launcher\n");
           await expect(fs.stat(transaction.backupRoot)).resolves.toBeDefined();
           return;
         }
@@ -296,10 +320,7 @@ describe("package verification bounds", () => {
         expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
         expect(restored.advisory?.message).toContain("fingerprint verification unavailable");
         expect(restored.stderrTail ?? "").not.toMatch(/unverified|verification failed/);
-        expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
-        expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
-          '"version":"1.0.0"',
-        );
+        await expectInstallation(packageRoot, launcher);
         const actual = await fs.stat(packageRoot);
         expect([actual.dev, actual.ino]).toEqual([original.dev, original.ino]);
         expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
@@ -344,8 +365,7 @@ describe("package verification bounds", () => {
       expect(grew).toBe(true);
       expect(result.status).toBe("failed");
       expect(oversizedRead).toBe(false);
-      expect(beforeActivate).not.toHaveBeenCalled();
-      expect(onLiveMutation).not.toHaveBeenCalled();
+      expectNoCalls(beforeActivate, onLiveMutation);
     });
   });
 
@@ -355,16 +375,11 @@ describe("package verification bounds", () => {
       const manifest = path.join(packageRoot, "package.json");
       const contents = await fs.readFile(manifest, "utf8");
       await fs.writeFile(manifest, contents.padEnd(1024 * 1024, " "));
-      const transactions: PackageUpdateTransaction[] = [];
-      const result = await swapStagedPackageInstall({
-        ...params,
-        onTransaction: (transaction) => {
-          transactions.push(transaction);
-        },
-      });
+      const onTransaction = vi.fn();
+      const { result, transaction } = await captureSwap({ ...params, onTransaction });
       expect(result.status).toBe("committed");
-      expect(transactions).toHaveLength(1);
-      expect((await transactions[0]!.rollback(() => {})).exitCode).toBe(0);
+      expect(onTransaction).toHaveBeenCalledOnce();
+      expect((await transaction.rollback(() => {})).exitCode).toBe(0);
       await expect(fs.readFile(manifest, "utf8")).resolves.toHaveLength(1024 * 1024);
     });
   });
@@ -416,8 +431,7 @@ describe("package verification bounds", () => {
           ]);
           expect(entered).toBe(true);
           expect(result).toMatchObject({ status: "failed" });
-          expect(beforeActivate).not.toHaveBeenCalled();
-          expect(onLiveMutation).not.toHaveBeenCalled();
+          expectNoCalls(beforeActivate, onLiveMutation);
         } finally {
           clearTimeout(timer);
           blocked.resolve();
@@ -505,10 +519,7 @@ describe("package verification bounds", () => {
             Promise.all(admitted.map((file) => jobs.get(file)!.settled.promise)),
             signal,
           );
-          await expect(
-            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-          ).resolves.toContain('"version":"2.0.0"');
-          await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
+          await expectInstallation(packageRoot, launcher, true);
         } finally {
           for (const job of jobs.values()) {
             job.release.resolve();
@@ -571,17 +582,7 @@ describe("npm rollback content diagnostics", () => {
         const modules = path.join(packageRoot, "node_modules");
         await fs.mkdir(modules);
         await fs.writeFile(path.join(modules, ".package-lock.json"), '{"lockfileVersion":3}');
-        let transaction: PackageUpdateTransaction | undefined;
-        const swap = await swapStagedPackageInstall({
-          ...params,
-          onTransaction: (value) => {
-            transaction = value;
-          },
-        });
-        expect(swap.status).toBe("committed");
-        if (!transaction) {
-          throw new Error("missing transaction");
-        }
+        const transaction = await retain(params);
         const cache = path.join(transaction.backupRoot, "node_modules", ".package-lock.json");
         const entry = path.join(transaction.backupRoot, "dist", "index.js");
         if (change === "rewrite cache") {
@@ -592,15 +593,14 @@ describe("npm rollback content diagnostics", () => {
           await fs.symlink("../dist/index.js", cache);
         } else if (change === "cache during scan") {
           const lstat = fs.lstat.bind(fs);
-          let parentReads = 0;
+          let cacheReads = 0;
           vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-            const stat = await lstat(...args);
-            if (String(args[0]) === path.dirname(cache) && ++parentReads === 2) {
-              // Replace after the parent's final observation; only the entry recheck can catch it.
+            if (String(args[0]) === cache && ++cacheReads === 2) {
+              // Substitute before this entry's recheck, independent of sibling IO order.
               await fs.unlink(cache);
               await fs.symlink("../dist/index.js", cache);
             }
-            return stat;
+            return lstat(...args);
           });
         } else {
           const before = await fs.stat(entry);
@@ -613,9 +613,7 @@ describe("npm rollback content diagnostics", () => {
         const changed =
           change === "contents" || change === "cache symlink" || change === "cache during scan";
         expect(rollback.exitCode, rollback.stderrTail ?? "").toBe(changed ? 1 : 0);
-        expect(await fs.readFile(launcher, "utf8")).toBe(
-          changed ? "candidate launcher\n" : "old launcher\n",
-        );
+        expect(await readText(launcher)).toBe(changed ? "candidate launcher\n" : "old launcher\n");
         if (changed && change !== "cache during scan") {
           const name = change === "contents" ? "dist/index.js" : "node_modules/.package-lock.json";
           const steps = updateRunStepsFromResultStep(rollback);
@@ -711,22 +709,15 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
     }
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(f.packageRoot);
-      let transaction: PackageUpdateTransaction | undefined;
-      const result = await swapStagedPackageInstall({
+      const { result, transaction } = await captureSwap({
         ...f.params,
         activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-        onTransaction: (value) => {
-          transaction = value;
-        },
       });
       expect(result.status, result.step.stderrTail ?? "").toBe("committed");
       expect(
         openPackageActivationJournal(resolvePackageActivationAnchor(f.packageRoot)).read()
           .descriptor.previous.digest,
       ).toBe(expectedDigest.digest("hex"));
-      if (!transaction) {
-        throw new Error("missing transaction");
-      }
       const backupRoot = transaction.backupRoot;
       for (let index = 0; index < 6; index++) {
         await fs.writeFile(path.join(backupRoot, `drift-${index}.js`), "after!");
@@ -779,10 +770,8 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
         expect(rollback.failureFacts?.[index]?.message).toContain("sha256");
       }
       expect(rollback.stderrTail).not.toContain("drift-5.js");
-      expect(await fs.readFile(f.launcher, "utf8")).toBe("candidate launcher\n");
-      expect(
-        await fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
-      ).toContain('"version":"1.0.0"');
+      expect(await readText(f.launcher)).toBe("candidate launcher\n");
+      await expectVersion(transaction.backupRoot, "1.0.0");
     });
   });
 });

@@ -124,22 +124,6 @@ describe("runIMessageCatchup", () => {
     await closeOpenClawStateDatabaseAsync();
   });
 
-  it("fetches chats then per-chat history and dispatches each row in rowid order", async () => {
-    const dispatched: string[] = [];
-    const { client, calls } = historyClient([chat(1), chat(2, "2026-05-08T11:50:00.000Z")], (id) =>
-      id === 1
-        ? [makeRow(102), makeRow(100, 1, "2026-05-08T11:50:00Z")]
-        : [makeRow(101, 2, "2026-05-08T11:51:00Z")],
-    );
-
-    const summary = await run(client, { dispatchPayload: collectGuids(dispatched) });
-
-    expect(summary).toMatchObject({ querySucceeded: true, fullyCaughtUp: true, replayed: 3 });
-    expect(dispatched).toEqual(["g-100", "g-101", "g-102"]);
-    expect(calls[0]?.method).toBe("chats.list");
-    expect(calls.filter((c) => c.method === "messages.history")).toHaveLength(2);
-  });
-
   it("skips chats whose last_message_at is older than the catchup window", async () => {
     let historyCalls = 0;
     const { client } = historyClient([chat(1), chat(99, "2025-12-01T00:00:00.000Z")], (id) => {

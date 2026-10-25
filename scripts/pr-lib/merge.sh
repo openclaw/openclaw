@@ -661,10 +661,13 @@ merge_run() {
       [ "$auto_merge_requested" = false ] && [ "$cancel_auto" = false ] &&
       [ -z "$merged_head$observed_head$legacy_directory$refusal_directory" ] &&
       [ "$recovery_oid" = "$MERGE_OUTCOME_OID" ] &&
-      printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '
-        .phase == "intent" and .route == "auto" and .method == "squash" and
-        .cancellation.state == "confirmed"' >/dev/null || {
-        merge_outcome_stop "current workflow recovery requires the selected confirmed cancelled auto outcome and replacement head"
+      printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg replacement "$replacement_head" \
+        --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
+        .phase == "intent" and .method == "squash" and
+        (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed"
+         else $admin and .route == "admin" and .accepted == false and
+           .priorCiAdmin.dispatchTransport == "rest" end)' >/dev/null || {
+        merge_outcome_stop "current workflow recovery requires the selected cancelled auto outcome or confirmed same-head REST admin recovery"
         return 1
       }
   fi

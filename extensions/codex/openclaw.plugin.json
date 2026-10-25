@@ -300,6 +300,11 @@
                 "pluginName": {
                   "type": "string"
                 },
+                "read_only": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Expose only app tools explicitly marked read-only. Unknown and disabled tools are denied."
+                },
                 "allow_destructive_actions": {
                   "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }]
                 }

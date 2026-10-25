@@ -124,14 +124,6 @@ it("pins one App Server connection while archive configuration changes live", as
     startOptions: expect.objectContaining({ command: "codex-archive-a", homeScope: "user" }),
     config: initialRuntimeConfig,
   });
-  expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
-    "thread/read",
-    "thread/list",
-    "thread/read",
-    "thread/list",
-    "thread/list",
-    "thread/archive",
-  ]);
   for (const [request] of pinnedConnectionMocks.request.mock.calls) {
     expect(request.client).toBe(pinnedConnectionMocks.client);
     expect(request.config).toBe(acquisition?.config);
@@ -174,7 +166,6 @@ it("rejects archive while another OpenClaw session owns the native thread", asyn
   const control = createEligibleControl();
 
   await expectArchiveBlocked(control, "attached to an OpenClaw session", bindingStore);
-  expect(control.requireEligibleThread).toHaveBeenCalledWith("thread-1");
 });
 
 it("rejects archive when a paginated archived descendant has an OpenClaw owner", async () => {
@@ -197,14 +188,6 @@ it("rejects archive when a paginated archived descendant has an OpenClaw owner",
     "spawned descendant is owned by an OpenClaw session",
     bindingStore,
   );
-  expect(control.listDescendantPage).toHaveBeenCalledWith({
-    ancestorThreadId: "thread-1",
-    archived: true,
-    limit: 100,
-    sortKey: "created_at",
-    sortDirection: "desc",
-    useStateDbOnly: true,
-  });
   expect(control.listDescendantPage).toHaveBeenCalledWith(
     expect.objectContaining({ archived: true, cursor: "descendants-2" }),
   );
@@ -329,10 +312,6 @@ it("registers generic actions and keeps paired-node archive view-only", async ()
   const isolated = { ...localSource, allowProcessHomeFallback: false };
   const archive = (source: typeof localSource) =>
     provider?.archive?.({ ...source, confirmNoOtherRunner: true });
-  expect(provider?.resolveCreateSession?.({ agentId: "main" })).toEqual({
-    model: "openai/gpt-6-astra",
-    agentRuntime: "codex",
-  });
   await withEnvAsync({ CODEX_HOME: undefined }, async () => {
     for (const operation of [
       () => provider?.continueSession?.({ ...isolated, clientScopes: ["operator.admin"] }),

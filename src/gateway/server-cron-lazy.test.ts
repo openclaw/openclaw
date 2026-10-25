@@ -37,7 +37,6 @@ describe("createLazyGatewayCronState", () => {
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     };
     buildGatewayCronService.mockReset().mockImplementation(() => state);
     lazy = createLazyGatewayCronState(createParams());
@@ -167,6 +166,30 @@ describe("createLazyGatewayCronState", () => {
     expect(await lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
     expect(cron.start).not.toHaveBeenCalled();
     expect(cron.wake).toHaveBeenCalledExactlyOnceWith({ mode: "now", text: "ping" });
+  });
+
+  it("rejects a deferred notice when the lazy scheduler stops during admission", async () => {
+    const entered = deferred();
+    const resume = deferred();
+    let committed = false;
+    state.deferHookWake = async ({ commitGuard }) => {
+      entered.resolve();
+      await resume.promise;
+      commitGuard();
+      committed = true;
+      return { ok: true, eventOutcome: "queued" };
+    };
+    const request = lazy.deferHookWake!({
+      text: "Scheduled notice",
+      agentId: "main",
+      commitGuard() {},
+    });
+    const refused = expect(request).rejects.toThrow("Scheduled Hook wake owner changed");
+    await entered.promise;
+    lazy.cron.stop();
+    resume.resolve();
+    await refused;
+    expect(committed).toBe(false);
   });
 
   it.each(["run", "enqueueRun"] as const)(

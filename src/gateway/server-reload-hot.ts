@@ -273,9 +273,6 @@ export function createGatewayReloadHandlers(
           params.setState(nextState);
           runtimeCommitted = true;
         }
-        if (plan.restartHeartbeat) {
-          nextState.heartbeatRunner.updateConfig(nextConfig);
-        }
         if (modelRuntime.required) {
           // Retire model/auth inputs together so requests cannot mix generations.
           preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
@@ -341,22 +338,11 @@ export function createGatewayReloadHandlers(
         });
       }
       await runAfterPluginLifecycleCommit(async () => {
-        if (plan.restartHeartbeat) {
-          await reviveAgentDatabasesAfterConfigCommit(listAgentIds(nextConfig), (message) =>
-            params.logReload.warn(message),
-          );
-        }
+        await reviveAgentDatabasesAfterConfigCommit(listAgentIds(nextConfig), (message) =>
+          params.logReload.warn(message),
+        );
         if (!ownsCron()) {
           return;
-        }
-        // Only accepted runtime state may own monitor writes and emitted events.
-        if (plan.reconcileSystemJobs) {
-          const result = await nextState.cronState.reconcileSystemJobs().catch(failConfigCommit);
-          if (result === "retry-scheduled") {
-            params.logReload.warn(
-              "cron system jobs pending; continuing hot reload with cron retry",
-            );
-          }
         }
         if (plan.restartCron && ownsCron()) {
           startGatewayCronWithLogging({
@@ -619,7 +605,6 @@ export function createGatewayReloadHandlers(
             }),
           timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
           onWarn: params.logReload.warn,
-          label: "bundle-mcp runtime disposal during config reload",
         });
       }
 

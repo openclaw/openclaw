@@ -20,13 +20,6 @@ import {
   mockedOpenRootFile,
 } from "./fs-bridge.test-helpers.js";
 
-type DockerRawCall = NonNullable<ReturnType<typeof findCallByDockerArg>>;
-
-function requireDockerCall(call: DockerRawCall | undefined, label: string): DockerRawCall {
-  expect(call, label).toBeDefined();
-  return call!;
-}
-
 async function createStatBridge(
   stateDir: string,
   stat: (script: string) => ReturnType<typeof dockerExecResult>,
@@ -144,15 +137,11 @@ describe("sandbox fs bridge anchored ops", () => {
     const { bridge } = await createSeededSandboxFsBridge(stateDir);
     await bridge.createFileExclusive!({ filePath: "nested/new.txt", data: "created" });
 
-    const opCall = mockedExecDockerRaw.mock.calls.find(
-      ([args]) =>
-        getDockerScript(args).includes('exec "$python_cmd" -c "$python_script" "$@"') &&
-        getDockerArg(args, 1) === "create",
-    );
-    const args = requireDockerCall(opCall, "exclusive create")[0];
-    ["create", "/workspace", "nested", "new.txt", "1"].forEach((value, index) => {
-      expect(getDockerArg(args, index + 1)).toBe(value);
-    });
+    const opCall = findCallByDockerArg(1, "create");
+    expect(opCall).toBeDefined();
+    const args = opCall![0];
+    expect(getDockerScript(args)).toContain('exec "$python_cmd" -c "$python_script" "$@"');
+    expect(args.slice(7)).toEqual(["create", "/workspace", "nested", "new.txt", "1"]);
     expect(args).not.toContain("/workspace/nested/new.txt");
   });
 
@@ -165,8 +154,9 @@ describe("sandbox fs bridge anchored ops", () => {
     });
     await bridge.mkdirp({ filePath: "..cache" });
 
-    const mkdirCall = requireDockerCall(findCallByDockerArg(1, "mkdirp"), "mkdirp");
-    expect(mkdirCall[0].slice(8, 10)).toEqual(["/workspace", "..cache"]);
+    const mkdirCall = findCallByDockerArg(1, "mkdirp");
+    expect(mkdirCall).toBeDefined();
+    expect(mkdirCall![0].slice(8, 10)).toEqual(["/workspace", "..cache"]);
   });
 
   it("rejects a mismatched pinned basename", async () => {
@@ -197,11 +187,9 @@ describe("sandbox fs bridge anchored ops", () => {
       bridge.stat({ filePath: "note.txt", expectedPolicyPath: "/workspace/note.txt" }),
     ).resolves.toBeNull();
 
-    const statCall = requireDockerCall(
-      findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"'),
-      "stat",
-    );
-    expect(getDockerScript(statCall[0])).toContain('LC_ALL=C stat -c "%F|%s|%y" -- "$2"');
+    const statCall = findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"');
+    expect(statCall).toBeDefined();
+    expect(getDockerScript(statCall![0])).toContain('LC_ALL=C stat -c "%F|%s|%y" -- "$2"');
   });
 
   it("keeps non-missing stat failures as errors", async () => {

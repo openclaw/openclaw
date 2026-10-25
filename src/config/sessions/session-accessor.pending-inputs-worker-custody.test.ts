@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
 import { resolveSessionMutationAuthorizationAsync as authorizeMutation } from "../../gateway/session-sharing-authorization-async.js";
@@ -66,6 +65,18 @@ function authorizedInput(
     assertAdmittedCurrent: assertCurrent,
     authority: authorization.admittedInputAuthority,
   };
+}
+async function authorize(
+  requestParams: Parameters<typeof authorizeMutation>[0]["requestParams"],
+  client: Parameters<typeof authorizeMutation>[0]["client"],
+  cfg = rolePolicyConfig(),
+) {
+  const context = createGatewayRequestContext(makeContextParams());
+  context.getRuntimeConfig = () => cfg;
+  context.getCommittedRuntimeConfig = () => cfg;
+  const result = await authorizeMutation({ client, method: "chat.send", requestParams, context });
+  expect(result.error).toBeNull();
+  return result.authorization!;
 }
 
 describe("accepted input worker custody", () => {
@@ -135,17 +146,7 @@ describe("accepted input worker custody", () => {
         const client = roleClient("view", "incognito-custody");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env })).release };
         client.connect.scopes = ["operator.admin"];
-        const context = createGatewayRequestContext(makeContextParams());
-        context.getRuntimeConfig = () => cfg;
-        context.getCommittedRuntimeConfig = () => cfg;
-        const resolved = await authorizeMutation({
-          client,
-          method: "chat.send",
-          requestParams: scope,
-          context,
-        });
-        expect(resolved.error).toBeNull();
-        const authorization = resolved.authorization!;
+        const authorization = await authorize(scope, client, cfg);
         const input = authorizedInput(authorization, "incognito-memory", "Continue in memory");
         try {
           receipt = await stageInput(scope, input);
@@ -207,14 +208,11 @@ it("refreshes every collected source after a non-revoking profile change", async
       for (const [index, profile] of [first, second].entries()) {
         setUserProfileRole(profile.id, "view");
         await addSessionMember(scope, { identityId: profile.id, addedBy: "another-profile" });
-        const result = await authorizeMutation({
-          client: sharingPolicyClient({ user: profile.id }),
-          method: "chat.send",
-          requestParams: scope,
-          context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-        });
-        expect(result.error).toBeNull();
-        const authorization = result.authorization!;
+        const authorization = await authorize(
+          scope,
+          sharingPolicyClient({ user: profile.id }),
+          cfg,
+        );
         const receipt = await stageInput(
           scope,
           authorizedInput(authorization, `collected-${index}`, `Source ${index}`),
@@ -269,14 +267,7 @@ it.each(["turn", "locked"] as const)(
         createdActor: { type: "human", source: "profile", id: "another-profile" },
       });
       await addSessionMember(scope, { identityId: profileId, addedBy: "another-profile" });
-      const resolved = await authorizeMutation({
-        client,
-        method: "chat.send",
-        requestParams: scope,
-        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-      });
-      expect(resolved.error).toBeNull();
-      const authorization = resolved.authorization!;
+      const authorization = await authorize(scope, client, cfg);
       const queries: string[] = [];
       const assertCurrent = () => {
         const host = observeHostDataSql();

@@ -1,9 +1,46 @@
-import { expect } from "vitest";
+import { assert, expect, vi } from "vitest";
 import type WebSocket from "ws";
+import { runEmbeddedAgent } from "../agents/embedded-agent-runner/run.js";
+import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
+import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { CronJobCreate } from "../cron/types.js";
-import { onceMessage, rpcReq } from "./test-helpers.js";
+import type { GatewayCronState } from "./server-cron.js";
+import {
+  gatewayReplyMock,
+  onceMessage,
+  prepareGatewayReplyRuntimeForTest,
+  rpcReq,
+  testState,
+} from "./test-helpers.js";
+
+// mock-isolation: Keep real reply admission and settlement; only provider inference is synthetic.
+vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 
 const CRON_WAIT_TIMEOUT_MS = 10_000;
+
+export async function cleanupCronTestRun(params: {
+  ws?: { close: () => void };
+  server?: { close: () => Promise<void> };
+  cronState?: Pick<GatewayCronState, "cron">;
+  prevSkipCron: string | undefined;
+}) {
+  params.ws?.close();
+  await params.server?.close();
+  if (params.cronState) {
+    const { cron } = params.cronState;
+    assert(typeof cron.stopAndDrain === "function", "Gateway cron drain is unavailable");
+    await cron.stopAndDrain();
+  }
+  testState.cronStorePath = undefined;
+  testState.cronEnabled = undefined;
+  testState.cronTriggersEnabled = undefined;
+  if (params.prevSkipCron === undefined) {
+    delete process.env.OPENCLAW_SKIP_CRON;
+    return;
+  }
+  process.env.OPENCLAW_SKIP_CRON = params.prevSkipCron;
+}
 
 export function makeCronJob(name: string, overrides: Partial<CronJobCreate> = {}): CronJobCreate {
   return {
@@ -17,30 +54,36 @@ export function makeCronJob(name: string, overrides: Partial<CronJobCreate> = {}
   };
 }
 
-/** Minimal Gateway fixtures need a session consumer before Cron can finish. */
-export async function installCronSystemEventConsumer() {
-  const [{ drainFormattedSystemEvents }, { getRuntimeConfig }, { setHeartbeatWakeHandler }] =
-    await Promise.all([
-      import("../auto-reply/reply/session-system-events.js"),
-      import("../config/config.js"),
-      import("../infra/heartbeat-wake.js"),
-    ]);
-  return setHeartbeatWakeHandler(async ({ source, agentId, sessionKey }) => {
-    if (source !== "cron") {
-      return { status: "skipped", reason: "no-pending-event" };
-    }
-    if (!agentId || !sessionKey) {
-      throw new Error("Cron wake did not resolve its session owner");
-    }
-    await drainFormattedSystemEvents({
-      cfg: getRuntimeConfig(),
-      agentId,
-      sessionKey,
-      isMainSession: true,
-      isNewSession: false,
-    });
-    return { status: "ran", durationMs: 0 };
+/** Minimal Gateway fixtures execute scheduled events through ordinary reply admission. */
+export async function installCronSystemEventConsumer(summary = "hello") {
+  await prepareGatewayReplyRuntimeForTest({ force: true });
+  const model = vi.mocked(runEmbeddedAgent);
+  const previousReply = gatewayReplyMock.getMockImplementation();
+  const previousModel = model.getMockImplementation();
+  gatewayReplyMock.mockImplementation((ctx, options, cfg) =>
+    getReplyFromConfig(ctx, options, withFullRuntimeReplyConfig(cfg ?? getRuntimeConfig())),
+  );
+  model.mockImplementation(async (params) => {
+    assert(params.preparedRunAdmission, "expected ordinary scheduled reply admission");
+    await params.preparedRunAdmission.admit("gateway", params.runId);
+    params.onExecutionPhase?.({ phase: "model_call_started" });
+    await params.onExecutionStarted?.();
+    await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+    return {
+      payloads: [{ text: summary }],
+      meta: { durationMs: 1, terminalReply: { disposition: "visible", text: summary } },
+    };
   });
+  return () => {
+    gatewayReplyMock.mockReset();
+    model.mockReset();
+    if (previousReply) {
+      gatewayReplyMock.mockImplementation(previousReply);
+    }
+    if (previousModel) {
+      model.mockImplementation(previousModel);
+    }
+  };
 }
 
 export async function waitForCronEvent(

@@ -14,6 +14,7 @@ import {
 } from "../../infra/sqlite-worker-operation-settlement.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -29,6 +30,7 @@ import { createSessionCompoundWorkerFixture } from "./session-compound-worker.te
 
 type Fault = {
   reply: "normal" | "lost" | "unknown" | "unknown-result";
+  beforeAdmissionError?: Error;
   replyError?: Error;
   transactionError?: Error;
   settlementLost?: boolean;
@@ -71,7 +73,7 @@ function createFixture() {
     lifetime,
     currentGeneration: () => `fixture:${epoch}`,
   });
-  let admit: (stage: "transaction" | "commit", publication?: unknown) => void = () => {
+  let admit: AgentWorkerOperationContext["admit"] = () => {
     throw new Error("No active transport admission");
   };
   const createKernel = () =>
@@ -79,7 +81,7 @@ function createFixture() {
       {
         options,
         open: () => database,
-        admit: (stage, publication) => admit(stage, publication),
+        admit: (stage, publication, transferList) => admit(stage, publication, transferList),
         writeTransaction: (_label, _owner, write) => {
           const result = runOpenClawAgentWriteTransaction((db) => {
             const value = write(db);
@@ -98,6 +100,7 @@ function createFixture() {
     );
   let kernel = createKernel();
   const transport: SessionActorTransport = {
+    agentId: options.agentId,
     run(operation, authorize) {
       return runOpenClawAgentWorkerWrite(options, async () => {
         async function execute<Key extends keyof SessionActorOperations>(command: {
@@ -110,6 +113,9 @@ function createFixture() {
           let admittedOutcomeDataFrames = 0;
           let interruptedOutcomeTransferFrame = false;
           commands.push(command.type);
+          if (fault.beforeAdmissionError) {
+            throw fault.beforeAdmissionError;
+          }
           const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
           const retained = { settled: completion.promise };
           const admission = createSqliteWorkerOperationAdmission((request, grant) => {
@@ -134,7 +140,7 @@ function createFixture() {
               admission.service();
             });
           const native: SqliteWorkerOperationContext = { port: admission.port };
-          admit = (stage, publication) => {
+          admit = (stage, publication, transferList) => {
             const actorPublication =
               isRecord(publication) && isRecord(publication.publication)
                 ? publication.publication
@@ -153,7 +159,10 @@ function createFixture() {
               }
               admittedOutcomeDataFrames += 1;
             }
-            requestSqliteWorkerOperationAdmission({ stage, facts: { identity, publication } });
+            requestSqliteWorkerOperationAdmission(
+              { stage, facts: { identity, publication } },
+              transferList,
+            );
           };
           try {
             await kernel.prepare(command);

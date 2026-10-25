@@ -1,10 +1,13 @@
 import { expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
+import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.test-support.js";
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
@@ -23,9 +26,78 @@ export function createStartupMethodUnlocker(unavailableGatewayMethods: Set<strin
 }
 
 export function registerGatewayStartupReadinessTests(params: {
-  start: (params: PostAttachParams) => ReturnType<typeof startGatewayPostAttachRuntime>;
+  start: (
+    params: PostAttachParams,
+    runtimeDeps?: GatewayStartupModuleMocks,
+  ) => ReturnType<typeof startGatewayPostAttachRuntime>;
   createParams: (overrides?: Partial<PostAttachParams>) => PostAttachParams;
+  createRuntimeDeps: () => GatewayStartupModuleMocks;
+  path: (...parts: string[]) => string;
+  expectAutonomousSidecarsNotStarted: () => void;
 }): void {
+  it.each([true, false])(
+    "admits update canary readiness only for attributed plugin failures (attributed=%s)",
+    async (attributed) => {
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.plugins.push(
+        createPluginRecord({
+          id: "startup-fixture",
+          source: params.path("startup-fixture", "index.js"),
+          status: "error",
+          error: "synthetic registration failure",
+        }),
+      );
+      pluginRegistry.diagnostics.push({
+        level: "error",
+        message: "synthetic registration failure",
+        ...(attributed ? { pluginId: "startup-fixture" } : {}),
+      });
+      const onStartupPluginsLoaded =
+        vi.fn<NonNullable<PostAttachParams["onStartupPluginsLoaded"]>>();
+      const onSidecarsReady = vi.fn();
+      const startupParams = params.createParams({
+        updateCanary: true,
+        pluginRegistry: createEmptyPluginRegistry(),
+        loadStartupPlugins: async () => ({ pluginRegistry, gatewayMethods: ["ping"] }),
+        onStartupPluginsLoaded,
+        onSidecarsReady,
+      });
+      const runtimeDeps = params.createRuntimeDeps();
+      const startup = params.start(startupParams, runtimeDeps);
+
+      if (attributed) {
+        await startup;
+        expect(onSidecarsReady).toHaveBeenCalledOnce();
+        expect(startupParams.unlockStartupMethods).toHaveBeenCalledOnce();
+      } else {
+        await expect(startup).rejects.toThrow(
+          "Candidate plugin registry reported an unattributed error",
+        );
+        expect(onSidecarsReady).not.toHaveBeenCalled();
+        expect(startupParams.unlockStartupMethods).not.toHaveBeenCalled();
+      }
+      const published = onStartupPluginsLoaded.mock.lastCall?.[0].pluginRegistry;
+      expect(published?.plugins).toEqual([
+        expect.objectContaining({
+          id: "startup-fixture",
+          status: "error",
+          activated: true,
+          error: "synthetic registration failure",
+        }),
+      ]);
+      expect(published?.diagnostics).toEqual([
+        {
+          level: "error",
+          message: "synthetic registration failure",
+          ...(attributed ? { pluginId: "startup-fixture" } : {}),
+        },
+      ]);
+      expect(startupParams.startChannels).not.toHaveBeenCalled();
+      params.expectAutonomousSidecarsNotStarted();
+      expect(runtimeDeps.createGatewayUpdateCheck).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([false, true])(
     "does not announce readiness while a core agent is refused (canary=%s)",
     async (updateCanary) => {
@@ -33,6 +105,7 @@ export function registerGatewayStartupReadinessTests(params: {
         updateCanary,
         getReadiness: () => ({
           ready: false,
+          coreReady: false,
           failing: ["agent-database:main"],
           uptimeMs: 0,
         }),

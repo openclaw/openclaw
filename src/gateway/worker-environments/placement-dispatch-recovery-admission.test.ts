@@ -2,23 +2,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { makeClaimInput } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import {
@@ -300,16 +297,9 @@ describe("placement recovery session admission with persisted placements", () =>
       throw new Error("Move fixture was not active");
     }
     harness.markEnvironmentOwnerEpoch(2);
-    const claim = await placements.claimTurn({
-      ...REQUEST,
-      claimId: "move-wait-claim",
-      runId: "move-wait-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await placements.claimTurn(
+      makeClaimInput(active, "move-wait-claim", "move-wait-run"),
+    );
     const coordinated = coordinate(harness);
     const move = coordinated.move({
       ...REQUEST,
@@ -543,8 +533,25 @@ describe("placement recovery session admission with persisted placements", () =>
       expectedGeneration: requested.generation,
       recoveryError: "finished fixture",
     });
+    const sibling = await placements.startDispatch({
+      ...REQUEST,
+      sessionId: "sibling",
+      sessionKey: "agent:main:sibling",
+    });
+    await placements.fail({
+      sessionId: sibling.sessionId,
+      expectedGeneration: sibling.generation,
+      recoveryError: "finished fixture",
+    });
+    let siblingAvailable = false;
     const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: root,
+      resolveWorkspace: async ({ sessionId }) => {
+        if (sessionId === sibling.sessionId && !siblingAvailable) {
+          throw new Error("fixture unavailable sibling workspace");
+        }
+        return { kind: "local", path: root };
+      },
       environmentGeneration: 3,
     });
     const coordinated = coordinate(harness);
@@ -563,6 +570,9 @@ describe("placement recovery session admission with persisted placements", () =>
       await providerEntered.promise;
       await coordinated.reconcileActive();
       expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
+      siblingAvailable = true;
+      await coordinated.reconcileActive();
+      expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
     } finally {
       releaseProvider.resolve();
       await dispatch;
@@ -574,44 +584,61 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
   });
 
-  it("retains the pending orphan pass after a transient workspace-resolution failure", async () => {
-    const root = support.testState.root;
-    await git(root, "init", "--quiet");
-    await fs.writeFile(path.join(root, "result.txt"), "retired workspace result");
-    await git(root, "add", "result.txt");
-    const tree = await git(root, "write-tree");
-    const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
-    await git(root, "update-ref", cleanupRef, tree);
-    const placements = createStore();
-    const idle = await placements.startDispatch({
-      ...REQUEST,
-      sessionId: "idle",
-      sessionKey: "agent:main:idle",
-    });
-    await placements.fail({
-      sessionId: idle.sessionId,
-      expectedGeneration: idle.generation,
-      recoveryError: "finished fixture",
-    });
-    let resolutionAttempts = 0;
-    const harness = await createHarness(support.testState.stateDb, placements, {
-      workspacePath: root,
-      resolveWorkspace: async () => {
-        resolutionAttempts += 1;
-        if (resolutionAttempts === 1) {
-          throw new Error("fixture transient workspace resolution failure");
-        }
-        return { kind: "local", path: root };
-      },
-    });
-    const coordinated = coordinate(harness);
-    await coordinated.reconcile("startup");
-    await coordinated.reconcileActive();
-    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
-    await coordinated.reconcileActive();
-    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
-    expect(resolutionAttempts).toBe(2);
-  });
+  it.each([1, 10])(
+    "fairly retries %i unavailable startup workspaces without losing later recovery",
+    async (count) => {
+      const root = support.testState.root;
+      await git(root, "init", "--quiet");
+      const tree = await git(root, "write-tree");
+      const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
+      await git(root, "update-ref", cleanupRef, tree);
+      const placements = createStore();
+      const sessionIds = Array.from({ length: count }, (_, index) => `idle-${index}`);
+      for (const sessionId of sessionIds) {
+        const idle = await placements.startDispatch({
+          ...REQUEST,
+          sessionId,
+          sessionKey: `agent:main:${sessionId}`,
+        });
+        await placements.fail({
+          sessionId,
+          expectedGeneration: idle.generation,
+          recoveryError: "finished fixture",
+        });
+      }
+      const recoveredSession = sessionIds.at(-1);
+      let workspaceAvailable = false;
+      const attempts: string[] = [];
+      const harness = await createHarness(support.testState.stateDb, placements, {
+        resolveWorkspace: async ({ sessionId }) => {
+          attempts.push(sessionId);
+          if (!workspaceAvailable || sessionId !== recoveredSession) {
+            throw new Error("fixture transient workspace resolution failure");
+          }
+          return { kind: "local", path: root };
+        },
+      });
+      const coordinated = coordinate(harness);
+      await coordinated.reconcile("startup");
+      await coordinated.reconcileActive();
+      expect(attempts).toEqual(sessionIds);
+      expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
+
+      attempts.length = 0;
+      await coordinated.reconcileActive();
+      expect(attempts).toEqual(sessionIds.slice(0, 8));
+      workspaceAvailable = true;
+      attempts.length = 0;
+      await coordinated.reconcileActive();
+      expect(attempts).toHaveLength(Math.min(count, 8));
+      expect(attempts).toContain(recoveredSession);
+      expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
+      attempts.length = 0;
+      await coordinated.reconcileActive();
+      expect(attempts).toHaveLength(Math.min(count - 1, 8));
+      expect(attempts).not.toContain(recoveredSession);
+    },
+  );
 
   it("a real dispatch reaches device provisioning while another placement's teardown is stuck", async () => {
     const placements = createStore();
@@ -665,22 +692,17 @@ describe("placement recovery session admission with persisted placements", () =>
     const dispatch = destroyEntered.promise.then(() => {
       bindDeviceWorkerAvailability(harness.environments, async () => ({
         available: true,
-        node: {
+        node: createNodeWorkerBundleTestNode({
           nodeId: "paired-local-device",
           connId: "device-connection",
           pairingIdentity: "device-pairing",
           pairingGeneration: "device-generation",
-          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-          clientMode: GATEWAY_CLIENT_MODES.NODE,
-          protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
           workerHost: {
-            enabled: true,
             capacity: { total: 1, available: 1 },
             capturedExecPolicy: true,
             promptContext: 1,
           },
-          commands: [],
-        },
+        }),
       }));
       return coordinated.dispatch({
         ...REQUEST,

@@ -3,10 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import {
-  SESSION_COMPOSER_FOCUS_PARAM,
-  SESSION_FACE_PREFERENCE_PARAM,
-} from "../../lib/sessions/route-navigation.ts";
+import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -128,15 +125,16 @@ describe("AppSidebar agent chip", () => {
     await vi.dynamicImportSettled();
     await sidebar.updateComplete;
     expect(dom.text(".sidebar-agent-menu")).not.toContain("Private agent");
-    const capabilities = dom.query('[data-value="command:capabilities"]');
+    expect(dom.query('[data-value="command:new-agent"]')).not.toBeNull();
+    expect(dom.query('[data-value="command:agents-directory"]')).toBeNull();
+    expect(dom.query('[data-value="command:capabilities"]')).toBeNull();
+    expect(dom.query('[data-value="command:agent-settings"]')).toBeNull();
+    const sharedSettings = dom.query('[data-value="agent:shared"] .sidebar-agent-menu__settings');
     if (discovery === "loading") {
-      expect(capabilities).toBeNull();
+      expect(sharedSettings).toBeNull();
     } else {
-      expect(capabilities?.textContent).toMatch(/shared/i);
+      expect(sharedSettings).not.toBeNull();
     }
-    expect(dom.query('[data-value="command:agent-settings"]')?.hasAttribute("disabled")).toBe(
-      discovery === "loading",
-    );
   });
 
   it("keeps the configured roster label when identity hydration returns a fallback", async () => {
@@ -160,7 +158,7 @@ describe("AppSidebar agent chip", () => {
       const labels = [...dom.all(".sidebar-agent-menu .agent-select__option-label")].map(
         (element) => element.textContent?.trim(),
       );
-      expect(labels).toEqual(["Show all", "Workspace Molty", "rust-claw"]);
+      expect(labels).toEqual(["Create new agent", "Show all", "Workspace Molty", "rust-claw"]);
     });
     await vi.waitFor(() => {
       const rustRow = menuAgent(sidebar, "rust-claw");
@@ -220,33 +218,15 @@ describe("AppSidebar agent chip", () => {
         '[data-value="scope:all"]',
       ),
     ).toEqual([false, false, false, false, true]);
-    expect(menuDom.all('[role="separator"]')).toHaveLength(2);
-    expect(
-      menu
-        ?.querySelector('[role="separator"]')
-        ?.previousElementSibling?.classList.contains("sidebar-agent-menu__agent-list"),
-    ).toBe(true);
+    expect(menuDom.all('[role="separator"]')).toHaveLength(0);
     expect(
       [...menuDom.all('[role^="menuitem"]')].map((element) => element.getAttribute("data-value")),
-    ).toEqual([
-      "scope:all",
-      "agent:main",
-      "agent:research",
-      "command:new-agent",
-      "command:agents-directory",
-      "command:capabilities",
-      "command:agent-settings",
-    ]);
+    ).toEqual(["command:new-agent", "scope:all", "agent:main", "agent:research"]);
 
     const commands = [...menuDom.all('[data-value^="command:"]')];
-    expect(commands.map((item) => item.textContent?.trim())).toEqual([
-      "New agent",
-      "See all agents",
-      "What can Molty do?",
-      "Molty settings",
-    ]);
+    expect(commands.map((item) => item.textContent?.trim())).toEqual(["Create new agent"]);
     for (const command of commands) {
-      expect(command.querySelector(".oc-menu-item__icon svg")).not.toBeNull();
+      expect(command.querySelector(".sidebar-agent-menu__create-icon svg")).not.toBeNull();
     }
 
     const agentRows = [...menuDom.all('[data-value^="agent:"]')];
@@ -272,39 +252,15 @@ describe("AppSidebar agent chip", () => {
     expect(dom.query(".sidebar-agent-menu")).toBeNull();
   });
 
-  it.each(["chip", "roster"] as const)("focuses the active agent composer (%s)", async (mode) => {
-    const { sidebar, context, dom } = await mountAgent();
-    const onNavigate = vi.fn();
-    sidebar.connected = true;
-    sidebar.onNavigate = onNavigate;
-    sidebar.activeRouteId = "skills";
-    context.agentSelection.set("research");
-    context.agentSelection.setScope(null);
-    sidebar.sidebarAgentsMode = mode;
-    await sidebar.updateComplete;
-
-    await openAgentMenu(sidebar);
-    const item = dom.query<HTMLElement>('[data-value="command:capabilities"]');
-    expect(item?.textContent).toContain("What can research do?");
-    item?.click();
-    await sidebar.updateComplete;
-
-    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalledOnce());
-    const options = onNavigate.mock.calls[0]?.[1] as { pathname: string; search: string };
-    expect(options.pathname).toBe("/chat/research");
-    const search = new URLSearchParams(options.search);
-    expect(search.get("draft")).toBe("What can you do?");
-    expect(search.get(SESSION_COMPOSER_FOCUS_PARAM)).toBe("1");
-  });
-
   it.each([
     { viewport: "normal", width: undefined, left: 12, right: 252, x: 12 },
     { viewport: "narrow", width: 280, left: 100, right: 340, x: 8 },
-  ])("positions the menu ($viewport viewport)", async ({ width, left, right, x }) => {
+  ])("positions the mobile menu ($viewport viewport)", async ({ width, left, right, x }) => {
     if (width !== undefined) {
       vi.stubGlobal("innerWidth", width);
     }
-    const { sidebar, dom } = await mountAgent();
+    const { sidebar, dom, provider } = await mountAgent();
+    provider.classList.add("shell--mobile-nav");
     sidebar.connected = true;
     await sidebar.updateComplete;
     const card = dom.query<HTMLButtonElement>(".sidebar-agent-card__main")!;
@@ -337,31 +293,30 @@ describe("AppSidebar agent chip", () => {
     expect(dom.query(".sidebar-agent-menu")).toBe(firstMenu);
   });
 
-  it.each([
-    { count: 6, pins: [], order: [1, 2, 3, 4, 5, 6] },
-    { count: 12, pins: ["agent-7", "agent-12"], order: [7, 12, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11] },
-    { count: 12, pins: [], order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] },
-    { count: 12, pins: ["deleted-agent"], order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] },
-  ])("renders $count agents in pin order ($pins)", async ({ count, pins, order }) => {
-    const { sidebar, context, dom } = await mountAgent(
-      undefined,
-      manyAgents(count),
-      undefined,
-      createSessions("agent-1", ["agent:agent-1:main"]),
-    );
-    sidebar.connected = true;
-    sidebar.pinnedAgentIds = pins;
-    context.agentSelection.set("agent-1");
-    await sidebar.updateComplete;
-    await openAgentMenu(sidebar);
-    expect(dom.query(".sidebar-agent-menu__filter")).toBeNull();
-    expect(dom.query(".sidebar-agent-menu__agent-list")).not.toBeNull();
-    expect(
-      [...dom.all('.sidebar-agent-menu [data-value^="agent:"] .agent-select__option-label')].map(
-        (item) => item.textContent?.trim(),
-      ),
-    ).toEqual(order.map((id) => "agent-" + id));
-  });
+  it.each([6, 12])(
+    "renders %s agents in gateway order without filter or pin controls",
+    async (count) => {
+      const { sidebar, context, dom } = await mountAgent(
+        undefined,
+        manyAgents(count),
+        undefined,
+        createSessions("agent-1", ["agent:agent-1:main"]),
+      );
+      sidebar.connected = true;
+      context.agentSelection.set("agent-1");
+      await sidebar.updateComplete;
+      await openAgentMenu(sidebar);
+      expect(dom.query(".sidebar-agent-menu__filter")).toBeNull();
+      expect(dom.query("input")).toBeNull();
+      expect(dom.query(".sidebar-agent-menu__pin")).toBeNull();
+      expect(dom.query(".sidebar-agent-menu__agent-list")).not.toBeNull();
+      expect(
+        [...dom.all('.sidebar-agent-menu [data-value^="agent:"] .agent-select__option-label')].map(
+          (item) => item.textContent?.trim(),
+        ),
+      ).toEqual(Array.from({ length: count }, (_, index) => `agent-${index + 1}`));
+    },
+  );
 
   it("loads switcher avatar tiles through the authenticated avatar loader", async () => {
     const avatarRoute = "/avatar/research?v=140879";

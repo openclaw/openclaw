@@ -56,6 +56,15 @@ describe("sanitizeHtml", () => {
     "color:rgba(0,0,0,0.0)",
     "color:hsla(0,0%,0%,0)",
     "transform:scale(0)",
+    "transform:scale(0, 0)",
+    "transform:scale3d(0, 0, 0)",
+    "transform:scale(1, 0)",
+    "transform:scaleX(-0.0)",
+    "transform:scaleY(0%)",
+    "transform:scale3d(0, 1, 1)",
+    "transform:scale3d(0%, 100%, 100%)",
+    "transform:scale3d(100%, 0%, 100%)",
+    "transform:rotate(30deg) scale(1, 0e2)",
     "transform:translateX(-9999px)",
     "transform:translateY(-9999px)",
     "width:0;height:0;overflow:hidden",
@@ -73,6 +82,21 @@ describe("sanitizeHtml", () => {
     const html = '<p>Show</p><div style="clip-path:inset(0%)">Visible</div>';
     const result = await sanitizeHtml(html);
     expect(result).toContain("Visible");
+  });
+
+  it.each([
+    "scale(1, 1)",
+    "scale(0.5, 0.5)",
+    "scale3d(1, 1, 0)",
+    "scale3d(100%, 100%, 0%)",
+    "scaleZ(0)",
+    "scale(0, 0, 0)",
+    "scale3d(0, 0)",
+    "scaleX(0, 0)",
+    "scale(0, invalid)",
+  ])("preserves visible or invalid transform %s", async (transform) => {
+    const html = `<p style="transform:${transform}">Visible</p>`;
+    expect(await sanitizeHtml(html)).toBe(html);
   });
 
   it.each(["sr-only", "visually-hidden", "d-none", "hidden"])(

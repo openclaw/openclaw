@@ -30,7 +30,7 @@ import type {
 import { SqliteWorkerError, type SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
-import { createCpuTrackedWorker } from "./worker-cpu.js";
+import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
 
 function cleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
   return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
@@ -221,7 +221,11 @@ export function createSqliteWorkerLifecycle({
     };
     const replyOwner = createReplyOwner(slot);
     slots.add(slot);
-    worker.on("message", (reply: SqliteWorkerReply) => slot.receiveReply(reply));
+    worker.on("message", (reply: SqliteWorkerReply) => {
+      if (!receiveWorkerMemoryPort(worker, reply)) {
+        slot.receiveReply(reply);
+      }
+    });
     worker.on("error", (error) => fail(slot, error));
     worker.on("messageerror", (error) => fail(slot, error));
     worker.once("exit", (code) => {

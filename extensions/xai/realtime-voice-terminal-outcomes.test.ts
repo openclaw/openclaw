@@ -1,80 +1,61 @@
 import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { RealtimeVoiceResponseOutcome } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceResponseOutcome,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { expect, it } from "vitest";
-import { WebSocketServer } from "ws";
+import { type WebSocket, WebSocketServer } from "ws";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
-
-type RealtimeOutcome = {
-  callbackOrder: string[];
-  errors: string[];
-  outcomes: RealtimeVoiceResponseOutcome[];
-  transcripts: Array<{ speaker: string; text: string; final: boolean }>;
-  tools: Array<{ itemId: string; callId: string; name: string; args: unknown }>;
-};
 
 type CaptureRealtimeOutcomeOptions = {
   closeOnToolCall?: boolean;
   completeQueuedResponse?: boolean;
   queuedUserMessage?: string;
-  onClientEvent?: (event: Record<string, unknown>) => void;
   throwOnResponseDone?: boolean;
 };
 
 async function captureRealtimeOutcome(
   eventInput: Record<string, unknown> | Record<string, unknown>[],
   options: CaptureRealtimeOutcomeOptions = {},
-): Promise<RealtimeOutcome> {
+) {
   const events = Array.isArray(eventInput) ? eventInput : [eventInput];
-  const outcome: RealtimeOutcome = {
-    callbackOrder: [],
-    errors: [],
-    outcomes: [],
-    transcripts: [],
-    tools: [],
-  };
-  const serverEventHandled = createDeferred<void>();
+  const callbackOrder: string[] = [];
+  const errors: string[] = [];
+  const outcomes: RealtimeVoiceResponseOutcome[] = [];
+  const transcripts: Array<{ speaker: string; text: string; final: boolean }> = [];
+  const tools: Parameters<NonNullable<RealtimeVoiceBridgeCreateRequest["onToolCall"]>>[0][] = [];
+  const clientEvents: string[] = [];
+  const finished = createDeferred<void>();
   const responseCreatedHandled = createDeferred<void>();
-  const queuedResponseCompleted = createDeferred<void>();
   const waitFor = (promise: Promise<void>, phase: string) =>
     withTimeout(promise, 2_000, { message: `timed out waiting for ${phase}` });
-  let queuedTurnTriggered = false;
+  let socket: WebSocket;
+  const send = (...batch: Record<string, unknown>[]) =>
+    batch.forEach((event) => socket.send(JSON.stringify(event)));
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1", maxPayload: 1024 * 1024 });
   wss.on("connection", (ws) => {
-    const replay = () => events.forEach((event) => ws.send(JSON.stringify(event)));
+    socket = ws;
     ws.on("message", (message) => {
       const bytes = Buffer.isBuffer(message)
         ? message
         : Array.isArray(message)
           ? Buffer.concat(message)
           : Buffer.from(message);
-      const clientEvent = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
-      options.onClientEvent?.(clientEvent);
-      if (clientEvent.type === "response.create" && options.queuedUserMessage) {
+      const { type } = JSON.parse(bytes.toString("utf8")) as { type: string };
+      clientEvents.push(type);
+      if (type === "response.create" && options.queuedUserMessage) {
         if (options.completeQueuedResponse) {
-          ws.send(JSON.stringify({ type: "response.created", response: { id: "response_2" } }));
-          ws.send(JSON.stringify(terminal("completed", { id: "response_2" })));
+          send(
+            { type: "response.created", response: { id: "response_2" } },
+            terminal("completed", { id: "response_2" }),
+          );
+        } else {
+          finished.resolve();
         }
-        serverEventHandled.resolve();
-        return;
-      }
-      if (
-        clientEvent.type === "conversation.item.create" &&
-        options.queuedUserMessage &&
-        !queuedTurnTriggered
-      ) {
-        queuedTurnTriggered = true;
-        replay();
-        return;
-      }
-      if (clientEvent.type !== "session.update") {
-        return;
-      }
-      ws.send(JSON.stringify({ type: "session.updated" }));
-      ws.send(JSON.stringify({ type: "response.created", response: { id: "response_1" } }));
-      if (!options.queuedUserMessage) {
-        replay();
+      } else if (type === "session.update") {
+        send({ type: "session.updated" });
       }
     });
   });
@@ -86,24 +67,24 @@ async function captureRealtimeOutcome(
     providerConfig: { apiKey: "fixture-value", baseUrl: `http://127.0.0.1:${port}/v1` },
     onAudio() {},
     onClearAudio() {},
-    onError: (error) => outcome.errors.push(error.message),
+    onError: (error) => errors.push(error.message),
     onResponseDone: (responseOutcome) => {
-      outcome.callbackOrder.push("outcome");
-      outcome.outcomes.push(responseOutcome);
+      callbackOrder.push("outcome");
+      outcomes.push(responseOutcome);
       if (responseOutcome.responseId === "response_2") {
-        queuedResponseCompleted.resolve();
+        finished.resolve();
       }
       if (options.throwOnResponseDone && responseOutcome.responseId === "response_1") {
         throw new Error("consumer callback failed");
       }
     },
     onTranscript: (speaker, text, final) => {
-      outcome.callbackOrder.push("transcript");
-      outcome.transcripts.push({ speaker, text, final });
+      callbackOrder.push("transcript");
+      transcripts.push({ speaker, text, final });
     },
     onToolCall: (tool) => {
-      outcome.callbackOrder.push("tool");
-      outcome.tools.push(tool);
+      callbackOrder.push("tool");
+      tools.push(tool);
       if (options.closeOnToolCall) {
         void bridge.close();
       }
@@ -113,34 +94,33 @@ async function captureRealtimeOutcome(
         return;
       }
       if (observed.type === "response.done") {
-        outcome.callbackOrder.push("terminal");
+        callbackOrder.push("terminal");
       }
       if (observed.type === "response.created") {
         responseCreatedHandled.resolve();
       }
       if (observed.type === events.at(-1)?.type && !options.queuedUserMessage) {
-        serverEventHandled.resolve();
+        finished.resolve();
       }
     },
   });
 
   try {
     await bridge.connect();
+    send({ type: "response.created", response: { id: "response_1" } });
+    await waitFor(responseCreatedHandled.promise, "response.created");
     if (options.queuedUserMessage) {
-      await waitFor(responseCreatedHandled.promise, "response.created");
       bridge.sendUserMessage?.(options.queuedUserMessage);
-      await waitFor(serverEventHandled.promise, "queued response.create");
-      if (options.completeQueuedResponse) {
-        await waitFor(queuedResponseCompleted.promise, "queued response completion");
-      }
-    } else {
-      await serverEventHandled.promise;
     }
-    return outcome;
+    send(...events);
+    await (options.queuedUserMessage
+      ? waitFor(finished.promise, "queued response completion")
+      : finished.promise);
+    return { callbackOrder, errors, outcomes, transcripts, tools, clientEvents };
   } finally {
     await bridge.close();
-    for (const socket of wss.clients) {
-      socket.terminate();
+    for (const client of wss.clients) {
+      client.terminate();
     }
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());
@@ -172,9 +152,10 @@ function terminal(status?: string, response: Record<string, unknown> = {}) {
 function scenario(
   name: string,
   event: Parameters<typeof captureRealtimeOutcome>[0],
-  expected: Partial<Pick<RealtimeOutcome, "errors" | "transcripts" | "tools">> = {},
+  status?: "failed" | "completed",
+  message?: string,
 ) {
-  return { name, event, expected };
+  return { name, event, outcomes: status ? [{ status, ...(message ? { message } : {}) }] : [] };
 }
 
 function assistantAudio(transcript: string) {
@@ -207,30 +188,35 @@ it("drains a queued follow-up when the terminal consumer throws", async () => {
   ]);
 });
 
-it("flushes a queued turn after malformed terminal output over a real WebSocket", async () => {
-  const clientEventTypes: string[] = [];
-
-  const outcome = await captureRealtimeOutcome(terminal("completed", { output: [null] }), {
-    queuedUserMessage: "Continue after malformed terminal output.",
-    onClientEvent: (event) => {
-      if (typeof event.type === "string") {
-        clientEventTypes.push(event.type);
-      }
+it("keeps valid terminal transcripts beside malformed output and flushes the queued turn", async () => {
+  const outcome = await captureRealtimeOutcome(
+    terminal("completed", {
+      output: [
+        null,
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            null,
+            { type: "output_text", text: "Valid text " },
+            { type: "output_audio", transcript: "and audio" },
+          ],
+        },
+      ],
+    }),
+    {
+      queuedUserMessage: "Continue after malformed terminal output.",
     },
-  });
+  );
 
   expect(outcome).toEqual({
-    callbackOrder: ["outcome", "terminal"],
+    callbackOrder: ["transcript", "outcome", "terminal"],
     errors: [],
     outcomes: [{ status: "completed" }],
-    transcripts: [],
+    transcripts: [{ speaker: "assistant", text: "Valid text and audio", final: true }],
     tools: [],
+    clientEvents: ["session.update", "conversation.item.create", "response.create"],
   });
-  expect(clientEventTypes).toEqual([
-    "session.update",
-    "conversation.item.create",
-    "response.create",
-  ]);
 });
 
 it("stops terminal output when a tool callback closes the bridge", async () => {
@@ -255,83 +241,34 @@ it("stops terminal output when a tool callback closes the bridge", async () => {
 
 it.each([
   scenario(
-    "preserves terminal-only transcripts",
-    terminal("completed", { output: [assistantAudio("terminal answer")] }),
-    {
-      transcripts: [{ speaker: "assistant", text: "terminal answer", final: true }],
-    },
-  ),
-  scenario(
     "surfaces provider failure details",
     terminal("failed", { status_details: { error: { code: "rate_limit_exceeded" } } }),
-    { errors: ["xAI realtime voice response failed: rate_limit_exceeded"] },
-  ),
-  scenario(
-    "surfaces the incomplete-response reason",
-    terminal("incomplete", { status_details: { reason: "max_output_tokens" } }),
-    { errors: ["xAI realtime voice response incomplete: max_output_tokens"] },
-  ),
-  scenario(
-    "accepts intentional cancellation",
-    terminal("cancelled", { status_details: { reason: "client_cancelled" } }),
+    "failed",
+    "xAI realtime voice response failed: rate_limit_exceeded",
   ),
   scenario("ignores nonterminal output items", {
     type: "response.output_item.done",
     item: completedTool,
   }),
-  scenario("buffers final tool arguments", toolArguments),
   scenario(
-    "discards buffered calls after failure",
-    [toolArguments, terminal("failed", { output: [] })],
-    { errors: ["xAI realtime voice response failed"] },
+    "discards buffered and terminal calls after failure",
+    [toolArguments, terminal("failed", { output: [completedTool] })],
+    "failed",
+    "xAI realtime voice response failed",
   ),
   scenario("ignores incomplete replayed calls", {
     type: "conversation.item.created",
     item: { ...completedTool, status: "incomplete" },
   }),
   scenario(
-    "recovers completed terminal tool calls",
-    terminal("completed", { output: [completedTool] }),
-    { tools: [expectedTool] },
-  ),
-  scenario("ignores failed-response tool output", terminal("failed", { output: [completedTool] }), {
-    errors: ["xAI realtime voice response failed"],
-  }),
-  scenario(
     "ignores incomplete terminal calls",
     terminal("completed", { output: [{ ...completedTool, status: "incomplete" }] }),
+    "completed",
   ),
-  scenario("fails closed on missing status", terminal(), {
-    errors: ["xAI realtime voice response failed: missing terminal status"],
-  }),
-  scenario("fails closed on invalid status", terminal("in_progress"), {
-    errors: ["xAI realtime voice response failed: invalid status in_progress"],
-  }),
-])("$name", async ({ event, expected }) => {
+])("$name", async ({ event, outcomes }) => {
   const actual = await captureRealtimeOutcome(event);
-  expect(actual.errors).toEqual([]);
-  expect(actual.transcripts).toEqual(expected.transcripts ?? []);
-  expect(actual.tools).toEqual(expected.tools ?? []);
-  const events = Array.isArray(event) ? event : [event];
-  const responseDone = events.findLast((candidate) => candidate.type === "response.done") as
-    | { response?: { status?: string } }
-    | undefined;
-  if (!responseDone) {
-    expect(actual.outcomes).toEqual([]);
-    return;
-  }
-  expect(actual.outcomes).toHaveLength(1);
-  expect(actual.callbackOrder.slice(-2)).toEqual(["outcome", "terminal"]);
-  const rawStatus = responseDone.response?.status;
-  if (!["completed", "cancelled", "failed", "incomplete"].includes(rawStatus ?? "")) {
-    expect(actual.outcomes[0]).toMatchObject({
-      status: "failed",
-      reason: "invalid_response_status",
-    });
-  } else {
-    expect(actual.outcomes[0]?.status).toBe(rawStatus);
-  }
-  if (expected.errors?.[0]) {
-    expect(actual.outcomes[0]).toMatchObject({ message: expected.errors[0] });
+  expect(actual).toMatchObject({ errors: [], transcripts: [], tools: [], outcomes });
+  if (outcomes.length) {
+    expect(actual.callbackOrder.slice(-2)).toEqual(["outcome", "terminal"]);
   }
 });

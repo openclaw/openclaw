@@ -208,19 +208,22 @@ it("renders native provider health without legacy index counters", () => {
   );
 });
 
-it("shows valid configuration examples when heartbeat is waiting for a delivery route", () => {
-  params.summary.heartbeat = {
-    defaultAgentId: "main",
-    agents: [
-      { agentId: "main", enabled: true, every: "1m", everyMs: 60_000, waitingForRoute: true },
-    ],
-  };
-  const value = findRowValue(buildStatusCommandOverviewRows(params), "Heartbeat");
-  expect(value).toContain("1m (main; waiting for delivery route");
-  expect(value).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
-  expect(value).toContain('heartbeat.target="telegram"');
-  expect(value).toContain('heartbeat.to="123456789"');
-});
+it.each([
+  { every: "1m", everyMs: 60_000 },
+  { every: "scheduled", everyMs: null },
+])(
+  "shows supported remediation for an enabled $every automation without a route",
+  ({ every, everyMs }) => {
+    params.summary.heartbeat = {
+      defaultAgentId: "main",
+      agents: [{ agentId: "main", enabled: true, every, everyMs, waitingForRoute: true }],
+    };
+    const value = findRowValue(buildStatusCommandOverviewRows(params), "Heartbeat");
+    expect(value).toContain(`${every} (main; waiting for delivery route`);
+    expect(value).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
+    expect(value).toContain("edit the automation delivery channel and recipient");
+  },
+);
 
 it("shows managed host desktop coordinates", () => {
   params.summary.hostDesktop = {
@@ -310,7 +313,8 @@ it("builds status-all overview rows from the shared surface", () => {
     "Update restart": "restart pending health verification",
     Security: "Run: openclaw security audit --deep",
     "Secret egress proxy": "Check OpenSSL, then retry the request.",
-    "Degraded secrets": "1 degraded · capability:tts",
+    "Degraded secrets":
+      "1 degraded · cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
     "Degraded plugins": "1 configured-unavailable · discord",
     "Model reasoning": "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
     Secrets: "2 diagnostics",

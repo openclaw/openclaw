@@ -1,17 +1,69 @@
 import { vi } from "vitest";
+import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import * as managedInstall from "../plugins/management-mutations.js";
 import * as managedUninstall from "../plugins/management-uninstall.js";
 import * as pluginPreflight from "../plugins/plugin-install-preflight.js";
 import * as skillLifecycle from "../skills/lifecycle/clawhub.js";
 import * as packageLease from "../state/claw-package-lifecycle-lease.js";
 import * as addState from "./add-state-write.js";
-import type { InstallClawPackagesOptions } from "./package-install-options.js";
 import {
   installClawPackages as installPackages,
   rollbackStatelessClawPackages as rollbackPackages,
 } from "./packages.js";
 import * as pluginProbe from "./plugin-capability-probe.js";
 import type { readClawPackageRefs } from "./provenance.js";
+
+export const testPluginPackage = {
+  kind: "plugin",
+  source: "clawhub",
+  ref: "@owner/audit",
+  version: "2.0.1",
+  integrity: `sha256:${"a".repeat(64)}`,
+} as const;
+
+type Probe = typeof installPluginFromClawHub;
+type PluginProbe = Extract<Awaited<ReturnType<Probe>>, { ok: true }>;
+export function testPluginProbe(overrides: Partial<PluginProbe> = {}): PluginProbe {
+  return {
+    ok: true,
+    pluginId: "audit",
+    packageName: testPluginPackage.ref,
+    targetDir: "/tmp/plugin",
+    extensions: [],
+    clawhub: {
+      source: "clawhub",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: testPluginPackage.ref,
+      clawhubFamily: "code-plugin",
+      integrity: testPluginPackage.integrity,
+    },
+    ...overrides,
+  };
+}
+
+export const withStagedInspection = (probe: Probe) => async (request: Parameters<Probe>[0]) => {
+  const result = await probe(request);
+  if (result.ok) {
+    await request.onPluginArtifactInspect?.({
+      pluginId: result.pluginId,
+      stagedArtifactDir: "/tmp/staged-audit",
+      mode: "install",
+    });
+  }
+  return result;
+};
+
+export function testPackageLease(onRelease: () => void = () => {}) {
+  return {
+    identity: {
+      scope: "claw-package-lifecycle" as const,
+      key: "test-package",
+      owner: "test-owner",
+    },
+    assertCurrent: () => {},
+    release: onRelease,
+  };
+}
 
 type PackageBoundaryFixtures = {
   installPlugin?: (
@@ -34,7 +86,7 @@ type PackageBoundaryFixtures = {
   resolvePlugin?: typeof pluginPreflight.resolveInstalledClawHubPlugin;
 };
 
-export type PackageInstallFixtureOptions = InstallClawPackagesOptions & {
+export type PackageInstallFixtureOptions = NonNullable<Parameters<typeof installPackages>[1]> & {
   deps?: PackageBoundaryFixtures;
 };
 

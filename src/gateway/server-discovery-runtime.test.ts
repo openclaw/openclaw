@@ -22,9 +22,7 @@ const mocks = vi.hoisted(() => ({
     changed: true,
     zonePath: "/tmp/openclaw.internal.db",
   })),
-  formatBonjourInstanceName: vi.fn((name: string) => `${name} (OpenClaw)`),
-  resolveBonjourCliPath: vi.fn(() => "/usr/local/bin/openclaw"),
-  resolveTailnetDnsHint: vi.fn(async () => "gateway.tailnet.example.ts.net"),
+  getTailnetHostname: vi.fn(async () => "gateway.tailnet.example.ts.net"),
 }));
 
 vi.mock("../infra/tailnet.js", () => ({
@@ -37,10 +35,9 @@ vi.mock("../infra/widearea-dns.js", () => ({
   writeWideAreaGatewayZone: mocks.writeWideAreaGatewayZone,
 }));
 
-vi.mock("./server-discovery.js", () => ({
-  formatBonjourInstanceName: mocks.formatBonjourInstanceName,
-  resolveBonjourCliPath: mocks.resolveBonjourCliPath,
-  resolveTailnetDnsHint: mocks.resolveTailnetDnsHint,
+vi.mock("../infra/tailscale.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/tailscale.js")>()),
+  getTailnetHostname: mocks.getTailnetHostname,
 }));
 
 const { startGatewayDiscovery } = await import("./server-discovery-runtime.js");
@@ -63,7 +60,7 @@ async function startDiscovery(
   const discovery = await startGatewayDiscovery({
     machineDisplayName: "Lab Mac",
     port: 18789,
-    tailscaleMode: "off",
+    tailscaleMode: "serve",
     logDiscovery: logs,
     gatewayDiscoveryServices,
     ...overrides,
@@ -141,6 +138,8 @@ describe("startGatewayDiscovery", () => {
   const envSnapshot = captureFullEnv();
   beforeEach(() => {
     useDevelopmentDiscoveryEnv();
+    process.env.OPENCLAW_CLI_PATH = "/usr/local/bin/openclaw";
+    delete process.env.OPENCLAW_TAILNET_DNS;
     logs = makeLogs();
   });
 
@@ -161,9 +160,38 @@ describe("startGatewayDiscovery", () => {
       vi.useRealTimers();
       envSnapshot.restore();
       vi.clearAllMocks();
-      mocks.resolveTailnetDnsHint.mockReset();
-      mocks.resolveTailnetDnsHint.mockResolvedValue("gateway.tailnet.example.ts.net");
+      mocks.getTailnetHostname.mockReset();
+      mocks.getTailnetHostname.mockResolvedValue("gateway.tailnet.example.ts.net");
     }
+  });
+
+  it("returns env hint when tailscale is disabled", async () => {
+    process.env.OPENCLAW_TAILNET_DNS = "studio.tailnet.ts.net.";
+    const service = makeDiscoveryService("bonjour");
+    await startDiscovery([service], { tailscaleMode: "off" });
+    expect(service.advertise).toHaveBeenCalledWith(
+      expect.objectContaining({ tailnetDns: "studio.tailnet.ts.net" }),
+    );
+    expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
+  });
+
+  it("skips tailscale lookup when disabled", async () => {
+    const service = makeDiscoveryService("bonjour");
+    await startDiscovery([service], { tailscaleMode: "off" });
+    expect(service.advertise).toHaveBeenCalledWith(
+      expect.objectContaining({ tailnetDns: undefined }),
+    );
+    expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
+  });
+
+  it("uses tailscale lookup when enabled", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("host.tailnet.ts.net");
+    const service = makeDiscoveryService("bonjour");
+    await startDiscovery([service], { tailscaleMode: "serve" });
+    expect(service.advertise).toHaveBeenCalledWith(
+      expect.objectContaining({ tailnetDns: "host.tailnet.ts.net" }),
+    );
+    expect(mocks.getTailnetHostname).toHaveBeenCalledTimes(1);
   });
 
   it("preserves getter discovery descriptors in their projected scope", async () => {
@@ -360,12 +388,12 @@ describe("startGatewayDiscovery", () => {
     await result.stop();
   });
 
-  it("replaces advertisements and wide-area metadata across live mode changes", async () => {
+  it("replaces advertisements and wide-area metadata across live mode and registry changes", async () => {
     process.env.OPENCLAW_SSH_PORT = "2222";
     const stop = vi.fn();
     const service = makeDiscoveryService("bonjour", { stop });
     const discovery = await startDiscovery([service], {
-      discovery: { mdns: { mode: "off" }, wideArea: { domain: "openclaw.internal." } },
+      discovery: { mdns: { mode: "full" }, wideArea: { domain: "openclaw.internal." } },
       gatewayTls: { enabled: true, fingerprintSha256: "fingerprint" },
       gatewayDirectReachable: true,
       tailscaleMode: "serve",
@@ -384,9 +412,9 @@ describe("startGatewayDiscovery", () => {
         sshPort: full ? 2222 : undefined,
       });
     }
-    expectCalls([service.advertise, 3], [stop, 3]);
+    expectCalls([service.advertise, 4], [stop, 4]);
     expect(service.advertise).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({ minimal: false, sshPort: 2222 }),
     );
     await discovery.update({ mdnsMode: undefined });
@@ -394,10 +422,14 @@ describe("startGatewayDiscovery", () => {
       expect.objectContaining({ minimal: true, cliPath: undefined, sshPort: undefined }),
     );
     await discovery.update({ mdnsMode: "minimal" });
-    expect(service.advertise).toHaveBeenCalledTimes(4);
+    expect(service.advertise).toHaveBeenCalledTimes(5);
+    const next = makeDiscoveryService("next");
+    await discovery.update({ gatewayDiscoveryServices: [next] });
+    expect(stop).toHaveBeenCalledTimes(5);
+    expect(next.advertise).toHaveBeenCalledWith(expect.objectContaining({ minimal: true }));
     await discovery.stop();
     await discovery.stop();
-    expect(stop).toHaveBeenCalledTimes(4);
+    expect(stop).toHaveBeenCalledTimes(5);
   });
 
   it.each(["ready", "pending"] as const)(
@@ -552,7 +584,7 @@ describe("startGatewayDiscovery", () => {
         await discovery.update({ gatewayDiscoveryServices: [active] });
       }
       if (boundary === "DNS") {
-        mocks.resolveTailnetDnsHint.mockImplementationOnce(() => {
+        mocks.getTailnetHostname.mockImplementationOnce(() => {
           activeStopping.resolve();
           return metadata.promise;
         });
@@ -597,7 +629,7 @@ describe("startGatewayDiscovery", () => {
     const resolving = createDeferredCore();
     const dns = createDeferredCore<string>();
     releases.push(() => dns.resolve("gateway.tailnet.example.ts.net"));
-    mocks.resolveTailnetDnsHint.mockImplementationOnce(() => {
+    mocks.getTailnetHostname.mockImplementationOnce(() => {
       resolving.resolve();
       return dns.promise;
     });
@@ -636,21 +668,5 @@ describe("startGatewayDiscovery", () => {
     expect(service.advertise).toHaveBeenCalledOnce();
     await discovery.stop();
     expect(stop).toHaveBeenCalledOnce();
-  });
-
-  it("retires the initial registry before a first mixed plugin and mode reload", async () => {
-    const oldStop = vi.fn();
-    const old = makeDiscoveryService("old", { stop: oldStop });
-    const discovery = await startDiscovery([old], {
-      discovery: { mdns: { mode: "full" } },
-    });
-    await discovery.update({ mdnsMode: "minimal" });
-    expectCalls([oldStop, 1], [old.advertise, 2]);
-    expect(old.advertise).toHaveBeenLastCalledWith(expect.objectContaining({ minimal: true }));
-    const next = makeDiscoveryService("next");
-    await discovery.update({ gatewayDiscoveryServices: [next] });
-    expect(oldStop).toHaveBeenCalledTimes(2);
-    expect(next.advertise).toHaveBeenCalledWith(expect.objectContaining({ minimal: true }));
-    await discovery.stop();
   });
 });

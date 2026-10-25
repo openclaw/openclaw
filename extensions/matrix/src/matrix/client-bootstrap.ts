@@ -65,7 +65,6 @@ export async function resolveRuntimeMatrixClientWithReadiness(
     cfg,
     timeoutMs: opts.timeoutMs,
     accountId: opts.accountId,
-    startClient: false,
     role: "transient",
   });
   try {

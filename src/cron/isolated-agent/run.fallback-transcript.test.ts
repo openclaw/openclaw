@@ -13,10 +13,11 @@ import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureCronInferenceBinding } from "../inference-binding.runtime.js";
-import { runCronIsolatedAgentTurn } from "./run.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
 // Keep lazy runner imports outside the turn's timeout budget.
 import "./run-executor.runtime.js";
 import "./run-embedded.runtime.js";
+import { runCronIsolatedAgentTurn } from "./run.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -107,6 +108,7 @@ it("continues one cron user turn when the primary times out after provider dispa
     });
     const message = "Reply exactly Fallback report";
     const result = await runCronIsolatedAgentTurn({
+      occurrence: TEST_SCHEDULED_OCCURRENCE,
       cfg: config,
       onExecutionPhase: ({ phase, model }) => {
         if (phase === "model_call_started" && model === "primary") {

@@ -336,7 +336,8 @@ Provider limits differ:
 | SubQ        | 2–255               | 2–10         | Up to 16 questions; text/JSON state; question IDs at most 100 characters           |
 | TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
-The host bounds JSON evidence to one MiB, 20,000 nodes, depth 32, and 256 questions.
+The host bounds JSON evidence to one MiB, 20,000 nodes, and depth 32. V1 accepts
+up to 256 questions; V2 accepts up to 400, subject to the selected provider's limit.
 Version 2 image state has a separate four-MiB decoded image limit. It admits at most four
 requests per provider and caps each deadline at 30 seconds. Optional assistance
 leaves the fourth slot for requested evaluations; under contention, the tool

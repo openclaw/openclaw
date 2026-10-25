@@ -2,7 +2,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import {
+  nativePane,
+  openChatPanels,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -40,7 +44,16 @@ async function installSessionSharing(
       sessionRow(key, title, updatedAt, {
         sharingRole: role,
         visibility,
-        ...(includePeople ? { createdActor: { type: "human", id: "owner", label: "Owner" } } : {}),
+        ...(includePeople
+          ? {
+              createdActor: {
+                type: "human",
+                id: "owner",
+                label: "Owner",
+                identity: { type: "profile", id: "owner" },
+              },
+            }
+          : {}),
       }),
     ]),
   };
@@ -53,6 +66,11 @@ async function installSessionSharing(
       members: [],
       role,
       allowedVisibilities: visibilities,
+      permissions: Array.from({ length: 30 }, (_, i) => ({
+        identityId: `member-${i}`,
+        level: "read",
+        options: ["read", "send"],
+      })),
       identities: [
         owner,
         ...Array.from({ length: 30 }, (_, i) => human(`member-${i}`, `Member ${i}`)),
@@ -61,6 +79,14 @@ async function installSessionSharing(
   }
   return installMockGateway(page, {
     sessionKey: key,
+    presenceUsers: includePeople
+      ? ["owner", "guest"].map((id) => ({
+          id,
+          identity: { type: "profile" as const, id },
+          name: id,
+          watchedSessions: [key],
+        }))
+      : [],
     featureMethods,
     methodResponses,
     operatorScopes: role === "owner" ? ["operator.read", "operator.write"] : ["operator.read"],
@@ -71,9 +97,8 @@ async function withMobilePage(run: (page: Page) => Promise<void>, colorScheme?: 
 }
 
 async function openMobilePanelLauncher(page: Page) {
-  const header = page.locator(".agent-chat__header--mobile").filter({ visible: true });
-  const trigger = header.getByRole("button", { name: "Panels", exact: true });
-  await trigger.click();
+  await nativePane(page).locator(".agent-chat__header--mobile").waitFor();
+  const trigger = await openChatPanels(page, "mobile");
   const host = page.locator(".chat-mobile-host").filter({ visible: true });
   await host
     .locator(".chat-mobile-host__header")
@@ -238,7 +263,7 @@ suite.define(() => {
           sessionKey,
           "Mobile menu",
           "owner",
-          "draft",
+          "read-only",
           colorScheme === "light",
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -330,9 +355,7 @@ suite.define(() => {
           await host.getByRole("button", { name: /^Sharing options/ }).click();
         }
         try {
-          await sharing
-            .getByRole("heading", { name: "Message permissions", exact: true })
-            .waitFor();
+          await sharing.getByRole("heading", { name: "Permissions", exact: true }).waitFor();
         } finally {
           console.info("MOBILE_SHARING_RECOVERY", {
             documentRequests,
@@ -340,7 +363,7 @@ suite.define(() => {
             failedRequests,
           });
         }
-        const lastMember = sharing.getByRole("checkbox", { name: /^Member 29,/ });
+        const lastMember = sharing.getByRole("button", { name: /^Member 29, Can read/ });
         await lastMember.scrollIntoViewIfNeeded();
         expect(await sharing.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         await lastMember.click({ trial: true });
@@ -355,9 +378,9 @@ suite.define(() => {
         const search = sharing.getByRole("searchbox", { name: "Search people and agents…" });
         await search.fill("Member 29");
         await lastMember.waitFor();
-        await sharing.getByRole("button", { name: /^Draft / }).click();
+        await sharing.getByRole("button", { name: /^Read-only/ }).click();
         const access = host.locator('[data-mobile-page="sharing-access"]');
-        await access.getByRole("button", { name: /^Draft / }).waitFor();
+        await access.getByRole("button", { name: /^Read-only/ }).waitFor();
         await host
           .locator(".chat-mobile-host__header")
           .getByRole("button", { name: "Back", exact: true })
@@ -370,7 +393,12 @@ suite.define(() => {
           .click();
         await host.waitFor({ state: "hidden" });
         await expect
-          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .poll(() =>
+            (colorScheme === "light"
+              ? page.getByRole("button", { name: "People", exact: true })
+              : trigger
+            ).evaluate((element) => element === document.activeElement),
+          )
           .toBe(true);
         if (colorScheme === "light") {
           await page.getByRole("button", { name: "People", exact: true }).click();
@@ -381,10 +409,10 @@ suite.define(() => {
         }
         await search.waitFor();
         expect(await search.inputValue()).toBe("Member 29");
-        await sharing.getByRole("button", { name: /^Draft / }).click();
-        await access.getByRole("button", { name: /^Draft / }).waitFor();
+        await sharing.getByRole("button", { name: /^Read-only/ }).click();
+        await access.getByRole("button", { name: /^Read-only/ }).waitFor();
         expect(
-          await access.getByRole("button", { name: /^Draft / }).getAttribute("aria-pressed"),
+          await access.getByRole("button", { name: /^Read-only/ }).getAttribute("aria-pressed"),
         ).toBe("true");
         await gateway.deferNext("session.visibility.set");
         await access.getByRole("button", { name: /^Shared / }).click();

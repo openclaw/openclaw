@@ -15,6 +15,7 @@ import type {
 import type { UserProfileAuthLink } from "../../state/user-model-accounts.js";
 import { createModelAccountConnectService } from "../model-account-connect.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import { usersHandlers } from "./users.js";
 
@@ -152,14 +153,8 @@ function createClient(profileId = "profile-1", scopes = ["operator.write"]): Tes
   const client: TestClient = {
     connId: `connection-${clients.size + 1}`,
     invalidated: false,
-    authenticatedUserProfile: { profileId, displayName: "Ada", hasAvatar: false, updatedAt: 1 },
-    connect: {
-      role: "operator",
-      scopes,
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", version: "1", platform: "test" },
-    },
+    authenticatedUserProfile: gatewayProfile(profileId, "Ada"),
+    connect: gatewayConnect(scopes, { id: "test", mode: "test", version: "1" }),
   };
   clients.add(client);
   return client;

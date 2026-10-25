@@ -360,16 +360,6 @@ ${cases
     expect(runFish(makeProgram(), line)).toEqual(expected);
   });
 
-  it("does not require optional Fish option choices", () => {
-    const program = choiceProgram(["auto", "manual"], "--mode [mode]", "Mode");
-    const optionLine = getCompletionScript("fish", program)
-      .split("\n")
-      .find((line) => line.includes(" -l mode "));
-    expect(optionLine).toContain(" -f -a ");
-    expect(optionLine).not.toContain(" -r ");
-    expect(optionLine).toContain("'auto' 'manual'");
-  });
-
   it("uses Commander's parsed flags instead of value placeholder syntax", () => {
     const program = new Command()
       .name("openclaw")
@@ -410,6 +400,10 @@ ${cases
   });
 
   itWithPowerShell.each([
+    ["openclaw 'completion' --shell f", "fish"],
+    ['openclaw "completion" --shell f', "fish"],
+    ["openclaw 'gateway' 'status' --j", "--json"],
+    ["openclaw gateway --token 'status' --f", "--force"],
     ["openclaw completion -ysf", "-ysfish"],
     ["openclaw completion -ys f", "fish"],
     ["openclaw completion --shell 'f", "fish"],

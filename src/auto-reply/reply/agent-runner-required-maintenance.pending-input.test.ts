@@ -34,12 +34,12 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runReplyAgent } from "./agent-runner-run.js";
-import { createReplyParams } from "./agent-runner-steer-adoption.test-support.js";
 import {
   createTestFollowupRun,
   installAgentRunnerMemoryFixture,
   isModelRuntimeContextCarrier,
 } from "./agent-runner.test-fixtures.js";
+import { createReplyParams } from "./test-helpers.js";
 import { createTypingController } from "./typing.js";
 
 type ModelRequest = {
@@ -349,6 +349,8 @@ it.each([
         };
         const result = await runReplyAgent(
           createReplyParams(followupRun, {
+            transcriptCommandBody: followupRun.prompt,
+            sessionKey: followupRun.run.sessionKey,
             opts: { runId },
             typing: createTypingController({}),
             sessionCtx: { Provider: "webchat", MessageSid: runId, SessionKey: sessionKey },

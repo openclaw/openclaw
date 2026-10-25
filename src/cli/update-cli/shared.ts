@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   isStandaloneRuntimeExecutable,
@@ -14,6 +15,8 @@ import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
   canResolveRegistryVersionForPackageTarget,
@@ -45,6 +48,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
+import { throwExpectedCliError } from "../failure-output.js";
 import { resolveNodeRunner } from "./node-runner.js";
 
 export { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
@@ -67,6 +71,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     /** Immutable original bytes for this invocation; never restoration authority. */
     originalRecoveryCapture?: UpdateRecoveryBaselineRef;
     defaultStepTimeoutMs?: number;
+    /** Retain the admitted SQLite writer allowance through finalization. */
+    busyTimeoutMs?: number;
     activationTimeoutMs?: number;
     /** Explicit operator budget, minted once by this invocation’s admission. */
     deadline?: import("../daemon-cli/restart-health-deadline.js").GatewayRestartDeadline;
@@ -121,6 +127,16 @@ export type UpdateWizardOptions = Pick<
   UpdateCommandOptions,
   "runtimeRecoveryEnv" | "acceptCapabilities" | "fullIntegrityCheck" | "timeout"
 >;
+
+export function parseUpdateChannel(value?: string) {
+  const channel = normalizeUpdateChannel(value);
+  if (value !== undefined && !channel) {
+    throwExpectedCliError(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got ${JSON.stringify(value)})`,
+    );
+  }
+  return channel;
+}
 
 /** Parse the shared timeout contract without exiting an owning operation. */
 export function parseUpdateTimeoutMs(
@@ -531,7 +547,7 @@ export async function tryWriteCompletionCache(
   timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
-  const binPath = path.join(root, "openclaw.mjs");
+  const binPath = fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", root));
   const standalone = isStandaloneRuntimeExecutable(nodeRunner);
   if (!standalone && !(await pathExists(binPath))) {
     return "skipped";
@@ -617,7 +633,7 @@ export async function confirmUpdateDowngrade(params: {
       status: "skipped",
       reason: decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required",
     },
-    { env: run.env },
+    run,
   );
   if (decision === "confirmation-required") {
     defaultRuntime.error(

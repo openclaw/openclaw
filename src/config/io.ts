@@ -54,6 +54,7 @@ export {
   resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
+  selectLiveRuntimeConfig,
   setAppliedRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,

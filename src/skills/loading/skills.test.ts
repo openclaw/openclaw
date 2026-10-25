@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { listReservedChatSlashCommandNames } from "../../auto-reply/commands-registry.data.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -12,12 +13,12 @@ import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-st
 import {
   captureEnv,
   createPathResolutionEnv,
+  withEnv,
   withEnvAsync,
   withPathResolutionEnv,
 } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
-import { listReservedChatSlashCommandNames } from "../discovery/chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import {
   applySkillEnvOverrides,
@@ -66,29 +67,8 @@ async function writePromptLimitSkills(workspaceDir: string) {
   }
 }
 
-const withClearedEnv = <T>(
-  keys: string[],
-  run: (original: Record<string, string | undefined>) => T,
-): T => {
-  const original: Record<string, string | undefined> = {};
-  for (const key of keys) {
-    original[key] = process.env[key];
-    delete process.env[key];
-  }
-
-  try {
-    return run(original);
-  } finally {
-    for (const key of keys) {
-      const value = original[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-};
+const withClearedEnv = <T>(keys: string[], run: () => T): T =>
+  withEnv(Object.fromEntries(keys.map((key) => [key, undefined])), run);
 
 function makeSkillEntry(
   name: string,

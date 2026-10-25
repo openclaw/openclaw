@@ -1,5 +1,4 @@
-import { lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
-import os from "node:os";
+import { lstat, mkdir, symlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readQaScenarioById } from "./scenario-catalog.js";
@@ -19,16 +18,10 @@ import {
   shouldUseIsolatedQaSuiteScenarioWorkers,
 } from "./suite-planning.js";
 import { makeQaSuiteTestScenario as makeScenario } from "./suite-test-helpers.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const roots: string[] = [];
-async function makeRoot(prefix: string) {
-  const root = await mkdtemp(path.join(os.tmpdir(), prefix));
-  roots.push(root);
-  return root;
-}
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
-});
+const { makeTempDir: makeRoot, cleanup } = createTempDirHarness();
+afterEach(cleanup);
 
 type Scenario = ReturnType<typeof makeScenario>;
 const channelParams = (scenarios: Scenario[], explicitChannel?: string) => ({
@@ -146,20 +139,15 @@ describe("qa suite planning helpers", () => {
   });
 
   it("isolates and collects scenario-declared transport policy", () => {
-    const scenario = makeScenario("sender-policy", {
-      transportPolicy: {
-        directMessageOnly: true,
-        requireGroupMention: true,
-        senderAllowlist: ["driver"],
-      },
-    });
+    const transportPolicy = {
+      directMessageOnly: true as const,
+      requireGroupMention: true as const,
+      senderAllowlist: ["driver"],
+    };
+    const scenario = makeScenario("sender-policy", { transportPolicy });
 
     expect(scenarioRequiresIsolatedQaSuiteWorker(scenario)).toBe(true);
-    expect(collectQaSuiteTransportPolicy([scenario])).toEqual({
-      directMessageOnly: true,
-      requireGroupMention: true,
-      senderAllowlist: ["driver"],
-    });
+    expect(collectQaSuiteTransportPolicy([scenario])).toEqual(transportPolicy);
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {

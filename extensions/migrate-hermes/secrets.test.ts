@@ -11,6 +11,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import {
   HERMES_REASON_AUTH_PROFILE_EXISTS,
+  HERMES_REASON_INCLUDE_SECRETS,
   HERMES_REASON_SECRET_NO_LONGER_PRESENT,
 } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
@@ -93,6 +94,18 @@ describe("Hermes migration secret items", () => {
         entries: { custom: { agentDir: customAgentDir } },
       },
     } as OpenClawConfig;
+    const skipped = await provider.plan(secretContext({ config, includeSecrets: false }));
+    expect(skipped.items).toEqual([
+      expect.objectContaining({
+        id: "secret:openai",
+        sensitive: true,
+        status: "skipped",
+        reason: HERMES_REASON_INCLUDE_SECRETS,
+      }),
+    ]);
+    expect(skipped.warnings).toContain(
+      "Auth credentials were detected but skipped. Re-run interactively or pass --include-secrets to import supported credentials.",
+    );
     const plan = await provider.plan(secretContext({ config }));
 
     expect(plan.metadata?.agentDir).toBe(customAgentDir);
@@ -306,6 +319,11 @@ describe("Hermes migration secret items", () => {
     const plan = await provider.plan(ctx);
     const plannedAuth = plan.items.filter((item) => item.kind === "auth");
     expect(plannedAuth).toHaveLength(2);
+    // Saved migration plans retain these identities, including the trailing NUL in their input.
+    expect(plannedAuth.map((item) => item.details?.sourceCredentialFingerprint)).toEqual([
+      "f115fb638e4d83a0e0357ec2c3238e8914456d1a88474d0e85c6319566af7742",
+      "244884a0f3a0ced413ddcad6fd1ce1bb6969e3ee68752012abc1af8fe310f745",
+    ]);
     for (const item of plannedAuth) {
       expect(item).toMatchObject({
         status: "planned",

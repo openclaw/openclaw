@@ -4,6 +4,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -23,6 +24,7 @@ import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-gu
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import type { ModelRequestHeaders } from "../llm/types.js";
 import { bufferToBlobPart } from "../plugin-sdk/blob-runtime.js";
 import {
   executeProviderOperationWithRetry,
@@ -345,30 +347,40 @@ export function resolveProviderHttpRequestConfigWithOriginTrust(params: {
   baseUrl?: string;
   defaultBaseUrl: string;
   allowPrivateNetwork?: boolean;
-  headers?: HeadersInit;
-  defaultHeaders?: Record<string, string>;
+  headers?: HeadersInit | ModelRequestHeaders;
+  defaultHeaders?: ModelRequestHeaders;
   request?: ModelProviderRequestTransportOverrides;
   provider?: string;
   api?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
 }): ResolvedProviderHttpRequestConfigWithOriginTrust {
+  const callerHeaders: ModelRequestHeaders | undefined = params.headers ? {} : undefined;
+  if (callerHeaders && params.headers) {
+    const entries =
+      params.headers instanceof Headers || Array.isArray(params.headers)
+        ? new Headers(params.headers).entries()
+        : Object.entries(params.headers);
+    for (const [name, value] of entries) {
+      if (value !== undefined) {
+        callerHeaders[name] = value;
+      }
+    }
+  }
   const requestConfig = resolveProviderRequestPolicyConfig({
     provider: params.provider ?? "",
     baseUrl: params.baseUrl,
     defaultBaseUrl: params.defaultBaseUrl,
     capability: params.capability ?? "other",
     transport: params.transport ?? "http",
-    callerHeaders: params.headers
-      ? Object.fromEntries(new Headers(params.headers).entries())
-      : undefined,
+    callerHeaders,
     providerHeaders: params.defaultHeaders,
     precedence: "caller-wins",
     allowPrivateNetwork: params.allowPrivateNetwork,
     api: params.api,
     request: params.request,
   });
-  const headers = new Headers(requestConfig.headers);
+  const headers = new Headers(omitNullRequestHeaders(requestConfig.headers));
   if (!requestConfig.baseUrl) {
     throw new Error("Missing baseUrl: provide baseUrl or defaultBaseUrl");
   }

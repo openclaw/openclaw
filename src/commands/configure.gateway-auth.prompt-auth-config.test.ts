@@ -7,6 +7,7 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createTestWizardPrompter } from "../test-utils/plugin-setup-wizard.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { withLoopbackTestServer } from "./loopback-server.test-support.js";
 
@@ -347,12 +348,8 @@ describe("promptAuthConfig", () => {
     });
     await withLoopbackTestServer(server, async (port) => {
       const baseUrl = `http://127.0.0.1:${port}/v1`;
-      const prompter: WizardPrompter = {
-        intro: vi.fn(),
-        outro: vi.fn(),
-        note: vi.fn(),
+      const prompter = createTestWizardPrompter({
         select: vi.fn().mockResolvedValueOnce("plaintext").mockResolvedValueOnce("openai"),
-        multiselect: vi.fn(),
         text: vi
           .fn()
           .mockResolvedValueOnce(baseUrl)
@@ -361,8 +358,7 @@ describe("promptAuthConfig", () => {
           .mockResolvedValueOnce("custom")
           .mockResolvedValueOnce("Custom"),
         confirm: vi.fn().mockResolvedValue(false),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      };
+      });
 
       const config = agentConfig({ model: defaultModel }, agentModel, explicit, {});
       const result = await promptAuthConfig(config, makeRuntime(), prompter, target);

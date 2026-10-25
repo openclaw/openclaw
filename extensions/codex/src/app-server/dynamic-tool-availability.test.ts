@@ -1,5 +1,6 @@
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
-import { describe, expect, it } from "vitest";
+import { createAgentHarnessToolSurfaceRuntimeAsync } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { parseCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { flattenCodexDynamicToolFunctions as functions } from "./protocol.js";
@@ -52,6 +53,58 @@ async function expectCollectionRejected(bridge: ReturnType<typeof createBridge>)
 }
 
 describe("Codex collector availability", () => {
+  it("retains a genuine restored discovery control without admitting a same-name tool", async () => {
+    const config = {
+      tools: {
+        codeMode: false,
+        toolSearch: { enabled: true, mode: "tools" as const },
+        gatewayPolicy: { allow: [] },
+      },
+    };
+    const runtime = await createAgentHarnessToolSurfaceRuntimeAsync({
+      config,
+      modelToolsEnabled: true,
+      executeTool: async () => ({ content: [], details: {} }),
+    });
+    onTestFinished(runtime.cleanup);
+    const controls = runtime.compactTools([]).tools.filter((tool) => tool.name === "tool_search");
+    expect(controls).toHaveLength(1);
+    const initial = createCodexDynamicToolBridge({
+      tools: controls,
+      signal: new AbortController().signal,
+      hookContext: { config },
+    });
+    const savedFingerprint = codexDynamicToolsFingerprint(initial.specs);
+    const restored = createCodexDynamicToolBridge({
+      tools: controls,
+      registeredSpecs: initial.specs,
+      signal: new AbortController().signal,
+      hookContext: { config },
+    });
+    expect(functions(restored.availableSpecs).map((tool) => tool.name)).toEqual(["tool_search"]);
+    expect(codexDynamicToolsFingerprint(restored.specs)).toBe(savedFingerprint);
+
+    const execute = vi.fn();
+    const lookalike = createCodexDynamicToolBridge({
+      tools: controls.map((tool) => Object.assign({}, tool, { execute })),
+      registeredSpecs: initial.specs,
+      signal: new AbortController().signal,
+      hookContext: { config },
+    });
+    expect(lookalike.availableSpecs).toEqual([]);
+    expect(codexDynamicToolsFingerprint(lookalike.specs)).toBe(savedFingerprint);
+    expect(
+      await lookalike.handleToolCall({
+        callId: "fake-discovery-control",
+        threadId: "thread",
+        turnId: "turn",
+        tool: "tool_search",
+        arguments: { query: "task" },
+      }),
+    ).toMatchObject({ success: false });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it.each(["direct", "searchable"] as const)(
     "keeps native catalogs frozen across the default-on upgrade with %s loading",
     async (loading) => {

@@ -18,7 +18,7 @@ export async function runModelCallAndCaptureTraceparent(params: {
       _context: Parameters<StreamFn>[1],
       options: Parameters<StreamFn>[2],
     ) => {
-      outboundTraceparent = options?.headers?.traceparent;
+      outboundTraceparent = options?.headers?.traceparent ?? undefined;
       const stream = createAssistantMessageEventStream();
       stream.end(makeAgentAssistantMessage({ content: [] }));
       return stream;

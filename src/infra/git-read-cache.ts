@@ -83,7 +83,7 @@ function diffRevisionMissReason(previous: string, current: string): DiffReadCach
 
 function createReadCache<Input, Output>(
   load: (input: Input, signal: AbortSignal, timing?: DiffReadTiming) => Promise<Output>,
-  freshness: number | { milliseconds: number; joinPending?: true; versionedMilliseconds?: number },
+  freshness: number | { milliseconds: number; joinPending?: true },
   revision?: (
     input: Input,
     signal: AbortSignal,
@@ -171,7 +171,7 @@ function createReadCache<Input, Output>(
     }
     const retainedFreshnessMs =
       typeof freshness !== "number" && typeof currentRevision === "string"
-        ? (freshness.versionedMilliseconds ?? freshnessMs)
+        ? Number.POSITIVE_INFINITY
         : freshnessMs;
     const revisionKey = waitingToRetry ? entry!.revision : JSON.stringify([input, currentRevision]);
     options.signal?.throwIfAborted();
@@ -534,7 +534,7 @@ function createReadCaches() {
       (input) => input.root,
     ),
     diff: createDiffReadCache(
-      { milliseconds: 0, versionedMilliseconds: Number.POSITIVE_INFINITY },
+      { milliseconds: 0 },
       // Full results may retain 1.5 MB of patches each.
       32,
     ),
@@ -543,7 +543,6 @@ function createReadCaches() {
       {
         milliseconds: 10_000,
         joinPending: true,
-        versionedMilliseconds: Number.POSITIVE_INFINITY,
       },
     ),
     branches: createReadCache(

@@ -45,55 +45,87 @@ async function copyRuntime(root: string): Promise<void> {
 
 const runner = `
 import assert from 'node:assert/strict';
+import {execFile} from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-const [base,scenario]=process.argv.slice(1);
-const doctorFailed=scenario==='doctor failure';
-const prefix=path.join(base,'prefix');
-const globalRoot=path.join(prefix,'lib/node_modules');
-const packageRoot=path.join(globalRoot,'openclaw');
-const stagePrefix=path.join(base,'stage');
-const stagedRoot=path.join(stagePrefix,'lib/node_modules/openclaw');
+import {promisify} from 'node:util';
+const exec=promisify(execFile);
+const [base,scenario,packageRoot,candidate]=process.argv.slice(1);
+const doctorFailed=scenario==='doctor failure'||scenario==='late recovery refusal';
+const late=scenario==='success'||scenario==='late recovery refusal';
+const globalRoot=path.dirname(packageRoot);
 const updater=await import(pathToFileURL(path.join(packageRoot,'dist/updater.mjs')).href);
 assert(fileURLToPath(updater.installedDependencyUrl).startsWith(packageRoot+path.sep));
+async function command(argv,cwd=base){
+  try{return {...await exec(argv[0],argv.slice(1),{cwd,env:process.env,timeout:60000,maxBuffer:1024*1024}),code:0}}
+  catch(error){return {code:typeof error.code==='number'?error.code:1,stdout:error.stdout??'',stderr:error.stderr??String(error)}}
+}
+const version=(await command(['npm','--version'])).stdout.trim();
+const [major,minor]=version.split('.').map(Number);
+const lifecyclePolicy=major>=12?'allow-scripts':major===11&&minor>=16?'allow-scripts-advisory':'unflagged';
 let transaction;
-let overrides;
-const result=await updater.swapStagedPackageInstall({
-  stage:{prefix:stagePrefix,packageRoot:stagedRoot,layout:{prefix:stagePrefix,globalRoot:path.dirname(stagedRoot),binDir:path.join(stagePrefix,'bin')},installTarget:{manager:'npm',command:'npm',globalRoot:path.dirname(stagedRoot),packageRoot:stagedRoot}},
-  installTarget:{manager:'npm',command:'npm',globalRoot,packageRoot},
-  packageName:'openclaw',localOverrides:{reapply:true,env:process.env},
-  beforeActivate:async()=>{if(scenario==='success')await fs.writeFile(path.join(packageRoot,'dist/late.js'),'late edit\\n')},
-  onTransaction:value=>{transaction=value},onLocalOverrides:value=>{overrides=value},
+const result=await updater.runGlobalPackageUpdateSteps({
+  installTarget:{manager:'npm',command:'npm',globalRoot,packageRoot,npmOwner:{version,lifecyclePolicy}},
+  packageName:'openclaw',packageRoot,installSpec:candidate,requirePackageReplacement:true,env:process.env,timeoutMs:60000,
+  localOverrides:{reapply:true,env:process.env},runCommand:(argv,options)=>command(argv,options.cwd),
+  runStep:async({name,argv,cwd})=>{const value=await command(argv,cwd);return {name,command:argv.join(' '),cwd:cwd??base,durationMs:0,exitCode:value.code,stdoutTail:value.stdout,stderrTail:value.stderr}},
+  beforeActivate:async()=>{if(late)await fs.writeFile(path.join(packageRoot,'dist/late.js'),'late edit\\n')},
+  onTransaction:value=>{transaction=value},
   postVerifyStep:async root=>({name:'fixture doctor',command:'fixture doctor',cwd:root,durationMs:0,exitCode:doctorFailed?1:0})
 });
+assert(transaction,JSON.stringify(result));
+const overrides=result.localOverrides;
 let rollback;
-if(result.status==='committed'){
-  if(doctorFailed)rollback=await transaction.rollback(()=>{});
-  await transaction.complete({activationVerified:!doctorFailed},()=>{});
-}
-const observed={status:result.status,overrideStatus:overrides?.status,applied:overrides?.applied,rollbackCode:rollback?.exitCode,
+if(doctorFailed)rollback=await transaction.rollback(()=>{});
+const completion=await transaction.complete({activationVerified:!doctorFailed},()=>{});
+const read=(root,file)=>root?fs.readFile(path.join(root,file),'utf8').catch(()=>null):null;
+const cli=await command([process.execPath,path.join(packageRoot,'dist/index.js')]);
+const observed={failedStep:result.failedStep?.name??null,restartSafe:result.recovery.serviceRestartSafe,
+  overrideStatus:overrides?.status,applied:overrides?.applied,rollbackCode:rollback?.exitCode,completionCode:completion?.exitCode??null,
+  hasRecoveryDir:overrides?.recoveryDir!==undefined,
   version:await fs.readFile(path.join(packageRoot,'package.json'),'utf8').then(value=>JSON.parse(value).version,()=>null),
-  index:await fs.readFile(path.join(packageRoot,'dist/index.js'),'utf8').catch(()=>null),
-  late:await fs.readFile(path.join(packageRoot,'dist/late.js'),'utf8').catch(()=>null),
+  index:await read(packageRoot,'dist/index.js'),late:await read(packageRoot,'dist/late.js'),cliCode:cli.code,cliOutput:cli.stdout.trim(),
+  savedIndex:await read(overrides?.recoveryDir,'files/dist/index.js'),savedLate:await read(overrides?.recoveryDir,'files/dist/late.js'),
+  notice:result.steps.some(step=>step.name==='local-package-overrides'&&step.advisory?.message.includes(overrides.recoveryDir)),
   backupPresent:await fs.stat(transaction.backupRoot).then(()=>true,()=>false)};
 console.log(JSON.stringify(observed));
 `;
 
-it.each(["success", "doctor failure"])(
-  "self-replay %s keeps the updater's native dependency available",
+it.each(["success", "doctor failure", "unchanged", "legacy", "late recovery refusal"])(
+  "real npm self-update keeps its native runtime and recovery contract: %s",
   async (scenario) => {
     const base = dirs.make("self-replay-");
-    const root = path.join(base, "prefix/lib/node_modules/openclaw");
-    const staged = path.join(base, "stage/lib/node_modules/openclaw");
-    await writePackageRoot(root, "1.0.0");
+    const source = path.join(base, "old");
+    const candidateSource = path.join(base, "candidate");
+    const prefix = path.join(base, "prefix");
+    const root = path.join(
+      prefix,
+      process.platform === "win32" ? "node_modules" : "lib/node_modules",
+      "openclaw",
+    );
+    const env = {
+      ...process.env,
+      HOME: base,
+      OPENCLAW_STATE_DIR: path.join(base, "state"),
+      npm_config_cache: path.join(base, "cache"),
+      npm_config_userconfig: path.join(base, "npmrc"),
+    };
+    await fs.writeFile(env.npm_config_userconfig, "");
+    const run = (command: string, args: string[], cwd = base) =>
+      exec(command, args, { cwd, env, timeout: 60_000, maxBuffer: 1024 * 1024 });
+    const upstream = '#!/usr/bin/env node\nconsole.log("upstream");\n';
+    const local = '#!/usr/bin/env node\nconsole.log("operator override");\n';
+    await writePackageRoot(source, "2026.9.3");
+    await fs.writeFile(path.join(source, "dist/index.js"), upstream, { mode: 0o755 });
+    await fs.chmod(path.join(source, "dist/index.js"), 0o755);
     await build({
       stdin: {
         contents:
-          'export { swapStagedPackageInstall } from "./src/infra/package-update-swap.ts"; export const installedDependencyUrl = import.meta.resolve("@openclaw/fs-safe/root");',
+          'export { runGlobalPackageUpdateSteps } from "./src/infra/package-update-steps.ts"; export const installedDependencyUrl = import.meta.resolve("@openclaw/fs-safe/root");',
         resolveDir: process.cwd(),
       },
-      outfile: path.join(root, "dist/updater.mjs"),
+      outfile: path.join(source, "dist/updater.mjs"),
       bundle: true,
       platform: "node",
       format: "esm",
@@ -116,32 +148,80 @@ it.each(["success", "doctor failure"])(
       },
       logLevel: "silent",
     });
+    await fs.cp(source, candidateSource, { recursive: true });
+    async function pack(directory: string, version: string) {
+      await fs.writeFile(
+        path.join(directory, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version,
+          type: "module",
+          files: ["dist"],
+          bin: { openclaw: "dist/index.js" },
+        }),
+      );
+      await writePackageDistInventory(directory);
+      if (scenario === "legacy" && directory === source) {
+        await fs.rm(path.join(directory, "dist/postinstall-content-inventory.json"));
+        await fs.writeFile(
+          path.join(directory, "dist/postinstall-inventory.json"),
+          JSON.stringify(["dist/index.js", "dist/updater.mjs"]),
+        );
+      }
+      await run(
+        "npm",
+        ["pack", "--ignore-scripts", "--json", "--pack-destination", base],
+        directory,
+      );
+      return path.join(base, `openclaw-${version}.tgz`);
+    }
+    const old = await pack(source, "2026.9.3");
+    const candidate = await pack(candidateSource, "2026.9.4");
+    await run("npm", [
+      "install",
+      "-g",
+      "--prefix",
+      prefix,
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      old,
+    ]);
     await copyRuntime(root);
-    await writePackageDistInventory(root);
-    await fs.cp(root, staged, { recursive: true });
-    await writePackageRoot(staged, "2.0.0");
-    await fs.writeFile(path.join(root, "dist/index.js"), "operator edit\n");
-    const { stdout } = await exec(
-      process.execPath,
-      ["--input-type=module", "--eval", runner, base, scenario],
-      {
-        cwd: base,
-        env: { ...process.env, HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") },
-        timeout: 60_000,
-        maxBuffer: 1024 * 1024,
-      },
-    );
+    if (scenario !== "unchanged") {
+      await fs.writeFile(path.join(root, "dist/index.js"), local);
+    }
+    const { stdout } = await run(process.execPath, [
+      "--input-type=module",
+      "--eval",
+      runner,
+      base,
+      scenario,
+      root,
+      candidate,
+    ]);
     const observed = JSON.parse(stdout.trim());
-    const success = scenario === "success";
+    const failed = scenario === "doctor failure" || scenario === "late recovery refusal";
+    const late = scenario === "success" || scenario === "late recovery refusal";
+    const unchanged = scenario === "unchanged";
+    const legacy = scenario === "legacy";
     expect(observed, stdout).toMatchObject({
-      status: "committed",
-      overrideStatus: "applied",
-      applied: success ? 2 : 1,
-      index: "operator edit\n",
-      late: success ? "late edit\n" : null,
-      backupPresent: false,
-      version: success ? "2.0.0" : "1.0.0",
-      ...(success ? {} : { rollbackCode: 0 }),
+      failedStep: failed ? "fixture doctor" : null,
+      restartSafe: !failed,
+      overrideStatus: unchanged ? "none" : legacy ? "preserved" : "applied",
+      applied: unchanged || legacy ? 0 : late ? 2 : 1,
+      index: unchanged || legacy ? upstream : local,
+      cliCode: 0,
+      cliOutput: unchanged || legacy ? "upstream" : "operator override",
+      late: late ? "late edit\n" : null,
+      savedIndex: unchanged ? null : local,
+      savedLate: late ? "late edit\n" : null,
+      hasRecoveryDir: !unchanged,
+      notice: !unchanged,
+      backupPresent: scenario === "late recovery refusal",
+      version: scenario === "doctor failure" ? "2026.9.3" : "2026.9.4",
+      completionCode: scenario === "late recovery refusal" ? 1 : null,
+      ...(failed ? { rollbackCode: scenario === "doctor failure" ? 0 : 1 } : {}),
     });
   },
   120_000,

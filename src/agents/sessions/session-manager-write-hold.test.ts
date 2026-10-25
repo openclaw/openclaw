@@ -17,15 +17,11 @@ import {
 import type { AgentMessage } from "../runtime/index.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import * as transcriptRedact from "../transcript-sanitize.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
 async function setup(state: OpenClawTestState) {
-  const scope = {
-    agentId: "main",
-    sessionId: "write-hold",
-    sessionKey: "agent:main:write-hold",
-    storePath: path.join(state.sessionsDir(), "sessions.json"),
-  };
+  const scope = sessionScope(path.join(state.sessionsDir(), "sessions.json"), "write-hold");
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   const manager = SessionManager.open(scope, state.workspaceDir);
   const parentId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });

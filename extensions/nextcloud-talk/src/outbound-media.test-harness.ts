@@ -3,6 +3,49 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { ChannelMessageSendMediaContext } from "openclaw/plugin-sdk/channel-outbound";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
+import type { NextcloudTalkInboundMessage } from "./types.js";
+
+export function fileMessage(
+  fixture: NextcloudTalkOutboundFixture,
+  overrides: Partial<NextcloudTalkInboundMessage> = {},
+): NextcloudTalkInboundMessage {
+  return {
+    messageId: "42",
+    roomToken: "allowed",
+    roomName: "Fixture",
+    senderId: "users/canonical-user",
+    senderName: "API",
+    text: "The report",
+    mediaType: "text/plain",
+    timestamp: Date.now(),
+    isGroupChat: true,
+    attachment: {
+      fileId: "81",
+      name: "openclaw-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa-report.pdf",
+      mimeType: "application/pdf",
+      declaredSizeBytes: fixture.bytes.length,
+      shareUrl: "https://cloud.invalid/s/synthetic",
+      hideDownload: false,
+    },
+    ...overrides,
+  };
+}
+
+export function chatFile(referenceId: string) {
+  return {
+    id: 42,
+    token: "allowed",
+    actorType: "users",
+    actorId: "canonical-user",
+    referenceId,
+    messageParameters: { file: { id: "81" } },
+  };
+}
+
+export function respondOcs(response: ServerResponse, data: unknown) {
+  response.writeHead(200, { "content-type": "application/json" });
+  response.end(JSON.stringify({ ocs: { data } }));
+}
 
 type NextcloudTalkOutboundRequest = {
   method: string;
@@ -10,11 +53,12 @@ type NextcloudTalkOutboundRequest = {
   body: Buffer;
   authorization?: string;
   ifNoneMatch?: string;
+  headers: IncomingMessage["headers"];
 };
 export type NextcloudTalkOutboundFixture = {
   directory: string;
   requests: NextcloudTalkOutboundRequest[];
-  ctx: ChannelMessageSendMediaContext;
+  ctx: Omit<ChannelMessageSendMediaContext, "onDeliveryResult">;
   bytes: Buffer;
   respond?: (request: NextcloudTalkOutboundRequest, response: ServerResponse) => boolean;
 };
@@ -52,6 +96,7 @@ export async function withNextcloudTalkOutboundFixture(
         url: new URL(request.url ?? "/", "http://fixture.invalid"),
         body: Buffer.concat(chunks),
         authorization: request.headers.authorization,
+        headers: request.headers,
         ifNoneMatch:
           typeof request.headers["if-none-match"] === "string"
             ? request.headers["if-none-match"]
@@ -64,6 +109,8 @@ export async function withNextcloudTalkOutboundFixture(
       let data: unknown;
       if (recorded.url.pathname === "/cloud/ocs/v1.php/cloud/user") {
         data = { id: "canonical-user" };
+      } else if (recorded.url.pathname === "/cloud/ocs/v2.php/cloud/capabilities") {
+        data = { capabilities: { spreed: { features: ["media-caption"] } } };
       } else if (recorded.method === "MKCOL") {
         response.writeHead(201);
         response.end();
@@ -89,12 +136,8 @@ export async function withNextcloudTalkOutboundFixture(
       } else if (recorded.url.pathname === "/cloud/ocs/v2.php/apps/spreed/api/v1/chat/allowed") {
         data = [
           {
-            id: 42,
-            token: "allowed",
-            actorType: "users",
-            actorId: "canonical-user",
+            ...chatFile(referenceId),
             parent: { id: 41 },
-            referenceId,
             messageParameters: { file: { id: "81", path: uploadedPath.slice(1) } },
           },
         ];

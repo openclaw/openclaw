@@ -42,6 +42,7 @@ import {
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { formatError } from "../../session.js";
+import { jidToE164 } from "../../targets-runtime.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { buildMentionConfig, isBotMentioned, resolveOwnerList } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -51,12 +52,27 @@ import { resolveGroupActivationFor } from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import { updateLastRouteInBackground } from "./last-route.js";
-import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
 import {
   createWhatsAppStatusReactionController,
   type StatusReactionController,
 } from "./status-reaction.js";
+
+function resolvePeerId(msg: AdmittedWebInboundMessage) {
+  const admission = msg.admission;
+  if (admission.conversation.kind === "group") {
+    return admission.conversation.id;
+  }
+  const sender = getSenderIdentity(msg);
+  if (sender.e164) {
+    return sender.e164;
+  }
+  const conversationId = admission.conversation.id;
+  if (conversationId.includes("@")) {
+    return jidToE164(conversationId) ?? conversationId;
+  }
+  return normalizeE164(conversationId);
+}
 
 const MAX_GROUP_DROP_WARNINGS = 100;
 const groupDropWarned = createDedupeCache({
@@ -279,7 +295,6 @@ export function createWebOnMessageHandler(params: {
           backgroundTasks: params.backgroundTasks,
           storeAgentId: route.agentId,
           sessionKey: route.sessionKey,
-          channel: "whatsapp",
           to: conversationId,
           accountId: route.accountId,
           ctx: metaCtx,

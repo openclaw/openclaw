@@ -18,6 +18,7 @@ import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/co
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { dropPostgresTestSchemas } from "../infra/postgres-sync/schema-cleanup.test-support.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import { captureSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
@@ -61,13 +62,7 @@ describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
     await cleanupSessionStateForTest({ stateDir: root });
     resetDatabaseEngineSelectionForTest();
     try {
-      const schemas = await client.query<{ nspname: string }>(
-        "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
-        [prefix.length + 1, `${prefix}_`],
-      );
-      for (const { nspname } of schemas.rows) {
-        await client.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
-      }
+      await dropPostgresTestSchemas(client, prefix);
     } finally {
       await client.end();
     }

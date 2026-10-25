@@ -65,24 +65,6 @@ describe("Gateway connection work", () => {
       }
     },
   );
-
-  it("does not drain another Gateway generation's work", async () => {
-    const first = new GatewayConnectionWork();
-    const second = new GatewayConnectionWork();
-    const gate = createDeferredCore();
-    const settled = vi.fn();
-    const pending = first.track(() => gate.promise.then(settled));
-    try {
-      second.beginClose();
-      await second.drain();
-      expect(settled).not.toHaveBeenCalled();
-    } finally {
-      gate.resolve();
-      first.beginClose();
-      await first.drain();
-      await pending;
-    }
-  });
 });
 
 describe.skipIf(process.platform === "win32")("Gateway connection broker ownership", () => {

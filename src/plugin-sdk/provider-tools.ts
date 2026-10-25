@@ -172,16 +172,12 @@ export function normalizeOpenAIToolSchemas(
   if (!shouldApplyOpenAIToolCompat(ctx)) {
     return ctx.tools;
   }
-  return ctx.tools.map((tool) => {
+  return mapArrayIfChanged(ctx.tools, (tool) => {
     if (tool.parameters != null && typeof tool.parameters !== "object") {
       return tool;
     }
-    return {
-      ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(
-        truncateToolSchemaDepth(tool.parameters ?? {}, tool.name),
-      ),
-    };
+    const parameters = normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}, tool.name);
+    return parameters === tool.parameters ? tool : { ...tool, parameters };
   });
 }
 
@@ -224,8 +220,8 @@ export function inspectOpenAIToolSchemas(
   if (!shouldApplyOpenAIToolCompat(ctx)) {
     return [];
   }
-  // Native OpenAI transports fall back to `strict: false` when any tool schema is not
-  // strict-compatible, so these findings are expected for optional-heavy tool schemas.
+  // Compatibility normalization runs before runtime inspection. Registration
+  // diagnostics own open-object warnings while the raw schemas are available.
   return [];
 }
 

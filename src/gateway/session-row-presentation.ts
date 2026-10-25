@@ -44,6 +44,7 @@ import {
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
+import { sessionTitleRequests } from "./session-title-state.js";
 import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
 import {
   applyGatewaySessionRowMode,
@@ -90,8 +91,12 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   const prepared = new WeakMap<T, { facts: [string, Partial<T>][]; bytes: number }>();
   const share = (sessions: T[]) => {
+    // Empty and single-row deltas cannot share facts; keep their prepared wire rows.
+    if (sessions.length < 2) {
+      return { sessions, sharedFacts: [] };
+    }
     type SharedFact = { fact: Partial<T>; rows: number[] };
-    const candidates = new Map<string, SharedFact>();
+    const candidates = new Map<string, { fact: Partial<T>; rows: number | number[] }>();
     const rows: GatewaySessionRow[] = [];
     sessions.forEach((row, index) => {
       const { key, kind, updatedAt, sessionId, rowMode } = row;
@@ -120,17 +125,21 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       for (const [encoded, fact] of facts) {
         const candidate = candidates.get(encoded);
         if (candidate) {
-          candidate.rows.push(index);
+          if (typeof candidate.rows === "number") {
+            candidate.rows = [candidate.rows, index];
+          } else {
+            candidate.rows.push(index);
+          }
         } else {
-          candidates.set(encoded, { fact, rows: [index] });
+          candidates.set(encoded, { fact, rows: index });
         }
       }
     });
     // Facts with the same recipients share one reference, including common scalar defaults.
     const groups = new Map<string, SharedFact>();
     for (const candidate of candidates.values()) {
-      if (candidate.rows.length < 2) {
-        Object.assign(rows[candidate.rows[0]!]!, candidate.fact);
+      if (typeof candidate.rows === "number") {
+        Object.assign(rows[candidate.rows]!, candidate.fact);
         continue;
       }
       const key = candidate.rows.join(",");
@@ -189,7 +198,8 @@ export function shareSidebarSessionRows(
       ? undefined
       : rowHistory?.find((previous) => previous.revision === baseRevision);
   if (baseRevision !== undefined && previousGeneration) {
-    const previous = new Map(Array.from(previousGeneration.ids, (id, index) => [id, index]));
+    const previous = new Map<number, number>();
+    previousGeneration.ids.forEach((id, index) => previous.set(id, index));
     const changed: GatewaySessionRow[] = [];
     const order = rows.map(
       (row) =>
@@ -225,15 +235,15 @@ export function prepareSessionRowPublication(
     const recipient = prepareSessionRowRecipient(read, client, view);
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
     return {
-      get audienceKey() {
+      getAudienceKey() {
         return JSON.stringify([
-          recipient.sharing.cacheKey,
+          recipient.sharing.getCacheKey(),
           recipient.presentFastMode("ultrafast"),
           recipient.publicationState?.factsRevision,
         ]);
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
-      get presentation() {
+      getPresentation() {
         return (presentation ??= prepareProjectedSessionPresentation(
           read,
           client,
@@ -324,7 +334,7 @@ export function prepareProjectedSessionPresentation(
     }
     const key = JSON.stringify([
       client === undefined,
-      sharing.cacheKey,
+      sharing.getCacheKey(),
       presentFastMode("ultrafast"),
       Object.entries(query).toSorted(([left], [right]) => left.localeCompare(right)),
     ]);
@@ -466,6 +476,11 @@ export function prepareProjectedSessionPresentation(
         run?.active,
         run?.status,
         preparedFacts,
+        sessionTitleRequests.get({
+          storePath: record.storeTarget.storePath,
+          sessionKey: record.key,
+          sessionId: record.entry.sessionId,
+        }) !== undefined,
         resolveActiveSessionAgentStatus(record.entry.agentStatus, now),
         // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
         record.entry.goal?.status === "active" && record.entry.goal.tokenBudget !== undefined

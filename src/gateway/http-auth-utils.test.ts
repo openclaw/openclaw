@@ -35,6 +35,7 @@ import {
 import { GatewayOperatorAccessDeniedError } from "./operator-access-policy.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const { authorize, ensureOwner } = vi.hoisted(() => ({ authorize: vi.fn(), ensureOwner: vi.fn() }));
@@ -360,13 +361,7 @@ describe("HTTP gateway owner profiles", () => {
         // The child keeps its source after the parent releases it and its response disconnects.
         const captured = await captureGatewayOperatorRunAuthority({
           client: {
-            connect: {
-              minProtocol: 1,
-              maxProtocol: 1,
-              client: { id: "test", version: "test", platform: "test", mode: "test" },
-              role: "operator",
-              scopes: ["operator.read"],
-            },
+            connect: gatewayConnect(["operator.read"], { id: "test", mode: "test" }),
             internal: { operatorRoleActor: { kind: "operator", profileId: person.id } },
           },
           context: { getRuntimeConfig: () => cfg },
@@ -413,6 +408,13 @@ describe("HTTP gateway owner profiles", () => {
         const result = await authenticate(method);
         assert(result.ok, "Expected authenticated request");
         expect(result.requestAuth.user).toBeUndefined();
+        if (method === "token" || method === "password") {
+          expect(result.requestAuth).toMatchObject({
+            authMethod: method,
+            trustDeclaredOperatorScopes: false,
+            operatorRoleActor: { kind: "system" },
+          });
+        }
         expect(result.requestAuth.authenticatedUserProfile).toMatchObject({
           displayName: profileId ? "Saved Owner" : "Gateway Person",
         });

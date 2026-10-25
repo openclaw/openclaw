@@ -4,10 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
-import {
-  releaseUpdateCommandPreflightForHandoff,
-  withUpdateCommandExecutor,
-} from "../cli/update-cli/update-command-executor.js";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import {
@@ -23,6 +20,7 @@ import {
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
+import { withExecutor } from "./config-executor.test-support.js";
 import { readLatestConfigSnapshotAuditRecordAsync } from "./config-journal-snapshot.js";
 import { getConfigValueAtPath as getAt, setConfigValueAtPath as setAt } from "./config-paths.js";
 import { hashConfigIncludeRaw } from "./includes.js";
@@ -41,11 +39,13 @@ import { hashConfigRaw } from "./io.read-helpers.js";
 import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import {
   createConfigWriteHomeFixture,
+  createConfigWritePluginRegistry as pluginRegistry,
   defaultedDemoPluginRegistry,
 } from "./io.write-config.test-support.js";
 import { registerConfigWritePreflightTests } from "./io.write-preflight.test-support.js";
 import { registerConfigWriteWarningTests } from "./io.write-warnings.test-support.js";
 import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
+import { createSnapshot } from "./mutate.test-support.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
 import type { AgentModelEntryConfig, AgentModelPolicyConfig } from "./types.agent-defaults.js";
@@ -191,28 +191,6 @@ const pluginEntries = <T>(entries: T) => ({ plugins: { entries } });
 const agentEntries = <T>(entries: T) => ({ agents: { entries } });
 const agentDefaults = <T>(defaults: T) => ({ agents: { defaults } });
 
-const pluginRegistry = (
-  id: string,
-  configSchema: NonNullable<PluginManifestRegistry["plugins"][number]["configSchema"]>,
-): PluginManifestRegistry => ({
-  diagnostics: [],
-  plugins: [
-    {
-      id,
-      origin: "bundled",
-      channels: [],
-      providers: [],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      rootDir: `/tmp/openclaw-test-${id}`,
-      source: `/tmp/openclaw-test-${id}/index.ts`,
-      manifestPath: `/tmp/openclaw-test-${id}/openclaw.plugin.json`,
-      configSchema,
-    },
-  ],
-});
-
 it.each(["changed-input", "revoked-requester"] as const)(
   "refuses Doctor promotion at the native writer (%s)",
   inHome(async (home, failure) => {
@@ -321,25 +299,6 @@ itWithHome(
     );
   },
 );
-
-const existingSnapshot = (
-  configPath: string,
-  config: OpenClawConfig,
-  raw: string | null,
-): ConfigFileSnapshot => ({
-  path: configPath,
-  exists: true,
-  raw,
-  parsed: config,
-  sourceConfig: config,
-  resolved: config,
-  valid: true,
-  runtimeConfig: config,
-  config,
-  issues: [],
-  warnings: [],
-  legacyIssues: [],
-});
 
 const readConfig = async (configPath: string): Promise<OpenClawConfig> =>
   JSON.parse(await readRaw(configPath)) as OpenClawConfig;
@@ -829,7 +788,11 @@ it.each(["success", "EEXIST"] as const)(
         },
       ),
     });
-    const baseSnapshot = existingSnapshot(configPath, original, originalRaw);
+    const baseSnapshot = createSnapshot({
+      path: configPath,
+      sourceConfig: original,
+      raw: originalRaw,
+    });
     const preflight = vi.fn(async () => {
       throw new Error("should not preflight rejected writes");
     });
@@ -925,7 +888,11 @@ itWithHome("allows shrinking without losing mode protection", async (home) => {
   const io = homeIO(home, {
     env: { VITEST: "true" },
   });
-  const baseSnapshot = existingSnapshot(configPath, original, originalRaw);
+  const baseSnapshot = createSnapshot({
+    path: configPath,
+    sourceConfig: original,
+    raw: originalRaw,
+  });
   const acceptedWrite = await io.writeConfigFile(
     { meta: original.meta, gateway: { mode: "local" } },
     {
@@ -2051,7 +2018,13 @@ for (const failure of ["warnings", "missing-raw", "concurrent", "env"] as const)
             writeConfigFile(
               next,
               failure === "missing-raw"
-                ? { baseSnapshot: existingSnapshot(configPath, initial, null) }
+                ? {
+                    baseSnapshot: createSnapshot({
+                      path: configPath,
+                      sourceConfig: initial,
+                      raw: null,
+                    }),
+                  }
                 : undefined,
             ),
           ).rejects.toThrow(
@@ -2282,71 +2255,57 @@ for (const { publication, layout } of [
 
 itWithHome("retains write failure after authority revocation", async (home) => {
   const { configPath, raw } = await seed(home, gatewayAt(18789));
-  const root = path.join(await fs.realpath(home), "package");
-  await fs.mkdir(root);
-  const databasePath = path.join(home, "control", "managed-update-handoffs.sqlite");
-  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
   const primaryError = new Error("rename failed before publication");
   const provenanceAfterRevocation = vi.fn(() => {
     throw new ConfigMutationConflictError("config path changed since last load", {
       retryable: false,
     });
   });
-  await withUpdateCommandExecutor(
-    "config-write-failure-fence",
-    async (executor) => {
-      const fence = await executor.enter(root, { preflight: true });
-      let revoked = false;
-      const io = fastIO(home, {
-        configPath,
-        fs: {
-          ...fsNode,
-          renameSync: (source, destination) => {
-            if (destination !== configPath) {
-              return fsNode.renameSync(source, destination);
-            }
-            releaseUpdateCommandPreflightForHandoff(fence);
-            revoked = true;
-            throw primaryError;
-          },
+  await withExecutor(home, "config-write-failure-fence", async (assertCurrent, revoke) => {
+    let revoked = false;
+    const io = fastIO(home, {
+      configPath,
+      fs: {
+        ...fsNode,
+        renameSync: (source, destination) => {
+          if (destination !== configPath) {
+            return fsNode.renameSync(source, destination);
+          }
+          revoke();
+          revoked = true;
+          throw primaryError;
         },
-      });
-      const priorAudit = auditRecords(home, io.env);
-      const failure = await io
-        .writeConfigFile(gatewayAt(19001), {
-          assertCurrent: fence.assertCurrent,
-          assertConfigPathForWrite: () => {
-            if (revoked) {
-              provenanceAfterRevocation();
-            }
-          },
-        })
-        .catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(AggregateError);
-      if (!(failure instanceof AggregateError)) {
-        throw new Error("expected the write and authority failures");
-      }
-      expect(failure.message).toBe(
-        "Config write failed after source ownership changed: rename failed before publication",
-      );
-      expect(failure.errors).toHaveLength(2);
-      expect(failure.errors[0]).toBe(primaryError);
-      expect(failure.errors[1]).toHaveProperty(
-        "message",
-        expect.stringContaining("executor ownership is no longer current"),
-      );
-      expect(failure.cause).toBe(failure.errors[1]);
-      expect(provenanceAfterRevocation).not.toHaveBeenCalled();
-      expect(await readRaw(configPath)).toBe(raw);
-      expect(auditRecords(home, io.env)).toEqual(priorAudit);
-    },
-    {
-      existingAuthority: {
-        ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-        installKey: root,
       },
-    },
-  );
+    });
+    const priorAudit = auditRecords(home, io.env);
+    const failure = await io
+      .writeConfigFile(gatewayAt(19001), {
+        assertCurrent,
+        assertConfigPathForWrite: () => {
+          if (revoked) {
+            provenanceAfterRevocation();
+          }
+        },
+      })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) {
+      throw new Error("expected the write and authority failures");
+    }
+    expect(failure.message).toBe(
+      "Config write failed after source ownership changed: rename failed before publication",
+    );
+    expect(failure.errors).toHaveLength(2);
+    expect(failure.errors[0]).toBe(primaryError);
+    expect(failure.errors[1]).toHaveProperty(
+      "message",
+      expect.stringContaining("executor ownership is no longer current"),
+    );
+    expect(failure.cause).toBe(failure.errors[1]);
+    expect(provenanceAfterRevocation).not.toHaveBeenCalled();
+    expect(await readRaw(configPath)).toBe(raw);
+    expect(auditRecords(home, io.env)).toEqual(priorAudit);
+  });
 });
 
 itWithHome("rolls back exhausted canonical env rereads", async (home) => {

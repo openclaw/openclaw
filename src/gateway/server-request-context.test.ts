@@ -1,6 +1,7 @@
 /**
  * Gateway request context construction tests.
  */
+
 import { writeFileSync } from "node:fs";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -41,9 +42,9 @@ import {
   makeContextParams,
   makeCronState,
   makeGatewayClient,
-  type RequestRuntime,
 } from "./server-request-context.test-support.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { gatewayProfile, dispatchProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -172,13 +173,7 @@ describe("createGatewayRequestContext", () => {
           }),
           usesSharedGatewayAuth: false,
           presenceKey: `event-${index}`,
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: null,
-            avatarRevision: "1",
-            hasAvatar: false,
-            updatedAt: profile.updatedAt,
-          },
+          authenticatedUserProfile: dispatchProfile(profile.id, { updatedAt: profile.updatedAt }),
           socket: {
             readyState: 1,
             bufferedAmount: 0,
@@ -327,21 +322,13 @@ describe("createGatewayRequestContext", () => {
   });
 
   it("reads cron state live from runtime state", () => {
-    const cronA = { start: vi.fn(), stop: vi.fn() } as never;
-    const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: RequestRuntime["runtimeState"] = {
-      cronState: makeCronState({ cron: cronA, storePath: "/tmp/cron-a" }),
-      configReloader: { isConfigReloadSettled: () => true },
-    };
-
-    const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
-
-    expect(context.cron).toBe(cronA);
-    expect(context.cronStorePath).toBe("/tmp/cron-a");
-
-    runtimeState.cronState = makeCronState({ cron: cronB, storePath: "/tmp/cron-b" });
-
-    expect(context.cron).toBe(cronB);
+    const params = makeContextParams();
+    const context = createGatewayRequestContext(params);
+    expect(context.cron).toBe(params.runtime.runtimeState.cronState.cron);
+    expect(context.cronStorePath).toBe("/tmp/cron");
+    const replacement = makeCronState({ storePath: "/tmp/cron-b" });
+    params.runtime.runtimeState.cronState = replacement;
+    expect(context.cron).toBe(replacement.cron);
     expect(context.cronStorePath).toBe("/tmp/cron-b");
   });
 
@@ -567,24 +554,14 @@ describe("createGatewayRequestContext", () => {
           clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
           scopes: ["operator.admin"],
         }),
-        authenticatedUserProfile: {
-          profileId: "profile-ada",
-          displayName: "Ada",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: gatewayProfile("profile-ada", "Ada"),
       };
       const unrelated = {
         ...makeGatewayClient({
           connId: "profile-unrelated",
           clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
         }),
-        authenticatedUserProfile: {
-          profileId: "profile-grace",
-          displayName: "Grace",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: gatewayProfile("profile-grace", "Grace"),
       };
       const unidentified = makeGatewayClient({
         connId: "shared-secret",

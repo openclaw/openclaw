@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
+import { createRouter } from "@openclaw/uirouter";
 import { createComponent, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
+import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
@@ -29,7 +31,8 @@ import {
   createSessions,
 } from "./sessions/sessions-page.test-support.ts";
 import { SessionsPage } from "./sessions/sessions-page.tsx";
-import { SkillsPage, type SkillsRouteData } from "./skills/skills-page.tsx";
+import { SkillsPage } from "./skills/skills-page.tsx";
+import type { SkillsRouteData } from "./skills/view-types.ts";
 import { createSkill } from "./skills/view.test-support.ts";
 import type { UsageRouteData } from "./usage/types.ts";
 import {
@@ -148,6 +151,9 @@ function contextWithClient(
     subscribe,
   });
   return {
+    router: createRouter<RouteId, ApplicationContext>({
+      routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+    }),
     gateway: gatewayWithClient(client, options.connected ?? false),
     agents: {
       state: { agentsList, agentsLoading: false, agentsError: null },
@@ -213,7 +219,6 @@ async function mountUsagePage(
       agentId: null,
     },
     result,
-    costSummary: null,
     loadedAtMs: Date.now(),
     error: null,
   };

@@ -11,10 +11,14 @@ import {
 import type { UsageSessionEntry } from "./types.ts";
 import { buildUsageFilterOptions } from "./view.test-support.ts";
 
-it("removes an entire quoted term without leaving phrase fragments", () => {
-  const quotedLabel = 'label:"Team  Planning"';
-  expect(removeQueryToken(`${quotedLabel} provider:openai`, quotedLabel)).toBe("provider:openai ");
-});
+it.each(['label:"Team  Planning"', '"label:Team  Planning"'])(
+  "removes an entire quoted term without leaving phrase fragments: %s",
+  (quotedLabel) => {
+    expect(removeQueryToken(`${quotedLabel} provider:openai`, quotedLabel)).toBe(
+      "provider:openai ",
+    );
+  },
+);
 
 it("limits suggestions before matching while preserving raw option spelling", () => {
   const values = [
@@ -42,10 +46,12 @@ it("limits suggestions before matching while preserving raw option spelling", ()
     buildQuerySuggestions(query, extractQueryTerms(query), options);
   expect(options.agent).toEqual(["OpenAI", "openai", " ", "four", "five", "six"]);
   for (const key of ["agent", "channel", "provider", "model"]) {
-    expect(suggest(`${key}:OPEN`).map((entry) => entry.value)).toEqual([
-      `${key}:OpenAI`,
-      `${key}:openai`,
-    ]);
+    for (const query of [`${key}:OPEN`, `"${key}:OPEN"`, `${key}:"OPEN"`]) {
+      expect(suggest(query).map((entry) => entry.value)).toEqual([
+        `${key}:OpenAI`,
+        `${key}:openai`,
+      ]);
+    }
     expect(suggest(`${key}:seventh`)).toEqual([]);
   }
   expect(suggest("constructor:")).toEqual([]);

@@ -78,6 +78,7 @@ async function fixture() {
     actions: [],
     accessories: [],
     widgets: [],
+    inlineViews: [],
     replacements: [],
   };
   const plugins = Object.assign(context.plugins, {
@@ -98,6 +99,7 @@ async function fixture() {
   sidebar.activeRouteId = "plugin";
   sidebar.activePluginTabId = "briefing/daily";
   await selectSidebarView(sidebar, "pages");
+  await vi.waitFor(() => expect(pageRow(sidebar, "route:usage")).not.toBeNull());
   await settleLitElement(sidebar);
   return {
     sidebar,
@@ -184,15 +186,38 @@ describe("Pages navigation identity", () => {
     pin.click();
     await settleLitElement(sidebar);
     expect(sidebar.sidebarEntries).toEqual([]);
-    sidebar.enabledRouteIds = ["agents-home"];
+    sidebar.enabledRouteIds = ["claws"];
     await settleLitElement(sidebar);
     expect(usage.row.isConnected).toBe(false);
     expect(pageRow(sidebar, "route:usage")).toBeNull();
-    const agents = pageEntry(sidebar, "route:agents-home");
-    sidebar.enabledRouteIds = ["agents-home", "usage"];
+    const claws = pageEntry(sidebar, "route:claws");
+    sidebar.enabledRouteIds = ["claws", "usage"];
     await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, "route:agents-home").row).toBe(agents.row);
+    expect(pageEntry(sidebar, "route:claws").row).toBe(claws.row);
     expect(pageEntry(sidebar, "route:usage").link.getAttribute("aria-current")).toBe("page");
+  });
+
+  it("updates a retained plugin row when its route placement changes", async () => {
+    const { sidebar, publishTab } = await fixture();
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    publishTab({ placement: "route:workboard" });
+    await settleLitElement(sidebar);
+    const before = pageEntry(sidebar, dailyKey);
+    expect(before.link.getAttribute("href")).toBe("/workboard");
+    expect(before.label.textContent).toBe("Workboard");
+    before.link.click();
+    expect(navigate).toHaveBeenLastCalledWith("workboard", undefined);
+
+    publishTab({ placement: "route:worktrees" });
+    await settleLitElement(sidebar);
+    const after = pageEntry(sidebar, dailyKey);
+    expect(after.row).toBe(before.row);
+    expect(after.link.getAttribute("href")).toBe("/worktrees");
+    expect(after.label.textContent).toBe("Worktrees");
+    after.link.click();
+    expect(navigate).toHaveBeenLastCalledWith("worktrees", undefined);
+    expect(navigate).toHaveBeenCalledTimes(2);
   });
 
   it("updates plugin artwork and labels, handles registry removal and releases subscriptions", async () => {

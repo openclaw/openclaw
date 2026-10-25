@@ -1,4 +1,5 @@
 import type { Selectable } from "kysely";
+import type { CronJobCreate } from "../cron/types.js";
 import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
@@ -15,7 +16,7 @@ export type PersistedClawCronRef = {
   declarationKey: string;
   schedulerJobId?: string;
   status: "pending" | "complete" | "failed" | "removed";
-  job: ClawCronJob;
+  job: ClawCronJob | { automation: CronJobCreate };
   error?: string;
   createdAtMs: number;
   updatedAtMs: number;

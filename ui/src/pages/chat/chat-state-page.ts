@@ -14,6 +14,7 @@ import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/se
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { currentDisplaySpeechConfig } from "../../lib/config/config-state-model.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
@@ -51,6 +52,7 @@ import {
   openSessionWorkspacePreview,
   getSessionWorkspace,
   clearSessionWorkspacePreviews,
+  sessionWorkspaceForHost,
 } from "./components/chat-session-workspace-state.ts";
 import {
   handleChatDraftChange,
@@ -311,11 +313,12 @@ export function createPageState(
         expectedLeafEntryId: resolveDisplayedLeafEntryId(state),
       }),
     async () => {
-      await context.runtimeConfig.ensureLoaded();
-      return resolveSpeechTextLimit(
-        context.runtimeConfig.state.configSnapshot?.runtimeConfig ??
-          context.runtimeConfig.state.configSnapshot?.config,
-      );
+      let config = currentDisplaySpeechConfig(context.runtimeConfig.state);
+      if (!config || !Object.hasOwn(config, "tts")) {
+        await context.runtimeConfig.ensureDisplayLoaded();
+        config = currentDisplaySpeechConfig(context.runtimeConfig.state);
+      }
+      return resolveSpeechTextLimit(config);
     },
   );
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
@@ -404,7 +407,7 @@ export function createPageState(
       transientResources.clear();
       transientResourceScope = scope;
     }
-    const normalized = normalizeSidebarLayout(layout);
+    let normalized = normalizeSidebarLayout(layout);
     // New tab is a live layout fact, not a saved resource or settings schema.
     // The persistence normalizer deliberately strips it again below.
     if (layout.newTab && normalized.columns[0]) {
@@ -431,6 +434,12 @@ export function createPageState(
       if (!panel || panel.environmentId !== undefined) {
         transientResources.delete(resource);
       }
+    }
+    const retiringResource = options?.retireAutomaticResource;
+    if (retiringResource && transientResources.has(retiringResource)) {
+      // Discovery can retire only its own transient tab, never an explicit target.
+      normalized = closeSlot(normalized, retiringResource);
+      transientResources.delete(retiringResource);
     }
     if (
       previous.resourceAutoOpenDismissed ||
@@ -525,6 +534,7 @@ export function createPageState(
         preview.label = fileTab.label;
         const workspace = getSessionWorkspace(state);
         workspace.previews = [...workspace.previews];
+        sessionWorkspaceForHost(state).publish();
       }
     } else {
       state.sidebarContent = content;

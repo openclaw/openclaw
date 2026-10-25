@@ -11,6 +11,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { parse } from "acorn";
 import { transformSync } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { parseFrontmatterBlockResult } from "../../packages/markdown-core/src/frontmatter.js";
 import { rewriteStandaloneImports } from "../../scripts/lib/bun-standalone-imports.mjs";
 import { createStandaloneMetadataAdapter } from "../../scripts/lib/bun-standalone-metadata.mjs";
@@ -22,6 +23,12 @@ import {
   readFileDescriptorBoundedSync,
 } from "../../src/infra/boundary-file-read.js";
 import { readRootJsonObjectSync } from "../../src/infra/json-files.js";
+import { tryProcessCwd } from "../../src/infra/safe-cwd.js";
+import {
+  resolveImmutableInstallIdentity,
+  resolvePluginCandidateInstallOwner,
+} from "../../src/plugins/candidate-install-owner.js";
+import { PluginDashboardDeclarationError } from "../../src/plugins/dashboard-capabilities.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../src/plugins/hardlink-policy.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "../../src/plugins/package-entrypoints.js";
 import {
@@ -33,6 +40,7 @@ import { createPluginCacheSdk, getPluginSdkHostFacts } from "../../src/plugins/p
 
 const temporaryRoots: string[] = [];
 afterEach(() => {
+  vi.unstubAllGlobals();
   temporaryRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
 });
 
@@ -317,6 +325,19 @@ function fixture({
 }
 
 describe("standalone image metadata", () => {
+  it("distinguishes embedded modules from directories and later disk additions", () => {
+    const { runtime, entry, context } = fixture();
+    vi.stubGlobal(
+      "__openclawStandaloneIsEmbeddedModule",
+      // eslint-disable-next-line no-underscore-dangle -- Compiler bootstrap contract.
+      context.__openclawStandaloneIsEmbeddedModule,
+    );
+    expect(isEmbeddedStandaloneModule(pathToFileURL(entry).href)).toBe(true);
+    expect(isEmbeddedStandaloneModule(path.dirname(entry))).toBe(false);
+    const fetched = path.join(runtime, "later.js");
+    fs.writeFileSync(fetched, "export const value = 42;");
+    expect(isEmbeddedStandaloneModule(fetched)).toBe(false);
+  });
   it.each(
     [false, true].flatMap((physical) => [false, true].map((minified) => ({ physical, minified }))),
   )(
@@ -668,7 +689,7 @@ describe("standalone image metadata", () => {
       ["src/plugins/native-module-require.ts", "PLUGIN_SOURCE_MODULE_EXTENSIONS"],
       ["src/channels/plugins/module-loader.ts", "loadModule"],
       ["src/plugins/module-export.ts", "unwrapDefaultModuleExport"],
-      ["src/channels/plugins/merge-plugin-section.ts", "mergeChannelPluginSection"],
+      ["src/channels/plugins/merge-plugin-section.ts", undefined],
       ["src/plugins/loader-channel-setup.ts", undefined],
     ] as const) {
       vm.runInContext(
@@ -837,13 +858,13 @@ describe("standalone image metadata", () => {
       const { runtime, launcher, mainEntry, context, adapter } = fixture();
       const native = vi.fn((filename: string) => fs.realpathSync.native(filename));
       context.fs = { realpathSync: { native } };
+      context.tryProcessCwd = tryProcessCwd;
       const source = ownerSource("src/infra/is-main.ts");
       vm.runInContext(source, context);
       const launch = {
         currentFile: mainEntry,
         argv: [process.execPath, launcher],
         env: {},
-        cwd: runtime,
         wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
       };
       expect(context.isMainModule(launch)).toBe(true);
@@ -898,6 +919,9 @@ describe("standalone image metadata", () => {
     const resolveArtifact = (params: { source: string; rootDir: string }) => params;
     Object.assign(context, {
       performance,
+      PluginDashboardDeclarationError,
+      resolveImmutableInstallIdentity,
+      resolvePluginCandidateInstallOwner,
       openRootFileSync: open,
       openPluginRootFileSync: vi.fn(openPluginRootFileSync),
       describeRootFileOpenFailure,
@@ -963,7 +987,12 @@ describe("standalone image metadata", () => {
         const steps = context.loadRuntimePluginCandidate({
           candidate: { source: sourcePath, rootDir, origin },
           manifestRecord: { channels: [], configSchema: {} },
-          context: { normalized: { slots: {} }, shouldLoadModules: true, env: {} },
+          context: {
+            normalized: { slots: {} },
+            shouldLoadModules: true,
+            installRecords: {},
+            env: {},
+          },
           options: {},
           state: { seenIds: new Map(), pluginLoadAttemptCount: 0 },
           preparedConfig: { validation: { ok: true } },

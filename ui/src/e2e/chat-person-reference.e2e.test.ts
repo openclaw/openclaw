@@ -57,9 +57,6 @@ const referenceBounds = (references: Locator) =>
   references.evaluateAll((elements) =>
     elements.map((element) => element.getBoundingClientRect().toJSON()),
   );
-const cardLinks = (card: Locator) =>
-  card.locator("a").evaluateAll((links) => links.map((link) => link.getAttribute("href")));
-const cardText = async (card: Locator) => (await card.textContent())?.replace(/\s+/gu, " ");
 async function personPage(page: Page, scenario: Parameters<typeof installMockGateway>[1] = {}) {
   const gateway = await installMockGateway(page, {
     historyMessages: [mentionMessage("profile-old")],
@@ -188,17 +185,8 @@ async function sharePersonActivity(page: Page) {
       ]),
     },
   });
-  await page.locator('[data-navigation-view="online"]').click();
-  const sidebarPerson = page.locator('[data-online-user-id="profile-ada"]');
-  await sidebarPerson.hover();
-  await card.getByRole("link", { name: /Release checklist/ }).waitFor();
-  const sidebarText = await cardText(card);
-  const sidebarLinks = await cardLinks(card);
-  await page.keyboard.press("Escape");
   await reference.focus();
-  await card.locator("h2").waitFor();
-  expect(await cardText(card)).toBe(sidebarText);
-  expect(await cardLinks(card)).toEqual(sidebarLinks);
+  await card.getByRole("link", { name: /Release checklist/ }).waitFor();
   expect(await card.textContent()).not.toMatch(/Unqualified identity|hidden/);
   await gateway.emitGatewayEvent("presence", {
     presence: [
@@ -311,7 +299,7 @@ suite.define(() => {
       }),
   );
 
-  it("shares live person details and visible sessions with the sidebar", () =>
+  it("updates live person details and visible sessions through an open reference", () =>
     withPage(sharePersonActivity, {
       viewport: { width: 1280, height: 900 },
       colorScheme: "light",

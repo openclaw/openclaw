@@ -26,7 +26,7 @@ function createBufferedPeer(connId: string, bufferedAmount: number) {
   const send = peer.socket.send.getMockImplementation()!;
   peer.socket.bufferedAmount = bufferedAmount;
   peer.socket.send.mockImplementation((wire, options, callback) => {
-    const bytes = Buffer.byteLength(wire);
+    const bytes = typeof wire === "string" ? Buffer.byteLength(wire) : wire.byteLength;
     peer.socket.bufferedAmount += bytes + (bytes < 126 ? 2 : bytes < 65536 ? 4 : 10);
     send(wire, options, callback);
   });

@@ -27,6 +27,8 @@ afterEach(() => vi.useRealTimers());
 it("loads, refreshes, and searches cards through the plugin's authenticated host", async () => {
   const page = mountPage({ connected: true });
   await afterWorkboardUpdate(() => expect(page.container.textContent).toContain("Initial card"));
+  page.focus();
+  expect(document.activeElement).toBe(page.container.querySelector(".workboard-search-trigger"));
   page.cards([createWorkboardCard({ title: "Updated card" })]);
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await afterWorkboardUpdate(() => expect(page.container.textContent).toContain("Updated card"));
@@ -43,6 +45,8 @@ it("loads, refreshes, and searches cards through the plugin's authenticated host
     expect(document.activeElement).toBe(current);
     return current;
   });
+  page.focus();
+  expect(document.activeElement).toBe(input);
   input.value = "Updated";
   input.dispatchEvent(new InputEvent("input", { bubbles: true }));
   await afterWorkboardUpdate(() => {
@@ -488,6 +492,10 @@ it("shows independent metadata and linked-session failures together", async () =
 
 it("keeps page failures visible in the board editor and prioritizes its save failure", async () => {
   const page = mountPage({ boardId: "planning" });
+  const failedSave = createDeferred<unknown>();
+  const retriedSave = createDeferred<unknown>();
+  const successfulSave = createDeferred<unknown>();
+  let saves = 0;
   const request = expectDefined(page.request.getMockImplementation(), "request implementation");
   page.request.mockImplementation(async (method, params) => {
     if (method === "agents.list") {
@@ -500,7 +508,7 @@ it("keeps page failures visible in the board editor and prioritizes its save fai
       };
     }
     if (method === "workboard.boards.upsert") {
-      throw new Error("Board update denied");
+      return [failedSave, retriedSave, successfulSave][saves++]!.promise;
     }
     return request(method, params);
   });
@@ -512,12 +520,50 @@ it("keeps page failures visible in the board editor and prioritizes its save fai
       "Agent metadata temporarily unavailable",
     );
   });
+  const name = expectDefined(
+    form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
+    "board name",
+  );
+  name.value = "Release planning";
+  name.dispatchEvent(new Event("input", { bubbles: true }));
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  expect(saves).toBe(1);
+  await afterWorkboardUpdate(() => {
+    expect(name.disabled).toBe(true);
+    expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+  });
+  failedSave.reject(new Error("Board update denied"));
   await afterWorkboardUpdate(() => {
     expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
       "Board update denied",
     );
   });
+  expect(name.value).toBe("Release planning");
+  expectDefined(
+    visibleToast(page.container)?.querySelector<HTMLButtonElement>("button"),
+    "dismiss save error",
+  ).click();
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await afterWorkboardUpdate(() => {
+    expect(saves).toBe(2);
+    expect(name.disabled).toBe(true);
+    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+      "Agent metadata temporarily unavailable",
+    );
+  });
+  expect(name.value).toBe("Release planning");
+  retriedSave.reject(new Error("Board update denied"));
+  await afterWorkboardUpdate(() => {
+    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+      "Board update denied",
+    );
+  });
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  successfulSave.resolve({ board: { id: "planning", name: "Release planning" } });
+  await afterWorkboardUpdate(() =>
+    expect(page.container.querySelector(".workboard-board-draft")).toBeNull(),
+  );
 });
 
 it.each(["canWrite", "connected"] as const)(
@@ -771,6 +817,26 @@ describe("selection reconciliation", () => {
     expect(page.workboard.state.draftOpen).toBe(true);
     expect(page.workboard.state.draftTitle).toBe("New operations task");
   });
+});
+
+it("titles the unfiltered page as all boards and a selected board by name", async () => {
+  const page = mountPage({ connected: true });
+  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+  page.request.mockImplementation(async (method, params) =>
+    method === "workboard.cards.list"
+      ? {
+          cards: [],
+          boards: [
+            { id: "planning", name: "Planning", total: 0, active: 0, archived: 0, byStatus: {} },
+          ],
+        }
+      : request(method, params),
+  );
+  page.fixture.notify();
+  const title = () => page.container.querySelector(".workboard-page-title")?.textContent?.trim();
+  await afterWorkboardUpdate(() => expect(title()).toBe("All boards"));
+  page.navigate("planning");
+  await afterWorkboardUpdate(() => expect(title()).toBe("Planning"));
 });
 
 it("saves explicit appearance clearing without sending legacy null values", async () => {

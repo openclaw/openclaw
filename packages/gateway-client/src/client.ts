@@ -19,6 +19,7 @@ import {
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-protocol/version";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAbortError, raceWithTimeout } from "@openclaw/retry";
 import {
@@ -44,6 +45,10 @@ import {
 } from "./connect-auth.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { resolveModelCatalogConnect } from "./model-catalog-connect.js";
+import {
+  resolveNodeProtocolClientMetadata,
+  shouldNegotiateLegacyNodeProtocol,
+} from "./node-protocol.js";
 import type { GatewayProtocolRequestTiming } from "./pending-request.js";
 import type {
   GatewayClientCloseInfo,
@@ -169,6 +174,8 @@ export type GatewayClientOptions = GatewayWebSocketTargetOptions &
      * this to keep the connect-challenge watchdog aligned with the gateway.
      */
     preauthHandshakeTimeoutMs?: number;
+    /** Synchronously revalidate the caller's live authority before transport writes. */
+    assertConnectionCurrent?: () => void;
     tickWatchMinIntervalMs?: number;
     tickWatchTimeoutMs?: number;
     requestTimeoutMs?: number;
@@ -217,17 +224,6 @@ export type {
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
 const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
-
-function resolveLegacyNodePlatform(platform: string): string | undefined {
-  switch (platform) {
-    case "macos":
-      return "darwin";
-    case "windows":
-      return "win32";
-    default:
-      return undefined;
-  }
-}
 
 type PendingStop = {
   ws: WebSocket;
@@ -338,10 +334,8 @@ export class GatewayClient {
       onConnectFailure: (error, context) => this.handleConnectRequestFailure(error, context.plan),
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
-        if (this.tickTimer) {
-          clearInterval(this.tickTimer);
-          this.tickTimer = null;
-        }
+        clearInterval(this.tickTimer ?? undefined);
+        this.tickTimer = null;
         if (decision.notify) {
           this.opts.onClose?.(context.code, context.reason, this.closeInfo(context));
         }
@@ -467,13 +461,14 @@ export class GatewayClient {
     // lifecycle and must remove it immediately after the socket is created.
     let unregisterGatewayLoopbackBypass: (() => void) | undefined;
     try {
-      unregisterGatewayLoopbackBypass = this.deps.registerGatewayLoopbackBypass(url);
-    } catch (error) {
-      throw new GatewayClientTransportPolicyError(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-    try {
+      try {
+        unregisterGatewayLoopbackBypass = this.deps.registerGatewayLoopbackBypass(url);
+        this.opts.assertConnectionCurrent?.();
+      } catch (error) {
+        throw new GatewayClientTransportPolicyError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
       ws = new WebSocket(url, transport.options);
       ws.binaryType = "nodebuffer";
     } finally {
@@ -498,14 +493,8 @@ export class GatewayClient {
     ws.on("unexpected-response", (request: ClientRequest, response: IncomingMessage) => {
       void readUpgradeErrorBody(response).then((body) => {
         const statusCode = response.statusCode;
-        let gatewayError: { type?: unknown; message?: unknown } | undefined;
-        try {
-          const parsed: unknown = JSON.parse(body);
-          const parsedError = isRecord(parsed) ? parsed.error : undefined;
-          gatewayError = isRecord(parsedError) ? parsedError : undefined;
-        } catch {
-          // Plain-text and truncated rejections remain visible in the original error message.
-        }
+        const parsedError = safeParseJsonRecord(body)?.error;
+        const gatewayError = isRecord(parsedError) ? parsedError : undefined;
         const rawLocation = response.headers.location;
         const location = rawLocation
           ? redactSensitiveUrlLikeString(
@@ -550,7 +539,11 @@ export class GatewayClient {
     });
     return {
       isOpen: () => ws.readyState === WebSocket.OPEN,
-      send: (data) => ws.send(data),
+      send: (data) => {
+        // Authentication and startup retries can yield after connection admission.
+        this.opts.assertConnectionCurrent?.();
+        ws.send(data);
+      },
       close: (code, reason) => ws.close(code, reason),
     };
   }
@@ -585,10 +578,8 @@ export class GatewayClient {
     this.stopped = true;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-    }
+    clearInterval(this.tickTimer ?? undefined);
+    this.tickTimer = null;
     if (this.pendingStop) {
       return this.pendingStop.promise;
     }
@@ -682,7 +673,7 @@ export class GatewayClient {
       role === "node" &&
       clientMode === GATEWAY_CLIENT_MODES.NODE &&
       clientId === GATEWAY_CLIENT_NAMES.NODE_HOST;
-    const negotiatesNodeProtocol = this.shouldNegotiateLegacyNodeProtocol();
+    const negotiatesNodeProtocol = shouldNegotiateLegacyNodeProtocol(this.opts);
     const useLegacyNodeProtocolEnvelope =
       isBuiltInNodeHost &&
       (this.useLegacyNodeProtocolEnvelope ||
@@ -705,13 +696,11 @@ export class GatewayClient {
       : negotiatesNodeProtocol
         ? PROTOCOL_VERSION
         : (this.opts.maxProtocol ?? PROTOCOL_VERSION);
-    const configuredPlatform = this.opts.platform ?? process.platform;
-    // A released v3 Gateway rejects v4 before authentication, so the retry can
-    // reproduce the shipped node-host envelope without mutating v4 pairings.
-    const platform = useLegacyNodeProtocolEnvelope
-      ? (resolveLegacyNodePlatform(configuredPlatform) ?? configuredPlatform)
-      : configuredPlatform;
-    const deviceFamily = useLegacyNodeProtocolEnvelope ? undefined : this.opts.deviceFamily;
+    const { platform, deviceFamily, modelIdentifier } = resolveNodeProtocolClientMetadata(
+      this.opts,
+      process.platform,
+      useLegacyNodeProtocolEnvelope,
+    );
 
     return {
       params: {
@@ -724,7 +713,7 @@ export class GatewayClient {
           buildId: this.opts.clientBuildId,
           platform,
           deviceFamily,
-          modelIdentifier: useLegacyNodeProtocolEnvelope ? undefined : this.opts.modelIdentifier,
+          modelIdentifier,
           mode: clientMode,
           instanceId: this.opts.instanceId,
         },
@@ -764,23 +753,9 @@ export class GatewayClient {
     };
   }
 
-  private shouldNegotiateLegacyNodeProtocol(): boolean {
-    if (
-      this.opts.role !== "node" ||
-      this.opts.mode !== GATEWAY_CLIENT_MODES.NODE ||
-      this.opts.clientName !== GATEWAY_CLIENT_NAMES.NODE_HOST
-    ) {
-      return false;
-    }
-    return (
-      (this.opts.minProtocol ?? MIN_NODE_PROTOCOL_VERSION) === MIN_NODE_PROTOCOL_VERSION &&
-      (this.opts.maxProtocol ?? PROTOCOL_VERSION) === PROTOCOL_VERSION
-    );
-  }
-
   private shouldRetryWithAlternateNodeProtocol(error: GatewayProtocolRequestError): boolean {
     if (
-      !this.shouldNegotiateLegacyNodeProtocol() ||
+      !shouldNegotiateLegacyNodeProtocol(this.opts) ||
       !(error instanceof GatewayClientRequestError)
     ) {
       return false;
@@ -904,7 +879,7 @@ export class GatewayClient {
   private completeConnectHello(helloOk: HelloOk): void {
     const reconnectWithCurrentNodeProtocol =
       this.useLegacyNodeProtocolEnvelope &&
-      this.shouldNegotiateLegacyNodeProtocol() &&
+      shouldNegotiateLegacyNodeProtocol(this.opts) &&
       helloOk.protocol > MIN_NODE_PROTOCOL_VERSION;
     if (reconnectWithCurrentNodeProtocol) {
       this.useLegacyNodeProtocolEnvelope = false;
@@ -958,8 +933,8 @@ export class GatewayClient {
       }
       this.logDebug(
         this.useLegacyNodeProtocolEnvelope
-          ? "gateway rejected protocol v4; retrying node host with protocol v3"
-          : "gateway rejected protocol v3; retrying node host with protocol v4",
+          ? `gateway rejected protocol v${PROTOCOL_VERSION}; retrying node host with protocol v${MIN_NODE_PROTOCOL_VERSION}`
+          : `gateway rejected protocol v${MIN_NODE_PROTOCOL_VERSION}; retrying node host with protocol v${PROTOCOL_VERSION}`,
       );
       return { closeCode: 1008, closeReason: "connect retry" };
     }
@@ -1220,9 +1195,7 @@ export class GatewayClient {
   }
 
   private startTickWatch() {
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-    }
+    clearInterval(this.tickTimer ?? undefined);
     const rawMinInterval = this.opts.tickWatchMinIntervalMs;
     const minInterval =
       typeof rawMinInterval === "number" && Number.isFinite(rawMinInterval)

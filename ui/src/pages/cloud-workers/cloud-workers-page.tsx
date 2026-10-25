@@ -1,7 +1,19 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, createStore, onCleanup, onSettled, Show, For } from "solid-js";
+import {
+  action,
+  createOptimistic,
+  createMemo,
+  createSignal,
+  createStore,
+  Errored,
+  Loading,
+  onSettled,
+  Show,
+  For,
+} from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   DocsLink,
   SettingsEmpty,
@@ -21,6 +33,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
@@ -45,26 +58,28 @@ export function CloudWorkersPage() {
     editor: null,
     draft: createCloudWorkerDraft(),
   });
-  const [saveRevision, setSaveRevision] = createSignal(0, { ownedWrite: true });
-  const configSave = new CloudWorkerConfigSave(() => setSaveRevision((value) => value + 1));
-  const saveState = () => {
-    saveRevision();
-    return configSave.state;
-  };
+  const configSave = new CloudWorkerConfigSave(() => saveProjection.publish());
+  const saveProjection = projectMutableSource(configSave, (owner) => owner.state);
+  const saveState = saveProjection.read;
+  let saveLifetime = Promise.withResolvers<void>();
+  function retireSavePresentation() {
+    saveLifetime.resolve();
+    saveLifetime = Promise.withResolvers<void>();
+  }
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
-  const [catalog, setCatalog] = createSignal<{
-    pending: boolean;
-    value?: Map<string, ProfileSummary>;
-    error?: string;
-  }>({ pending: false });
+  const [catalog, setCatalog] = createSignal<Map<string, ProfileSummary>>();
+  const [catalogLoad, setCatalogLoad] = createSignal<{ promise: Promise<void> } | null>(null);
+  const catalogCompletion = createMemo(() => catalogLoad()?.promise.then(() => null) ?? null);
   let previousCatalogReceipt: ReturnType<typeof catalogReceipt> | undefined;
   let catalogRequest: AbortController | undefined;
   function clearPresentation() {
+    retireSavePresentation();
     setView((state) => {
       state.editor = null;
       state.draft = createCloudWorkerDraft();
     });
-    setCatalog({ pending: false });
+    setCatalog(undefined);
+    setCatalogLoad(null);
   }
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
@@ -80,8 +95,38 @@ export function CloudWorkersPage() {
       }
       refreshCatalog();
     },
-    invalidateRequests: () => configSave.update({ busy: false }),
+    invalidateRequests: () => {
+      retireSavePresentation();
+      catalogRequest?.abort();
+      configSave.update({ busy: false });
+    },
   });
+  const saveScope = createMemo(() => {
+    saveState();
+    return saveLifetime;
+  });
+  const savePresentation = createMemo(() => {
+    const retired = saveScope().promise;
+    const [saving, setSaving] = createOptimistic(false);
+    return { retired, saving, setSaving };
+  });
+  const saving = () => savePresentation().saving() || saveState().busy;
+  const presentSave = action(function* (
+    current: ReturnType<typeof savePresentation>,
+    pending: Promise<boolean>,
+  ) {
+    if (current.retired === saveLifetime.promise) {
+      current.setSaving(true);
+    }
+    yield Promise.race([pending, current.retired]);
+  });
+  async function saveConfig(...args: Parameters<CloudWorkerConfigSave["save"]>) {
+    const current = savePresentation();
+    const pending = configSave.save(...args);
+    // The plain owner admits the patch before Solid presents its progress.
+    await Promise.resolve();
+    return presentSave(current, pending);
+  }
   void context.runtimeConfig.ensureLoaded();
   function catalogReceipt() {
     const snapshot = context.gateway.snapshot;
@@ -112,14 +157,12 @@ export function CloudWorkersPage() {
         !canCallGatewayMethod(gateway.snapshot, "environments.list", "operator.admin")
       ) {
         if (gateway.connected) {
-          setCatalog({ pending: false });
-        } else {
-          setCatalog((previous) => ({ ...previous, pending: false }));
+          setCatalog(undefined);
         }
+        setCatalogLoad(null);
         return;
       }
-      setCatalog((previous) => ({ ...previous, pending: true }));
-      void scope.client
+      const promise = scope.client
         .request<EnvironmentsListResult>(
           "environments.list",
           { projection: "profiles" },
@@ -132,31 +175,34 @@ export function CloudWorkersPage() {
               gateway.isCurrent(scope) &&
               context.runtimeConfig.state.configSnapshot?.appliedConfigHash === appliedHash
             ) {
-              setCatalog({
-                pending: false,
-                value: new Map((result.profiles ?? []).map((profile) => [profile.id, profile])),
-              });
+              setCatalog(new Map((result.profiles ?? []).map((profile) => [profile.id, profile])));
             }
           },
           (error: unknown) => {
             if (!controller.signal.aborted && gateway.isCurrent(scope)) {
-              setCatalog((previous) => ({
-                ...previous,
-                pending: false,
-                error: formatUiError(error),
-              }));
+              throw error;
             }
           },
         );
+      setCatalogLoad({ promise });
+      // The async memo owns feedback; retired and unobserved tasks still settle safely.
+      void promise.catch(() => undefined);
     });
   }
   onSettled(() => {
     // Applied-config receipts abort the prior catalog request before refreshing profiles.
     const stop = configProjection.subscribe(refreshCatalog);
+    const stopRoute = context.router.subscribe(() => {
+      retireSavePresentation();
+      saveProjection.publish();
+    });
     refreshCatalog();
-    return stop;
+    return () => {
+      stop();
+      stopRoute();
+      saveLifetime.resolve();
+    };
   });
-  onCleanup(() => catalogRequest?.abort());
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
   }
@@ -228,7 +274,7 @@ export function CloudWorkersPage() {
     }
     const profileId = editingId ?? draft.id;
     const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await configSave.save(runtimeConfig, isCurrent, {
+    await saveConfig(runtimeConfig, isCurrent, {
       build: (base) => buildCloudWorkerUpsertPatch(base, draft, editingId),
       note: `cloud workers: ${editingId ? "update" : "add"} ${profileId}`,
       canDispatch: isCurrent,
@@ -271,7 +317,7 @@ export function CloudWorkersPage() {
       return;
     }
     const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await configSave.save(runtimeConfig, isCurrent, {
+    await saveConfig(runtimeConfig, isCurrent, {
       build: (base) => buildCloudWorkerDeletePatch(base, profile.id),
       note: `cloud workers: delete ${profile.id}`,
       canDispatch: isCurrent,
@@ -301,7 +347,7 @@ export function CloudWorkersPage() {
             t("cloudWorkersPage.operatingSystemFact", {
               value:
                 catalog()
-                  .value?.get(profile.id)
+                  ?.get(profile.id)
                   ?.operatingSystems?.find((system) => system.id === profile.target)?.label ??
                 profile.target,
             }),
@@ -316,14 +362,33 @@ export function CloudWorkersPage() {
   }
 
   function renderProfile(profile: ConfiguredCloudWorkerProfile) {
-    const statusControl = () =>
-      catalog().pending && !catalog().value ? (
-        <SettingsStatus kind={"muted"} label={t("common.loading")} />
-      ) : catalog().value?.has(profile.id) ? (
-        <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
-      ) : (
-        <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
-      );
+    const unavailable = () => (
+      <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
+    );
+    const statusControl = () => (
+      <Show
+        when={catalog()}
+        fallback={
+          <Show when={catalogLoad()} keyed fallback={unavailable()}>
+            {(request) => (
+              <Errored fallback={unavailable()}>
+                <Loading
+                  on={request}
+                  fallback={<SettingsStatus kind={"muted"} label={t("common.loading")} />}
+                >
+                  {catalogCompletion()}
+                  {unavailable()}
+                </Loading>
+              </Errored>
+            )}
+          </Show>
+        }
+      >
+        <Show when={catalog()?.has(profile.id)} fallback={unavailable()}>
+          <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
+        </Show>
+      </Show>
+    );
 
     return (
       <SettingsRow
@@ -336,7 +401,7 @@ export function CloudWorkersPage() {
               class="btn btn--sm"
               type="button"
               aria-label={`${t("cloudWorkersPage.editAction")}: ${profile.id}`}
-              disabled={!canManage()}
+              disabled={saving() || !canManage()}
               onClick={() => openEditor(profile)}
             >
               {t("cloudWorkersPage.editAction")}
@@ -345,7 +410,7 @@ export function CloudWorkersPage() {
               class="btn btn--sm danger"
               type="button"
               aria-label={`${t("common.delete")}: ${profile.id}`}
-              disabled={!canManage()}
+              disabled={saving() || !canManage()}
               onClick={() => void deleteProfile(profile)}
             >
               {t("common.delete")}
@@ -389,7 +454,7 @@ export function CloudWorkersPage() {
             autocomplete="off"
             spellcheck="false"
             value={view.draft[field]}
-            disabled={saveState().busy}
+            disabled={saving()}
             onInput={(event) => patchDraft({ [field]: event.currentTarget.value })}
           />
         }
@@ -400,7 +465,7 @@ export function CloudWorkersPage() {
   function Editor() {
     const editing = () => view.editor?.kind === "edit";
     const systems = () =>
-      editing() ? (catalog().value?.get(view.draft.id)?.operatingSystems ?? []) : [];
+      editing() ? (catalog()?.get(view.draft.id)?.operatingSystems ?? []) : [];
     const unadvertised = () =>
       Boolean(view.draft.target && !systems().some((system) => system.id === view.draft.target));
     return (
@@ -428,39 +493,28 @@ export function CloudWorkersPage() {
             title={t("cloudWorkersPage.fields.operatingSystem")}
             description={t("cloudWorkersPage.fields.operatingSystemHelp")}
             control={
-              <select
-                class="settings-select"
+              <SettingsSelect
                 aria-label={t("cloudWorkersPage.fields.operatingSystem")}
                 value={view.draft.target}
-                disabled={saveState().busy}
+                options={[
+                  { value: "", label: t("cloudWorkersPage.fields.providerDefault") },
+                  ...systems().map((system) => ({
+                    value: system.id,
+                    label: `${system.label}${system.disabledReason ? ` — ${system.disabledReason}` : ""}`,
+                    disabled: Boolean(system.disabledReason),
+                  })),
+                  ...(unadvertised()
+                    ? [{ value: view.draft.target, label: view.draft.target }]
+                    : []),
+                ]}
+                disabled={saving()}
                 onChange={(event) => {
                   const target = event.currentTarget.value;
                   if (!systems().find((system) => system.id === target)?.disabledReason) {
                     patchDraft({ target });
                   }
                 }}
-              >
-                <option value="" selected={!view.draft.target}>
-                  {t("cloudWorkersPage.fields.providerDefault")}
-                </option>
-                <For each={systems()}>
-                  {(system) => (
-                    <option
-                      value={system.id}
-                      selected={view.draft.target === system.id}
-                      disabled={Boolean(system.disabledReason)}
-                    >
-                      {system.label}
-                      {system.disabledReason ? ` — ${system.disabledReason}` : ""}
-                    </option>
-                  )}
-                </For>
-                <Show when={unadvertised()}>
-                  <option value={view.draft.target} selected>
-                    {view.draft.target}
-                  </option>
-                </Show>
-              </select>
+              />
             }
           />
         </Show>
@@ -481,7 +535,7 @@ export function CloudWorkersPage() {
               autocomplete="off"
               spellcheck="false"
               value={view.draft.setup}
-              disabled={saveState().busy}
+              disabled={saving()}
               onInput={(event) => patchDraft({ setup: event.currentTarget.value })}
             />
           }
@@ -490,7 +544,7 @@ export function CloudWorkersPage() {
           title={t("cloudWorkersPage.fields.desktop")}
           description={t("cloudWorkersPage.fields.desktopHelp")}
           checked={view.draft.desktop}
-          disabled={saveState().busy}
+          disabled={saving()}
           onChange={(desktop) => patchDraft({ desktop })}
         />
         {renderDraftInput("binary", {
@@ -501,7 +555,7 @@ export function CloudWorkersPage() {
             title={t("cloudWorkersPage.fields.warmImage")}
             description={t("cloudWorkersPage.fields.warmImageHelp")}
             value={view.draft.warmImage}
-            disabled={saveState().busy}
+            disabled={saving()}
             onChange={(value) => {
               if (value === "auto" || value === "on" || value === "off") {
                 patchDraft({ warmImage: value });
@@ -532,12 +586,12 @@ export function CloudWorkersPage() {
               <button
                 class="btn primary"
                 type="button"
-                disabled={!canManage()}
+                disabled={saving() || !canManage()}
                 onClick={() => void saveProfile({ ...view.draft })}
               >
-                {saveState().busy ? t("common.saving") : t("common.save")}
+                {saving() ? t("common.saving") : t("common.save")}
               </button>
-              <button class="btn" type="button" disabled={saveState().busy} onClick={closeEditor}>
+              <button class="btn" type="button" disabled={saving()} onClick={closeEditor}>
                 {t("common.cancel")}
               </button>
             </>
@@ -559,11 +613,15 @@ export function CloudWorkersPage() {
                   {t("cloudWorkersPage.adminRequired")}
                 </div>
               </Show>
-              <Show when={catalog().error}>
-                <div class="callout warning" role="status">
-                  {t("cloudWorkersPage.catalogFailed", { error: catalog().error ?? "" })}
-                </div>
-              </Show>
+              <Errored
+                fallback={(error) => (
+                  <div class="callout warning" role="status">
+                    {t("cloudWorkersPage.catalogFailed", { error: formatUiError(error()) })}
+                  </div>
+                )}
+              >
+                <Loading on={catalogLoad()}>{catalogCompletion()}</Loading>
+              </Errored>
               <Show when={saveState().error && !view.editor}>
                 <div class="callout warning" role="alert">
                   {saveState().error}
@@ -578,7 +636,7 @@ export function CloudWorkersPage() {
                 title={t("cloudWorkersPage.environments.machines")}
                 count={profiles().length}
                 actions={
-                  <Show when={canManage()}>
+                  <Show when={!saving() && canManage()}>
                     <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
                       {t("cloudWorkersPage.addProfile")}
                     </button>

@@ -324,7 +324,6 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(
 }
 
 export function scheduleRestartAbortedMainSessionRecovery(params: {
-  delayMs?: number;
   getConfig: () => OpenClawConfig;
   maxRetries?: number;
   shouldContinue?: () => boolean;
@@ -492,7 +491,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       await Promise.race([params.waitForStart(), waitForAbortSignal(abortController.signal)]);
     }
     await runRecoveryRetries({
-      initialDelayMs: params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS,
+      initialDelayMs: 0,
       maxRetries: Math.max(1, params.maxRetries ?? MAX_RECOVERY_RETRIES),
       shouldContinue,
       signal: abortController.signal,

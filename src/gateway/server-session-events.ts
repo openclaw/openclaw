@@ -550,7 +550,6 @@ async function handleTranscriptUpdateBroadcast(
       const sessionSnapshot = buildGatewaySessionSnapshot({
         sessionRow,
         agentId: eventAgentId,
-        includeSession: true,
         activeRunState,
       });
       // Read live connection preferences and every exact observer at delivery time.

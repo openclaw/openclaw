@@ -23,12 +23,6 @@ export { renderPeoplePage, renderPersonPage } from "./people.js";
 export { renderReportPage } from "./report.js";
 export type { PageContext } from "./page.js";
 export type PeriodIndex = Record<Period, PeriodListEntry[]>;
-type OverviewOptions = {
-  orgs: string[];
-  latest?: { report: ReportDocument; summary: SummaryDocument | null };
-  health: TeamReportsHealth;
-  workSessions?: WorkSessions;
-};
 const PERIODS: Period[] = ["day", "week", "month"];
 const SERIES_LENGTH = { day: 28, week: 12, month: 6 };
 const combined = (entry: PeriodListEntry) => entry.githubTotal + entry.discordMessages;
@@ -104,7 +98,12 @@ function homeMetric(label: string, value: string | number): string {
 export function renderIndexPage(
   ctx: PageContext,
   index: PeriodIndex,
-  options: OverviewOptions,
+  options: {
+    orgs: string[];
+    latest?: { report: ReportDocument; summary: SummaryDocument | null };
+    health: TeamReportsHealth;
+    workSessions?: WorkSessions;
+  },
 ): string {
   const days = index.day.toSorted((a, b) => a.key.localeCompare(b.key));
   const latestDay = index.day[0];

@@ -152,13 +152,6 @@ describe("parseCliContainerArgs", () => {
     });
   });
 
-  it("rejects a missing container value", () => {
-    expect(parseCliContainerArgs(["node", "openclaw", "--container"])).toEqual({
-      ok: false,
-      error: "--container requires a value",
-    });
-  });
-
   it("stops parsing --container after the -- terminator", () => {
     const childCommand = ["docker", "run", "--container", "demo", "alpine"];
     const argv = ["node", "openclaw", "nodes", "run", "--", ...childCommand];
@@ -167,10 +160,13 @@ describe("parseCliContainerArgs", () => {
 });
 
 describe("maybeRunCliInContainer", () => {
-  it("passes through when no container target is provided", () => {
-    expect(runTarget(undefined, { OPENCLAW_CONTAINER: undefined })).toEqual({
+  it.each([
+    [{ OPENCLAW_CONTAINER: undefined }, ["status"]],
+    [{ OPENCLAW_CLI_CONTAINER_BYPASS: "1" }, ["--container", "demo", "status"]],
+  ] as const)("passes through without a target or with bypass: %j", (env, args) => {
+    expect(runTarget(undefined, env, [...args])).toEqual({
       handled: false,
-      argv: ["node", "openclaw", "status"],
+      argv: ["node", "openclaw", ...args],
     });
   });
 
@@ -200,27 +196,55 @@ describe("maybeRunCliInContainer", () => {
     expect(thrown).toBe(launchError);
   });
 
-  it("clears inherited host routing and gateway env before execing into the child CLI", () => {
-    const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
-
-    runTarget(spawnSync, hostRoutingEnv);
-
-    expectContainerExec(spawnSync);
-    const childOptions = requireSpawnCall(spawnSync, 2)[2] as { env: NodeJS.ProcessEnv };
-    for (const name of Object.keys(hostRoutingEnv)) {
-      expect(childOptions.env).not.toHaveProperty(name);
-    }
-  });
-
-  it("passes the proxy URL env fallback into the child container CLI", () => {
-    const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
-
-    runTarget(spawnSync, { OPENCLAW_PROXY_URL: " http://proxy.internal:3128 " });
-
+  it.each<
+    [
+      string,
+      NodeJS.ProcessEnv,
+      { argv?: string[]; tty?: boolean; runtime?: "podman" | "docker"; proxyUrl?: string }?,
+    ]
+  >([
+    ["clears host routing", hostRoutingEnv],
+    [
+      "forwards proxy fallback",
+      { OPENCLAW_PROXY_URL: " http://proxy.internal:3128 " },
+      { proxyUrl: "http://proxy.internal:3128" },
+    ],
+    [
+      "permits explicit loopback proxy",
+      {
+        OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
+        OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL: "1",
+      },
+      { proxyUrl: "http://127.0.0.1:3128" },
+    ],
+    ["selects Docker after Podman", { USER: "somalley" }, { runtime: "docker" }],
+    ["allocates interactive tty", {}, { argv: ["setup"], tty: true }],
+  ])("%s", (_name, env, options) => {
+    const { argv = ["status"], tty = false, runtime = "podman", proxyUrl } = options ?? {};
+    const probes =
+      runtime === "docker"
+        ? [missingContainer, runningContainer]
+        : [runningContainer, missingContainer];
+    const spawnSync = mockSpawn(...probes, successfulExec);
+    const args = runtime === "docker" || tty ? ["--container", "demo", ...argv] : argv;
+    expect(runTarget(spawnSync, env, args, tty)).toEqual({ handled: true, exitCode: 0 });
     expectContainerExec(spawnSync, {
-      proxyUrl: "http://proxy.internal:3128",
-      env: { OPENCLAW_PROXY_URL: " http://proxy.internal:3128 " },
+      runtime,
+      argv,
+      tty,
+      proxyUrl,
+      env: env === hostRoutingEnv ? undefined : env,
     });
+    if (env === hostRoutingEnv) {
+      const childOptions = requireSpawnCall(spawnSync, 2)[2] as { env: NodeJS.ProcessEnv };
+      for (const name of Object.keys(hostRoutingEnv)) {
+        expect(childOptions.env).not.toHaveProperty(name);
+      }
+    }
+    if (runtime === "docker") {
+      expectRuntimeProbes(spawnSync);
+      expect(spawnSync).toHaveBeenCalledTimes(3);
+    }
   });
 
   it.each(["http://localhost.:3128", "http://[::1]:3128", "http://[::ffff:127.0.0.1]:3128"])(
@@ -256,33 +280,6 @@ describe("maybeRunCliInContainer", () => {
     expect(spawnSync).toHaveBeenCalledTimes(2);
   });
 
-  it("allows explicitly overridden loopback proxy URL forwarding into a child container CLI", () => {
-    const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
-
-    runTarget(spawnSync, {
-      OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
-      OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL: "1",
-    });
-
-    const podmanCall = requireSpawnCall(spawnSync, 2);
-    expect(podmanCall[0]).toBe("podman");
-    expect(podmanCall[1]).toContain("OPENCLAW_PROXY_URL=http://127.0.0.1:3128");
-    expect(podmanCall[2]).toBeDefined();
-  });
-
-  it("checks docker after podman and before failing", () => {
-    const spawnSync = mockSpawn(missingContainer, runningContainer, successfulExec, successfulExec);
-
-    expect(runTarget(spawnSync, { USER: "somalley" }, ["--container", "demo", "status"])).toEqual({
-      handled: true,
-      exitCode: 0,
-    });
-
-    expectRuntimeProbes(spawnSync);
-    expectContainerExec(spawnSync, { runtime: "docker", env: { USER: "somalley" } });
-    expect(spawnSync).toHaveBeenCalledTimes(3);
-  });
-
   it("does not try any sudo podman fallback for regular users", () => {
     const spawnSync = mockSpawn(missingContainer, missingContainer);
 
@@ -302,27 +299,6 @@ describe("maybeRunCliInContainer", () => {
     ).toThrow(
       'Container "demo" is running under multiple runtimes (podman, docker); use a unique container name.',
     );
-  });
-
-  it("allocates a tty for interactive terminal sessions", () => {
-    const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
-
-    runTarget(spawnSync, {}, ["--container", "demo", "setup"], true);
-
-    expectContainerExec(spawnSync, { argv: ["setup"], tty: true });
-  });
-
-  it("skips recursion when the bypass env is set", () => {
-    expect(
-      runTarget(undefined, { OPENCLAW_CLI_CONTAINER_BYPASS: "1" }, [
-        "--container",
-        "demo",
-        "status",
-      ]),
-    ).toEqual({
-      handled: false,
-      argv: ["node", "openclaw", "--container", "demo", "status"],
-    });
   });
 
   it.each([

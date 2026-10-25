@@ -15,18 +15,14 @@ import { startMeetingRealtimeEngine } from "./realtime-engine.js";
 import {
   createParticipationTestRuntime,
   createTestRuntime,
+  captionSnapshot,
+  testBrowser,
+  releaseTab,
   type TestSession,
 } from "./session-runtime.test-support.js";
 import type { MeetingTranscriptSnapshot } from "./session-types.js";
 
 const participant = { url: "https://meeting.example/room", agentId: "operator" };
-
-function captionSnapshot(
-  lines: MeetingTranscriptSnapshot["lines"],
-  options: Pick<MeetingTranscriptSnapshot, "epoch" | "pendingLines"> = {},
-): MeetingTranscriptSnapshot {
-  return { droppedLines: 0, epoch: "page-1", ...options, lines };
-}
 
 async function captionFixture(
   captureTranscript: NonNullable<Parameters<typeof createTestRuntime>[0]["captureTranscript"]>,
@@ -58,19 +54,10 @@ describe("MeetingSessionRuntime startup custody", () => {
       talkBack: true,
       joinTransport: async ({ session }) => {
         firstSessionId ??= session.id;
-        session.browser = {
-          launched: true,
-          tab: { targetId: session.url, openedByPlugin: true },
-          health: { inCall: true, micMuted: false },
-        };
+        session.browser = testBrowser(session.url, { health: { inCall: true, micMuted: false } });
         return {};
       },
-      releaseBrowserTab: async (session) => {
-        if (session.browser) {
-          session.browser.tab = undefined;
-        }
-        return true;
-      },
+      releaseBrowserTab: async (session) => releaseTab(session),
       ensureRealtimeBridge: async (session) => {
         if (session.browser?.hasAudioBridge) {
           return undefined;

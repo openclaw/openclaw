@@ -632,6 +632,17 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       }
       candidate.owner.needsRefresh = true;
       candidate.owner.refreshError = refreshError;
+      if (
+        candidate.owner.provenance === "configured" &&
+        !(refreshError instanceof PreparedModelRuntimePublicationSupersededError)
+      ) {
+        candidate.owner.catalogRecovery ??= {
+          error: refreshError,
+          scheduledAttempted: false,
+          retryAfter: 0,
+        };
+        candidate.owner.catalogRecovery.error = refreshError;
+      }
     }
     settleSingleOwner?.failed(refreshError, candidates[0]!.isCurrent);
     throw refreshError;

@@ -11,7 +11,6 @@ import type {
 } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { TempHomeEnv } from "../../test-utils/temp-home.js";
-import { VERSION } from "../../version.js";
 import type { updateFinalizeCommand as UpdateFinalizeCommand } from "./update-command-finalize.js";
 import type { updateCommand as UpdateCommand } from "./update-command.js";
 
@@ -34,11 +33,18 @@ export const recoveryVerificationStep = (
   exitCode: failureFacts ? 1 : 0,
   ...(failureFacts ? { failureFacts } : {}),
 });
-export const recoveryVersionMismatch = {
-  check: "versionMatch",
-  code: "version-mismatch",
-  message: `Expected Gateway version ${VERSION}; observed 1.0.0.`,
-};
+export const recoveryObservationStep = (cwd = process.cwd()) => ({
+  name: "gateway recovery observation",
+  command: "gateway verification",
+  cwd,
+  durationMs: expect.any(Number),
+  exitCode: 0,
+  diagnostics: [
+    expect.stringMatching(
+      /^(?:No recovery needed; .+ No service was stopped or started\.|Gateway readiness was not checked: no Gateway service or listener was present before maintenance\.)$/,
+    ),
+  ],
+});
 export function registerForegroundFailureRecoveryTests(deps: {
   setupUpdatedRootRefresh: () => { root: string };
   spawn: Mock;
@@ -76,16 +82,12 @@ export function registerForegroundFailureRecoveryTests(deps: {
 
       expect(deps.defaultRuntime.exit).not.toHaveBeenCalled();
       expect(deps.spawnCall()?.[2]?.env?.OPENCLAW_UPDATE_RUN_HANDOFF).toBe(handoff);
-      expect(deps.lastWriteJsonCall()).toMatchObject({
+      const result = deps.lastWriteJsonCall() as UpdateRunResult | undefined;
+      expect(result?.verification).toEqual({});
+      expect(result).toMatchObject({
         status: "error",
         reason: "post-core-update-failed",
         recovery: { serviceRestartSafe: false },
-        verification: {
-          runningVersion: VERSION,
-          versionMatch: true,
-          readyz: true,
-          settled: true,
-        },
         steps: [
           expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
           {
@@ -100,7 +102,7 @@ export function registerForegroundFailureRecoveryTests(deps: {
               { check: "update", code: "update-failed" },
             ],
           },
-          recoveryVerificationStep(undefined, root),
+          recoveryObservationStep(root),
         ],
       });
       expect(deps.updateNpmInstalledPlugins).not.toHaveBeenCalled();

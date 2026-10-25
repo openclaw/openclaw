@@ -10,10 +10,13 @@ import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-me
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
 import { modelsAuthListCommand } from "./auth-list.js";
+import { modelsAuthOrderGetCommand, modelsAuthOrderUpdateCommand } from "./auth-order.js";
 import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
+  setAuthProfileOrder: vi.fn(),
+  refreshRunningGatewayAuthState: vi.fn(async () => undefined),
   externalCliDiscoveryForProviderAuth: vi.fn(() => ({ kind: "none" })),
   loadModelsConfig: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
@@ -32,17 +35,19 @@ vi.mock("../../agents/agent-scope.js", () => ({
 // mock-isolation: Listing formats synthetic profiles without reading host stores or external CLIs.
 vi.mock("../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStoreAsync: async (...args: unknown[]) => mocks.ensureAuthProfileStore(...args),
+  setAuthProfileOrder: mocks.setAuthProfileOrder,
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
   resolveAuthStatePathForDisplay: mocks.resolveAuthStatePathForDisplay,
 }));
 
-vi.mock("./load-config.js", () => ({
-  loadModelsConfig: mocks.loadModelsConfig,
-}));
-
-vi.mock("./shared.js", () => ({
-  resolveModelsTargetAgent: mocks.resolveModelsTargetAgent,
+// mock-isolation: Use fixture config without reading host config or resolving its secrets.
+vi.mock("./load-config.js", () => ({ loadModelsConfig: mocks.loadModelsConfig }));
+// mock-isolation: Resolve only the synthetic agent directories owned by this suite.
+vi.mock("./shared.js", () => ({ resolveModelsTargetAgent: mocks.resolveModelsTargetAgent }));
+vi.mock("./auth-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-refresh.js")>()),
+  refreshRunningGatewayAuthState: mocks.refreshRunningGatewayAuthState,
 }));
 
 const NOW = Date.parse("2026-08-30T00:00:00.000Z");
@@ -62,6 +67,10 @@ async function listBoth() {
 
 function expectProfile(json: unknown, profile: Record<string, unknown>) {
   expect(json).toMatchObject({ profiles: [expect.objectContaining(profile)] });
+}
+
+function summary(id: string, type: string, fields = {}) {
+  return { id, label: id, provider: id.split(":")[0], type, ...fields };
 }
 
 function setOAuthProfile(
@@ -167,12 +176,7 @@ describe("modelsAuthListCommand", () => {
         },
         { trustConfigIdentity: true },
       );
-      const identity = {
-        id: "my-gateway:manual",
-        label: "my-gateway:manual",
-        provider: "my-gateway",
-        type: "api_key",
-      };
+      const identity = summary("my-gateway:manual", "api_key");
       if (bypassed) {
         expect(json).toMatchObject({ profiles: [identity] });
         expect(text.at(-1)).toBe("- my-gateway:manual [my-gateway/api_key]");
@@ -300,11 +304,7 @@ describe("modelsAuthListCommand", () => {
           email: "user@example.com",
         }),
         "openai:api-key-backup": createApiKeyCredential("openai", "sk-secret"),
-        "anthropic:manual": {
-          type: "token",
-          provider: "anthropic",
-          token: "token-secret",
-        },
+        "anthropic:manual": { type: "token", provider: "anthropic", token: "token-secret" },
       });
       if (expires === 8_700_000_000_000_000) {
         store.usageStats = { "openai:user@example.com": { cooldownUntil: expires } };
@@ -322,20 +322,11 @@ describe("modelsAuthListCommand", () => {
           agentId: "main",
           authStatePath: "/tmp/openclaw/agents/main/openclaw-agent.sqlite",
           profiles: [
-            {
-              id: "openai:api-key-backup",
-              label: "openai:api-key-backup",
-              provider: "openai",
-              type: "api_key",
-            },
-            {
+            summary("openai:api-key-backup", "api_key"),
+            summary("openai:user@example.com", "oauth", {
               email: "user@example.com",
               ...expectedExpiry,
-              id: "openai:user@example.com",
-              label: "openai:user@example.com",
-              provider: "openai",
-              type: "oauth",
-            },
+            }),
           ],
           provider: "openai",
         },
@@ -355,5 +346,85 @@ describe("modelsAuthListCommand", () => {
       `Auth state store: ${authStatePath}`,
       "Profiles: (none)",
     ]);
+  });
+});
+
+describe("models auth order", () => {
+  const order = ["anthropic:b", "anthropic:a"];
+  let runtime: ReturnType<typeof createRuntimeEnv>;
+  function store(ids: string[], savedOrder?: string[], provider = "anthropic"): AuthProfileStore {
+    return {
+      ...createAuthProfileStoreFixture(
+        Object.fromEntries(
+          ids.map((id) => [
+            id,
+            createOAuthRefreshCredential({ provider: id.split(":")[0], access: "tok" }),
+          ]),
+        ),
+      ),
+      ...(savedOrder ? { order: { [provider]: savedOrder } } : {}),
+    };
+  }
+  function expectWrite(agent: string, provider: string, ids: string[] | null) {
+    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
+      agentDir: `/tmp/openclaw/agents/${agent}`,
+      provider,
+      order: ids,
+    });
+  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runtime = createRuntimeEnv();
+    mocks.loadModelsConfig.mockResolvedValue({});
+    mocks.ensureAuthProfileStore.mockReturnValue(store(order.toReversed(), ["anthropic:a"]));
+    mocks.setAuthProfileOrder.mockResolvedValue(store(order, order));
+  });
+
+  it("get resolves an omitted agent through the read target", async () => {
+    await modelsAuthOrderGetCommand({ provider: "anthropic" }, runtime);
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), undefined, {
+      kind: "read",
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Agent: main");
+  });
+
+  it.each([
+    { agent: "ops", order, message: "Auth profile order override: anthropic:b, anthropic:a" },
+    {
+      agent: undefined,
+      order: null,
+      message: expect.stringContaining("Auth profile order override cleared"),
+    },
+  ])(
+    "writes order $order for $agent and refreshes the gateway",
+    async ({ agent, order: ids, message }) => {
+      await modelsAuthOrderUpdateCommand({ provider: "anthropic", agent, order: ids }, runtime);
+      expectWrite(agent ?? "main", "anthropic", ids);
+      expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), agent, {
+        kind: "mutation",
+      });
+      expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith(
+        agent ?? "main",
+        "update",
+        runtime,
+      );
+      expect(runtime.log).toHaveBeenCalledWith(message);
+    },
+  );
+
+  it("accepts alias-provider profiles and reports the canonical stored order", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue(store(["xai:a"]));
+    mocks.setAuthProfileOrder.mockResolvedValue(store([], ["xai:a"], "xai"));
+    await modelsAuthOrderUpdateCommand({ provider: "x-ai", order: ["xai:a"] }, runtime);
+    expectWrite("main", "xai", ["xai:a"]);
+    expect(runtime.log).toHaveBeenCalledWith("Auth profile order override: xai:a");
+  });
+
+  it("does not refresh the gateway when the store update fails", async () => {
+    mocks.setAuthProfileOrder.mockResolvedValue(null);
+    await expect(
+      modelsAuthOrderUpdateCommand({ provider: "anthropic", order: ["anthropic:a"] }, runtime),
+    ).rejects.toThrow("Failed to update auth state");
+    expect(mocks.refreshRunningGatewayAuthState).not.toHaveBeenCalled();
   });
 });

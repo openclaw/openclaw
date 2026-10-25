@@ -10,6 +10,7 @@ import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmission,
 } from "../infra/sqlite-database-admission.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
@@ -60,7 +61,7 @@ type PreparationInput = {
 type Activation = {
   isCurrent: () => boolean;
   preparationReady: Promise<void>;
-  openAgent: (input: PreparationInput) => Promise<void>;
+  openAgent: (input: PreparationInput) => Promise<AsyncDisposable | void>;
   migrateAgent: (input: PreparationInput) => Promise<void | { maintain: () => Promise<void> }>;
   publishAgent: (input: PreparationInput) => Promise<void>;
 };
@@ -507,6 +508,7 @@ class AgentDatabaseStartupAdmission {
             async () => {
               await assertNotDeleted();
               await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+                await using prepared = new AsyncDisposableStack();
                 const input = {
                   agentId,
                   paths,
@@ -515,25 +517,59 @@ class AgentDatabaseStartupAdmission {
                   assertCurrent,
                   phase,
                 };
-                phase("open-wait");
-                const release = await this.opening.acquire({ signal: this.signal });
-                try {
-                  assertCurrent();
-                  phase("open");
-                  await activation.openAgent(input);
-                } finally {
-                  release?.();
-                }
-                phase("migration-wait");
-                const releaseMigration = await this.migrating.acquire({ signal: this.signal });
-                try {
-                  assertCurrent();
-                  phase("migration");
-                  const migrated = await activation.migrateAgent(input);
-                  preparation.maintenance = migrated ? migrated.maintain : undefined;
-                } finally {
-                  releaseMigration?.();
-                }
+                const retryLockedPreparation = async (run: () => Promise<void>) => {
+                  let preparationAttempts = 0;
+                  await retryAsync(
+                    async () => {
+                      if (preparationAttempts++ > 0) {
+                        await assertNotDeleted();
+                      }
+                      assertCurrent();
+                      await run();
+                    },
+                    {
+                      attempts: 4,
+                      minDelayMs: 500,
+                      maxDelayMs: 8000,
+                      jitter: 0.2,
+                      sleep: (ms) => sleepWithAbort(ms, this.signal),
+                      // Mixed cleanup failures and uncertain outcomes must not replay preparation.
+                      shouldRetry: isSqliteLockError,
+                      onRetry: ({ attempt }) =>
+                        log.warn("agent database startup locked; retrying preparation", {
+                          agentId,
+                          phase: recovery.phase,
+                          attempt,
+                        }),
+                    },
+                  );
+                };
+                await retryLockedPreparation(async () => {
+                  phase("open-wait");
+                  const release = await this.opening.acquire({ signal: this.signal });
+                  try {
+                    assertCurrent();
+                    phase("open");
+                    const opened = await activation.openAgent(input);
+                    if (opened) {
+                      prepared.use(opened);
+                    }
+                  } finally {
+                    release?.();
+                  }
+                });
+                await retryLockedPreparation(async () => {
+                  phase("migration-wait");
+                  const releaseMigration = await this.migrating.acquire({ signal: this.signal });
+                  try {
+                    assertCurrent();
+                    phase("migration");
+                    const migrated = await activation.migrateAgent(input);
+                    preparation.maintenance = migrated ? migrated.maintain : undefined;
+                  } finally {
+                    releaseMigration?.();
+                  }
+                });
                 // Keep the revision until admission publishes after its final journal check.
                 phase("publication-wait");
                 const previous = this.publication;

@@ -1,6 +1,8 @@
 // Advanced renders without an include list: it shows every section that has no
 // curated home.
 // Each curated page opens at its first section.
+import type { JsonSchema } from "../../lib/config-form-utils.ts";
+
 const CONFIG_PAGES = [
   ["communications", ["messages", "tts", "transcripts"]],
   ["appearance", ["__appearance__", "ui"]],
@@ -74,4 +76,40 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
     return defaultConfigSelection(pageId);
   }
   return normalizeConfigSelection(pageId, section, null);
+}
+
+// Appearance's Language picker owns this leaf; generic forms and search must
+// not expose a second control for it.
+const CURATED_SETTINGS_OWNED_LEAF_PATHS: readonly string[] = ["ui.prefs.locale"];
+
+function omitLeafPath(schema: JsonSchema, segments: readonly string[]): JsonSchema {
+  const [segment, ...rest] = segments;
+  const child = segment === undefined ? undefined : schema.properties?.[segment];
+  if (segment === undefined || !schema.properties || !child) {
+    return schema;
+  }
+  const nextProperties: Record<string, JsonSchema> = { ...schema.properties };
+  if (rest.length === 0) {
+    delete nextProperties[segment];
+  } else {
+    nextProperties[segment] = omitLeafPath(child, rest);
+  }
+  const required = schema.required?.filter((key) => Object.hasOwn(nextProperties, key));
+  return { ...schema, properties: nextProperties, ...(required ? { required } : {}) };
+}
+
+// Prefix is the mounted section path, or empty for a whole-config schema.
+export function omitCuratedOwnedConfigLeaves(schema: JsonSchema, prefix = ""): JsonSchema {
+  let next = schema;
+  for (const path of CURATED_SETTINGS_OWNED_LEAF_PATHS) {
+    const relative = prefix
+      ? path.startsWith(`${prefix}.`)
+        ? path.slice(prefix.length + 1)
+        : null
+      : path;
+    if (relative) {
+      next = omitLeafPath(next, relative.split("."));
+    }
+  }
+  return next;
 }

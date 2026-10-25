@@ -1,7 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
-import { validateAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
+import {
+  getAgentRunContext,
+  validateAgentRunDelegatedAuthority,
+} from "../../../infra/agent-run-registry.js";
 import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
@@ -47,6 +51,7 @@ import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
 } from "./attempt-async-tasks.js";
+import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
   readAttemptNestedToolActivity,
   type AttemptNestedToolActivityState,
@@ -101,6 +106,8 @@ type PrepareEmbeddedAttemptStreamInput = {
     revokeApprovals: () => void,
   ) => Promise<void>;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
+  readSessionForkBoundary?: () => LlmBoundaryOptions;
+  projectSessionForkMessages?: (messages: AgentMessage[]) => AgentMessage[];
   runtimeChannel?: string;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
@@ -436,6 +443,29 @@ function prepareStream(
     return isCurrentRegistration();
   };
   const canInject = () => isSteeringAdmissionOpen() && hasCurrentRegistration();
+  const instance = attempt.admittedRunContext?.operationalRunInstance;
+  const runContext = getAgentRunContext(attempt.runId);
+  const supportsUserReplyPromotion =
+    instance !== undefined &&
+    runContext?.delegatedAuthority?.operationalRunInstance === instance &&
+    !(runContext.isControlUiVisible === false && runContext.projectSessionMessages === false);
+  const recordUserReply = (options: EmbeddedAgentQueueMessageOptions | undefined) => {
+    const isUserReply = options?.isInboundUserReply ?? options?.isInboundUserMessage;
+    if (!options || !isUserReply || options.terminalReplyExpectation === "optional") {
+      return;
+    }
+    if (!supportsUserReplyPromotion || getAgentRunContext(attempt.runId) !== runContext) {
+      throw new Error("Accepted user input lost its reply owner");
+    }
+    runContext.acceptedUserReply = {
+      operationalRunInstance: instance,
+      expectation:
+        options.terminalReplyExpectation === "result-required" ||
+        runContext.acceptedUserReply?.expectation === "result-required"
+          ? "result-required"
+          : "required",
+    };
+  };
   type InputAuthority = NonNullable<
     Parameters<typeof cancelPendingAgentQuestionForSession>[0]["authority"]
   >;
@@ -482,6 +512,7 @@ function prepareStream(
         canInjectMessage,
         questionAuthority(assertCurrent, authorityKind, toolAuthorityPreparation),
         prepareCurrent,
+        supportsUserReplyPromotion ? () => recordUserReply(options) : undefined,
       );
     } finally {
       activeQueueAdmissions--;
@@ -500,7 +531,12 @@ function prepareStream(
       attempt.sessionKey,
       composeInjectionGuard(assertCurrent),
       questionAuthority(assertCurrent, authorityKind, preparation),
-    );
+    ).then((accepted) => {
+      if (accepted && supportsUserReplyPromotion) {
+        recordUserReply(options);
+      }
+      return accepted;
+    });
   const cancelPendingUserInput = (
     resolvedBy: string,
     assertCurrent?: () => void,
@@ -532,8 +568,6 @@ function prepareStream(
     cancelPendingUserInputAsync: (resolvedBy, preparation, kind) =>
       cancelPendingUserInput(resolvedBy, preparation.assertCurrent, kind, preparation),
   } satisfies NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
-  const heartbeatReplyOperation =
-    attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
   const canApplyPermissionMode = () =>
     admission.accepting && !input.runAbortController.signal.aborted && isCurrentRegistration();
   const applyPermissionMode = input.applyPermissionMode;
@@ -567,20 +601,40 @@ function prepareStream(
       : undefined,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-    preemptByVisibleTurn: heartbeatReplyOperation
-      ? () => heartbeatReplyOperation.supersede()
-      : undefined,
     queueMessage,
     messageInjection,
     messageInjectionV2: messageInjection,
     isStreaming: () => activeSession.isStreaming,
+    readSessionForkContext: () => {
+      if (!isCurrentRegistration()) {
+        return undefined;
+      }
+      return {
+        model: attempt.model,
+        systemPrompt: activeSession.systemPrompt,
+        tools: activeSession.agent.state.tools.map(({ name, description, parameters, async }) => ({
+          name,
+          description,
+          parameters,
+          ...(async === false ? { async } : {}),
+        })),
+        messages: activeSession.messages.slice(),
+        projectMessages: input.projectSessionForkMessages,
+        sessionVersion: activeSession.sessionManager.getHeader()?.version,
+        boundary: input.readSessionForkBoundary?.(),
+        blockImages: activeSession.settingsManager.getBlockImages(),
+      };
+    },
     isAborted: () => input.getRunState().aborted,
     isStopped: () => !isSteeringAdmissionOpen(),
     isCompacting: () => subscription.isCompacting(),
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
-    terminalReplyExpectation: resolveReplyExpectation(attempt),
+    get terminalReplyExpectation() {
+      return resolveReplyExpectation(attempt);
+    },
+    supportsUserReplyPromotion,
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     recoverStalledModelCall: recoverStalledModelCall
       ? () => {

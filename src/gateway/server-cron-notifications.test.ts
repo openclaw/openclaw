@@ -101,6 +101,18 @@ function waitForFast(assertion: () => void | Promise<void>) {
   return vi.waitFor(assertion, { interval: 1 });
 }
 
+function expectSettlement(
+  settled: unknown,
+  status: "delivered" | "not-delivered" | "unknown" = "delivered",
+  error?: string,
+) {
+  expect(settled).toHaveBeenCalledExactlyOnceWith({
+    delivered: status === "unknown" ? undefined : status === "delivered",
+    status,
+    ...(error === undefined ? {} : { error }),
+  });
+}
+
 function webhookRequestBody() {
   const body = mocks.fetchWithSsrFGuard.mock.calls[0]?.[0].init?.body;
   if (typeof body !== "string") {
@@ -212,8 +224,6 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         });
       }
       const delivery = sendGatewayCronFailureAlert({
-        deps: {} as CliDeps,
-        logger: { warn: vi.fn() },
         resolveCronAgent,
         job,
         routing: defaultAgentId ? { defaultAgentId } : {},
@@ -246,10 +256,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
             }),
           }),
         );
-        expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
-          delivered: true,
-          status: "delivered",
-        });
+        expectSettlement(onDeliverySettled);
       } else {
         await expect(delivery).rejects.toThrow(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
         await expect(delivery).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
@@ -257,11 +264,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
         expect(mocks.sendCronAnnouncePayloadStrict).not.toHaveBeenCalled();
         expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-        expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
-          delivered: false,
-          status: "not-delivered",
-          error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
-        });
+        expectSettlement(onDeliverySettled, "not-delivered", CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
       }
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     },
@@ -279,11 +282,11 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
           onDeliverySettled,
         }),
       ).rejects.toThrow("Gateway is restarting");
-      expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
-        delivered: false,
-        status: "not-delivered",
-        error: "Gateway is restarting. Please try again shortly.",
-      });
+      expectSettlement(
+        onDeliverySettled,
+        "not-delivered",
+        "Gateway is restarting. Please try again shortly.",
+      );
       expect(mocks.sendCronAnnouncePayloadStrict).not.toHaveBeenCalled();
       expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -313,12 +316,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       let failureAlert: Promise<void> | undefined;
       await parentAdmission.run(async () => {
         dispatchCompletion(job);
-        failureAlert = sendGatewayCronFailureAlert({
-          job,
-          accountId: "bot-a",
-          threadId: 42,
-          mode: "announce",
-        });
+        failureAlert = sendGatewayCronFailureAlert({ job, accountId: "bot-a", threadId: 42 });
         await waitForFast(() => {
           expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
           expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledOnce();
@@ -425,10 +423,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       await expect(delivery).resolves.toBeUndefined();
       expect(cleanupOrder).toEqual(["cancel", "release"]);
       expect(release).toHaveBeenCalledOnce();
-      expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
-        delivered: true,
-        status: "delivered",
-      });
+      expectSettlement(onDeliverySettled);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -482,18 +477,9 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       });
 
       await expect(
-        sendGatewayCronFailureAlert({
-          channel: "last",
-          mode: "webhook",
-          to: "https://example.invalid/failure",
-          onDeliverySettled,
-        }),
+        sendFailureWebhook({ to: "https://example.invalid/failure", onDeliverySettled }),
       ).rejects.toThrow(errorMessage);
-      expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
-        delivered: status === "unknown" ? undefined : false,
-        status,
-        error: errorMessage,
-      });
+      expectSettlement(onDeliverySettled, status, errorMessage);
       expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     },
@@ -601,11 +587,11 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         await expect(deliveryOutcome).resolves.toEqual(
           expect.objectContaining({ message: "cron: failure alert announcement timed out" }),
         );
-        expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
-          delivered: recipientReached ? undefined : false,
-          status: recipientReached ? "unknown" : "not-delivered",
-          error: "cron: failure alert announcement timed out",
-        });
+        expectSettlement(
+          onDeliverySettled,
+          recipientReached ? "unknown" : "not-delivered",
+          "cron: failure alert announcement timed out",
+        );
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         expect(vi.getTimerCount()).toBe(0);
       } finally {
@@ -630,23 +616,13 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   });
 
   it("rejects credential-bearing completion webhook targets before fetch", () => {
-    const logger = {
-      warn: vi.fn(),
-    };
+    const logger = { warn: vi.fn() };
     const credentialUrl = new URL("https://example.invalid/hook?token=placeholder");
     credentialUrl.username = "user";
     credentialUrl.password = "password";
-    const job = createWebhookJob({
-      mode: "announce",
-      completionDestination: {
-        mode: "webhook",
-        to: credentialUrl.href,
-      },
-    });
-
-    dispatchGatewayCronFinishedNotifications({
+    const job = createCompletionWebhookJob(credentialUrl.href);
+    dispatchCompletion(job, {
       evt: { jobId: job.id, action: "finished", status: "ok" },
-      job,
       logger,
     });
 
@@ -712,23 +688,14 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   );
 
   it("keeps failure webhook messages stable and adds structured runAtMs", async () => {
-    const job = makeCronJob({
-      delivery: {
-        mode: "announce",
-        completionDestination: { mode: "webhook", to: "https://example.invalid/cron" },
-      },
-    });
-    await sendGatewayCronFailureAlert({
+    const job = createCompletionWebhookJob();
+    await sendFailureWebhook({
       runAtMs,
       resolveCronAgent: () => ({
         agentId: "main",
         cfg: { agents: { defaults: { userTimezone: "America/New_York" } } },
       }),
       job,
-      payload: { text: "cron failed" },
-      channel: "last",
-      mode: "webhook",
-      to: "https://example.invalid/cron",
       ssrfPolicy: webhookSsrfPolicy,
     });
 
@@ -761,13 +728,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   ])(
     "composes failure alert details $name without dropping presentation",
     async ({ gateway, expectedText }) => {
-      const job = makeCronJob({
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "channel:ops",
-        },
-      });
+      const job = createWebhookJob({ mode: "announce", channel: "telegram", to: "channel:ops" });
 
       await sendGatewayCronFailureAlert({
         runAtMs,
@@ -782,7 +743,6 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         },
         channel: "telegram",
         to: "channel:ops",
-        mode: "announce",
       });
 
       expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(

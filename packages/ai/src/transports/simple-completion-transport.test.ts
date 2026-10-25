@@ -3,6 +3,7 @@ import type { Api, AssistantMessageEventStreamContract, Model, StreamFn } from "
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApiRegistry, type ApiRegistry } from "../api-registry.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 
 const vertexStream = vi.fn();
 const registerApi = vi.fn();
@@ -22,16 +23,13 @@ const initialHost = getAiTransportHost();
 function makeModel<T extends Api>(
   overrides: Pick<Model<T>, "api" | "provider" | "baseUrl"> & Partial<Model<T>>,
 ): Model<T> {
-  return {
-    id: "test-model",
+  return makeProviderModel(overrides.api, overrides.provider, "test-model", {
     name: "Test Model",
     reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8192,
     maxTokens: 4096,
     ...overrides,
-  };
+  });
 }
 
 function makeChatGPTModel(baseUrl: string) {
@@ -232,7 +230,7 @@ describe("prepareModelForSimpleCompletion", () => {
       api: "openai-completions",
       provider: "llama-cpp",
       baseUrl: "local://llama-cpp",
-      headers: { Authorization: null } as never,
+      headers: { Authorization: null },
     });
 
     const result = prepare({ model });

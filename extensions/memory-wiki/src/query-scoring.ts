@@ -367,86 +367,6 @@ function hasRouteQuestionMatch(values: readonly string[], queryLower: string): b
   return hasAnyQueryMatch(values, queryLower, buildRouteQuestionTokens(queryLower));
 }
 
-function scoreWikiSearchModeBoost(params: {
-  page: QueryableWikiPage | MemoryWikiCompiledDigestPage;
-  claims: readonly (WikiClaim | MemoryWikiCompiledClaim)[];
-  matchingClaimCount: number;
-  queryLower: string;
-  queryTokens: readonly string[];
-  mode: WikiSearchMode;
-}): number {
-  const { page, queryLower, queryTokens } = params;
-  switch (params.mode) {
-    case "auto":
-      return 0;
-    case "find-person": {
-      let score = isPersonLikePage(page) ? 24 : -4;
-      if (
-        hasAnyQueryMatch(
-          [
-            page.canonicalId,
-            ...(page.aliases ?? []),
-            page.personCard?.canonicalId,
-            ...(page.personCard?.handles ?? []),
-            ...(page.personCard?.emails ?? []),
-            ...(page.personCard?.socials ?? []),
-          ],
-          queryLower,
-          queryTokens,
-        )
-      ) {
-        score += 24;
-      }
-      return score;
-    }
-    case "route-question": {
-      let score = isPersonLikePage(page) ? 14 : 0;
-      if (hasRouteQuestionMatch(buildRouteQuestionFields(page), queryLower)) {
-        score += 32;
-      }
-      // Digests retain only top relationships; ranking still uses the full count.
-      const relationshipCount =
-        "relationships" in page ? page.relationships.length : (page.relationshipCount ?? 0);
-      return score + Math.min(8, relationshipCount * 2);
-    }
-    case "source-evidence": {
-      let score = page.kind === "source" ? 22 : 0;
-      const evidenceFields = params.claims.flatMap((claim) =>
-        "evidence" in claim
-          ? claim.evidence.flatMap((evidence) => [
-              evidence.kind,
-              evidence.sourceId,
-              evidence.path,
-              evidence.lines,
-              evidence.note,
-            ])
-          : [
-              ...(claim.sourceIds ?? []),
-              ...(claim.evidenceKinds ?? []),
-              ...(claim.privacyTiers ?? []),
-            ],
-      );
-      if (
-        hasAnyQueryMatch(
-          [
-            "sourcePath" in page ? page.sourcePath : undefined,
-            ...page.sourceIds,
-            ...evidenceFields,
-          ],
-          queryLower,
-          queryTokens,
-        )
-      ) {
-        score += 30;
-      }
-      return score;
-    }
-    case "raw-claim":
-      return params.matchingClaimCount > 0 ? 42 : 0;
-  }
-  return 0;
-}
-
 export function buildDigestCandidatePaths(params: {
   snapshot: MemoryWikiCompiledCacheSnapshot;
   query: string;
@@ -547,14 +467,74 @@ function scorePage(params: {
     score += bestMatchingClaim.score;
     score += Math.min(10, (matchingClaims.length - 1) * 2);
   }
-  score += scoreWikiSearchModeBoost({
-    page,
-    claims,
-    matchingClaimCount: matchingClaims.length,
-    queryLower,
-    queryTokens,
-    mode,
-  });
+  switch (mode) {
+    case "auto":
+      break;
+    case "find-person": {
+      let modeScore = isPersonLikePage(page) ? 24 : -4;
+      if (
+        hasAnyQueryMatch(
+          [
+            page.canonicalId,
+            ...(page.aliases ?? []),
+            page.personCard?.canonicalId,
+            ...(page.personCard?.handles ?? []),
+            ...(page.personCard?.emails ?? []),
+            ...(page.personCard?.socials ?? []),
+          ],
+          queryLower,
+          queryTokens,
+        )
+      ) {
+        modeScore += 24;
+      }
+      score += modeScore;
+      break;
+    }
+    case "route-question": {
+      let modeScore = isPersonLikePage(page) ? 14 : 0;
+      if (hasRouteQuestionMatch(buildRouteQuestionFields(page), queryLower)) {
+        modeScore += 32;
+      }
+      // Digests retain only top relationships; ranking still uses the full count.
+      const relationshipCount =
+        "relationships" in page ? page.relationships.length : (page.relationshipCount ?? 0);
+      score += modeScore + Math.min(8, relationshipCount * 2);
+      break;
+    }
+    case "source-evidence": {
+      let modeScore = page.kind === "source" ? 22 : 0;
+      const evidenceFields = claims.flatMap((claim) =>
+        "evidence" in claim
+          ? claim.evidence.flatMap((evidence) => [
+              evidence.kind,
+              evidence.sourceId,
+              evidence.path,
+              evidence.lines,
+              evidence.note,
+            ])
+          : (claim.sourceIds ?? []).concat(claim.evidenceKinds ?? [], claim.privacyTiers ?? []),
+      );
+      if (
+        hasAnyQueryMatch(
+          [
+            "sourcePath" in page ? page.sourcePath : undefined,
+            ...page.sourceIds,
+            ...evidenceFields,
+          ],
+          queryLower,
+          queryTokens,
+        )
+      ) {
+        modeScore += 30;
+      }
+      score += modeScore;
+      break;
+    }
+    case "raw-claim":
+      score += matchingClaims.length > 0 ? 42 : 0;
+      break;
+  }
   // Digest candidates admit phrase and distributed token matches in metadata.
   // Live pages also match and score their body text.
   if (!("raw" in page)) {

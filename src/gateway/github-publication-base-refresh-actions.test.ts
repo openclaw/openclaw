@@ -367,15 +367,17 @@ it("recovers one guest integration, retains saved data and publishes the resolve
       .mockImplementation((params, operation) =>
         withStore(params, (store) => operation({ ...store, update: intercept(store.update) })),
       );
-  const reservationInterruption = interceptUpdate((update) => async (row, patch, authority) => {
-    if (
-      patch.pending_target === "canonical" &&
-      isLocalWorkspaceBaseRefreshRef(patch.pending_ref ?? null)
-    ) {
-      throw new Error("interrupted before refresh reservation");
-    }
-    return await update(row, patch, authority);
-  });
+  const reservationInterruption = interceptUpdate(
+    (update) => async (row, patch, authority, manifest) => {
+      if (
+        patch.pending_target === "canonical" &&
+        isLocalWorkspaceBaseRefreshRef(patch.pending_ref ?? null)
+      ) {
+        throw new Error("interrupted before refresh reservation");
+      }
+      return await update(row, patch, authority, manifest);
+    },
+  );
   await expect(refresh()).rejects.toThrow("interrupted before refresh reservation");
   reservationInterruption.mockRestore();
   expect(await git("rev-parse", "MERGE_HEAD")).toBe(baseCommit);
@@ -383,8 +385,8 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
   // Fail after the real canonical receipt, before projection application; retry uses its retained payload.
   let interrupted = false;
-  const interruption = interceptUpdate((update) => async (row, patch, authority) => {
-    const result = await update(row, patch, authority);
+  const interruption = interceptUpdate((update) => async (row, patch, authority, manifest) => {
+    const result = await update(row, patch, authority, manifest);
     if (
       !interrupted &&
       patch.pending_target === "projection" &&

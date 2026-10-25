@@ -40,6 +40,8 @@ export type ModelDefinitionConfig = Omit<
 > & {
   /** Internal discovery metadata; not a user config option. */
   parameterCount?: number;
+  /** Provider/catalog-declared canonical family; internal metadata, not a user config option. */
+  family?: string;
   /** Whether the model supports reasoning/thinking controls. */
   reasoning: boolean;
   /** Supported input modalities for routing and media-tool selection. */

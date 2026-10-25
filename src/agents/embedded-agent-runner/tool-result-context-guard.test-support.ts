@@ -1,5 +1,6 @@
 import type { Agent, AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { expect } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
 
@@ -10,14 +11,7 @@ export function makeUser(text: string): AgentMessage {
 }
 
 export function makeToolResult(id: string, text: string, toolName = "grep"): AgentMessage {
-  return castAgentMessage({
-    role: "toolResult",
-    toolCallId: id,
-    toolName,
-    content: [{ type: "text", text }],
-    isError: false,
-    timestamp: Date.now(),
-  });
+  return makeTextToolResult(id, toolName, text, false, Date.now());
 }
 
 export function makeAssistant(text: string, extras: Record<string, unknown> = {}): AgentMessage {

@@ -1,9 +1,9 @@
 import { EventEmitter, once } from "node:events";
 import net from "node:net";
-import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import { createMattermostConnectOnce } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
@@ -88,11 +88,7 @@ async function startStalledWebSocketHandshakeServer(): Promise<{
   const server = net.createServer((socket) => {
     accepted.push(socket);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const { port } = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   return {
     url: `ws://127.0.0.1:${port}`,
     close: async () => {
@@ -182,9 +178,7 @@ it("terminates the connection when the authentication reply never arrives", asyn
   vi.useFakeTimers();
   const socket = new FakeWebSocket();
   const runtime = testRuntime();
-  const connectOnce = createConnection(socket, {
-    runtime,
-  });
+  const connectOnce = createConnection(socket, { runtime });
 
   const connected = connectOnce();
   socket.emit("open");
@@ -311,25 +305,18 @@ it("dispatches reaction events to the reaction handler", async () => {
     emoji_name: "thumbsup",
   });
   const payload = { event: "reaction_added", data: { reaction } };
-  const connected = connectOnce();
-  queueMicrotask(() => {
-    socket.emit("open");
-    socket.emit("message", authOkFrame(1));
-    socket.emit("message", encodeFrame(payload));
-    socket.emitClose(1000);
-  });
+  const connected = startAuthenticated(connectOnce, socket);
+  socket.emit("message", encodeFrame(payload));
+  socket.emitClose(1000);
   await connected;
-  expect(onReaction).toHaveBeenCalledTimes(1);
+  expect(onReaction).toHaveBeenCalledExactlyOnceWith(payload);
   expect(onPosted).not.toHaveBeenCalled();
-  expect(onReaction.mock.calls.at(0)?.[0]).toEqual(payload);
 });
 
 it("hands posted envelopes to ingress raw without duplicate decoding", async () => {
   const socket = new FakeWebSocket();
   const onPosted = vi.fn(async () => {});
-  const connectOnce = createConnection(socket, {
-    onPosted,
-  });
+  const connectOnce = createConnection(socket, { onPosted });
   const post = { id: "post-raw", channel_id: "channel-raw", unexpected_transport_field: true };
   const raw = postEnvelope(post);
   const frame = Buffer.from(raw);
@@ -342,9 +329,7 @@ it("hands posted envelopes to ingress raw without duplicate decoding", async () 
   });
   expect(onPosted).not.toHaveBeenCalled();
   socket.emit("message", frame);
-  await vi.waitFor(() => {
-    expect(onPosted).toHaveBeenCalledTimes(1);
-  });
+  await vi.waitFor(() => expect(onPosted).toHaveBeenCalledTimes(1));
   socket.emitClose(1000);
   await connected;
 
@@ -396,52 +381,39 @@ it("terminates silent websocket drops when Mattermost misses pong timeout", asyn
   await connected;
 });
 
-it("does not terminate when getBotUpdateAt throws", async () => {
-  const { socket, runtime, connected } = startTimedMonitor({
-    getBotUpdateAt: vi
-      .fn<() => Promise<number>>()
-      .mockResolvedValueOnce(1000)
-      .mockRejectedValue(new Error("network error")),
-  });
-  socket.ping = () => void socket.emit("pong", Buffer.alloc(0));
-
-  await vi.advanceTimersByTimeAsync(0);
-
-  await vi.advanceTimersByTimeAsync(30_000);
-  expect(socket.terminateCalls).toBe(0);
-  expect(runtime.error).toHaveBeenCalledWith(
-    "mattermost: health check error: Error: network error",
-  );
-
-  socket.emitClose(1000);
-  await connected;
-});
-
-it("keeps polling when the initial getBotUpdateAt call fails", async () => {
-  const { socket, runtime, connected } = startTimedMonitor({
-    getBotUpdateAt: vi
-      .fn<() => Promise<number>>()
+it.each([false, true])("keeps polling after health check failure (initial=%s)", async (initial) => {
+  const getBotUpdateAt = vi.fn<() => Promise<number>>();
+  if (initial) {
+    getBotUpdateAt
       .mockRejectedValueOnce(new Error("network error"))
       .mockResolvedValueOnce(1000)
-      .mockResolvedValue(2000),
-  });
+      .mockResolvedValue(2000);
+  } else {
+    getBotUpdateAt.mockResolvedValueOnce(1000).mockRejectedValue(new Error("network error"));
+  }
+  const { socket, runtime, connected } = startTimedMonitor({ getBotUpdateAt });
   socket.ping = () => void socket.emit("pong", Buffer.alloc(0));
 
   await vi.advanceTimersByTimeAsync(0);
-  expect(runtime.error).toHaveBeenCalledWith(
-    "mattermost: failed to get initial update_at: Error: network error",
-  );
-
+  if (initial) {
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost: failed to get initial update_at: Error: network error",
+    );
+  }
   await vi.advanceTimersByTimeAsync(30_000);
   expect(socket.terminateCalls).toBe(0);
-
-  await vi.advanceTimersByTimeAsync(30_000);
-  expect(socket.terminateCalls).toBe(1);
-  expect(runtime.log).toHaveBeenCalledWith(
-    "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
-  );
-
-  socket.emitClose(1006);
+  if (initial) {
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(socket.terminateCalls).toBe(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
+    );
+  } else {
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost: health check error: Error: network error",
+    );
+  }
+  socket.emitClose(initial ? 1006 : 1000);
   await connected;
 });
 

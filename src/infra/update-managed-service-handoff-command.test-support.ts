@@ -1,16 +1,20 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { Readable } from "node:stream";
+import { PassThrough, type Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { vi } from "vitest";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { readManagedHandoffArtifacts } from "./update-managed-service-handoff-artifacts.test-support.js";
 import type {
   ManagedServiceManagerBoundaryResult,
   ManagedServiceManagerBoundaryOptions,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 const recoveryReadyMarker = "OPENCLAW_TEST_RECOVERY_DESCENDANT_READY";
@@ -18,6 +22,39 @@ const failed = "managed-service-handoff-failed";
 const cancelled = "managed-service-handoff-cancelled";
 const restoreFailed = "managed-service-handoff-restore-failed";
 const restartArgs = ["gateway", "restart", "--preserve-definition", "--json"];
+
+export function createManagedServiceChildMock(params?: { pid?: number }) {
+  return Object.assign(new EventEmitter(), {
+    pid: params?.pid ?? process.pid,
+    exitCode: null,
+    signalCode: null,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    unref: vi.fn(),
+  });
+}
+
+export function createReadyManagedServiceChild(
+  args: string[],
+  cleanups: Set<() => void>,
+  readyDelayMs = 0,
+) {
+  const child = createManagedServiceChildMock();
+  process.nextTick(() => {
+    const ready = () =>
+      signalMockManagedUpdateHandoffReady({
+        child,
+        paramsPath: readManagedHandoffArtifacts(args).paramsPath,
+        cleanups,
+      });
+    if (readyDelayMs > 0) {
+      setTimeout(ready, readyDelayMs);
+    } else {
+      ready();
+    }
+  });
+  return child;
+}
 
 type ManagerBoundary = (
   kind: "systemd" | "launchd",

@@ -139,7 +139,7 @@ enum PostUpdateNotificationOutcome: Equatable {
 final class PostUpdateController: NSObject, NSWindowDelegate {
     static let shared = PostUpdateController()
     static let updateGuideURL = URL(string: "https://docs.openclaw.ai/install/updating")!
-    static let discordURL = URL(string: "https://discord.gg/clawd")!
+    static let supportURL = URL(string: "https://community.openclaw.ai/")!
 
     private let model = PostUpdateModel()
     private var receipt: PostAppUpdateReceipt?

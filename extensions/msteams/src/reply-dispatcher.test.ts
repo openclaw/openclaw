@@ -65,6 +65,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       },
       channel: {
         text: {
+          chunkMarkdownTextWithMode: (text: string) => [text],
           resolveChunkMode: vi.fn(() => "length"),
           resolveMarkdownTableMode: vi.fn(() => "code"),
         },
@@ -169,6 +170,57 @@ describe("createMSTeamsReplyDispatcher", () => {
       content,
     });
   }
+
+  it.each([false, true])("resolves authored fallback before delivery (table=%s)", async (table) => {
+    const messenger = await vi.importActual<typeof import("./messenger.js")>("./messenger.js");
+    renderMessagesMock.mockImplementation(messenger.renderReplyPayloadsToMessages);
+    sendMessagesMock.mockResolvedValue(["reply-id"]);
+    const dispatcher = createDispatcher(table ? "channel" : "personal", {
+      streaming: { mode: "progress" },
+    });
+    const presentation: NonNullable<ReplyPayload["presentation"]> = {
+      title: "Deployment",
+      blocks: table
+        ? [{ type: "table", caption: "Targets", headers: ["State"], rows: [["Ready"]] }]
+        : [{ type: "buttons", buttons: [{ label: "Deploy", value: "deploy" }] }],
+    };
+    await dispatcher.send({
+      text: "Authored fallback",
+      presentation,
+      presentationTextMode: "fallback",
+    });
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    expect(sendMessagesMock.mock.calls.map(([send]) => send.messages)).toEqual([
+      table
+        ? [{ text: "Authored fallback" }]
+        : [
+            {
+              adaptiveCard: expect.objectContaining({
+                body: [
+                  {
+                    type: "TextBlock",
+                    text: "Deployment",
+                    weight: "Bolder",
+                    size: "Medium",
+                    wrap: true,
+                  },
+                ],
+                actions: [
+                  {
+                    type: "Action.Submit",
+                    title: "Deploy",
+                    data: { value: "deploy", label: "Deploy" },
+                  },
+                ],
+              }),
+            },
+          ],
+    ]);
+    if (!table) {
+      expect(dispatcher.stream().emit).not.toHaveBeenCalled();
+    }
+  });
 
   it("sends an informative status update once work expands in personal chats", async () => {
     vi.useFakeTimers();

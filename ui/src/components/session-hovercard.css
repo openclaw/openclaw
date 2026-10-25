@@ -26,6 +26,7 @@
 }
 
 .session-hovercard__automation-link {
+  padding-block: var(--space-1);
   border-radius: var(--radius-sm);
   color: inherit;
   text-decoration: none;
@@ -34,7 +35,6 @@
 .session-hovercard__automation-link:is(:hover, :focus-visible) {
   color: var(--text);
   background: var(--bg-hover);
-  text-decoration: underline;
 }
 
 .session-hovercard__header {

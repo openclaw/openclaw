@@ -65,6 +65,8 @@ let targets = explicitTargets
         .map((file) => `src/infra/database-engine/${file.replaceAll("\\", "/")}`)
         .toSorted(),
       "src/commands/doctor-database-diagnostics.postgres.test.ts",
+      "src/commands/startup-client-credentials.postgres.test.ts",
+      "src/config/sessions/session-accessor.sqlite-lifecycle-artifacts.postgres.test.ts",
       "src/config/sessions/session-accessor.sqlite-read-hold.postgres.test.ts",
       "src/config/sessions/session-turn-resident.postgres.test.ts",
       "src/infra/client-credential-migration.postgres.test.ts",
@@ -77,6 +79,7 @@ let targets = explicitTargets
       "src/state/openclaw-agent-db-engine.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
+      "extensions/memory-core/src/memory/manager-duplicate-chunks.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-publication.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-search.postgres.test.ts",
       "extensions/memory-core/src/tools.postgres.test.ts",

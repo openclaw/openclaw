@@ -8,6 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -80,7 +81,8 @@ const args = process.argv.slice(2);
 if (args.includes("fetch") && args.includes(${JSON.stringify(url)})) {
   for (const flag of ["--depth=1", "--no-write-fetch-head", "--no-recurse-submodules", "http.followRedirects=false", "protocol.allow=never", "credential.helper="]) assert(args.includes(flag));
   assert.equal(args.at(-1), ${JSON.stringify(baseCommit)});
-  const inheritedAuthKeys = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_TRACE", "GH_TOKEN", "GITHUB_TOKEN", "git_config_count", "git_config_key_0", "git_config_value_0", "Git_Trace", "gh_token", "GitHub_Token"].filter((key) => process.env[key] !== undefined);
+  assert.deepEqual(Object.fromEntries(Object.entries(process.env).filter(([key]) => /^GIT_CONFIG_(COUNT|KEY_[0-9]+|VALUE_[0-9]+)$/i.test(key))), ${JSON.stringify(gitMaintenanceEnvironment())});
+  const inheritedAuthKeys = ["GIT_TRACE", "GH_TOKEN", "GITHUB_TOKEN", "Git_Trace", "gh_token", "GitHub_Token"].filter((key) => process.env[key] !== undefined);
   fs.writeFileSync(${JSON.stringify(inheritedAuthWitness)}, JSON.stringify(inheritedAuthKeys));
   assert.deepEqual(inheritedAuthKeys, []);
   assert.equal(process.env.GIT_CONFIG_GLOBAL, require("node:os").devNull);

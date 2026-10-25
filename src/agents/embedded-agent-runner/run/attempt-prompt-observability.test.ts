@@ -155,7 +155,7 @@ describe("observeEmbeddedAttemptPrompt", () => {
     expectDispatch(0, 0, 0);
   });
 
-  it.each([false, true])("ignores unrecorded tool metadata (compacted=%s)", (compacted) => {
+  it("ignores unrecorded tool metadata", () => {
     const tool = {
       get name(): string {
         throw new Error("unrecorded tool metadata must not be read");
@@ -164,7 +164,6 @@ describe("observeEmbeddedAttemptPrompt", () => {
     observe({
       effectiveTools: [tool],
       uncompactedEffectiveTools: [tool],
-      toolSearchCompacted: compacted,
       trajectoryRecorder: null,
     });
 

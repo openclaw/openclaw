@@ -4,8 +4,9 @@ import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import { GatewayRetainedWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 
@@ -155,7 +156,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
           const validating = token.validating;
           token.validating = true;
           try {
-            mutationAuthority.run(token, assertCurrent);
+            runWithAsyncStore(mutationAuthority, token, assertCurrent);
           } finally {
             token.validating = validating;
           }
@@ -180,19 +181,11 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
       return work.scope.track(run);
     },
   };
-  const unregister = registerOpenClawStateDatabaseAsyncResource({
-    async close(identity) {
-      if (
-        !identity ||
-        identity.key === admission.identity.key ||
-        identity.canonicalPath === admission.identity.canonicalPath
-      ) {
-        await work.beginDrainAll();
-        retired = true;
-        lifetimes.delete(admission.coordinationKey);
-        unregister();
-      }
-    },
+  const unregister = registerOpenClawStatePathAsyncResource(admission, async () => {
+    await work.beginDrainAll();
+    retired = true;
+    lifetimes.delete(admission.coordinationKey);
+    unregister();
   });
   return owner;
 }
@@ -275,7 +268,7 @@ export function withWorktreeRunEnd<T>(
   const operation: RunEndOperation = { context, active: true };
   return lifetime(context).run(
     () =>
-      current.run(operation, async () => {
+      runWithAsyncStore(current, operation, async () => {
         try {
           return await run();
         } finally {

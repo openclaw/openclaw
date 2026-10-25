@@ -215,12 +215,14 @@ it("forwards native file invalidation without replacing the shared directory wat
   const directory = tempDirs.make("owned-directory-events-");
   const watch = vi.spyOn(nativeWatchFs, "watch");
   const listener = observe(directory);
+  const resolve = vi.spyOn(path, "resolve");
   watch.mock.calls[0]![2]("rename", "profiles");
   expect(listener).toHaveBeenCalledWith("profiles");
   listener.mockClear();
   watch.mock.calls[0]![2]("change", path.basename(directory));
   expect(listener).toHaveBeenCalledWith(path.basename(directory));
   expect(watch).toHaveBeenCalledTimes(1);
+  expect(resolve).not.toHaveBeenCalled();
 });
 
 it("watches the long form of a Windows 8.3 short path", () => {

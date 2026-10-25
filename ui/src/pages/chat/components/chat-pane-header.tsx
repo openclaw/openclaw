@@ -1,4 +1,4 @@
-import { Show, onSettled, type Element } from "solid-js";
+import { Show, createMemo, lazy, merge, onSettled, type Element } from "solid-js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
@@ -8,15 +8,16 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { canRetryGatewayStatus } from "../../../components/gateway-status.ts";
-import { StandalonePersonLink } from "../../../components/person-activity-link-solid.tsx";
+import { PersonAvatarLink } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
-import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import "../../../components/tooltip.ts";
+import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
@@ -26,20 +27,31 @@ import {
   ChatDashboardMenu,
   ChatPaneLayoutMenu,
 } from "./chat-header-panel-actions.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { AgentCrumb, IdentityCrumbs, ProjectCrumb } from "./chat-pane-header-identity.tsx";
 import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileComposition } from "./chat-pane-mobile-composition.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
-import { ChatSessionPublicIndicator, ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
-import { ContinueInTerminalDialog } from "./continue-in-terminal-dialog.tsx";
+import { ChatSessionPublicIndicator } from "./chat-session-sharing-shared.tsx";
+import { ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+
+const ContinueInTerminalDialog = lazy(() => import("./continue-in-terminal-dialog.tsx"), {
+  export: "ContinueInTerminalDialog",
+});
 
 export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
   return (
     <>
       <ChatPaneHeader {...props.header} />
       <Show when={props.continueInTerminal}>
-        {(dialog) => <ContinueInTerminalDialog {...dialog()} />}
+        {(dialog) => (
+          <ChatLazyBoundary onClose={() => dialog().onClose()}>
+            <ContinueInTerminalDialog {...dialog()} />
+          </ChatLazyBoundary>
+        )}
       </Show>
     </>
   );
@@ -76,37 +88,42 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   const Details = (detailsProps: {
     placement: Parameters<typeof ChatPanePlacement>[0];
     onOpenMachine: () => void;
-  }) => (
-    <Show when={props.detailsControl !== undefined}>
-      <ChatDetails
-        {...props.detailsControl!}
-        chat={
-          props.detailsControl!.chat
-            ? {
-                ...props.detailsControl!.chat,
-                environment: {
-                  ...props.detailsControl!.chat.environment,
-                  placement: detailsProps.placement,
-                  onOpenMachine:
-                    props.detailsControl?.nativePresentation === "mobile"
-                      ? detailsProps.onOpenMachine
-                      : undefined,
-                },
-              }
-            : undefined
-        }
-        triggerContent={!props.mergedChrome ? detailsGlyph : undefined}
-        mobileBindings={
-          props.detailsControl?.mobileBindings
-            ? {
-                ...props.detailsControl.mobileBindings,
-                versions: props.mobileVersions,
-              }
-            : undefined
-        }
-      />
-    </Show>
-  );
+  }) => {
+    const chat = createMemo(() => {
+      const source = props.detailsControl?.chat;
+      return source
+        ? merge(source, {
+            environment: merge(
+              () => source.environment ?? {},
+              () => ({
+                placement: detailsProps.placement,
+                onOpenMachine:
+                  props.detailsControl?.nativePresentation === "mobile"
+                    ? detailsProps.onOpenMachine
+                    : undefined,
+              }),
+            ),
+          })
+        : undefined;
+    });
+    return (
+      <Show when={props.detailsControl !== undefined}>
+        <ChatDetails
+          {...props.detailsControl!}
+          chat={chat()}
+          triggerContent={!props.mergedChrome ? detailsGlyph : undefined}
+          mobileBindings={
+            props.detailsControl?.mobileBindings
+              ? {
+                  ...props.detailsControl.mobileBindings,
+                  versions: props.mobileVersions,
+                }
+              : undefined
+          }
+        />
+      </Show>
+    );
+  };
   const notice = (
     <Show when={incognito()}>
       <aside class="chat-pane__incognito-notice" aria-label={t("sessionsView.incognitoLabel")}>
@@ -249,7 +266,11 @@ function ChatPaneHeaderChrome(
                   />
                 </Show>
               </Show>
-              <Show when={props.gatewayStatus?.kind}>
+              <Show
+                when={
+                  props.gatewayStatus?.kind ?? (props.savedConversation ? "reconnecting" : null)
+                }
+              >
                 {(kind) => (
                   <openclaw-tooltip
                     prop:content={
@@ -302,7 +323,9 @@ function ChatPaneHeaderChrome(
                             />
                           </Show>
                         </span>
-                        {t(`connection.${kind()}`)}
+                        {props.savedConversation
+                          ? t("chat.savedConversation", { status: t(`connection.${kind()}`) })
+                          : t(`connection.${kind()}`)}
                       </span>
                       <Show when={canRetryGatewayStatus(kind()) && props.gatewayStatus?.onRetry}>
                         <span class="chat-pane__connection-divider" aria-hidden="true" />
@@ -343,7 +366,8 @@ function ChatPaneHeaderChrome(
             {(indicator) => <ChatSessionPublicIndicator {...indicator()} />}
           </Show>
           {props.mergedChrome || props.detailsControl || hasSharingControl() ? undefined : (
-            <StandalonePersonLink
+            <PersonAvatarLink
+              standalone
               link={
                 props.showOwnerChip
                   ? personActivityLink(
@@ -362,7 +386,7 @@ function ChatPaneHeaderChrome(
                 props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
                 props.ownerViewing,
               )}
-            </StandalonePersonLink>
+            </PersonAvatarLink>
           )}
           {!props.mergedChrome &&
           !props.detailsControl &&
@@ -500,6 +524,19 @@ function ChatPaneHeaderChrome(
               </openclaw-tooltip>
             </Show>
           </div>
+          {/* Inactive panes hide session actions, but must keep their close control. */}
+          <Show when={!props.mergedChrome && props.onClosePane}>
+            <button
+              type="button"
+              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close"
+              aria-label={t("chat.splitView.closePane")}
+              title={t("chat.splitView.closePane")}
+              disabled={props.actionsDisabled}
+              onClick={() => props.onClosePane?.(props.paneId)}
+            >
+              <Icon name="x" />
+            </button>
+          </Show>
         </div>
         <Show when={props.narrow && (props.mergedChrome || !props.detailsControl)}>
           <RunningSubagents count={props.runningSubagentCount} />

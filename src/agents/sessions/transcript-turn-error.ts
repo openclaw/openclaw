@@ -5,6 +5,7 @@ export function isSessionTranscriptTurnMismatchErrorMessage(
   const text = message?.replace(/^Error: /, "") ?? "";
   return (
     /^Session transcript keyed user is outside the current turn: \S/.test(text) ||
+    text === "Model prompt projection lost its canonical user turn" ||
     text === "Pending input is no longer active in its admitted transcript" ||
     text === "Pending input session changed before transcript promotion" ||
     text === "Pending input custody ended before transcript promotion"

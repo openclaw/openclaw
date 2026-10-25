@@ -76,6 +76,17 @@ afterEach(() => {
 });
 
 describe("legacy TUI last-session migration", () => {
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const state = fixture({ terminal: pointer("utf8-marker") });
+    const bytes = fs.readFileSync(state.sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    fs.writeFileSync(state.sourcePath, bytes);
+    const result = state.run();
+    await expectRefusal(state, result, "must be valid UTF-8", null);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(fs.readFileSync(state.sourcePath)).toEqual(bytes);
+  });
+
   it("requires Doctor opt-in and discards heartbeat pointers", async () => {
     const { stateDir, sourcePath, read } = fixture({
       terminal: pointer(),

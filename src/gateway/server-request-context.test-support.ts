@@ -23,7 +23,6 @@ export function makeCronState(overrides: Partial<TestCronState> = {}): TestCronS
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileSystemJobs: vi.fn(async () => "converged" as const),
     ...overrides,
   };
 }
@@ -36,6 +35,7 @@ export function makeContextParams(
     runtime: {
       scheduler: createTestGatewayScheduler(),
       getSessionRowProjection: () => undefined,
+      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
       forgetConnectionAncestors: vi.fn(),
       connectionWork: { track: trackAsyncWork },
       deps: {} as never,

@@ -17,12 +17,13 @@ import {
   readDeferredPluginMigrations,
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
+import { DeferredPluginSessionImportSchema } from "../infra/deferred-plugin-session-import-schema.js";
+import { readDeferredPluginSessionImportReceipt } from "../infra/deferred-plugin-session-source-read.js";
 import { rebuildDeferredPluginSessionSourceIndex } from "../infra/deferred-plugin-session-source-recovery.js";
 import {
   hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
-  readDeferredPluginSessionImportReceipt,
   readStaleDeferredPluginSessionImport,
   resolveVerifiedSessionSource,
   type DeferredPluginSessionImport,
@@ -52,7 +53,6 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { DeferredPluginSessionImportSchema } from "../infra/state-migrations.deferred-session-import.js";
 import { markLegacyMigrationSourceRemovedInDatabase } from "../infra/state-migrations.receipts.js";
 import {
   createRetainedAgentDatabaseMatcher,

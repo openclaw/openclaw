@@ -6,6 +6,7 @@ import { createServer } from "node:https";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { waitForGatewayHttpReadiness } from "../cli/daemon-cli/restart-health-probe.js";
 import { startProxy } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -31,12 +32,6 @@ async function listen(server: http.Server) {
   }
   return address.port;
 }
-async function close(server: http.Server) {
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
 function requestHttp(
   probe: ConfiguredGatewayLocalProbe,
   port: number,
@@ -54,6 +49,42 @@ const configFor = (certPath: string) => ({
       keyPath: path.join(path.dirname(certPath), "missing-key.pem"),
     },
   },
+});
+
+test("reads detailed channel outages and retains status when the body exceeds its bound", async () => {
+  let oversized = false;
+  const failing = Array.from({ length: 80 }, (_, index) => `channel-${index}-${"x".repeat(30)}`);
+  const server = http.createServer((req, res) => {
+    res.writeHead(req.url === "/readyz" ? 503 : 200).end(
+      JSON.stringify({
+        ready: false,
+        coreReady: true,
+        failing,
+        ...(oversized ? { padding: "x".repeat(70_000) } : {}),
+      }),
+    );
+  });
+  const port = await listen(server);
+  const observe = () =>
+    waitForGatewayHttpReadiness({
+      attempts: 1,
+      deadlineAt: performance.now() + 1000,
+      delayMs: 0,
+      port,
+      requireChannelHealth: false,
+    });
+  try {
+    expect(await observe()).toEqual({
+      healthz: 200,
+      readyz: 503,
+      coreReady: true,
+      failingChannels: failing,
+    });
+    oversized = true;
+    expect(await observe()).toEqual({ healthz: 200, readyz: 503, coreReady: false });
+  } finally {
+    await closeHttpServer(server);
+  }
 });
 
 describe("local TLS probes", () => {
@@ -74,7 +105,7 @@ describe("local TLS probes", () => {
     probe = createConfiguredGatewayLocalProbe(configFor(certPath));
   });
   afterEach(async () => {
-    await Promise.all(servers.splice(0).map(close));
+    await Promise.all(servers.splice(0).map(closeHttpServer));
     await dirs.cleanup();
   });
   test("probes directly under a managed proxy while enforcing its certificate pin", async () => {
@@ -193,7 +224,7 @@ test.each(["silent", "dripping"])("bounds a %s native HTTP peer by one deadline"
   } finally {
     controller.abort();
     vi.useRealTimers();
-    await Promise.all([close(server), operation]);
+    await Promise.all([closeHttpServer(server), operation]);
   }
 });
 
@@ -216,7 +247,7 @@ test("cancels pending readiness requests when the repair budget expires", async 
     controller.abort(aborted);
     await rejected;
   } finally {
-    await close(server);
+    await closeHttpServer(server);
   }
 });
 

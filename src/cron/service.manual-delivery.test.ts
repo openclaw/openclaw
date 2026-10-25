@@ -14,7 +14,7 @@ import { makeBaseParams } from "./isolated-agent/delivery-dispatch.test-fixtures
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
-import type { CronEvent } from "./service/state.js";
+import type { CronEvent } from "./types.js";
 
 const FOUR_HOURS_MS = 4 * 60 * 60_000;
 const text = "Fresh result from this invocation.";

@@ -16,7 +16,7 @@ import type {
 } from "openclaw/plugin-sdk/sandbox";
 import { resolveMxcBinaryPath } from "./binary-resolver.js";
 import type { MxcConfig } from "./config.js";
-import { createMxcFsBridge } from "./fs-bridge.js";
+import { MxcFsBridge } from "./fs-bridge.js";
 import {
   buildMxcContainerConfig,
   resolveCurrentBaselineContext,
@@ -39,10 +39,7 @@ type MxcExecFinalizeToken = {
 const CONTAINER_ID_MAX_LEN = 64;
 function uniqueContainerId(runtimeId: string): string {
   const suffix = randomBytes(4).toString("hex");
-  const base =
-    runtimeId.length + suffix.length + 1 > CONTAINER_ID_MAX_LEN
-      ? runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1)
-      : runtimeId;
+  const base = runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1);
   return `${base}-${suffix}`;
 }
 
@@ -210,7 +207,7 @@ export function createMxcSandboxBackendHandle(params: {
       cleanupLauncherPayloadFile(token);
     },
 
-    createFsBridge: ({ sandbox }) => createMxcFsBridge({ sandbox }),
+    createFsBridge: ({ sandbox }) => new MxcFsBridge(sandbox),
 
     async runShellCommand(
       cmdParams: SandboxBackendCommandParams,

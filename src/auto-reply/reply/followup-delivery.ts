@@ -1,5 +1,6 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
@@ -12,10 +13,12 @@ import {
   MISSING_REPLY_NOTICE_TEXT,
   isRequiredReplyExpectation,
   isSyntheticSourceReplyTurn,
+  resolveClaimedReplyExpectation,
   resolveReplyCompletion,
   shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -24,7 +27,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
-  retainSilentFinalPayloads,
+  selectAutomationReplyPayloads,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -38,8 +41,13 @@ import {
 } from "./agent-runner-failure-reply.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+import {
+  resolveAutomationReplyState,
+  retainAutomationReasoningWithFinal,
+} from "./automation-reply-payloads.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
+import { createFollowupSpeechPreparer } from "./followup-delivery-tts.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
@@ -120,6 +128,7 @@ export async function resolveFollowupDeliveryDecision(params: {
   }
   const sourcePolicy = resolveSourceReplyVisibilityPolicy({
     cfg: turn.config,
+    scheduledAutomation: turn.queued.run.scheduledAutomation !== undefined,
     ctx: {
       ChatType: turn.queued.originatingChatType ?? turn.queued.run.chatType,
       InboundEventKind: turn.queued.currentInboundEventKind,
@@ -132,7 +141,10 @@ export async function resolveFollowupDeliveryDecision(params: {
   const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   const isInteractive =
     isRequiredReplyExpectation(terminalReplyExpectation) ||
-    (!isSyntheticSourceReplyTurn({ inputProvenance: turn.queued.run.inputProvenance }) &&
+    (!isSyntheticSourceReplyTurn({
+      inputProvenance: turn.queued.run.inputProvenance,
+      scheduledAutomation: turn.queued.run.scheduledAutomation !== undefined,
+    }) &&
       !isInternalMessageChannel(
         turn.queued.originatingChannel ?? turn.queued.run.messageProvider,
       ) &&
@@ -211,21 +223,16 @@ export async function resolveFollowupDeliveryDecision(params: {
   const terminalRunFailed = execution.outcome.status === "failed";
   const missingReplyNoticeAllowed = shouldDeliverMissingReplyNotice({
     ...turn.queued.run,
+    scheduledAutomation: turn.queued.run.scheduledAutomation !== undefined,
     terminalReplyExpectation,
     trigger: turn.queued.run.internalEventExecution ? "event" : "user",
     currentInboundEventKind: turn.queued.currentInboundEventKind,
   });
-  const authoredSilence =
-    !terminalRunFailed &&
-    result.meta?.aborted !== true &&
-    !result.meta?.error &&
-    result.didSendDeterministicApprovalPrompt !== true &&
-    !accounting.terminalFailurePayload &&
-    result.meta?.terminalReply?.disposition === "silent";
-  const pendingContinuation =
-    result.meta?.yielded === true ||
-    result.meta?.continuationPending === true ||
-    (result.meta?.pendingToolCalls?.length ?? 0) > 0;
+  const { authoredSilence, pendingContinuation, automationNoChange, reasoningPayloadsEnabled } =
+    resolveAutomationReplyState(execution.outcome, {
+      opts,
+      terminalFailurePayload: accounting.terminalFailurePayload,
+    });
   const directBlockDeliveries = execution.outcome.directBlockDeliveries;
   const sourceReplyDelivery = resolveSourceReplyDelivery(
     result,
@@ -236,22 +243,26 @@ export async function resolveFollowupDeliveryDecision(params: {
     }),
   );
   let completion = resolveReplyCompletion(
-    terminalReplyExpectation,
+    resolveClaimedReplyExpectation(terminalReplyExpectation, result.meta),
     result.meta?.error?.kind === "hook_block" || result.didSendDeterministicApprovalPrompt === true
       ? "blocked"
       : authoredSilence
         ? "silent"
         : sourceReplyDelivery !== "missing"
           ? sourceReplyDelivery
-          : pendingContinuation
-            ? "pending"
-            : "empty",
+          : automationNoChange
+            ? "silent"
+            : pendingContinuation
+              ? "pending"
+              : "empty",
   );
   const explicitSilence = completion.outcome === "silent";
-  const sourcePayloads = authoredSilence
-    ? retainSilentFinalPayloads(accounting.payloadArray)
-    : accounting.payloadArray;
-  if (explicitSilence && sourcePayloads.length === 0) {
+  const sourcePayloads = selectAutomationReplyPayloads(
+    accounting.payloadArray,
+    automationNoChange,
+    authoredSilence,
+  );
+  if ((explicitSilence || automationNoChange) && sourcePayloads.length === 0) {
     return { kind: "suppress", reason: "silent" };
   }
   const completedSourceDelivery = hasCompletedSourceReplyDeliveryEvidence(result);
@@ -262,7 +273,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     result.meta?.finalAssistantVisibleText ?? "",
   );
   let payloads = preparePayloads(sourcePayloads, {
-    reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
+    reasoningPayloadsEnabled,
     commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
     sentMediaUrls: result.messagingToolSentMediaUrls,
     sentTargets: result.messagingToolSentTargets,
@@ -292,7 +303,6 @@ export async function resolveFollowupDeliveryDecision(params: {
           sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourcePolicy.sendPolicyDenied,
           successfulSourceReplyDelivery: completedSourceDelivery,
-          isHeartbeat: false,
           isRoomEvent: false,
         });
   if (recovery.kind === "retry") {
@@ -402,6 +412,9 @@ export async function resolveFollowupDeliveryDecision(params: {
     if (payloads.length === 0) {
       return { kind: "suppress", reason: "message-tool-only" };
     }
+  }
+  if (execution.outcome.automation) {
+    payloads = retainAutomationReasoningWithFinal(payloads);
   }
   return payloads.length > 0
     ? { kind: "deliver", payloads, resolved: runtimeResolved }
@@ -532,7 +545,6 @@ export async function deliverFollowupDecision(params: {
   const typing = createTypingSignaler({
     typing: defaults.typing,
     mode: defaults.typingMode,
-    isHeartbeat: false,
   });
   const crossChannelFailures: ReplyPayload[] = [];
   const queuedPayloads: ReplyPayload[] = [];
@@ -559,7 +571,25 @@ export async function deliverFollowupDecision(params: {
   const origin = resolveOriginMessageProvider({ originatingChannel });
   const sameChannelOrigin = Boolean(origin && origin === provider);
   const crossChannelOrigin = Boolean(origin && provider && origin !== provider);
-  for (const payload of payloads) {
+  const prepareSpeech = createFollowupSpeechPreparer({ turn, defaults, kind });
+  // The operation holds lifecycle admission until queue handoff. Retain its
+  // current generation so recovery cannot adopt a later reset's session.
+  const entry = turn.session.current();
+  const sessionGeneration: SessionDeliveryGeneration | undefined =
+    turn.session.kind === "session" && turn.session.storePath && entry
+      ? {
+          agentId: resolveSessionAgentId({
+            sessionKey: turn.session.key,
+            config: turn.config,
+            fallbackAgentId: turn.queued.run.agentId,
+          }),
+          storePath: turn.session.storePath,
+          sessionKey: turn.session.key,
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision ?? null,
+        }
+      : undefined;
+  for (let payload of payloads) {
     const providerRoute = deliveryPlan.resolveFollowupRoute({
       payload,
       originatingChannel,
@@ -590,6 +620,13 @@ export async function deliverFollowupDecision(params: {
       }
     }
     await typing.signalTextDelta(payload.text);
+    // The stalled recovery owner delivers its terminal notice after the operation aborts.
+    if (
+      turn.queued.stalledTurnRecovery !== true ||
+      !isReplyOperationStalledBeforeOutput(turn.operation)
+    ) {
+      payload = await prepareSpeech(payload, route);
+    }
     if (route !== "origin") {
       await dispatchPayload(payload);
     } else if (isRoutableChannel(originatingChannel) && originatingTo) {
@@ -600,6 +637,7 @@ export async function deliverFollowupDecision(params: {
         to: originatingTo,
         agentId: turn.queued.run.agentId,
         sessionKey: turn.queued.run.sessionKey,
+        sessionGeneration,
         accountId: turn.queued.originatingAccountId,
         requesterSenderId: turn.queued.run.senderId,
         requesterSenderName: turn.queued.run.senderName,

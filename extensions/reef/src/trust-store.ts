@@ -62,15 +62,20 @@ export class ReefTrustStore {
     this.operationState = { ...stores, identityScope, assertCurrent: () => assertActive?.() };
   }
 
-  #operation(assertOwnerCurrent?: () => void): PluginStateOperation<ReefTrustStateOperations> {
+  #operation(
+    assertOwnerCurrent?: () => void,
+    isAdmitted?: () => boolean,
+  ): PluginStateOperation<ReefTrustStateOperations> {
     const state = this.operationState;
     return state.peers.createOperation!<ReefTrustStateOperations>(
       [state.peers, state.deliveries],
       operationHandler,
       {
         assertCurrent: () => {
-          state.assertCurrent();
-          assertOwnerCurrent?.();
+          if (!isAdmitted?.()) {
+            state.assertCurrent();
+            assertOwnerCurrent?.();
+          }
         },
       },
     );
@@ -81,11 +86,18 @@ export class ReefTrustStore {
     input: ReefTrustStateOperations[Type]["input"],
     missingValue: ReefTrustStateOperations[Type]["output"],
     watchStores: readonly number[] = [0],
+    ifEmptyStore?: number,
   ): Promise<PluginStateOperationReceipt<ReefTrustStateOperations[Type]["output"]>> {
     const operation = this.#operation();
     const receipt = await operation.execute(
       { type, input },
-      { writeStores: [], watchStores, missingValue },
+      {
+        writeStores: [],
+        watchStores,
+        missingValue,
+        ifEmpty:
+          ifEmptyStore === undefined ? undefined : { store: ifEmptyStore, value: missingValue },
+      },
     );
     receipt.assertCurrent();
     return receipt;
@@ -145,20 +157,8 @@ export class ReefTrustStore {
 
   async beginRemoval(peer: string, assertOwnerCurrent?: () => void): Promise<() => Promise<void>> {
     const key = this.#key(peer);
-    const state = this.operationState;
     let admitted = false;
-    const operation = state.peers.createOperation!<ReefTrustStateOperations>(
-      [state.peers, state.deliveries],
-      operationHandler,
-      {
-        assertCurrent: () => {
-          if (!admitted) {
-            state.assertCurrent();
-            assertOwnerCurrent?.();
-          }
-        },
-      },
-    );
+    const operation = this.#operation(assertOwnerCurrent, () => admitted);
     const revoke = () =>
       operation.execute({ type: "remove", input: { key } }, { writeStores: [0] });
     await revoke();
@@ -228,20 +228,8 @@ export class ReefTrustStore {
   ): Promise<ReefRequestSettlement> {
     const requestId = randomUUID();
     const key = this.#key(peer);
-    const state = this.operationState;
     let admitted = false;
-    const operation = state.peers.createOperation!<ReefTrustStateOperations>(
-      [state.peers, state.deliveries],
-      operationHandler,
-      {
-        assertCurrent: () => {
-          if (!admitted) {
-            state.assertCurrent();
-            assertOwnerCurrent?.();
-          }
-        },
-      },
-    );
+    const operation = this.#operation(assertOwnerCurrent, () => admitted);
     await operation.execute(
       { type: "beginRequest", input: { key, requestId, requestedAt } },
       { writeStores: [0] },
@@ -289,8 +277,15 @@ export class ReefTrustStore {
   }
 
   async overdueOutboundDeliveries(olderThanMs: number, now = Date.now()) {
+    // Deliveries arriving after the empty read are picked up by the next periodic reconciliation.
     return (
-      await this.#read("overdueDeliveries", { prefix: this.#prefix, olderThanMs, now }, [], [0, 1])
+      await this.#read(
+        "overdueDeliveries",
+        { prefix: this.#prefix, olderThanMs, now },
+        [],
+        [0, 1],
+        1,
+      )
     ).value;
   }
 
@@ -314,7 +309,7 @@ export class ReefTrustStore {
     const operation = this.#operation();
     const receipt = await operation.execute(
       { type: "pendingRejections", input: { prefix: this.#prefix } },
-      { writeStores: [], missingValue: [], watchStores: [0, 1] },
+      { writeStores: [], missingValue: [], watchStores: [0, 1], ifEmpty: { store: 1, value: [] } },
     );
     receipt.assertCurrent();
     return receipt.value.map((entry) =>

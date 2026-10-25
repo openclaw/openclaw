@@ -22,6 +22,17 @@ import {
 
 const state = await setupAgentRunnerExecutionTestState();
 
+function createTranscriptStart(generation: string, maxSeq: number) {
+  return {
+    agentId: "main",
+    sessionId: "session",
+    sessionKey: "main",
+    storePath: "/synthetic/sessions.json",
+    generation,
+    maxSeq,
+  };
+}
+
 it("settles the turn's attribution before model-routing hooks run", async () => {
   const executeAgentTurn = await getRawExecuteAgentTurnForTest();
   const capture = createDeferred();
@@ -70,14 +81,7 @@ it("announces a remote native run before its worker starts writing replies", asy
       defaults: { models: { "anthropic/claude": { agentRuntime: { id: "openclaw" } } } },
     },
   };
-  const transcriptStart = {
-    agentId: "main",
-    sessionId: "session",
-    sessionKey: "main",
-    storePath: "/synthetic/sessions.json",
-    generation: "worker-start",
-    maxSeq: 7,
-  };
+  const transcriptStart = createTranscriptStart("worker-start", 7);
   const prepare = vi
     .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
     .mockResolvedValue(transcriptStart);
@@ -127,14 +131,7 @@ it.each(["settled", "pending"] as const)(
       createDeferred<
         Awaited<ReturnType<typeof transcriptWatermarks.readSessionTranscriptStartAsync>>
       >();
-    const priorStart = {
-      agentId: "main",
-      sessionId: "session",
-      sessionKey: "main",
-      storePath: "/synthetic/sessions.json",
-      generation: "transcript-generation",
-      maxSeq: 7,
-    };
+    const priorStart = createTranscriptStart("transcript-generation", 7);
     const currentStart = { ...priorStart, maxSeq: 11 };
     const prepare = vi
       .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
@@ -208,14 +205,7 @@ it("keeps native start facts when an earlier event's preparation settles late", 
     createDeferred<
       Awaited<ReturnType<typeof transcriptWatermarks.readSessionTranscriptStartAsync>>
     >();
-  const nativeStart = {
-    agentId: "main",
-    sessionId: "session",
-    sessionKey: "main",
-    storePath: "/synthetic/sessions.json",
-    generation: "native-start",
-    maxSeq: 11,
-  };
+  const nativeStart = createTranscriptStart("native-start", 11);
   const prepare = vi
     .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
     .mockImplementationOnce(() => {
@@ -263,14 +253,7 @@ it.each(["embedded preparation", "fallback preparation"])(
       Object.assign(session, deriveGatewaySessionLifecycleSnapshot({ session, event }));
     });
     const onAgentRunStart = vi.fn();
-    const transcriptStart = {
-      agentId: "main",
-      sessionId: "session",
-      sessionKey: "main",
-      storePath: "/synthetic/sessions.json",
-      generation: "prompt-start-generation",
-      maxSeq: 11,
-    };
+    const transcriptStart = createTranscriptStart("prompt-start-generation", 11);
     const turn = createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } });
     const run = (runId: string) =>
       executeAgentTurn({

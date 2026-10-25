@@ -7,7 +7,6 @@ import { hasNonEmptyString, uniqueStrings } from "openclaw/plugin-sdk/string-coe
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
   buildDiscordComponentMessage,
-  buildDiscordComponentMessageFlags,
   resolveDiscordComponentAttachmentName,
   type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
@@ -156,13 +155,10 @@ async function buildDiscordComponentPayload(params: {
     agentId: params.opts.agentId,
     accountId: params.accountId,
   });
-  const flags = buildDiscordComponentMessageFlags(buildResult.components);
-  const finalFlags = params.opts.silent ? (flags ?? 0) | SUPPRESS_NOTIFICATIONS_FLAG : flags;
-
   const payload: MessagePayloadObject = {
     components: buildResult.components,
     allowed_mentions: params.opts.allowedMentions,
-    ...(finalFlags ? { flags: finalFlags } : {}),
+    ...(params.opts.silent ? { flags: SUPPRESS_NOTIFICATIONS_FLAG } : {}),
     ...(files ? { files } : {}),
   };
   const body = {

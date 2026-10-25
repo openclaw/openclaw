@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import * as agentLeases from "./openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-lifecycle.js";
+import { useAgentDatabaseDirectories } from "./openclaw-agent-db-lifecycle.test-support.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
@@ -18,25 +18,17 @@ import {
   resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
-const roots = createTempDirTracker();
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
 const realIntegrity = integrity.assertSqliteIntegrityInWorker;
 const wrongIndex = "CREATE INDEX idx_agent_cache_expiry ON cache_entries(key)";
 
-afterEach(async () => {
+const roots = useAgentDatabaseDirectories(async () => {
   releases.splice(0).forEach((release) => release());
   await Promise.allSettled(pending.splice(0));
   vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  roots.cleanup();
 });
 
 function own<T>(work: Promise<T>): Promise<T> {
@@ -61,7 +53,24 @@ function fixture(repair = false) {
     operation: Parameters<typeof withOpenClawAgentDatabaseAsync<T>>[1],
     guard?: () => void,
   ) => own(withOpenClawAgentDatabaseAsync(options, operation, guard));
-  return { options, pathname, state, leases, run };
+  return { options, pathname, state, leases, run, gate: holdIntegrity(pathname) };
+}
+
+function authority(message: string, observe: () => void = () => {}) {
+  const refused = new Error(message);
+  let allowed = true;
+  return {
+    refused,
+    retire: () => {
+      allowed = false;
+    },
+    guard: () => {
+      observe();
+      if (!allowed) {
+        throw refused;
+      }
+    },
+  };
 }
 
 function withNative<T>(
@@ -134,7 +143,7 @@ it("rejects already-retired authority without creating database state", async ()
 it.each(["integrity-shaped", "falsy", "native-failure"] as const)(
   "unwinds %s initiating refusal before repairing indexes for coalesced callers",
   async (kind) => {
-    const f = fixture(true);
+    const { gate, ...f } = fixture(true);
     if (kind === "native-failure") {
       withNative(f.pathname, (db) =>
         db.exec(
@@ -142,7 +151,6 @@ it.each(["integrity-shaped", "falsy", "native-failure"] as const)(
         ),
       );
     }
-    const gate = holdIntegrity(f.pathname);
     const refused = kind === "falsy" ? 0 : new Error("initiating authority retired");
     if (kind === "integrity-shaped" && refused instanceof Error) {
       refused.name = "SqliteIntegrityError";
@@ -184,12 +192,12 @@ it.each(["integrity-shaped", "falsy", "native-failure"] as const)(
 );
 
 it("keeps a coalesced peer's authority and async context separate", async () => {
-  const f = fixture();
-  const gate = holdIntegrity(f.pathname);
+  const { gate, ...f } = fixture();
   const context = new AsyncLocalStorage<string>();
   const observations: Array<{ caller: string; context: string | undefined }> = [];
-  const refused = new Error("peer retired");
-  let peerAllowed = true;
+  const { guard, retire, refused } = authority("peer retired", () => {
+    observations.push({ caller: "peer", context: context.getStore() });
+  });
   const first = context.run("initiator", () =>
     f.run(
       () => context.getStore(),
@@ -206,15 +214,8 @@ it("keeps a coalesced peer's authority and async context separate", async () => 
   await expect(initiallyDenied).rejects.toBe(refused);
   expect(deniedOperation).not.toHaveBeenCalled();
   const peerOperation = vi.fn();
-  const peer = context.run("peer", () =>
-    f.run(peerOperation, () => {
-      observations.push({ caller: "peer", context: context.getStore() });
-      if (!peerAllowed) {
-        throw refused;
-      }
-    }),
-  );
-  peerAllowed = false;
+  const peer = context.run("peer", () => f.run(peerOperation, guard));
+  retire();
   gate.release.resolve();
   await expect(first).resolves.toBe("initiator");
   await expect(peer).rejects.toBe(refused);
@@ -226,8 +227,7 @@ it("keeps a coalesced peer's authority and async context separate", async () => 
 });
 
 it("denies an initiating operation after publication without retiring its valid peer or handle", async () => {
-  const f = fixture();
-  const gate = holdIntegrity(f.pathname);
+  const { gate, ...f } = fixture();
   const refused = new Error("caller retired at publication");
   const firstOperation = vi.fn();
   const first = f.run(firstOperation, () => {
@@ -250,25 +250,18 @@ it("denies an initiating operation after publication without retiring its valid 
 });
 
 it("keeps the joining caller's guard across an aborted predecessor retry", async () => {
-  const f = fixture();
-  const gate = holdIntegrity(f.pathname);
+  const { gate, ...f } = fixture();
   const first = f.run(() => "old");
   await gate.entered.promise;
   closeOpenClawAgentDatabaseByPath(f.pathname);
   const context = new AsyncLocalStorage<string>();
   const seen: Array<string | undefined> = [];
-  const refused = new Error("joining caller retired");
-  let allowed = true;
+  const { guard, retire, refused } = authority("joining caller retired", () => {
+    seen.push(context.getStore());
+  });
   const operation = vi.fn();
-  const joining = context.run("joining", () =>
-    f.run(operation, () => {
-      seen.push(context.getStore());
-      if (!allowed) {
-        throw refused;
-      }
-    }),
-  );
-  allowed = false;
+  const joining = context.run("joining", () => f.run(operation, guard));
+  retire();
   gate.release.resolve();
   await expect(first).rejects.toThrow(/revoked/);
   await expect(joining).rejects.toBe(refused);
@@ -280,24 +273,15 @@ it("keeps the joining caller's guard across an aborted predecessor retry", async
 });
 
 it("retains both authority refusal and recoverable lease cleanup failure", async () => {
-  const f = fixture(true);
-  const gate = holdIntegrity(f.pathname);
-  const refused = new Error("authority retired before cleanup");
-  let allowed = true;
-  const work = f.run(
-    () => "forbidden",
-    () => {
-      if (!allowed) {
-        throw refused;
-      }
-    },
-  );
+  const { gate, ...f } = fixture(true);
+  const { guard, retire, refused } = authority("authority retired before cleanup");
+  const work = f.run(() => "forbidden", guard);
   await gate.entered.promise;
   f.state.db.exec(
     "CREATE TEMP TRIGGER fail_authority_release BEFORE DELETE ON agent_database_leases BEGIN SELECT RAISE(ABORT, 'retained cleanup failure'); END",
   );
   try {
-    allowed = false;
+    retire();
     gate.release.resolve();
     const failure = await work.catch((error: unknown) => error);
     assert(failure instanceof AggregateError);
@@ -318,8 +302,7 @@ it("retains both authority refusal and recoverable lease cleanup failure", async
 it.each(["revoked", "integrity-shaped failure"] as const)(
   "checks database-owner %s before consulting the initiating caller",
   async (kind) => {
-    const f = fixture(kind === "integrity-shaped failure");
-    const gate = holdIntegrity(f.pathname);
+    const { gate, ...f } = fixture(kind === "integrity-shaped failure");
     const failedOwner = new Error("shared database owner could not be checked");
     failedOwner.name = "SqliteIntegrityError";
     let ownerRetired = false;
@@ -358,8 +341,7 @@ it.each(["revoked", "integrity-shaped failure"] as const)(
 );
 
 it("revokes pending native writes before draining retained resources in its root", async () => {
-  const f = fixture();
-  const native = holdIntegrity(f.pathname);
+  const { gate: native, ...f } = fixture();
   const resourceDrain = createDeferred();
   releases.push(() => resourceDrain.resolve());
   registerOpenClawAgentDatabaseAsyncResource({

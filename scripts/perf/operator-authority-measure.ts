@@ -1,9 +1,13 @@
 // Owner-level allocation probe; see scripts/perf/README.md before interpreting counts.
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
-import { performance } from "node:perf_hooks";
+import os from "node:os";
+import path from "node:path";
+import { constants, performance, PerformanceObserver } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   bindOperatorModelExecution,
   createAdmittedRunOperatorAuthority,
@@ -23,12 +27,20 @@ import {
   resolvePreparedGatewayOperatorAccessAuthority,
   resumeGatewayOperatorAccessGrant,
 } from "../../src/gateway/operator-access-policy.js";
+import { sourceRolePolicy } from "../../src/gateway/operator-role-source-policy.js";
+import { decodeQueuedOperatorRecoverySource } from "../../src/gateway/operator-run-recovery-source.codec.js";
+import { restoreGatewayOperatorSource } from "../../src/gateway/operator-run-recovery.js";
+import type { GatewayRequestContext } from "../../src/gateway/server-methods/shared-types.js";
 import { createUnavailableRuntime } from "../../src/plugins/api-builder.js";
 import type { PluginGatewayAccessAuthority } from "../../src/plugins/gateway-access-policy.types.js";
 import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { getPluginInstance } from "../../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../../src/plugins/registry.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../../src/plugins/runtime.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../src/state/openclaw-state-db.js";
+import { profileCatalogPath } from "../../src/state/user-profile-identity.read.js";
+import { prepareUserProfileIdentity } from "../../src/state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import type { UserProfileAccessFacts } from "../../src/state/user-profiles.types.js";
 
 const { values } = parseArgs({
@@ -36,6 +48,8 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "20000" },
     warmup: { type: "string", default: "5000" },
     scenario: { type: "string", default: "all" },
+    "counts-only": { type: "boolean", default: false },
+    "timing-only": { type: "boolean", default: false },
     "sampling-interval": { type: "string", default: "32768" },
     "start-at": { type: "string" },
     output: { type: "string" },
@@ -47,10 +61,27 @@ function positiveInteger(value: string, label: string): number {
   assert(Number.isSafeInteger(number) && number > 0, `${label} must be a positive integer`);
   return number;
 }
+assert(!(values["counts-only"] && values["timing-only"]), "Select one measurement mode");
 const iterations = positiveInteger(values.iterations, "iterations");
 const warmup = positiveInteger(values.warmup, "warmup");
 const samplingInterval = positiveInteger(values["sampling-interval"], "sampling-interval");
-assert(globalThis.gc, "Run Node with --expose-gc");
+assert(values["counts-only"] || globalThis.gc, "Run Node with --expose-gc");
+const authorityCounts = (
+  globalThis as typeof globalThis & {
+    [key: symbol]:
+      | {
+          active: boolean;
+          counts: Record<string, number>;
+          callers: Record<string, number>;
+          installed: Record<string, Record<string, number>>;
+        }
+      | undefined;
+  }
+)[Symbol.for("openclaw.benchmark.authorityCounts")];
+assert(
+  !values["counts-only"] || authorityCounts,
+  "--counts-only requires --import <authority-counts-preload.mjs> from the Gateway count pass",
+);
 
 const pluginId = "synthetic-authority-policy";
 const email = "operator@authority.example.test";
@@ -78,7 +109,15 @@ const profile: UserProfileAccessFacts = Object.freeze({
   githubAccountIds: Object.freeze([12345]),
   assignedRole: "synthetic-operator",
 });
-const counts = { authPolicy: 0, resumeOwner: 0, authorize: 0, resume: 0, pluginAssert: 0 };
+const allowedProfiles = new Set([profile.profileId]);
+const counts = {
+  recoverySource: 0,
+  authPolicy: 0,
+  resumeOwner: 0,
+  authorize: 0,
+  resume: 0,
+  pluginAssert: 0,
+};
 function resetCounts() {
   for (const key of Object.keys(counts) as (keyof typeof counts)[]) {
     counts[key] = 0;
@@ -111,13 +150,13 @@ builder.registry.plugins.push(record);
 builder.createApi(record, { config }).registerGatewayAccessPolicy({
   authorize(context) {
     counts.authorize++;
-    assert.equal(context.profile.profileId, profile.profileId);
+    assert(allowedProfiles.has(context.profile.profileId));
     assert.equal(context.requiredByRole, true);
     return grantLive ? pluginAuthority : undefined;
   },
   resume(context) {
     counts.resume++;
-    assert.equal(context.profile.profileId, profile.profileId);
+    assert(allowedProfiles.has(context.profile.profileId));
     assert.equal(context.grantId, pluginAuthority.grantId);
     return grantLive ? pluginAuthority : undefined;
   },
@@ -196,6 +235,65 @@ const transcript = await withOwnedSessionTranscriptWrites(
   },
   async () => captureOwnedTranscriptWriteAssertion(transcriptTarget),
 );
+let recovery: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
+let recoveryStateDir: string | undefined;
+let recoveryConfig = config;
+if (values.scenario === "all" || values.scenario === "recovery-source") {
+  recoveryStateDir = await mkdtemp(path.join(os.tmpdir(), "operator-authority-measure-"));
+  process.env.OPENCLAW_STATE_DIR = recoveryStateDir;
+  const person = ensureProfileForEmail("recovery@authority.example.test");
+  allowedProfiles.add(person.id);
+  const identity = await prepareUserProfileIdentity(person.id);
+  try {
+    const { profile: facts } = identity.readCurrentFacts();
+    const recoveredAccess = resolvePreparedGatewayOperatorAccessAuthority(
+      { ...facts, role: facts.assignedRole, isCurrent: () => true },
+      config,
+      { requireLivePolicySet: true },
+    );
+    assert(recoveredAccess?.gatewayAccessGrant);
+    // Decode the persisted shape so this is never an already-issued policy identity.
+    const source = decodeQueuedOperatorRecoverySource({
+      kind: "gateway",
+      snapshot: {
+        profileId: person.id,
+        scopes: ["operator.write"],
+        assignedRole: facts.assignedRole,
+        githubLogin: facts.githubLogin ?? null,
+        rolePolicy: sourceRolePolicy(config.gateway?.roles?.definitions["synthetic-operator"]),
+        grant: recoveredAccess.gatewayAccessGrant,
+        aliasBindingIds: identity.emailBindingIds,
+        authPolicy: {
+          ...captureGatewayAuthPolicy(config, {
+            role: "operator",
+            authMethod: "token",
+            verifiedIdentity: "recovery@authority.example.test",
+            browserOrigin: authPolicy.browserOrigin,
+          }),
+          generation: "",
+        },
+        controlUiAdmin: false,
+        localOperator: false,
+        sourceIngress: "control-ui",
+      },
+    });
+    assert(source.kind === "gateway");
+    // Recovery only consumes the config reader and optional owner identities.
+    const context = { getRuntimeConfig: () => recoveryConfig } as GatewayRequestContext;
+    recovery = await restoreGatewayOperatorSource({
+      snapshot: source.snapshot,
+      target: {
+        agentId: "synthetic-agent",
+        sessionKey: "agent:synthetic-agent:recovery",
+        sessionId: "synthetic-recovery",
+      },
+      context,
+      assertCurrent() {},
+    });
+  } finally {
+    identity.release();
+  }
+}
 const scenarios = [
   { name: "auth-policy", check: checkAuth },
   { name: "retained-grant", check: checkGrant },
@@ -203,6 +301,16 @@ const scenarios = [
   { name: "admitted-run", check: admitted },
   { name: "transcript-guard", check: transcript },
 ];
+if (recovery) {
+  const authority = recovery.authority;
+  scenarios.push({
+    name: "recovery-source",
+    check() {
+      counts.recoverySource++;
+      authority.assertCurrent();
+    },
+  });
+}
 assert(
   values.scenario === "all" || scenarios.some(({ name }) => name === values.scenario),
   `Unknown scenario: ${values.scenario}`,
@@ -216,8 +324,26 @@ type SampleNode = {
 };
 function summarizeProfile(root: SampleNode) {
   let bytes = 0;
+  let authPolicyStringifyBytes = 0;
   const sites: { bytes: number; stack: string[] }[] = [];
-  function visit(node: SampleNode, parents: string[]) {
+  function visit(
+    node: SampleNode,
+    parents: string[],
+    inAuthPolicy = false,
+    inAuthStringify = false,
+  ) {
+    const hasAuthPolicy =
+      inAuthPolicy || node.callFrame.functionName === "captureGatewayAuthPolicy";
+    // V8 can inline the public wrapper while retaining its recursive serializer frames.
+    const hasAuthStringify =
+      inAuthStringify ||
+      (hasAuthPolicy &&
+        (node.callFrame.functionName === "stableStringify" ||
+          node.callFrame.functionName === "stringifyStableValue" ||
+          node.callFrame.functionName === "stringifyObjectValue"));
+    if (hasAuthStringify) {
+      authPolicyStringifyBytes += node.selfSize;
+    }
     bytes += node.selfSize;
     const frame = `${node.callFrame.functionName || "(anonymous)"} ${node.callFrame.url}:${node.callFrame.lineNumber + 1}`;
     const stack = [...parents, frame].slice(-8);
@@ -225,11 +351,51 @@ function summarizeProfile(root: SampleNode) {
       sites.push({ bytes: node.selfSize, stack });
     }
     for (const child of node.children) {
-      visit(child, stack);
+      visit(child, stack, hasAuthPolicy, hasAuthStringify);
     }
   }
   visit(root, []);
-  return { bytes, topSites: sites.toSorted((a, b) => b.bytes - a.bytes).slice(0, 15) };
+  return {
+    bytes,
+    authPolicyStringifyBytes,
+    topSites: sites.toSorted((a, b) => b.bytes - a.bytes).slice(0, 15),
+  };
+}
+function observeGc() {
+  const entries: { startTime: number; duration: number; detail?: unknown }[] = [];
+  const observer = new PerformanceObserver((list) => entries.push(...list.getEntries()));
+  observer.observe({ entryTypes: ["gc"] });
+  return async (startedAt: number, endedAt: number) => {
+    // GC notifications arrive after the synchronous owner-check loop yields.
+    await nextTurn();
+    entries.push(...observer.takeRecords());
+    observer.disconnect();
+    const measured = entries.filter(
+      (entry) => entry.startTime >= startedAt && entry.startTime < endedAt,
+    );
+    const summarize = (kind?: number) => {
+      const pauses = measured
+        .filter(
+          (entry) => kind === undefined || (isRecord(entry.detail) && entry.detail.kind === kind),
+        )
+        .map((entry) => entry.duration)
+        .toSorted((a, b) => a - b);
+      return {
+        count: pauses.length,
+        totalMs: pauses.reduce((sum, ms) => sum + ms, 0),
+        maxMs: pauses.at(-1) ?? 0,
+        p95Ms: pauses.length ? pauses[Math.ceil(pauses.length * 0.95) - 1] : null,
+        p99Ms: pauses.length ? pauses[Math.ceil(pauses.length * 0.99) - 1] : null,
+      };
+    };
+    return {
+      all: summarize(),
+      minor: summarize(constants.NODE_PERFORMANCE_GC_MINOR),
+      major: summarize(constants.NODE_PERFORMANCE_GC_MAJOR),
+      incremental: summarize(constants.NODE_PERFORMANCE_GC_INCREMENTAL),
+      weakCallback: summarize(constants.NODE_PERFORMANCE_GC_WEAKCB),
+    };
+  };
 }
 const results = [];
 const inspector = new Session();
@@ -242,7 +408,7 @@ try {
     for (let index = 0; index < warmup; index++) {
       scenario.check();
     }
-    globalThis.gc();
+    globalThis.gc?.();
     if (values["start-at"]) {
       const startAt = positiveInteger(values["start-at"], "start-at");
       const remaining = startAt - Date.now();
@@ -252,38 +418,85 @@ try {
       });
     }
     resetCounts();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    if (values["counts-only"]) {
+      assert(authorityCounts);
+      authorityCounts.counts = {};
+      authorityCounts.callers = {};
+      authorityCounts.active = true;
+      try {
+        for (let index = 0; index < iterations; index++) {
+          scenario.check();
+        }
+      } finally {
+        authorityCounts.active = false;
+      }
+      results.push({
+        scenario: scenario.name,
+        iterations,
+        counts: { ...counts },
+        host: {
+          counts: { ...authorityCounts.counts },
+          installed: authorityCounts.installed,
+        },
+      });
+      continue;
+    }
+    if (!values["timing-only"]) {
+      await inspector.post("HeapProfiler.startSampling", {
+        samplingInterval,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+    }
+    const finishGc = values["timing-only"] ? observeGc() : undefined;
     const cpu = process.threadCpuUsage();
     const start = performance.now();
     for (let index = 0; index < iterations; index++) {
       scenario.check();
     }
-    const elapsedMs = performance.now() - start;
+    const endedAt = performance.now();
+    const elapsedMs = endedAt - start;
     const cpuUsed = process.threadCpuUsage(cpu);
     const measuredCounts = { ...counts };
-    const { profile: heapProfile } = await inspector.post("HeapProfiler.stopSampling");
-    const allocation = summarizeProfile(heapProfile.head);
-    if (values.output) {
-      await writeFile(`${values.output}.${scenario.name}.heapprofile`, JSON.stringify(heapProfile));
+    const gc = await finishGc?.(start, endedAt);
+    let allocation: ReturnType<typeof summarizeProfile> | undefined;
+    if (!values["timing-only"]) {
+      const { profile: heapProfile } = await inspector.post("HeapProfiler.stopSampling");
+      allocation = summarizeProfile(heapProfile.head);
+      if (values.output) {
+        await writeFile(
+          `${values.output}.${scenario.name}.heapprofile`,
+          JSON.stringify(heapProfile),
+        );
+      }
     }
     results.push({
       scenario: scenario.name,
       iterations,
       elapsedMs,
+      gc,
+      gcMsPerCheck: gc && gc.all.totalMs / iterations,
       nsPerCheck: (elapsedMs * 1e6) / iterations,
       threadCpuNsPerCheck: ((cpuUsed.user + cpuUsed.system) * 1000) / iterations,
-      estimatedAllocatedBytes: allocation.bytes,
-      estimatedBytesPerCheck: allocation.bytes / iterations,
+      estimatedAllocatedBytes: allocation?.bytes,
+      estimatedBytesPerCheck: allocation && allocation.bytes / iterations,
+      estimatedAuthPolicyStringifyBytesPerCheck:
+        allocation && allocation.authPolicyStringifyBytes / iterations,
       counts: measuredCounts,
       countsPerCheck: Object.fromEntries(
         Object.entries(measuredCounts).map(([name, count]) => [name, count / iterations]),
       ),
-      topSites: allocation.topSites,
+      topSites: allocation?.topSites,
     });
+  }
+  let nextCheckConfigRevocationDenied: boolean | undefined;
+  if (recovery) {
+    recoveryConfig = {
+      ...config,
+      gateway: { ...config.gateway, controlUi: { allowedOrigins: [] } },
+    };
+    assert.throws(recovery.authority.assertCurrent);
+    nextCheckConfigRevocationDenied = true;
   }
   // Positive control outside capture: retained plugin answers remain live on the next check.
   grantLive = false;
@@ -294,11 +507,14 @@ try {
     workload: "real authority owners; synthetic non-owner profile and registered access policy",
     scope:
       "owner microbenchmark; no model turns, tool execution, transcript writes, or Gateway transport",
-    samplingInterval,
-    includeCollected: true,
+    samplingInterval: values["counts-only"] || values["timing-only"] ? undefined : samplingInterval,
+    includeCollected: !values["counts-only"] && !values["timing-only"],
+    timingOnly: values["timing-only"],
+    countsOnly: values["counts-only"],
     warmup,
     setupCountsExcluded: true,
     nextCheckRevocationDenied: true,
+    nextCheckConfigRevocationDenied,
     results,
   };
   const json = JSON.stringify(report, null, 2);
@@ -312,4 +528,9 @@ try {
   admission.close();
   controller.abort();
   await clearActivePluginRegistry();
+  recovery?.release();
+  if (recoveryStateDir) {
+    await closeOpenClawStateDatabaseByPathAsync(profileCatalogPath({}));
+    await rm(recoveryStateDir, { recursive: true, force: true });
+  }
 }

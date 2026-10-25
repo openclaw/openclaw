@@ -1,6 +1,5 @@
 // Imessage tests cover monitor.last route plugin behavior.
 import path from "node:path";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -10,11 +9,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  createTestRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -25,11 +20,6 @@ import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
 import {
-  matchIMessageAcpConversation,
-  normalizeIMessageAcpConversationId,
-} from "./conversation-id.js";
-import { monitorIMessageProvider } from "./monitor.js";
-import {
   createChatDb,
   createChatDbMessage,
   DEFAULT_SENDER,
@@ -38,6 +28,7 @@ import {
   withChatDb,
 } from "./monitor.last-route.test-support.js";
 import * as iMessageMediaStaging from "./monitor/media-staging.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import {
   advanceIMessageRecoveryCursor,
   loadIMessageRecoveryCursor,
@@ -49,6 +40,7 @@ import {
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
 import type { probeIMessagePrivateApi } from "./probe.js";
+import { installIMessageConfiguredBindingRegistryForTest } from "./test-support/configured-binding.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const ANCHOR_REPAIR_GUID = "11111111-1111-4111-8111-111111111111";
@@ -350,14 +342,12 @@ describe("iMessage monitor last-route updates", () => {
       expect(auxiliaryClient.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ service: expectedService, to: DEFAULT_SENDER, typing: true }),
-        expect.any(Object),
       );
     });
     const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { chat_id: 123 };
     expect(auxiliaryClient.request).toHaveBeenCalledWith(
       "read",
       expect.objectContaining(expectedReadTarget),
-      expect.any(Object),
     );
     expect(auxiliaryClient.request).toHaveBeenCalledWith(
       "send",
@@ -568,26 +558,7 @@ describe("iMessage monitor last-route updates", () => {
   function createConfiguredBindingMonitor(
     overrides: Omit<MonitorRunParams, "bindings"> = {},
   ): MonitorRunParams {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "imessage",
-          source: "test",
-          plugin: {
-            id: "imessage",
-            bindings: {
-              compileConfiguredBinding: ({ conversationId }) =>
-                normalizeIMessageAcpConversationId(conversationId),
-              matchInboundConversation: ({ compiledBinding, conversationId }) =>
-                matchIMessageAcpConversation({
-                  bindingConversationId: compiledBinding.conversationId,
-                  conversationId,
-                }),
-            } satisfies NonNullable<ChannelPlugin["bindings"]>,
-          },
-        },
-      ]),
-    );
+    installIMessageConfiguredBindingRegistryForTest();
     return {
       ...overrides,
       agents: { entries: { main: {}, codex: {} } },
@@ -850,14 +821,12 @@ describe("iMessage monitor last-route updates", () => {
       expect(client.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: true }),
-        expect.any(Object),
       );
     });
     await vi.waitFor(() => {
       expect(client.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: false }),
-        expect.any(Object),
       );
     });
   });
@@ -880,7 +849,6 @@ describe("iMessage monitor last-route updates", () => {
           expect(earlyTypingClient.request).toHaveBeenCalledWith(
             "typing",
             expect.objectContaining({ typing: true, to: "+15550001111" }),
-            expect.any(Object),
           );
           expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
         });
@@ -891,7 +859,6 @@ describe("iMessage monitor last-route updates", () => {
       expect(earlyTypingClient.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: true, to: "+15550001111" }),
-        expect.any(Object),
       );
       return EMPTY_DISPATCH_RESULT;
     });
@@ -901,13 +868,11 @@ describe("iMessage monitor last-route updates", () => {
     expect(watchClient.request).not.toHaveBeenCalledWith(
       "typing",
       expect.objectContaining({ typing: true }),
-      expect.anything(),
     );
     await vi.waitFor(() => {
       expect(earlyTypingClient.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: false, to: "+15550001111" }),
-        expect.any(Object),
       );
     });
   });
@@ -936,12 +901,10 @@ describe("iMessage monitor last-route updates", () => {
     expect(auxiliaryClient.request).toHaveBeenCalledWith(
       "read",
       expect.objectContaining({ chat_id: 123 }),
-      expect.any(Object),
     );
     expect(auxiliaryClient.request).toHaveBeenCalledWith(
       "typing",
       expect.objectContaining({ typing: true }),
-      expect.any(Object),
     );
   });
 
@@ -988,7 +951,6 @@ describe("iMessage monitor last-route updates", () => {
       expect(client.request).not.toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: true }),
-        expect.anything(),
       );
     });
   }
@@ -1013,13 +975,8 @@ describe("iMessage monitor last-route updates", () => {
     expect(readClient.request).toHaveBeenCalledWith(
       "read",
       expect.objectContaining({ chat_id: 123 }),
-      expect.any(Object),
     );
-    expect(watchClient.request).not.toHaveBeenCalledWith(
-      "read",
-      expect.anything(),
-      expect.anything(),
-    );
+    expect(watchClient.request).not.toHaveBeenCalledWith("read", expect.anything());
     expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
   });
 

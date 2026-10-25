@@ -52,36 +52,17 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
   return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
 }
 
-export function applyMinimaxApiProviderConfig(
-  cfg: OpenClawConfig,
-  modelId = MINIMAX_DEFAULT_MODEL_ID,
-): OpenClawConfig {
-  return applyMinimaxApiProviderConfigWithBaseUrl(cfg, modelId, MINIMAX_API_BASE_URL);
+function createMinimaxApiConfigPair(baseUrl: string) {
+  const provider = (cfg: OpenClawConfig, modelId = MINIMAX_DEFAULT_MODEL_ID): OpenClawConfig =>
+    applyMinimaxApiProviderConfigWithBaseUrl(cfg, modelId, baseUrl);
+  const defaults = (cfg: OpenClawConfig, modelId = MINIMAX_DEFAULT_MODEL_ID): OpenClawConfig =>
+    applyAgentDefaultModelPrimary(provider(cfg, modelId), `minimax/${modelId}`);
+  return { provider, defaults };
 }
 
-export function applyMinimaxApiConfig(
-  cfg: OpenClawConfig,
-  modelId = MINIMAX_DEFAULT_MODEL_ID,
-): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(
-    applyMinimaxApiProviderConfig(cfg, modelId),
-    `minimax/${modelId}`,
-  );
-}
-
-export function applyMinimaxApiProviderConfigCn(
-  cfg: OpenClawConfig,
-  modelId = MINIMAX_DEFAULT_MODEL_ID,
-): OpenClawConfig {
-  return applyMinimaxApiProviderConfigWithBaseUrl(cfg, modelId, MINIMAX_CN_API_BASE_URL);
-}
-
-export function applyMinimaxApiConfigCn(
-  cfg: OpenClawConfig,
-  modelId = MINIMAX_DEFAULT_MODEL_ID,
-): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(
-    applyMinimaxApiProviderConfigCn(cfg, modelId),
-    `minimax/${modelId}`,
-  );
-}
+const globalApiConfig = createMinimaxApiConfigPair(MINIMAX_API_BASE_URL);
+const cnApiConfig = createMinimaxApiConfigPair(MINIMAX_CN_API_BASE_URL);
+export const applyMinimaxApiProviderConfig = globalApiConfig.provider;
+export const applyMinimaxApiConfig = globalApiConfig.defaults;
+export const applyMinimaxApiProviderConfigCn = cnApiConfig.provider;
+export const applyMinimaxApiConfigCn = cnApiConfig.defaults;

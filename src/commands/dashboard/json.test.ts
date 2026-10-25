@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DaemonStatus } from "../../cli/daemon-cli/status.gather.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { dashboardCommand } from "../dashboard.js";
 import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
-  ensureDashboardGatewayReady: vi.fn(),
+  gatherStatus: vi.fn(),
+  confirm: vi.fn(),
+  installGateway: vi.fn(),
+  startGateway: vi.fn(),
   inspectPortUsage: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
   openUrl: vi.fn(),
@@ -45,8 +49,21 @@ vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: mocks.inspectPortUsage,
 }));
 
-vi.mock("../gateway-readiness.js", () => ({
-  ensureDashboardGatewayReady: mocks.ensureDashboardGatewayReady,
+vi.mock("../../cli/daemon-cli/status.gather.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cli/daemon-cli/status.gather.js")>()),
+  gatherDaemonStatus: mocks.gatherStatus,
+}));
+vi.mock("../../cli/prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cli/prompt.js")>()),
+  promptYesNo: mocks.confirm,
+}));
+vi.mock("../../cli/daemon-cli/install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cli/daemon-cli/install.js")>()),
+  runDaemonInstall: mocks.installGateway,
+}));
+vi.mock("../../cli/daemon-cli/lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cli/daemon-cli/lifecycle.js")>()),
+  runDaemonStart: mocks.startGateway,
 }));
 
 vi.mock("../control-ui-handoff.js", async (importOriginal) => ({
@@ -58,6 +75,20 @@ vi.mock("../control-ui-handoff.js", async (importOriginal) => ({
 const fakeToken = ["te", "st"].join("");
 const fakePassword = ["te", "st-password"].join("");
 const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
+const stopped = {
+  service: {
+    label: "synthetic service",
+    loaded: false,
+    loadState: { status: "not-loaded" },
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    command: null,
+    runtime: { status: "stopped" },
+  },
+  port: { port: 18789, status: "free", listeners: [], hints: [] },
+  rpc: { ok: false, error: "connect ECONNREFUSED 127.0.0.1:18789" },
+  extraServices: [],
+} satisfies DaemonStatus;
 
 const runtime = {
   ...createTestRuntime(),
@@ -109,10 +140,7 @@ describe("dashboardCommand --json", () => {
       links(bind === "custom" ? "10.0.0.5" : "127.0.0.1"),
     );
     mockListeners();
-    mocks.ensureDashboardGatewayReady.mockResolvedValue({
-      ready: true,
-      recovered: false,
-    });
+    mocks.gatherStatus.mockResolvedValue({ ...stopped, rpc: { ok: true } });
     mocks.issueDeviceBootstrapToken.mockResolvedValue({
       token: "browser-bootstrap",
       expiresAtMs: 123_456,
@@ -190,19 +218,16 @@ describe("dashboardCommand --json", () => {
   });
 
   it("prints JSON and actionable stderr before exiting when not ready", async () => {
-    mocks.ensureDashboardGatewayReady.mockResolvedValue({
-      ready: false,
-      reason: "Gateway is not running.",
-    });
+    mocks.gatherStatus.mockResolvedValue(stopped);
 
     await dashboardCommand(runtime, { json: true });
 
-    expect(mocks.ensureDashboardGatewayReady).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowInstall: false,
-        interactive: false,
-      }),
+    expect(mocks.gatherStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ rpc: { url: "ws://10.0.0.5:18789" } }),
     );
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.installGateway).not.toHaveBeenCalled();
+    expect(mocks.startGateway).not.toHaveBeenCalled();
     expectFailure("Gateway is not running.");
     expect(runtime.log).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(

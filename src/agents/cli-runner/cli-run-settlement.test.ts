@@ -122,11 +122,18 @@ describe("isCliBindingFlushed", () => {
     vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
   });
 
-  it("returns false when no sessionId is provided", async () => {
-    probe.mockResolvedValue(true);
-    expect(await isCliBindingFlushed(undefined, "claude-cli")).toBe(false);
-    expect(probe).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["missing session", undefined, "claude-cli", undefined, false],
+    ["other backend", "sid-codex", "codex-cli", undefined, true],
+    ["managed continuity", "sid-warm", "claude-cli", { skipTranscriptProbe: true }, true],
+  ] as const)(
+    "skips transcript probing for %s",
+    async (_name, sessionId, provider, options, expected) => {
+      probe.mockResolvedValue(true);
+      expect(await isCliBindingFlushed(sessionId, provider, workspaceDir, options)).toBe(expected);
+      expect(probe).not.toHaveBeenCalled();
+    },
+  );
 
   it("succeeds when the transcript becomes visible on a later retry", async () => {
     vi.useFakeTimers();
@@ -143,31 +150,12 @@ describe("isCliBindingFlushed", () => {
 
   it("schedules at most 0 + 50 + 150ms of delay across the bounded retry", async () => {
     vi.useFakeTimers();
-    const settled = vi.fn();
-    const errored = vi.fn();
-    isCliBindingFlushed("sid-bounded", "claude-cli", workspaceDir).then(settled, errored);
+    const result = isCliBindingFlushed("sid-bounded", "claude-cli", workspaceDir);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(50);
     await vi.advanceTimersByTimeAsync(150);
-    expect(settled.mock.calls).toEqual([[false]]);
-    expect(errored).not.toHaveBeenCalled();
+    expect(await result).toBe(false);
     expect(probe).toHaveBeenCalledTimes(3);
-  });
-
-  it("returns true without probing for non-claude-cli providers", async () => {
-    expect(await isCliBindingFlushed("sid-codex", "codex-cli")).toBe(true);
-    expect(await isCliBindingFlushed("sid-anthropic", "anthropic")).toBe(true);
-    expect(await isCliBindingFlushed("sid-openai", "openai")).toBe(true);
-    expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("returns true without probing when the caller owns continuity outside native transcripts", async () => {
-    expect(
-      await isCliBindingFlushed("sid-warm", "claude-cli", workspaceDir, {
-        skipTranscriptProbe: true,
-      }),
-    ).toBe(true);
-    expect(probe).not.toHaveBeenCalled();
   });
 });
 
@@ -194,6 +182,103 @@ it.each(["required", "result-required", "optional"] as const)(
     );
   },
 );
+
+it.each([
+  {
+    name: "a required hidden acknowledgement",
+    terminalReplyExpectation: "result-required" as const,
+    output: { text: "HEARTBEAT_OK" },
+    trigger: "user" as const,
+    expectedError: true,
+  },
+  {
+    name: "an optional hidden acknowledgement",
+    terminalReplyExpectation: "optional" as const,
+    output: { text: "HEARTBEAT_OK" },
+    trigger: "user" as const,
+    expectedError: false,
+  },
+  {
+    name: "a required acknowledgement with media",
+    terminalReplyExpectation: "result-required" as const,
+    output: { text: "HEARTBEAT_OK", toolMediaUrls: ["https://example.invalid/chart.png"] },
+    trigger: "user" as const,
+    expectedError: false,
+  },
+])("settles $name at the message-presentation boundary", (testCase) => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.params.terminalReplyExpectation = testCase.terminalReplyExpectation;
+  context.params.trigger = testCase.trigger;
+
+  const result = testRunResult({ context, output: testCase.output });
+
+  if (testCase.expectedError) {
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      message: "No answer was returned. Ask again if you still need one.",
+      fallbackSafe: false,
+    });
+    expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
+    expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+    expect(result.meta.finalAssistantRawText).toBe("HEARTBEAT_OK");
+    return;
+  }
+
+  expect(result.meta.error).toBeUndefined();
+  expect(result.meta.terminalReply).toEqual({
+    disposition: "visible",
+    text: "HEARTBEAT_OK",
+  });
+  expect(result.payloads?.[0]?.text).toBe("HEARTBEAT_OK");
+  if (testCase.output.toolMediaUrls) {
+    expect(result.payloads?.flatMap((payload) => payload.mediaUrls ?? [])).toContain(
+      testCase.output.toolMediaUrls[0],
+    );
+  }
+});
+
+it("preserves confirmed final delivery of an acknowledgement-only CLI result", () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.params.terminalReplyExpectation = "result-required";
+  const result = testRunResult({
+    context,
+    output: {
+      text: "HEARTBEAT_OK",
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSourceReplyPayloads: [{ text: "HEARTBEAT_OK", sourceReplyFinal: true }],
+    },
+  });
+
+  expect(result.meta.error).toBeUndefined();
+  expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+  expect(result.payloads).toEqual([{ text: "HEARTBEAT_OK" }]);
+});
+
+it("preserves an accepted completion-message child over a hidden CLI acknowledgement", () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.params.terminalReplyExpectation = "result-required";
+  const acceptedSessionSpawns = [
+    {
+      runId: "child-run",
+      childSessionKey: "agent:main:subagent:child-run",
+      expectsCompletionMessage: true,
+    },
+  ];
+  const result = testRunResult({
+    context,
+    output: { text: "HEARTBEAT_OK", acceptedSessionSpawns },
+  });
+
+  expect(result.meta.error).toBeUndefined();
+  expect(result.meta.terminalReply).toEqual({
+    disposition: "visible",
+    text: "HEARTBEAT_OK",
+  });
+  expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
+});
+
 it.each([
   ["blocked", "s1", "previous-native-session"],
   ["no-native-id", "s1", "previous-native-session"],

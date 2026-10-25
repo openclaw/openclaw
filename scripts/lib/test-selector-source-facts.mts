@@ -1216,13 +1216,13 @@ export function readTestSelectorSourceFacts(
       stdio: ["pipe", "pipe", "pipe"],
     });
   let result = scan();
-  // Recover only the observed V8 JIT-page assertion, without scan workers.
+  // Recover the observed native parser crashes once, without scan workers.
   // Node 24 has a related concurrent WASM teardown defect (nodejs/node#66366).
   // Parser errors, output overflow, and cancellation must remain fatal.
   if (
     !result.error &&
-    result.signal === "SIGTRAP" &&
-    result.stderr.includes("Check failed: jit_page.has_value()")
+    (result.signal === "SIGILL" ||
+      (result.signal === "SIGTRAP" && result.stderr.includes("Check failed: jit_page.has_value()")))
   ) {
     result = scan(true);
   }

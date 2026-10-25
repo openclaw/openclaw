@@ -181,7 +181,6 @@ function applyReadyCatalogModelOrder(
 export function loadManifestModelCatalog(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   fallbackToMetadataScan?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): ModelCatalogEntry[] {
@@ -193,14 +192,13 @@ export function loadManifestModelCatalog(params: {
     (params.fallbackToMetadataScan === false
       ? getCurrentPluginMetadataSnapshot({
           config: params.config,
-          env: params.env,
           ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
           ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
         })
       : resolvePluginMetadataSnapshot({
           config: params.config,
           ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-          env: params.env ?? process.env,
+          env: process.env,
           allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
         }));
   return resolvedSnapshot ? loadManifestModelCatalogRows(params.config, resolvedSnapshot) : [];

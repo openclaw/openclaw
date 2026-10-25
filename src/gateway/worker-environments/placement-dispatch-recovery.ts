@@ -432,7 +432,12 @@ export function createPlacementRecoveryActions(
     if (mode === "startup") {
       orphanCleanupPending =
         initialPlacements.length > 0
-          ? { placements: initialPlacements, rootsBySession: new Map(), completedRoots: new Set() }
+          ? {
+              placements: [...initialPlacements],
+              initialDiscoveryPending: true,
+              rootsBySession: new Map(),
+              completedRoots: new Set(),
+            }
           : undefined;
     }
     for (const { sessionId } of candidates) {

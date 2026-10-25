@@ -272,13 +272,7 @@ async function useRealManager() {
 
 function setMemorySecret(id: string) {
   getRuntimeConfig.mockReturnValue({
-    memory: {
-      search: {
-        remote: {
-          apiKey: { source: "env", provider: "default", id },
-        },
-      },
-    },
+    memory: { search: { remote: { apiKey: { source: "env", provider: "default", id } } } },
   });
 }
 
@@ -875,12 +869,7 @@ it("fans JSON status out to every keyed agent entry", async () => {
 
 it("repairs invalid recall metadata and stale locks with status --fix", async () => {
   const workspaceDir = await createWorkspace();
-  await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-  await fs.writeFile(
-    path.join(workspaceDir, "memory", "2026-04-03.md"),
-    "Vector router cache note\n",
-    "utf-8",
-  );
+  await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["Vector router cache note"]);
   await shortTermTesting.writeRawRecallStore(workspaceDir, {
     version: 1,
     updatedAt: "2026-04-04T00:00:00.000Z",
@@ -1289,26 +1278,17 @@ it.each([false, true])(
 
 it("picks up slugged daily memory files for rem-backfill (#69536)", async () => {
   const workspaceDir = await createWorkspace();
-  const historyDir = path.join(workspaceDir, "history");
-  await fs.mkdir(historyDir, { recursive: true });
-  const sluggedPath = path.join(historyDir, "2025-01-01-vendor-pitch.md");
-  const secondSluggedPath = path.join(historyDir, "2025-01-01-travel-rule.md");
-  await fs.writeFile(
-    sluggedPath,
-    [
-      "## Preferences Learned",
-      '- Always use "Happy Together" calendar for flights and reservations.',
-    ].join("\n") + "\n",
-    "utf-8",
-  );
-  await fs.writeFile(
-    secondSluggedPath,
-    ["## Preferences Learned", "- Always book aisle seats for red-eye flights."].join("\n") + "\n",
-    "utf-8",
-  );
+  const sluggedPath = await writeHistory(workspaceDir, "2025-01-01-vendor-pitch.md", [
+    "## Preferences Learned",
+    '- Always use "Happy Together" calendar for flights and reservations.',
+  ]);
+  const secondSluggedPath = await writeHistory(workspaceDir, "2025-01-01-travel-rule.md", [
+    "## Preferences Learned",
+    "- Always book aisle seats for red-eye flights.",
+  ]);
   mockWorkspace(workspaceDir);
   const errors = spyRuntimeErrors(defaultRuntime);
-  await run(["rem-backfill", "--path", historyDir]);
+  await run(["rem-backfill", "--path", path.dirname(sluggedPath)]);
   expect(
     errors.mock.calls.some((call) => String(call[0]).includes("found no YYYY-MM-DD.md files")),
   ).toBe(false);
@@ -1445,10 +1425,7 @@ it("rolls back grounded staged short-term entries without touching diary rollbac
     },
   ]);
   expect(staged[0]?.queryHashes).toHaveLength(2);
-  mockManager({
-    status: () => memoryStatus({ workspaceDir }),
-    close,
-  });
+  mockStatus({ workspaceDir }, { close });
   await run("rem-backfill --rollback-short-term");
   const entries = await readRecalls({ workspaceDir });
   expect(entries).toHaveLength(0);
@@ -1588,26 +1565,17 @@ it("honors the configured prior-entry loss limit during CLI promotion", async ()
       .join("\n"),
     "utf-8",
   );
-  await writeDailyMemoryNote(workspaceDir, "2026-04-10", ["Retain the release checklist."]);
-  await recordRecall(
-    workspaceDir,
-    "release checklist",
-    recallResult("memory/2026-04-10.md", "Retain the release checklist."),
-  );
+  const { recall } = await dailyRecallFixture(workspaceDir, "2026-04-10", [
+    ["Retain the release checklist.", 0.91],
+  ]);
+  await recall("release checklist", 1);
   getRuntimeConfig.mockReturnValue({
     agents: {
       entries: { main: { workspace: workspaceDir, bootstrapMaxChars: 1_400 } },
     },
-    plugins: {
-      entries: {
-        "memory-core": {
-          config: { dreaming: { phases: { deep: { maxPriorEntryLossFraction: 1 } } } },
-        },
-      },
-    },
+    ...memoryCoreConfig({ dreaming: { phases: { deep: { maxPriorEntryLossFraction: 1 } } } }),
   });
-  const close = vi.fn(async () => {});
-  mockManager({ status: () => memoryStatus({ workspaceDir }), close });
+  mockWorkspace(workspaceDir);
   await run(["promote", "--apply", ...unrestrictedPromotion]);
   const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
   expect(memory).toContain("Retain the release checklist.");

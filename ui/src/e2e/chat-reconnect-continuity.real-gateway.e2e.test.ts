@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import {
@@ -8,6 +8,7 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { startScrollInferenceFixture } from "./chat-collaborator-scroll.real-gateway.test-support.ts";
 import { exactButton, requireString } from "./chat-flow.test-support.ts";
+import { callGateway, createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -20,19 +21,23 @@ const offlineTail = "The second section arrived while the browser was offline.";
 const followUpPrompt = "Confirm the next turn is clean.";
 const followUpReply = "The follow-up completed exactly once.";
 
+type HistoryPayload = {
+  inFlightRun?: { runId?: string; text?: string } | null;
+  messages?: Array<{ role?: string }>;
+};
 type Frame = {
   connection: number;
   type?: string;
   id?: string;
   method?: string;
+  ok?: boolean;
   params?: Record<string, unknown>;
-  payload?: {
-    inFlightRun?: { runId?: string; text?: string } | null;
-    messages?: Array<{ role?: string }>;
+  payload?: HistoryPayload & {
+    initialHistory?: { ok?: boolean; payload?: HistoryPayload };
   };
 };
 
-let instance: Awaited<ReturnType<typeof createOpenClawTestInstance>>;
+let instance: OpenClawTestInstance;
 let provider: Awaited<ReturnType<typeof startScrollInferenceFixture>>;
 
 const suite = createControlUiE2eSuite({
@@ -47,30 +52,15 @@ const suite = createControlUiE2eSuite({
         () => provider.close(),
       );
     try {
-      instance = await createOpenClawTestInstance({
+      instance = await createChatGatewayInstance({
         name: "control-ui-reconnect-continuity",
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
-        config: {
-          gateway: { controlUi: { enabled: true } },
-          cron: { enabled: false },
-          agents: {
-            ownership: "explicit",
-            defaults: { model: "reconnect/echo", modelPolicy: { allow: ["reconnect/*"] } },
-            entries: { main: { identity: { name: "Reconnect fixture" } } },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              reconnect: {
-                api: "openai-responses",
-                apiKey: "synthetic-fixture-key",
-                baseUrl: `http://127.0.0.1:${provider.port}/v1`,
-                models: [{ id: "echo", name: "Reconnect fixture" }],
-              },
-            },
-          },
-          plugins: { allow: [] },
-        },
+        provider: "reconnect",
+        identity: "Reconnect fixture",
+        model: "echo",
+        apiKey: "synthetic-fixture-key",
+        baseUrl: `http://127.0.0.1:${provider.port}/v1`,
+        models: [{ id: "echo", name: "Reconnect fixture" }],
+        agents: { ownership: "explicit" },
       });
       await instance.startGateway();
       return { baseUrl: `http://127.0.0.1:${instance.port}/`, close };
@@ -84,12 +74,8 @@ const suite = createControlUiE2eSuite({
 
 const occurrences = (value: string, marker: string) => value.split(marker).length - 1;
 
-async function call(method: string, params: Record<string, unknown>) {
-  const args = ["gateway", "call", method, "--json", "--params", JSON.stringify(params)];
-  const result = await instance.cli(args);
-  expect(result.code, result.stderr).toBe(0);
-  return result.stdout;
-}
+const call = (method: string, params: Record<string, unknown>) =>
+  callGateway(instance, method, params);
 
 suite.define(() => {
   it("reconstructs one streamed turn after browser socket loss, then aborts and follows up cleanly", async () => {
@@ -183,12 +169,21 @@ suite.define(() => {
         (frame) =>
           frame.connection === 2 &&
           frame.type === "req" &&
-          ["chat.startup", "chat.history"].includes(frame.method ?? "") &&
-          frame.params?.sessionKey === sessionKey,
+          ((["chat.startup", "chat.history"].includes(frame.method ?? "") &&
+            frame.params?.sessionKey === sessionKey) ||
+            (frame.method === "sessions.messages.subscribe" &&
+              frame.params?.key === sessionKey &&
+              frame.params.initialHistory !== undefined)),
       );
       expect(historyRequest?.id).toEqual(expect.any(String));
-      expect(response(historyRequest?.id, 2)).toMatchObject({
-        type: "res",
+      const historyResponse = response(historyRequest?.id, 2);
+      expect(historyResponse).toMatchObject({ type: "res", ok: true });
+      const history =
+        historyRequest?.method === "sessions.messages.subscribe"
+          ? historyResponse?.payload?.initialHistory
+          : { ok: historyResponse?.ok, payload: historyResponse?.payload };
+      expect(history).toMatchObject({
+        ok: true,
         payload: { inFlightRun: { runId, text: opening + offlineTail } },
       });
 
@@ -221,10 +216,18 @@ suite.define(() => {
       await composer.fill(followUpPrompt);
       await exactButton(page, "Send message").click();
       await expect.poll(() => provider.requests(), { timeout: 15_000 }).toBe(2);
+      await stop.waitFor({ state: "visible" });
       await followUpTurn.append(followUpReply);
       await followUpTurn.finish();
-      await assistant(followUpReply).waitFor();
+      // Final text hands off from the live stream to persisted history at settlement.
       await stop.waitFor({ state: "detached" });
+      const completedHistory = await readHistory();
+      expect(completedHistory.inFlightRun ?? null).toBeNull();
+      expect(completedHistory.messages?.filter(({ role }) => role === "assistant")).toMatchObject([
+        { content: [{ type: "text", text: opening + offlineTail }] },
+        { content: [{ type: "text", text: followUpReply }] },
+      ]);
+      await assistant(followUpReply).waitFor();
 
       await page.reload();
       await waitForControlUiGatewayReady(page);
@@ -239,17 +242,13 @@ suite.define(() => {
           text: group.textContent ?? "",
         })),
       );
-      const index = (role: "user" | "assistant", text: string) =>
-        groups.findIndex((group) => group[role] && group.text.includes(text));
-      const firstUserIndex = index("user", firstPrompt);
-      const firstAssistantIndex = index("assistant", opening.trim());
-      const followUpUserIndex = index("user", followUpPrompt);
-      const followUpAssistantIndex = index("assistant", followUpReply);
-      expect(firstUserIndex).toBeGreaterThanOrEqual(0);
-      expect(firstAssistantIndex).toBeGreaterThan(firstUserIndex);
-      expect(followUpUserIndex).toBeGreaterThan(firstAssistantIndex);
-      expect(followUpAssistantIndex).toBeGreaterThan(followUpUserIndex);
-      expect(groups[followUpAssistantIndex]?.text).not.toContain(offlineTail);
+      expect(groups).toEqual([
+        { assistant: false, user: true, text: expect.stringContaining(firstPrompt) },
+        { assistant: true, user: false, text: expect.stringContaining(opening.trim()) },
+        { assistant: false, user: true, text: expect.stringContaining(followUpPrompt) },
+        { assistant: true, user: false, text: expect.stringContaining(followUpReply) },
+      ]);
+      expect(groups.at(-1)?.text).not.toContain(offlineTail);
       const transcript = groups.flatMap((row) => (row.assistant ? [row.text] : [])).join("\n");
       expect(occurrences(transcript, followUpReply)).toBe(1);
       expect([aborts().length, provider.requests()]).toEqual([1, 2]);

@@ -1,62 +1,44 @@
 import { describe, expect, it } from "vitest";
-import {
-  INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
-  PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-  buildCapabilityConsentErrorDetails,
-  readCapabilityConsentErrorDetails,
-  readInstallPolicyWarningErrorDetails,
-  validateCapabilityConsentErrorDetails,
-  validatePluginsInstallParams,
-  validatePluginsReloadParams,
-  validatePluginsCatalogGetParams,
-  validatePluginsSetEnabledParams,
-  validatePluginsControlUiReportParams,
-  type InstallPolicyWarningErrorDetails,
-} from "./index.js";
+import * as p from "./index.js";
+import { validation } from "./schema/protocol-validation.test-support.js";
 
+const install = validation(p.validatePluginsInstallParams);
+const reload = validation(p.validatePluginsReloadParams);
+const enable = validation(p.validatePluginsSetEnabledParams);
+const report = validation(p.validatePluginsControlUiReportParams);
+const consentDetails = validation(p.validateCapabilityConsentErrorDetails);
 const official = { source: "official", pluginId: "workboard" };
 const clawhub = { source: "clawhub", packageName: "memory-plus" };
-const reload = { plugins: [{ pluginId: "notes" }] };
-const enable = { pluginId: "workboard", enabled: true };
+const reloadRequest = { plugins: [{ pluginId: "notes" }] };
+const enableRequest = { pluginId: "workboard", enabled: true };
 const consent = { reviewToken: "surface-sha256" };
+const invalidConsent = [true, false, {}, { reviewToken: "" }, { ...consent, unexpected: true }];
 
 describe("plugin lifecycle protocol validators", () => {
   it("accepts bounded activation report batches while retaining per-plugin receipts", () => {
-    const report = { pluginId: "review", revision: "one", status: "activated" };
-    expect(validatePluginsControlUiReportParams({ reports: [report] })).toBe(true);
-    expect(
-      validatePluginsControlUiReportParams({
-        reports: Array.from({ length: 64 }, () => ({ ...report })),
-      }),
-    ).toBe(true);
-    for (const params of [
-      report,
+    const receipt = { pluginId: "review", revision: "one", status: "activated" };
+    const batch = (length: number) => Array.from({ length }, () => ({ ...receipt }));
+    report.accepts({ reports: [receipt] }, { reports: batch(64) });
+    report.rejects(
+      receipt,
       { reports: [] },
-      { reports: Array.from({ length: 65 }, () => ({ ...report })) },
-      { reports: [{ ...report, status: "pending" }] },
-      { reports: [{ ...report, error: "x".repeat(513) }] },
-      { reports: [{ ...report, extra: true }] },
-      { reports: [report], extra: true },
-    ]) {
-      expect(validatePluginsControlUiReportParams(params)).toBe(false);
-    }
+      { reports: batch(65) },
+      { reports: [{ ...receipt, status: "pending" }] },
+      { reports: [{ ...receipt, error: "x".repeat(513) }] },
+      { reports: [{ ...receipt, extra: true }] },
+      { reports: [receipt], extra: true },
+    );
   });
-
   it("accepts one bounded batch of exact installed owners for reload", () => {
     const target = { pluginId: "alpha", installHash: "a".repeat(64) };
     const batch = (length: number) =>
-      Array.from({ length }, (_, index) => ({
-        ...target,
-        pluginId: `plugin-${index}`,
-      }));
-    for (const plugins of [
-      [target],
-      batch(64),
-      [{ ...target, sourceDigests: { alpha: "b".repeat(64) } }],
-    ]) {
-      expect(validatePluginsReloadParams({ plugins })).toBe(true);
-    }
-    for (const request of [
+      Array.from({ length }, (_, index) => ({ ...target, pluginId: `plugin-${index}` }));
+    reload.accepts(
+      { plugins: [target] },
+      { plugins: batch(64) },
+      { plugins: [{ ...target, sourceDigests: { alpha: "b".repeat(64) } }] },
+    );
+    reload.rejects(
       { plugins: [] },
       { plugins: batch(65) },
       { plugins: [target, target] },
@@ -65,152 +47,110 @@ describe("plugin lifecycle protocol validators", () => {
       { plugins: [{ ...target, sourceDigests: { alpha: "not-a-digest" } }] },
       { plugins: [target], pluginId: "alpha" },
       { plugins: [{ ...target, trusted: true }] },
-    ]) {
-      expect(validatePluginsReloadParams(request)).toBe(false);
-    }
+    );
   });
-
   it("accepts the CLI's npm install intent without caller trust metadata", () => {
     const request = { source: "npm", spec: "example-plugin@1.2.3", pin: true, mode: "update" };
-    expect(validatePluginsInstallParams(request)).toBe(true);
-    expect(validatePluginsInstallParams({ ...request, enable: false })).toBe(true);
+    install.accepts(request, { ...request, enable: false });
     for (const trust of [
       { trustedSourceLinkedOfficialInstall: true },
       { bundledOrigin: true },
       { clawManaged: true },
     ]) {
-      expect(validatePluginsInstallParams({ ...request, ...trust })).toBe(false);
+      install.rejects({ ...request, ...trust });
     }
   });
-
   it("exports install policy warning details from the package root", () => {
-    const details: InstallPolicyWarningErrorDetails = {
-      installPolicyCode: INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
+    const details: p.InstallPolicyWarningErrorDetails = {
+      installPolicyCode: p.INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
       targetName: "memory-plus",
       targetType: "plugin",
       requestMode: "install",
       reason: "review this plugin",
     };
-
-    expect(readInstallPolicyWarningErrorDetails(details)).toEqual(details);
+    expect(p.readInstallPolicyWarningErrorDetails(details)).toEqual(details);
   });
-
   it("round-trips closed capability consent details through the public package boundary", () => {
-    const details = buildCapabilityConsentErrorDetails({
+    const details = p.buildCapabilityConsentErrorDetails({
       pluginId: "memory-plus",
       reviewToken: "surface-sha256",
       widened: { tools: ["memory_search"], contracts: ["workerProviders: worker"] },
       acceptedAt: "2026-08-25T00:00:00.000Z",
     });
-
-    expect(details.capabilityConsentCode).toBe(PLUGIN_CAPABILITY_CONSENT_REQUIRED);
-    expect(validateCapabilityConsentErrorDetails(details)).toBe(true);
-    expect(readCapabilityConsentErrorDetails(details)).toEqual(details);
-
-    for (const invalidDetails of [
-      { ...details, capabilityConsentCode: "incorrect" },
-      { ...details, pluginId: "" },
-      { ...details, reviewToken: "" },
-      { ...details, widened: { tools: [""] } },
-      { ...details, widened: { unexpected: ["tool"] } },
-      { ...details, acceptedAt: "" },
-      { ...details, name: "Memory Plus" },
-      { ...details, unexpected: true },
+    expect(details.capabilityConsentCode).toBe(p.PLUGIN_CAPABILITY_CONSENT_REQUIRED);
+    consentDetails.accepts(details);
+    expect(p.readCapabilityConsentErrorDetails(details)).toEqual(details);
+    for (const fields of [
+      { capabilityConsentCode: "incorrect" },
+      { pluginId: "" },
+      { reviewToken: "" },
+      { widened: { tools: [""] } },
+      { widened: { unexpected: ["tool"] } },
+      { acceptedAt: "" },
+      { name: "Memory Plus" },
+      { unexpected: true },
     ]) {
-      expect(validateCapabilityConsentErrorDetails(invalidDetails)).toBe(false);
-      expect(readCapabilityConsentErrorDetails(invalidDetails)).toBeUndefined();
+      const invalid = { ...details, ...fields };
+      consentDetails.rejects(invalid);
+      expect(p.readCapabilityConsentErrorDetails(invalid)).toBeUndefined();
     }
-
-    const whitespaceDetails = buildCapabilityConsentErrorDetails({
+    const whitespace = p.buildCapabilityConsentErrorDetails({
       pluginId: " memory-plus ",
       reviewToken: " surface-sha256 ",
       widened: { contracts: [" workerProviders: worker "] },
       acceptedAt: " 2026-08-25T00:00:00.000Z ",
     });
-    expect(validateCapabilityConsentErrorDetails(whitespaceDetails)).toBe(true);
-    expect(readCapabilityConsentErrorDetails(whitespaceDetails)).toEqual(whitespaceDetails);
+    consentDetails.accepts(whitespace);
+    expect(p.readCapabilityConsentErrorDetails(whitespace)).toEqual(whitespace);
   });
-
   it("accepts only URL-safe plugin discovery ids", () => {
-    expect(validatePluginsCatalogGetParams({ id: "ch_c2FtcGxl" })).toBe(true);
-    expect(validatePluginsCatalogGetParams({ id: "publisher/plugin" })).toBe(false);
+    const catalog = validation(p.validatePluginsCatalogGetParams);
+    catalog.accepts({ id: "ch_c2FtcGxl" });
+    catalog.rejects({ id: "publisher/plugin" });
   });
-
   it("keeps official and ClawHub install requests distinct", () => {
-    expect(
-      validatePluginsInstallParams({
-        ...clawhub,
-        version: "2.1.0",
-        acknowledgeInstallPolicyWarning: true,
-        acknowledgeCapabilities: consent,
-      }),
-    ).toBe(true);
-    expect(
-      validatePluginsInstallParams({
-        ...official,
-        acknowledgeInstallPolicyWarning: true,
-        acknowledgeCapabilities: consent,
-      }),
-    ).toBe(true);
-    expect(
-      validatePluginsInstallParams({ ...official, acknowledgeInstallPolicyWarning: false }),
-    ).toBe(false);
-    for (const request of [
-      { ...official, acknowledgeCapabilities: true },
-      { ...official, acknowledgeCapabilities: false },
-      { ...official, acknowledgeCapabilities: {} },
-      { ...official, acknowledgeCapabilities: { reviewToken: "" } },
-      { ...official, acknowledgeCapabilities: { ...consent, unexpected: true } },
+    const acknowledgments = {
+      acknowledgeInstallPolicyWarning: true,
+      acknowledgeCapabilities: consent,
+    };
+    install.accepts(
+      { ...clawhub, version: "2.1.0", ...acknowledgments },
+      { ...official, ...acknowledgments },
+    );
+    install.rejects(
+      { ...official, acknowledgeInstallPolicyWarning: false },
+      { ...official, packageName: "memory-plus" },
       { ...clawhub, acknowledgeCapabilities: true },
       { ...clawhub, acknowledgeCapabilities: false },
-    ]) {
-      expect(validatePluginsInstallParams(request)).toBe(false);
-    }
-    expect(validatePluginsInstallParams({ ...official, packageName: "memory-plus" })).toBe(false);
+    );
   });
-
-  it("keeps targeted reload and its capability acknowledgment closed", () => {
-    expect(validatePluginsReloadParams(reload)).toBe(true);
-    expect(
-      validatePluginsReloadParams({
-        plugins: [{ pluginId: "notes", installHash: "a".repeat(64) }],
-        acknowledgeCapabilities: { reviewToken: "reviewed-artifact" },
-      }),
-    ).toBe(true);
-    for (const request of [
+  it("keeps targeted reload closed", () => {
+    reload.accepts(reloadRequest, {
+      plugins: [{ pluginId: "notes", installHash: "a".repeat(64) }],
+      acknowledgeCapabilities: { reviewToken: "reviewed-artifact" },
+    });
+    reload.rejects(
       {},
       { pluginId: "notes" },
       { plugins: [{ pluginId: "" }] },
       { plugins: [{ pluginId: "notes", enabled: true }] },
-      { ...reload, acknowledgeCapabilities: true },
-      { ...reload, acknowledgeCapabilities: { reviewToken: "" } },
-      { ...reload, acknowledgeCapabilities: { reviewToken: "reviewed", extra: true } },
-    ]) {
-      expect(validatePluginsReloadParams(request)).toBe(false);
+    );
+  });
+  it.each([
+    ["install", install, official],
+    ["reload", reload, reloadRequest],
+    ["enable", enable, enableRequest],
+  ] as const)("keeps %s capability acknowledgment closed", (_, validate, base) => {
+    validate.accepts({ ...base, acknowledgeCapabilities: consent });
+    for (const acknowledgeCapabilities of invalidConsent) {
+      validate.rejects({ ...base, acknowledgeCapabilities });
     }
   });
-
   it("validates enablement mutations", () => {
-    expect(validatePluginsSetEnabledParams({ ...enable, allowlistPolicy: "preserve" })).toBe(true);
+    enable.accepts(enableRequest, { ...enableRequest, allowlistPolicy: "preserve" });
     for (const allowlistPolicy of ["widen", "", true, {}]) {
-      expect(validatePluginsSetEnabledParams({ ...enable, allowlistPolicy })).toBe(false);
+      enable.rejects({ ...enableRequest, allowlistPolicy });
     }
-
-    expect(validatePluginsSetEnabledParams(enable)).toBe(true);
-    expect(validatePluginsSetEnabledParams({ ...enable, acknowledgeCapabilities: consent })).toBe(
-      true,
-    );
-    for (const acknowledgment of [
-      true,
-      false,
-      {},
-      { reviewToken: "" },
-      { ...consent, unexpected: true },
-    ]) {
-      expect(
-        validatePluginsSetEnabledParams({ ...enable, acknowledgeCapabilities: acknowledgment }),
-      ).toBe(false);
-    }
-    expect(validatePluginsSetEnabledParams({ ...enable, enabled: "yes" })).toBe(false);
+    enable.rejects({ ...enableRequest, enabled: "yes" });
   });
 });

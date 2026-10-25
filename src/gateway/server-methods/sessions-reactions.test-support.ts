@@ -5,6 +5,7 @@ import { appendTranscriptMessage } from "../../config/sessions/session-accessor.
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as projectionAccess from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
@@ -16,6 +17,25 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 export const sessionKey = "agent:main:main";
 export const sessionId = "reactions-session";
 export const transcriptScope = { agentId: "main", sessionKey, sessionId };
+
+export function reactionGate() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const wait = () => {
+    entered.resolve();
+    return release.promise;
+  };
+  return {
+    entered: entered.promise,
+    release: release.resolve,
+    wait,
+    async hold<T>(reading: Promise<T>) {
+      const result = await reading;
+      await wait();
+      return result;
+    },
+  };
+}
 
 export function client(profileId: string, displayName = profileId, admin = false): GatewayClient {
   const scopes = admin ? ["operator.admin"] : ["operator.read", "operator.write"];

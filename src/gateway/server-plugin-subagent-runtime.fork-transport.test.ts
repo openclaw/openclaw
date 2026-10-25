@@ -1,16 +1,12 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
-import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import "../agents/ai-transport-runtime-host.js";
-import {
-  clearEmbeddedSessionForkSnapshot,
-  wrapStreamFnWithSessionFork,
-} from "../agents/embedded-agent-runner/session-fork.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
-import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import { closeProviderTransportDispatcherPool } from "../agents/provider-transport-dispatcher-pool.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,7 +33,7 @@ import { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.j
 
 const PLUGIN_ID = "test-session-fork-transport";
 const SESSION_ID = "fork-transport-parent";
-const SESSION_KEY = "agent:research:fork-transport-parent";
+const SESSION_KEY = "agent:research:telegram:direct:fork-transport-parent";
 const API_KEY = "synthetic-fork-transport-key";
 
 type RecordedRequest = {
@@ -111,7 +107,7 @@ describe("plugin session fork visibility transport", () => {
           },
           async () => {
             const baseUrl = `http://127.0.0.1:${claim.port}/v1`;
-            const model: Model<"openai-completions"> = {
+            const model = {
               provider: fixture.providerId,
               id: "fork-model",
               name: "Fork model",
@@ -122,11 +118,13 @@ describe("plugin session fork visibility transport", () => {
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 8192,
               maxTokens: 1024,
-            };
+            } satisfies Model<"openai-completions">;
             const config: OpenClawConfig = {
+              channels: { telegram: { enabled: false, dmHistoryLimit: 1 } },
               agents: {
                 defaults: {
                   workspace: state.workspaceDir,
+                  userTimezone: "UTC",
                   models: {
                     [`${fixture.providerId}/fork-model`]: { agentRuntime: { id: "openclaw" } },
                   },
@@ -182,22 +180,58 @@ describe("plugin session fork visibility transport", () => {
             await initializeSessionReadContext(context);
             const runtime = createGatewaySubagentRuntime(() => context, {}, lifetime.signal);
             try {
-              // Prepare the parent's replay through the same capture and HTTP transport as a turn.
-              const parent = wrapStreamFnWithSessionFork(
-                createOpenAICompletionsTransportStreamFn(),
-                { agentId: "research", sessionId: SESSION_ID, runId: "parent" },
-              );
-              const parentStream = await parent(
-                attachModelProviderRequestTransport(model, { allowPrivateNetwork: true }),
+              // A persisted conversation remains forkable without any process-local parent request.
+              const transcript = await SessionManager.openAsync(
                 {
-                  systemPrompt: "Stable parent instructions",
-                  messages: [{ role: "user", content: "Parent question", timestamp: 1 }],
+                  agentId: "research",
+                  sessionId: SESSION_ID,
+                  sessionKey: SESSION_KEY,
+                  storePath: path.join(state.agentDir("research"), "openclaw-agent.sqlite"),
                 },
-                { apiKey: API_KEY },
+                state.workspaceDir,
               );
-              expect((await parentStream.result()).stopReason).toBe("stop");
-              expect(requests).toHaveLength(1);
-              requests.length = 0;
+              await transcript.appendMessageAsync({
+                role: "user",
+                content: "DISCARDED_PRE_COMPACTION_1672",
+                timestamp: 0,
+              });
+              const retainedId = await transcript.appendMessageAsync({
+                role: "user",
+                content: "Parent question",
+                timestamp: 1,
+              });
+              if (!retainedId) {
+                throw new Error("Retained question was not persisted");
+              }
+              const compactionId = await transcript.appendCompactionAsync(
+                "Earlier request summarized for review",
+                retainedId,
+                100,
+              );
+              await transcript.appendMessageAsync({
+                role: "user",
+                content: "OUTSIDE_HISTORY_WINDOW_1672",
+                timestamp: 2,
+              });
+              await transcript.appendMessageAsync({
+                role: "user",
+                content: "Parent question",
+                timestamp: 3,
+              });
+              await transcript.appendCustomEntryAsync("openclaw.system-prompt", {
+                prefix: "Stable parent instructions",
+                renderedPrefix: "Stable parent instructions",
+                routeKey: JSON.stringify([
+                  model.provider,
+                  model.id,
+                  model.api,
+                  model.baseUrl,
+                  true,
+                  null,
+                ]),
+                historyId: compactionId,
+                tools: [],
+              });
 
               await expect(
                 withPluginRuntimeGatewayRequestScope(
@@ -224,6 +258,13 @@ describe("plugin session fork visibility transport", () => {
                 ),
               ).resolves.toMatchObject({ text: "fork-ok" });
               expect(requests).toHaveLength(1);
+              expect(JSON.stringify(requests[0]?.body)).not.toContain(
+                "DISCARDED_PRE_COMPACTION_1672",
+              );
+              expect(JSON.stringify(requests[0]?.body)).not.toContain(
+                "OUTSIDE_HISTORY_WINDOW_1672",
+              );
+              expect(requests[0]?.body).not.toHaveProperty("prompt_cache_key");
               expect(requests[0]).toMatchObject({
                 url: "/v1/chat/completions",
                 authorization: `Bearer ${API_KEY}`,
@@ -231,14 +272,27 @@ describe("plugin session fork visibility transport", () => {
                   model: "fork-model",
                   messages: [
                     { role: "system", content: "Stable parent instructions" },
-                    { role: "user", content: "Parent question" },
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "text",
+                          text: "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier request summarized for review\n</summary>",
+                        },
+                      ],
+                    },
+                    {
+                      role: "user",
+                      content: expect.stringContaining(
+                        "[Thu 1970-01-01 00:00 UTC] Parent question",
+                      ),
+                    },
                     { role: "user", content: "Review the parent" },
                   ],
                 },
               });
             } finally {
               lifetime.abort();
-              clearEmbeddedSessionForkSnapshot(SESSION_ID);
               await disposeSessionReadContexts();
               await resetPreparedModelRuntimeSnapshotsForTest();
               await closeProviderTransportDispatcherPool();

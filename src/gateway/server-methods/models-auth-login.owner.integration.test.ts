@@ -14,6 +14,7 @@ import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js"
 import { disconnectGatewayClient } from "../test-helpers.e2e.js";
 import type { GatewayClient as ServerGatewayClient } from "./client-types.js";
 import { modelsAuthLoginHandlers } from "./models-auth-login.js";
+import { writeCatalogPlugin } from "./models-catalog-fixture.test-support.js";
 import {
   closeModelsEndpoint,
   connectModelsReader,
@@ -87,23 +88,9 @@ async function createState() {
 }
 
 async function writePlugin(state: OpenClawTestState, baseUrl: string) {
-  await state.writeJson("login-plugin/openclaw.plugin.json", {
-    id: provider,
-    providers: [provider],
-    configSchema: { type: "object", additionalProperties: false },
-    providerAuthChoices: [
-      {
-        provider,
-        method: "api-key",
-        choiceId: "fixture-key",
-        choiceLabel: "Fixture API key",
-        appGuidedSecret: true,
-        credentialOnly: true,
-      },
-    ],
-  });
-  const pluginPath = await state.writeText(
-    "login-plugin/index.cjs",
+  const pluginPath = await writeCatalogPlugin(
+    state,
+    provider,
     `module.exports = {
     id: ${JSON.stringify(provider)},
     register(api) { api.registerProvider({
@@ -127,6 +114,18 @@ async function writePlugin(state: OpenClawTestState, baseUrl: string) {
       } }],
     }); },
   };`,
+    {
+      providerAuthChoices: [
+        {
+          provider,
+          method: "api-key",
+          choiceId: "fixture-key",
+          choiceLabel: "Fixture API key",
+          appGuidedSecret: true,
+          credentialOnly: true,
+        },
+      ],
+    },
   );
   return modelsTestConfig(state, token, {
     agents: {

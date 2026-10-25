@@ -50,7 +50,10 @@ import {
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import { authProfileScopeCwdEntrypoint } from "./store-scope-cwd-runtime.test-support.js";
-import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
+import {
+  createAuthOwnerTestFixtures,
+  persistOwnerProfile as persistProfile,
+} from "./store-state-owner.test-support.js";
 import {
   captureAuthProfileStorePersistenceSnapshot as capturePersistence,
   restoreAuthProfileStorePersistenceSnapshot as restorePersistence,
@@ -58,7 +61,6 @@ import {
   withEnvOnlyAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
-import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedRoot } =
   createAuthOwnerTestFixtures();
@@ -92,18 +94,6 @@ function saveProfiles(profiles: AuthProfileStore["profiles"], agentDir?: string)
 }
 function writeRaw(profiles: unknown, agentDir: string) {
   writePersistedAuthProfileStoreRaw({ version: 1, profiles }, agentDir);
-}
-function persistProfile(
-  root: Pick<Root, "stateDir">,
-  profileId: string,
-  credential: AuthProfileCredential,
-  agentDir?: string,
-) {
-  return persistAuthProfileBatch({
-    stateDir: root.stateDir,
-    agentDir,
-    profiles: [{ profileId, credential }],
-  });
 }
 function refuseMigration(root: Root) {
   markAuthProfileMigrationRequired(

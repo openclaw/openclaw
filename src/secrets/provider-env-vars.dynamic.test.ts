@@ -283,45 +283,38 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(existsSync).toHaveBeenCalledWith("/fixture/missing-cloud-sdk/credentials.json");
   });
 
-  it("preserves home and appdata fallback when no provider directory is selected", () => {
-    const evidence = cloudEvidence();
-    mockExistingPaths("/fixture/home/credentials.json", "/fixture/appdata/credentials.json");
-
-    expect(resolveLocalProviderAuthEvidence(evidence, { HOME: "/fixture/home" })).toEqual(
-      cloudCredential,
-    );
-    expect(
-      resolveLocalProviderAuthEvidence(evidence, {
+  it.each<{ name: string; env: NodeJS.ProcessEnv }>([
+    { name: "home", env: { HOME: "/fixture/home" } },
+    {
+      name: "appdata after a blank override",
+      env: {
         EXTERNAL_CLOUD_CONFIG: "   ",
         HOME: "/fixture/missing-home",
         APPDATA: "/fixture/appdata",
-      }),
-    ).toEqual(cloudCredential);
+      },
+    },
+  ])("preserves $name fallback without an explicit provider directory", ({ env }) => {
+    mockExistingPaths("/fixture/home/credentials.json", "/fixture/appdata/credentials.json");
+    expect(resolveLocalProviderAuthEvidence(cloudEvidence(), env)).toEqual(cloudCredential);
   });
 
-  it("accepts placeholder text introduced by an environment value", () => {
-    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
-
-    expect(
-      resolveLocalProviderAuthEvidence(
-        cloudEvidence(["${EXTERNAL_CLOUD_CONFIG}/credentials.json"]),
-        { EXTERNAL_CLOUD_CONFIG: "/fixture/${literal}" },
-      ),
-    ).toEqual(cloudCredential);
-    expect(existsSync).toHaveBeenCalledWith("/fixture/${literal}/credentials.json");
-  });
-
-  it("rejects manifest credential evidence with a missing variable", () => {
-    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
-
-    expect(
-      resolveLocalProviderAuthEvidence(
-        cloudEvidence(["${EXTERNAL_CLOUD_CONFIG}/credentials.json"]),
-        {},
-      ),
-    ).toBeNull();
-    expect(existsSync).not.toHaveBeenCalled();
-  });
+  it.each([undefined, "/fixture/${literal}"])(
+    "expands only manifest placeholders (directory: %s)",
+    (directory) => {
+      const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+      expect(
+        resolveLocalProviderAuthEvidence(
+          cloudEvidence(["${EXTERNAL_CLOUD_CONFIG}/credentials.json"]),
+          directory === undefined ? {} : { EXTERNAL_CLOUD_CONFIG: directory },
+        ),
+      ).toEqual(directory === undefined ? null : cloudCredential);
+      if (directory === undefined) {
+        expect(existsSync).not.toHaveBeenCalled();
+      } else {
+        expect(existsSync).toHaveBeenCalledWith("/fixture/${literal}/credentials.json");
+      }
+    },
+  );
 
   it("does not reuse a load-path current snapshot for default provider env lookups", () => {
     const staleSnapshot = metadataSnapshot(LOAD_PATH_PROVIDER_PLUGIN);
@@ -345,17 +338,6 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
   });
 
-  it("excludes untrusted workspace plugin auth evidence by default", () => {
-    useInstalledSetupPlugin("workspace-cloud", "workspace", {
-      id: "workspace-cloud",
-      authEvidence: workspaceEvidence,
-    });
-
-    expect(
-      resolveProviderAuthLookupMaps({ config: { plugins: {} } }).authEvidenceMap["workspace-cloud"],
-    ).toBeUndefined();
-  });
-
   it("reuses lookup maps only for immutable configs", () => {
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(
       metadataSnapshot(LOAD_PATH_PROVIDER_PLUGIN),
@@ -372,7 +354,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     );
   });
 
-  it("keeps explicitly trusted workspace plugin auth evidence", () => {
+  it.each([false, true])("requires workspace trust for auth evidence (trusted: %s)", (trusted) => {
     useInstalledSetupPlugin("workspace-cloud", "workspace", {
       id: "workspace-cloud",
       authEvidence: workspaceEvidence,
@@ -380,9 +362,9 @@ describe("provider env vars dynamic manifest metadata", () => {
 
     expect(
       resolveProviderAuthLookupMaps({
-        config: { plugins: { allow: ["workspace-cloud"] } },
+        config: { plugins: trusted ? { allow: ["workspace-cloud"] } : {} },
       }).authEvidenceMap["workspace-cloud"],
-    ).toEqual(workspaceEvidence);
+    ).toEqual(trusted ? workspaceEvidence : undefined);
   });
 
   it("excludes untrusted workspace plugin env vars when requested", () => {
@@ -404,35 +386,24 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(listKnownProviderAuthEnvVarNamesCore(options)).not.toContain("WORKSPACE_SETUP_SECRET");
   });
 
-  it("does not trust arbitrary workspace plugin ids from the context engine slot", () => {
-    useInstalledSetupPlugin("workspace-audio", "workspace", {
-      id: "whisperx",
-      envVars: ["AWS_SECRET_ACCESS_KEY"],
-    });
+  it.each([false, true])(
+    "trusts the context-engine slot only for an engine (engine: %s)",
+    (engine) => {
+      useInstalledSetupPlugin(
+        "workspace-engine",
+        "workspace",
+        { id: "whisperx", envVars: [engine ? "WHISPERX_API_KEY" : "AWS_SECRET_ACCESS_KEY"] },
+        engine ? { kind: "context-engine" } : {},
+      );
 
-    expect(
-      getProviderEnvVarsCore("whisperx", {
-        config: { plugins: { slots: { contextEngine: "workspace-audio" } } },
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("keeps selected workspace context engine env vars when requested", () => {
-    useInstalledSetupPlugin(
-      "workspace-engine",
-      "workspace",
-      { id: "whisperx", envVars: ["WHISPERX_API_KEY"] },
-      { kind: "context-engine" },
-    );
-
-    expect(
-      getProviderEnvVarsCore("whisperx", {
-        config: { plugins: { slots: { contextEngine: "workspace-engine" } } },
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    ).toEqual(["WHISPERX_API_KEY"]);
-  });
+      expect(
+        getProviderEnvVarsCore("whisperx", {
+          config: { plugins: { slots: { contextEngine: "workspace-engine" } } },
+          includeUntrustedWorkspacePlugins: false,
+        }),
+      ).toStrictEqual(engine ? ["WHISPERX_API_KEY"] : []);
+    },
+  );
 
   it("resolves auth maps with policy work bounded to contributing plugins", () => {
     const fireworksEvidence: MockAuthEvidence[] = [

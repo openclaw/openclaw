@@ -11,7 +11,7 @@ import {
   catalogReply,
   catalogAgents,
   catalogSessionRpc,
-  catalogModelDefaults,
+  catalogDiscoverySource,
   closeCatalogServer,
   createCatalogState,
   expectAssistantReply,
@@ -79,26 +79,16 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
         register(api) {
           api.registerProvider({
             id: ${JSON.stringify(provider)}, label: "Dispatch fixture", auth: [],
-            catalog: {
-              order: "profile",
-              async run(ctx) {
-                const auth = ctx.resolveProviderAuth(${JSON.stringify(provider)});
-                if (!auth.discoveryApiKey) return null;
-                const response = await fetch(${JSON.stringify(`${baseUrl}/models`)}, {
-                  headers: { Authorization: "Bearer " + auth.discoveryApiKey },
-                });
-                if (!response.ok) throw new Error("Fixture discovery failed");
-                const { data: rows } = await response.json();
-                return { provider: {
-                  baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
-                  models: rows.map((row) => ({
-                    ...row, ...${JSON.stringify(catalogModelDefaults())}, input: ["text", "image"], maxTokens: 1536,
-                    headers: { "X-Catalog-Model": "discovered-generation" },
-                    compat: { maxTokensField: "max_tokens" },
-                  })),
-                } };
+            ${catalogDiscoverySource(provider, baseUrl, {
+              wrappedRows: true,
+              error: "Fixture discovery failed",
+              model: {
+                input: ["text", "image"],
+                maxTokens: 1536,
+                headers: { "X-Catalog-Model": "discovered-generation" },
+                compat: { maxTokensField: "max_tokens" },
               },
-            },
+            })},
           });
         },
       };`,
@@ -106,6 +96,7 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
     );
     const token = "catalog-dispatch-gateway-token";
     const cfg = {
+      cron: { enabled: false },
       models: {
         providers: {
           [provider]: {
@@ -120,7 +111,6 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
       },
       agents: catalogAgents(state, {
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         modelPolicy: { allow: [`${provider}/*`] },
       }),
       tools: { profile: "minimal" },
