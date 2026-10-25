@@ -8,18 +8,14 @@ import { fetchClawHubJson, type ClawHubFetchOptions } from "./clawhub-client.js"
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { fetchClawHubSkillVerification, searchClawHubSkills } from "./clawhub-skills.js";
 import { captureClawHubResponse } from "./clawhub.test-support.js";
+import { makeStallingStream } from "./http-body.test-support.js";
 
 const search = (options: ClawHubFetchOptions) =>
   searchClawHubSkills({ query: "calendar", ...options });
 
 function createStalledBodyResponse(firstChunk: string, init: ResponseInit = {}) {
   const cancel = vi.fn();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(firstChunk));
-    },
-    cancel,
-  });
+  const body = makeStallingStream([new TextEncoder().encode(firstChunk)], cancel);
   return {
     response: new Response(body, init),
     cancel,

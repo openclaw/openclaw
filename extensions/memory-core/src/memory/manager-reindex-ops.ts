@@ -60,8 +60,8 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
       return;
     }
     try {
-      if (state.progress.cacheWritesPendingPrune) {
-        await this.withPublishedDatabase(() => this.pruneEmbeddingCacheIfNeeded());
+      if (state.progress.cachePrunePending) {
+        await this.withPublishedDatabase(() => this.pruneEmbeddingCacheIfNeeded(true));
       }
     } finally {
       await state.shadow.closeShadow();
@@ -140,7 +140,7 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
         publishedIdentity: originalDatabase.facts.serialized,
         progress: {
           memoryComplete: false,
-          cacheWritesPendingPrune: false,
+          cachePrunePending: false,
           completedSessionFiles: new Set(),
           changedSessionFiles: new Set(),
           changedSessionTargets: new Map(),
@@ -278,8 +278,8 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
       this.vector.dims = rebuilt.nextMeta.vectorDims;
       // Rebuild writes must not evict unread hits. After publication the ordinary
       // policy can prefer vectors no longer referenced by the replacement index.
-      await this.pruneEmbeddingCacheIfNeeded();
-      state.progress.cacheWritesPendingPrune = false;
+      await this.pruneEmbeddingCacheIfNeeded(true);
+      state.progress.cachePrunePending = false;
       this.clearFullReindexRetryBackoff();
     } catch (err) {
       this.adoptReindexRetryState(originalRetryState);

@@ -32,11 +32,32 @@ const media = (player: Player) => player.querySelector("video");
 const source = (video: HTMLVideoElement | null) => video?.getAttribute("src");
 
 it("starts metadata loading only when the video card reaches the viewport", async () => {
-  let intersect: IntersectionObserverCallback | undefined;
-  const disconnect = vi.fn();
+  let intersect: (() => void) | undefined;
+  const targets = new Set<Element>();
   vi.stubGlobal("IntersectionObserver", function (callback: IntersectionObserverCallback) {
-    intersect = callback;
-    return { observe() {}, disconnect };
+    const observed = new Set<Element>();
+    // SAFETY: The viewport owner only reads target and isIntersecting.
+    intersect = () =>
+      callback(
+        [...observed].map(
+          (target) => ({ target, isIntersecting: true }) as IntersectionObserverEntry,
+        ),
+        {} as IntersectionObserver,
+      );
+    return {
+      observe(target: Element) {
+        observed.add(target);
+        targets.add(target);
+      },
+      unobserve(target: Element) {
+        observed.delete(target);
+        targets.delete(target);
+      },
+      disconnect() {
+        observed.forEach((target) => targets.delete(target));
+        observed.clear();
+      },
+    };
   });
   const onFallbackExpand = vi.fn();
   const player = await open("clip", { sourceIdentity: "media:clip-metadata", onFallbackExpand });
@@ -45,15 +66,11 @@ it("starts metadata loading only when the video card reaches the viewport", asyn
   expect(video?.preload).toBe("metadata");
   expect(video?.hasAttribute("src")).toBe(false);
 
-  // SAFETY: This observer fixture exercises only the visibility field.
-  const entry = { isIntersecting: true } as IntersectionObserverEntry;
-  // SAFETY: The production callback does not inspect its observer argument.
-  const observer = {} as IntersectionObserver;
-  const enterViewport = () => intersect?.([entry], observer);
+  const enterViewport = () => intersect?.();
   enterViewport();
   await player.updateComplete;
   expect(source(video)).toBe("https://example.com/clip.mp4");
-  expect(disconnect).toHaveBeenCalledOnce();
+  expect(targets.size).toBe(0);
 
   video!.dispatchEvent(new Event("error"));
   await player.updateComplete;
@@ -67,7 +84,7 @@ it("starts metadata loading only when the video card reaches the viewport", asyn
   expect(player.querySelector("a[download]")?.getAttribute("href")).toBe(player.src);
   expandButton(player).click();
   expect(onFallbackExpand).toHaveBeenCalledOnce();
-  expect(disconnect).toHaveBeenCalledTimes(2);
+  expect(targets.size).toBe(0);
 
   player.src = "https://example.com/recovered.mp4";
   await player.updateComplete;
@@ -79,12 +96,12 @@ it("starts metadata loading only when the video card reaches the viewport", asyn
   enterViewport();
   await player.updateComplete;
   expect(source(recovered)).toBe("https://example.com/recovered.mp4");
-  expect(disconnect).toHaveBeenCalledTimes(3);
+  expect(targets.size).toBe(0);
 
   player.remove();
   await Promise.resolve();
   flush();
-  expect(disconnect).toHaveBeenCalledTimes(4);
+  expect(targets.size).toBe(0);
 });
 
 it("keeps a loaded preview through rebuffering and applies a renewed ticket on resume", async () => {

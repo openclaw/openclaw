@@ -40,6 +40,48 @@ function parseProfile(args: string[]) {
 
 describe("worktrees cli", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("escapes terminal table cells while preserving raw registry records in JSON", async () => {
+    const record = makeWorktreeRecord("/repo/café\x1b[31m\nforged", "worktree-id", {
+      name: "ordinary",
+      repoFingerprint: "fingerprint",
+      path: "/state/worktree-id",
+      branch: "openclaw/ordinary",
+      ownerKind: "manual",
+    });
+    vi.spyOn(owner, "list").mockResolvedValue([record]);
+    const text = muteOutput(false);
+    await run(["list"]);
+    const output = text.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(output).toContain("/repo/café\\nforged");
+    expect(output).toContain("openclaw/ordinary");
+    expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+
+    const json = muteOutput();
+    await run(["list", "--json"]);
+    expect(json).toHaveBeenCalledWith({ worktrees: [record] });
+    expect(record.repoRoot).toBe("/repo/café\x1b[31m\nforged");
+  });
+
+  it("escapes the creation acknowledgement without changing its JSON record", async () => {
+    const repoRoot = await fs.realpath(tempDirs.make("openclaw-terminal-worktree-"));
+    const record = makeWorktreeRecord(repoRoot, "worktree-id", {
+      name: "ordinary",
+      repoFingerprint: "fingerprint",
+      path: "/state/café\x1b[31m\nforged\tpath\r\x00\x85",
+      branch: "openclaw/ordinary",
+      ownerKind: "manual",
+    });
+    const args = ["create", repoRoot];
+    vi.spyOn(owner, "create").mockResolvedValue(record);
+    const text = muteOutput(false);
+    await run(args);
+    expect(text).toHaveBeenCalledWith("worktree-id\t/state/café\\nforged\\tpath\\r");
+
+    const json = muteOutput();
+    await run([...args, "--json"]);
+    expect(json).toHaveBeenCalledWith(record);
+  });
   const exactRequest = {
     ownerKind: "session",
     ownerId: "example-owner",

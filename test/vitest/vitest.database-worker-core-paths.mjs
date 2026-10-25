@@ -55,6 +55,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/terminal-tool.incognito.test.ts",
   "src/agents/interrupted-input-context.integration.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
+  "src/infra/database-engine/pending-input-source.conformance.test.ts",
   "src/infra/database-engine/backup-runs.conformance.test.ts",
   "src/infra/database-engine/goal-receipts.conformance.test.ts",
   "src/infra/database-engine/owner-fragments.conformance.test.ts",
@@ -73,6 +74,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/gateway-session-startup.conformance.test.ts",
   "src/infra/database-engine/session-actor.conformance.test.ts",
   "src/infra/database-engine/audit-retention.conformance.test.ts",
+  "src/infra/database-engine/acp-retention.conformance.test.ts",
+  "src/infra/database-engine/row-limit.conformance.test.ts",
   "src/infra/database-engine/gateway-agent-inspection.conformance.test.ts",
   "src/infra/database-engine/session-group-catalog.conformance.test.ts",
   "src/infra/database-engine/post-ready.conformance.test.ts",
@@ -1390,6 +1393,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-deletion-recovery-hold.postgres.test.ts",
   "src/commands/doctor/cron/legacy-repair.postgres.test.ts",
   "src/infra/database-engine/session-path-alias.conformance.test.ts",
+  "src/infra/database-engine/sql-probe.conformance.test.ts",
+  "src/infra/database-engine/message-progress-retention.conformance.test.ts",
   "src/infra/database-engine/session-archive-alias.conformance.test.ts",
   "src/infra/database-engine/outcome-surfaces.postgres.test.ts",
 ];

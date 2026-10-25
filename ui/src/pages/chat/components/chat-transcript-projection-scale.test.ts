@@ -1,19 +1,26 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createComponent, createSignal } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { setExpansionState } from "../chat-thread.ts";
+import { createChatViewFrame } from "../chat-view-frame.ts";
 import {
+  createChatProps,
   createTestTranscript as createTranscript,
   stubAnimationFrames,
 } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
+import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
+import { ChatThread } from "./chat-thread-view.tsx";
+import * as transcriptIndex from "./chat-transcript-message-index.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   installTranscriptDomMocks,
@@ -86,6 +93,85 @@ describe("transcript projection", () => {
     }
     resetTranscriptTestDom();
     vi.useRealTimers();
+  });
+
+  it("updates live text without projecting rows, but projects visibility and completion", async () => {
+    const paneId = "stream-leaf-projection";
+    const transcript = createTestTranscript(paneId);
+    const projectRows = vi.spyOn(transcriptIndex, "projectTranscriptIndex");
+    let updateText!: (text: string | null) => void;
+    let updateContext!: (value: boolean) => void;
+    const view = mountSolid(() => {
+      const [text, setText] = createSignal<string | null>("Initial reply");
+      const [context, setContext] = createSignal(false);
+      updateText = setText;
+      updateContext = setContext;
+      const props = {
+        ...createChatProps({
+          paneId,
+          sessionKey: "agent:main:stream-leaf",
+          messages: [msg("user", "Prompt", 1_000)],
+          transcript,
+        }),
+        runId: "live",
+        runActive: true,
+        runWorking: true,
+        streamStartedAt: 2_000,
+        get stream() {
+          return text();
+        },
+        get assistantName() {
+          return context() ? "Updated assistant" : "Assistant";
+        },
+      };
+      const viewFrame = createChatViewFrame(
+        props,
+        () => undefined,
+        createAsyncQuestionPresentation(getTranscriptState(paneId), props),
+      );
+      return createComponent(ChatThread, { props: viewFrame.threadProps, transcript });
+    });
+    onTestFinished(view.unmount);
+    transcript.start();
+    transcript.update();
+    await vi.advanceTimersByTimeAsync(0);
+    const currentBubble = () => view.container.querySelector<HTMLElement>(".chat-bubble.streaming");
+    const bubble = currentBubble()!;
+    expect(bubble).not.toBeNull();
+    projectRows.mockClear();
+
+    for (const text of ["Reply grows", "Reply grows again", "Reply grows again."]) {
+      updateText(text);
+      flush();
+      expect(currentBubble()!).toBe(bubble);
+      expect(bubble.textContent).toContain(text);
+      expect(projectRows).not.toHaveBeenCalled();
+    }
+
+    // A sibling projection update replaces the live resolver's reactive owner.
+    updateContext(true);
+    flush();
+    expect(projectRows).toHaveBeenCalledOnce();
+    projectRows.mockClear();
+    updateText("Reply after sibling update");
+    flush();
+    expect(bubble.textContent).toContain("Reply after sibling update");
+    expect(projectRows).not.toHaveBeenCalled();
+
+    updateText("<thinking>Private planning</thinking>");
+    flush();
+    expect(view.container.textContent).not.toContain("Private planning");
+    expect(projectRows).toHaveBeenCalledOnce();
+    projectRows.mockClear();
+    updateText("Visible again");
+    flush();
+    expect(currentBubble()!.textContent).toContain("Visible again");
+    expect(projectRows).toHaveBeenCalledOnce();
+    projectRows.mockClear();
+    updateText(null);
+    flush();
+    expect(currentBubble()).toBeNull();
+    expect(projectRows).toHaveBeenCalledOnce();
   });
 
   it.each(["answer", "reasoning"] as const)(

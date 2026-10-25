@@ -3,7 +3,7 @@ import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import {
   projectPlainTextToolCallBlocks,
   stripPlainTextToolCallBlocks,
-} from "../../../packages/tool-call-repair/src/index.js";
+} from "../../../packages/tool-call-repair/src/payload.js";
 import { escapeRegExp } from "../regexp.js";
 import {
   canReuseMarkdownOwnership,

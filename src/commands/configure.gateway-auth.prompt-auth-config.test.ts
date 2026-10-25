@@ -66,6 +66,7 @@ vi.mock("./models/list.manifest-catalog.js", () => ({
 }));
 
 import { promptAuthConfig } from "./configure.gateway-auth.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const { applyAuthChoice: applyProviderAuthChoice } =
   await vi.importActual<typeof import("./auth-choice.apply.js")>("./auth-choice.apply.js");
@@ -100,17 +101,7 @@ function providerModels(id: string) {
   return {
     baseUrl: "https://provider.example/v1",
     api: "openai-completions" as const,
-    models: [
-      {
-        id,
-        name: id,
-        reasoning: false,
-        input: ["text"] as Array<"text" | "image" | "video" | "audio">,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      },
-    ],
+    models: [createTestModelDefinition(id, { contextWindow: 128_000 })],
   };
 }
 

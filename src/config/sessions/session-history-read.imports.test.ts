@@ -55,6 +55,8 @@ it("keeps lazy readers independent of unrelated runtime barrels", () => {
     ...gatewayFiles("session-utils-store-sources"),
     ...sessionFiles("store-target-inventory"),
     "src/config/runtime-source-projection.ts",
+    "src/agents/bash-tools.process-schema.ts",
+    "packages/tool-call-repair/src/stream-normalizer.ts",
   ]);
   expectIndependent(
     [

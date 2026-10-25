@@ -1,13 +1,13 @@
 // @vitest-environment node
 
 import { expect, it } from "vitest";
+import { resolveCanvasIframeUrl } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   extractToolCardsCached as extractToolCards,
   isToolCardError,
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
-import { resolveCanvasIframeUrl } from "../../../lib/chat/tool-display.ts";
 
 const assistantCards = (content: unknown[], metadata: Record<string, unknown> = {}) =>
   extractToolCards({ role: "assistant", content, ...metadata });

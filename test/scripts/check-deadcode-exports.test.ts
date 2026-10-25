@@ -35,6 +35,12 @@ describe("check-deadcode-exports", () => {
       "config/knip.scripts-exports.config.ts!",
       "scripts/generate-runtime-script-assets.mjs!",
       "scripts/generate-static-validators.mts!",
+      "scripts/perf/cron-delivery-gateway-entry.ts!",
+      "scripts/perf/plugin-policy-read-measure.mjs!",
+      "scripts/perf/prompt-cache-observation-measure.ts!",
+      "scripts/perf/reconnect-read-wave-measure.ts!",
+      "scripts/perf/session-actor-retention-measure.ts!",
+      "scripts/perf/session-row-churn-probe.ts!",
       "tsdown.config.ts!",
     ]);
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
@@ -44,7 +50,11 @@ describe("check-deadcode-exports", () => {
       "scripts/crabbox-wrapper.mts!",
       "scripts/check-openclaw-package-tarball.mjs!",
       "scripts/check-openclaw-package-tarball.mts!",
+      "test/scripts/service-relay-artifact.test-support.mjs!",
     ]);
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "test/scripts/service-relay-artifact.test-support.mjs!",
+    );
     for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
       for (const directory of ["src", "scripts", "test"]) {
         expect(isEntry(fullRootWorkspace.entry, `${directory}/x.test.${extension}`)).toBe(true);
@@ -221,6 +231,9 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(compiled).toContain(
       'import { fetchWithSsrFGuard as __dynamic2_0 } from "../extensions/team-reports/src/report-run.benchmark-fixtures.test-support.ts";',
     );
+    expect(compiled).toContain(
+      'import { addDoctorLegacyIssues as __dynamic3_0 } from "../src/commands/doctor/shared/legacy-config-issues.js";',
+    );
 
     const readFileSync = fs.readFileSync.bind(fs);
     vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
@@ -251,6 +264,11 @@ const catalog = module.loadControlUiSourceCatalog();`;
           "",
         );
       }
+      if (
+        path.resolve(String(file)) === path.resolve("src/commands/config-preflight-snapshot.ts")
+      ) {
+        return String(source).replaceAll(").addDoctorLegacyIssues", ").consumeLegacyIssues");
+      }
       return source;
     });
     const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
@@ -259,6 +277,7 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(withoutConsumers).not.toContain("runtimeProcessWorkerDependencies");
     expect(withoutConsumers).not.toContain("gatewayBenchTaskOperation");
     expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
+    expect(withoutConsumers).not.toContain("addDoctorLegacyIssues");
   });
 
   it("models retained updater named exports without fabricating private imports", () => {

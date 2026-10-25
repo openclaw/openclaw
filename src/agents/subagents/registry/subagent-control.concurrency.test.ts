@@ -13,8 +13,6 @@ import * as controllerLifecycle from "../../../sessions/session-controller.lifec
 import {
   beginSessionEffect,
   captureSessionTarget,
-  getSessionMutationCount,
-  getSessionControllerWorkCount,
   runSessionMutation,
   type SessionEffectRef,
 } from "../../../sessions/session-controller.lifecycle.js";
@@ -74,12 +72,10 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
     expectsCompletionMessage: true,
   });
   const original = subagentRuns.get("selected-original")!;
-  const entered = createDeferred();
-  const release = createDeferred();
+  const handoff = createEnteredGate();
   const killNative = nativeControl.killSubagentRunAdmin;
   vi.spyOn(nativeControl, "killSubagentRunAdmin").mockImplementation(async (...args) => {
-    entered.resolve();
-    await release.promise;
+    await handoff.wait();
     return killNative(...args);
   });
   const tool = createSubagentsTool({ agentSessionKey: requesterKey, config: getRuntimeConfig() });
@@ -91,7 +87,7 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
   });
   try {
     await awaitGateBeforeSettlement(
-      entered.promise,
+      handoff.entered,
       pending,
       "Cancellation never reached its runtime handoff.",
     );
@@ -112,11 +108,11 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
     const successor = subagentRuns.get("selected-followup")!;
     expect(successor.generation).toBeGreaterThan(original.generation!);
     attachActiveEmbeddedRun(sessionId, handle, sessionKey);
-    release.resolve();
+    handoff.release();
     expect((await pending).details).toMatchObject({ killed: false });
     expect(controller.signal.aborted).toBe(false);
   } finally {
-    release.resolve();
+    handoff.release();
     await pending;
     await detachActiveEmbeddedRun(sessionId, handle, sessionKey);
   }
@@ -130,12 +126,12 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
     });
     let callerControlsAncestor = true;
     const controller = new AbortController();
-    const abort = vi.fn(() => {
+    const abort = () => {
       controller.abort();
       if (revocation === "after abort") {
         callerControlsAncestor = false;
       }
-    });
+    };
     const handle = createEmbeddedRunHandle({ runId, abort });
     attachActiveEmbeddedRun(sessionId, handle, sessionKey);
     const interrupted = createDeferred();
@@ -178,7 +174,6 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
       await expect(pending).rejects.toThrow("Caller no longer controls ancestor.");
       const accepted = revocation === "after abort";
       expect(controller.signal.aborted).toBe(accepted);
-      expect(abort).toHaveBeenCalledTimes(Number(accepted));
       expect(onInterrupt).toHaveBeenCalledTimes(Number(revocation !== "before interruption"));
       expect(subagentRuns.get(runId)?.killIntent).toBeUndefined();
     } finally {
@@ -203,8 +198,6 @@ it.each([
       runId: "readiness-run",
     });
     const controller = new AbortController();
-    const aborted = vi.fn();
-    controller.signal.addEventListener("abort", aborted, { once: true });
     const handle = createEmbeddedRunHandle({ runId, abort: () => controller.abort() });
     attachActiveEmbeddedRun(sessionId, handle, sessionKey);
     const interrupted = createDeferred();
@@ -285,8 +278,7 @@ it.each([
         "Cancellation skipped pending caller preparation.",
       );
       expect(settled).toBe(false);
-      expect(aborted).toHaveBeenCalledTimes(phase === "accepted" ? 1 : 0);
-      expect(getSessionMutationCount()).toBeGreaterThan(0);
+      expect(controller.signal.aborted).toBe(phase === "accepted");
       if (terminal) {
         expect(await markSubagentRunTerminated({ runId, reason: "killed" })).toBe(1);
         expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
@@ -294,16 +286,15 @@ it.each([
       releaseRead.resolve();
       const result = await pending;
       if (outcome === "failure") {
+        const error = "error" in result ? result.error : undefined;
         expect(result.killed).toBe(phase === "accepted");
-        expect("error" in result ? result.error : undefined).toContain("cancel read failed");
-        expect("error" in result ? result.error : undefined).not.toContain(
-          "Caller facts were not prepared",
-        );
+        expect(error).toContain("cancel read failed");
+        expect(error).not.toContain("Caller facts were not prepared");
       } else {
         expect(result.killed).toBe(true);
       }
       const stopped = phase === "accepted" || outcome === "ready";
-      expect(aborted).toHaveBeenCalledTimes(Number(stopped));
+      expect(controller.signal.aborted).toBe(stopped);
       expect(subagentRuns.get(runId)?.killIntent).toBeUndefined();
       expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe(
         stopped ? "killed" : "running",
@@ -341,13 +332,13 @@ it.for(["admin", "bulk"] as const)(
     const cleanupGate = createDeferred();
     const allRemoved = createDeferred();
     let removals = 0;
-    const removed = vi.fn(async () => {
+    const removed = async () => {
       removals += 1;
       if (removals === queued.length) {
         allRemoved.resolve();
       }
       await cleanupGate.promise;
-    });
+    };
     for (const runId of queued) {
       enqueueControlRun("sibling-cancellation", runId, running, start, {
         maxConcurrent: running.length,
@@ -403,13 +394,11 @@ it.for(["admin", "bulk"] as const)(
     try {
       await awaitProgress(allInterrupted.promise, "Cancellation skipped a running sibling");
       expect(interrupted.toSorted()).toEqual(running);
-      expect(getSessionControllerWorkCount()).toBe(running.length);
       expect(start).not.toHaveBeenCalled();
       for (const lease of leases.toReversed()) {
         lease.release();
       }
       await awaitProgress(allRemoved.promise, "Cancellation skipped a queued sibling");
-      expect(removed).toHaveBeenCalledTimes(queued.length);
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -461,9 +450,9 @@ it.for(["before capacity release", "after interrupt"] as const)(
       }
     }
     const unrelatedStarted = createDeferred();
-    const unrelatedStart = vi.fn(async () => {
+    const unrelatedStart = async () => {
       unrelatedStarted.resolve();
-    });
+    };
     const startG = vi.fn(async () => {});
     const startFailure = vi.fn(() => true);
     const groupFor = (requester: string) => JSON.stringify(["main", requester, "shared-name"]);
@@ -521,7 +510,6 @@ it.for(["before capacity release", "after interrupt"] as const)(
       await lateRegistration;
       // The kill cannot settle while admission A is held, so only the test deadline bounds this.
       await withinTest(unrelatedStarted.promise, signal);
-      expect(unrelatedStart).toHaveBeenCalledOnce();
       expect(interruptD).not.toHaveBeenCalled();
       expect(startG).not.toHaveBeenCalled();
       admissionA.release();

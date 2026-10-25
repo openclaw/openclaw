@@ -175,6 +175,7 @@ export function createContext(
     runtimeConfig: {
       state: { configSnapshot: null, configLoading: false, lastError: null },
       ensureLoaded: vi.fn(async () => undefined),
+      ensureDisplayLoaded: vi.fn(async () => undefined),
       subscribe: () => () => undefined,
     },
     router: {

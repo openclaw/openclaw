@@ -51,15 +51,6 @@ function resolveDeferredReceiverRunAt(job: CronJob, nowMs: number): number | und
   return hasScheduledNextRunAtMs(future) ? Math.max(next, future) : undefined;
 }
 
-/** Internal Hook adapter; the public Cron facade retains its existing wake contract. */
-export type DeferredHookWake = (opts: {
-  text: string;
-  agentId: string;
-  expectedTarget?: SessionEventTarget;
-  createIfMissing?: true;
-  commitGuard: () => void;
-}) => Promise<{ ok: true; eventOutcome: "queued" | "coalesced" } | { ok: false; reason?: string }>;
-
 /** Keeps safety notices with their creator and limits failure routes to explicit origins. */
 export async function enqueueCronNotification(
   state: CronServiceState,

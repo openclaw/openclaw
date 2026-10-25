@@ -428,14 +428,7 @@ export function ContextNotice(props: ContextNoticeProps) {
                               {context().pct}%
                             </strong>
                           </div>
-                          <Show
-                            when={props.gateway && props.session}
-                            fallback={
-                              <p class="context-usage__note" role="status">
-                                {t("chat.sessionDetails.contextOffline")}
-                              </p>
-                            }
-                          >
+                          <Show when={props.gateway && props.session}>
                             <Loading fallback={<ContextPopoverSkeleton />}>
                               <ChatContextBreakdown
                                 gateway={props.gateway!}

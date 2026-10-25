@@ -890,6 +890,13 @@ function createFetchServiceWorker(
       },
     },
   });
+  const createLifecycleRequest = (): ServiceWorkerFetchRequest => ({
+    url: scope,
+    method: "GET",
+    mode: "cors",
+    cache: "default",
+    headers: new Headers(),
+  });
   return {
     scope,
     cache,
@@ -911,13 +918,7 @@ function createFetchServiceWorker(
     async activate() {
       listeners.get("activate")?.({
         waitUntil,
-        request: {
-          url: scope,
-          method: "GET",
-          mode: "cors",
-          cache: "default",
-          headers: new Headers(),
-        },
+        request: createLifecycleRequest(),
         clientId: "",
         respondWith: vi.fn(),
       });
@@ -928,13 +929,7 @@ function createFetchServiceWorker(
       listeners.get("message")?.({
         data: { type: "sw-version-probe", offlinePrecache },
         ports: [{ postMessage: probeReply }],
-        request: {
-          url: scope,
-          method: "GET",
-          mode: "cors",
-          cache: "default",
-          headers: new Headers(),
-        },
+        request: createLifecycleRequest(),
         clientId: "requesting-window",
         respondWith: vi.fn(),
         waitUntil,
@@ -944,13 +939,7 @@ function createFetchServiceWorker(
     async install() {
       listeners.get("install")?.({
         waitUntil,
-        request: {
-          url: scope,
-          method: "GET",
-          mode: "cors",
-          cache: "default",
-          headers: new Headers(),
-        },
+        request: createLifecycleRequest(),
         clientId: "",
         respondWith: vi.fn(),
       });

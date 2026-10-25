@@ -198,6 +198,8 @@ describe("sidebar people workload", () => {
     expect(link).not.toHaveBeenCalled();
 
     await selectSidebarView(sidebar, "online");
+    await vi.dynamicImportSettled();
+    await settle(sidebar);
     expect(person(sidebar, "ada").getAttribute("href")).toBe("/activity/ada");
     expect(link).toHaveBeenCalled();
     await selectSidebarView(sidebar, "sessions");

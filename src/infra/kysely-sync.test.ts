@@ -16,9 +16,11 @@ import {
   prepareSqliteQueryIterator,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
+  prepareSqliteTerminalWrite,
   sqliteStringSet,
 } from "./kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
 import { assertNoActiveSqliteReaders, withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
@@ -134,6 +136,39 @@ describe("kysely sync helpers", () => {
       ).toEqual({ count: 1 });
     }
     expect(run(db.deleteFrom("items"))).toEqual({ numAffectedRows: 1n, rows: [] });
+  });
+
+  it("settles terminal writes before fallible native statement cleanup", () => {
+    createItems();
+    const nativePrepare = database.prepare.bind(database);
+    let cleanupCalls = 0;
+    vi.spyOn(database, "prepare").mockImplementation((query) => {
+      const statement = nativePrepare(query);
+      const dispose = statement[Symbol.dispose]?.bind(statement);
+      Object.defineProperty(statement, Symbol.dispose, {
+        configurable: true,
+        value() {
+          dispose?.();
+          cleanupCalls += 1;
+          throw new Error("synthetic statement cleanup failure");
+        },
+      });
+      return statement;
+    });
+    const write = prepareSqliteTerminalWrite<{ id: bigint; name: string }>(database, (parameter) =>
+      db.insertInto("items").values({
+        id: parameter((row) => row.id),
+        name: parameter((row) => row.name),
+      }),
+    );
+    expect(() =>
+      withSqlitePostCommitPublications(database, () => {
+        write({ id: 9007199254740993n, name: "committed" });
+        expect(cleanupCalls).toBe(0);
+      }),
+    ).not.toThrow();
+    expect(cleanupCalls).toBe(1);
+    expect(nativePrepare("select name from items").get()).toEqual({ name: "committed" });
   });
 
   it("preserves raw readers and distinguishes writes with and without returned rows", () => {
