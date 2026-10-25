@@ -2,6 +2,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { SpeechProviderConfig } from "openclaw/plugin-sdk/speech-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult as spawnResult } from "../test-support/command-result.test-support.js";
 
 const runCommandBufferedMock = vi.hoisted(() => vi.fn());
 
@@ -16,10 +17,7 @@ const WAV_AUDIO = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.fr
 
 function commandResult(overrides: Record<string, unknown> = {}) {
   return {
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
+    ...spawnResult(),
     stdout: WAV_AUDIO,
     stderr: Buffer.alloc(0),
     ...overrides,
