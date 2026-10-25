@@ -2,8 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { SessionUpstreamProbe } from "openclaw/plugin-sdk/session-catalog";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { injectFileShortReads } from "../test-support/file-short-reads.test-support.js";
+import { describe, expect, it } from "vitest";
 import { checkClaudeUpstreamActivity, linkContinued } from "./session-upstream-activity.js";
 
 const CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
@@ -52,10 +51,6 @@ function continueLink(overrides: Partial<Parameters<typeof linkContinued>[0]>) {
 function row(type: "user" | "assistant", content: unknown, timestamp: string) {
   return JSON.stringify({ type, timestamp, message: { role: type, content } }) + "\n";
 }
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 describe("Claude upstream activity", () => {
   it("stats without reading when the file did not grow", async () => {

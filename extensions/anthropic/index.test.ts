@@ -170,13 +170,7 @@ describe("anthropic provider replay hooks", () => {
         model: { primary: "anthropic/claude-opus-4-6" },
         models: { "anthropic/claude-opus-4-6": {} },
       },
-      {
-        auth: {
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-          },
-        },
-      },
+      { auth: { profiles: { "anthropic:api": { provider: "anthropic", mode: "api_key" } } } },
     );
 
     const models = next?.agents?.defaults?.models;
@@ -247,12 +241,11 @@ describe("anthropic provider replay hooks", () => {
       },
       {
         auth: {
-          order: {
-            anthropic: ["anthropic:oauth", "anthropic:claude-cli"],
-          },
+          ...cliAuth,
+          order: { anthropic: ["anthropic:oauth", "anthropic:claude-cli"] },
           profiles: {
+            ...cliAuth?.profiles,
             "anthropic:oauth": { provider: "anthropic", mode: "oauth" },
-            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
           },
         },
       },
@@ -312,35 +305,29 @@ describe("anthropic provider replay hooks", () => {
       const profile = thinking(modelId);
       expect(levelIds(profile)).toStrictEqual(thinkingLevels);
       expect(requireRecord(profile, `${modelId} thinking profile`).defaultLevel).toBe(defaultLevel);
-      const normalized = provider.normalizeResolvedModel?.({
-        provider: "anthropic",
-        modelId,
-        model: {
-          ...(resolved as ProviderRuntimeModel),
-          reasoning: false,
-          ...(checksCliPolicy
-            ? {}
-            : { contextWindow: 200_000, contextTokens: 200_000, maxTokens: 64_000 }),
-          ...(restoresMissingCost
-            ? {
-                cost:
-                  restoresMissingCost === "tiers" && cost
-                    ? {
-                        input: cost.input,
-                        output: cost.output,
-                        cacheRead: cost.cacheRead,
-                        cacheWrite: cost.cacheWrite,
-                      }
-                    : undefined,
-              }
-            : {}),
-        } as ProviderRuntimeModel,
-      } as never);
-      expectFields(normalized, {
-        reasoning: true,
+      const normalized = normalizeModel({
+        ...(resolved as ProviderRuntimeModel),
+        reasoning: false,
         ...(checksCliPolicy
           ? {}
-          : { contextWindow: 1_000_000, contextTokens: 1_000_000, maxTokens: 128_000 }),
+          : { contextWindow: 200_000, contextTokens: 200_000, maxTokens: 64_000 }),
+        ...(restoresMissingCost
+          ? {
+              cost:
+                restoresMissingCost === "tiers" && cost
+                  ? {
+                      input: cost.input,
+                      output: cost.output,
+                      cacheRead: cost.cacheRead,
+                      cacheWrite: cost.cacheWrite,
+                    }
+                  : undefined,
+            }
+          : {}),
+      } as ProviderRuntimeModel);
+      expectFields(normalized, {
+        reasoning: true,
+        ...(checksCliPolicy ? {} : modernLimits),
         ...(restoresMissingCost ? { cost } : {}),
       });
       if (checksCliPolicy) {
