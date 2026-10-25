@@ -123,17 +123,15 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
           );
           controlSessionId = call.sessionId;
         } else {
-          const foreignTarget = await prepareTalkSessionTarget(
-            harness.getConfig(),
-            "agent:primary:main",
-          );
           foreignOperation = createReplyOperation({
             sessionKey: "global",
             sessionId: "other-agent-session",
             agentId: "primary",
             resetTriggered: false,
             target: captureSessionTarget({
-              storeScope: foreignTarget.storePath,
+              storeScope: (
+                await prepareTalkSessionTarget(harness.getConfig(), "agent:primary:main")
+              ).storePath,
               sessionKey: "global",
               incarnation: "other-agent-session",
               agentId: "primary",
@@ -158,6 +156,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
           undefined,
           expect.objectContaining({ code: "INVALID_REQUEST" }),
         );
+        const controlResult = expect.objectContaining({ ok: cancelsOriginal, mode: "cancel" });
         if (surface === "browser-provider") {
           harness.getBrowserControl().onToolCall?.({
             callId: "control",
@@ -166,10 +165,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
             args: { ...cancel },
           });
           await vi.waitFor(() =>
-            expect(harness.submitProviderResult).toHaveBeenCalledWith(
-              "control",
-              expect.objectContaining({ ok: cancelsOriginal, mode: "cancel" }),
-            ),
+            expect(harness.submitProviderResult).toHaveBeenCalledWith("control", controlResult),
           );
         } else {
           const respond = await harness.dispatch(
@@ -180,11 +176,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
               ...cancel,
             },
           );
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({ ok: cancelsOriginal, mode: "cancel" }),
-            undefined,
-          );
+          expect(respond).toHaveBeenCalledWith(true, controlResult, undefined);
         }
         expect(abortOwned).toHaveBeenCalledTimes(cancelsOriginal ? 1 : 0);
         expect(abortOther).not.toHaveBeenCalled();

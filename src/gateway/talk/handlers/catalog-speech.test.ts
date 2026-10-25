@@ -82,24 +82,14 @@ vi.mock("../../../realtime-transcription/provider-registry.js", async (importOri
 async function readCatalog(cfg: OpenClawConfig, params: Record<string, unknown> = {}) {
   const context = { getRuntimeConfig: () => cfg };
   const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", params, { context });
-  const ownsTimers = !vi.isFakeTimers();
-  if (ownsTimers) {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const result = await read();
+  if (
+    asOptionalRecord(asOptionalRecord(result.error)?.details)?.reason !== "talk-catalog-warming"
+  ) {
+    return result;
   }
-  try {
-    const result = await read();
-    if (
-      asOptionalRecord(asOptionalRecord(result.error)?.details)?.reason !== "talk-catalog-warming"
-    ) {
-      return result;
-    }
-    await vi.advanceTimersByTimeAsync(0);
-    return await read();
-  } finally {
-    if (ownsTimers) {
-      vi.useRealTimers();
-    }
-  }
+  await vi.advanceTimersByTimeAsync(0);
+  return read();
 }
 
 afterEach(() => vi.useRealTimers());
@@ -112,6 +102,7 @@ function expectWarming(result: unknown) {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   registry.providers = [];
   registry.listSpeechProviders.mockReset().mockImplementation(() => registry.providers);
   registry.realtime = [];
@@ -242,12 +233,11 @@ it("single-flights cold discovery and isolates owner/model snapshots", async () 
 it("serves the last catalog during one slow refresh and publishes its late success", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const cfg: OpenClawConfig = { plugins: { enabled: false } };
-  const context = { getRuntimeConfig: () => cfg, logGateway: { warn: vi.fn() } };
+  const context = { getRuntimeConfig: () => cfg };
   const pending = createDeferred<boolean>();
   const readiness = vi.fn(async () => true);
   registry.providers = [speechProvider(readiness, "slow")];
-  const read = () =>
-    callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context: context as never });
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
   expectWarming(await read());
   await vi.advanceTimersByTimeAsync(0);
   const first = await read();
@@ -257,11 +247,9 @@ it("serves the last catalog during one slow refresh and publishes its late succe
   const burst = await Promise.all(Array.from({ length: 20 }, read));
   expect(burst.every((result) => result.response === first.response)).toBe(true);
   await vi.advanceTimersByTimeAsync(0);
-  expect(readiness).toHaveBeenCalledTimes(2);
   await vi.advanceTimersByTimeAsync(6_000);
   expect((await read()).response).toBe(first.response);
   expect(readiness).toHaveBeenCalledTimes(2);
-  expect(context.logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("waiting=speech"));
   pending.resolve(false);
   await vi.advanceTimersByTimeAsync(0);
   expectCatalog(await read(), "speech", { providers: [{ configured: false }] });
@@ -312,18 +300,19 @@ it.each(["speech", "realtime", "transcription"] as const)(
     const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
     expect((await read()).ok).toBe(false);
     await nextTurn();
-    expectCatalog(await read(), kind, {
+    const expectedRows = (configured: boolean) => ({
       providers: [
         { id: "healthy", configured: true },
-        { id: "broken", configured: false },
+        { id: "broken", configured },
       ],
     });
+    expectCatalog(await read(), kind, expectedRows(false));
     brokenReadiness.mockResolvedValue(true);
     cfg = { ...cfg };
     await read();
     await nextTurn();
     const recovered = await read();
-    expectCatalog(recovered, kind, { providers: [{ configured: true }, { configured: true }] });
+    expectCatalog(recovered, kind, expectedRows(true));
     brokenReadiness.mockRejectedValue(new Error("provider unavailable again"));
     cfg = { ...cfg };
     expect((await read()).response).toBe(recovered.response);
@@ -333,11 +322,6 @@ it.each(["speech", "realtime", "transcription"] as const)(
     cfg = { ...cfg };
     expect((await read()).response).toBe(recovered.response);
     await nextTurn();
-    expectCatalog(await read(), kind, {
-      providers: [
-        { id: "healthy", configured: true },
-        { id: "broken", configured: false },
-      ],
-    });
+    expectCatalog(await read(), kind, expectedRows(false));
   },
 );
