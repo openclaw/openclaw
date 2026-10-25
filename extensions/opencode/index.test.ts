@@ -6,7 +6,6 @@ import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runt
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -16,9 +15,37 @@ import {
   resolveOpencodeZenStarterModel,
 } from "./provider-catalog.js";
 
-const requireRecord = createRequireRecord("record", "expected-label-record");
 const METADATA_URL = "https://models.opencode.ai/api.json";
 const MODELS_URL = "https://opencode.ai/zen/v1/models";
+const OPENAI_URL = "https://opencode.ai/zen/v1";
+const ANTHROPIC_URL = "https://opencode.ai/zen";
+type Provider = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+type CatalogContext = Parameters<NonNullable<Provider["catalog"]>["run"]>[0];
+const denyFetch = () =>
+  vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected fetch"));
+const resolveModel = (provider: Provider, modelId: string) =>
+  provider.resolveDynamicModel?.({ modelId } as never);
+const discover = (
+  fetchGuard: NonNullable<Parameters<typeof buildOpencodeZenLiveProviderConfig>[0]>["fetchGuard"],
+  apiKey = "runtime-key",
+  discoveryApiKey = "discovery-key",
+) => buildOpencodeZenLiveProviderConfig({ apiKey, discoveryApiKey, fetchGuard });
+const catalogContext = (
+  resolveProviderApiKey: CatalogContext["resolveProviderApiKey"],
+): CatalogContext => ({
+  config: {},
+  env: {},
+  resolveProviderApiKey,
+  resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+});
+const prepareDynamic = (provider: Provider, overrides: Record<string, unknown> = {}) =>
+  provider.prepareDynamicModel?.({
+    config: {},
+    provider: "opencode",
+    modelId: "unconfigured-preview-fixture",
+    modelRegistry: {},
+    ...overrides,
+  } as never);
 function prepareModel(modelId: string, fetchGuard: typeof ssrfRuntime.fetchWithSsrFGuard) {
   vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(fetchGuard);
   return prepareOpencodeZenModel({ modelId });
@@ -162,10 +189,12 @@ describe("opencode provider plugin", () => {
     });
     const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
 
-    expect(mediaProvider?.capabilities).toEqual(["image"]);
-    expect(mediaProvider?.defaultModels).toEqual({ image: "minimax-m3" });
-    expect(typeof mediaProvider?.describeImage).toBe("function");
-    expect(typeof mediaProvider?.describeImages).toBe("function");
+    expect(mediaProvider).toMatchObject({
+      capabilities: ["image"],
+      defaultModels: { image: "minimax-m3" },
+      describeImage: expect.any(Function),
+      describeImages: expect.any(Function),
+    });
   });
 
   it("owns Gemini-only passthrough replay policy", async () => {
@@ -183,9 +212,7 @@ describe("opencode provider plugin", () => {
   });
 
   it("keeps the offline manifest seed resolvable without downloading metadata", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("unexpected fetch"));
+    const fetchMock = denyFetch();
     const provider = await registerSingleProviderPlugin(plugin);
     const result = await provider.staticCatalog?.run({} as never);
 
@@ -204,32 +231,23 @@ describe("opencode provider plugin", () => {
         { input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5, range: [272_000] },
       ],
     });
-    expect(provider.resolveDynamicModel?.({ modelId: "claude-opus-5" } as never)).toMatchObject({
-      api: "anthropic-messages",
-      baseUrl: "https://opencode.ai/zen",
-    });
-    expect(provider.resolveDynamicModel?.({ modelId: "gpt-5.6-sol" } as never)).toMatchObject({
-      api: "openai-responses",
-      baseUrl: "https://opencode.ai/zen/v1",
-    });
-    expect(provider.resolveDynamicModel?.({ modelId: "gemini-3.6-flash" } as never)).toMatchObject({
-      api: "google-generative-ai",
-      baseUrl: "https://opencode.ai/zen/v1",
-    });
+    for (const [id, api, baseUrl] of [
+      ["claude-opus-5", "anthropic-messages", ANTHROPIC_URL],
+      ["gpt-5.6-sol", "openai-responses", OPENAI_URL],
+      ["gemini-3.6-flash", "google-generative-ai", OPENAI_URL],
+    ]) {
+      expect(resolveModel(provider, id)).toMatchObject({ api, baseUrl });
+    }
     expectSeedModels(manifest.modelCatalog.providers.opencode.models);
     for (const modelId of OFFLINE_MODEL_IDS) {
-      expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({ id: modelId });
+      expect(resolveModel(provider, modelId)).toMatchObject({ id: modelId });
     }
-    expect(
-      provider.resolveDynamicModel?.({ modelId: "unknown-offline-fixture" } as never),
-    ).toBeUndefined();
+    expect(resolveModel(provider, "unknown-offline-fixture")).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("exposes the offline seed through provider discovery without network access", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("unexpected fetch"));
+    const fetchMock = denyFetch();
     const { default: discovery } = await import("./provider-discovery.js");
     const result = await discovery.staticCatalog?.run({} as never);
 
@@ -244,45 +262,25 @@ describe("opencode provider plugin", () => {
   it("never downloads metadata when OpenCode has no configured credentials", async () => {
     vi.stubEnv("OPENCODE_API_KEY", undefined);
     vi.stubEnv("OPENCODE_ZEN_API_KEY", undefined);
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("unexpected fetch"));
+    const fetchMock = denyFetch();
     const provider = await registerSingleProviderPlugin(plugin);
 
     await expect(
-      provider.catalog?.run({
-        config: {},
-        env: {},
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-      } as never),
+      provider.catalog?.run(catalogContext(() => ({ apiKey: undefined }))),
     ).resolves.toBeNull();
+    await expect(prepareDynamic(provider)).resolves.toBeUndefined();
     await expect(
-      provider.prepareDynamicModel?.({
-        config: {},
-        provider: "opencode",
-        modelId: "unconfigured-preview-fixture",
-        modelRegistry: {},
-      } as never),
-    ).resolves.toBeUndefined();
-    await expect(
-      provider.prepareDynamicModel?.({
-        config: {},
-        provider: "opencode",
-        modelId: "unconfigured-preview-fixture",
-        modelRegistry: {},
+      prepareDynamic(provider, {
         authProfileMode: "api_key",
         authProfileId: "anthropic:default",
-      } as never),
+      }),
     ).resolves.toBeUndefined();
     expectSeedModels((await buildOpencodeZenLiveProviderConfig()).models);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not resolve OpenCode credentials or download metadata for another provider scope", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("unexpected fetch"));
+    const fetchMock = denyFetch();
     const resolveProviderApiKey = vi.fn(
       (): { apiKey: string; discoveryApiKey: string | undefined } => ({
         apiKey: "configured-opencode-key",
@@ -332,12 +330,10 @@ describe("opencode provider plugin", () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     await expect(
-      provider.prepareDynamicModel?.({
+      prepareDynamic(provider, {
         config: { models: { providers: { opencode: { baseUrl: "https://opencode.ai/zen/v1" } } } },
-        provider: "opencode",
         modelId: "configured-selection-fixture",
-        modelRegistry: {},
-      } as never),
+      }),
     ).resolves.toMatchObject({
       id: "configured-selection-fixture",
       api: "anthropic-messages",
@@ -355,9 +351,7 @@ describe("opencode provider plugin", () => {
     { authProvider: "opencode", apiKey: undefined },
   ])("keeps $authProvider catalog credentials and profile together ($apiKey)", async (fixture) => {
     const provider = await registerSingleProviderPlugin(plugin);
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("unexpected fetch"));
+    const fetchMock = denyFetch();
     const liveCatalog = vi
       .spyOn(await import("./provider-catalog.js"), "buildOpencodeZenLiveProviderConfig")
       .mockImplementation(async (params = {}) => ({
@@ -381,14 +375,7 @@ describe("opencode provider plugin", () => {
       throw new Error("Unused sibling credentials must not be resolved");
     });
 
-    await expect(
-      provider.catalog?.run({
-        config: {},
-        env: {},
-        resolveProviderApiKey,
-        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-      }),
-    ).resolves.toEqual({
+    await expect(provider.catalog?.run(catalogContext(resolveProviderApiKey))).resolves.toEqual({
       provider: {
         baseUrl: "https://opencode.ai/zen/v1",
         apiKey: auth.apiKey ?? auth.discoveryApiKey,
@@ -418,14 +405,9 @@ describe("opencode provider plugin", () => {
         return { apiKey: undefined };
       });
 
-      await expect(
-        provider.catalog?.run({
-          config: {},
-          env: {},
-          resolveProviderApiKey,
-          resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-        }),
-      ).rejects.toBe(failure);
+      await expect(provider.catalog?.run(catalogContext(resolveProviderApiKey))).rejects.toBe(
+        failure,
+      );
       expect(resolveProviderApiKey.mock.calls).toEqual(
         failedProvider === "opencode" ? [["opencode"]] : [["opencode"], ["opencode-go"]],
       );
@@ -454,20 +436,10 @@ describe("opencode provider plugin", () => {
       ],
     });
     const provider = await registerSingleProviderPlugin(plugin);
-    expect(
-      provider.resolveDynamicModel?.({ modelId: "x-preview-f-free" } as never),
-    ).toBeUndefined();
+    expect(resolveModel(provider, "x-preview-f-free")).toBeUndefined();
 
-    const first = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "runtime-key",
-      discoveryApiKey: "discovery-key",
-      fetchGuard,
-    });
-    const second = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "other-runtime-key",
-      discoveryApiKey: "discovery-key",
-      fetchGuard,
-    });
+    const first = await discover(fetchGuard);
+    const second = await discover(fetchGuard, "other-runtime-key");
 
     expect(fetchGuard.mock.calls.map(([request]) => request.url)).toEqual([
       METADATA_URL,
@@ -494,18 +466,13 @@ describe("opencode provider plugin", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: { supportedReasoningEfforts: ["low", "high", "max"] },
     });
-    expect(first.models.find((model) => model.id === "fresh-claude-fixture")).toMatchObject({
-      api: "anthropic-messages",
-      baseUrl: "https://opencode.ai/zen",
-    });
-    expect(first.models.find((model) => model.id === "fresh-gemini-fixture")).toMatchObject({
-      api: "google-generative-ai",
-      baseUrl: "https://opencode.ai/zen/v1",
-    });
-    expect(first.models.find((model) => model.id === "fresh-gpt-fixture")).toMatchObject({
-      api: "openai-responses",
-      baseUrl: "https://opencode.ai/zen/v1",
-    });
+    for (const [id, api, baseUrl] of [
+      ["fresh-claude-fixture", "anthropic-messages", ANTHROPIC_URL],
+      ["fresh-gemini-fixture", "google-generative-ai", OPENAI_URL],
+      ["fresh-gpt-fixture", "openai-responses", OPENAI_URL],
+    ]) {
+      expect(first.models.find((model) => model.id === id)).toMatchObject({ api, baseUrl });
+    }
     for (const id of ["listed-only-fixture", "listed-only-fixture-free", "test"]) {
       expect(first.models.find((model) => model.id === id)).toMatchObject({
         api: "openai-completions",
@@ -513,14 +480,10 @@ describe("opencode provider plugin", () => {
         provider: "opencode",
       });
     }
-    expect(
-      provider.resolveDynamicModel?.({ modelId: "retired-zen-fixture" } as never),
-    ).toMatchObject({
+    expect(resolveModel(provider, "retired-zen-fixture")).toMatchObject({
       id: "retired-zen-fixture",
     });
-    expect(
-      provider.resolveDynamicModel?.({ modelId: "listed-only-fixture" } as never),
-    ).toBeUndefined();
+    expect(resolveModel(provider, "listed-only-fixture")).toBeUndefined();
   });
 
   it("evicts dynamic models removed or rejected by a refreshed authoritative catalog", async () => {
@@ -530,18 +493,14 @@ describe("opencode provider plugin", () => {
       advertised: [],
     });
     await prepareModel("refreshed-model-fixture", fetchGuard);
-    expect(
-      provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
-    ).toMatchObject({
+    expect(resolveModel(provider, "refreshed-model-fixture")).toMatchObject({
       id: "refreshed-model-fixture",
     });
 
     clearLiveCatalogCacheForTests();
     const removedFetchGuard = createCatalogFetchGuard({ metadata: [], advertised: [] });
     await prepareModel("refreshed-model-fixture", removedFetchGuard);
-    expect(
-      provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
-    ).toBeUndefined();
+    expect(resolveModel(provider, "refreshed-model-fixture")).toBeUndefined();
 
     clearLiveCatalogCacheForTests();
     await prepareModel("refreshed-model-fixture", fetchGuard);
@@ -551,10 +510,8 @@ describe("opencode provider plugin", () => {
       advertised: [],
     });
     await prepareModel("refreshed-model-fixture", unsupportedFetchGuard);
-    expect(
-      provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
-    ).toBeUndefined();
-    expect(provider.resolveDynamicModel?.({ modelId: "minimax-m3" } as never)).toMatchObject({
+    expect(resolveModel(provider, "refreshed-model-fixture")).toBeUndefined();
+    expect(resolveModel(provider, "minimax-m3")).toMatchObject({
       id: "minimax-m3",
     });
   });
@@ -565,16 +522,8 @@ describe("opencode provider plugin", () => {
       advertised: (authorization) =>
         authorization === "Bearer discovery-a" ? ["account-a-fixture"] : ["account-b-fixture"],
     });
-    const first = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "runtime-a",
-      discoveryApiKey: "discovery-a",
-      fetchGuard,
-    });
-    const second = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "runtime-b",
-      discoveryApiKey: "discovery-b",
-      fetchGuard,
-    });
+    const first = await discover(fetchGuard, "runtime-a", "discovery-a");
+    const second = await discover(fetchGuard, "runtime-b", "discovery-b");
 
     expect(first.models.map((model) => model.id)).toEqual(["account-a-fixture"]);
     expect(second.models.map((model) => model.id)).toEqual(["account-b-fixture"]);
@@ -589,13 +538,7 @@ describe("opencode provider plugin", () => {
     const fetchGuard = vi.fn(async () => {
       throw new Error("network unavailable");
     });
-    await expect(
-      buildOpencodeZenLiveProviderConfig({
-        apiKey: "runtime-key",
-        discoveryApiKey: "discovery-key",
-        fetchGuard,
-      }),
-    ).rejects.toThrow("network unavailable");
+    await expect(discover(fetchGuard)).rejects.toThrow("network unavailable");
   });
 
   it.each(["failed", "filtered"] as const)(
@@ -615,18 +558,14 @@ describe("opencode provider plugin", () => {
 
       try {
         expectSeedModels((await buildOpencodeZenLiveProviderConfig()).models);
-        const discovery = buildOpencodeZenLiveProviderConfig({
-          apiKey: "runtime-key",
-          discoveryApiKey: "discovery-key",
-          fetchGuard,
-        });
+        const discovery = discover(fetchGuard);
 
         if (advertising === "failed") {
           await expect(discovery).rejects.toThrow("model advertising unavailable");
         } else {
           await expect(discovery).resolves.toMatchObject({ models: [] });
         }
-        expect(provider.resolveDynamicModel?.({ modelId: retiredId } as never)).toMatchObject({
+        expect(resolveModel(provider, retiredId)).toMatchObject({
           id: retiredId,
         });
       } finally {
@@ -656,22 +595,9 @@ describe("opencode provider plugin", () => {
     ).resolves.toBe(expected);
   });
 
-  it("canonicalizes stale OpenCode Zen base URLs", async () => {
+  it("canonicalizes the Anthropic route without the OpenAI v1 suffix", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-    const normalizedConfig = requireRecord(
-      provider.normalizeConfig?.({
-        provider: "opencode",
-        providerConfig: {
-          api: "openai-completions",
-          baseUrl: "https://opencode.ai/zen/",
-          models: [],
-        },
-      } as never),
-      "normalized config",
-    );
-    expect(normalizedConfig.baseUrl).toBe("https://opencode.ai/zen/v1");
-
-    const normalizedModel = requireRecord(
+    expect(
       provider.normalizeResolvedModel?.({
         provider: "opencode",
         model: {
@@ -681,15 +607,6 @@ describe("opencode provider plugin", () => {
           baseUrl: MODELS_URL.replace("/models", ""),
         },
       } as never),
-      "normalized model",
-    );
-    expect(normalizedModel.baseUrl).toBe("https://opencode.ai/zen");
-    expect(
-      provider.normalizeTransport?.({
-        provider: "opencode",
-        api: "openai-completions",
-        baseUrl: "https://opencode.ai/zen",
-      } as never),
-    ).toEqual({ api: "openai-completions", baseUrl: "https://opencode.ai/zen/v1" });
+    ).toMatchObject({ baseUrl: ANTHROPIC_URL });
   });
 });

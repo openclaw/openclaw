@@ -188,10 +188,9 @@ function activity(seq: number, lastHumanMessageId: string | null, humanTurns: nu
 }
 
 function textMessage(id: string, role: string, value: string, offset = 0) {
-  return {
-    info: { id, role, time: { created: 1_700_000_000_000 + offset } },
-    parts: [text(value)],
-  };
+  const result = message(id, [text(value)], offset);
+  result.info.role = role;
+  return result;
 }
 
 function probe(marker: Probe["marker"], ownRecentUserTexts: string[] = []): Probe {
@@ -209,6 +208,16 @@ function probe(marker: Probe["marker"], ownRecentUserTexts: string[] = []): Prob
 
 const checkActivity = (marker: Probe["marker"], ownRecentUserTexts: string[] = []) =>
   checkOpenCodeUpstreamActivity([probe(marker, ownRecentUserTexts)]);
+const continueSession = () => linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a");
+
+async function expectActivity(
+  session: StatefulOpenCodeSession,
+  marker: Probe["marker"],
+  expected: unknown,
+) {
+  await installStatefulOpenCode([session]);
+  await expect(checkActivity(marker)).resolves.toEqual(expected);
+}
 
 function markerFrom(
   outcome: Awaited<ReturnType<typeof checkOpenCodeUpstreamActivity>>[number] | undefined,
@@ -229,7 +238,7 @@ describe("OpenCode session upstream activity", () => {
         textMessage("msg_001", "assistant", "ready"),
       ]);
       const fixture = await installStatefulOpenCode([session], version);
-      const continued = await linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a");
+      const continued = await continueSession();
       expect(continued.upstream?.marker).toEqual({ seq: 1, lastHumanMessageId: null });
 
       await fixture.clearLog();
@@ -255,18 +264,24 @@ describe("OpenCode session upstream activity", () => {
     },
   );
 
-  // OpenCode 2.0.16 omits seq when the captured log watermark is empty.
-  itWithCli("released v2 empty log watermark is a valid zero baseline", async () => {
-    await installStatefulOpenCode([openCodeSession(undefined, [])], 2);
-    const result = await linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a");
-    expect(result.upstream?.marker).toEqual({ seq: 0, lastHumanMessageId: null });
+  itWithCli.each([1, 2])("uses zero for a missing v%s watermark", async (version) => {
+    // v1 has no event_sequence row; released v2 omits seq on an empty log.
+    await installStatefulOpenCode([openCodeSession(undefined, [])], version);
+    await expect(continueSession()).resolves.toEqual({
+      sessionKey: "agent:main:ses-a",
+      upstream: {
+        kind: "opencode-cli",
+        ref: { threadId: "ses_a" },
+        marker: { seq: 0, lastHumanMessageId: null },
+      },
+    });
   });
 
   itWithCli.each([null, "0", -1, 0.5, Number.MAX_SAFE_INTEGER + 1])(
     "rejects an invalid present v2 log watermark (%s)",
     async (seq) => {
       await installStatefulOpenCode([{ ...openCodeSession(undefined, []), seq }], 2);
-      await expect(linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a")).resolves.toEqual({
+      await expect(continueSession()).resolves.toEqual({
         sessionKey: "agent:main:ses-a",
       });
     },
@@ -282,12 +297,7 @@ describe("OpenCode session upstream activity", () => {
     session.messages.push(textMessage("msg_002", "user", "new after migration", 1000));
     session.seq = 2;
     await fixture.writeState({ sessions: [session] });
-    await expect(checkActivity(markerFrom(reset[0]))).resolves.toEqual([
-      expect.objectContaining({
-        humanTurns: 1,
-        nextMarker: { seq: 2, lastHumanMessageId: "msg_002" },
-      }),
-    ]);
+    await expect(checkActivity(markerFrom(reset[0]))).resolves.toEqual(changed(1, 2, "msg_002"));
   });
 
   itWithCli(
@@ -315,32 +325,30 @@ describe("OpenCode session upstream activity", () => {
     },
   );
 
-  itWithCli("suppresses compaction replay text duplicated from an earlier user turn", async () => {
-    const session = openCodeSession(9, [
-      message("msg_001", [text("hidden", { ignored: true }), text("please keep going")]),
+  itWithCli.each([
+    {
+      name: "normalized text",
+      first: [text("hidden", { ignored: true }), text("please keep going")],
+      replay: "  please   keep going ",
+      seq: 9,
+      marker: { seq: 4, lastHumanMessageId: "msg_001" },
+    },
+    {
+      name: "media placeholders",
+      first: [part("file", { mime: "image/png", filename: "screen.png" })],
+      replay: "[Attached image/png: screen.png]",
+      seq: 7,
+      marker: { seq: 2, lastHumanMessageId: null },
+    },
+  ])("suppresses compaction replay of $name", async ({ first, replay, seq, marker }) => {
+    const session = openCodeSession(seq, [
+      message("msg_001", first),
       textMessage("msg_002", "assistant", "working", 1000),
       message("msg_003", [part("compaction")], 2000),
       textMessage("msg_004", "assistant", "summary", 3000),
-      textMessage("msg_005", "user", "  please   keep going ", 4000),
+      textMessage("msg_005", "user", replay, 4000),
     ]);
-    await installStatefulOpenCode([session]);
-    await expect(checkActivity({ seq: 4, lastHumanMessageId: "msg_001" })).resolves.toEqual([
-      activity(9, "msg_005", 0),
-    ]);
-  });
-
-  itWithCli("normalizes media placeholders when suppressing compaction replay", async () => {
-    const session = openCodeSession(7, [
-      message("msg_001", [part("file", { mime: "image/png", filename: "screen.png" })]),
-      textMessage("msg_002", "assistant", "working", 1000),
-      message("msg_003", [part("compaction")], 2000),
-      textMessage("msg_004", "assistant", "summary", 3000),
-      textMessage("msg_005", "user", "[Attached image/png: screen.png]", 4000),
-    ]);
-    await installStatefulOpenCode([session]);
-    await expect(checkActivity({ seq: 2, lastHumanMessageId: null })).resolves.toEqual([
-      activity(7, "msg_005", 0),
-    ]);
+    await expectActivity(session, marker, [activity(seq, "msg_005", 0)]);
   });
 
   itWithCli("bounds replay suppression to the preceding 50 user messages", async () => {
@@ -355,8 +363,9 @@ describe("OpenCode session upstream activity", () => {
       ),
       textMessage("msg_052", "user", "repeat me", 52000),
     ]);
-    await installStatefulOpenCode([session]);
-    await expect(checkActivity({ seq: 1, lastHumanMessageId: "msg_001" })).resolves.toEqual(
+    await expectActivity(
+      session,
+      { seq: 1, lastHumanMessageId: "msg_001" },
       changed(1, 80, "msg_052"),
     );
   });
@@ -372,10 +381,7 @@ describe("OpenCode session upstream activity", () => {
         message("msg_005", [text("looks human"), part("compaction")], 4000),
         message("msg_006", [text("continue", { metadata: { compaction_continue: true } })], 5000),
       ]);
-      await installStatefulOpenCode([session]);
-      await expect(checkActivity({ seq: 1, lastHumanMessageId: null })).resolves.toEqual([
-        activity(12, null, 0),
-      ]);
+      await expectActivity(session, { seq: 1, lastHumanMessageId: null }, [activity(12, null, 0)]);
     },
   );
 
@@ -395,10 +401,7 @@ describe("OpenCode session upstream activity", () => {
         1000,
       ),
     ]);
-    await installStatefulOpenCode([session]);
-    await expect(checkActivity({ seq: 1, lastHumanMessageId: null })).resolves.toEqual([
-      activity(3, null, 0),
-    ]);
+    await expectActivity(session, { seq: 1, lastHumanMessageId: null }, [activity(3, null, 0)]);
   });
 
   itWithCli(
@@ -444,19 +447,6 @@ describe("OpenCode session upstream activity", () => {
       ]);
     },
   );
-
-  itWithCli("treats a missing event_sequence row as sequence zero", async () => {
-    const session = openCodeSession(undefined, []);
-    await installStatefulOpenCode([session]);
-    await expect(linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a")).resolves.toEqual({
-      sessionKey: "agent:main:ses-a",
-      upstream: {
-        kind: "opencode-cli",
-        ref: { threadId: "ses_a" },
-        marker: { seq: 0, lastHumanMessageId: null },
-      },
-    });
-  });
 
   itWithCli("bounds concurrent exports when many cursors advance", async () => {
     const sessions: StatefulOpenCodeSession[] = Array.from({ length: 9 }, (_, index) => ({
