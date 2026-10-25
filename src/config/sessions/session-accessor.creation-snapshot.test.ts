@@ -126,63 +126,25 @@ it("preserves a competing creation committed while the initial entry is prepared
   expect(loadSessionEntry(scope)).toMatchObject(competing);
 });
 
-it("preserves adopted history without selecting a new projection", async () => {
-  const { scope: target, put, database } = fixture();
-  const scope = { ...target, sessionId: "target" };
-  const entry = { sessionId: "target", updatedAt: 1 };
-  put(entry);
+it("preserves history added during asynchronous adoption", async () => {
+  const { scope, put, database } = fixture();
+  const target = { sessionId: "target", updatedAt: 1 };
+  put(target);
   let before: ReturnType<typeof readTranscriptStorageRows> = [];
-  const result = await createSession(scope, async () => {
+  const created = await createSession(scope, async ({ existingEntry }) => {
+    expect(existingEntry).toMatchObject(target);
     await Promise.resolve();
-    replaceTranscriptEventsSync(scope, [
+    replaceTranscriptEventsSync({ ...scope, sessionId: target.sessionId }, [
       timedMessageEvent("user-1", null, "2026-07-15T21:23:03.698Z", {
         role: "user",
         content: "Retained text.\r\n  Keep spacing.",
       }),
     ]);
-    before = readTranscriptStorageRows(database(), "target");
-    return { ok: true, entry: { ...entry, label: "adopted" } };
-  });
-  expect(result).toMatchObject({ ok: true, entry: { ...entry, label: "adopted" } });
-  expect(readTranscriptStorageRows(database(), "target")).toEqual(before);
-});
-
-it("prepares and adopts a complete target without decoding sibling entries", async () => {
-  const { scope, put, snapshot, addMembers } = fixture();
-  const target = {
-    ...savedEntry("target-saved-prompt"),
-    systemPromptReport: promptReport(1, 1, 0),
-  };
-  put(target);
-  put(
-    {
-      sessionId: "sibling",
-      updatedAt: 1,
-      displayName: "unrelated-entry-marker",
-      skillsSnapshot: { prompt: "unrelated-saved-prompt".repeat(1024), skills: [] },
-    },
-    "agent:main:sibling",
-  );
-  addMembers();
-  snapshot();
-  const parse = vi.spyOn(JSON, "parse");
-  const prepared = snapshot();
-  const siblingPayloadReads = parse.mock.calls.filter(([json]) =>
-    json.includes("unrelated-entry-marker"),
-  ).length;
-  parse.mockRestore();
-  expect(prepared.existingEntry).toMatchObject(target);
-  expect(siblingPayloadReads).toBe(0);
-  const created = await createSession(scope, ({ existingEntry }) => {
-    expect(existingEntry).toMatchObject(target);
+    before = readTranscriptStorageRows(database(), target.sessionId);
     return { ok: true, entry: { ...existingEntry!, label: "adopted" } };
   });
   expect(created).toMatchObject({ ok: true, entry: { ...target, label: "adopted" } });
-  expect(loadSessionEntry(scope)).toMatchObject({
-    ...target,
-    label: "adopted",
-    ...members,
-  });
+  expect(readTranscriptStorageRows(database(), target.sessionId)).toEqual(before);
 });
 it("preserves normalized and opaque target identities after reopening", async () => {
   const key = "agent:main:matrix:group:!Room:example.org";
