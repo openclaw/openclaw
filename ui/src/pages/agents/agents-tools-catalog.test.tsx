@@ -23,26 +23,19 @@ import { AgentTools } from "./panels-tools-skills.tsx";
 type Kind = "catalog" | "effective";
 type Result = ToolsCatalogResult | ToolsEffectiveResult;
 function result(kind: Kind, label: string): Result {
-  const groups: ToolsEffectiveResult["groups"] = [
-    {
-      id: "core",
-      label: "Built-in tools",
-      source: "core" as const,
-      tools: [
-        {
-          id: "read",
-          label,
-          description: "Read",
-          rawDescription: "Read",
-          source: "core" as const,
-          defaultProfiles: [],
-        },
-      ],
-    },
-  ];
+  const group = { id: "core" as const, label: "Built-in tools", source: "core" as const };
+  const tool = { id: "read", label, description: "Read", source: "core" as const };
   return kind === "catalog"
-    ? { agentId: "main", profiles: [], groups }
-    : { agentId: "main", profile: "full", groups };
+    ? {
+        agentId: "main",
+        profiles: [],
+        groups: [{ ...group, tools: [{ ...tool, defaultProfiles: [] }] }],
+      }
+    : {
+        agentId: "main",
+        profile: "full",
+        groups: [{ ...group, tools: [{ ...tool, rawDescription: "Read" }] }],
+      };
 }
 
 async function mountTools(kind: Kind, read: () => Promise<Result>, panel: AgentsPanel = "tools") {
