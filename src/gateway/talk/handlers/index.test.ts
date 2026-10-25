@@ -532,6 +532,41 @@ describe("talk.catalog handler", () => {
     expect(mocks.listRealtimeVoiceProviders).not.toHaveBeenCalled();
   });
 
+  it("reports speech.ready false when the selected provider is missing credentials", async () => {
+    mocks.listSpeechProviders.mockReturnValue([
+      {
+        id: "elevenlabs",
+        label: "ElevenLabs",
+        // No API key anywhere: the provider row cannot synthesize.
+        isConfigured: vi.fn(() => false),
+      } as never,
+    ]);
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+      {
+        id: "openai",
+        label: "OpenAI Realtime Transcription",
+        resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
+        isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "stt-key"),
+      } as never,
+    ]);
+    mocks.listRealtimeVoiceProviders.mockReturnValue([]);
+
+    const respond = vi.fn();
+    await callTalkHandler("talk.catalog", {
+      params: {},
+      respond,
+      config: { talk: { provider: "elevenlabs", providers: { elevenlabs: {} } } },
+    });
+
+    const catalog = expectRespondOk(respond) as {
+      speech: { ready?: boolean; providers: Array<{ id: string; configured?: boolean }> };
+    };
+    // speech.ready must not claim stt-tts is usable while the row says the
+    // provider cannot synthesize (#165363 Rev 2).
+    expect(catalog.speech.providers.find((p) => p.id === "elevenlabs")?.configured).toBe(false);
+    expect(catalog.speech.ready).toBe(false);
+  });
+
   it.each([
     ["talk.catalog", {}],
     ["talk.client.create", { provider: "openai" }],
@@ -681,12 +716,14 @@ describe("talk.catalog handler", () => {
           transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
           brains: ["agent-consult", "direct-tools", "none"],
           speech: {
+            ready: true,
             activeProvider: "elevenlabs",
             providers: [
               {
                 ...expected.speech,
                 configured: true,
                 modes: ["stt-tts"],
+                transports: ["managed-room"],
                 brains: ["agent-consult"],
               },
             ],

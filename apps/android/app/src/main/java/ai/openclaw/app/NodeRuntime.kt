@@ -105,6 +105,7 @@ import ai.openclaw.app.voice.PreviewVoiceWakeRecognizer
 import ai.openclaw.app.voice.SystemSpeechSpeaker
 import ai.openclaw.app.voice.TalkAudioPlayer
 import ai.openclaw.app.voice.TalkFailureNotice
+import ai.openclaw.app.voice.TalkModeGatewayConfigParser
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.TalkPttOnceStart
 import ai.openclaw.app.voice.TalkPttStopPayload
@@ -1173,6 +1174,7 @@ class NodeRuntime internal constructor(
   private val providerModelCatalogRefreshGuard = LatestGatewayRefreshGuard()
   private val _modelAuthProviders = MutableStateFlow<List<GatewayModelProviderSummary>>(emptyList())
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = _modelAuthProviders.asStateFlow()
+  private val talkSetupRefreshGuard = LatestGatewayRefreshGuard()
   private val _talkSetupReadiness = MutableStateFlow(GatewayTalkSetupReadiness.unverified())
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> = _talkSetupReadiness.asStateFlow()
   private val _gatewayDefaultAgentId = MutableStateFlow<String?>(null)
@@ -1732,6 +1734,7 @@ class NodeRuntime internal constructor(
     _providerModelCatalogRefreshing.value = false
     _providerModelCatalogErrorText.value = null
     _modelAuthProviders.value = emptyList()
+    talkSetupRefreshGuard.invalidate()
     _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
     voiceWakeWordsSaveSeq.incrementAndGet()
     _voiceWakeWordsSaving.value = false
@@ -2879,7 +2882,7 @@ class NodeRuntime internal constructor(
     _modelAuthProviders.value = AndroidScreenshotFixture.providers
     _talkSetupReadiness.value =
       GatewayTalkSetupReadiness(
-        realtimeTalk = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
+        talk = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
         dictation = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
       )
     _cronStatus.value =
@@ -5409,6 +5412,11 @@ class NodeRuntime internal constructor(
     handleExecApprovalGatewayEvent(event = event, payloadJson = payloadJson)
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
+    if (event == "config.changed") {
+      talkSetupRefreshGuard.invalidate()
+      _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+      if (operatorConnected) refreshTalkSetupReadiness()
+    }
     if (wearRealtimeTalkControllerLazy.isInitialized()) {
       wearRealtimeTalkController.handleGatewayEvent(event, payloadJson)
     }
@@ -6553,6 +6561,7 @@ class NodeRuntime internal constructor(
   }
 
   private suspend fun refreshTalkSetupReadinessFromGateway() {
+    val refreshGeneration = talkSetupRefreshGuard.begin()
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) {
       _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
@@ -6560,11 +6569,22 @@ class NodeRuntime internal constructor(
     }
     val readiness =
       try {
-        parseGatewayTalkSetupReadiness(requestGatewayObject(gatewayScope, "talk.catalog", "{}"))
-      } catch (_: Throwable) {
+        val route =
+          try {
+            requestGatewayObject(gatewayScope, "talk.config", "{}")
+              ?.get("config")
+              .asObjectOrNull()
+              ?.let { TalkModeGatewayConfigParser.parse(it).route }
+          } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            null
+          }
+        parseGatewayTalkSetupReadiness(route, requestGatewayObject(gatewayScope, "talk.catalog", "{}"))
+      } catch (error: Exception) {
+        if (error is CancellationException) throw error
         GatewayTalkSetupReadiness.unverified(GatewayTalkSetupIssue.CatalogLoadFailed)
       }
-    publishGatewayData(gatewayScope) { _talkSetupReadiness.value = readiness }
+    talkSetupRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) { _talkSetupReadiness.value = readiness }
   }
 
   private suspend fun refreshCronFromGateway() {

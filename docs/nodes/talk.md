@@ -226,11 +226,13 @@ realtime Talk. See [Talk realtime migration](/gateway/doctor/config-migrations#t
 
 `talk.catalog` exposes primary provider ids and registry aliases. It exposes each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags. It exposes the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally. Treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
 
+Android checks readiness for the route selected by `talk.config`: `talk.catalog.realtime` for Gateway relay, or `talk.catalog.speech` for native Talk. Native Talk uses device speech recognition, so Gateway transcription readiness does not block it. Missing or unsupported speech providers remain unverified so the existing device-TTS fallback can run; a selected, known speech provider that is unconfigured requires setup. Configuration changes invalidate the displayed readiness and refresh it before publishing a new result.
+
 ## Notes
 
 - Native speech recognition requires the platform's speech and microphone access. Standalone Watch realtime requires microphone access, not local speech recognition.
-- Native Talk uses the active Gateway session. macOS observes the accepted run through Gateway completion and retrieves its complete matching reply from history before speaking.
-- The gateway resolves Talk playback through `talk.speak` using the active Talk provider. Android falls back to local system TTS only when that RPC is unavailable.
+- Native Talk uses the active Gateway session. macOS observes the accepted run through Gateway completion and retrieves its complete matching reply from history before speaking. Native Talk only falls back to history polling when response events are unavailable.
+- The gateway resolves Talk playback through `talk.speak` using the active Talk provider. Android falls back to local system TTS when that RPC is unavailable or reports a missing or unsupported Talk provider.
 - macOS local MLX playback uses the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`. Set `OPENCLAW_MLX_TTS_BIN` to point at a custom helper binary during development. The helper streams PCM, keeps one selected model resident, and supports Fish S2 Pro reference audio through `providers.mlx.referenceAudioPath` plus `referenceText`.
 - Voice directive value ranges (ElevenLabs): the `stability`, `similarity`, and `style` keys accept `0..1`. The `speed` key accepts `0.5..2`. The `latency_tier` key accepts `0..4`.
 

@@ -12,6 +12,10 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.ui.chat.ChatRealtimeTalkLaunch
+import ai.openclaw.app.ui.chat.resolveChatRealtimeTalkLaunch
+import ai.openclaw.app.voice.TalkModeGatewayConfigParser
+import ai.openclaw.app.voice.TalkModeRoute
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +51,134 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class NodeRuntimeAgentSelectionTest {
+  @Test
+  fun talkAdmissionFollowsTheConfiguredRouteInsteadOfUnrelatedProviders() =
+    runBlocking {
+      data class Case(
+        val name: String,
+        val config: String?,
+        val route: TalkModeRoute?,
+        val speechReady: Boolean?,
+        val realtimeReady: Boolean,
+        val expected: ChatRealtimeTalkLaunch,
+        val speechProvider: String? = "selected",
+      )
+      val native = """{"talk":{"realtime":{"mode":"stt-tts"}},"clientHints":{"realtime":{"gatewayRelaySupported":true}}}"""
+      val realtime = """{"talk":{"realtime":{"mode":"realtime"}},"clientHints":{"realtime":{"gatewayRelaySupported":true}}}"""
+      val fallback = """{"talk":{"realtime":{"mode":"realtime"}},"clientHints":{"realtime":{"gatewayRelaySupported":false}}}"""
+      val cases =
+        listOf(
+          Case("native speech ready", native, TalkModeRoute.NativeConfigured, true, false, ChatRealtimeTalkLaunch.StartTalk),
+          Case("selected speech unconfigured", native, TalkModeRoute.NativeConfigured, false, true, ChatRealtimeTalkLaunch.ShowSetupMessage),
+          Case("older speech catalog", native, TalkModeRoute.NativeConfigured, null, false, ChatRealtimeTalkLaunch.StartTalk),
+          Case("native fallback", fallback, TalkModeRoute.NativeGatewayFallback, true, false, ChatRealtimeTalkLaunch.StartTalk),
+          Case("gateway fallback with device voice", fallback, TalkModeRoute.NativeGatewayFallback, false, true, ChatRealtimeTalkLaunch.StartTalk, speechProvider = null),
+          Case("android fallback with device voice", """{"talk":{"realtime":{"model":"gpt-live"}}}""", TalkModeRoute.NativeAndroidFallback, false, true, ChatRealtimeTalkLaunch.StartTalk, speechProvider = "unsupported"),
+          Case("native without speech provider", native, TalkModeRoute.NativeConfigured, false, true, ChatRealtimeTalkLaunch.StartTalk, speechProvider = null),
+          Case("fallback selected speech unconfigured", fallback, TalkModeRoute.NativeGatewayFallback, false, true, ChatRealtimeTalkLaunch.ShowSetupMessage),
+          Case("realtime unconfigured", realtime, TalkModeRoute.RealtimeRelay, true, false, ChatRealtimeTalkLaunch.ShowSetupMessage),
+          Case("realtime ready", realtime, TalkModeRoute.RealtimeRelay, false, true, ChatRealtimeTalkLaunch.StartTalk),
+          Case("unavailable config", null, null, false, false, ChatRealtimeTalkLaunch.StartTalk),
+        )
+      val runtime = createConnectedRuntime()
+      val refreshes = Channel<Job>(Channel.UNLIMITED)
+      try {
+        val actual =
+          cases.map { case ->
+            val speechReadiness = case.speechReady?.let { "\"ready\":$it," }.orEmpty()
+            val speechSelection = case.speechProvider?.let { "\"activeProvider\":\"$it\",\"providers\":[{\"id\":\"selected\",\"label\":\"Selected voice\",\"configured\":${case.speechReady == true}},{\"id\":\"other\",\"configured\":true}]" } ?: "\"providers\":[]"
+            runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+              when (method) {
+                "talk.config" -> {
+                  case.config?.let { """{"config":$it}""" } ?: error("Talk config unavailable")
+                }
+
+                "talk.catalog" -> {
+                  refreshes.send(currentCoroutineContext().job)
+                  """{
+                  "speech":{$speechReadiness$speechSelection},
+                  "realtime":{"ready":${case.realtimeReady},"activeProvider":"relay","providers":[{"id":"relay","configured":${case.realtimeReady}}]},
+                  "transcription":{"ready":false,"providers":[]}
+                }"""
+                }
+
+                else -> {
+                  error("Unexpected Talk request: $method")
+                }
+              }
+            }
+            case.config?.let { config ->
+              assertEquals(case.name, case.route, TalkModeGatewayConfigParser.parse(Json.parseToJsonElement(config).jsonObject).route)
+            }
+            runtime.refreshTalkSetupReadiness()
+            withTimeout(2_000) { refreshes.receive().join() }
+            val state = runtime.talkSetupReadiness.value.talk
+            assertTrue(runtime.talkSetupReadiness.value.dictation.requiresSetup)
+            if (case.speechReady == null || case.config == null || case.speechProvider != "selected") {
+              assertTrue(state is GatewayTalkSetupState.Unverified)
+            }
+            case.name to resolveChatRealtimeTalkLaunch(hasMicPermission = true, requiresSetup = state.requiresSetup)
+          }
+        assertEquals(cases.map { it.name to it.expected }, actual)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun talkConfigChangesRetirePendingReadiness() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val catalogReads = AtomicInteger()
+      val firstRead = CompletableDeferred<Job>()
+      val releaseFirst = CompletableDeferred<Unit>()
+      val nextRead = CompletableDeferred<Job>()
+      val catalog = """{
+        "speech":{"ready":true,"activeProvider":"voice","providers":[{"id":"voice","configured":true}]},
+        "realtime":{"ready":false,"activeProvider":"relay","providers":[{"id":"relay","configured":false}]}
+      }"""
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "talk.config" -> {
+              val mode = if (catalogReads.get() == 0) "realtime" else "stt-tts"
+              """{"config":{"talk":{"realtime":{"mode":"$mode"}}}}"""
+            }
+
+            "talk.catalog" -> {
+              if (catalogReads.incrementAndGet() == 1) {
+                firstRead.complete(currentCoroutineContext().job)
+                releaseFirst.await()
+              } else {
+                nextRead.complete(currentCoroutineContext().job)
+              }
+              catalog
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+        runtime.refreshTalkSetupReadiness()
+        val oldRefresh = withTimeout(2_000) { firstRead.await() }
+        ReflectionHelpers.callInstanceMethod<Unit>(
+          runtime,
+          "handleGatewayEvent",
+          ReflectionHelpers.ClassParameter.from(String::class.java, "config.changed"),
+          ReflectionHelpers.ClassParameter.from(String::class.java, "{}"),
+        )
+        withTimeout(2_000) { nextRead.await().join() }
+        assertTrue(runtime.talkSetupReadiness.value.talk.isReady)
+        releaseFirst.complete(Unit)
+        withTimeout(2_000) { oldRefresh.join() }
+        assertTrue("The old relay response must not replace current native readiness", runtime.talkSetupReadiness.value.talk.isReady)
+      } finally {
+        releaseFirst.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
   @Test
   fun browserFocusAvailabilityFollowsOperatorHelloAndDisconnect() {
     val runtime = createConnectedRuntime()

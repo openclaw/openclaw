@@ -441,6 +441,10 @@ async function buildTalkCatalog(
             label: provider.label,
             configured,
             modes: ["stt-tts"],
+            // stt-tts sessions run through the managed-room transport; the
+            // session-create path rejects every other transport for this mode
+            // (#165363).
+            transports: ["managed-room"],
             brains: ["agent-consult"],
           };
           if (provider.models) {
@@ -589,6 +593,13 @@ async function buildTalkCatalog(
     transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
     brains: ["agent-consult", "direct-tools", "none"],
     speech: {
+      // The active provider row's configured flag already runs the async
+      // isTtsProviderConfiguredAsync check, including the missing-credentials
+      // case, so speech.ready mirrors that row instead of assuming a resolved
+      // config means a usable provider (#165363 Rev 2).
+      ready:
+        speechProviders.find((provider) => provider.id === activeSpeechProvider)?.configured ===
+        true,
       ...(activeSpeechProvider ? { activeProvider: activeSpeechProvider } : {}),
       providers: speechProviders,
     },

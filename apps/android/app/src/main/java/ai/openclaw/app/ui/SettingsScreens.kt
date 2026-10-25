@@ -768,7 +768,7 @@ private fun VoiceSettingsScreen(
       }
       Text(text = nativeString("Talk Provider Setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        VoiceSetupReadinessRow(title = nativeString("Realtime Talk"), state = talkSetupReadiness.realtimeTalk, icon = Icons.Default.GraphicEq)
+        VoiceSetupReadinessRow(title = nativeString("Talk"), state = talkSetupReadiness.talk, icon = Icons.Default.GraphicEq)
         VoiceSetupReadinessRow(title = nativeString("Dictation"), state = talkSetupReadiness.dictation, icon = Icons.Default.Mic)
       }
       Text(text = nativeString("Microphone"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
