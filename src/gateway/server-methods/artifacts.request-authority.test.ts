@@ -79,6 +79,13 @@ const registry = createGatewayMethodRegistry(
 const sessionKey = "agent:main:artifact-request-authority";
 const runId = "artifact-request-authority-run";
 const managedId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
+const agentConfig = (agentId: string): OpenClawConfig => ({
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId } },
+    entries: { main: {}, work: {} },
+  },
+});
 
 async function exercise(
   method: Method,
@@ -179,13 +186,13 @@ async function exercise(
         connection.abort();
       }
     };
+    const entered = createDeferred();
+    const release = createDeferred();
+    const hold = async () => {
+      entered.resolve();
+      await release.promise;
+    };
     if (disclosureBoundary) {
-      const entered = createDeferred();
-      const release = createDeferred();
-      const hold = async () => {
-        entered.resolve();
-        await release.promise;
-      };
       if (disclosureBoundary === "transcript") {
         boundaries.visit.mockImplementationOnce(async (_scope, visit) => {
           visit(message, 2);
@@ -203,97 +210,77 @@ async function exercise(
           return null;
         });
       }
-      const outcome = Promise.allSettled([
-        invoke({
-          sessionKey,
-          ...(method === "artifacts.list" ? {} : { artifactId }),
-          ...(method === "artifacts.download" && disclosureBoundary === "transcript"
-            ? { transport: "http" }
-            : {}),
-        }),
-      ]);
-      try {
-        await entered.promise;
-        expect(respond).not.toHaveBeenCalled();
-        changeAuthority();
-        release.resolve();
-        const settled = await outcome;
-        if (change === "reconnected") {
-          expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
-          expect(respond.mock.calls[0]?.[0]).toBe(true);
-          if (method === "artifacts.download" && disclosureBoundary === "transcript") {
-            expect(respond.mock.calls[0]?.[1]).toMatchObject({
-              encoding: "base64",
-              data: "aGVsbG8=",
-            });
-            expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("url");
-          }
-        } else {
-          expect(settled).toMatchObject([{ status: "rejected", reason: refusal }]);
-          expect(respond).not.toHaveBeenCalled();
+    } else {
+      const prepare = resolution.prepareArtifactSessionResolution;
+      let preparations = 0;
+      vi.spyOn(resolution, "prepareArtifactSessionResolution").mockImplementation(async (query) => {
+        const prepared = await prepare(query);
+        if (++preparations === (secondPreparation ? 2 : 1)) {
+          await hold();
         }
-      } finally {
-        release.resolve();
-        await outcome;
-        captured.release();
-        closeGatewayDeviceRevocation(context);
-        await closeOpenClawStateDatabaseAsync();
-      }
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      return;
+        return prepared;
+      });
     }
-    const preparing = createDeferred();
-    const release = createDeferred();
-    const prepare = resolution.prepareArtifactSessionResolution;
-    let preparations = 0;
-    vi.spyOn(resolution, "prepareArtifactSessionResolution").mockImplementation(async (query) => {
-      const prepared = await prepare(query);
-      if (++preparations === (secondPreparation ? 2 : 1)) {
-        preparing.resolve();
-        await release.promise;
-      }
-      return prepared;
-    });
     const outcome = Promise.allSettled([
       invoke({
         sessionKey,
         ...(secondPreparation ? { runId } : {}),
         ...(method === "artifacts.list" ? {} : { artifactId }),
+        ...(method === "artifacts.download" && disclosureBoundary === "transcript"
+          ? { transport: "http" }
+          : {}),
       }),
     ]);
     try {
-      await preparing.promise;
+      await entered.promise;
       expect(respond).not.toHaveBeenCalled();
-      expect(guard).toHaveBeenCalled();
       const transcriptReadsBeforeRelease = boundaries.visit.mock.calls.length;
-      expect(transcriptReadsBeforeRelease).toBe(secondPreparation ? 1 : 0);
+      if (!disclosureBoundary) {
+        expect(guard).toHaveBeenCalled();
+        expect(transcriptReadsBeforeRelease).toBe(secondPreparation ? 1 : 0);
+      }
       changeAuthority();
-      expect(captured.isCurrent()).toBe(
-        change !== "device revoked" && change !== "caller replaced",
-      );
+      if (!disclosureBoundary) {
+        expect(captured.isCurrent()).toBe(
+          change !== "device revoked" && change !== "caller replaced",
+        );
+      }
       release.resolve();
       const settled = await outcome;
       if (change === "reconnected") {
         expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
         expect(respond.mock.calls[0]?.[0]).toBe(true);
-        expect(boundaries.visit).toHaveBeenCalledOnce();
+        if (!disclosureBoundary) {
+          expect(boundaries.visit).toHaveBeenCalledOnce();
+        }
         if (secondPreparation) {
           expect(boundaries.managed).toHaveBeenCalledOnce();
+        }
+        if (method === "artifacts.download" && disclosureBoundary === "transcript") {
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({
+            encoding: "base64",
+            data: "aGVsbG8=",
+          });
+          expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("url");
         }
       } else {
         expect(settled).toMatchObject([
           {
             status: "rejected",
             reason:
-              change === "request canceled" || change === "opaque guard refused"
+              disclosureBoundary ||
+              change === "request canceled" ||
+              change === "opaque guard refused"
                 ? refusal
                 : { message: "Gateway requester authority changed" },
           },
         ]);
         expect(respond).not.toHaveBeenCalled();
-        expect(boundaries.visit).toHaveBeenCalledTimes(transcriptReadsBeforeRelease);
-        expect(boundaries.managed).not.toHaveBeenCalled();
-        expect(boundaries.managedUrl).not.toHaveBeenCalled();
+        if (!disclosureBoundary) {
+          expect(boundaries.visit).toHaveBeenCalledTimes(transcriptReadsBeforeRelease);
+          expect(boundaries.managed).not.toHaveBeenCalled();
+          expect(boundaries.managedUrl).not.toHaveBeenCalled();
+        }
       }
     } finally {
       release.resolve();
@@ -309,13 +296,7 @@ async function exercise(
 describe("registered artifact request authority after session preparation", () => {
   it.each(methods)("uses the current system agent after preparing %s", async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      let config: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: {}, work: {} },
-        },
-      };
+      let config = agentConfig("main");
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
       const readers = await import("../session-transcript-native.test-support.js");
@@ -364,13 +345,7 @@ describe("registered artifact request authority after session preparation", () =
       const prepare = resolution.prepareArtifactSessionResolution;
       vi.spyOn(resolution, "prepareArtifactSessionResolution").mockImplementation(async (query) => {
         const resolve = await prepare(query);
-        config = {
-          agents: {
-            ownership: "explicit",
-            defaults: { systemAgent: { agentId: "work" } },
-            entries: { main: {}, work: {} },
-          },
-        };
+        config = agentConfig("work");
         setRuntimeConfigSnapshot(config);
         return resolve;
       });

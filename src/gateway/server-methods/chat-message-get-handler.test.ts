@@ -54,6 +54,13 @@ function expectNotFound(respond: Parameters<typeof historyPayload>[0]) {
   expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
 }
 
+const textContent = (text: string) => [{ type: "text", text }];
+const assistant = (content: string, extra: Record<string, unknown> = {}) => ({
+  role: "assistant",
+  content: textContent(content),
+  ...extra,
+});
+
 it("uses indexed reads across hidden announce chunks while retaining recovered and partial replies", async () => {
   await withHistoryState(async () => {
     const scope = await seed("message-recovery", 2000);
@@ -91,7 +98,7 @@ it("uses indexed reads across hidden announce chunks while retaining recovered a
         timestamp: 1000,
         stopReason: "stop",
         errorMessage: undefined,
-        content: [{ type: "text", text: "Old paired answer" }],
+        content: textContent("Old paired answer"),
       },
     ];
     await replaceMessages(scope, messages);
@@ -124,20 +131,20 @@ it("uses indexed reads across hidden announce chunks while retaining recovered a
         model: "backup",
         stopReason: "stop",
         errorMessage: undefined,
-        content: [{ type: "text", text: "Recovered answer" }],
+        content: textContent("Recovered answer"),
       },
     });
     expectNotFound(await lookup("failed"));
     expectHistoryMessage(await lookup("answer"), {
-      content: [{ type: "text", text: "Recovered answer" }],
+      content: textContent("Recovered answer"),
     });
 
     await appendTranscriptMessage(scope, {
       eventId: "partial",
-      message: { ...failure, content: [{ type: "text", text: "Partial answer" }] },
+      message: { ...failure, content: textContent("Partial answer") },
     });
     expectHistoryMessage(await lookup("partial"), {
-      content: [{ type: "text", text: "Partial answer" }],
+      content: textContent("Partial answer"),
     });
     await appendTranscriptEvent(scope, {
       type: "reset",
@@ -203,10 +210,7 @@ it("fetches a retained history reference without crossing conversation or pendin
 
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:other-reference" },
-      {
-        sessionId: "other-reference",
-        updatedAt: 1,
-      },
+      { sessionId: "other-reference", updatedAt: 1 },
     );
     expectHistoryError(
       await request("chat.message.get", {
@@ -268,6 +272,10 @@ it("reopens SQLite with bounded history previews and exact recoverable tool text
     const context = await createHistoryReadContext();
     const rpc = historyRpc(context, scope.sessionKey);
     const request = async (...args: Parameters<typeof rpc>) => historyPayload(await rpc(...args));
+    const get = (messageId: string, maxChars?: number) =>
+      request("chat.message.get", { messageId, ...(maxChars === undefined ? {} : { maxChars }) });
+    const expectMessage = (response: unknown, message: Record<string, unknown>) =>
+      expect(response).toMatchObject({ ok: true, message });
     const history = await request("chat.history");
     expect(Array.isArray(history.messages)).toBe(true);
     const messages = history.messages as Array<Record<string, unknown>>;
@@ -288,16 +296,10 @@ it("reopens SQLite with bounded history previews and exact recoverable tool text
       expect(metadata?.toolOutput).toEqual(
         asOptionalRecord(asOptionalRecord(fixture.message)?.["__openclaw"])?.toolOutput,
       );
-      const response = await request("chat.message.get", {
-        messageId: fixture.id,
-        maxChars: 2_000_000,
-      });
-      expect(response).toMatchObject({
-        ok: true,
-        message: {
-          toolCallId: fixture.message.toolCallId,
-          content: [{ type: "text", text: fixture.text }],
-        },
+      const response = await get(fixture.id, 2_000_000);
+      expectMessage(response, {
+        toolCallId: fixture.message.toolCallId,
+        content: textContent(fixture.text),
       });
       const full = expectDefined(asOptionalRecord(response.message), "full message");
       expect(asOptionalRecord(full["__openclaw"])?.truncated).toBeUndefined();
@@ -307,29 +309,18 @@ it("reopens SQLite with bounded history previews and exact recoverable tool text
         }
       }
     }
-    const capped = await request("chat.message.get", { messageId: "execution-output" });
-    expect(capped).toMatchObject({
-      ok: true,
-      message: {
-        content: [{ type: "text", text: largeOutput.slice(0, 1_000_000) }],
-        __openclaw: {
-          truncated: true,
-          reason: "display-cap",
-          toolOutput: { source: "execution", modelInput: "unverified" },
-        },
+    expectMessage(await get("execution-output"), {
+      content: textContent(largeOutput.slice(0, 1_000_000)),
+      __openclaw: {
+        truncated: true,
+        reason: "display-cap",
+        toolOutput: { source: "execution", modelInput: "unverified" },
       },
     });
-    const smallCap = await request("chat.message.get", {
-      messageId: "provider-output",
-      maxChars: 32,
-    });
-    expect(smallCap).toMatchObject({
-      ok: true,
-      message: {
-        isError: true,
-        content: [{ type: "text", text: output.slice(0, 32) }],
-        __openclaw: { truncated: true, reason: "display-cap", toolOutput },
-      },
+    expectMessage(await get("provider-output", 32), {
+      isError: true,
+      content: textContent(output.slice(0, 32)),
+      __openclaw: { truncated: true, reason: "display-cap", toolOutput },
     });
     expect(await loadTranscriptEvents(scope)).toEqual(persisted);
   });
@@ -383,19 +374,11 @@ it.each([
       };
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config, config);
-      const scope = {
-        agentId,
-        sessionKey,
-        sessionId: "retired-message-session",
-      };
+      const scope = { agentId, sessionKey, sessionId: "retired-message-session" };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       await appendTranscriptMessage(scope, {
         eventId: "retained-message",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Retained retired-agent reply" }],
-          stopReason: "stop",
-        },
+        message: assistant("Retained retired-agent reply", { stopReason: "stop" }),
       });
       const context = await createHistoryReadContext({ getRuntimeConfig: () => config });
       const rpc = historyRpc(context, scope.sessionKey);
@@ -416,10 +399,7 @@ it.each([
             });
             expect(readMessage).not.toHaveBeenCalled();
           } else {
-            expectHistoryMessage(respond, {
-              role: "assistant",
-              content: [{ type: "text", text: "Retained retired-agent reply" }],
-            });
+            expectHistoryMessage(respond, assistant("Retained retired-agent reply"));
             expect(readMessage).toHaveBeenCalledOnce();
           }
         }
