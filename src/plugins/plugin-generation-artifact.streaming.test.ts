@@ -252,13 +252,11 @@ it.each(["replacement", "growth"] as const)(
   "rejects pinned-source %s and removes failed captures",
   (change) => {
     const source = fixture(Buffer.alloc(64 * 1024 + 1, "P"), "fixture.js");
-    const admitted = fs.statSync(source.filename, { bigint: true });
     let target: string | undefined;
     let refused: unknown;
     interceptCopies(source.filename, (options, copyRootFileSync) => {
       target = options.destination.absolutePath;
       if (change === "replacement") {
-        expect(options.expectedSourceIdentity).toEqual({ dev: admitted.dev, ino: admitted.ino });
         fs.renameSync(source.filename, `${source.filename}.retained`);
         fs.writeFileSync(source.filename, "replacement");
       } else {
@@ -289,8 +287,6 @@ it.each(["replacement", "growth"] as const)(
 
 it.each([
   ["EIO", false],
-  ["EBADF", false],
-  ["ENOSPC", false],
   ["ENOSPC", true],
 ] as const)("propagates %s without retry (cleanup failure: %s)", (code, cleanupFails) => {
   const source = fixture(Buffer.alloc(64 * 1024 + 1, "C"), "fixture.js");

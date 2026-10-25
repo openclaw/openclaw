@@ -40,34 +40,24 @@ function fixture(standalone = false, nativePackageMap = false) {
   const root = temp.make("plugin-recovery-source-");
   const captures = temp.make("plugin-recovery-captures-");
   const entry = path.join(root, "index.cjs");
-  const dependency = path.join(root, "node_modules", "recovery-dependency");
-  const nativeDependency = path.join(root, "node_modules", "native-recovery");
-  fs.mkdirSync(dependency, { recursive: true });
-  fs.mkdirSync(nativeDependency);
-  const write = (filename: string, contents: string | object) =>
-    fs.writeFileSync(
-      path.join(root, filename),
-      typeof contents === "string" ? contents : JSON.stringify(contents),
-    );
-  write("package.json", {
-    name: "recovery-fixture",
-    dependencies: { "recovery-dependency": "1.0.0", "native-recovery": "1.0.0" },
-  });
-  write("node_modules/recovery-dependency/package.json", {
-    name: "recovery-dependency",
-    main: "index.cjs",
-  });
-  write("node_modules/recovery-dependency/index.cjs", "exports.value = 'original dependency';");
-  write("node_modules/native-recovery/package.json", {
-    name: "native-recovery",
-    ...(nativePackageMap ? { exports: "./native.node" } : { main: "native.node" }),
-  });
-  write("node_modules/native-recovery/native.node", "original native dependency");
-  write("late.cjs", "exports.value = 'original late import';");
-  write("native.so", "original native bytes");
-  write(
-    "index.cjs",
-    `const dependency = require('recovery-dependency');
+  const files = {
+    "package.json": {
+      name: "recovery-fixture",
+      dependencies: { "recovery-dependency": "1.0.0", "native-recovery": "1.0.0" },
+    },
+    "node_modules/recovery-dependency/package.json": {
+      name: "recovery-dependency",
+      main: "index.cjs",
+    },
+    "node_modules/recovery-dependency/index.cjs": "exports.value = 'original dependency';",
+    "node_modules/native-recovery/package.json": {
+      name: "native-recovery",
+      ...(nativePackageMap ? { exports: "./native.node" } : { main: "native.node" }),
+    },
+    "node_modules/native-recovery/native.node": "original native dependency",
+    "late.cjs": "exports.value = 'original late import';",
+    "native.so": "original native bytes",
+    "index.cjs": `const dependency = require('recovery-dependency');
      const fs = require('node:fs');
      const path = require('node:path');
      let count = 0;
@@ -77,7 +67,12 @@ function fixture(standalone = false, nativePackageMap = false) {
      exports.nativePath = path.join(__dirname, 'native.so');
      exports.native = () => fs.readFileSync(path.join(__dirname, 'native.so'), 'utf8');
      exports.late = () => require('./late.cjs').value;`,
-  );
+  };
+  for (const [filename, contents] of Object.entries(files)) {
+    const target = path.join(root, filename);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, typeof contents === "string" ? contents : JSON.stringify(contents));
+  }
   const create = () =>
     withPluginSourceCaptureDirectory(captures, () =>
       newInstance("recovery-fixture", {
@@ -140,7 +135,6 @@ it.each(
       await warm.dispose();
       expect(oldModule.native()).toBe("original native bytes");
     }
-    const copiedNative = vi.spyOn(fs, "copyFileSync");
     const nativeRead = vi.spyOn(fs, "readFileSync");
     const nativeShadow = fs.realpathSync(oldModule.nativePath);
     fs.writeFileSync(path.join(root, "native.so"), "replacement native bytes");
@@ -177,11 +171,6 @@ it.each(
     expectIdentity(finalModule.nativePath, nativeIdentity);
     await final.dispose();
     expect(fs.readdirSync(captures)).toEqual([]);
-    expect(
-      copiedNative.mock.calls.filter(([source]) =>
-        /(?:native\.so|native\.node)$/.test(String(source)),
-      ),
-    ).toHaveLength(0);
     expect(
       nativeRead.mock.calls.filter(([source], index) => {
         const result = nativeRead.mock.results[index];

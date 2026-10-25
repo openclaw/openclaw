@@ -198,58 +198,49 @@ it("denies an official ClawHub plugin before artifact and record commit, then in
   });
 });
 
-it("rejects missing consent before publishing an artifact or install record", async () => {
-  await withLocalFixture(async ({ env, deny }) => {
-    await deny();
-    await expectUnpublished(env);
-  });
-});
-
-it("keeps the installed artifact and record unchanged when update consent is denied", async () => {
-  await withLocalFixture(async ({ root, env, install, deny }) => {
-    const reviewed: string[][] = [];
-    await install({
-      onCapabilityConsent: async (review) => {
-        reviewed.push(review.declared.tools);
-        return { reviewToken: review.reviewToken };
-      },
-    });
-    expect(reviewed).toEqual([["audit.read"]]);
-    const original = await readInstalled(env);
-    expect(original.record?.acceptedSurface?.tools).toEqual(["audit.read"]);
-
-    await writePluginSource(root, "audit.write");
-    await deny({
-      mode: "update",
-      onCapabilityConsent: async (review) => {
-        reviewed.push(review.declared.tools);
-        return undefined;
-      },
-    });
-
-    expect(reviewed).toEqual([["audit.read"], ["audit.write"]]);
-    expect(await readInstalled(env)).toEqual(original);
-  });
-});
-
-it("rejects a staged capability change during the Claw owner's final check", async () => {
-  await withLocalFixture(async ({ env, deny }) => {
-    let stageChanged = false;
-    await deny({
-      onCapabilityConsent: acceptReview,
-      beforePersistentEffect: async () => {
-        if (stageChanged) {
-          return;
+it.each([
+  { mode: undefined, drift: false },
+  { mode: undefined, drift: true },
+  { mode: "update", drift: false },
+  { mode: "update", drift: true },
+] as const)(
+  "preserves committed state on consent refusal ($mode, drift=$drift)",
+  async ({ mode, drift }) => {
+    await withLocalFixture(async ({ root, env, install, deny }) => {
+      let original: Awaited<ReturnType<typeof readInstalled>> | undefined;
+      if (mode) {
+        await install({ onCapabilityConsent: acceptReview });
+        original = await readInstalled(env);
+        expect(original.record?.acceptedSurface?.tools).toEqual(["audit.read"]);
+        await writePluginSource(root, "audit.write");
+      }
+      const tools = [mode ? "audit.write" : "audit.read"];
+      await deny({
+        mode,
+        onCapabilityConsent: drift
+          ? acceptReview
+          : mode
+            ? async (review) => {
+                expect(review.declared.tools).toEqual(tools);
+                return undefined;
+              }
+            : undefined,
+        ...(drift
+          ? { beforePersistentEffect: () => replaceStagedTools(env, [...tools, "audit.admin"]) }
+          : {}),
+      });
+      if (original) {
+        expect(await readInstalled(env)).toEqual(original);
+        if (drift) {
+          await install({ mode, onCapabilityConsent: acceptReview });
+          expect((await readInstalled(env)).record?.acceptedSurface?.tools).toEqual(tools);
         }
-        stageChanged = true;
-        await replaceStagedTools(env, ["audit.read", "audit.write"]);
-      },
+      } else {
+        await expectUnpublished(env);
+      }
     });
-
-    expect(stageChanged).toBe(true);
-    await expectUnpublished(env);
-  });
-});
+  },
+);
 
 it("rejects sibling-entry drift even when the merged capability token is unchanged", async () => {
   await withLocalFixture(async ({ sourceDir, env, install }) => {
@@ -297,28 +288,5 @@ it("rejects sibling-entry drift even when the merged capability token is unchang
     expect(changed?.declared).toEqual(expected.declared);
     expect(changed?.grantsByPluginId).not.toEqual(expected.grantsByPluginId);
     await expectUnpublished(env);
-  });
-});
-
-it("rejects final-stage capability drift without replacing the installed plugin", async () => {
-  await withLocalFixture(async ({ root, env, install, deny }) => {
-    const onCapabilityConsent = acceptReview;
-    await install({ onCapabilityConsent });
-    const original = await readInstalled(env);
-
-    await writePluginSource(root, "audit.write");
-    await deny({
-      mode: "update",
-      onCapabilityConsent,
-      beforePersistentEffect: () => replaceStagedTools(env, ["audit.write", "audit.admin"]),
-    });
-
-    expect(await readInstalled(env)).toEqual(original);
-
-    await install({ mode: "update", onCapabilityConsent });
-    expect(
-      (await readPersistedInstalledPluginIndexInstallRecordsAsync({ env }))?.["claw-audit"]
-        ?.acceptedSurface?.tools,
-    ).toEqual(["audit.write"]);
   });
 });

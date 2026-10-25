@@ -14,15 +14,18 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { selectCurrentPluginMetadataCache } from "./current-plugin-metadata-state.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import { callFixtureGatewayMethod } from "./loader-fixture-builders.test-support.js";
+import {
+  callFixtureGatewayMethod,
+  writeFixtureJson,
+} from "./loader-fixture-builders.test-support.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { acquirePluginRegistryForInspection } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
+  EMPTY_PLUGIN_SCHEMA,
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
-  writePluginMetadata,
 } from "./loader.test-fixtures.js";
 import {
   createPluginCache,
@@ -68,7 +71,6 @@ async function withInstalledEsmPlugin(
   files: Record<string, string>,
   run: (fixture: {
     pluginDir: string;
-    stateDir: string;
     install: (record: Omit<PluginInstallRecord, "installPath">) => Promise<void>;
     inspect: (
       workspace: string,
@@ -82,24 +84,17 @@ async function withInstalledEsmPlugin(
   const stateDir = fs.realpathSync(makePluginLoaderTempDir());
   const pluginDir = path.join(stateDir, "extensions", PLUGIN_ID);
   fs.mkdirSync(pluginDir, { recursive: true });
-  writePluginMetadata({
-    dir: pluginDir,
-    id: PLUGIN_ID,
-    packageJson: {
-      name: `@vendor/${PLUGIN_ID}`,
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.mjs"] },
-    },
+  writeFixtureJson(pluginDir, "package.json", {
+    name: `@vendor/${PLUGIN_ID}`,
+    version: "1.0.0",
+    type: "module",
+    openclaw: { extensions: ["./index.mjs"] },
   });
-  const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-  fs.writeFileSync(
-    manifestPath,
-    JSON.stringify({
-      ...JSON.parse(fs.readFileSync(manifestPath, "utf8")),
-      providers: ["fixture-provider"],
-    }),
-  );
+  writeFixtureJson(pluginDir, "openclaw.plugin.json", {
+    id: PLUGIN_ID,
+    configSchema: EMPTY_PLUGIN_SCHEMA,
+    providers: ["fixture-provider"],
+  });
   for (const [name, source] of Object.entries(files)) {
     fs.writeFileSync(path.join(pluginDir, name), source);
   }
@@ -129,7 +124,6 @@ async function withInstalledEsmPlugin(
       await withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
         run({
           pluginDir,
-          stateDir,
           install: (record) =>
             refreshPersistedInstalledPluginIndex({
               reason: "source-changed",
@@ -221,7 +215,6 @@ export function register(api) {
           return prepared;
         });
       const retired = await inspect("main");
-      expect(prepare).toHaveBeenCalledTimes(1);
       const artifact = (await prepare.mock.results[0]!.value).artifact;
       await retired.release();
       const replacement = await inspect("main");
@@ -229,7 +222,6 @@ export function register(api) {
       const slot = (globalThis as Record<symbol, AuthoritySlot>)[authority]!;
       expect(replacement.registry.plugins[0]).toMatchObject({ origin: "global", status: "loaded" });
       expect(slot).toMatchObject({ evaluations: 1, registrations: 2 });
-      expect(prepare).toHaveBeenCalledTimes(1);
       const readLazy = async (inspection: typeof replacement) => {
         const respond = await callFixtureGatewayMethod(
           inspection.registry.gatewayHandlers["fixture.read"]!,

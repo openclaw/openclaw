@@ -29,7 +29,6 @@ function createOwner(
 ) {
   return createPluginRecord({
     id,
-    name: id,
     source: `/tmp/${id}/index.js`,
     origin: "global",
     enabled: true,
@@ -84,32 +83,25 @@ describe("worker provider registry", () => {
   });
 
   it("registers both placement modes in canonical order", () => {
-    const pluginRegistry = createTestRegistry();
+    const { registry, registerWorkerProvider: register } = createTestRegistry();
     const provider = {
       ...createWorkerProvider("static-ssh"),
       supportedExecutionModes: ["worker-turn", "remote-exec"],
     } satisfies WorkerProvider;
 
-    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+    register(createOwner("owner", ["static-ssh"]), provider);
 
-    expect(pluginRegistry.registry.workerProviders.get("static-ssh")?.provider).toBe(provider);
-    expect(pluginRegistry.registry.diagnostics).toEqual([]);
+    expect(registry.workerProviders.get("static-ssh")?.provider).toBe(provider);
+    expect(registry.diagnostics).toEqual([]);
   });
 
   it("rejects normalized duplicate provider ids", () => {
-    const pluginRegistry = createTestRegistry();
-    pluginRegistry.registerWorkerProvider(
-      createOwner("first", ["static-ssh"]),
-      createWorkerProvider("Static-SSH"),
-    );
+    const { registry, registerWorkerProvider: register } = createTestRegistry();
+    register(createOwner("first", ["static-ssh"]), createWorkerProvider("Static-SSH"));
+    register(createOwner("second", ["static-ssh"]), createWorkerProvider(" static-ssh "));
 
-    pluginRegistry.registerWorkerProvider(
-      createOwner("second", ["static-ssh"]),
-      createWorkerProvider(" static-ssh "),
-    );
-
-    expect(pluginRegistry.registry.workerProviders.size).toBe(1);
-    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+    expect(registry.workerProviders.size).toBe(1);
+    expect(registry.diagnostics).toContainEqual(
       expect.objectContaining({
         level: "error",
         pluginId: "second",
@@ -215,7 +207,6 @@ describe("configured worker provider maintenance", () => {
     expect(harness.profiles.second.settings).toEqual({
       nested: { location: "two" },
     });
-    expect(retained).toBeDefined();
     expect(() => retained!.assertCurrent()).toThrow("no longer current");
     expect(harness.warn).not.toHaveBeenCalled();
   });

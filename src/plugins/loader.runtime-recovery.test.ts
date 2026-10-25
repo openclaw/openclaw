@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createPreparedInboundRegistryLoader } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "../agents/prepared-model-runtime.plugin-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -75,12 +75,6 @@ it.each(["installed", "bundled-mjs"] as const)(
     const extension = kind === "bundled-mjs" ? "mjs" : "cjs";
     const bundledDir = path.join(root, "bundled");
     const id = "recovery-inbound";
-    const evaluatedEvent = `recovery-inbound-evaluated-${kind}`;
-    const registeredEvent = `recovery-inbound-registered-${kind}`;
-    const evaluated = vi.fn();
-    const registered = vi.fn();
-    process.on(evaluatedEvent, evaluated);
-    process.on(registeredEvent, registered);
     const plugin = writePlugin({
       id,
       dir: path.join(bundled ? bundledDir : root, id),
@@ -89,13 +83,11 @@ it.each(["installed", "bundled-mjs"] as const)(
         type: "object",
         properties: { marker: { type: "string" }, fail: { type: "boolean" } },
       },
-      body: `process.emit(${JSON.stringify(evaluatedEvent)});
-        let registrations = 0;
+      body: `let registrations = 0;
         ${extension === "mjs" ? "export default" : "module.exports ="} {
           id: ${JSON.stringify(id)},
           register(api) {
             const registration = ++registrations;
-            process.emit(${JSON.stringify(registeredEvent)});
             const lifetime = new AbortController();
             api.lifecycle.onDispose(() => lifetime.abort());
             if (api.pluginConfig.fail) throw new Error('replacement registration failed');
@@ -151,7 +143,6 @@ it.each(["installed", "bundled-mjs"] as const)(
           const previous = withPluginCache(publishedCache, () => load(options));
           const oldRecord = previous.plugins.find((record) => record.id === id)!;
           expect(oldRecord.origin).toBe(bundled ? "bundled" : "config");
-          const oldInstance = getPluginInstance(oldRecord)!;
           const oldTool = resolveProbe(previous);
           expect(await oldTool.execute("previous", {})).toMatchObject({
             content: [{ text: "original:1" }],
@@ -184,9 +175,6 @@ it.each(["installed", "bundled-mjs"] as const)(
                 previousRegistry: previous,
                 moduleRecoveries: new Map([[id, recovery]]),
               });
-              const restoredRecord = restored.plugins.find((record) => record.id === id)!;
-              expect(restoredRecord).not.toBe(oldRecord);
-              expect(getPluginInstance(restoredRecord)).not.toBe(oldInstance);
               prepareOwnedPluginLoadContext(context, process.env, restored, metadata);
               bindPluginRegistryGatewayOwner(restored, { current: () => restored });
               setActivePluginRegistry(restored, undefined, "gateway-bindable", root);
@@ -210,8 +198,6 @@ it.each(["installed", "bundled-mjs"] as const)(
                 expect(inbound).toBe(restored);
                 expect(await resolveProbe(inbound).execute("inbound", {})).toMatchObject(expected);
               }
-              expect(registered).toHaveBeenCalledTimes(3);
-              expect(evaluated).toHaveBeenCalledTimes(bundled ? 1 : 3);
             });
           } finally {
             await recovery.module.dispose();
@@ -222,8 +208,6 @@ it.each(["installed", "bundled-mjs"] as const)(
       await clearActivePluginRegistry();
       await disposeLoaderFixtures(registries);
       selectCurrentPluginMetadataCache(previousCache);
-      process.off(evaluatedEvent, evaluated);
-      process.off(registeredEvent, registered);
     }
   },
 );

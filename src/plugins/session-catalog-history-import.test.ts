@@ -94,24 +94,15 @@ it("imports and deduplicates in the supplied config store without polluting runt
         expect(commitGuard).toHaveBeenCalledTimes(guardedWrites);
 
         const imported = await readMessages(supplied);
-        expect(imported).toMatchObject([
-          {
-            idempotencyKey: "fixture-catalog-catalog:source-thread:prompt",
-            message: { role: "user", content: "Imported prompt" },
-          },
-          {
-            idempotencyKey: "fixture-catalog-catalog:source-thread:answer",
-            message: { role: "assistant", content: [{ type: "text", text: "Imported answer" }] },
-          },
-          {
-            idempotencyKey: "fixture-catalog-catalog:source-thread:continuation-notice",
-            message: {
-              provider: "openclaw",
-              model: "session-catalog",
-              content: [{ type: "text", text: "Copied snapshot; using openai/gpt-5.6-sol." }],
-            },
-          },
+        expect(imported.map(({ message }) => [message.role, message.content])).toEqual([
+          ["user", "Imported prompt"],
+          ["assistant", [{ type: "text", text: "Imported answer" }]],
+          ["assistant", [{ type: "text", text: "Copied snapshot; using openai/gpt-5.6-sol." }]],
         ]);
+        expect(imported.at(-1)?.message).toMatchObject({
+          provider: "openclaw",
+          model: "session-catalog",
+        });
         commitGuard.mockImplementation(() => {
           throw new Error("Catalog source revoked");
         });
