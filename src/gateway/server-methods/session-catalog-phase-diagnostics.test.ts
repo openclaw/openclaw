@@ -174,7 +174,7 @@ describe("registered catalog list phase diagnostics", () => {
       return [host];
     });
     install(list);
-    const client = { connId: "shared-caller" };
+    const client = { connId: "shared-caller", connect: { scopes: [] } };
     const leader = start(leaderTrace, client);
     const settledWork: Promise<unknown>[] = [Promise.allSettled([leader.completion])];
     try {

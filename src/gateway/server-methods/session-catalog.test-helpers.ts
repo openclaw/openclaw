@@ -112,7 +112,7 @@ export function startCall(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: { connect?: { scopes?: string[] }; connId?: string; connectionSignal?: AbortSignal },
+  client?: { connect: { scopes: string[] }; connId?: string; connectionSignal?: AbortSignal },
   contextOverrides: Record<string, unknown> = {},
 ) {
   // Keep caller identity stable for shared lists and live scope updates.

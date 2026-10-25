@@ -45,7 +45,7 @@ describe("session catalog progress ownership", () => {
         "sessions.catalog.list",
         { progressId: "progress-1", ...(withdrawn ? { allowPartialResults: true } : {}) },
         {},
-        { connId: "requester", connect: {} },
+        { connId: "requester", connect: { scopes: [] } },
         { broadcastToConnIds },
       );
 
@@ -98,7 +98,7 @@ describe("session catalog progress ownership", () => {
     const config = { agents: { entries: { main: {}, research: {} } } };
     const leaderBroadcast = vi.fn();
     const followerBroadcast = vi.fn();
-    const sharedClient = { connId: "requester" };
+    const sharedClient = { connId: "requester", connect: { scopes: [] } };
     const leader = startCall(
       "sessions.catalog.list",
       { progressId: "leader-progress", agentId: "main" },
@@ -207,7 +207,7 @@ describe("session catalog progress ownership", () => {
       });
       hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
       const config = {};
-      const client = { connId: "requester" };
+      const client = { connId: "requester", connect: { scopes: [] } };
       const context = { isConnectionActive: () => connected };
       const progressive = startCall(
         "sessions.catalog.list",
@@ -282,7 +282,7 @@ describe("session catalog progress ownership", () => {
         "sessions.catalog.list",
         { allowPartialResults: true, progressId: "live" },
         {},
-        { connId: "requester" },
+        { connId: "requester", connect: { scopes: [] } },
         { broadcastToConnIds },
       );
       try {
@@ -322,7 +322,7 @@ describe("session catalog progress ownership", () => {
       { provider: provider("completed") },
     ];
     const config = {};
-    const client = { connId: "requester" };
+    const client = { connId: "requester", connect: { scopes: [] } };
     const request = { catalogId: "fixture", search: "held" };
     const leader = startCall("sessions.catalog.list", request, config, client);
     const pending = [leader];
@@ -401,7 +401,7 @@ describe("session catalog progress ownership", () => {
         },
       ];
       const config = {};
-      const client = { connId: "requester" };
+      const client = { connId: "requester", connect: { scopes: [] } };
       const original = startCall(
         "sessions.catalog.list",
         { progressId: "before-delete" },
@@ -495,7 +495,11 @@ describe("session catalog progress ownership", () => {
           "sessions.catalog.list",
           { progressId: "original" },
           config,
-          { connId: "old", connectionSignal: connection.signal },
+          {
+            connId: "old",
+            connect: { scopes: [] },
+            connectionSignal: connection.signal,
+          },
           {
             broadcastToConnIds,
             requestEntryLifetime: { signal: gateway.signal },
@@ -517,7 +521,7 @@ describe("session catalog progress ownership", () => {
           "sessions.catalog.list",
           { progressId: "replacement" },
           config,
-          { connId: "new" },
+          { connId: "new", connect: { scopes: [] } },
           { broadcastToConnIds: replacementBroadcast },
         );
         releases[0]!.resolve();

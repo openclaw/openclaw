@@ -316,7 +316,7 @@ describe("session catalog Gateway methods", () => {
       "sessions.catalog.list",
       { progressId: "progress-creator" },
       {},
-      { connId: "requester", connect: {} },
+      { connId: "requester", connect: { scopes: [] } },
       { broadcastToConnIds },
     );
     const projectedSessions = [
