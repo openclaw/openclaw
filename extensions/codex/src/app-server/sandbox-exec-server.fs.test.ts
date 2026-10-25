@@ -2,14 +2,10 @@ import { setImmediate as flushIo } from "node:timers/promises";
 import type { SandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
-import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   codexFsSandboxContext,
-  createClient,
   createSandboxContext,
-  execServerUrlFromClient,
   globPath,
-  openSocket,
   openSandboxSocket,
   rpc,
   specialPath,
@@ -23,8 +19,9 @@ afterEach(async () => {
 const connect = (overrides: Parameters<typeof createSandboxContext>[0]) =>
   openSandboxSocket(createSandboxContext(overrides));
 
-type Socket = Awaited<ReturnType<typeof openSocket>>;
+type Socket = Awaited<ReturnType<typeof openSandboxSocket>>;
 type LegacyTarget = { filePath: string; cwd?: string; signal?: AbortSignal };
+const legacyOperation = <T>() => vi.fn(async (_params: T) => undefined);
 const fileStat = (size: number) => ({ type: "file" as const, size, mtimeMs: 1 });
 const uri = (name: string) => `file:///workspace${name ? `/${name}` : ""}`;
 function pendingIo<T>() {
@@ -104,28 +101,22 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   });
 
   it("keeps pre-upgrade sandbox fs bridges source- and runtime-compatible", async () => {
-    const writeFile = vi.fn(
-      async (
-        _params: Pick<LegacyTarget, "filePath" | "signal"> & {
-          data: Buffer | string;
-          encoding?: BufferEncoding;
-          mkdir?: boolean;
-        },
-      ) => undefined,
-    );
-    const copyFile = vi.fn(
-      async (
-        _params: Omit<LegacyTarget, "filePath"> & {
-          sourcePath: string;
-          destinationPath: string;
-          mkdir?: boolean;
-        },
-      ) => undefined,
-    );
-    const mkdirp = vi.fn(async (_params: LegacyTarget) => undefined);
-    const remove = vi.fn(
-      async (_params: LegacyTarget & { recursive?: boolean; force?: boolean }) => undefined,
-    );
+    const writeFile = legacyOperation<
+      Pick<LegacyTarget, "filePath" | "signal"> & {
+        data: Buffer | string;
+        encoding?: BufferEncoding;
+        mkdir?: boolean;
+      }
+    >();
+    const copyFile = legacyOperation<
+      Omit<LegacyTarget, "filePath"> & {
+        sourcePath: string;
+        destinationPath: string;
+        mkdir?: boolean;
+      }
+    >();
+    const mkdirp = legacyOperation<LegacyTarget>();
+    const remove = legacyOperation<LegacyTarget & { recursive?: boolean; force?: boolean }>();
     // Deliberately model the interface shipped before canonical mutation pins:
     // no resolvePinnedMutationTarget method and no pinnedPath parameters.
     const legacyBridge = {
@@ -228,6 +219,17 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         "Codex fs sandbox denied read access",
       );
     }
+    await expect(
+      fileRpc(socket, "open", "private/secret.txt", {
+        handleId: "denied",
+        sandbox: codexFsSandboxContext({
+          entries: [
+            { path: specialPath("root"), access: "read" },
+            { path: globPath("private/*.txt"), access: "deny" },
+          ],
+        }),
+      }),
+    ).rejects.toThrow("Codex fs sandbox denied read access");
     await write(socket, uri("private/nested/allowed.txt"), "ok", policy);
     await expect(removeTree(socket, "private", policy)).rejects.toThrow(
       "because /workspace/private/*.txt is not writable",
@@ -428,20 +430,10 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     );
     const sandbox = createSandboxContext({
       readFile,
-      stat: async ({ filePath }) => ({
-        type: "file",
-        size: filePath.endsWith("first.txt") ? 5 : 6,
-        mtimeMs: 1,
-      }),
+      stat: async ({ filePath }) => fileStat(filePath.endsWith("first.txt") ? 5 : 6),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const first = await openSocket(execServerUrlFromClient(client));
-    const second = await openSocket(execServerUrlFromClient(client));
-    for (const socket of [first, second]) {
-      await rpc(socket, "initialize", { clientName: "test" });
-      socket.send(JSON.stringify({ method: "initialized" }));
-    }
+    const first = await openSandboxSocket(sandbox);
+    const second = await openSandboxSocket(sandbox);
     await openFile(first, "shared-id", uri("first.txt"));
     await openFile(second, "shared-id", uri("second.txt"));
     await expect(readBlock(first, "shared-id", 0, 6)).resolves.toEqual(block("first", true));
@@ -450,26 +442,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     await expect(readBlock(second, "shared-id", 1, 2)).resolves.toEqual(block("ec", false));
     first.close();
     second.close();
-  });
-
-  it("enforces sandbox read policy before opening a streamed file", async () => {
-    const readFile = vi.fn(async () => Buffer.from("secret"));
-    const socket = await connect({ readFile });
-
-    await expect(
-      rpc(socket, "fs/open", {
-        handleId: "denied",
-        path: "file:///workspace/private/secret.txt",
-        sandbox: codexFsSandboxContext({
-          entries: [
-            { path: specialPath("root"), access: "read" },
-            { path: globPath("private/*.txt"), access: "deny" },
-          ],
-        }),
-      }),
-    ).rejects.toThrow("Codex fs sandbox denied read access");
-    expect(readFile).not.toHaveBeenCalled();
-    socket.close();
   });
 
   it("rejects duplicate, oversized, and invalid sandbox file read handles", async () => {

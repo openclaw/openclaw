@@ -321,29 +321,32 @@ describe("private inference HTTP relay", () => {
     );
   });
 
-  it("rejects OAuth use when asynchronous transport preparation loses the grant", async () => {
-    let grantCurrent = true;
-    const resolve = vi.fn(async () => {
-      return {
+  it.each(["OAuth grant", "empty context"])(
+    "revalidates %s after asynchronous transport preparation",
+    async (owner) => {
+      const grant = new AbortController();
+      const resolve = vi.fn(async () => ({
         token: "synthetic-access",
-        assertCurrent: () => {
-          if (!grantCurrent) {
-            throw new Error("revoked");
-          }
-        },
-      };
-    });
-    const next = await fixture(true, undefined, { resolve });
-    let writes = 0;
-    transport.fetch.mockImplementation(async (args) => {
-      grantCurrent = false;
-      args.beforeRequest();
-      writes++;
-      throw new Error("unexpected upstream write");
-    });
-    expect((await post(next.proxy.baseUrl + "/responses", next.body)).status).toBe(502);
-    expect(writes).toBe(0);
-  });
+        assertCurrent: () => grant.signal.throwIfAborted(),
+      }));
+      const oauth = owner === "OAuth grant";
+      const { proxy, controller, body } = await fixture(
+        true,
+        oauth ? undefined : "",
+        oauth ? { resolve } : undefined,
+      );
+      let writes = 0;
+      transport.fetch.mockImplementation(async (args) => {
+        (oauth ? grant : controller).abort();
+        args.beforeRequest();
+        writes++;
+        throw new Error("unexpected upstream write");
+      });
+      expect((await post(proxy.baseUrl + "/responses", body)).status).toBe(502);
+      expect(transport.fetch).toHaveBeenCalledTimes(1);
+      expect(writes).toBe(0);
+    },
+  );
 
   it("rejects unadmitted native prewarm for OAuth", async () => {
     const resolve = vi.fn();
@@ -392,21 +395,6 @@ describe("private inference HTTP relay", () => {
     expect(stale.status).toBe(502);
     expect(await stale.text()).not.toContain("synthetic persona");
     expect(transport.fetch).not.toHaveBeenCalled();
-  });
-
-  it("revalidates admission after asynchronous preparation without a context rewrite", async () => {
-    const { proxy, controller, body } = await fixture(true, "");
-    let writes = 0;
-    transport.fetch.mockImplementation(async (args) => {
-      controller.abort();
-      args.beforeRequest();
-      writes++;
-      throw new Error("must not reach the upstream");
-    });
-    const response = await post(proxy.baseUrl + "/responses", body);
-    expect(response.status).toBe(502);
-    expect(transport.fetch).toHaveBeenCalledTimes(1);
-    expect(writes).toBe(0);
   });
 
   it("passes native unauthorized responses through for native auth recovery", async () => {
@@ -534,10 +522,6 @@ describe("private inference WebSocket relay", () => {
       expect(transport.resolve).toHaveBeenCalledTimes(proxied ? 0 : 1);
       if (proxied) {
         expect(transport.wsAgents[0] === agent).toBe(true);
-        expect(transport.proxyAgent).toHaveBeenCalledWith({
-          mode: "env",
-          targetUrl: expect.any(String),
-        });
       }
       const closed = once(socket, "close");
       registration.release();

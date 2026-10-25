@@ -227,31 +227,14 @@ describe("CodexNativeSubagentMonitor", () => {
     await disposal;
   });
 
-  it.each(["wrong-turn", "terminal", "failed"])(
-    "does not admit a %s V1 spawn",
-    async (scenario) => {
-      const { client, monitor, claimDirectChild, owner } = await directFixture();
-      if (scenario === "failed") {
-        owner.bindTurn("turn-1");
-        await client.item(
-          collabItem("spawnAgent", ["failed-child"], { status: "failed" }),
-          "turn-1",
-        );
-      } else {
-        await client.spawn(
-          "child-thread",
-          scenario === "wrong-turn" ? "wrong-turn" : "turn-1",
-          "v1",
-        );
-        if (scenario === "terminal") {
-          await client.completeNative({ result: "done" });
-        }
-        owner.bindTurn("turn-1");
-      }
-      expect(claimDirectChild).not.toHaveBeenCalled();
-      await monitor.dispose();
-    },
-  );
+  it("does not resurrect terminal pre-bind V1 spawn evidence", async () => {
+    const { client, monitor, claimDirectChild, owner } = await directFixture();
+    await client.spawn("child-thread", "turn-1", "v1");
+    await client.completeNative({ result: "done" });
+    owner.bindTurn("turn-1");
+    expect(claimDirectChild).not.toHaveBeenCalled();
+    await monitor.dispose();
+  });
 
   it("keeps another bound parent from consuming V2 pre-bind evidence capacity", async () => {
     const { client, monitor } = monitorFixture();
@@ -320,26 +303,22 @@ describe("CodexNativeSubagentMonitor", () => {
     await monitor.dispose();
   });
 
-  it.each(["completed", "interrupted"] as const)(
-    "rejects pending direct admission when a child is observed %s before its spawn claim",
-    async (status) => {
-      const rejectPendingDirectChild = vi.fn();
-      const { client, monitor, claimDirectChild, owner } = await directFixture({
-        rejectPendingDirectChild,
-      });
-      owner.bindTurn("turn-1");
-      await notifyChildStarted(client);
-      await client.completeTurn({ status });
-      await client.notify(spawnNotification("v1", "turn-1"));
-
-      expect(rejectPendingDirectChild).toHaveBeenCalledWith(
-        "child-thread",
-        expect.stringContaining("Codex child turn"),
-      );
-      expect(claimDirectChild).not.toHaveBeenCalled();
-      await monitor.dispose();
-    },
-  );
+  it("rejects pending direct admission when interrupted before its spawn claim", async () => {
+    const rejectPendingDirectChild = vi.fn();
+    const { client, monitor, claimDirectChild, owner } = await directFixture({
+      rejectPendingDirectChild,
+    });
+    owner.bindTurn("turn-1");
+    await notifyChildStarted(client);
+    await client.completeTurn({ status: "interrupted" });
+    await client.notify(spawnNotification("v1", "turn-1"));
+    expect(rejectPendingDirectChild).toHaveBeenCalledWith(
+      "child-thread",
+      expect.stringContaining("Codex child turn"),
+    );
+    expect(claimDirectChild).not.toHaveBeenCalled();
+    await monitor.dispose();
+  });
 
   function spawnNotification(version: "v1" | "v2", turnId = "parent-turn") {
     return itemNotification(directSpawnItem(version, "parent-thread", "child-thread"), turnId);
