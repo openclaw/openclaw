@@ -209,29 +209,6 @@ it("shares projection facts until a native write changes their snapshot", () => 
   );
 });
 
-it("reads hot, archived, and missing frontiers with one statement each", () => {
-  const database = openOpenClawAgentDatabase(scope("first"));
-  const first = readSessionTranscriptWatermark(scope("first"));
-  const second = readSessionTranscriptWatermark(scope("second"));
-  writeArchive(database.db, "second", 41);
-  const reads = trackQueries(
-    database,
-    (sql) => isHotWatermarkQuery(sql) || sql.includes('from "session_transcript_cold_archives"'),
-  );
-  for (const [sessionId, expected] of [
-    ["first", first],
-    ["second", { ...second, maxSeq: 41 }],
-    ["missing", { generation: null, maxSeq: null }],
-  ] as const) {
-    expect(
-      runSqliteDeferredTransactionSync(database.db, () =>
-        readSessionTranscriptWatermarkInDatabase(database, sessionId),
-      ),
-    ).toEqual(expected);
-  }
-  expect(reads()).toBe(3);
-});
-
 it("reads raw page watermarks once without recompiling tiny or empty reads", () => {
   const targets = [scope("first"), scope("second")];
   const pages = targets.map((target) => {
@@ -304,7 +281,6 @@ it.each([false, true])("keeps public reads committed through writer rollback=%s"
         generation,
       });
       expect(readSessionTranscriptWatermark(target)).toEqual(before);
-      expect(readSessionTranscriptWatermark(target)).toEqual(before);
       if (rollback) {
         throw failure;
       }
@@ -332,9 +308,9 @@ it("reads hot and cold watermarks once while preserving a WAL snapshot and forei
       sql,
     ),
   );
-  const read = () => {
+  const read = (sessionId = target.sessionId) => {
     const executions = reads();
-    const watermark = readSessionTranscriptWatermarkInDatabase(database, target.sessionId);
+    const watermark = readSessionTranscriptWatermarkInDatabase(database, sessionId);
     expect(reads() - executions).toBe(1);
     return watermark;
   };
@@ -354,6 +330,7 @@ it("reads hot and cold watermarks once while preserving a WAL snapshot and forei
     const db = getNodeSqliteKysely<DB>(peer);
     runSqliteDeferredTransactionSync(database.db, () => {
       expect(read()).toEqual(before);
+      expect(read("missing")).toEqual({ generation: null, maxSeq: null });
       peer.exec("BEGIN IMMEDIATE");
       writeGeneration(peer, target.sessionId, "peer-generation");
       writeArchive(peer, target.sessionId, 0);

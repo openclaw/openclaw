@@ -30,6 +30,14 @@ import type { InternalSessionEntry } from "./types.js";
 
 type InputScope = Parameters<typeof stageSessionPendingInput>[0];
 type InputOptions = Parameters<typeof stageSessionPendingInput>[1];
+function seed(
+  database: Parameters<typeof writeSessionEntry>[0],
+  name: string,
+  fields: Partial<InternalSessionEntry> = {},
+) {
+  writeSessionEntry(database, `agent:main:${name}`, { sessionId: name, updatedAt: 1, ...fields });
+}
+
 function stageInput(
   scope: InputScope,
   runId: string,
@@ -134,18 +142,9 @@ test("restricts orphan discovery to the active-session index", async ({
   store: { database, store },
 }) => {
   for (let index = 0; index < 32; index++) {
-    writeSessionEntry(database, `agent:main:archived-${index}`, {
-      sessionId: `archived-${index}`,
-      updatedAt: 1,
-      archivedAt: 1,
-      abortedLastRun: true,
-    });
+    seed(database, `archived-${index}`, { archivedAt: 1, abortedLastRun: true });
   }
-  writeSessionEntry(database, "agent:main:orphan", {
-    sessionId: "orphan",
-    updatedAt: 1,
-    abortedLastRun: true,
-  });
+  seed(database, "orphan", { abortedLastRun: true });
   const plans: string[] = [];
   const prototype = requireNodeSqlite().StatementSync.prototype;
   const observers = (["all", "iterate"] as const).map((method) => {
@@ -211,16 +210,9 @@ test("pages exec owners without unrelated entries or saved prompts", async ({
         },
       },
     );
-    writeSessionEntry(database, `agent:main:unrelated-${index}`, {
-      sessionId: `unrelated-${index}`,
-      updatedAt: 1,
-    });
+    seed(database, `unrelated-${index}`);
   }
-  writeSessionEntry(database, "agent:main:empty-exec", {
-    sessionId: "empty-exec",
-    updatedAt: 1,
-    pendingExecNotifications: {},
-  });
+  seed(database, "empty-exec", { pendingExecNotifications: {} });
 
   const selected = [];
   for await (const item of iteratePendingExecNotificationEntriesInWorker(store)) {
@@ -236,12 +228,8 @@ test("pages exec owners without unrelated entries or saved prompts", async ({
 test("pages saved deliveries while preserving live custody", async ({
   store: { database, store },
 }) => {
-  const scope = {
-    ...store,
-    sessionKey: "agent:main:mixed-recovery",
-    sessionId: "mixed-recovery",
-  };
-  writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+  const scope = { ...store, sessionKey: "agent:main:mixed-recovery", sessionId: "mixed-recovery" };
+  seed(database, scope.sessionId);
   await using receipts = inputReceipts();
   for (let index = 0; index < 24; index++) {
     const receipt = await stageInput(scope, `input-${index}`, {
@@ -269,7 +257,7 @@ test("reconciles interrupted and crash-left chat inputs at startup", async ({
   store: { database, store },
 }) => {
   const scope = { ...store, sessionKey: "agent:main:chat-recovery", sessionId: "chat-recovery" };
-  writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+  seed(database, scope.sessionId);
   await using receipts = inputReceipts();
   for (const runId of ["terminated", "killed", "legacy"]) {
     const receipt = await stageInput(scope, runId, {
@@ -302,10 +290,7 @@ test("skips an admitted store without optional pending-input storage", async ({
   store: { database, store },
 }) => {
   const { env } = store;
-  writeSessionEntry(database, "agent:main:recovery-old-store", {
-    sessionId: "old-store-session",
-    updatedAt: 1,
-  });
+  seed(database, "recovery-old-store", { sessionId: "old-store-session" });
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   copyFileSync(database.path, `${database.path}.previous`);
@@ -338,8 +323,7 @@ test("refreshes empty recovery reads with only recoverable inputs", async ({
     "ordinary",
   ];
   for (const name of states) {
-    const target = scope(name);
-    writeSessionEntry(database, target.sessionKey, { sessionId: target.sessionId, updatedAt: 1 });
+    seed(database, scope(name).sessionId);
   }
   await using receipts = inputReceipts();
   const stage = async (name: string, trackCompletion = false) => {
@@ -383,10 +367,7 @@ test("refreshes empty recovery reads with only recoverable inputs", async ({
   expect(consumed.state).toBe("consumed");
 
   await finishInput(await stage("old"));
-  writeSessionEntry(database, scope("old").sessionKey, {
-    sessionId: "replacement-session",
-    updatedAt: 2,
-  });
+  seed(database, "recovery-old", { sessionId: "replacement-session", updatedAt: 2 });
 
   const candidates = await readPendingInputRecoveryEntriesInWorker(store);
   expect(

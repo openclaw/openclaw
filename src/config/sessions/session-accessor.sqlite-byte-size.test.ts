@@ -302,10 +302,7 @@ it("admits compressed transcript bytes before decoding and preserves canonical s
       .run(scope.sessionId, compressed!.seq!);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBe(sizeBytes);
     expect(raw(1)).toMatchObject(
-      page([], true, {
-        requiredBytes: Buffer.byteLength(canonical[0]!) + 1,
-        serializedBytes: 0,
-      }),
+      page([], true, { requiredBytes: Buffer.byteLength(canonical[0]!) + 1, serializedBytes: 0 }),
     );
     expect(() => raw(sizeBytes + events.length)).toThrow();
     expect(() => loadTranscriptEventsSync({ ...scope, maxEventBytes: sizeBytes - 1 })).toThrow(

@@ -311,10 +311,7 @@ describe("memory conversation delivery", () => {
   };
 
   const deliveryFixture = () =>
-    createMemoryConversation(key, {
-      entry: conversationEntry(sessionId, 1),
-      cwd: "/synthetic",
-    });
+    createMemoryConversation(key, { entry: conversationEntry(sessionId, 1), cwd: "/synthetic" });
 
   it("reports a bound publication failure while retaining the delivery receipt", async () => {
     const { binding } = await deliveryFixture();

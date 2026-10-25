@@ -223,12 +223,7 @@ it.each([false, true])(
         {
           type: "session.entry.create",
           input: {
-            entry: {
-              sessionId,
-              lifecycleRevision: "generation-1",
-              updatedAt: 1,
-              incognito: true,
-            },
+            entry: { sessionId, lifecycleRevision: "generation-1", updatedAt: 1, incognito: true },
           },
         },
         authority,
