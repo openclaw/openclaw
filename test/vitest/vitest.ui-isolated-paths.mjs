@@ -59,6 +59,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
   "ui/src/pages/chat/chat-pane.test.ts",
   "ui/src/pages/chat/chat-pane-tool-icons.test.tsx",
+  // The cold widget placeholder proof holds the renderer import.
+  "ui/src/pages/chat/components/chat-message-deferred.test.tsx",
   "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
   "ui/src/pages/chat/components/chat-transcript-geometry.test.ts",
   "ui/src/pages/chat/components/chat-transcript-invalidation.test.ts",

@@ -171,8 +171,63 @@ describe("transcript message reactions", () => {
     };
     expect(render(new Map())).toEqual(["actions"]);
     expect(render(new Map([["message-1", reactions]]))).toEqual(["chips"]);
+    expect(host.querySelector(".chat-message-reactions")?.parentElement).toBe(
+      host.querySelector(".chat-group > .chat-group-footer"),
+    );
     expect(render(new Map([["message-1", []]]))).toEqual(["actions"]);
   });
+
+  it.each(["user", "assistant"])(
+    "shares each %s message's existing footer without merging reaction targets",
+    (role) => {
+      host = document.body.appendChild(document.createElement("div"));
+      const harness = createMessageGroupHarness(host);
+      const message = (id: string) => ({
+        role,
+        content: [{ type: "text", text: `Shared message ${id}` }],
+        timestamp: 1,
+        __openclaw: { id },
+      });
+      const first = message("first");
+      const group = createMessageGroup(first, role, {
+        messages: [
+          { key: "first", message: first },
+          { key: "last", message: message("last") },
+        ],
+      });
+      const onReact = vi.fn();
+      const render = (messageReactions: Map<string, MessageReactionSummary[]>) =>
+        harness.render(group, { showReasoning: false, userId: "self", messageReactions, onReact });
+      render(new Map());
+      const footer = host.querySelector(".chat-group > .chat-group-footer")!;
+      const earlier = host.querySelector(".chat-message-actions-row")!;
+      const copy = earlier.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
+      copy.focus();
+      render(
+        new Map([
+          ["first", reactions],
+          ["last", reactions],
+        ]),
+      );
+      expect(document.activeElement).toBe(copy);
+      expect(
+        host.querySelector('[data-message-id="first"].chat-message-reactions')?.parentElement,
+      ).toBe(earlier);
+      expect(
+        host.querySelector('[data-message-id="last"].chat-message-reactions')?.parentElement,
+      ).toBe(footer);
+      for (const id of ["first", "last"]) {
+        host
+          .querySelector<HTMLButtonElement>(
+            `[data-message-id="${id}"].chat-message-reactions .chat-reaction-chip`,
+          )!
+          .click();
+      }
+      expect(onReact.mock.calls.map(([id]) => id)).toEqual(["first", "last"]);
+      expect(footer.querySelector(".chat-group-footer__meta")).not.toBeNull();
+      expect(host.querySelectorAll(".chat-message-reactions")).toHaveLength(2);
+    },
+  );
 
   it("searches emoji by name and selects the first match on Enter", async () => {
     const { root, onReact, input } = await customEntry();

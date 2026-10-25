@@ -59,6 +59,7 @@ function MessageActionsRow(props: {
   details: MessageActionDetails | null | undefined;
   options: NativeMessageGroupOptions;
   class?: string;
+  reactionGroup?: MessageGroupData;
 }) {
   let owner: HTMLDivElement | undefined;
   return (
@@ -69,6 +70,16 @@ function MessageActionsRow(props: {
       class={props.class ?? "chat-group-footer-actions"}
       data-message-actions-for={props.messageKey}
     >
+      <Show when={props.reactionGroup}>
+        {(group) => (
+          <GroupMessageReactions
+            group={group()}
+            actionDetails={props.details}
+            isStreaming={false}
+            options={props.options}
+          />
+        )}
+      </Show>
       <MessageActions
         details={props.details}
         options={props.options}
@@ -85,6 +96,7 @@ function PreparedMessage(props: {
   index: number;
   options: NativeMessageGroupOptions & Pick<GroupedMessageOptions, "replyLine">;
   prepared?: ReturnType<typeof prepareGroupMessage>;
+  showReactions?: boolean;
 }) {
   const prepared = createMemo(
     () => props.prepared ?? prepareGroupMessage(props.group, props.item, props.options),
@@ -149,12 +161,14 @@ function PreparedMessage(props: {
         options={options()}
         onOpenSidebar={props.options.onOpenSidebar}
       />
-      <GroupMessageReactions
-        group={props.group}
-        actionDetails={prepared().actions}
-        isStreaming={isStreaming()}
-        options={props.options}
-      />
+      <Show when={props.showReactions !== false}>
+        <GroupMessageReactions
+          group={props.group}
+          actionDetails={prepared().actions}
+          isStreaming={isStreaming()}
+          options={props.options}
+        />
+      </Show>
     </>
   );
 }
@@ -353,9 +367,14 @@ function FramedMessage(props: {
   }));
   const showActions = () =>
     prepared().ownsActions &&
-    hasMessageActionButtons(prepared().actions, frame().options) &&
+    (hasMessageActionButtons(prepared().actions, frame().options) ||
+      Boolean(prepared().actions?.reactionMessageId && frame().options.onReact)) &&
     props.index < frame().lastMessageIndex &&
     !frame().isTurnBlock;
+  // The final message has the group footer; earlier actionable messages already
+  // reserve their own row. Inline-only activity keeps its original chip location.
+  const inlineReactions = () =>
+    frame().isTurnBlock || (props.index < frame().lastMessageIndex && !showActions());
   return (
     <>
       {/* Showing a previously absent peer reply changes this local message's structural wrapper. */}
@@ -372,6 +391,7 @@ function FramedMessage(props: {
               index={props.index}
               options={options()}
               prepared={prepared()}
+              showReactions={inlineReactions()}
             />
           </>
         }
@@ -384,6 +404,7 @@ function FramedMessage(props: {
             index={props.index}
             options={options()}
             prepared={prepared()}
+            showReactions={inlineReactions()}
           />
           <GroupAvatar
             frame={props.frame}
@@ -401,10 +422,17 @@ function FramedMessage(props: {
               details={prepared().actions}
               options={frame().options}
               class="chat-message-actions-row"
+              reactionGroup={frame().group}
             />
           }
         >
           <div class="chat-group-footer chat-message-footer">
+            <GroupMessageReactions
+              group={frame().group}
+              actionDetails={prepared().actions}
+              isStreaming={false}
+              options={frame().options}
+            />
             <div class="chat-group-footer__meta">
               <SenderIdentity frame={props.frame} />
               <MessageMeta timestamp={prepared().source.normalizedMessage.timestamp} meta={null} />
@@ -508,6 +536,14 @@ function FramedMessageGroup(props: {
               },
             ]}
           >
+            <Show when={!frame().ownsRunFrame}>
+              <GroupMessageReactions
+                group={props.group}
+                actionDetails={frame().footerActionDetails}
+                isStreaming={false}
+                options={options()}
+              />
+            </Show>
             <Show when={!frame().isPeerGroup}>
               <UserFooterActions frame={frame()} />
             </Show>

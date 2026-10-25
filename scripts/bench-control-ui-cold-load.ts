@@ -14,6 +14,8 @@
 // --gateway-http serves paired bundles through the Gateway HTTP owner on loopback.
 // --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
+// --boot-route chat|new|sessions|settings selects the measured reload destination.
+// --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
@@ -251,6 +253,9 @@ const { values } = parseArgs({
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "filmstrip-only": { type: "boolean", default: false },
+    "layout-matrix": { type: "boolean", default: false },
+    "layout-route": { type: "string", multiple: true, default: [] },
+    "layout-start": { type: "string", default: "0" },
     "hold-boot-assets": { type: "boolean", default: false },
     "history-validator-delay-ms": { type: "string", default: "0" },
     "dashboard-paint-marker": { type: "boolean", default: false },
@@ -375,7 +380,51 @@ const baselineCpu = values["cpu-profile-compare"]
     ])
   : undefined;
 const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
-const runs = Number(values.runs);
+const layoutStart = Number(values["layout-start"]);
+if (
+  !Number.isInteger(layoutStart) ||
+  layoutStart < 0 ||
+  layoutStart > 31 ||
+  values["layout-route"].some((route) => !["chat", "new", "sessions", "settings"].includes(route))
+) {
+  throw new Error("Expected layout-start 0–31 and layout-route chat, new, sessions or settings");
+}
+if (
+  values["layout-matrix"] &&
+  (values["first-load"] ||
+    values["critical-path"] ||
+    values["gateway-http"] ||
+    values["gateway-url"])
+) {
+  throw new Error(
+    "layout-matrix owns cold/warm setup and route readiness; use the production preview without first-load, critical-path or gateway HTTP modes",
+  );
+}
+const layoutCells = values["layout-matrix"]
+  ? (["desktop", "mobile"] as const)
+      .flatMap((cellViewport) =>
+        (["light", "dark"] as const).flatMap((cellColorScheme) =>
+          (["chat", "new", "sessions", "settings"] as const).flatMap((route) =>
+            [true, false].map((cold) => ({
+              viewport: cellViewport,
+              colorScheme: cellColorScheme,
+              route,
+              cold,
+            })),
+          ),
+        ),
+      )
+      .filter(
+        ({ route }) => !values["layout-route"].length || values["layout-route"].includes(route),
+      )
+      .slice(layoutStart)
+  : [];
+if (values["layout-matrix"] && !layoutCells.length) {
+  throw new Error("layout-start must leave at least one selected matrix cell");
+}
+const layoutVariants = values["layout-matrix"] ? values["compare-bundle-dir"].length + 1 : 1;
+const requestedRuns = Number(values.runs);
+const runs = requestedRuns * (layoutCells.length || 1) * layoutVariants;
 const gatewayUrl = values["gateway-url"] ? new URL(values["gateway-url"]) : undefined;
 const firstLoad = values["first-load"];
 if (
@@ -385,8 +434,13 @@ if (
   throw new Error("hold-boot-assets requires one first-load filmstrip-only run without comparison");
 }
 const bootRoute = values["boot-route"];
-if (bootRoute !== "chat" && bootRoute !== "new") {
-  throw new Error("Expected boot-route chat or new");
+if (
+  bootRoute !== "chat" &&
+  bootRoute !== "new" &&
+  bootRoute !== "sessions" &&
+  bootRoute !== "settings"
+) {
+  throw new Error("Expected boot-route chat, new, sessions or settings");
 }
 const navigationRoutes: CriticalPathRoute[] = [];
 for (const route of values["critical-path-route"]) {
@@ -399,18 +453,17 @@ for (const route of values["critical-path-route"]) {
 if (navigationRoutes.length && !values["critical-path"]) {
   throw new Error("critical-path-route requires critical-path");
 }
-if (values["critical-path"] && !navigationRoutes.length && bootRoute !== "new") {
+if (values["critical-path"] && !navigationRoutes.length && bootRoute === "chat") {
   navigationRoutes.push(...criticalPathRoutes);
 }
 if (
-  bootRoute === "new" &&
-  (!firstLoad ||
-    values["live-events"] ||
+  bootRoute !== "chat" &&
+  (values["live-events"] ||
     values["session-switch"] ||
     values["streaming-reply"] ||
     values["overlay-probe"])
 ) {
-  throw new Error("boot-route new requires first-load without chat interaction phases");
+  throw new Error("Non-chat boot routes exclude chat interaction phases");
 }
 const networkLatencyMs = Number(values["network-latency-ms"] ?? 0);
 const downloadKbps = Number(values["download-kbps"] ?? 0);
@@ -505,9 +558,9 @@ if (
   );
 }
 if (
-  !Number.isInteger(runs) ||
-  runs < 1 ||
-  runs > (values["compare-bundle-dir"].length ? 60 : 20) ||
+  !Number.isInteger(requestedRuns) ||
+  requestedRuns < 1 ||
+  requestedRuns > (values["compare-bundle-dir"].length ? 60 : 20) ||
   !Number.isFinite(latencyMs) ||
   latencyMs < 0 ||
   !Number.isFinite(connectNotBeforeMs) ||
@@ -719,6 +772,7 @@ try {
         firstEnabledComposerMs: null as number | null,
         firstComposerFocusMs: null as number | null,
         firstNonemptyTranscriptMs: null as number | null,
+        firstRouteReadyMs: null as number | null,
         fontLoadEventsMs: [] as number[],
         staticShellGeometry: null as Record<string, unknown> | null,
         firstLiveShellGeometry: null as Record<string, unknown> | null,
@@ -818,6 +872,35 @@ try {
           }),
         );
       const sample = () => {
+        const route = location.pathname.split("/")[1] || measuredRoute;
+        const readySelector =
+          route === "new"
+            ? ".new-session-page__message"
+            : route === "sessions"
+              ? ".sessions-toolbar__refresh"
+              : route === "settings"
+                ? "#settings-font-chat"
+                : ".chat-pane-cache__pane--active .chat-virtual-row .chat-text";
+        const readyControl = document.querySelector(readySelector);
+        const activePane = document.querySelector(".chat-pane-cache__pane--active");
+        const routeDataReady =
+          route === "chat" || route === "dashboard"
+            ? activePane &&
+              Reflect.get(activePane, "transcriptReady") === true &&
+              activePane.querySelector("textarea:not(:disabled)")
+            : route === "sessions"
+              ? document.querySelector("openclaw-sessions-page .session-link")
+              : readyControl;
+        if (
+          milestones.firstRouteReadyMs === null &&
+          readyControl &&
+          routeDataReady &&
+          visible(routeDataReady) &&
+          visible(readyControl) &&
+          !readyControl.matches(":disabled")
+        ) {
+          milestones.firstRouteReadyMs = performance.now();
+        }
         const staticShell = document.querySelector("#openclaw-boot-shell");
         if (milestones.firstStaticShellMs === null && staticShell && visible(staticShell)) {
           milestones.firstStaticShellMs = performance.now();
@@ -833,15 +916,14 @@ try {
           milestones.firstLiveShellGeometry === null &&
           shell &&
           visible(shell) &&
-          chatInput &&
-          visible(chatInput)
+          (chatInput ? visible(chatInput) : readyControl && visible(readyControl))
         ) {
           milestones.firstLiveShellMs = performance.now();
           milestones.firstLiveShellGeometry = geometry(shell, {
             sidebar: ".shell-nav",
-            header: ".chat-pane__header, .agent-chat__header--mobile",
-            transcript: ".chat-thread",
-            composer: ".agent-chat__input",
+            header: ".chat-pane__header, .agent-chat__header--mobile, .content-header, .topbar",
+            transcript: ".chat-thread, main.content",
+            composer: ".agent-chat__input, .new-session-page__message",
           });
         }
         if (
@@ -873,11 +955,7 @@ try {
         ) {
           milestones.firstNonemptyTranscriptMs = performance.now();
         }
-        if (
-          milestones.firstShellInteractiveMs === null ||
-          milestones.firstEnabledComposerMs === null ||
-          (measuredRoute === "chat" && milestones.firstNonemptyTranscriptMs === null)
-        ) {
+        if (milestones.firstRouteReadyMs === null || milestones.firstLiveShellGeometry === null) {
           requestAnimationFrame(sample);
         }
       };
@@ -1097,18 +1175,20 @@ try {
   }
   // Fetch the real public document; the init script selects the synthetic session.
   // Session-entry authorization is outside this static-delivery benchmark.
-  const url = usesGatewayHttp
-    ? new URL(bootRoute === "new" ? "/new" : "/chat", baseUrl).href
-    : bootRoute === "new"
-      ? new URL("/new", baseUrl).href
-      : values["full-uuid-route"]
-        ? new URL(
-            `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
-            baseUrl,
-          ).href
-        : values["short-route"]
-          ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
-          : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
+  const chatUrl = usesGatewayHttp
+    ? new URL("/chat", baseUrl).href
+    : values["full-uuid-route"]
+      ? new URL(
+          `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
+          baseUrl,
+        ).href
+      : values["short-route"]
+        ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
+        : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
+  const url =
+    bootRoute === "chat"
+      ? chatUrl
+      : new URL(bootRoute === "settings" ? "/settings/appearance" : `/${bootRoute}`, baseUrl).href;
   let releaseBootAssets: (() => void) | undefined;
   const heldBootAssets: Array<{ url: string; type: string }> = [];
   if (values["hold-boot-assets"]) {
@@ -1125,7 +1205,7 @@ try {
     });
   }
   const coldResetUrl = new URL("/__control-ui-bench-cold-reset__", baseUrl).href;
-  if (firstLoad) {
+  if (firstLoad || values["layout-matrix"]) {
     await page.route(coldResetUrl, (route) =>
       route.fulfill({ body: "", contentType: "text/html" }),
     );
@@ -1147,32 +1227,39 @@ try {
       Reflect.get(window, "openclawControlUiE2eGateway").setServerBuildId(id);
     }, buildId);
   }
-  async function settle() {
+  async function settle(route = bootRoute) {
     try {
-      if (bootRoute === "new") {
-        await page.locator(".new-session-page__message").waitFor();
-        await page.waitForFunction(() => {
+      const mobile = (page.viewportSize()?.width ?? viewport.width) <= 900;
+      if (route !== "chat") {
+        const selector =
+          route === "new"
+            ? ".new-session-page__message"
+            : route === "sessions"
+              ? ".sessions-toolbar__refresh"
+              : "#settings-font-chat";
+        await page.locator(selector).waitFor();
+        await page.waitForFunction((readySelector) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
-          const composer = document.querySelector<HTMLTextAreaElement>(
-            ".new-session-page__message",
-          );
+          const control = document.querySelector(readySelector);
+          const readyAt = Reflect.get(window, "__coldLoadPresentation")?.firstRouteReadyMs;
           return (
-            composer &&
-            !composer.disabled &&
+            control?.checkVisibility() &&
+            !control.matches(":disabled") &&
+            typeof readyAt === "number" &&
             state &&
             !state.pending &&
             !state.queued &&
             state.idleMs > 750
           );
-        });
+        }, selector);
         return;
       }
       await page
-        .locator(viewportName === "mobile" ? ".agent-chat__header--mobile" : ".chat-pane__header")
+        .locator(mobile ? ".agent-chat__header--mobile" : ".chat-pane__header")
         .first()
         .waitFor();
       // A closed mobile drawer parks its sidebar rows; they are not part of responsive boot.
-      if (viewportName === "desktop") {
+      if (!mobile) {
         if (values["session-event-ancestor-refs"]) {
           await page
             .locator(
@@ -1333,8 +1420,19 @@ try {
   const snapshotSaves: Array<
     Omit<Awaited<ReturnType<typeof persistColdLoadWarmState>>, "storage">
   > = [];
+  const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+    sessionKey: fixture.selectedSessionKey,
+    offRosterSession: values["off-roster-route"],
+    sidebarView: sidebarView === "online" ? "online" : "sessions",
+  };
   if (!firstLoad) {
-    await page.goto(url);
+    await page.goto(chatUrl);
+    if (viewportName === "mobile") {
+      await page
+        .locator('.agent-chat__header--mobile button[aria-expanded="false"]')
+        .first()
+        .click();
+    }
     try {
       await page.locator("#sidebar-session-owner-title").click();
       await page
@@ -1357,7 +1455,7 @@ try {
     if (sidebarView === "online") {
       await page.locator('[data-navigation-view="online"]').click();
     }
-    await settle();
+    await settle("chat");
     await expandSidebar();
     if (values["chat-dashboard-route"] || (face === "dashboard" && values["dashboard-widget"])) {
       // Save the operator's dashboard-first layout through its normal action.
@@ -1390,29 +1488,36 @@ try {
           controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat"),
         );
       }
-      await settle();
+      await settle("chat");
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
-    const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
-      sessionKey: fixture.selectedSessionKey,
-      offRosterSession: values["off-roster-route"],
-      sidebarView: sidebarView === "online" ? "online" : "sessions",
-    };
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
       warmInput,
     );
     warmStates.push(warmStorage);
     snapshotSaves.push(snapshotSave);
+    if (viewportName === "mobile") {
+      await page.keyboard.press("Escape");
+    }
     for (let index = 1; index < bundleSlots.length; index++) {
       await restoreColdLoadWarmState(page, warmStorage);
       await selectComparisonBundle(index, page);
       await page.reload({ waitUntil: "domcontentloaded" });
-      await settle();
+      await settle("chat");
+      if (viewportName === "mobile") {
+        await page
+          .locator('.agent-chat__header--mobile button[aria-expanded="false"]')
+          .first()
+          .click();
+      }
       await expandSidebar();
       const { storage, ...saved } = await page.evaluate(persistColdLoadWarmState, warmInput);
       warmStates.push(storage);
       snapshotSaves.push(saved);
+      if (viewportName === "mobile") {
+        await page.keyboard.press("Escape");
+      }
     }
   }
   let historyValidatorRequests = 0;
@@ -1435,6 +1540,39 @@ try {
   }
   await selectComparisonBundle(0, page);
   for (let run = 0; run < runs; run++) {
+    const bundleIndex = run % bundleSlots.length;
+    const layoutCell = layoutCells[Math.floor(run / bundleSlots.length) % layoutCells.length];
+    const runRoute = layoutCell?.route ?? bootRoute;
+    const runUrl =
+      runRoute === "chat"
+        ? chatUrl
+        : new URL(runRoute === "settings" ? "/settings/appearance" : `/${runRoute}`, baseUrl).href;
+    let reloadStorage = warmStates[bundleIndex];
+    if (layoutCell) {
+      await selectComparisonBundle(bundleIndex, page);
+      await page.setViewportSize(
+        layoutCell.viewport === "mobile"
+          ? { width: 390, height: 844 }
+          : { width: 1719, height: 1179 },
+      );
+      await page.emulateMedia({ colorScheme: layoutCell.colorScheme });
+      if (!layoutCell.cold) {
+        // Cold Settings never opens the chat database. Let its native owner
+        // create the schema before restoring the saved warm fixture.
+        await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
+        await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        // Save through the native owner at this viewport. Reusing the desktop
+        // seed would measure a width-change restore instead of a warm reload.
+        reloadStorage = (await page.evaluate(persistColdLoadWarmState, warmInput)).storage;
+        if (runRoute !== "chat") {
+          await page.goto(runUrl, { waitUntil: "domcontentloaded" });
+          await settle(runRoute);
+        }
+      }
+    }
     const hostLoadAverage = loadavg();
     const cpuPhases: Record<string, ColdLoadCpuTables> = {};
     async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
@@ -1462,13 +1600,12 @@ try {
       );
       return { ...mapped, summary };
     }
-    const bundleIndex = run % bundleSlots.length;
     const validatorRequestsBeforeReload = historyValidatorRequests;
     const cdp = await context.newCDPSession(page);
-    if (firstLoad) {
+    if (layoutCell?.cold ?? firstLoad) {
       await resetColdState(cdp, bundleIndex);
     } else {
-      await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
+      await restoreColdLoadWarmState(page, reloadStorage!);
       await selectComparisonBundle(bundleIndex, page);
     }
     runTransfer =
@@ -1614,12 +1751,12 @@ try {
         releaseBootAssets?.();
         await page.waitForLoadState("domcontentloaded");
       }
-    } else if (firstLoad || values["critical-path"]) {
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+    } else if (layoutCell || firstLoad || values["critical-path"] || bootRoute !== "chat") {
+      await page.goto(runUrl, { waitUntil: "domcontentloaded" });
     } else {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
-    await settle();
+    await settle(runRoute);
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
           .filter((entry) => URL.parse(entry.url)?.pathname.startsWith("/assets/"))
@@ -1705,6 +1842,11 @@ try {
         transferBytes: entry.transferSize,
       }));
       return {
+        display: {
+          width: innerWidth,
+          height: innerHeight,
+          colorScheme: document.documentElement.dataset.themeMode,
+        },
         ...Reflect.get(window, "__coldLoad").read(),
         bootRpcs: Reflect.get(window, "__coldLoad")
           .read()
@@ -1781,11 +1923,15 @@ try {
       await cdp.send("Tracing.end");
       await complete;
     }
-    await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.png`) });
-    await writeFile(
-      path.join(artifactDir, `run-${run + 1}.trace.json`),
-      JSON.stringify({ traceEvents: rawTrace }),
-    );
+    if (!layoutCells.length || run < layoutCells.length * bundleSlots.length) {
+      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.png`) });
+    }
+    if (captureTrace) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.trace.json`),
+        JSON.stringify({ traceEvents: rawTrace }),
+      );
+    }
     if (profile) {
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.cpuprofile`),
@@ -2517,6 +2663,7 @@ try {
     }
     await cdp.detach();
     const result = {
+      layoutCell,
       run: run + 1,
       hostLoadAverage,
       ...(comparisonBundleDirs.length
@@ -2564,6 +2711,7 @@ try {
     console.log(
       JSON.stringify({
         run: result.run,
+        layoutCell,
         variant: result.variant,
         hostLoadAverage,
         presentation: {

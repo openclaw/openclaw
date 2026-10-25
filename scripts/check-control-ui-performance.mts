@@ -62,10 +62,11 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Vyctor approved the restored mobile topbar in #182599 (2026-10-24).
+  // Reserve widget/reaction and mobile Sessions geometry against reload shifts.
+  // Measured complete bundle after preserving the current Details composition.
   // Fixed bundle ceilings, not a repeatable per-PR growth allowance.
-  totalCssGzipBytes: 303_372,
-  totalCssRawBytes: 1_595_521,
+  totalCssGzipBytes: 303_373,
+  totalCssRawBytes: 1_596_765,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
