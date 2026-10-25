@@ -27,19 +27,6 @@ vi.mock("./systemd-user-transport.js", () => ({
 }));
 
 const programArguments = ["/usr/bin/openclaw", "gateway", "run"];
-const literalDirectories = (
-  [
-    ["percent", "state%h", "state%h", "statepercent"],
-    ["asterisk", "state*", "state\\*", "state-one", "state-two"],
-    ["question mark", "state?", "state\\?", "state1", "state2"],
-    ["backslash", "state\\part", "state\\\\part", "statepart", "state/part"],
-  ] satisfies [string, string, string, ...string[]][]
-).map(([name, directory, expression, ...alternatives]) => ({
-  name,
-  directory,
-  expression,
-  alternatives,
-}));
 
 // These are Linux unit contracts using POSIX filenames, including characters Windows cannot create.
 describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
@@ -105,12 +92,6 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
       .replace(/^[ \t]+|[ \t]+$/g, "");
   }
 
-  async function readExpression(expression: string) {
-    await writeUnit();
-    mockManager({ environmentFiles: [[expression, false]] });
-    return readCommand(true);
-  }
-
   it("rejects trailing whitespace before rendering a different native cwd", () => {
     expect(() =>
       buildSystemdUnit({ programArguments, workingDirectory: `${home}/trailing\t/.//` }),
@@ -164,9 +145,13 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     expect(command?.environment).toEqual(environment);
   });
 
-  it.each(literalDirectories.filter(({ name }) => name !== "question mark"))(
-    "generates a literal EnvironmentFile with $name without selecting neighboring files",
-    async ({ directory, alternatives }) => {
+  it.each([
+    ["state%h", ["statepercent"]],
+    ["state*", ["state-one", "state-two"]],
+    ["state\\part", ["statepart", "state/part"]],
+  ] satisfies [string, string[]][])(
+    "generates a literal EnvironmentFile in %s without selecting neighbors",
+    async (directory, alternatives) => {
       const environmentFile = resolveSystemdEnvironmentFilePath({
         stateDir: path.join(home, directory),
       });
@@ -195,44 +180,40 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     },
   );
 
-  describe("manager EnvironmentFile expressions", () => {
-    it.each(literalDirectories.filter(({ name }) => name === "question mark"))(
-      "preserves escaped $name alongside a real wildcard",
-      async ({ directory, expression, alternatives }) => {
-        await writeEnvironmentFile(
-          path.join(home, directory, "set-10.env"),
-          "FIRST=retained\nSHARED=first\n",
-        );
-        await writeEnvironmentFile(path.join(home, directory, "set-20.env"), "SHARED=second\n");
-        await writeNeighbors(alternatives, "set-10.env");
-        const command = await readExpression(path.join(home, expression, "set-*.env"));
-        expect(command?.environment).toEqual({ FIRST: "retained", SHARED: "second" });
-        expect(command?.environmentValueSources).toEqual({ FIRST: "file", SHARED: "file" });
-      },
+  it("preserves an escaped question mark alongside a real manager wildcard", async () => {
+    await writeEnvironmentFile(
+      path.join(home, "state?", "set-10.env"),
+      "FIRST=retained\nSHARED=first\n",
     );
-
-    it.each([false, true])(
-      "does not broaden a missing literal file (optional=%s)",
-      async (optional) => {
-        await writeNeighbors(["missing-one"], "gateway.systemd.env");
-        const expression = path.join(home, "missing\\*", "gateway.systemd.env");
-        await writeUnit(
-          "[Service]\nExecStart=/usr/bin/openclaw gateway run\nEnvironment=INLINE=retained\n",
-        );
-        mockManager({
-          environment: ["INLINE=retained"],
-          environmentFiles: [[expression, optional]],
-        });
-        const command = readCommand(true);
-        if (!optional) {
-          await expect(command).rejects.toThrow();
-        } else {
-          expect((await command)?.environment).toEqual({ INLINE: "retained" });
-        }
-      },
-    );
+    await writeEnvironmentFile(path.join(home, "state?", "set-20.env"), "SHARED=second\n");
+    await writeNeighbors(["state1", "state2"], "set-10.env");
+    await writeUnit();
+    mockManager({ environmentFiles: [[path.join(home, "state\\?", "set-*.env"), false]] });
+    const command = await readCommand(true);
+    expect(command?.environment).toEqual({ FIRST: "retained", SHARED: "second" });
+    expect(command?.environmentValueSources).toEqual({ FIRST: "file", SHARED: "file" });
   });
 
+  it.each([false, true])(
+    "does not broaden a missing literal file (optional=%s)",
+    async (optional) => {
+      await writeNeighbors(["missing-one"], "gateway.systemd.env");
+      const expression = path.join(home, "missing\\*", "gateway.systemd.env");
+      await writeUnit(
+        "[Service]\nExecStart=/usr/bin/openclaw gateway run\nEnvironment=INLINE=retained\n",
+      );
+      mockManager({
+        environment: ["INLINE=retained"],
+        environmentFiles: [[expression, optional]],
+      });
+      const command = readCommand(true);
+      if (!optional) {
+        await expect(command).rejects.toThrow();
+      } else {
+        expect((await command)?.environment).toEqual({ INLINE: "retained" });
+      }
+    },
+  );
   it.each([false, true])(
     "does not read an optional relative EnvironmentFile (manager=%s)",
     async (manager) => {

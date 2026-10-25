@@ -131,26 +131,26 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("system-scope effective command", () => {
   it.each([
-    { canStart: false, refuse: false, empty: true, reason: "disabled-no-start" },
-    { canStart: true, refuse: true, empty: true, reason: "refuse-manual-start" },
-    { canStart: true, refuse: false, empty: false, reason: undefined },
-    { canStart: true, refuse: true, empty: false, reason: undefined },
-    { canStart: true, refuse: false, empty: false, reason: undefined, file: "masked-runtime" },
-  ])(
-    "preserves start policy when command inspection fails ($reason, refuse=$refuse)",
-    async (row) => {
+    [false, false, true, "disabled-no-start"],
+    [true, true, true, "refuse-manual-start"],
+    [true, false, false, undefined],
+    [true, true, false, undefined],
+    [true, false, false, undefined, "masked-runtime"],
+  ] satisfies [boolean, boolean, boolean, string | undefined, string?][])(
+    "inspects start policy (canStart=%s, refuse=%s, empty=%s, reason=%s)",
+    async (canStart, refuseManualStart, emptyCommand, reason, file) => {
       Object.assign(state, {
-        unitFileState: row.file ?? "disabled",
+        unitFileState: file ?? "disabled",
         activeState: "inactive",
-        canStart: row.canStart,
-        refuseManualStart: row.refuse,
-        emptyCommand: row.empty,
+        canStart,
+        refuseManualStart,
+        emptyCommand,
       });
       const command = readLoaded();
-      if (row.reason) {
+      if (reason) {
         await expect(command).rejects.toMatchObject({
           name: "ServiceStartRefusalError",
-          refusal: { reason: row.reason },
+          refusal: { reason },
         });
       } else {
         // Refusing manual start must not prevent inspection for an explicit stop.
