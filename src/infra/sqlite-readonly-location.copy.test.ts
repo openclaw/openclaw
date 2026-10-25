@@ -121,7 +121,6 @@ function createWalActivationFixture() {
   activated.close();
   const copy = sqliteCopy.copySqliteFile;
   let injected = false;
-  // Async acquisition publishes through copySqliteFile, not fs.fsyncSync.
   vi.spyOn(sqliteCopy, "copySqliteFile").mockImplementation(async (...args) => {
     const result = await copy(...args);
     if (!injected && args[0] === fixture.sourcePath) {
