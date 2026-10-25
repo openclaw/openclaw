@@ -46,6 +46,42 @@ function fixture() {
   return { owner, root, runtime };
 }
 
+function mountReadinessShell(overrides: Partial<SolidReadinessShell> = {}) {
+  const { root, runtime } = fixture();
+  const workspace = element();
+  const shell: SolidReadinessShell = {
+    element: element("section"),
+    shellElement: workspace,
+    readiness: undefined,
+    activeSessionKey: "agent:main:main",
+    workspaceChromeVisible: false,
+    navigationSidebar: Object.assign(element("nav"), { navigationVisible: false }),
+    routeOutlet: Object.assign(element(), {
+      presentationSettled: true,
+      settlePresentation: async () => true,
+    }),
+  };
+  Object.defineProperties(shell, Object.getOwnPropertyDescriptors(overrides));
+  shell.element.append(workspace);
+  root.append(shell.element);
+  document.body.append(root);
+  const { owner, dispose } = createRoot((disposeRoot) => ({
+    dispose: disposeRoot,
+    owner: createSolidControlUiReadiness(
+      root,
+      runtime,
+      () => {},
+      () => ({ shell, terminal: shell.terminalPanel }),
+    ),
+  }));
+  onTestFinished(() => {
+    owner.disconnect();
+    dispose();
+    root.remove();
+  });
+  return { owner, root, workspace };
+}
+
 it("publishes the new generation only after the retiring MCP route releases its replacement", async () => {
   const { owner, runtime, root } = fixture();
   const teardown = createDeferredCore();
@@ -152,95 +188,39 @@ it.each(["resolve", "reject"])(
 );
 
 it("advertises a cold shell terminal only once its command owner is ready", async () => {
-  const { root, runtime } = fixture();
-  const workspace = element();
   const terminal = Object.assign(element(), { available: true, updateComplete: Promise.resolve() });
-  let activationReady = false;
-  const shell: SolidReadinessShell = {
-    element: element("section"),
-    shellElement: workspace,
-    readiness: undefined,
-    activeSessionKey: "agent:main:main",
-    workspaceChromeVisible: false,
-    navigationSidebar: Object.assign(element("nav"), { navigationVisible: false }),
-    routeOutlet: Object.assign(element(), {
-      presentationSettled: true,
-      settlePresentation: async () => true,
-    }),
+  const state = { activationReady: false };
+  const { owner } = mountReadinessShell({
     terminalPanel: terminal,
     get terminalActivationReady() {
-      return activationReady;
+      return state.activationReady;
     },
-  };
-  shell.element.append(workspace);
-  root.append(shell.element);
-  document.body.append(root);
-  const { owner, dispose } = createRoot((disposeRoot) => ({
-    dispose: disposeRoot,
-    owner: createSolidControlUiReadiness(
-      root,
-      runtime,
-      () => {},
-      () => ({ shell, terminal }),
-    ),
-  }));
-  onTestFinished(() => owner.disconnect());
-  try {
-    for (const available of [false, true, false]) {
-      activationReady = available;
-      owner.commitRoot();
-      const expected = { routeReady: true, terminalActivationReady: available };
-      await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject(expected));
-    }
-  } finally {
-    dispose();
-    root.remove();
+  });
+  for (const available of [false, true, false]) {
+    state.activationReady = available;
+    owner.commitRoot();
+    const expected = { routeReady: true, terminalActivationReady: available };
+    await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject(expected));
   }
 });
 
 it("waits for a visible lazy sidebar to connect, without blocking hidden navigation", async () => {
-  const { root, runtime } = fixture();
-  const workspace = element();
   const drawer = element();
   const sidebar = Object.assign(element("nav"), { navigationVisible: true });
-  const shell: SolidReadinessShell = {
-    element: element("section"),
-    shellElement: workspace,
+  const { owner, root, workspace } = mountReadinessShell({
     navDrawerElement: drawer,
     workspaceChromeVisible: true,
-    readiness: undefined,
-    activeSessionKey: "agent:main:main",
     navigationSidebar: sidebar,
-    routeOutlet: Object.assign(element(), {
-      presentationSettled: true,
-      settlePresentation: async () => true,
-    }),
-  };
+  });
   workspace.append(drawer);
-  shell.element.append(workspace);
-  root.append(shell.element);
-  document.body.append(root);
   const get = customElements.get.bind(customElements);
   vi.spyOn(customElements, "get").mockImplementation((name) =>
     name === "openclaw-app-sidebar" ? HTMLElement : get(name),
   );
-  const { owner, dispose } = createRoot((disposeRoot) => ({
-    dispose: disposeRoot,
-    owner: createSolidControlUiReadiness(
-      root,
-      runtime,
-      () => {},
-      () => ({ shell }),
-    ),
-  }));
-  onTestFinished(() => {
-    owner.disconnect();
-    dispose();
-    root.remove();
-    vi.restoreAllMocks();
-  });
+  onTestFinished(() => vi.restoreAllMocks());
   owner.commitRoot();
   await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject({ routeReady: false }));
+  expect(root.hasAttribute("data-openclaw-ready")).toBe(false);
   drawer.append(sidebar);
   owner.commitRoot();
   await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject({ routeReady: true }));
