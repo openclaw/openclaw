@@ -24,29 +24,32 @@ import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
 function projection(db: EngineConnection, sessionId: string) {
+  const rows = (sql: string) => db.prepare(sql).all(sessionId);
   return {
-    active: db
-      .prepare(
-        "SELECT active_position, context_eligible, event_seq, message_position FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
-      )
-      .all(sessionId),
+    active: rows(
+      "SELECT active_position, context_eligible, event_seq, message_position FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
+    ),
     state: db
       .prepare(
         "SELECT active_event_count, active_message_count, indexed_seq, leaf_event_id, needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
       )
       .get(sessionId),
-    fts: db
-      .prepare(
-        "SELECT f.message_id, f.text, f.role, f.timestamp FROM session_transcript_fts_rows m JOIN session_transcript_fts f ON f.rowid = m.id WHERE m.session_id = ? ORDER BY m.id",
-      )
-      .all(sessionId),
-    identities: db
-      .prepare(
-        "SELECT message_id FROM session_transcript_fts_rows WHERE session_id = ? ORDER BY id",
-      )
-      .all(sessionId),
+    fts: rows(
+      "SELECT f.message_id, f.text, f.role, f.timestamp FROM session_transcript_fts_rows m JOIN session_transcript_fts f ON f.rowid = m.id WHERE m.session_id = ? ORDER BY m.id",
+    ),
+    identities: rows(
+      "SELECT message_id FROM session_transcript_fts_rows WHERE session_id = ? ORDER BY id",
+    ),
   };
 }
+
+const indexState = (events: number, messages: number, seq: number, leaf: string, dirty = 0) => ({
+  active_event_count: events,
+  active_message_count: messages,
+  indexed_seq: seq,
+  leaf_event_id: leaf,
+  needs_rebuild: dirty,
+});
 
 function transcriptWindow(db: EngineConnection, sessionId: string) {
   return db
@@ -86,11 +89,7 @@ function expectTrips(db: EngineConnection, run: () => void, count: number) {
   } finally {
     trips.restore();
   }
-  if (isPostgresSqlConnection(db)) {
-    expect(trips.statements).toHaveLength(count);
-  } else {
-    expect(trips.statements).toEqual([]);
-  }
+  expect(trips.statements).toHaveLength(isPostgresSqlConnection(db) ? count : 0);
 }
 
 function message(
@@ -156,6 +155,11 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         await f.prepare(command);
         return admit(() => f.mutate(command));
       };
+      const mutation = (
+        type: "session.actor.appendToolResult" | "session.actor.completeTurn",
+        commandId: string,
+        turn: SessionTurnPlan,
+      ): Mutation => ({ type, input: { target: f.target, commandId, phaseId: "turn", turn } });
       const readPersisted = () =>
         admit(() => ({
           transcript: readTranscriptEventRows(f.database, f.scope.sessionId),
@@ -177,24 +181,16 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
               turn: plan("input", "user", "Needle question", 10),
             },
           },
-          {
-            type: "session.actor.appendToolResult",
-            input: {
-              target: f.target,
-              commandId: "tool",
-              phaseId: "turn",
-              turn: plan("tool", "toolResult", "Needle tool output", 20),
-            },
-          },
-          {
-            type: "session.actor.completeTurn",
-            input: {
-              target: f.target,
-              commandId: "final",
-              phaseId: "turn",
-              turn: plan("final", "assistant", "Needle answer", 30),
-            },
-          },
+          mutation(
+            "session.actor.appendToolResult",
+            "tool",
+            plan("tool", "toolResult", "Needle tool output", 20),
+          ),
+          mutation(
+            "session.actor.completeTurn",
+            "final",
+            plan("final", "assistant", "Needle answer", 30),
+          ),
         ];
         let expectedUpdatedAt: number | null | undefined;
         const trips = observePgTrips(f.database.db);
@@ -223,15 +219,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             ),
           ).toBe(true);
           expect(
-            trips.statements.filter((sql) =>
-              /insert into\s+"?transcript_(?:events|event_identities)"?/iu.test(sql),
-            ),
-          ).toHaveLength(3);
-          expect(trips.statements.filter((sql) => /^BEGIN\b/iu.test(sql))).toHaveLength(3);
-          expect(trips.statements.filter((sql) => /^COMMIT\b/iu.test(sql))).toHaveLength(3);
-          expect(
-            trips.statements.filter((sql) => /pg_advisory_xact_lock/iu.test(sql)),
-          ).toHaveLength(3);
+            [
+              /insert into\s+"?transcript_(?:events|event_identities)"?/iu,
+              /^BEGIN\b/iu,
+              /^COMMIT\b/iu,
+              /pg_advisory_xact_lock/iu,
+            ].map((pattern) => trips.statements.filter((sql) => pattern.test(sql)).length),
+          ).toEqual([3, 3, 3, 3]);
         }
         const persisted = readPersisted();
         const search = admit(() =>
@@ -254,13 +248,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             event_seq,
             message_position: index,
           })),
-          state: {
-            active_event_count: 4,
-            active_message_count: 4,
-            indexed_seq: 4,
-            leaf_event_id: "final",
-            needs_rebuild: 0,
-          },
+          state: indexState(4, 4, 4, "final"),
           fts: [
             { message_id: "previous", text: "Previous answer", role: "assistant", timestamp: 1 },
             { message_id: "input", text: "Needle question", role: "user", timestamp: 10 },
@@ -287,24 +275,14 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         ]);
 
         expect(
-          await execute({
-            type: "session.actor.appendToolResult",
-            input: {
-              target: f.target,
-              commandId: "retry",
-              phaseId: "turn",
-              turn: retry,
-            },
-          }),
+          await execute(mutation("session.actor.appendToolResult", "retry", retry)),
         ).toMatchObject({ kind: "committed" });
         const stable = readPersisted();
-        expect({
-          ...stable,
-          transcript: stable.transcript.map((row) => JSON.parse(row.eventJson)),
-        }).toEqual({
-          ...persisted,
-          transcript: persisted.transcript.map((row) => JSON.parse(row.eventJson)),
+        const decoded = (snapshot: typeof stable) => ({
+          ...snapshot,
+          transcript: snapshot.transcript.map((row) => JSON.parse(row.eventJson)),
         });
+        expect(decoded(stable)).toEqual(decoded(persisted));
         // Both failure points run after the projection statement, before durable commit.
         for (const refusal of ["rollback", "revoked grant"] as const) {
           if (refusal === "rollback") {
@@ -318,15 +296,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
               }
             };
           }
-          const outcome = await execute({
-            type: "session.actor.completeTurn",
-            input: {
-              target: f.target,
-              commandId: refusal,
-              phaseId: "turn",
-              turn: plan(`refused-${refusal}`, "assistant", "Refused answer", 100),
-            },
-          });
+          const outcome = await execute(
+            mutation(
+              "session.actor.completeTurn",
+              refusal,
+              plan(`refused-${refusal}`, "assistant", "Refused answer", 100),
+            ),
+          );
           expect(outcome).toMatchObject({ kind: "rolled-back", error: { message: refusal } });
           delete f.hooks.withCommit;
           delete f.hooks.admit;
@@ -401,13 +377,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           expectTrips(db, () => append.flush(), 1);
           expect(projection(db, scope.sessionId)).toEqual({
             ...rowsOnly,
-            state: {
-              active_event_count: count,
-              active_message_count: count,
-              indexed_seq: count - 1,
-              leaf_event_id: `batch-${count - 1}`,
-              needs_rebuild: 0,
-            },
+            state: indexState(count, count, count - 1, `batch-${count - 1}`),
           });
         });
       }));
@@ -440,23 +410,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             expect(append.append({ seq, event, eventId: event.id, createdAt: seq })).toBe(seq >= 3);
           }
           append.flush();
-          expect(projection(db, scope.sessionId).state).toEqual({
-            active_event_count: 2,
-            active_message_count: 2,
-            indexed_seq: 2,
-            leaf_event_id: "abandoned",
-            needs_rebuild: 1,
-          });
+          expect(projection(db, scope.sessionId).state).toEqual(
+            indexState(2, 2, 2, "abandoned", 1),
+          );
           expect(reconcileSessionTranscriptIndexInTransaction(db, scope.sessionId)).toBe(true);
           const current = projection(db, scope.sessionId);
           expect(current.active.map((row) => row.event_seq)).toEqual([1, 3, 4]);
-          expect(current.state).toEqual({
-            active_event_count: 3,
-            active_message_count: 2,
-            indexed_seq: 4,
-            leaf_event_id: "compact",
-            needs_rebuild: 0,
-          });
+          expect(current.state).toEqual(indexState(3, 2, 4, "compact"));
           expect(current.fts).toEqual([
             { message_id: "root", text: "Needle root", role: "user", timestamp: 1 },
             { message_id: "selected", text: "Needle selected", role: "assistant", timestamp: 3 },

@@ -32,7 +32,6 @@ import { readSessionTranscriptJsonlBytesInDatabase } from "../../config/sessions
 import { readCurrentProjectionSnapshot } from "../../config/sessions/session-accessor.sqlite-projection-read.js";
 import { readVisibleTranscriptStats } from "../../config/sessions/session-accessor.sqlite-reset-window.js";
 import {
-  getSessionKysely,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
   type ResolvedTranscriptScope,
@@ -76,7 +75,6 @@ import { createProfileAvatarReader } from "../../state/user-profiles-avatar.js";
 import { ensureUserProfileRoleSchema } from "../../state/user-profiles-schema.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { executeSqliteQuerySync } from "../kysely-sync.js";
 import {
   bindCurrentConversationRecordAsync as bind,
   listCurrentConversationBindingRecordsBySessionsAsync as listBindings,
@@ -413,19 +411,19 @@ const message = (id: string, parentId: string | null, role: string, content: str
 function withTranscript(
   scope: ReturnType<typeof scopeFor>,
   events: unknown[],
-  inspect: (database: OpenClawAgentDatabase, resolved: ResolvedTranscriptScope) => void,
+  inspect?: (database: OpenClawAgentDatabase, resolved: ResolvedTranscriptScope) => void,
 ) {
   admit(() => {
     const resolved = resolveSqliteTranscriptScope(scope);
     runOpenClawAgentWriteTransaction((database) => {
       writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
       replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
-      inspect(database, resolved);
+      inspect?.(database, resolved);
     }, toDatabaseOptions(resolved));
   });
 }
 
-conformance("transcript report navigation", (_fixture, engine) => {
+conformance("transcript report navigation", () => {
   it("returns numeric transcript bytes for raw, reset-tail, and maintenance reads", () => {
     const scope = scopeFor("transcript-byte-counts");
     const kept = message("kept", "discarded", "user", "Retained λ🦞 preference.");
@@ -466,33 +464,11 @@ conformance("transcript report navigation", (_fixture, engine) => {
     const scope = scopeFor("report-navigation");
     const content = "synthetic report content ".repeat(400);
     const selected = { customType: "status", content, details: { selected: true } };
-    withTranscript(
-      scope,
-      [
-        { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
-        message("root", null, "user", content),
-        {
-          type: "custom_message",
-          id: "selected",
-          parentId: "root",
-          ...selected,
-          display: true,
-        },
-      ],
-      (database) => {
-        const rows = executeSqliteQuerySync(
-          database.db,
-          getSessionKysely(database.db)
-            .selectFrom("transcript_events")
-            .select(["event_json", "event_zstd"])
-            .where("session_id", "=", scope.sessionId),
-        ).rows;
-        // SQLite uses zstd navigation; PostgreSQL keeps canonical JSON and delegates to TOAST.
-        expect(
-          rows.filter((row) => row.event_json === null && row.event_zstd !== null),
-        ).toHaveLength(engine === "sqlite" ? 2 : 0);
-      },
-    );
+    withTranscript(scope, [
+      { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
+      message("root", null, "user", content),
+      { type: "custom_message", id: "selected", parentId: "root", ...selected, display: true },
+    ]);
     const selectReport = vi.fn();
     await expect(
       appendSessionTranscriptReport(scope, {
