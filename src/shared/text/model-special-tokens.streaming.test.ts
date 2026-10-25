@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   assistantVisibleTextFilters,
   sanitizeAssistantVisibleTextWithProfile,
 } from "./assistant-visible-text.js";
 import { modelSpecialTokensTextFilter } from "./model-special-tokens.js";
+import { expectPrefixParity, regexWork, streamChunks } from "./streaming.test-support.js";
 import { applyTextFilters, createTextProjection, type TextFilter } from "./text-projection.js";
 
 function streamSource(
@@ -11,16 +12,11 @@ function streamSource(
   chunkSize: number,
   filters: readonly TextFilter[] = [modelSpecialTokensTextFilter],
 ) {
-  const projection = createTextProjection(filters);
-  let delivered = "";
-  for (let offset = 0; offset < source.length; offset += chunkSize) {
-    const { text, delta } = projection.append(source.slice(offset, offset + chunkSize));
-    delivered = delta === null ? text : delivered + delta;
+  return streamChunks(source, chunkSize, createTextProjection(filters), (result, end) => {
     if (chunkSize === 1) {
-      expect(text).toBe(applyTextFilters(source.slice(0, offset + 1), filters));
+      expect(result.text).toBe(applyTextFilters(source.slice(0, end), filters));
     }
-  }
-  return { text: projection.text, delivered };
+  });
 }
 
 function expectStream(source: string, expected: string, delivery = false) {
@@ -38,7 +34,7 @@ const chunkSizes = [1, 2, 3, 4, 5, 7, 64];
 
 const sources: Array<[string, string?]> = [
   ["<|assistant|>Hello there."],
-  ["Hello<|assistant|>world"],
+  ["Hello<|assistant|>world", "Hello world"],
   ["first<|user|><|assistant|>second"],
   ["Hello<|assistant|>"],
   ["Hello<|assistant|>World"],
@@ -78,7 +74,7 @@ const sources: Array<[string, string?]> = [
   ['[a `<|assistant|>`]: /url "t'],
   ["[a `<|assistant|>`](url) stays visible."],
   ["[a `<|assistant|>`][missing] stays visible."],
-  ["[a \\] `<|assistant|>`]: /url"],
+  ["[a \\] `<|assistant|>`]: /url", "[a \\] ``]: /url"],
 ];
 
 describe("model special token streaming", () => {
@@ -111,30 +107,11 @@ describe("model special token streaming", () => {
     ["code inside a token body", "[a <|`x`|>]: /url x", "[a <|`x`|>]: /url x"],
   ])("keeps prefix and delta parity across every split of %s", (_name, source, expected) => {
     expect(modelSpecialTokensTextFilter.transform(source)).toBe(expected);
-    const check = (chunks: string[]) => {
-      const projection = createTextProjection([modelSpecialTokensTextFilter]);
-      let prefix = "";
-      let delivered = "";
-      for (const chunk of chunks) {
-        prefix += chunk;
-        const result = projection.append(chunk);
-        delivered = result.delta === null ? result.text : delivered + result.delta;
-        const batch = modelSpecialTokensTextFilter.transform(prefix);
-        expect(result.text, JSON.stringify(chunks)).toBe(batch);
-        expect(delivered, JSON.stringify(chunks)).toBe(batch);
-      }
-      expect(delivered).toBe(expected);
-    };
-    for (let split = 1; split < source.length; split++) {
-      check([source.slice(0, split), source.slice(split)]);
-    }
-    for (const size of [1, 4]) {
-      check(
-        Array.from({ length: Math.ceil(source.length / size) }, (_, index) =>
-          source.slice(index * size, (index + 1) * size),
-        ),
-      );
-    }
+    expectPrefixParity(
+      source,
+      () => createTextProjection([modelSpecialTokensTextFilter]),
+      modelSpecialTokensTextFilter.transform,
+    );
   });
 
   it.each(sources)("matches the batch transform for %j", (source, expected) => {
@@ -143,14 +120,6 @@ describe("model special token streaming", () => {
       expect(batch).toBe(expected);
     }
     expectStream(source, batch);
-  });
-
-  it("completes a token whose opener is split across deltas", () => {
-    const projection = createTextProjection([modelSpecialTokensTextFilter]);
-    const result = projection.append("a<|assist");
-    const rest = projection.append("ant|>b");
-    const text = rest.delta === null ? rest.text : result.text + rest.delta;
-    expect(text).toBe("a b");
   });
 
   it("keeps a token at the end pending until the separator is known", () => {
@@ -196,32 +165,12 @@ describe("model special token streaming", () => {
   ])("scans a bounded prefix with %s", (_name, source, expected) => {
     expect(source.length).toBeGreaterThan(16_000);
     const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));
-    const probe = vi.spyOn(RegExp.prototype, "test");
-    let tokenScanCharacters = 0;
-    try {
-      for (let offset = 0; offset < source.length; offset += 4) {
-        projection.append(source.slice(offset, offset + 4));
-      }
-      probe.mock.calls.forEach(([value], index) => {
-        const receiver = probe.mock.contexts[index];
-        if (receiver instanceof RegExp && receiver.source.startsWith("<[|｜]")) {
-          tokenScanCharacters += value.length;
-        }
-      });
-    } finally {
-      probe.mockRestore();
-    }
+    const tokenScanCharacters = regexWork(
+      () => streamChunks(source, 4, projection),
+      (regex) => regex.source.startsWith("<[|｜]"),
+    );
     expect(projection.text).toBe(expected);
     expect(tokenScanCharacters).toBeGreaterThan(0);
     expect(tokenScanCharacters).toBeLessThan(source.length * 4);
-  });
-
-  it("matches the batch transform when an escaped bracket precedes a definition token", () => {
-    const source = "[a \\] `<|assistant|>`]: /url";
-    const batch = modelSpecialTokensTextFilter.transform(source);
-    expect(batch).toBe("[a \\] ``]: /url");
-    const projection = createTextProjection([modelSpecialTokensTextFilter]);
-    projection.append("[a \\] `<|assistant|>`");
-    expect(projection.append("]: /url").text).toBe(batch);
   });
 });

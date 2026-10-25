@@ -5,6 +5,7 @@ import {
 } from "../../agents/embedded-agent-utils.js";
 import { assistantVisibleTextFilters } from "./assistant-visible-text.js";
 import { canReuseMarkdownOwnership, findCodeOwnership } from "./code-regions.js";
+import { expectPrefixParity, regexWork, streamChunks } from "./streaming.test-support.js";
 import { createTextProjection } from "./text-projection.js";
 
 const markdownOwnershipWork = vi.hoisted(() => ({ scannedCharacters: 0 }));
@@ -41,6 +42,15 @@ vi.mock("../../../packages/markdown-core/src/markdown-code-regions.js", async (i
     },
   };
 });
+
+function projectFinal(chunks: readonly string[]) {
+  const stream = createAssistantVisibleStreamText("final_answer");
+  for (const chunk of chunks) {
+    stream.append(chunk);
+  }
+  expect(stream.text).toBe(sanitizeAssistantVisibleStreamText(chunks.join(""), "final_answer"));
+  return stream.text;
+}
 
 function expectOwnershipCorrection(
   chunks: readonly string[],
@@ -185,16 +195,7 @@ it("keeps a trailing high surrogate pending until its visibility is known", () =
 it("bounds classification work while invisible text streams", () => {
   const source = "\u200B".repeat(1024);
   const stream = createTextProjection(assistantVisibleTextFilters("delivery", true));
-  const probe = vi.spyOn(RegExp.prototype, "test");
-  let testedCharacters = 0;
-  try {
-    for (const char of source) {
-      stream.append(char);
-    }
-    testedCharacters = probe.mock.calls.reduce((sum, [text]) => sum + text.length, 0);
-  } finally {
-    probe.mockRestore();
-  }
+  const testedCharacters = regexWork(() => streamChunks(source, 1, stream));
   expect(stream.text).toBe("");
   expect(testedCharacters).toBeGreaterThan(0);
   expect(testedCharacters).toBeLessThan(source.length * 128);
@@ -218,9 +219,7 @@ it.each([
     ? createTextProjection(assistantVisibleTextFilters("delivery", true))
     : createAssistantVisibleStreamText("final_answer");
   const before = markdownOwnershipWork.scannedCharacters;
-  for (let offset = 0; offset < source.length; offset += 4) {
-    stream.append(source.slice(offset, offset + 4));
-  }
+  streamChunks(source, 4, stream);
   expect(stream.text).toBe(
     _name === "bibliography" ? sanitizeAssistantVisibleStreamText(source, "final_answer") : source,
   );
@@ -230,9 +229,7 @@ it.each([
 it("hides a completed tool call", () => {
   const source = '[tool:write]\n{"path":"notes.txt","content":"safe"}\n\n';
   const stream = createAssistantVisibleStreamText("final_answer");
-  for (let offset = 0; offset < source.length; offset += 4) {
-    stream.append(source.slice(offset, offset + 4));
-  }
+  streamChunks(source, 4, stream);
   expect(stream.text).toBe("");
 });
 
@@ -262,30 +259,12 @@ it.each([
   "[tool:read] {}\n\n[a\\]b]: /url\n\n![example `x\n[tool:read] {}\nx`][a\\]b]\n",
   "````text\n```\n[tool:read] {}\n<tool_call>literal</tool_call>\n<|assistant|>\n```\n````\n",
 ])("matches canonical Markdown at every streamed prefix %#", (source) => {
-  const expected = Array.from({ length: source.length + 1 }, (_, end) =>
-    sanitizeAssistantVisibleStreamText(source.slice(0, end), "final_answer"),
+  const final = expectPrefixParity(
+    source,
+    () => createAssistantVisibleStreamText("final_answer"),
+    (text) => sanitizeAssistantVisibleStreamText(text, "final_answer"),
   );
-  const partitions = [
-    ...Array.from({ length: source.length + 1 }, (_, split) => [
-      source.slice(0, split),
-      source.slice(split),
-    ]),
-    source.split(""),
-    Array.from({ length: Math.ceil(source.length / 4) }, (_, i) => source.slice(i * 4, i * 4 + 4)),
-  ];
-  for (const chunks of partitions) {
-    const stream = createAssistantVisibleStreamText("final_answer");
-    let length = 0;
-    let delivered = "";
-    for (const chunk of chunks) {
-      length += chunk.length;
-      const result = stream.append(chunk);
-      delivered = result.delta === null ? result.text : delivered + result.delta;
-      expect(result.text).toBe(expected[length]);
-      expect(delivered).toBe(expected[length]);
-    }
-  }
-  expect(expected.at(-1)?.includes("[tool:read] {}")).toBe(source.startsWith("````"));
+  expect(final?.includes("[tool:read] {}")).toBe(source.startsWith("````"));
 });
 
 it.each([
@@ -320,35 +299,20 @@ it("invalidates table ownership for a blockquoted delimiter row", () => {
   expectOwnershipCorrection([prefix, suffix], { visibleBefore: false });
 });
 
-it("refreshes link-title ownership across blockquote prefixes", () => {
-  const chunks = [
-    '> [label](/url "title\n`x\n[tool:read] {}\nx` trailing\n',
-    '> "\n> ',
-    ")\n",
-  ] as const;
-  expectOwnershipCorrection(chunks, { intermediateVisible: true });
-});
-
-it("refreshes link-title ownership across nested blockquote prefixes", () => {
-  const deepQuote = "> ".repeat(40);
-  const scenarios = [
-    ['>    > [label](/url "title\n`x\n[tool:read] {}\nx` trailing\n', '>    > "\n>    > ', ")\n"],
-    [
-      `${deepQuote}[label](/url "title\n\`x\n[tool:read] {}\nx\` trailing\n`,
-      `${deepQuote}"\n${deepQuote}`,
-      ")\n",
-    ],
-    [
-      '- item\n\n    > [label](/url "title\n`x\n[tool:read] {}\nx` trailing\n',
-      '    > "\n    > ',
-      ")\n",
-    ],
-  ] as const;
-
-  for (const chunks of scenarios) {
-    expectOwnershipCorrection(chunks, { intermediateVisible: true });
-  }
-});
+it.each(["> ", ">    > ", "> ".repeat(40), "- item\n\n    > "])(
+  "refreshes link-title ownership across container prefixes %j",
+  (opening) => {
+    const continuation = opening.startsWith("-") ? "    > " : opening;
+    expectOwnershipCorrection(
+      [
+        opening + '[label](/url "title\n`x\n[tool:read] {}\nx` trailing\n',
+        continuation + '"\n' + continuation,
+        ")\n",
+      ],
+      { intermediateVisible: true },
+    );
+  },
+);
 
 it("checks repeated blockquote prefixes without exponential backtracking", () => {
   const previousText = `Intro \`code\`\n${"> ".repeat(40)}ordinary text`;
@@ -376,14 +340,7 @@ it.each([
 
 it("rechecks ownership when an indentation-only line gains content", () => {
   const chunks = ["[tool:read] {}\n\n    ", "[tool:write] {}\n"] as const;
-  const source = chunks.join("");
-  const stream = createAssistantVisibleStreamText("final_answer");
-
-  stream.append(chunks[0]);
-  const corrected = stream.append(chunks[1]);
-
-  expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-  expect(corrected.text).toBe("    [tool:write] {}");
+  expect(projectFinal(chunks)).toBe("    [tool:write] {}");
 });
 
 it("refreshes image-alt ownership when a long reference destination closes", () => {
@@ -402,29 +359,13 @@ it("refreshes image-alt ownership when a long reference destination closes", () 
   ];
 
   for (const chunks of scenarios) {
-    const source = chunks.join("");
-    const stream = createAssistantVisibleStreamText("final_answer");
-
-    for (const chunk of chunks.slice(0, -1)) {
-      stream.append(chunk);
-    }
-    const corrected = stream.append(chunks.at(-1)!);
-
-    expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-    expect(corrected.text).not.toContain("[tool:read] {}");
+    expect(projectFinal(chunks)).not.toContain("[tool:read] {}");
   }
 });
 
 it("does not extend a list fence across an unindented continuation", () => {
   const chunks = ["- ```text\n  [tool:read] {}\n  ~~~\n  example {}", "\n[tool:write] {}\nDone."];
-  const source = chunks.join("");
-  const stream = createAssistantVisibleStreamText("final_answer");
-
-  for (const chunk of chunks) {
-    stream.append(chunk);
-  }
-
-  expect(stream.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-  expect(stream.text).toContain("[tool:read] {}");
-  expect(stream.text).not.toContain("[tool:write] {}");
+  const text = projectFinal(chunks);
+  expect(text).toContain("[tool:read] {}");
+  expect(text).not.toContain("[tool:write] {}");
 });

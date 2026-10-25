@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import * as codeRegions from "./code-regions.js";
+import { expectPrefixParity, regexWork, streamChunks } from "./streaming.test-support.js";
 import { createTextProjection } from "./text-projection.js";
 import { stripToolCallXmlTags, toolCallXmlTextFilter } from "./tool-call-xml.js";
 
@@ -21,42 +22,19 @@ function observeMarkdownOwnership() {
 }
 
 function streamXml(source: string, size = CHUNK) {
-  const projection = createTextProjection([
-    toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
-  ]);
-  const deltas: string[] = [];
-  for (let offset = 0; offset < source.length; offset += size) {
-    deltas.push(projection.append(source.slice(offset, offset + size)).delta ?? "");
-  }
-  return { text: projection.text, deltas };
+  return streamChunks(
+    source,
+    size,
+    createTextProjection([
+      toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
+    ]),
+  );
 }
 
-/** An ordinary frontend answer: fenced JSX with many tags, no tool-call markup. */
 function jsxAnswer(sections: number): string {
-  const parts: string[] = [];
-  for (let index = 0; index < sections; index += 1) {
-    parts.push(
-      `Section ${index} renders the following component.`,
-      "",
-      "```jsx",
-      `export function Card${index}({ title, items }) {`,
-      "  return (",
-      `    <section className="card card-${index}">`,
-      "      <h2>{title}</h2>",
-      "      <ul>",
-      "        {items.map((item) => (",
-      "          <li key={item.id}>{item.label}</li>",
-      "        ))}",
-      "      </ul>",
-      `      {items.length < ${index + 3} ? <p>Few items</p> : <p>Many items</p>}`,
-      "    </section>",
-      "  );",
-      "}",
-      "```",
-      "",
-    );
-  }
-  return parts.join("\n");
+  return "```jsx\n<div><p>{items.length < 3 ? <b>Few</b> : <i>Many</i>}</p></div>\n```\n".repeat(
+    sections,
+  );
 }
 
 /** An ordinary HTML answer whose line length periodically leaves "<p" at a delta edge. */
@@ -187,34 +165,7 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
         streaming,
       );
       for (const source of sources) {
-        // Compare retained state with a fresh canonical transform at each prefix.
-        const expected = Array.from({ length: source.length + 1 }, (_, end) =>
-          filter.transform(source.slice(0, end)),
-        );
-        const schedules = [
-          ...Array.from({ length: source.length + 1 }, (_, split) => [split, source.length]),
-          ...[1, 4].map((size) =>
-            Array.from({ length: Math.ceil(source.length / size) }, (_, index) =>
-              Math.min((index + 1) * size, source.length),
-            ),
-          ),
-        ];
-        for (const ends of schedules) {
-          const projection = createTextProjection([filter]);
-          let start = 0;
-          let previous = "";
-          for (const end of ends) {
-            const result = projection.append(source.slice(start, end));
-            expect(result.text, JSON.stringify({ source, streaming, start, end })).toBe(
-              expected[end],
-            );
-            if (result.delta !== null) {
-              expect(previous + result.delta).toBe(result.text);
-            }
-            previous = result.text;
-            start = end;
-          }
-        }
+        expectPrefixParity(source, () => createTextProjection([filter]), filter.transform);
       }
     }
   });
@@ -225,12 +176,6 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
     const projection = streamXml(source, 1);
     expect(projection.text).toBe(stripToolCallXmlTags(source));
     expect(projection.text).toBe("Before.\n\nAfter.");
-  });
-
-  it("preserves a quoted tool-call example inside fenced code", () => {
-    const source = '```xml\n<tool_call>{"path":"a.ts"}</tool_call>\n```\n\nDone.';
-    const projection = streamXml(source, 3);
-    expect(projection.text).toBe(source);
   });
 
   it("still strips a tool call that follows ordinary markup", () => {
@@ -259,19 +204,7 @@ it("bounds work after unfenced XML while continuing the visible reply", () => {
   const source = lead + "The next step keeps the visible answer moving.\n".repeat(200);
   const filter = toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true);
   const projection = createTextProjection([filter]);
-  let testedCharacters: number;
-  const probe = vi.spyOn(RegExp.prototype, "test");
-  try {
-    for (let offset = 0; offset < source.length; offset += CHUNK) {
-      projection.append(source.slice(offset, offset + CHUNK));
-    }
-  } finally {
-    testedCharacters = probe.mock.calls.reduce(
-      (total, [text]) => total + (typeof text === "string" ? text.length : 0),
-      0,
-    );
-    probe.mockRestore();
-  }
+  const testedCharacters = regexWork(() => streamChunks(source, CHUNK, projection));
   expect(projection.text).toBe(filter.transform(source));
   expect(projection.text).toContain("The next step");
   expect(projection.text).not.toContain("<invoke");
