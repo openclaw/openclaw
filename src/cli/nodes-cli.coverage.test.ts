@@ -174,38 +174,23 @@ describe("nodes-cli coverage", () => {
   });
 
   it.each([
-    {
-      recorded: ["operator.write", "operator.write"],
-      commands: ["system.run"],
-      expected: ["operator.pairing", "operator.write"],
-    },
-    {
-      recorded: ["operator.pairing"],
-      commands: ["system.run"],
-      expected: ["operator.pairing", "operator.admin"],
-    },
-    {
-      recorded: "malformed",
-      commands: ["canvas.present"],
-      expected: ["operator.pairing", "operator.write"],
-    },
-    { recorded: undefined, commands: [], expected: ["operator.pairing"] },
-  ])(
-    "preserves approval scopes for $recorded and $commands",
-    async ({ recorded, commands, expected }) => {
-      callGateway
-        .mockResolvedValueOnce({
-          pending: [
-            { requestId: "scope-request", nodeId: "n1", requiredApproveScopes: recorded, commands },
-          ],
-        })
-        .mockResolvedValueOnce({ approved: true });
-      await parseNodes("nodes approve scope-request");
-      expect(callGateway).toHaveBeenLastCalledWith(
-        expect.objectContaining({ method: "node.pair.approve", scopes: expected }),
-      );
-    },
-  );
+    [["operator.write", "operator.write"], ["system.run"], ["operator.pairing", "operator.write"]],
+    [["operator.pairing"], ["system.run"], ["operator.pairing", "operator.admin"]],
+    ["malformed", ["canvas.present"], ["operator.pairing", "operator.write"]],
+    [undefined, [], ["operator.pairing"]],
+  ] as const)("preserves approval scopes for %j and %j", async (recorded, commands, expected) => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [
+          { requestId: "scope-request", nodeId: "n1", requiredApproveScopes: recorded, commands },
+        ],
+      })
+      .mockResolvedValueOnce({ approved: true });
+    await parseNodes("nodes approve scope-request");
+    expect(callGateway).toHaveBeenLastCalledWith(
+      expect.objectContaining({ method: "node.pair.approve", scopes: expected }),
+    );
+  });
 
   it("still approves when the pairing preflight is unavailable", async () => {
     callGateway
@@ -231,51 +216,36 @@ describe("nodes-cli coverage", () => {
   });
 
   it.each([
-    [
-      "list",
-      "nodes list --last-connected not-a-duration",
-      "Invalid --last-connected: Invalid duration",
-    ],
-    ["status", ["nodes", "status", "--last-connected", ""], "Invalid --last-connected"],
+    ["list", ["--last-connected", "not-a-duration"], "Invalid --last-connected: Invalid duration"],
+    ["status", ["--last-connected", ""], "Invalid --last-connected"],
+    ["invoke", ["--node", "   ", "--command", "canvas.eval"], "--node and --command required"],
+    ["invoke", ["--node", "mac-1", "--command", "   "], "--node and --command required"],
     [
       "invoke",
-      ["nodes", "invoke", "--node", "   ", "--command", "canvas.eval"],
-      "--node and --command required",
-    ],
-    [
-      "invoke",
-      ["nodes", "invoke", "--node", "mac-1", "--command", "   "],
-      "--node and --command required",
-    ],
-    [
-      "invoke",
-      [..."nodes invoke --node mac-1 --command canvas.eval --idempotency-key".split(" "), ""],
+      ["--node", "mac-1", "--command", "canvas.eval", "--idempotency-key", ""],
       "--idempotency-key",
     ],
-    ["rename", ["nodes", "rename", "--node", "mac-1", "--name", "   "], "--name must not be empty"],
+    ["rename", ["--node", "mac-1", "--name", "   "], "--name must not be empty"],
     [
       "push",
-      "nodes push --node mac-1 --environment staging",
+      ["--node", "mac-1", "--environment", "staging"],
       "invalid --environment (use sandbox|production)",
     ],
-    [
-      "notify",
-      ["nodes", "notify", "--node", "mac-1", "--title", " ", "--body", " "],
-      "missing --title or --body",
-    ],
+    ["notify", ["--node", "mac-1", "--title", " ", "--body", " "], "missing --title or --body"],
     [
       "camera snap",
-      "nodes camera snap --node mac-1 --facing side",
+      ["--node", "mac-1", "--facing", "side"],
       "invalid facing: side (expected front|back|both)",
     ],
     [
       "camera clip",
-      "nodes camera clip --node mac-1 --facing both",
+      ["--node", "mac-1", "--facing", "both"],
       "invalid facing: both (expected front|back)",
     ],
   ] as const)(
     "reports invalid %s input once before calling the gateway",
-    async (command, args, message) => {
+    async (command, options, message) => {
+      const args = ["nodes", ...command.split(" "), ...options];
       await expectFailure(args);
 
       expect(callGateway).not.toHaveBeenCalled();

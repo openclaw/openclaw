@@ -94,15 +94,10 @@ describe("tryRouteCli", () => {
     originalEnv.restore();
   });
 
-  it("falls back before bootstrap when the route cannot parse the argv", async () => {
-    await expect(
-      tryRouteCli(["node", "openclaw", "sessions", "--json", "--unknown"]),
-    ).resolves.toBe(false);
-
+  function expectNoBootstrap() {
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(runRouteMock).not.toHaveBeenCalled();
-  });
+  }
 
   it.each<[string, object, boolean?]>([
     ["health --json --timeout 5000", { json: true, verbose: false, timeoutMs: 5000 }],
@@ -205,46 +200,39 @@ describe("tryRouteCli", () => {
     expect(runRouteMock).toHaveBeenCalledExactlyOnceWith(
       ...(singleArgument ? [expected] : [expected, defaultRuntime]),
     );
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expectNoBootstrap();
   });
 
-  it.each(
-    [
-      ["status", "--timeout"],
-      ["status", "--agent"],
-      ...["0", "-5", "nope", "5s"].flatMap((value) => [
-        ["status", "--timeout", value],
-        ["health", "--timeout", value],
-      ]),
-      ["status", "--timeout", "5000", "--timeout", "nope"],
-      ["--json", "status"],
-      ["--json", "health"],
-      ["--verbose", "health"],
-      ["--timeout=5000", "health"],
-      ["--timeout", "5000", "health"],
-      ["sessions", "--", "--json"],
-      ["agents", "list", "extra"],
-      ["config", "unset", "gateway.port", "", "--dry-run"],
-      ["gateway", "status", "--ssh", "host"],
-      ["gateway", "status", "--ssh-auto"],
-      ["gateway", "health"],
-      ["gateway", "health", "--url", "ws://127.0.0.1:18789", "--port", "19083", "--json"],
-      ["gateway", "health", "--timeout", "5s", "--json"],
-      ["config", "get", "--json"],
-      ["models", "status", "--probe-profile"],
-      ...[
-        ["gateway", "status"],
-        ["models", "list"],
-        ["channels", "list"],
-        ["channels", "status"],
-      ].map((command) => command.concat("--wat")),
-    ].map((args) => ({ args })),
-  )("defers malformed routed argv $args without observing startup", async ({ args }) => {
-    await expect(tryRouteCli(["node", "openclaw", ...args])).resolves.toBe(false);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  it.each([
+    "sessions --json --unknown",
+    "status --timeout",
+    "status --agent",
+    ...["0", "-5", "nope", "5s"].flatMap((value) => [
+      `status --timeout ${value}`,
+      `health --timeout ${value}`,
+    ]),
+    "status --timeout 5000 --timeout nope",
+    "--json status",
+    "--json health",
+    "--verbose health",
+    "--timeout=5000 health",
+    "--timeout 5000 health",
+    "sessions -- --json",
+    "agents list extra",
+    "config unset gateway.port  --dry-run",
+    "gateway status --ssh host",
+    "gateway status --ssh-auto",
+    "gateway health",
+    "gateway health --url ws://127.0.0.1:18789 --port 19083 --json",
+    "gateway health --timeout 5s --json",
+    "config get --json",
+    "models status --probe-profile",
+    ...["gateway status", "models list", "channels list", "channels status"].map(
+      (command) => `${command} --wat`,
+    ),
+  ])("defers malformed routed argv %s without observing startup", async (command) => {
+    await expect(tryRouteCli(["node", "openclaw", ...command.split(" ")])).resolves.toBe(false);
+    expectNoBootstrap();
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(runRouteMock).not.toHaveBeenCalled();
     expect(loggingState.forceConsoleToStderr).toBe(false);
@@ -294,8 +282,7 @@ describe("tryRouteCli", () => {
   ])("falls back for %s routed log level options before bootstrap", async (_name, argv) => {
     await expect(tryRouteCli(argv)).resolves.toBe(false);
 
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expectNoBootstrap();
     expect(runRouteMock).not.toHaveBeenCalled();
     expect(process.env.OPENCLAW_LOG_LEVEL).toBeUndefined();
   });

@@ -103,21 +103,17 @@ function expectRuntimeProbes(spawnSync: SpawnMock): void {
   }
 }
 
+type ExecOptions = {
+  runtime?: "podman" | "docker";
+  argv?: string[];
+  tty?: boolean;
+  proxyUrl?: string;
+  env?: NodeJS.ProcessEnv;
+};
+
 function expectContainerExec(
   spawnSync: SpawnMock,
-  {
-    runtime = "podman",
-    argv = ["status"],
-    tty = false,
-    proxyUrl,
-    env,
-  }: {
-    runtime?: "podman" | "docker";
-    argv?: string[];
-    tty?: boolean;
-    proxyUrl?: string;
-    env?: NodeJS.ProcessEnv;
-  } = {},
+  { runtime = "podman", argv = ["status"], tty = false, proxyUrl, env }: ExecOptions = {},
 ): void {
   const envFlag = runtime === "docker" ? "-e" : "--env";
   expect(spawnSync).toHaveBeenNthCalledWith(
@@ -136,10 +132,7 @@ function expectContainerExec(
       "openclaw",
       ...argv,
     ],
-    {
-      stdio: "inherit",
-      env: expect.objectContaining({ ...env, OPENCLAW_CONTAINER: "" }),
-    },
+    { stdio: "inherit", env: expect.objectContaining({ ...env, OPENCLAW_CONTAINER: "" }) },
   );
 }
 
@@ -179,8 +172,9 @@ describe("maybeRunCliInContainer", () => {
   });
 
   it("throws the original ENOENT launch error from the container exec", () => {
-    const code = "ENOENT";
-    const launchError = Object.assign(new Error(`spawnSync podman ${code}`), { code });
+    const launchError = Object.assign(new Error("spawnSync podman ENOENT"), {
+      code: "ENOENT",
+    });
     const spawnSync = mockSpawn(runningContainer, missingContainer, {
       status: null,
       error: launchError,
@@ -196,13 +190,7 @@ describe("maybeRunCliInContainer", () => {
     expect(thrown).toBe(launchError);
   });
 
-  it.each<
-    [
-      string,
-      NodeJS.ProcessEnv,
-      { argv?: string[]; tty?: boolean; runtime?: "podman" | "docker"; proxyUrl?: string }?,
-    ]
-  >([
+  it.each<[string, NodeJS.ProcessEnv, ExecOptions?]>([
     ["clears host routing", hostRoutingEnv],
     [
       "forwards proxy fallback",
@@ -220,7 +208,7 @@ describe("maybeRunCliInContainer", () => {
     ["selects Docker after Podman", { USER: "somalley" }, { runtime: "docker" }],
     ["allocates interactive tty", {}, { argv: ["setup"], tty: true }],
   ])("%s", (_name, env, options) => {
-    const { argv = ["status"], tty = false, runtime = "podman", proxyUrl } = options ?? {};
+    const { argv = ["status"], tty = false, runtime = "podman" } = options ?? {};
     const probes =
       runtime === "docker"
         ? [missingContainer, runningContainer]
@@ -228,13 +216,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(...probes, successfulExec);
     const args = runtime === "docker" || tty ? ["--container", "demo", ...argv] : argv;
     expect(runTarget(spawnSync, env, args, tty)).toEqual({ handled: true, exitCode: 0 });
-    expectContainerExec(spawnSync, {
-      runtime,
-      argv,
-      tty,
-      proxyUrl,
-      env: env === hostRoutingEnv ? undefined : env,
-    });
+    expectContainerExec(spawnSync, { ...options, env: env === hostRoutingEnv ? undefined : env });
     if (env === hostRoutingEnv) {
       const childOptions = requireSpawnCall(spawnSync, 2)[2] as { env: NodeJS.ProcessEnv };
       for (const name of Object.keys(hostRoutingEnv)) {
