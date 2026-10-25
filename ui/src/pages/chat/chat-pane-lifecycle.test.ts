@@ -1,7 +1,7 @@
 // The non-isolated runner resets modules between files but preserves customElements.
 // A dedicated jsdom context keeps the registered pane class on this file's module graph.
 import { createEffect, createRoot, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
 import type {
@@ -35,7 +35,6 @@ import { enqueueChatMessage } from "./chat-queue.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
-import { handleChatDraftChange } from "./input-history.ts";
 import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
 import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
 import { isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
@@ -114,14 +113,6 @@ function stopAtAttach(pane: TestChatPane) {
     expect(() => getPaneTestRuntime(pane).start()).toThrow(error);
     return attach.mock.calls[0]?.[0];
   };
-}
-
-function editablePane(request: ReturnType<typeof vi.fn>) {
-  const fixture = barePane(request);
-  fixture.state.handleChatDraftChange = (next) => {
-    fixture.state.chatMessage = next;
-  };
-  return fixture;
 }
 
 function rejectedSuggestion(message: string) {
@@ -240,34 +231,32 @@ it("publishes a disconnected gateway snapshot through reactive page state", () =
   const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   state.client = pane.context.gateway.snapshot.client;
   state.connected = true;
-  const changes: Array<{
-    connected: boolean;
-    canvas: ChatPageHost["canvasPluginSurfaceUrl"];
-  }> = [];
-  const dispose = createRoot((stop) => {
-    createEffect(
-      () => ({ connected: state.connected, canvas: state.canvasPluginSurfaceUrl }),
-      (snapshot) => {
-        changes.push(snapshot);
-      },
-    );
-    return stop;
+  const changes: Pick<ChatPageHost, "connected" | "canvasPluginSurfaceUrl">[] = [];
+  onTestFinished(
+    createRoot((stop) => {
+      createEffect(
+        () => ({
+          connected: state.connected,
+          canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
+        }),
+        (snapshot) => {
+          changes.push(snapshot);
+        },
+      );
+      return stop;
+    }),
+  );
+  flush();
+  changes.length = 0;
+  pane.applyGatewaySnapshot({
+    ...pane.context.gateway.snapshot,
+    phase: "reconnecting",
+    canvasPluginSurfaceUrl: "/canvas/reconnected",
   });
-  try {
-    flush();
-    changes.length = 0;
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      phase: "reconnecting",
-      canvasPluginSurfaceUrl: "/canvas/reconnected",
-    });
-    // Transport consumers still observe connection retirement synchronously.
-    expect(state.connected).toBe(false);
-    flush();
-    expect(changes).toEqual([{ connected: false, canvas: "/canvas/reconnected" }]);
-  } finally {
-    dispose();
-  }
+  // Transport consumers still observe connection retirement synchronously.
+  expect(state.connected).toBe(false);
+  flush();
+  expect(changes).toEqual([{ connected: false, canvasPluginSurfaceUrl: "/canvas/reconnected" }]);
 });
 
 it("renews the attention cue for repeated draft prefill", () => {
@@ -551,7 +540,7 @@ it("drops a resolve completion after the same session key rotates instances", as
 
 it("does not apply an edit failure after the same session key rotates instances", async () => {
   const deferred = createDeferred<never>();
-  const { pane, state } = editablePane(vi.fn(() => deferred.promise));
+  const { pane, state } = barePane(vi.fn(() => deferred.promise));
   const suggestion = pendingSuggestion(state, "edit", "suggested text");
   pane.sessionSuggestionTargetSignature = "main\0agent:main:current\0session-a";
   state.chatMessage = "original";
@@ -572,7 +561,6 @@ it.each([false, true])(
     const deferred = createDeferred<never>();
     const { pane, state } = barePane(vi.fn(() => deferred.promise));
     const suggestion = pendingSuggestion(state, "edit-rejected", "@Alex rejected suggestion");
-    state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
     state.chatMessage = "@Alex owner draft";
     state.chatMentions = [{ profileId: "original-profile", start: 0, end: 5 }];
 
@@ -596,7 +584,7 @@ it.each([false, true])(
 
 it("serializes edit resolutions so rejected suggestions cannot snapshot each other", async () => {
   const { first, second, request } = deferredPair<never>();
-  const { pane, state } = editablePane(request);
+  const { pane, state } = barePane(request);
   const suggestion = (id: string) => pendingSuggestion(state, id);
   state.chatMessage = "owner draft";
 

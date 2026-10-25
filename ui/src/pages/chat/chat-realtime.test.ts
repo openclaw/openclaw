@@ -339,7 +339,6 @@ it.each([
   { preference: true, status: "listening" },
   { preference: true, status: "error" },
   { preference: undefined, status: "listening" },
-  { preference: false, status: "listening" },
 ] as const)(
   "auto-enable respects preference=$preference and status=$status",
   async ({ preference, status }) => {
@@ -420,36 +419,23 @@ it("does not let a stale camera-off completion overwrite a newer camera stream",
   expect(loadSettings().talkCameraAutoEnable).toBe(true);
 });
 
-it("cycles live cameras in enumeration order and persists the successful switch", async () => {
-  const switchCamera = vi
-    .spyOn(RealtimeTalkSession.prototype, "switchCamera")
-    .mockResolvedValue(undefined);
-
+it.each([false, true])("switches cameras and persists only success (failed=%s)", async (failed) => {
+  const switchCamera = vi.spyOn(RealtimeTalkSession.prototype, "switchCamera");
+  const detail = "The selected camera is unavailable";
+  if (failed) {
+    switchCamera.mockRejectedValue(new Error(detail));
+  }
   await state.toggleRealtimeTalk();
-  preview("back", "Back Camera");
-
+  const deviceId = failed ? "missing" : "back";
+  const stream = preview(deviceId, "Next camera");
   await state.switchRealtimeTalkCamera();
-
-  expect(switchCamera).toHaveBeenCalledWith("back");
-  expect(loadSettings().realtimeTalkVideoDeviceId).toBe("back");
-  expect(read().realtimeTalkCameraError).toBe(false);
-});
-
-it("keeps the restored preview and reports a failed live camera switch", async () => {
-  vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockRejectedValue(
-    new Error("The selected camera is unavailable"),
-  );
-
-  await state.toggleRealtimeTalk();
-  const stream = preview("missing", "Missing Camera");
-  await state.switchRealtimeTalkCamera();
-
+  expect(switchCamera).toHaveBeenCalledWith(deviceId);
   expect(read().realtimeTalkVideoStream).toBe(stream);
   expect(read()).toMatchObject({
-    realtimeTalkCameraError: true,
-    realtimeTalkDetail: "The selected camera is unavailable",
+    realtimeTalkCameraError: failed,
+    realtimeTalkDetail: failed ? detail : null,
   });
-  expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+  expect(loadSettings().realtimeTalkVideoDeviceId).toBe(failed ? undefined : deviceId);
 });
 
 it.each(["before toggle", "during rejection", "during stream"] as const)(

@@ -96,6 +96,13 @@ function expectPayloads(retained: ChatAttachment[], released: ChatAttachment[] =
   released.forEach((attachment) => expect(getChatAttachmentDataUrl(attachment)).toBeNull());
 }
 
+function handoffFixture(owner = {} as GatewayBrowserClient) {
+  const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
+  const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
+  disposals.push(() => handoff.dispose());
+  return { owner, handoff, context };
+}
+
 describe("cross-region Home composer ownership", () => {
   beforeEach(() => {
     vi.stubGlobal("sessionStorage", createStorageMock());
@@ -108,11 +115,6 @@ describe("cross-region Home composer ownership", () => {
     sessionKey = "global",
     agentId = "main",
   ) {
-    if (!context.chatAttachmentHandoff) {
-      const stagedHandoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
-      Object.assign(context, { chatAttachmentHandoff: stagedHandoff });
-      disposals.push(() => stagedHandoff.dispose());
-    }
     const current = state([], sessionKey);
     current.assistantAgentId = agentId;
     current.client = owner;
@@ -157,7 +159,6 @@ describe("cross-region Home composer ownership", () => {
       current,
       persistence,
       controller,
-      dispose: controller.dispose,
       notify,
       view,
       handoff,
@@ -174,7 +175,7 @@ describe("cross-region Home composer ownership", () => {
     sessionKey = "global",
     owner = { recoveryScope: "profile-a" } as GatewayBrowserClient,
   ) {
-    const context = {} as ApplicationContext;
+    const { context } = handoffFixture(owner);
     return { context, owner, page: presentation(context, owner, "page", sessionKey) };
   }
 
@@ -250,7 +251,7 @@ describe("cross-region Home composer ownership", () => {
       dock.view.presented = true;
       dock.handoff.claim();
       page.handoff.dispose();
-      page.dispose();
+      page.controller.dispose();
       expect(dock.controller.attachmentReads.pendingReads).toBe(1);
       progress(reader, dock, page, 2);
       const reads = dock.controller.attachmentReads;
@@ -506,14 +507,6 @@ describe("cross-region Home composer ownership", () => {
 });
 
 describe("staged chat attachment pane handoff", () => {
-  function handoffFixture() {
-    const owner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
-    const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
-    disposals.push(() => handoff.dispose());
-    return { owner, handoff, context };
-  }
-
   function persistedComposer() {
     const current = state();
     const persistence = new ChatComposerPersistence(() => current);

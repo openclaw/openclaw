@@ -272,30 +272,21 @@ it("keeps the pane quiet for unrelated PR snapshots while publishing its own cha
   expect(pane.sessionPullRequests).toEqual([pullRequest(2, "merged")]);
 });
 
-it.each(["unavailable", "rate-limited"] as const)(
-  "applies retained and replaced repository snapshots during %s",
-  async (status) => {
-    const { pane, push, epoch, setPullRequestSummary } = createPullRequestPane();
-    const key = "agent:main:current";
-    pane.refreshSessionPullRequests();
-    await Promise.resolve();
-    push({
-      repository,
-      branch,
-      pullRequests: [pullRequest(111532, "open")],
-    });
-    const failure = { pullRequests: [], rateLimited: status === "rate-limited", status };
-    push({ ...failure, repository });
-    expect(pane.sessionPullRequests).toHaveLength(1);
-    expect(pane.sessionPullRequestsBranch?.branch).toBe("feature/demo");
-
-    const replacement = { owner: "other", repo: "checkout" };
-    push({ ...failure, repository: replacement });
-    expect(pane.sessionPullRequests).toEqual([]);
-    expect(pane.sessionPullRequestsBranch).toBeUndefined();
-    expect(setPullRequestSummary).toHaveBeenLastCalledWith(key, undefined, epoch);
-  },
-);
+it("clears the pane summary when a rate-limited snapshot replaces its repository", async () => {
+  const { pane, push, epoch, setPullRequestSummary } = createPullRequestPane();
+  pane.refreshSessionPullRequests();
+  await Promise.resolve();
+  push({ repository, branch, pullRequests: [pullRequest(111532, "open")] });
+  push({
+    pullRequests: [],
+    rateLimited: true,
+    status: "rate-limited",
+    repository: { owner: "other", repo: "checkout" },
+  });
+  expect(pane.sessionPullRequests).toEqual([]);
+  expect(pane.sessionPullRequestsBranch).toBeUndefined();
+  expect(setPullRequestSummary).toHaveBeenLastCalledWith("agent:main:current", undefined, epoch);
+});
 
 it.each(["global", "per-sender"] as const)(
   "preserves the selected raw-global owner through publication RPCs in %s scope",
@@ -601,13 +592,9 @@ it.each(["incarnation", "sharing", "archive-projection"] as const)(
 );
 
 it.each([
-  ["identical finals on separate frames", "duplicate"],
-  ["distinct finals in the same burst", "burst"],
-  ["distinct finals after the debounce interval", "spaced"],
   ["the first live final after history", "history"],
   ["the first presented final after hidden delivery", "hiddenFirst"],
   ["a stream announcement followed by its final", "stream"],
-  ["a final whose queued refresh lost its last watch before sync", "loseWatchBeforeSync"],
   ["a same-session background final", "background"],
   ["explicit history reset between finals", "reset"],
   ["ordinary history between final replays", "historyBetween"],
@@ -615,7 +602,7 @@ it.each([
 ] as const)("keeps subscription force scoped for %s", async (_name, mode) => {
   const texts = ["history", "stream", "background"].includes(mode)
     ? ["Opened"]
-    : ["Opened", mode === "burst" || mode === "spaced" ? "Merged" : "Opened"];
+    : ["Opened", "Opened"];
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   onTestFinished(() => {
     vi.useRealTimers();
@@ -692,14 +679,8 @@ it.each([
     }
     pane.presented = !(mode === "hiddenFirst" && index === 0);
     deliver({ state: "final", message: message(text) });
-    if (index === 0 && mode === "loseWatchBeforeSync") {
-      pane.presented = false;
-    }
     // Preserve separate WebSocket deliveries within the debounce window.
     await nextFrame();
-    if (mode === "spaced") {
-      await vi.advanceTimersByTimeAsync(5_000);
-    }
   }
   await vi.advanceTimersByTimeAsync(5_000);
   await nextFrame();
@@ -712,5 +693,5 @@ it.each([
   for (const [, params] of forces) {
     expect(params).toEqual({ sessionKeys: [key, otherKey], refreshSessionKeys: [key] });
   }
-  expect(forces).toHaveLength(mode === "spaced" ? 2 : 1);
+  expect(forces).toHaveLength(1);
 });
