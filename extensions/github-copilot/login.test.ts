@@ -15,6 +15,8 @@ import { runGitHubCopilotDeviceFlow } from "./login.js";
 
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
+const authorized = { access_token: "ghu_tok_xyz", token_type: "bearer" };
+const quietIO = () => ({ showCode: vi.fn(async () => {}) });
 
 const VALID_DEVICE_CODE_BODY = {
   device_code: "dev-code-abc123",
@@ -45,9 +47,7 @@ afterEach(() => {
 });
 
 function runDeviceFlowAfterFirstPoll(
-  io: Parameters<typeof runGitHubCopilotDeviceFlow>[0] = {
-    showCode: vi.fn(async () => {}),
-  },
+  io: Parameters<typeof runGitHubCopilotDeviceFlow>[0] = quietIO(),
   domain?: string,
 ) {
   vi.useFakeTimers();
@@ -65,11 +65,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
       expect(params.timeoutMs).toBe(30_000);
       return params.url === DEVICE_CODE_URL
         ? guardResponse(VALID_DEVICE_CODE_BODY)
-        : guardResponse(
-            { access_token: "ghu_tok_xyz", token_type: "bearer" },
-            200,
-            ACCESS_TOKEN_URL,
-          );
+        : guardResponse(authorized, 200, ACCESS_TOKEN_URL);
     });
 
     const showCode = vi.fn(async () => {});
@@ -124,11 +120,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
           current = false;
           return guardResponse({ error: "authorization_pending" }, 200, ACCESS_TOKEN_URL);
         }
-        return guardResponse(
-          { access_token: "ghu_tok_xyz", token_type: "bearer" },
-          200,
-          ACCESS_TOKEN_URL,
-        );
+        return guardResponse(authorized, 200, ACCESS_TOKEN_URL);
       });
 
       const rejection = expect(
@@ -183,9 +175,9 @@ describe("runGitHubCopilotDeviceFlow", () => {
       guardResponse(VALID_DEVICE_CODE_BODY, 200, "https://acme.ghe.com/login/device/code"),
     );
 
-    await expect(
-      runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) }, "acme.ghe.com"),
-    ).rejects.toThrow("unexpected verification URL");
+    await expect(runGitHubCopilotDeviceFlow(quietIO(), "acme.ghe.com")).rejects.toThrow(
+      "unexpected verification URL",
+    );
   });
   it.each([
     {
@@ -196,25 +188,17 @@ describe("runGitHubCopilotDeviceFlow", () => {
         { error: "slow_down", interval: 7 },
         { error: "slow_down" },
       ],
-      steps: [
-        { delay: 4_999, times: [] },
-        { delay: 1, times: [5_000] },
-        { delay: 5_000, times: [5_000, 10_000] },
-        { delay: 10_000, times: [5_000, 10_000, 20_000] },
-        { delay: 15_000, times: [5_000, 10_000, 20_000, 35_000] },
-      ],
+      delays: [4_999, 1, 5_000, 10_000, 15_000],
+      times: [5_000, 10_000, 20_000, 35_000],
     },
     {
       name: "server-provided slow_down interval",
       interval: 2,
       responses: [{ error: "slow_down", interval: 7 }],
-      steps: [
-        { delay: 2_000, times: [2_000] },
-        { delay: 6_999, times: [2_000] },
-        { delay: 1, times: [2_000, 9_000] },
-      ],
+      delays: [2_000, 6_999, 1],
+      times: [2_000, 9_000],
     },
-  ])("respects $name", async ({ interval, responses, steps }) => {
+  ])("respects $name", async ({ interval, responses, delays, times }) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-16T00:00:00Z"));
     const startedAt = Date.now();
@@ -235,13 +219,15 @@ describe("runGitHubCopilotDeviceFlow", () => {
       return guardResponse(pollResponses.shift(), 200, ACCESS_TOKEN_URL);
     });
 
-    const result = runGitHubCopilotDeviceFlow({
-      showCode: vi.fn(async () => {}),
-    });
+    const result = runGitHubCopilotDeviceFlow(quietIO());
 
-    for (const { delay, times } of steps) {
+    let elapsed = 0;
+    for (const delay of delays) {
       await vi.advanceTimersByTimeAsync(delay);
-      expect(pollTimes).toEqual(times.map((elapsed) => startedAt + elapsed));
+      elapsed += delay;
+      expect(pollTimes).toEqual(
+        times.filter((time) => time <= elapsed).map((time) => startedAt + time),
+      );
     }
 
     await expect(result).resolves.toEqual({
@@ -267,7 +253,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
       });
 
       let settled = false;
-      const observing = runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) }).then(
+      const observing = runGitHubCopilotDeviceFlow(quietIO()).then(
         (value) => {
           settled = true;
           return { value };

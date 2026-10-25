@@ -1,5 +1,3 @@
-// Exercise discovery and embeddings over real sockets, including request
-// cancellation and redaction without relying on fetch or SSRF mocks.
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -50,7 +48,8 @@ async function startCopilotServer(handle: {
       });
       handle.observeRequest?.(req, body);
       requests.push({ method: req.method, url: req.url });
-      const isEmbeddings = req.method === "POST" && req.url === "/embeddings";
+      const isEmbeddings =
+        req.method === "POST" && ["/embeddings", "/v1/embeddings"].includes(req.url ?? "");
       const route = isEmbeddings && handle.embeddings ? handle.embeddings : handle.models;
       if (typeof route === "function") {
         route(res);
@@ -81,12 +80,16 @@ function pointTokenAt(baseUrl: string): void {
   });
 }
 
-function defaultCreateOptions() {
-  return {
-    config: {} as Record<string, unknown>,
+function create(
+  remote?: Parameters<typeof githubCopilotMemoryEmbeddingProviderAdapter.create>[0]["remote"],
+  config: Parameters<typeof githubCopilotMemoryEmbeddingProviderAdapter.create>[0]["config"] = {},
+) {
+  return githubCopilotMemoryEmbeddingProviderAdapter.create({
+    config,
     agentDir: "/tmp/test-agent",
     model: "",
-  };
+    remote,
+  });
 }
 
 // Points the global logging-config reader at an on-disk config with sensitive
@@ -96,14 +99,9 @@ function withRedactionDisabledConfig(): () => void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-redact-off-"));
   const configPath = path.join(dir, "openclaw.json");
   fs.writeFileSync(configPath, JSON.stringify({ logging: { redactSensitive: "off" } }));
-  const previous = process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   return () => {
-    if (previous === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = previous;
-    }
+    vi.unstubAllEnvs();
     fs.rmSync(dir, { recursive: true, force: true });
   };
 }
@@ -165,10 +163,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
 
       try {
         await expect(
-          githubCopilotMemoryEmbeddingProviderAdapter.create({
-            ...defaultCreateOptions(),
-            remote: { baseUrl: server.baseUrl, apiKey: "copilot-test-only" },
-          }),
+          create({ baseUrl: server.baseUrl, apiKey: "copilot-test-only" }),
         ).rejects.toThrow("request timed out");
 
         expect(performance.now() - startedAt).toBeLessThan(1_500);
@@ -183,105 +178,58 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
     20_000,
   );
 
-  it("redacts credential-shaped text in model discovery errors over real transport", async () => {
-    const server = await startCopilotServer({
-      models: {
-        status: 401,
-        body: '{"error":{"message":"authentication failed"},"access_token":"ghu_AAAAUNIQUESECRETXXXX111122223333"}',
-      },
-    });
-    pointTokenAt(server.baseUrl);
-
-    let caught: Error | undefined;
-    try {
-      await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-    } catch (error) {
-      caught = error as Error;
-    }
-
-    expect(server.requests).toEqual([{ method: "GET", url: "/models" }]);
-    expect(caught?.message).toContain("GitHub Copilot model discovery HTTP 401");
-    expect(caught?.message).toContain("authentication failed");
-    expect(caught?.message).not.toContain("ghu_AAAAUNIQUESECRETXXXX111122223333");
-    expect(caught?.message).not.toContain("UNIQUESECRET");
-  });
-
-  it("redacts credential-shaped text in embeddings errors over real transport", async () => {
-    const server = await startCopilotServer({
-      models: { status: 200, body: DISCOVERY_MODELS_BODY },
-      embeddings: {
-        status: 429,
-        body: '{"error":{"message":"rate limit exceeded"},"access_token":"gho_BBBBUNIQUEEMBSECRETYYYY444455556666"}',
-      },
-    });
-    pointTokenAt(server.baseUrl);
-
-    const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-
-    let caught: Error | undefined;
-    try {
-      await result.provider?.embed("hello", { inputType: "query" });
-    } catch (error) {
-      caught = error as Error;
-    }
-
-    expect(server.requests).toEqual([
-      { method: "GET", url: "/models" },
-      { method: "POST", url: "/embeddings" },
-    ]);
-    expect(caught?.message).toContain("GitHub Copilot embeddings HTTP 429");
-    expect(caught?.message).toContain("rate limit exceeded");
-    expect(caught?.message).not.toContain("gho_BBBBUNIQUEEMBSECRETYYYY444455556666");
-    expect(caught?.message).not.toContain("UNIQUEEMBSECRET");
-  });
-
-  it("still redacts when logging.redactSensitive is off", async () => {
-    const restoreConfig = withRedactionDisabledConfig();
-    try {
-      const server = await startCopilotServer({
-        models: {
-          status: 403,
-          body: '{"error":{"message":"forbidden"},"access_token":"ghu_CCCCUNIQUEOFFSECRETZZZZ777788889999"}',
-        },
-      });
-      pointTokenAt(server.baseUrl);
-
-      let caught: Error | undefined;
+  it.each([
+    ["model discovery", 401, false],
+    ["embeddings", 429, false],
+    ["model discovery", 403, true],
+  ] as const)(
+    "redacts %s HTTP %s errors (logging disabled: %s)",
+    async (stage, status, disabled) => {
+      const marker = "UNIQUESECRET";
+      const token = `${stage === "embeddings" ? "gho" : "ghu"}_AAAA${marker}XXXX111122223333`;
+      const message = "upstream denied";
+      const restoreConfig = disabled ? withRedactionDisabledConfig() : () => {};
       try {
-        await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-      } catch (error) {
-        caught = error as Error;
+        const failure = {
+          status,
+          body: JSON.stringify({ error: { message }, access_token: token }),
+        };
+        const server = await startCopilotServer({
+          models: stage === "embeddings" ? { status: 200, body: DISCOVERY_MODELS_BODY } : failure,
+          embeddings: failure,
+        });
+        pointTokenAt(server.baseUrl);
+        const request = async () => {
+          const result = await create();
+          await result.provider?.embed("hello", { inputType: "query" });
+        };
+        const caught = await request().catch((error: unknown) => error);
+        expect(caught).toBeInstanceOf(Error);
+        if (!(caught instanceof Error)) {
+          throw new Error("Expected provider error");
+        }
+        expect(caught.message).toContain(`GitHub Copilot ${stage} HTTP ${status}`);
+        expect(caught.message).toContain(message);
+        expect(caught.message).not.toContain(token);
+        expect(caught.message).not.toContain(marker);
+        expect(server.requests).toEqual([
+          { method: "GET", url: "/models" },
+          ...(stage === "embeddings" ? [{ method: "POST", url: "/embeddings" }] : []),
+        ]);
+      } finally {
+        restoreConfig();
       }
-
-      expect(caught?.message).toContain("GitHub Copilot model discovery HTTP 403");
-      expect(caught?.message).toContain("forbidden");
-      // Forced `tools` mode must mask the token even though on-disk config
-      // disables general log redaction; a config-honoring call would leak it.
-      expect(caught?.message).not.toContain("ghu_CCCCUNIQUEOFFSECRETZZZZ777788889999");
-      expect(caught?.message).not.toContain("UNIQUEOFFSECRET");
-    } finally {
-      restoreConfig();
-    }
-  });
+    },
+  );
 
   it.each(["profile", "custom"])(
     "preserves %s authentication and embedding wire requests",
     async (auth) => {
-      const observed: Array<{
-        authorization: string | undefined;
-        integration: unknown;
-        custom: unknown;
-        body: string;
-      }> = [];
+      const observed: Array<{ headers: IncomingMessage["headers"]; body: string }> = [];
       const server = await startCopilotServer({
         models: { status: 200, body: DISCOVERY_MODELS_BODY },
         observeRequest: (request, body) => {
-          observed.push({
-            authorization: request.headers.authorization,
-            integration: request.headers["copilot-integration-id"],
-            custom: request.headers["x-proof"],
-            body,
-          });
+          observed.push({ headers: request.headers, body });
         },
         embeddings: (response) => {
           response.writeHead(200, { "content-type": "application/json" });
@@ -300,13 +248,36 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
       });
       pointTokenAt(server.baseUrl);
 
-      const result = await githubCopilotMemoryEmbeddingProviderAdapter.create({
-        ...defaultCreateOptions(),
-        remote: {
-          ...(auth === "custom" ? { baseUrl: server.baseUrl, apiKey: "explicit-test-token" } : {}),
-          headers: { Authorization: "replaced-test-token", "X-Proof": "forwarded" },
+      const prefix = auth === "custom" ? "/v1" : "";
+      const result = await create(
+        {
+          ...(auth === "custom"
+            ? { baseUrl: `${server.baseUrl}${prefix}`, apiKey: "explicit-test-token" }
+            : {}),
+          headers: {
+            Authorization: "replaced-test-token",
+            "X-Proof": "forwarded",
+            ...(auth === "profile" ? { "COPILOT-INTEGRATION-ID": "remote-identity" } : {}),
+          },
         },
-      });
+        {
+          models: {
+            providers: {
+              "github-copilot": {
+                baseUrl: server.baseUrl,
+                models: [],
+                headers:
+                  auth === "profile"
+                    ? {
+                        "copilot-integration-id": "vscode-chat",
+                        "X-Private-Header": "not-for-embeddings",
+                      }
+                    : {},
+              },
+            },
+          },
+        },
+      );
       expect(await result.provider?.embed("hello", { inputType: "query" })).toEqual([0.6, 0.8]);
       expect(await result.provider?.embedBatch(["first", { text: "second" }])).toEqual([
         [1, 0],
@@ -314,23 +285,26 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
       ]);
 
       expect(server.requests).toEqual([
-        { method: "GET", url: "/models" },
-        { method: "POST", url: "/embeddings" },
-        { method: "POST", url: "/embeddings" },
+        { method: "GET", url: `${prefix}/models` },
+        { method: "POST", url: `${prefix}/embeddings` },
+        { method: "POST", url: `${prefix}/embeddings` },
       ]);
       const authorization = `Bearer ${auth === "custom" ? "explicit-test-token" : "copilot_test_token_abc"}`;
-      expect(observed).toEqual(
-        [
-          "",
-          JSON.stringify({ model: "text-embedding-3-small", input: ["hello"] }),
-          JSON.stringify({ model: "text-embedding-3-small", input: ["first", "second"] }),
-        ].map((body) => ({
+      expect(observed[0]?.headers["accept-encoding"]).toBe("identity");
+      for (const { headers } of observed) {
+        expect(headers).toMatchObject({
           authorization,
-          integration: "copilot-developer-cli",
-          custom: "forwarded",
-          body,
-        })),
-      );
+          "copilot-integration-id":
+            auth === "profile" ? "remote-identity" : "copilot-developer-cli",
+          "x-proof": "forwarded",
+        });
+        expect(headers).not.toHaveProperty("x-private-header");
+      }
+      expect(observed.map(({ body }) => body)).toEqual([
+        "",
+        JSON.stringify({ model: "text-embedding-3-small", input: ["hello"] }),
+        JSON.stringify({ model: "text-embedding-3-small", input: ["first", "second"] }),
+      ]);
       expect(resolveFirstGithubTokenMock).toHaveBeenCalledTimes(auth === "custom" ? 0 : 1);
       expect(resolveCopilotRuntimeAuthMock).toHaveBeenCalledTimes(auth === "custom" ? 0 : 1);
     },

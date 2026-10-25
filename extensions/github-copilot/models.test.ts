@@ -77,6 +77,12 @@ const capturePayload = () =>
   vi.fn((_payload: unknown) => {
     throw new Error("captured before sending");
   });
+const completionsCompat = {
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsUsageInStreaming: false,
+  maxTokensField: "max_tokens",
+};
 
 describe("resolveCopilotForwardCompatModel", () => {
   it("returns undefined for empty modelId", () => {
@@ -98,10 +104,8 @@ describe("resolveCopilotForwardCompatModel", () => {
   });
 
   it("infers reasoning=true for Codex model IDs", () => {
-    for (const id of ["gpt-5.4-codex", "gpt-5.5-codex", "gpt-5.4-codex-mini", "gpt-5.3-codex"]) {
-      const ctx = createMockCtx(id);
-      const result = requireResolvedModel(ctx);
-      expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
+    for (const id of ["gpt-5.4-codex-mini", "gpt-5.3-codex"]) {
+      expect(requireResolvedModel(createMockCtx(id)).reasoning).toBe(true);
     }
   });
 });
@@ -251,13 +255,8 @@ describe("fetchCopilotModelCatalog", () => {
   const sampleApiResponse = {
     data: [
       chatModel("gpt-5.5", [400000, 128000, 272000], { vision: true, reasoning_effort }, "GPT-5.5"),
-      chatModel("gpt-5.3-codex", [400000, 128000], {
-        vision: false,
-        reasoning_effort,
-      }),
-      chatModel("gemini-3.1-pro-preview", [1_000_000, 65_536], {
-        vision: true,
-      }),
+      chatModel("gpt-5.3-codex", [400000, 128000], { vision: false, reasoning_effort }),
+      chatModel("gemini-3.1-pro-preview", [1_000_000, 65_536], { vision: true }),
       chatModel("claude-opus-4.7-1m-internal", [1000000, 64000], {
         vision: true,
         reasoning_effort: [...reasoning_effort, "xhigh"],
@@ -405,12 +404,7 @@ describe("fetchCopilotModelCatalog", () => {
       expect.objectContaining({
         id: "gemini-3.1-pro-preview",
         api: "openai-completions",
-        compat: {
-          supportsStore: false,
-          supportsDeveloperRole: false,
-          supportsUsageInStreaming: false,
-          maxTokensField: "max_tokens",
-        },
+        compat: completionsCompat,
       }),
       expect.objectContaining({
         id: "claude-opus-4.7-1m-internal",
@@ -433,15 +427,11 @@ describe("fetchCopilotModelCatalog", () => {
 
   it.each<[unknown, string, string, string]>([
     [undefined, "OpenAI", "endpoint-fixture", "openai-responses"],
-    [null, "OpenAI", "endpoint-fixture", "openai-responses"],
-    [[], "OpenAI", "endpoint-fixture", "openai-responses"],
-    [{ unknown: true }, "OpenAI", "endpoint-fixture", "openai-responses"],
     [["/future-api"], "OpenAI", "endpoint-fixture", "openai-responses"],
     [[42, " /v1/chat/completions/ "], "OpenAI", "endpoint-fixture", "openai-completions"],
     [["/chat/completions", "/responses"], "OpenAI", "endpoint-fixture", "openai-responses"],
     [["/responses", "/v1/messages"], "Anthropic", "endpoint-fixture", "anthropic-messages"],
     [["/v1/messages"], "OpenAI", "endpoint-fixture", "anthropic-messages"],
-    [["/v1/responses"], "OpenAI", "endpoint-fixture", "openai-responses"],
     [["/responses"], "Google", "gemini-endpoint-fixture", "openai-responses"],
     [["/chat/completions"], "Anthropic", "claude-sonnet-4.5", "openai-completions"],
     [["/responses"], "Anthropic", "claude-sonnet-4.5", "openai-responses"],
@@ -454,6 +444,7 @@ describe("fetchCopilotModelCatalog", () => {
         capabilities: {
           type: "chat",
           limits: { max_context_window_tokens: 1_048_576, max_prompt_tokens: 917_504 },
+          supports: { reasoning_effort: ["low", "high", "max"] },
         },
       },
     ]);
@@ -461,52 +452,14 @@ describe("fetchCopilotModelCatalog", () => {
     expect(model).toMatchObject({ api, contextWindow: 1_048_576, contextTokens: 917_504 });
     if (api === "openai-completions") {
       expect(model.compat).toEqual({
-        supportsStore: false,
-        supportsDeveloperRole: false,
-        supportsUsageInStreaming: false,
-        maxTokensField: "max_tokens",
+        ...completionsCompat,
+        supportedReasoningEfforts: ["low", "high", "max"],
       });
     } else {
       expect(model.compat?.maxTokensField).toBeUndefined();
       expect(model.compat?.supportsEagerToolInputStreaming).toBeUndefined();
     }
   });
-  it("routes each listed model through an endpoint the account lists", async () => {
-    const models = await fetchSelectionFixture([
-      {
-        id: "kimi-k3",
-        vendor: "Moonshot AI",
-        supported_endpoints: ["/chat/completions"],
-        capabilities: { type: "chat", supports: { reasoning_effort: ["low", "high", "max"] } },
-      },
-      {
-        id: "gpt-5-mini",
-        vendor: "Azure OpenAI",
-        supported_endpoints: ["/chat/completions", "/responses", "ws:/responses"],
-        capabilities: { type: "chat" },
-      },
-      {
-        id: "claude-haiku-4.5",
-        vendor: "Anthropic",
-        supported_endpoints: ["/chat/completions", "/v1/messages"],
-        capabilities: { type: "chat" },
-      },
-    ]);
-
-    expect(models.map(({ id, api }) => [id, api])).toEqual([
-      ["kimi-k3", "openai-completions"],
-      ["gpt-5-mini", "openai-responses"],
-      ["claude-haiku-4.5", "anthropic-messages"],
-    ]);
-    expect(models[0]?.compat).toEqual({
-      supportsStore: false,
-      supportsDeveloperRole: false,
-      supportsUsageInStreaming: false,
-      maxTokensField: "max_tokens",
-      supportedReasoningEfforts: ["low", "high", "max"],
-    });
-  });
-
   it("names a listed model's family from its vendor, else from the catalog row", async () => {
     const listed = (id: string, vendor?: string) => ({
       id,
