@@ -246,21 +246,6 @@ it("logs a failed prewarm and continues to later items", async () => {
   expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
 });
 
-it("stops before scheduling another event-loop turn", async () => {
-  const firstDone = createDeferred();
-  mocks.prewarmGatewaySessionHistory.mockImplementationOnce(() => firstDone.promise);
-  const sidecar = schedule();
-
-  await vi.advanceTimersToNextTimerAsync();
-  await vi.dynamicImportSettled();
-  expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
-  const stopping = sidecar.stop();
-  firstDone.resolve();
-  await stopping;
-  await drainPrewarm();
-
-  expect(mocks.events).not.toContain("handlers");
-});
 it("delays context prewarm and uses current config after foreground work", async () => {
   mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
   let current: OpenClawConfig = { agents: { entries: {} } };

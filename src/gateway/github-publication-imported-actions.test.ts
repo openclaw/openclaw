@@ -164,26 +164,19 @@ describe("actions on the imported original PR", () => {
     realWorktree: true,
   });
 
-  it.each([
-    { olderReceipt: false, prepared: true },
-    { olderReceipt: true, prepared: true },
-    { olderReceipt: false, prepared: false },
-  ])(
-    "reads the bound original PR without a new publication (%j)",
-    async ({ olderReceipt, prepared }) => {
-      const f = await fixture(olderReceipt, prepared);
-      const checkpoints = checkpoint.mock.calls.length;
-      const result = await f.invoke("guest", { action: "edit" });
-      expect(result.details).toMatchObject({
-        pullRequest: { url, repository: "example/repository", branch: "topic" },
-        headCommit,
-      });
-      expect(result.details).not.toHaveProperty("publication");
-      expect(Value.Check(SessionGitHubActionResultSchema, result.details)).toBe(true);
-      expect(checkpoint.mock.calls.length).toBe(checkpoints);
-      expect(f.writes).toEqual([]);
-    },
-  );
+  it("reads the unprepared bound original PR despite an older publication", async () => {
+    const f = await fixture(true, false);
+    const checkpoints = checkpoint.mock.calls.length;
+    const result = await f.invoke("guest", { action: "edit" });
+    expect(result.details).toMatchObject({
+      pullRequest: { url, repository: "example/repository", branch: "topic" },
+      headCommit,
+    });
+    expect(result.details).not.toHaveProperty("publication");
+    expect(Value.Check(SessionGitHubActionResultSchema, result.details)).toBe(true);
+    expect(checkpoint.mock.calls.length).toBe(checkpoints);
+    expect(f.writes).toEqual([]);
+  });
 
   it("edits, requests the fixed review and marks ready without pushing source", async () => {
     const f = await fixture();

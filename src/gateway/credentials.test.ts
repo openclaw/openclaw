@@ -81,6 +81,25 @@ describe("resolveGatewayCredentialsFromConfig", () => {
   const missingLocalToken = { mode: "token", token: envSecretRef("MISSING_LOCAL_TOKEN") } as const;
   const cases: CredentialCase[] = [
     ["prefers explicit auth", { auth: DEFAULT_GATEWAY_AUTH }, explicitAuth, { explicitAuth }],
+    ["local env-first", local(DEFAULT_GATEWAY_AUTH), ENV_AUTH, { localPrecedence: "env-first" }],
+    [
+      "remote precedence overrides",
+      remote(DEFAULT_REMOTE_AUTH, DEFAULT_GATEWAY_AUTH),
+      { token: "env-token", password: "remote-password" },
+      { remoteTokenPrecedence: "env-first", remotePasswordPrecedence: "remote-first" },
+    ],
+    [
+      "remote-only fallback",
+      remote({ token: "remote-token" }, DEFAULT_GATEWAY_AUTH),
+      { token: "remote-token", password: undefined },
+      remoteOnly,
+    ],
+    [
+      "remote mode override",
+      local(DEFAULT_GATEWAY_AUTH, DEFAULT_REMOTE_AUTH),
+      DEFAULT_REMOTE_AUTH,
+      { modeOverride: "remote", remotePasswordPrecedence: "remote-first" },
+    ],
     [
       "isolates CLI URL overrides",
       { auth: DEFAULT_GATEWAY_AUTH },
@@ -229,58 +248,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
 });
 
 describe("resolveGatewayCredentialsWithSecretInputs", () => {
-  type Options = Partial<
-    Omit<Parameters<typeof resolveGatewayCredentialsWithSecretInputs>[0], "config" | "env">
-  >;
-  const localAuth = { token: "local-token", password: "local-password" }; // pragma: allowlist secret
-  const remoteConfig = (
-    mode: "local" | "remote" = "remote",
-    credentials: GatewayConfig["remote"] = DEFAULT_REMOTE_AUTH,
-  ) =>
-    gatewayConfig({
-      mode,
-      auth: localAuth,
-      remote: { url: "wss://remote.example", ...credentials },
-    });
-  const remoteFirst: Options = {
-    remoteTokenPrecedence: "remote-first",
-    remotePasswordPrecedence: "remote-first", // pragma: allowlist secret
-  };
-  it.each([
-    [
-      "local env-first",
-      gatewayConfig({ mode: "local", auth: DEFAULT_GATEWAY_AUTH }),
-      { localPrecedence: "env-first" },
-      ENV_AUTH,
-    ],
-    ["remote defaults", remoteConfig(), {}, { token: "remote-token", password: "env-password" }], // pragma: allowlist secret
-    [
-      "remote precedence overrides",
-      remoteConfig(),
-      { ...remoteFirst, remoteTokenPrecedence: "env-first" },
-      { token: "env-token", password: "remote-password" },
-    ], // pragma: allowlist secret
-    [
-      "remote-only fallback",
-      remoteConfig("remote", { token: "remote-token" }),
-      { remoteTokenFallback: "remote-only", remotePasswordFallback: "remote-only" },
-      { token: "remote-token", password: undefined },
-    ],
-    [
-      "remote mode override",
-      remoteConfig("local"),
-      { ...remoteFirst, modeOverride: "remote" },
-      DEFAULT_REMOTE_AUTH,
-    ],
-  ] satisfies [string, OpenClawConfig, Options, { token?: string; password?: string }][])(
-    "%s",
-    async (_name, config, options, expected) => {
-      await expect(
-        resolveGatewayCredentialsWithSecretInputs({ config, env: DEFAULT_GATEWAY_ENV, ...options }),
-      ).resolves.toEqual(expected);
-    },
-  );
-
   it.each([
     ["pending bare shorthand", "$SOURCE", {}, { SOURCE: "${OTHER}" }],
     ["substituted template-looking literal", "${SOURCE}", { SOURCE: "${OTHER}" }, {}],

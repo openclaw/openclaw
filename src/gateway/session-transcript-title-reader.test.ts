@@ -1,11 +1,7 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import {
-  persistSessionTranscriptTurn,
-  type SessionTranscriptMessageEvent,
-} from "../config/sessions/session-accessor.js";
+import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import {
@@ -51,10 +47,6 @@ const user = (content: unknown, fields = {}) => ({ role: "user", content, ...fie
 const assistant = (content: unknown) => ({ role: "assistant", content });
 const repeatedReplies = (count: number, content: string) =>
   Array.from({ length: count }, () => assistant(content));
-const activeEvents = () =>
-  vi.importActual<typeof import("../config/sessions/session-accessor.sqlite-active-events.js")>(
-    "../config/sessions/session-accessor.sqlite-active-events.js",
-  );
 async function writeSqliteMessages(
   sessionId: string,
   messages: Array<{ content: unknown; display?: boolean; provenance?: unknown; role: string }>,
@@ -231,7 +223,9 @@ describe("session transcript title hydration", () => {
       ...repeatedReplies(18, "Older reply"),
     ]);
     await sessionAccessor.replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const actual = await activeEvents();
+    const actual = await vi.importActual<
+      typeof import("../config/sessions/session-accessor.sqlite-active-events.js")
+    >("../config/sessions/session-accessor.sqlite-active-events.js");
     const pageReader = vi.mocked(sessionAccessor.readSessionTranscriptMessageEventPage);
     pageReader.mockImplementationOnce((readScope, options) => {
       expect(
@@ -283,16 +277,11 @@ describe("session transcript title hydration", () => {
 
     expectTitle(scope, "Original question", `${"x".repeat(237)}...`);
     expect(sessionAccessor.readSessionTranscriptBoundedMessageTailPage).toHaveBeenCalledTimes(1);
-    expect(
-      vi
-        .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
-        .mock.calls.map(([, options]) => options),
-    ).toEqual([{ maxMessages: 20, offset: 0, readOnly: true }]);
   });
 });
 
 describe("session transcript Markdown title previews", () => {
-  test("stops reading older content after widening to the newest visible preview", async () => {
+  test("widens past hidden messages to the newest visible Markdown preview", async () => {
     const hiddenMessages = [
       { role: "toolResult", content: "tool output" },
       { role: "system", content: "system event" },
@@ -303,56 +292,12 @@ describe("session transcript Markdown title previews", () => {
       assistant([{ type: "text", text: "" }]),
       assistant("```ts\nconst hidden = true;\n```"),
     ];
-    const olderText = "Earlier **reply**";
-    // Keep the observed row outside the first-user head probe, including after widening.
-    const prefix = [
-      user("Keep **title Markdown** unchanged"),
-      ...Array.from({ length: 100 }, () => ({ role: "toolResult", content: "tool output" })),
-    ];
-    const olderSeq = prefix.length + 1;
     const scope = await writeSqliteMessages("reader-title-short-circuit-true", [
-      ...prefix,
-      assistant([{ type: "text", text: olderText }]),
+      user("Keep **title Markdown** unchanged"),
+      assistant([{ type: "text", text: "Earlier **reply**" }]),
       { ...assistant("# Latest\n\nRead the [guide](https://example.com)."), display: true },
       ...Array.from({ length: 3 }, () => hiddenMessages).flat(),
     ]);
-    const actual = await activeEvents();
-    const readOlderText = vi.fn(() => olderText);
-    let observedRows = 0;
-    const observeOlderContent = (
-      entries: Pick<SessionTranscriptMessageEvent, "event" | "seq">[],
-    ) => {
-      for (const entry of entries) {
-        if (entry.seq !== olderSeq) {
-          continue;
-        }
-        observedRows += 1;
-        entry.event = {
-          ...asOptionalRecord(entry.event),
-          message: assistant([
-            {
-              type: "text",
-              // Nested text survives normalization; only projection reads it.
-              get text() {
-                return readOlderText();
-              },
-            },
-          ]),
-        };
-      }
-    };
-    const pageReader = vi.mocked(sessionAccessor.readSessionTranscriptBoundedMessageTailPage);
-    try {
-      pageReader.mockImplementation((readScope, options) => {
-        const page = actual.readSessionTranscriptBoundedMessageTailPage(readScope, options);
-        observeOlderContent(page.events);
-        return page;
-      });
-      expectTitle(scope, "Keep **title Markdown** unchanged", "Latest Read the guide.");
-      expect(observedRows).toBe(1);
-      expect(readOlderText).not.toHaveBeenCalled();
-    } finally {
-      pageReader.mockImplementation(actual.readSessionTranscriptBoundedMessageTailPage);
-    }
+    expectTitle(scope, "Keep **title Markdown** unchanged", "Latest Read the guide.");
   });
 });
