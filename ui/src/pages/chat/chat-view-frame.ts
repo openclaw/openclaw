@@ -1,4 +1,4 @@
-import { merge } from "solid-js";
+import { createMemo, merge } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -227,6 +227,18 @@ export function createChatViewFrame(
   }
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
+  // Stream text changes whether a label is needed, not the label on every delta.
+  const startupLabel = createMemo(() =>
+    chatStartupStatusLabel(
+      props.startupStatus,
+      placementStartup,
+      props.environmentStartStatus,
+      (runWorking || props.stream !== null) &&
+        props.awaitingActivity !== false &&
+        !props.stream?.trim() &&
+        props.toolMessages.length === 0,
+    ),
+  );
   const threadProps: ChatThreadProps = merge(props, {
     asyncQuestions,
     loading: props.loading && !placementStartup,
@@ -238,15 +250,7 @@ export function createChatViewFrame(
     runWorking,
     runFinalizing: !isSessionRunVisuallyActive(true, props.startupStatus?.phase),
     get startupLabel() {
-      return chatStartupStatusLabel(
-        props.startupStatus,
-        placementStartup,
-        props.environmentStartStatus,
-        (runWorking || props.stream !== null) &&
-          props.awaitingActivity !== false &&
-          !props.stream?.trim() &&
-          props.toolMessages.length === 0,
-      );
+      return startupLabel();
     },
     retryAt: props.startupStatus?.phase === "retrying" ? props.startupStatus.retryAt : undefined,
     failureActionsRunId: chatFailureRunId(props.runError, props.selectedSession),

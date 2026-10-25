@@ -109,6 +109,102 @@ function drawContent(content: RawContent["content"], media?: MarkdownMedia) {
 
 describe("streaming Markdown DOM", () => {
   it.each([
+    ["A reply", "A reply with **bold**", "strong", "bold"],
+    ["A reply", "A reply with `code`", "code", "code"],
+    ["A reply", "A reply with [link](https://example.com)", "a", "link"],
+    ["A **bold**", "A **bold** trailing text", "strong", "bold"],
+  ])("keeps inline syntax canonical while streaming %s", (initial, next, tag, text) => {
+    draw(initial);
+    draw(next);
+    expect(container.querySelector(tag)?.textContent).toBe(text);
+    expect(container.querySelector("p")?.textContent).not.toMatch(/\*|`|https:/u);
+  });
+
+  it("formats the first delta after an idle formatting window immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      draw("A growing reply");
+      await vi.advanceTimersByTimeAsync(50);
+      draw("A growing reply with **bold** text");
+      expect(container.querySelector("strong")?.textContent).toBe("bold");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces burst formatting into one bounded window and flushes an idle preview", async () => {
+    vi.useFakeTimers();
+    const parse = vi.spyOn(DOMParser.prototype, "parseFromString");
+    try {
+      draw("A growing reply");
+      const parsed = parse.mock.calls.length;
+      draw("A growing reply with more");
+      draw("A growing reply with more text");
+      expect(container.textContent).toContain("with more text");
+      expect(parse.mock.calls.length).toBe(parsed);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(parse.mock.calls.length).toBeGreaterThan(parsed);
+
+      const caughtUp = parse.mock.calls.length;
+      draw("A growing reply with more text and another suffix");
+      expect(parse.mock.calls.length).toBe(caughtUp);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(parse.mock.calls.length).toBeGreaterThan(caughtUp);
+    } finally {
+      parse.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps visible plain text in place when deferred formatting catches up", async () => {
+    vi.useFakeTimers();
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    try {
+      draw("A growing reply");
+      draw("A growing reply with more text");
+      const text = container.querySelector("p")?.textContent;
+      observer.observe(container, { characterData: true, subtree: true });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.querySelector("p")?.textContent).toBe(text);
+      expect([...mutations, ...observer.takeRecords()]).toHaveLength(0);
+      observer.disconnect();
+      draw("A growing reply with more text and a pending suffix");
+      draw("A growing reply with more text");
+      expect(container.querySelector("p")?.textContent).toBe(text);
+    } finally {
+      observer.disconnect();
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows appended text before bounded formatting and flushes completion without a stale timer", async () => {
+    vi.useFakeTimers();
+    const parse = vi.spyOn(DOMParser.prototype, "parseFromString");
+    try {
+      draw("A growing reply");
+      const paragraph = container.querySelector("p");
+      const parsed = parse.mock.calls.length;
+      draw("A growing reply with a plain tail");
+      expect(paragraph?.textContent).toBe("A growing reply with a plain tail");
+      expect(parse.mock.calls.length).toBe(parsed);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.querySelector("p")).toBe(paragraph);
+      expect(parse.mock.calls.length).toBeGreaterThan(parsed);
+
+      draw("A growing reply with a plain tail and *final*");
+      draw("A growing reply with a plain tail and *final*", { streaming: false });
+      expect(container.querySelector("em")?.textContent).toBe("final");
+      draw("Replacement", { key: "replacement", streaming: false });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.textContent).toBe("Replacement\n");
+    } finally {
+      parse.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
     { label: "paragraph", initial: "A growing reply", suffix: " with more text", selector: "p" },
     {
       label: "list",

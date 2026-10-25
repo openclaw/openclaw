@@ -120,6 +120,24 @@ async function settleFrames() {
   });
 }
 
+it("keeps a newly measured tail visible in the first paint after growth", async () => {
+  const { host, thread, row, distance } = await mountFollowingFixture();
+  const gapAtPaint = await new Promise<number>((resolve) => {
+    setTimeout(() => {
+      const content = row.firstElementChild as HTMLElement;
+      content.style.height = `${host.lastRowHeight + 88}px`;
+      requestAnimationFrame(() => {
+        const observer = new ResizeObserver(() => {
+          observer.disconnect();
+          resolve(distance());
+        });
+        observer.observe(thread);
+      });
+    }, 0);
+  });
+  expect(gapAtPaint).toBe(0);
+});
+
 it.each([true, false])(
   "preserves footer-only resize intent while following: %s",
   async (following) => {
