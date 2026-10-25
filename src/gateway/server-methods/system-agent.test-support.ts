@@ -89,9 +89,8 @@ export function useSystemAgentGatewayTestFixture() {
     | undefined;
   const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
   let previousAppliedHash: string | null = null;
-  const requireFixture = () =>
-    expectDefined(fixture, "verified inference fixture was not initialized");
-  const requireVerifiedInferenceFixture = () => requireFixture().binding;
+  const requireVerifiedInferenceFixture = () =>
+    expectDefined(fixture, "verified inference fixture was not initialized").binding;
   const installVerifiedConfigReader = () => {
     vi.spyOn(configModule, "readConfigFileSnapshot").mockResolvedValue({
       ...createSnapshot({ sourceConfig: verifiedConfig, hash: "verified-config", raw: null }),
