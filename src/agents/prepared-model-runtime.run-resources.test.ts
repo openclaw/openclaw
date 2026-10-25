@@ -44,18 +44,11 @@ import {
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
+import { completionModelDefinition } from "./simple-completion.test-support.js";
 
 const providerId = "run-owner-provider";
 const siblingId = "run-owner-sibling";
-const model = {
-  id: "model",
-  name: "Fixture model",
-  reasoning: false,
-  input: ["text" as const],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 8192,
-  maxTokens: 1024,
-};
+const model = completionModelDefinition({ id: "model", name: "Fixture model" });
 const providerCatalog = {
   api: "openai-completions" as const,
   baseUrl: "https://fixture.invalid/v1",
@@ -64,7 +57,6 @@ const providerCatalog = {
 
 type Registration = {
   id: string;
-  mode: string;
   database: DatabaseSync;
   file: string;
   disposals: number;
@@ -161,7 +153,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const database = new DatabaseSync(file);
   database.exec("CREATE TABLE answer(value INTEGER); INSERT INTO answer VALUES (42)");
   const store = api.runtime.state.openKeyedStore({ namespace: "run-proof", maxEntries: 20 });
-  const record = { id: api.id, mode: api.registrationMode, database, file, disposals: 0, store, instance: bridge.captureInstance() };
+  const record = { id: api.id, database, file, disposals: 0, store, instance: bridge.captureInstance() };
   bridge.registrations.push(record);
   api.lifecycle.registerRuntimeLifecycle({ id: "database", async dispose() {
     if (bridge.hold && record === bridge.registrations[0]) {

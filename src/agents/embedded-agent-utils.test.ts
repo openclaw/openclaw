@@ -14,7 +14,7 @@ import {
   sanitizeAssistantVisibleStreamText,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
-import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const REFERENCE_THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)`;
 const REFERENCE_THINKING_TAG_OPEN_RE = new RegExp(
@@ -70,13 +70,8 @@ function makeAssistantMessage(
     },
 ): AssistantMessage {
   return {
-    role: "assistant",
-    timestamp: 1,
+    ...makeAgentAssistantMessage({ content: [], model: "gpt-5", timestamp: 1 }),
     api: "responses",
-    provider: "openai",
-    model: "gpt-5",
-    usage: createZeroUsageFixture(),
-    stopReason: "stop",
     ...message,
   } as unknown as AssistantMessage;
 }
@@ -327,6 +322,11 @@ describe("stripDowngradedToolCallText", () => {
 });
 
 describe("extractAssistantVisibleText", () => {
+  const commentary = phasedText("Working...", "commentary");
+  const legacy = textBlock("Legacy answer");
+  const code = "    const value = 1;\n    use(value);";
+  const literal = "Before <think>literal tag text after";
+  const final = (text: string, type = "text") => phasedText(text, "final_answer", type);
   it.each(["Visible prefix <think>private reasoning tail", ""])(
     "captures legacy string content before it changes: %j",
     (content) => {
@@ -340,76 +340,37 @@ describe("extractAssistantVisibleText", () => {
   );
 
   it.each([
-    { name: "plain text", text: "Done." },
-    { name: "indented code", text: "    const value = 1;\n    use(value);" },
-  ])("prefers non-empty final_answer $name over commentary", ({ text }) => {
-    const msg = makeAssistantMessage({
-      content: [phasedText("Working...", "commentary"), phasedText(text, "final_answer")],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe(text);
-  });
-
-  it.each([
-    ["commentary", phasedText("Working...", "commentary"), "text"],
-    ["legacy text", textBlock("Legacy answer"), "text"],
-    ["legacy output_text", textBlock("Legacy answer"), "output_text"],
-  ] as const)("never falls back to %s when final_answer is empty", (_name, prefix, type) => {
-    const content = [prefix, phasedText("   ", "final_answer", type)];
-    expect(extractAssistantVisibleText(makeAssistantMessage({ content }))).toBe("");
-  });
-
-  it("falls back to legacy unphased text when phased text is absent", () => {
-    expect(extractAssistantVisibleText(textMessage("Legacy answer"))).toBe("Legacy answer");
-  });
-
-  it("preserves literal reasoning-looking tags in unphased visible text", () => {
-    const msg = makeAssistantMessage({
-      content: [phasedText("Before <think>literal tag text after")],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("Before <think>literal tag text after");
-  });
-
-  it("does not pull unphased legacy text into final_answer extraction when phased blocks are present", () => {
-    const msg = makeAssistantMessage({
-      phase: "final_answer",
-      content: [textBlock("Legacy."), phasedText("Done.", "final_answer")],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("Done.");
+    ["plain final", [commentary, final("Done.")], "Done."],
+    ["indented final", [commentary, final(code)], code],
+    ["empty final after commentary", [commentary, final("   ")], ""],
+    ["empty final after legacy text", [legacy, final("   ")], ""],
+    ["empty output_text final", [legacy, final("   ", "output_text")], ""],
+    ["legacy fallback", [legacy], "Legacy answer"],
+    ["literal reasoning tag", [phasedText(literal)], literal],
+    ["no legacy mixing", [textBlock("Legacy."), final("Done.")], "Done.", "final_answer"],
+  ] as const)("selects visible text: %s", (_name, content, expected, phase) => {
+    expect(extractAssistantVisibleText(makeAssistantMessage({ content, phase }))).toBe(expected);
   });
 });
 
 describe("promoteThinkingTagsToBlocks", () => {
-  it("preserves malformed null content entries while promoting thinking tags", () => {
-    const msg = makeAssistantMessage({
-      content: [null as never, { type: "text", text: "<thinking>hello</thinking>ok" }],
-    });
+  it.each([
+    [
+      [null, textBlock("<thinking>hello</thinking>ok")],
+      [null, { type: "thinking", thinking: "hello" }, textBlock("ok")],
+    ],
+    [
+      [textBlock("<antml:thinking>hidden</antml:thinking>Visible")],
+      [{ type: "thinking", thinking: "hidden" }, textBlock("Visible")],
+    ],
+    [
+      [undefined, textBlock("no tags here")],
+      [undefined, textBlock("no tags here")],
+    ],
+  ])("promotes tags without losing malformed entries: %j", (content, expected) => {
+    const msg = makeAssistantMessage({ content });
     promoteThinkingTagsToBlocks(msg);
-    const types = msg.content.map((b: { type?: string }) => b?.type);
-    expect(types).toContain("thinking");
-    expect(types).toContain("text");
-  });
-
-  it("splits antml namespaced thinking tags into thinking blocks", () => {
-    const msg = makeAssistantMessage({
-      content: [{ type: "text", text: "<antml:thinking>hidden</antml:thinking>Visible" }],
-    });
-
-    promoteThinkingTagsToBlocks(msg);
-    expect(msg.content).toEqual([
-      { type: "thinking", thinking: "hidden" },
-      { type: "text", text: "Visible" },
-    ]);
-  });
-
-  it("preserves undefined content entries when there are no thinking tags", () => {
-    const msg = makeAssistantMessage({
-      content: [undefined as never, { type: "text", text: "no tags here" }],
-    });
-    promoteThinkingTagsToBlocks(msg);
-    expect(msg.content).toEqual([undefined, { type: "text", text: "no tags here" }]);
+    expect(msg.content).toEqual(expected);
   });
 });
 

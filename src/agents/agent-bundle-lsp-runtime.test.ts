@@ -486,54 +486,28 @@ describe("bundle LSP runtime", () => {
     expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_typescript");
   });
 
-  it("rejects invalid UTF-8 in LSP JSON bodies", async () => {
+  it.each([
+    ["a suffixed Content-Length value", "Content-Length: 4junk"],
+    ["duplicate Content-Length fields", "Content-Length: 4\r\nContent-Length: 4"],
+    ["a colonless header line", "Content-Length: 4\r\nbroken"],
+    ["an oversized declared body", `Content-Length: ${64 * 1024 * 1024 + 1}`],
+    ["an oversized unterminated header", `X-Header: ${"x".repeat(8 * 1024)}`],
+    ["invalid UTF-8", "Content-Length: 1", Buffer.from([0xff])],
+  ] as const)("fails the LSP session immediately for %s", async (name, header, body) => {
     const child = pendingChild("initialize");
     const { tool: hoverTool } = await startTool(child);
     const request = hoverTool.execute("call-1", position);
-    const hoverRequest = child.messages("textDocument/hover")[0];
-    if (typeof hoverRequest?.id !== "number") {
-      throw new Error("expected numeric hover request id");
-    }
-    const body = Buffer.concat([
-      Buffer.from(`{"jsonrpc":"2.0","id":${hoverRequest.id},"result":{"contents":"`),
-      Buffer.from([0xff]),
-      Buffer.from('"}}'),
-    ]);
-    const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "ascii");
-    child.stdout.write(Buffer.concat([header, body]));
-
-    await expect(request).rejects.toThrow(/LSP framing error: body is not valid UTF-8/i);
-    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
-  });
-
-  it.each([
-    ["a suffixed Content-Length value", (n: number) => `Content-Length: ${n}junk`],
-    [
-      "duplicate Content-Length fields",
-      (n: number) => `Content-Length: ${n}\r\nContent-Length: ${n}`,
-    ],
-    ["a colonless header line", (n: number) => `Content-Length: ${n}\r\nbroken`],
-    ["an oversized declared body", () => `Content-Length: ${64 * 1024 * 1024 + 1}`],
-    ["an oversized unterminated header", () => `X-Header: ${"x".repeat(8 * 1024)}`],
-  ] as const)("fails the LSP session immediately for %s", async (_name, header) => {
-    const child = new MockChildProcess(
-      "",
-      new Set(["initialize", "textDocument/hover"]),
-      (body, method) => {
-        if (method === "initialize") {
-          return encodeLspMessage(body);
-        }
-        const json = JSON.stringify(body);
-        const start = header(Buffer.byteLength(json, "utf-8"));
-        return _name === "an oversized unterminated header" ? start : `${start}\r\n\r\n${json}`;
-      },
+    child.stdout.write(
+      name === "an oversized unterminated header"
+        ? header
+        : Buffer.concat([Buffer.from(`${header}\r\n\r\n`), body ?? Buffer.from("null")]),
     );
-    const { tool: hoverTool } = await startTool(child);
-
-    const request = hoverTool.execute("call-1", position);
     const outcome = await withinRequestDeadline(requestOutcome(request));
-
-    expect(outcome).toMatch(/LSP framing error/i);
+    expect(outcome).toMatch(
+      name === "invalid UTF-8"
+        ? /LSP framing error: body is not valid UTF-8/i
+        : /LSP framing error/i,
+    );
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 

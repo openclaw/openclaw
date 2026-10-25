@@ -348,6 +348,8 @@ describe("tool terminal outcome observer", () => {
     ["message", "send", "success", "mutation_committed", {}],
     ["plugin_unknown", undefined, "success", "uncertain", {}],
     ["message", "send", "failure", "uncertain", {}],
+    ["memory_search", undefined, "success", "uncertain", {}],
+    ["memory_get", undefined, "success", "read_completed", {}],
   ] as const)(
     "records a host-owned effect receipt for %s/%s/%s",
     (toolName, action, outcome, state, options) => {
@@ -358,9 +360,14 @@ describe("tool terminal outcome observer", () => {
         ...(outcome === "failure" ? { failure: { error: "operation failed" } } : {}),
         ...options,
       };
-      expect(createToolTerminalObserver("run-effect-receipt")(input).effectReceipt).toEqual({
-        state,
-      });
+      const terminal = createToolTerminalObserver("run-effect-receipt")(input);
+      expect(terminal.effectReceipt).toEqual({ state });
+      if (toolName === "memory_search" || toolName === "memory_get") {
+        expect(terminal).toMatchObject({
+          executionStarted: true,
+          sideEffectEvidence: toolName === "memory_search",
+        });
+      }
     },
   );
 
@@ -397,25 +404,6 @@ describe("tool terminal outcome observer", () => {
 
     const payloads = buildPayloads({ lastToolError: afterRetry.lastToolError });
     expect(payloads).toEqual([]);
-  });
-
-  it("preserves durable memory recall side-effect evidence", () => {
-    const observe = createToolTerminalObserver("run-memory");
-
-    expect(
-      observe({
-        toolName: "memory_search",
-        arguments: { query: "recall" },
-        outcome: "success",
-      }),
-    ).toMatchObject({ executionStarted: true, sideEffectEvidence: true });
-    expect(
-      observe({
-        toolName: "memory_get",
-        arguments: { path: "memory/notes.md" },
-        outcome: "success",
-      }),
-    ).toMatchObject({ executionStarted: true, sideEffectEvidence: false });
   });
 
   it.each([
@@ -480,25 +468,5 @@ describe("tool terminal outcome observer", () => {
     );
 
     expect(terminal.lastToolError).toMatchObject({ mutatingAction: false });
-  });
-
-  it("clears a failed persistence action after the same tool succeeds", () => {
-    const observe = createToolTerminalObserver("run-memory-store-retry");
-    const ownerMutation = { ownerKey: '["memory-lancedb","memory_store"]' };
-
-    observe(
-      failed("memory_store", "store unavailable", {
-        arguments: { text: "The user prefers metric units." },
-        ownerMutation,
-      }),
-    );
-    expect(
-      observe({
-        toolName: "memory_store",
-        arguments: { text: "The user prefers imperial units." },
-        outcome: "success",
-        ownerMutation,
-      }).lastToolError,
-    ).toBeUndefined();
   });
 });

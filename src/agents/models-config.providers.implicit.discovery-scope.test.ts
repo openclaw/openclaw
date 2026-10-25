@@ -171,48 +171,34 @@ it("keeps catalog auth scoped when an ambient credential is present", async () =
   expect(mocks.runProviderCatalog).toHaveBeenCalledOnce();
 });
 
-it("loads configured providers but prepares only unresolved refs", async () => {
-  const openai = createStaticOnlyProvider("openai");
-  const anthropic = createStaticOnlyProvider("anthropic");
-  mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([openai, anthropic]);
-  mocks.prepareProviderStaticCatalog.mockResolvedValue({
-    providers: [anthropic],
-    entries: [],
-  });
-
-  const prepared = await prepareImplicitProviderStaticCatalog({
-    config: {},
-    env: state.env,
-    providerDiscoveryProviderIds: ["openai", "anthropic"],
-    staticCatalogProviderIds: ["anthropic"],
-  });
-
-  expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
-    providers: [anthropic],
-    providerIds: ["anthropic"],
-  });
-  expect(prepared.providers).toEqual([openai, anthropic]);
-});
-
-it("prepares a sole family hook for a selected catalog identity", async () => {
-  const byteplus = { ...createStaticOnlyProvider("byteplus"), pluginId: "byteplus" };
-  mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([byteplus]);
-
-  await prepareImplicitProviderStaticCatalog({
-    config: {},
-    env: state.env,
-    pluginMetadataSnapshot: metadataWithOwners({
-      modelCatalogProviders: new Map([["byteplus-plan", ["byteplus"]]]),
-    }),
-    providerDiscoveryProviderIds: ["byteplus-plan"],
-    staticCatalogProviderIds: ["byteplus-plan"],
-  });
-
-  expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
-    providers: [byteplus],
-    providerIds: ["byteplus-plan"],
-  });
-});
+it.each([false, true])(
+  "prepares only selected static hooks (family identity: %s)",
+  async (family) => {
+    const providers = family
+      ? [{ ...createStaticOnlyProvider("byteplus"), pluginId: "byteplus" }]
+      : [createStaticOnlyProvider("openai"), createStaticOnlyProvider("anthropic")];
+    const providerIds = family ? ["byteplus-plan"] : ["anthropic"];
+    const selected = providers.slice(-1);
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue(providers);
+    mocks.prepareProviderStaticCatalog.mockResolvedValue({ providers: selected, entries: [] });
+    const prepared = await prepareImplicitProviderStaticCatalog({
+      config: {},
+      env: state.env,
+      pluginMetadataSnapshot: family
+        ? metadataWithOwners({
+            modelCatalogProviders: new Map([["byteplus-plan", ["byteplus"]]]),
+          })
+        : undefined,
+      providerDiscoveryProviderIds: family ? providerIds : ["openai", "anthropic"],
+      staticCatalogProviderIds: providerIds,
+    });
+    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
+      providers: selected,
+      providerIds,
+    });
+    expect(prepared.providers).toEqual(providers);
+  },
+);
 
 it("scopes catalog hooks within a shared plugin", async () => {
   const alpha = { ...createProvider("alpha"), pluginId: "shared" };

@@ -1,9 +1,8 @@
 // Fresh-process fixture: value imports stay outside OpenClaw until each scenario demands them.
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
-import { once } from "node:events";
 import fs from "node:fs";
-import { createServer, type IncomingHttpHeaders } from "node:http";
+import type { IncomingHttpHeaders } from "node:http";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { text } from "node:stream/consumers";
@@ -151,12 +150,13 @@ function authOptions(
 }
 
 async function createHttpFixture() {
+  const { startCompletionServer } = await import("./simple-completion.test-support.js");
   const requests: HttpRequest[] = [];
   const refreshInputs: string[] = [];
   const order: string[] = [];
   const errors: unknown[] = [];
   const behavior = { rejectRefresh: false };
-  const server = createServer((request, response) => {
+  const server = await startCompletionServer((request, response) => {
     void (async () => {
       const body = await text(request);
       response.setHeader("content-type", "application/json");
@@ -205,22 +205,15 @@ async function createHttpFixture() {
       response.end();
     });
   });
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  const origin = `http://127.0.0.1:${address.port}`;
   return {
-    url: `${origin}/mcp`,
-    tokenUrl: `${origin}/token`,
+    url: `${server.origin}/mcp`,
+    tokenUrl: `${server.origin}/token`,
     requests,
     refreshInputs,
     order,
     behavior,
     close: async () => {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections();
-      });
+      await server[Symbol.asyncDispose]();
       assert.deepEqual(errors, []);
     },
   };
