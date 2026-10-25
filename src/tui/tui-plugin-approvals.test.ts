@@ -87,23 +87,25 @@ describe("TUI plugin approvals", () => {
     expect(harness.openOverlay).not.toHaveBeenCalled();
   });
 
-  it("shows plugin approvals for the active session and resolves the selection", async () => {
+  it.each([false, true])("confirms approval before allowing (allow-only=%s)", async (allowOnly) => {
     const harness = createHarness();
-
-    harness.request();
-
-    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    harness.request({ allowedDecisions: allowOnly ? ["allow-once"] : ["allow-once", "deny"] });
     const renderedPrompt = stripAnsi(harness.render());
     expect(renderedPrompt).toContain("plugin approval: Apply workspace skill proposal");
     expect(renderedPrompt).toContain("Severity: Warning");
     expect(renderedPrompt).toContain("Tool: skill_workshop");
     expect(renderedPrompt).toContain("Plugin: workspace-skills");
     expect(renderedPrompt).toContain("Review pending workspace skill changes.");
-    expect(harness.selectors[0]?.items.map((item) => item.value)).toEqual(["allow-once", "deny"]);
-    expect(harness.selectors[0]?.setSelectedIndex).toHaveBeenCalledWith(1);
+    expect(harness.selectors[0]?.items.map((item) => item.value)).toEqual(
+      allowOnly ? ["allow-once"] : ["allow-once", "deny"],
+    );
+    if (!allowOnly) {
+      expect(harness.selectors[0]?.setSelectedIndex).toHaveBeenCalledWith(1);
+    }
 
     harness.selectors[0]?.onSelect?.({ value: "allow-once", label: "Allow once" });
     expect(harness.resolvePluginApproval).not.toHaveBeenCalled();
+    expect(stripAnsi(harness.render())).toContain("Press Enter again to confirm Allow once.");
     harness.allow();
     await harness.expectAllowed();
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
@@ -240,19 +242,6 @@ describe("TUI plugin approvals", () => {
 
     harness.controller.sessionChanged();
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
-  });
-
-  it("requires a visible second confirmation for allow-only approvals", async () => {
-    const harness = createHarness();
-    harness.request({ allowedDecisions: ["allow-once"] });
-
-    harness.allow();
-
-    expect(harness.resolvePluginApproval).not.toHaveBeenCalled();
-    expect(stripAnsi(harness.render())).toContain("Press Enter again to confirm Allow once.");
-
-    harness.selectors[0]?.onSelect?.({ value: "allow-once", label: "Allow once" });
-    await harness.expectAllowed();
   });
 
   it("reopens a pending approval when resolution fails", async () => {

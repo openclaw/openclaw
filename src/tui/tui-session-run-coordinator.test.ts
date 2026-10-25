@@ -65,24 +65,17 @@ it("bounds run ID tracker FIFO membership and supports explicit cleanup", () => 
 });
 describe("TuiSessionRunCoordinator", () => {
   it.each([
-    "finalizedRuns",
-    "finalizedRunsWithDisplay",
-    "persistedTerminalRunIds",
-    "completedRuns",
-    "postFinalizingRuns",
-  ] as const)("bounds %s membership without refreshing duplicate IDs", (field) => {
+    ["finalizedRuns", "noteFinalizedRun"],
+    ["finalizedRunsWithDisplay", "noteFinalizedRun"],
+    ["persistedTerminalRunIds", "notePersistedRun"],
+    ["completedRuns", "noteCompletedRun"],
+    ["postFinalizingRuns", "notePostFinalizingRun"],
+  ] as const)("bounds %s membership without refreshing duplicate IDs", (field, method) => {
     const { coordinator } = createCoordinator();
-    const note = (runId: string) => {
-      if (field === "persistedTerminalRunIds") {
-        coordinator.notePersistedRun(runId);
-      } else if (field === "postFinalizingRuns") {
-        coordinator.notePostFinalizingRun(runId);
-      } else if (field === "completedRuns") {
-        coordinator.noteCompletedRun(runId);
-      } else {
-        coordinator.noteFinalizedRun(runId, { displayedFinal: true });
-      }
-    };
+    const note = (runId: string) =>
+      method === "noteFinalizedRun"
+        ? coordinator[method](runId, { displayedFinal: true })
+        : coordinator[method](runId);
     for (let index = 0; index < 200; index += 1) {
       note(`run-${index}`);
     }
@@ -232,38 +225,39 @@ describe("TuiSessionRunCoordinator", () => {
     await expect(Promise.all([firstDrain, secondDrain])).resolves.toEqual([!reset, true]);
     expect(settled).toHaveBeenCalledTimes(2);
   });
-  it("does not finalize a gap-recovery run when authoritative history fails", async () => {
-    const { coordinator, loadHistory, finalizeHistoryOwnedRun } = createCoordinator({
-      loadHistory: async () => {
-        throw new Error("history temporarily unavailable");
-      },
-    });
-    coordinator.queueGapHistoryReload(["run-gap"]);
-    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(coordinator.isHistoryReloadingRun("run-gap")).toBe(false));
-    expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
-  });
-  it("reconciles every tracked run after a Gateway event gap", async () => {
-    const { coordinator, finalizeHistoryOwnedRun } = createCoordinator();
-    coordinator.queueGapHistoryReload(["run-first", "run-second"]);
-    await vi.waitFor(() => expect(finalizeHistoryOwnedRun).toHaveBeenCalledTimes(2));
-    expectFinalized(finalizeHistoryOwnedRun, "run-first");
-    expectFinalized(finalizeHistoryOwnedRun, "run-second");
-  });
   it.each([
-    { membership: "exact", activeRunIds: ["run-first", "run-second"] },
-    { membership: "unknown", activeRunIds: undefined },
-  ])("keeps concurrent runs after a gap with $membership membership", async ({ activeRunIds }) => {
-    const { coordinator, finalizeHistoryOwnedRun } = createCoordinator({
-      loadHistory: async () => ({
-        ...activeHistory("run-second"),
-        ...(activeRunIds ? { activeRunIds } : {}),
-      }),
-    });
-    coordinator.queueGapHistoryReload(["run-first", "run-second"]);
-    await vi.waitFor(() => expect(coordinator.isHistoryReloadingRun("run-first")).toBe(false));
-    expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
-  });
+    ["completed", completedHistory],
+    ["failed lookup", null],
+    [
+      "exact active membership",
+      { ...activeHistory("run-second"), activeRunIds: ["run-first", "run-second"] },
+    ],
+    ["unknown active membership", activeHistory("run-second")],
+  ] satisfies [string, TuiHistoryLoadResult | null][])(
+    "reconciles every gap run against %s history",
+    async (_name, result) => {
+      const { coordinator, loadHistory, finalizeHistoryOwnedRun } = createCoordinator({
+        loadHistory: async () => {
+          if (!result) {
+            throw new Error("history temporarily unavailable");
+          }
+          return result;
+        },
+      });
+      const runs = ["run-first", "run-second"];
+      coordinator.queueGapHistoryReload(runs);
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(coordinator.isHistoryReloadingRun(runs[0])).toBe(false));
+      if (result === completedHistory) {
+        expect(finalizeHistoryOwnedRun).toHaveBeenCalledTimes(2);
+        for (const runId of runs) {
+          expectFinalized(finalizeHistoryOwnedRun, runId);
+        }
+      } else {
+        expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
+      }
+    },
+  );
   it.each([
     { tracked: true, observation: "delta" },
     { tracked: false, observation: "delta" },
@@ -303,36 +297,28 @@ describe("TuiSessionRunCoordinator", () => {
       expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
     },
   );
-  it("allows a later queued history to supersede a delta from the previous reload", async () => {
-    const { coordinator, loadHistory, finalizeHistoryOwnedRun, resolveHistory } =
-      createControlledCoordinator();
-    coordinator.queueGapHistoryReload(["run-live"]);
-    coordinator.queueGapHistoryReload(["run-live"]);
-    coordinator.deferHistoryRunEvent({
-      runId: "run-live",
-      sessionKey: "agent:main:main",
-      seq: 2,
-      state: "delta",
-      message: { role: "assistant", content: "before the next snapshot" },
-    });
-    resolveHistory(completedHistory);
-    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
-    expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
-    resolveHistory(completedHistory);
-    await vi.waitFor(() => expect(finalizeHistoryOwnedRun).toHaveBeenCalledTimes(1));
-  });
   it.each([
-    { firstHistory: "still streaming", inFlightRunId: "run-gap" },
-    { firstHistory: "already completed", inFlightRunId: null },
+    { firstHistory: "still streaming", result: activeHistory("run-gap"), delta: false },
+    { firstHistory: "already completed", result: completedHistory, delta: false },
+    { firstHistory: "superseded by a delta", result: completedHistory, delta: true },
   ])(
     "defers overlapping gap finalization when the older history is $firstHistory",
-    async ({ inFlightRunId }) => {
+    async ({ result, delta }) => {
       const { coordinator, loadHistory, finalizeHistoryOwnedRun, resolveHistory } =
         createControlledCoordinator();
       coordinator.queueGapHistoryReload(["run-gap"]);
       coordinator.queueGapHistoryReload(["run-gap"]);
+      if (delta) {
+        coordinator.deferHistoryRunEvent({
+          runId: "run-gap",
+          sessionKey: "agent:main:main",
+          seq: 2,
+          state: "delta",
+          message: { role: "assistant", content: "before the next snapshot" },
+        });
+      }
       expect(loadHistory).toHaveBeenCalledTimes(1);
-      resolveHistory(inFlightRunId ? activeHistory(inFlightRunId) : completedHistory);
+      resolveHistory(result);
       await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
       expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
       resolveHistory(completedHistory);

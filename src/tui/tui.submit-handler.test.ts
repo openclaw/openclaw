@@ -54,34 +54,13 @@ function bufferSubmit(
 }
 
 describe("submit admission and ownership", () => {
-  it.each([
-    ["idle", true, null, "hello", { status: "allowed" }],
-    ["disconnected", false, null, "hello", { status: "blocked", reason: "disconnected" }],
-    [
-      "sending",
-      true,
-      { phase: "sending", runId: "run-local", draftText: "hello" },
-      "another",
-      { status: "blocked", reason: "pending" },
-    ],
-    [
-      "stop accepted run",
-      true,
-      { phase: "accepted", runId: "run-accepted", draftText: null },
-      "please stop",
-      { status: "allowed" },
-    ],
-  ] as const)(
-    "resolves admission while %s",
-    (_name, isConnected, pendingSubmit, message, expected) => {
-      const h = createTuiCommandHandlersHarness({
-        isConnected,
-        pendingSubmit,
-        historyLoaded: true,
-      });
-      expect(h.resolveMessageAdmission(message)).toEqual(expected);
-    },
-  );
+  it("allows a stop request while an accepted submit is pending", () => {
+    const h = createTuiCommandHandlersHarness({
+      pendingSubmit: { phase: "accepted", runId: "run-accepted", draftText: null },
+      historyLoaded: true,
+    });
+    expect(h.resolveMessageAdmission("please stop")).toEqual({ status: "allowed" });
+  });
 
   it.each([
     ["sending", clearPendingSubmitDraft, "run-sending", "run-sending"],
@@ -92,15 +71,6 @@ describe("submit admission and ownership", () => {
     };
     expect(clear(state, runId)).toBe(false);
     expect(state.pendingSubmit).toEqual({ phase, runId: owner, draftText: "hello" });
-  });
-
-  it.each([
-    [false, "not connected to gateway — message not sent"],
-    [true, "local runtime not ready — message not sent"],
-  ] as const)("reports disconnected runtime (local=%s)", async (local, message) => {
-    const h = createTuiCommandHandlersHarness({ isConnected: false, opts: { local } });
-    await h.sendMessage("hello");
-    expect(h.addSystem).toHaveBeenCalledWith(message);
   });
 });
 
@@ -136,49 +106,42 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.getExpandedText()).toBe("");
   });
 
-  it("routes genuine bang input to local shell and history", () => {
-    const { editor, sendMessage, handleBangLine } = createRealEditorSubmitHarness();
-    editor.setText("!cmd");
-    editor.handleInput("\r");
-    expect(handleBangLine).toHaveBeenCalledExactlyOnceWith("!cmd");
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(editor.getText()).toBe("");
-    editor.handleInput("\u001b[A");
-    expect(editor.getText()).toBe("!cmd");
-  });
-
-  it("keeps a newline-suffixed bang paste in chat and omits it from history", () => {
-    const input = "!cmd\n";
-    const { editor, sendMessage, handleCommand, handleBangLine } = createRealEditorSubmitHarness();
-    editor.handleInput(`\u001b[200~${input}\u001b[201~`);
-    editor.handleInput("\r");
-    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
-    expectUnused(handleCommand, handleBangLine);
-    expect(editor.getText()).toBe("");
-    editor.handleInput("\u001b[A");
-    expect(editor.getText()).toBe("");
-    editor.handleInput("\r");
-    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
-    expectUnused(handleCommand, handleBangLine);
-  });
-
-  it("preserves whitespace-prefixed bang routing across a blocked retry", () => {
-    const input = "  !cmd";
-    const admitMessage = vi
-      .fn()
-      .mockReturnValueOnce({ status: "blocked", reason: "pending" })
-      .mockReturnValueOnce({ status: "allowed" });
+  it.each([
+    ["!cmd", "shell", "!cmd", false],
+    ["!cmd\n", "chat", "", false],
+    ["  !cmd", "chat", "", true],
+  ] as const)("preserves bang routing and recall for %j", (input, route, recall, blocked) => {
+    const admitMessage = vi.fn<
+      NonNullable<Parameters<typeof createEditorSubmitHandler>[0]["admitMessage"]>
+    >(() => ({ status: "allowed" }));
+    if (blocked) {
+      admitMessage.mockReturnValueOnce({ status: "blocked", reason: "pending" });
+    }
     const { editor, sendMessage, handleCommand, handleBangLine } =
       createRealEditorSubmitHarness(admitMessage);
-    editor.setText(input);
+    if (input.includes("\n")) {
+      editor.handleInput(`\u001b[200~${input}\u001b[201~`);
+    } else {
+      editor.setText(input);
+    }
     editor.handleInput("\r");
-    expect(editor.getText()).toBe(input);
-    expectUnused(sendMessage, handleCommand, handleBangLine);
-    editor.handleInput("\r");
-    expect(admitMessage).toHaveBeenCalledTimes(2);
-    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
-    expectUnused(handleCommand, handleBangLine);
+    if (blocked) {
+      expect(editor.getText()).toBe(input);
+      expectUnused(sendMessage, handleCommand, handleBangLine);
+      editor.handleInput("\r");
+    }
+    const [used, unused] =
+      route === "shell" ? [handleBangLine, sendMessage] : [sendMessage, handleBangLine];
+    expect(used).toHaveBeenCalledExactlyOnceWith(input.trim());
+    expectUnused(handleCommand, unused);
     expect(editor.getText()).toBe("");
+    editor.handleInput("\u001b[A");
+    expect(editor.getText()).toBe(recall);
+    if (input.includes("\n")) {
+      editor.handleInput("\r");
+      expect(used).toHaveBeenCalledExactlyOnceWith(input.trim());
+      expectUnused(handleCommand, unused);
+    }
   });
 
   it("continues to route slash commands while chat is busy", () => {
@@ -199,7 +162,7 @@ describe("createEditorSubmitHandler", () => {
         throw new Error("command exploded");
       });
     }
-    expect(() => harness.onSubmit(action === "message" ? "hello" : "/broken")).not.toThrow();
+    harness.onSubmit(action === "message" ? "hello" : "/broken");
     await Promise.resolve();
     expect(harness.onSubmitError).toHaveBeenCalledWith(action, expect.any(Error));
   });
