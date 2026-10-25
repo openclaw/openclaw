@@ -54,11 +54,15 @@ function sharedGeneration(config: OpenClawConfig) {
   );
 }
 
-function proxyClient(config: OpenClawConfig, identity = "retained@example.test"): AuthClient {
+function proxyClient(
+  config: OpenClawConfig,
+  identity = "retained@example.test",
+  authMethod: "trusted-proxy" | "password" = "trusted-proxy",
+): AuthClient {
   const authPolicy = captureGatewayAuthPolicy(config, {
     role: "operator",
-    authMethod: "trusted-proxy",
-    verifiedIdentity: identity,
+    authMethod,
+    verifiedIdentity: authMethod === "trusted-proxy" ? identity : undefined,
   });
   return {
     usesSharedGatewayAuth: true,
@@ -91,123 +95,79 @@ function writeGeneration(
 afterEach(clearSecretsRuntimeSnapshot);
 
 it.each([
-  { field: "userHeader", next: proxyConfig({ userHeader: "x-authenticated-user" }) },
-  { field: "requiredHeaders", next: proxyConfig({ requiredHeaders: ["x-authenticated"] }) },
-  { field: "allowLoopback", next: proxyConfig({ allowLoopback: true }) },
-  { field: "trustedProxies", next: proxyConfig({}, ["192.0.2.2"]) },
-])(
-  "fences $field edits without publishing source invalidation, including a later refresh",
-  ({ next }) => {
+  ["userHeader", proxyConfig({ userHeader: "x-authenticated-user" }), false],
+  ["requiredHeaders", proxyConfig({ requiredHeaders: ["x-authenticated"] }), false],
+  ["allowLoopback", proxyConfig({ allowLoopback: true }), false],
+  ["trustedProxies", proxyConfig({}, ["192.0.2.2"]), false],
+  ["explicit all-source revocation", proxyConfig(), true],
+] as const)(
+  "fences %s while distinguishing handshake changes from source revocation",
+  (_field, next, revokeAll) => {
     const initial = proxyConfig();
     const client = proxyClient(initial);
     const state = generationState(client.sharedGatewaySessionGeneration);
     const source = observeSource(state, client);
     const sourceInvalidated = vi.fn();
     onTestFinished(onGatewayPolicyClientInvalidated(client, sourceInvalidated));
-    const publication = vi.spyOn(state, "publishInvalidation");
     const nextGeneration = sharedGeneration(next);
     const transition = { previous: initial, next };
-    const ownership = claimGeneration(state, nextGeneration);
-
     disconnectStaleSharedGatewayAuthClients({
       state,
       clients: [client],
-      expectedGeneration: nextGeneration,
+      expectedGeneration: revokeAll ? null : nextGeneration,
       transition,
     });
-    expect(state.finalize(ownership, transition)).toBe(true);
-    expect(state.finalize(claimGeneration(state, nextGeneration), { previous: next, next })).toBe(
-      true,
-    );
+    if (!revokeAll) {
+      expect(state.finalize(claimGeneration(state, nextGeneration), transition)).toBe(true);
+      expect(state.finalize(claimGeneration(state, nextGeneration), { previous: next, next })).toBe(
+        true,
+      );
+    }
 
     expect(client.socket.close).toHaveBeenCalledWith(4001, "gateway auth changed");
     expect(client.invalidated).toBe(true);
-    expect(client.sourceInvalidated).toBeFalsy();
-    expect(sourceInvalidated).not.toHaveBeenCalled();
-    expect(source.aborted).toBe(false);
-    expect(publication).not.toHaveBeenCalled();
+    expect(Boolean(client.sourceInvalidated)).toBe(revokeAll);
+    expect(sourceInvalidated).toHaveBeenCalledTimes(revokeAll ? 1 : 0);
+    expect(source.aborted).toBe(revokeAll);
   },
 );
 
-it("revokes only the removed proxy identity, including retained disconnected sources", () => {
-  const initial = proxyConfig();
-  const retained = proxyClient(initial);
-  const removed = proxyClient(initial, "removed@example.test");
-  const state = generationState(sharedGeneration(initial));
-  const retainedSource = observeSource(state, retained);
-  const removedSource = observeSource(state, removed);
-  const next = proxyConfig({ allowUsers: ["retained@example.test"] });
-  const nextGeneration = sharedGeneration(next);
-
-  writeGeneration(state, nextGeneration, next, [retained], initial);
-
-  expect(retained.sourceInvalidated).toBeFalsy();
-  expect(retainedSource.aborted).toBe(false);
-  expect(removed.socket.close).not.toHaveBeenCalled();
-  expect(removedSource.aborted).toBe(true);
-  disconnectStaleSharedGatewayAuthClients({
-    state,
-    clients: [removed],
-    expectedGeneration: nextGeneration,
-    transition: { previous: initial, next },
-  });
-  expect(removed.sourceInvalidated).toBe(true);
-  expect(removed.socket.close).toHaveBeenCalledWith(4001, "gateway auth changed");
-});
-
-it("keeps explicit all-source revocation independent of proxy policy fencing", () => {
-  const initial = proxyConfig();
-  const client = proxyClient(initial);
-  const state = generationState(sharedGeneration(initial));
-  const revoked = vi.fn();
-  const release = state.onInvalidated(
-    client.sharedGatewaySessionGeneration,
-    revoked,
-    client.authPolicy,
-  );
-  disconnectStaleSharedGatewayAuthClients({
-    state,
-    clients: [client],
-    expectedGeneration: null,
-    transition: { previous: initial, next: initial },
-  });
-  expect(client.sourceInvalidated).toBe(true);
-  expect(revoked).toHaveBeenCalledOnce();
-  release();
-});
-
-it("revokes a rotated local proxy password without revoking the proxy identity", () => {
-  const initial = proxyConfig();
-  initial.gateway!.auth!.password = "old-local-fallback";
-  const next = structuredClone(initial);
-  next.gateway!.auth!.password = "new-local-fallback";
-  const retained = proxyClient(initial);
-  const fallback: AuthClient = {
-    usesSharedGatewayAuth: true,
-    sharedGatewaySessionGeneration: sharedGeneration(initial),
-    authPolicy: captureGatewayAuthPolicy(initial, { role: "operator", authMethod: "password" }),
-    socket: { close: vi.fn() },
-  };
-  const generation = sharedGeneration(next);
-  expect(generation).toBe(fallback.sharedGatewaySessionGeneration);
-  const state = generationState(generation);
-  const retainedSource = observeSource(state, retained);
-  const detachedFallbackSource = observeSource(state, fallback);
-  const fallbackInvalidated = vi.fn();
-  const releaseClient = onGatewayPolicyClientInvalidated(fallback, fallbackInvalidated);
-  const transition = { previous: initial, next };
-
-  expect(state.finalize(claimGeneration(state, generation), transition)).toBe(true);
-  expect(detachedFallbackSource.aborted).toBe(true);
-  writeGeneration(state, generation, next, [retained, fallback], initial);
-  expect(fallback.sourceInvalidated).toBe(true);
-  expect(fallback.socket.close).toHaveBeenCalledWith(4001, "gateway auth changed");
-  expect(fallbackInvalidated).toHaveBeenCalledOnce();
-  expect(retained.socket.close).not.toHaveBeenCalled();
-  expect(retained.sourceInvalidated).toBeFalsy();
-  expect(retainedSource.aborted).toBe(false);
-  releaseClient();
-});
+it.each(["trusted-proxy", "password"] as const)(
+  "revokes only the changed %s grant",
+  (authMethod) => {
+    const initial = proxyConfig();
+    initial.gateway!.auth!.password = "old-local-fallback";
+    const next = structuredClone(initial);
+    if (authMethod === "password") {
+      next.gateway!.auth!.password = "new-local-fallback";
+    } else {
+      next.gateway!.auth!.trustedProxy!.allowUsers = ["retained@example.test"];
+    }
+    const retained = proxyClient(initial);
+    const removed = proxyClient(initial, "removed@example.test", authMethod);
+    const state = generationState(sharedGeneration(initial));
+    const retainedSource = observeSource(state, retained);
+    const removedSource = observeSource(state, removed);
+    const nextGeneration = sharedGeneration(next);
+    const invalidated = vi.fn();
+    onTestFinished(onGatewayPolicyClientInvalidated(removed, invalidated));
+    expect(
+      state.finalize(claimGeneration(state, nextGeneration), { previous: initial, next }),
+    ).toBe(true);
+    expect(removed.socket.close).not.toHaveBeenCalled();
+    expect(removedSource.aborted).toBe(true);
+    writeGeneration(state, nextGeneration, next, [retained, removed], initial);
+    expect(removed.sourceInvalidated).toBe(true);
+    expect(removed.socket.close).toHaveBeenCalledWith(4001, "gateway auth changed");
+    expect(invalidated).toHaveBeenCalledOnce();
+    if (authMethod === "password") {
+      expect(nextGeneration).toBe(removed.sharedGatewaySessionGeneration);
+      expect(retained.socket.close).not.toHaveBeenCalled();
+    }
+    expect(retained.sourceInvalidated).toBeFalsy();
+    expect(retainedSource.aborted).toBe(false);
+  },
+);
 
 it.each([
   ["same-generation refresh", "generation-a", null, true],

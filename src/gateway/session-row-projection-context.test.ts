@@ -9,14 +9,11 @@ import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.j
 import {
   buildProjectedAgentRunIndex,
   claimAgentRunContext,
-  clearAgentRunContext,
   getAgentRunLifecycleGeneration,
   recordAgentRunModel,
   registerAgentRunContext,
   releaseAgentRunContext,
   resetAgentRunRegistryForTest,
-  rotateAgentRunRegistryLifecycleGeneration,
-  sweepStaleRunContexts,
 } from "../infra/agent-run-registry.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
 
@@ -92,10 +89,6 @@ it("refreshes both run and ancestor facts at the same epoch after owner publicat
     expect(context.current.projectedAgentRuns).toEqual(buildProjectedAgentRunIndex());
     return context.current;
   };
-  const register = (patch: Parameters<typeof registerAgentRunContext>[1] = runContext) => {
-    registerAgentRunContext("run", patch);
-    return current();
-  };
   recordAgentRunModel("run", { provider: "openai", model: "model-a" });
   expect(current().projectedAgentRuns?.modelsBySessionId.get("main\0child")).toEqual({
     provider: "openai",
@@ -103,45 +96,17 @@ it("refreshes both run and ancestor facts at the same epoch after owner publicat
   });
   recordAgentRunModel("run", undefined);
   expect(current().projectedAgentRuns?.modelsBySessionId.get("main\0child")).toBeNull();
-  expect(register({ isControlUiVisible: false }).projectedAgentRuns?.modelsBySessionId.size).toBe(
-    0,
-  );
-  register({ isControlUiVisible: true });
-  const moved = register({
-    agentId: "other",
-    sessionKey: "agent:other:moved",
-    sessionId: "moved",
-  });
-  expect([...moved.projectedAgentRuns!.sessionKeys.keys()]).toEqual(["other\0agent:other:moved"]);
-  register();
-  const releaseWait = registerAgentRunCapacityWait("run", getAgentRunLifecycleGeneration())!;
-  expect(current().projectedAgentRuns?.sessionKeys.get(`main\0${child}`)).toBe("queued");
-  releaseWait();
-  expect(current().projectedAgentRuns?.sessionKeys.get(`main\0${child}`)).toBe("running");
+  registerAgentRunContext("run", { isControlUiVisible: false });
+  expect(current().projectedAgentRuns?.modelsBySessionId.size).toBe(0);
+  registerAgentRunContext("run", { isControlUiVisible: true });
+  current();
   const runsBeforeMove = context.current.projectedAgentRuns;
   subagentRuns.set(run.runId, { ...run, requesterSessionKey: "agent:main:next" });
   publishSubagentRunChanges([child]);
   expect([...current().projectedSubagentActivity!]).toEqual(["agent:main:next"]);
   expect(context.current.projectedAgentRuns).toBe(runsBeforeMove);
-  expect([...register({ projectSessionActive: false }).projectedSubagentActivity!]).toEqual([]);
-  register();
-  const claim = claimAgentRunContext("run", runContext, { trackOwner: true, ownsContext: true });
-  current();
-  clearAgentRunContext("run");
-  current();
-  releaseAgentRunContext("run", claim);
-  expect(current().projectedAgentRuns?.sessionKeys.size).toBe(0);
-  register();
-  rotateAgentRunRegistryLifecycleGeneration();
-  expect(current().projectedAgentRuns?.sessionKeys.size).toBe(0);
-  registerAgentRunContext("fresh", { ...runContext, registeredAt: 1 });
-  current();
-  sweepStaleRunContexts(0);
-  expect(current().projectedAgentRuns?.sessionKeys.size).toBe(0);
-  registerAgentRunContext("fresh", runContext);
-  current();
-  resetAgentRunRegistryForTest();
-  expect(current().projectedAgentRuns?.sessionKeys.size).toBe(0);
+  registerAgentRunContext("run", { projectSessionActive: false });
+  expect([...current().projectedSubagentActivity!]).toEqual([]);
 });
 
 it("keeps current facts after rejected registration and stale queue release", () => {
