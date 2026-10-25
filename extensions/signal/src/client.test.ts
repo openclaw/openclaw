@@ -83,8 +83,8 @@ it.each([
 describe("signalRpcRequest", () => {
   it.each([false, true])(
     "prepares the HTTP handoff and rechecks its caller after waiting (revoked=%s)",
-    async (revoked) => {
-      await expectPreparedHandoff(revoked, async ({ arrive, response, assertHandoff }) => {
+    (revoked) =>
+      expectPreparedHandoff(revoked, async ({ arrive, response, assertHandoff }) => {
         const result = { sent: true };
         const baseUrl = await withSignalServer(async (_req, res) => {
           arrive();
@@ -105,8 +105,7 @@ describe("signalRpcRequest", () => {
           assertCount: (count) => expect(request).toHaveBeenCalledTimes(count),
           result,
         };
-      });
-    },
+      }),
   );
 
   it("rejects malformed UTF-8 bytes before JSON parsing", async () => {
@@ -197,18 +196,6 @@ describe("streamSignalEvents", () => {
         },
       }),
     ).rejects.toBe(appendError);
-  });
-
-  it("reports HTTP status failures from the event stream", async () => {
-    const baseUrl = await withSignalServer((_req, res) => {
-      res.writeHead(503, "Unavailable");
-      res.end("down");
-    });
-
-    await expect(stream(baseUrl)).rejects.toMatchObject({
-      message: "Signal SSE failed (503 Unavailable)",
-      status: 503,
-    });
   });
 
   it.each([

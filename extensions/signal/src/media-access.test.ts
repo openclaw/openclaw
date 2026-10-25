@@ -53,6 +53,8 @@ describe("Signal host-owned outbound media access", () => {
   let requests: Array<{ envelope: SignalRpcEnvelope; attachment: Buffer | undefined }>;
   let onRequest: (() => void) | undefined;
   let rejectQuotes: boolean;
+  let caller: AbortController;
+  const close = () => caller.abort(new Error("Signal caller closed"));
 
   beforeEach(async () => {
     state = await createOpenClawTestState({
@@ -63,6 +65,7 @@ describe("Signal host-owned outbound media access", () => {
     requests = [];
     onRequest = undefined;
     rejectQuotes = false;
+    caller = new AbortController();
     server = signalJsonServer(async (envelope, _request, response) => {
       const attachmentPath = envelope.params?.attachments?.[0];
       requests.push({
@@ -98,7 +101,7 @@ describe("Signal host-owned outbound media access", () => {
   });
 
   function createContext(overrides: Partial<SignalMediaContext> = {}): SignalMediaContext {
-    return { cfg, to: "+15551234567", text: "attachment", mediaUrl: "chart.png", ...overrides };
+    return { ...textContext(), text: "attachment", mediaUrl: "chart.png", ...overrides };
   }
 
   function workspaceAccess(readFile?: OutboundMediaAccess["readFile"]): OutboundMediaAccess {
@@ -113,7 +116,7 @@ describe("Signal host-owned outbound media access", () => {
       body: "original message",
     });
   }
-  function textContext(caller: AbortController) {
+  function textContext() {
     return {
       cfg,
       to: "+15551234567",
@@ -135,7 +138,6 @@ describe("Signal host-owned outbound media access", () => {
       const approvedReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
       const conflictingReader = vi.fn(async () => Buffer.from("untrusted bytes"));
       const mediaAccess = workspaceAccess(approvedReader);
-      const send = vi.fn(sendMessageSignal);
       await registerQuote();
 
       const result = await deliver(
@@ -144,7 +146,7 @@ describe("Signal host-owned outbound media access", () => {
           mediaLocalRoots: [conflictingRoot],
           mediaReadFile: conflictingReader,
           replyToId: "1700000000001",
-          deps: { signal: send },
+          deps: { signal: sendMessageSignal },
         }),
       );
 
@@ -171,8 +173,6 @@ describe("Signal host-owned outbound media access", () => {
       ["during read", "after transmission"].map((phase) => ({ name, deliver, phase })),
     ),
   )("settles the $name when its caller closes $phase", async ({ deliver, phase }) => {
-    const caller = new AbortController();
-    const close = () => caller.abort(new Error("Signal caller closed"));
     const readFile = vi.fn(async (filePath: string) => {
       const bytes = await fs.readFile(filePath);
       close();
@@ -184,7 +184,6 @@ describe("Signal host-owned outbound media access", () => {
     const delivery = deliver(
       createContext({
         mediaAccess: workspaceAccess(phase === "during read" ? readFile : undefined),
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
       }),
     );
     if (phase === "during read") {
@@ -200,10 +199,8 @@ describe("Signal host-owned outbound media access", () => {
   it.each(SIGNAL_MEDIA_ADAPTERS)(
     "checks the current caller after preparation for $name text delivery",
     async ({ text: send }) => {
-      const caller = new AbortController();
-      const delivery = send(textContext(caller));
-      caller.abort(new Error("Signal caller closed"));
-
+      const delivery = send(textContext());
+      close();
       await rejectedBeforeSend(delivery);
     },
   );
@@ -211,13 +208,12 @@ describe("Signal host-owned outbound media access", () => {
   it.each([false, true])("keeps quote fallback on the same caller (closed=%s)", async (closed) => {
     const send = requireAdapter(signalPlugin.message?.send?.text);
     await registerQuote();
-    const caller = new AbortController();
     rejectQuotes = true;
     if (closed) {
-      onRequest = () => caller.abort(new Error("Signal caller closed"));
+      onRequest = close;
     }
     const delivery = send({
-      ...textContext(caller),
+      ...textContext(),
       text: "A quoted reply",
       replyToId: "1700000000001",
     });
@@ -235,11 +231,10 @@ describe("Signal host-owned outbound media access", () => {
 
   it("preserves a reported text chunk and stops later chunks when its caller closes", async () => {
     const send = requireAdapter(signalPlugin.outbound?.sendFormattedText);
-    const caller = new AbortController();
     const delivered: unknown[] = [];
     await expect(
       send({
-        ...textContext(caller),
+        ...textContext(),
         cfg: {
           ...cfg,
           channels: { signal: { ...cfg.channels?.signal, textChunkLimit: 4 } },
@@ -257,8 +252,7 @@ describe("Signal host-owned outbound media access", () => {
 
   it.each([false, true])("stops a closed caller's reaction (remove=%s)", async (remove) => {
     const react = requireAdapter(signalPlugin.actions?.handleAction);
-    const caller = new AbortController();
-    caller.abort(new Error("Signal caller closed"));
+    close();
     await rejectedBeforeSend(
       react({
         channel: "signal",
@@ -277,16 +271,15 @@ describe("Signal host-owned outbound media access", () => {
       const approvedReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
       const conflictingReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
 
-      await expect(
-        deliver(
-          createContext({
-            mediaUrl: "../outside.png",
-            mediaLocalRoots: [state.root],
-            mediaReadFile: conflictingReader,
-            mediaAccess: workspaceAccess(approvedReader),
-          }),
-        ),
-      ).rejects.toMatchObject({ code: "path-not-allowed" });
+      const delivery = deliver(
+        createContext({
+          mediaUrl: "../outside.png",
+          mediaLocalRoots: [state.root],
+          mediaReadFile: conflictingReader,
+          mediaAccess: workspaceAccess(approvedReader),
+        }),
+      );
+      await expect(delivery).rejects.toMatchObject({ code: "path-not-allowed" });
 
       expect(approvedReader).not.toHaveBeenCalled();
       expect(conflictingReader).not.toHaveBeenCalled();

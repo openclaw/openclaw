@@ -10,7 +10,8 @@ import {
 } from "./setup-transport.js";
 import { detectSignalTransport as detectTransport } from "./transport-detection.js";
 
-function signalConfig(signal: NonNullable<OpenClawConfig["channels"]>["signal"]): OpenClawConfig {
+type Signal = NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>;
+function signalConfig(signal: Signal): OpenClawConfig {
   return { channels: { signal } };
 }
 
@@ -50,15 +51,14 @@ const write = (cfg: OpenClawConfig, transport: Transport, accountId = "work") =>
   writeSignalAccountTransport({ cfg, accountId, transport });
 const workPhone = "+15555550124";
 const bound = (httpPort: number) => account(native({ httpPort }));
-const named = (
-  entries: NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>["accounts"],
-) => signalConfig({ accounts: entries });
+const named = (accounts: Signal["accounts"]) => signalConfig({ accounts });
 const root = (transport: Transport) => signalConfig({ transport });
 const splitConfig = signalConfig({
   ...bound(8080),
   accounts: { work: account(undefined, workPhone) },
 });
-const prepared = (endpoint: string, httpHost: string, httpPort: number) =>
+const local = (port = 8080) => `http://127.0.0.1:${port}`;
+const prepared = (httpPort: number, httpHost = "127.0.0.1", endpoint = local(httpPort)) =>
   native({ url: endpoint, httpHost, httpPort });
 
 const detectSignalTransportMock = vi.hoisted(() => vi.fn());
@@ -120,11 +120,11 @@ it("skips setup-time detection for an explicit transport kind", async () => {
   expect(detectSignalTransportMock).not.toHaveBeenCalled();
 });
 
-it("realigns an existing managed connection URL after a partial bind update", () => {
-  const cfg = workTransport(prepared("http://127.0.0.1:8181", "127.0.0.1", 8181));
+it("realigns an existing managed connection URL after an IPv6 bind update", () => {
+  const cfg = workTransport(prepared(8181));
   expect(
-    apply({ httpHost: "127.0.0.2", httpPort: "8282" }, cfg, "work")?.accounts?.work?.transport,
-  ).toMatchObject(prepared("http://127.0.0.2:8282", "127.0.0.2", 8282));
+    apply({ httpHost: "::1", httpPort: "8282" }, cfg, "work")?.accounts?.work?.transport,
+  ).toMatchObject(prepared(8282, "::1", "http://[::1]:8282"));
 });
 
 it("preserves managed transport options during a partial setup update", () => {
@@ -154,12 +154,6 @@ it("makes a new default transport update authoritative over accounts.default", (
 it("keeps bare HTTP URLs on the historical external-native transport", () => {
   const next = apply({ signalNumber: "+15555550124", httpUrl: "signal-native:8080" }, {}, "work");
   expect(next?.accounts?.work?.transport).toEqual(external("http://signal-native:8080"));
-});
-
-it("keeps IPv6 bind hosts on the managed transport", () => {
-  expect(apply({ httpHost: "::1", httpPort: "9090" })).toMatchObject({
-    transport: { kind: "managed-native", httpHost: "::1", httpPort: 9090 },
-  });
 });
 
 it.each([
@@ -210,10 +204,9 @@ it("preserves sockets and does not reserve HTTP ports during setup", () => {
   const cfg = root(transport);
   expect(prepare(cfg, "default")).toEqual(transport);
   expect(prepare(cfg).httpPort).toBe(8080);
-  expect(
-    write(cfg, external("http://127.0.0.1:8080"), "http").channels?.signal?.accounts?.http
-      ?.transport,
-  ).toEqual(external("http://127.0.0.1:8080"));
+  expect(write(cfg, external(local()), "http").channels?.signal?.accounts?.http?.transport).toEqual(
+    external(local()),
+  );
 });
 
 it.each([
@@ -255,26 +248,26 @@ it.each([
     signalConfig({
       ...bound(8080),
       accounts: {
-        work: account(native({ url: "http://127.0.0.1:8080", httpHost: "0.0.0.0" }), workPhone),
+        work: account(native({ url: local(), httpHost: "0.0.0.0" }), workPhone),
       },
     }),
     "work",
     undefined,
-    prepared("http://127.0.0.1:8081", "0.0.0.0", 8081),
+    prepared(8081, "0.0.0.0"),
   ],
   [
     "independent HTTPS proxy",
     root(native({ url: "https://127.0.0.1:8080" })),
     "default",
     undefined,
-    prepared("https://127.0.0.1:8080", "127.0.0.1", 8081),
+    prepared(8081, "127.0.0.1", "https://127.0.0.1:8080"),
   ],
   [
     "IPv6 wildcard",
-    root(prepared("http://127.0.0.1:8080", "127.0.0.1", 8080)),
+    root(prepared(8080)),
     "default",
     { httpHost: "::" },
-    prepared("http://[::1]:8080", "::", 8080),
+    prepared(8080, "::", "http://[::1]:8080"),
   ],
 ] as const)("prepares %s", (_name, cfg, id, overrides, expected) => {
   expect(prepare(cfg, id, overrides)).toEqual(expected);

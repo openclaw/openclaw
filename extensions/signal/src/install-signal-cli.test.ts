@@ -57,7 +57,10 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
 });
 
 const { downloadToFile, installSignalCli } = await import("./install-signal-cli.js");
-const install = () => installSignalCli(createRuntimeSpies());
+const install = (platform: NodeJS.Platform = "linux", arch = "x64") => {
+  setProcessPlatform(platform, arch);
+  return installSignalCli(createRuntimeSpies());
+};
 
 function okDownloadResponse(body: BodyInit, init: ResponseInit = {}) {
   const result = {
@@ -127,7 +130,6 @@ async function expectRejectedDownload(error: string, release: ReturnType<typeof 
 }
 
 it("rejects a release with only signatures or incomplete assets", async () => {
-  setProcessPlatform("linux");
   mockRelease("0.0.0", [
     { name: "signal-cli.tar.gz" },
     { browser_download_url: "https://example.com/file.tar.gz" },
@@ -144,9 +146,8 @@ it.each([
   ["linux", "arm64", expect.stringContaining("Install Homebrew")],
   ["win32", "x64", "Signal CLI auto-install is not supported on Windows yet."],
 ] as const)("does not fetch archives on %s/%s", async (platform, arch, error) => {
-  setProcessPlatform(platform, arch);
   brewMock.mockReturnValue(undefined);
-  await expect(install()).resolves.toEqual({ ok: false, error });
+  await expect(install(platform, arch)).resolves.toEqual({ ok: false, error });
   expect(fetchMock).not.toHaveBeenCalled();
 });
 it.each([undefined, "0x10"])("downloads with SSRF guard and declared length %s", async (length) => {
@@ -208,7 +209,6 @@ it.each([
     "Failed to parse signal-cli release info.",
   ],
 ] as const)("returns metadata error for %s", async (body, status, error) => {
-  setProcessPlatform("linux");
   const { release } = okDownloadResponse(body, { status });
   expect(await install()).toEqual({ ok: false, error });
   expect(fetchMock).toHaveBeenCalledOnce();
@@ -216,7 +216,6 @@ it.each([
 });
 
 it("bounds oversized GitHub release metadata and cancels the stream", async () => {
-  setProcessPlatform("linux");
   const chunkCount = 20; // 20 MiB — over the 16 MiB cap
   const oversized = createStreamingResponse({
     status: 200,
@@ -234,7 +233,6 @@ it("bounds oversized GitHub release metadata and cancels the stream", async () =
 });
 
 it("removes the download temp dir even when extraction fails", async () => {
-  setProcessPlatform("linux");
   mockRelease("0.0.0-leak-test");
   okDownloadResponse("not-a-real-archive");
   expect((await install()).ok).toBe(false);
@@ -242,7 +240,6 @@ it("removes the download temp dir even when extraction fails", async () => {
 });
 
 it("removes the download temp dir on the success path too", async () => {
-  setProcessPlatform("linux");
   const archivePath = await archive("signal-cli-0.0.0-success-test", "#!/bin/sh\necho ok\n");
   mockRelease("0.0.0-success-test");
   okDownloadResponse(await fs.readFile(archivePath));
@@ -268,7 +265,6 @@ it("removes the download temp dir on the success path too", async () => {
 });
 
 it("skips malformed asset rows while retaining a valid download", async () => {
-  setProcessPlatform("linux");
   mockRelease("0.0.0-download-failure-test", [
     null,
     { name: 42, browser_download_url: "https://example.com/wrong-name.tar.gz" },
@@ -287,7 +283,6 @@ it.each([
   { binaryDir: "bin", found: true },
   { binaryDir: path.join("libexec", "nested", "native", "bin"), found: false },
 ])("finds Homebrew binaries within four levels: $binaryDir", async ({ binaryDir, found }) => {
-  setProcessPlatform("darwin", "arm64");
   const binary = path.join(workDir, binaryDir, "signal-cli");
   await fs.mkdir(path.dirname(binary), { recursive: true });
   await fs.writeFile(binary, "");
@@ -296,7 +291,7 @@ it.each([
     .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
     .mockResolvedValueOnce({ code: 0, stdout: `${workDir}\n`, stderr: "" })
     .mockResolvedValueOnce({ code: 0, stdout: "signal-cli 0.14.5\n", stderr: "" });
-  expect(await install()).toEqual(
+  expect(await install("darwin", "arm64")).toEqual(
     found
       ? {
           ok: true,

@@ -5,6 +5,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignalSseEvent } from "./client-adapter.js";
+import type { SignalDataMessage, SignalEnvelope } from "./monitor/event-handler.types.js";
 import { startSignalIngressMonitor } from "./signal-ingress.js";
 
 type SignalIngressQueue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
@@ -15,25 +16,18 @@ const defer = (_event: SignalSseEvent, lifecycle: Parameters<SignalIngressDispat
   return { kind: "deferred" } as const;
 };
 
-function signalEvent(params?: {
-  senderNumber?: string;
-  senderUuid?: string;
-  timestamp?: number;
-  groupId?: string;
-  message?: string;
-}): SignalSseEvent {
-  const timestamp = params?.timestamp ?? 1_700_000_000_001;
+function signalEvent(
+  envelope: SignalEnvelope = {},
+  dataMessage: SignalDataMessage = {},
+): SignalSseEvent {
   return {
     event: "receive",
     data: JSON.stringify({
       envelope: {
-        sourceNumber: params?.senderNumber ?? "+15550001111",
-        ...(params?.senderUuid ? { sourceUuid: params.senderUuid } : {}),
-        timestamp,
-        dataMessage: {
-          message: params?.message ?? "hello",
-          ...(params?.groupId ? { groupInfo: { groupId: params.groupId } } : {}),
-        },
+        sourceNumber: "+15550001111",
+        timestamp: 1_700_000_000_001,
+        ...envelope,
+        dataMessage: { message: "hello", ...dataMessage },
       },
     }),
   };
@@ -144,11 +138,11 @@ describe("Signal durable ingress", () => {
 
   it("keeps a pending dual-identity message dispatchable through redelivery", async () => {
     const sender = {
-      senderNumber: "+15550002222",
-      senderUuid: "123e4567-e89b-12d3-a456-426614174000",
+      sourceNumber: "+15550002222",
+      sourceUuid: "123e4567-e89b-12d3-a456-426614174000",
     };
-    const first = signalEvent({ ...sender, timestamp: 1_700_000_000_001, message: "first" });
-    const second = signalEvent({ ...sender, timestamp: 1_700_000_000_002, message: "second" });
+    const first = signalEvent(sender, { message: "first" });
+    const second = signalEvent({ ...sender, timestamp: 1_700_000_000_002 }, { message: "second" });
     let adoptFirst: (() => void | Promise<void>) | undefined;
     const dispatch = vi.fn<SignalIngressDispatch>((_event, lifecycle, payload) => {
       if (payload.envelope?.dataMessage?.message === "first") {
@@ -171,8 +165,11 @@ describe("Signal durable ingress", () => {
   });
 
   it("uses a direct-sender or group-conversation lane and stores the raw event", async () => {
-    const direct = signalEvent({ senderUuid: "123e4567-e89b-12d3-a456-426614174000" });
-    const group = signalEvent({ groupId: "group-123", timestamp: 1_700_000_000_002 });
+    const direct = signalEvent({ sourceUuid: "123e4567-e89b-12d3-a456-426614174000" });
+    const group = signalEvent(
+      { timestamp: 1_700_000_000_002 },
+      { groupInfo: { groupId: "group-123" } },
+    );
     const started = await start(defer);
     await receive(started, direct, group);
     expect(

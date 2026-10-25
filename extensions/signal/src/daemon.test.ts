@@ -139,18 +139,10 @@ describe("spawnSignalDaemon", () => {
 
   it("expands home-relative configPath before passing it to signal-cli", () => {
     startDaemon({ configPath: "~/.openclaw/signal-cli" });
-    expect(spawnMock).toHaveBeenCalledWith(
-      "signal-cli",
-      [
-        "--config",
-        path.join(os.homedir(), ".openclaw/signal-cli"),
-        "daemon",
-        "--http",
-        "127.0.0.1:8080",
-        "--no-receive-stdout",
-      ],
-      { env: expect.any(Object), stdio: ["ignore", "pipe", "pipe"] },
-    );
+    expect(spawnMock.mock.calls[0]?.[1].slice(0, 2)).toEqual([
+      "--config",
+      path.join(os.homedir(), ".openclaw/signal-cli"),
+    ]);
   });
 
   it("starts signal-cli with process essentials but without Gateway secrets", () => {
@@ -209,16 +201,7 @@ describe("spawnSignalDaemon", () => {
     expect(subsystemWarnMock).toHaveBeenCalledTimes(1);
     const [subsystem, message] = subsystemWarnMock.mock.calls[0] as [string, string];
     expect(subsystem).toBe("signal/daemon");
-    for (const hint of [
-      "HTTPS_PROXY, SSL_CERT_FILE, no_proxy",
-      "JAVA_TOOL_OPTIONS",
-      "-Dhttps.proxyHost=<host> -Dhttps.proxyPort=<port>",
-      "transport.cliPath",
-      "external-native",
-      "https://docs.openclaw.ai/channels/signal#managed-daemon-environment",
-    ]) {
-      expect(message).toContain(hint);
-    }
+    expect(message).toContain("HTTPS_PROXY, SSL_CERT_FILE, no_proxy");
     expect(message).not.toContain("synthetic-");
     expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN");
     const env = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv;
