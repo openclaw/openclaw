@@ -26,6 +26,8 @@ export function captureAgentPluginRuntimeRefresh() {
       return true;
     },
     isRequested: () => owner?.active === true && owner.requested,
+    /** True when captured inside an active run's refresh scope. */
+    isOwned: () => owner?.active === true,
     isPending: () => owner?.active === true && owner.requested && owner.holds === 0,
     hold: () => {
       if (!owner?.active) {
