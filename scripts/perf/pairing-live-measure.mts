@@ -194,7 +194,9 @@ try {
     return list.nodes.some((entry) => entry.connected);
   }, "paired node connection");
   await delay(3_000);
-  const db = new DatabaseSync(path.join(fixture, "state", "openclaw.sqlite"), { readOnly: true });
+  const db = new DatabaseSync(path.join(fixture, "state", "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
   try {
     const read = () => {
       const row = db
