@@ -16,6 +16,36 @@ import {
 } from "./cron.inference-binding.test-support.js";
 import { createCronCallerClient } from "./cron.validation.test-support.js";
 
+type Fixture = Parameters<Parameters<typeof withFixture>[0]>[0];
+type Caller = Parameters<Fixture["invoke"]>[2];
+const creatorClient = () => createCronCallerClient("main", undefined, sessionKey);
+const addForCreator = (fixture: Fixture) =>
+  fixture.invoke("cron.add", createParams(), creatorClient());
+const updateModel = (fixture: Fixture, id: string, model: string, client?: Caller) =>
+  fixture.invoke("cron.update", { id, patch: { payload: { kind: "agentTurn", model } } }, client);
+const binding = (profileId: string, source: "user" | "auto", authRequirement: string) => ({
+  provider: "openai",
+  profileId,
+  authRequirement,
+  source,
+});
+const nativeAuthority: CronRuntimeAuthority = {
+  version: 1,
+  runtimeId: "synthetic-native",
+  namespace: "synthetic.inference",
+  payload: { account: "synthetic-native-account" },
+};
+function captureAuthority(
+  client: ReturnType<typeof creatorClient>,
+  authority?: CronRuntimeAuthority,
+) {
+  const identity = client.internal!.agentRuntimeIdentity!;
+  const scope = createCronCreatorAuthorityRunScope(identity.operationalRunInstance.runId);
+  identity.cronToolsAllowCapture = "final-executable-surface";
+  identity.cronCreatorAuthorityGrant = mintCronCreatorAuthorityGrant(scope, undefined, authority);
+  return { [Symbol.dispose]: () => revokeCronCreatorAuthorityRunScope(scope) };
+}
+
 describe("cron handler inference binding persistence", () => {
   it("keeps native Codex inference unbound without a Gateway account", async () => {
     await withFixture(async (fixture) => {
@@ -227,11 +257,7 @@ describe("cron handler inference binding persistence", () => {
     await withFixture(async (fixture) => {
       const personal = await fixture.personalAccount();
       await fixture.setCreator(personal.profileId);
-      await fixture.invoke(
-        "cron.add",
-        createParams(),
-        createCronCallerClient("main", undefined, sessionKey),
-      );
+      await addForCreator(fixture);
       expect((await fixture.reload()).inferenceBinding).toMatchObject({
         profileId: personal.profileId,
         source: "auto",
@@ -277,20 +303,10 @@ describe("cron handler inference binding persistence", () => {
       fixture.setAlias();
       await fixture.invoke("cron.add", createParams());
       const created = await fixture.reload();
-      await fixture.invoke("cron.update", {
-        id: created.id,
-        patch: {
-          payload: { kind: "agentTurn", model: "synthetic-alias@" + subscriptionId },
-        },
-      });
+      await updateModel(fixture, created.id, "synthetic-alias@" + subscriptionId);
       const adopted = await fixture.reload();
       expect(adopted.inferenceBinding).toMatchObject({ profileId: subscriptionId, source: "user" });
-      await fixture.invoke("cron.update", {
-        id: created.id,
-        patch: {
-          payload: { kind: "agentTurn", model: "synthetic-alias" },
-        },
-      });
+      await updateModel(fixture, created.id, "synthetic-alias");
       expect((await fixture.reload()).inferenceBinding).toEqual(adopted.inferenceBinding);
     });
   });
@@ -302,28 +318,18 @@ describe("cron handler inference binding persistence", () => {
     async ({ profileId, other, requirement }) => {
       await withFixture(async (fixture) => {
         await fixture.setCreator(profileId);
-        const client = createCronCallerClient("main", undefined, sessionKey);
+        const client = creatorClient();
         await fixture.invoke("cron.add", createParams(), client);
         const created = await fixture.reload();
         expect(created.inferenceBinding).toEqual({
           version: 1,
-          provider: "openai",
-          profileId,
+          ...binding(profileId, "auto", requirement),
           authorizationId: expect.stringMatching(/^[a-f0-9]{64}$/),
-          authRequirement: requirement,
-          source: "auto",
         });
         const originalBinding = created.inferenceBinding;
         await fixture.changeDefaults(other);
         await fixture.setCreator(other);
-        await fixture.invoke(
-          "cron.update",
-          {
-            id: created.id,
-            patch: { payload: { kind: "agentTurn", model: "openai/gpt-4o" } },
-          },
-          client,
-        );
+        await updateModel(fixture, created.id, "openai/gpt-4o", client);
         const preserved = await fixture.reload();
         expect(preserved.payload).toMatchObject({ model: "openai/gpt-4o" });
         expect(preserved.inferenceBinding).toEqual(originalBinding);
@@ -333,22 +339,12 @@ describe("cron handler inference binding persistence", () => {
           includeDeliveryPreviews: false,
         });
 
-        await fixture.invoke(
-          "cron.update",
-          {
-            id: created.id,
-            patch: { payload: { kind: "agentTurn", model: "openai/gpt-4o@" + other } },
-          },
-          client,
-        );
+        await updateModel(fixture, created.id, "openai/gpt-4o@" + other, client);
         const adopted = await fixture.reload();
         expect(adopted.inferenceBinding).toEqual({
           version: 1,
-          provider: "openai",
-          profileId: other,
+          ...binding(other, "user", requirement === "api-key" ? "subscription" : "api-key"),
           authorizationId: expect.stringMatching(/^[a-f0-9]{64}$/),
-          authRequirement: requirement === "api-key" ? "subscription" : "api-key",
-          source: "user",
         });
         expect(adopted.inferenceBinding?.authorizationId).not.toBe(
           originalBinding?.authorizationId,
@@ -366,18 +362,9 @@ describe("cron handler inference binding persistence", () => {
       await withFixture(async (fixture) => {
         await fixture.setCreator(creator);
         fixture.setDefaultProfile(profileId);
-        await fixture.invoke(
-          "cron.add",
-          createParams(),
-          createCronCallerClient("main", undefined, sessionKey),
-        );
+        await addForCreator(fixture);
         const created = await fixture.reload();
-        expect(created.inferenceBinding).toMatchObject({
-          provider: "openai",
-          profileId,
-          authRequirement: requirement,
-          source: "user",
-        });
+        expect(created.inferenceBinding).toMatchObject(binding(profileId, "user", requirement));
       });
     },
   );
@@ -392,19 +379,16 @@ describe("cron handler inference binding persistence", () => {
       await withFixture(async (fixture) => {
         await fixture.setCreator(platformId);
         fixture.setScheduledProfile(subscriptionId, scope, allowed);
-        await fixture.invoke(
-          "cron.add",
-          createParams(),
-          createCronCallerClient("main", undefined, sessionKey),
-        );
+        await addForCreator(fixture);
         const created = await fixture.reload();
         expect(created.payload).not.toHaveProperty("model");
-        expect(created.inferenceBinding).toMatchObject({
-          provider: "openai",
-          profileId: allowed ? subscriptionId : platformId,
-          authRequirement: allowed ? "subscription" : "api-key",
-          source: allowed ? "user" : "auto",
-        });
+        expect(created.inferenceBinding).toMatchObject(
+          binding(
+            allowed ? subscriptionId : platformId,
+            allowed ? "user" : "auto",
+            allowed ? "subscription" : "api-key",
+          ),
+        );
       });
     },
   );
@@ -431,12 +415,13 @@ describe("cron handler inference binding persistence", () => {
         );
         const created = await fixture.reload();
         expect(created.payload).not.toHaveProperty("model");
-        expect(created.inferenceBinding).toMatchObject({
-          provider: "openai",
-          profileId: isGmailHook ? subscriptionId : platformId,
-          authRequirement: isGmailHook ? "subscription" : "api-key",
-          source: isGmailHook ? "user" : "auto",
-        });
+        expect(created.inferenceBinding).toMatchObject(
+          binding(
+            isGmailHook ? subscriptionId : platformId,
+            isGmailHook ? "user" : "auto",
+            isGmailHook ? "subscription" : "api-key",
+          ),
+        );
       });
     },
   );
@@ -444,19 +429,10 @@ describe("cron handler inference binding persistence", () => {
   it("captures the effective job default instead of an unrelated creator provider", async () => {
     await withFixture(async (fixture) => {
       await fixture.setCreator("anthropic:temporary", "anthropic");
-      await fixture.invoke(
-        "cron.add",
-        createParams(),
-        createCronCallerClient("main", undefined, sessionKey),
-      );
+      await addForCreator(fixture);
       const created = await fixture.reload();
       expect(created.payload).not.toHaveProperty("model");
-      expect(created.inferenceBinding).toMatchObject({
-        provider: "openai",
-        profileId: platformId,
-        authRequirement: "api-key",
-        source: "auto",
-      });
+      expect(created.inferenceBinding).toMatchObject(binding(platformId, "auto", "api-key"));
     });
   });
 
@@ -509,46 +485,30 @@ describe("cron handler inference binding persistence", () => {
   it("replaces a host binding when a native creator adopts the job", async () => {
     await withFixture(async (fixture) => {
       await fixture.setCreator(platformId);
-      const client = createCronCallerClient("main", undefined, sessionKey);
+      const client = creatorClient();
       await fixture.invoke("cron.add", createParams(), client);
       const created = await fixture.reload();
       expect(created.inferenceBinding).toMatchObject({ profileId: platformId });
-      const authority: CronRuntimeAuthority = {
-        version: 1,
-        runtimeId: "synthetic-native",
-        namespace: "synthetic.inference",
-        payload: { account: "synthetic-native-account" },
-      };
-      const identity = client.internal!.agentRuntimeIdentity!;
-      const scope = createCronCreatorAuthorityRunScope(identity.operationalRunInstance.runId);
-      identity.cronToolsAllowCapture = "final-executable-surface";
-      identity.cronCreatorAuthorityGrant = mintCronCreatorAuthorityGrant(
-        scope,
-        undefined,
-        authority,
-      );
-      try {
-        await fixture.invoke(
-          "cron.update",
-          {
-            id: created.id,
-            patch: {
-              payload: {
-                kind: "agentTurn",
-                message: "Adopt with native inference",
-                model: "openai/gpt-4o@openai:missing-native-only",
-                toolsAllow: [],
-              },
+      const authority = nativeAuthority;
+      using _ = captureAuthority(client, authority);
+      await fixture.invoke(
+        "cron.update",
+        {
+          id: created.id,
+          patch: {
+            payload: {
+              kind: "agentTurn",
+              message: "Adopt with native inference",
+              model: "openai/gpt-4o@openai:missing-native-only",
+              toolsAllow: [],
             },
           },
-          client,
-        );
-        const adopted = await fixture.reload();
-        expect(adopted.runtimeAuthority).toEqual(authority);
-        expect(adopted.inferenceBinding).toBeUndefined();
-      } finally {
-        revokeCronCreatorAuthorityRunScope(scope);
-      }
+        },
+        client,
+      );
+      const adopted = await fixture.reload();
+      expect(adopted.runtimeAuthority).toEqual(authority);
+      expect(adopted.inferenceBinding).toBeUndefined();
     });
   });
 
@@ -557,52 +517,31 @@ describe("cron handler inference binding persistence", () => {
     async (hasPayload) => {
       await withFixture(async (fixture) => {
         await fixture.setCreator(platformId);
-        const authority: CronRuntimeAuthority | undefined = hasPayload
-          ? {
-              version: 1,
-              runtimeId: "synthetic-native",
-              namespace: "synthetic.inference",
-              payload: { account: "synthetic-native-account" },
-            }
-          : undefined;
-        const client = createCronCallerClient("main", undefined, sessionKey);
-        const identity = client.internal!.agentRuntimeIdentity!;
-        const scope = createCronCreatorAuthorityRunScope(identity.operationalRunInstance.runId);
-        identity.cronToolsAllowCapture = "final-executable-surface";
-        identity.cronCreatorAuthorityGrant = mintCronCreatorAuthorityGrant(
-          scope,
-          undefined,
-          authority,
-        );
-        try {
-          await fixture.invoke("cron.add", createParams(), client);
-          const created = await fixture.reload();
-          expect(created.runtimeAuthority).toEqual(authority);
-          if (hasPayload) {
-            expect(created.inferenceBinding).toBeUndefined();
-            // Existing native ownership must also win over later explicit host-account edits.
-            await fixture.invoke("cron.update", {
-              id: created.id,
-              patch: { payload: { kind: "agentTurn", model: "openai/gpt-4o@" + subscriptionId } },
-            });
-            const updated = await fixture.reload();
-            expect(updated.runtimeAuthority).toEqual(authority);
-            expect(updated.inferenceBinding).toBeUndefined();
-          } else {
-            expect(created.inferenceBinding).toMatchObject({
-              profileId: platformId,
-              authRequirement: "api-key",
-              source: "auto",
-            });
-            await fixture.changeDefaults(subscriptionId);
-            expect(await fixture.resolveAuth(created.inferenceBinding!)).toMatchObject({
-              profileId: platformId,
-              mode: "api-key",
-              apiKey: "synthetic-platform-key",
-            });
-          }
-        } finally {
-          revokeCronCreatorAuthorityRunScope(scope);
+        const authority = hasPayload ? nativeAuthority : undefined;
+        const client = creatorClient();
+        using _ = captureAuthority(client, authority);
+        await fixture.invoke("cron.add", createParams(), client);
+        const created = await fixture.reload();
+        expect(created.runtimeAuthority).toEqual(authority);
+        if (hasPayload) {
+          expect(created.inferenceBinding).toBeUndefined();
+          // Existing native ownership must also win over later explicit host-account edits.
+          await updateModel(fixture, created.id, "openai/gpt-4o@" + subscriptionId);
+          const updated = await fixture.reload();
+          expect(updated.runtimeAuthority).toEqual(authority);
+          expect(updated.inferenceBinding).toBeUndefined();
+        } else {
+          expect(created.inferenceBinding).toMatchObject({
+            profileId: platformId,
+            authRequirement: "api-key",
+            source: "auto",
+          });
+          await fixture.changeDefaults(subscriptionId);
+          expect(await fixture.resolveAuth(created.inferenceBinding!)).toMatchObject({
+            profileId: platformId,
+            mode: "api-key",
+            apiKey: "synthetic-platform-key",
+          });
         }
       });
     },
