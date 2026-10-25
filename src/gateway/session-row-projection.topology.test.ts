@@ -313,7 +313,7 @@ it("admits a committed update without host SQL while a marker awaits prepared me
     const handler = createTranscriptUpdateBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
-      sessionMessageSubscribers: { get: () => new Set<string>() },
+      sessionMessageSubscribers: { get: () => new Set<string>(), getNarration: () => new Set() },
       getSessionRowProjection: () => projection,
     });
     const marker = handler({
@@ -425,7 +425,7 @@ it.for([
       const params = {
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
-        sessionMessageSubscribers: { get: () => new Set<string>() },
+        sessionMessageSubscribers: { get: () => new Set<string>(), getNarration: () => new Set() },
         getSessionRowProjection: () => projection,
       };
       const pending =

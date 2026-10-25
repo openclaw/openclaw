@@ -206,7 +206,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     const handler = createTranscriptUpdateBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => broadConnIds },
-      sessionMessageSubscribers: { get: getSessionMessageSubscribers },
+      sessionMessageSubscribers: {
+        get: getSessionMessageSubscribers,
+        getNarration: () => new Set(),
+      },
     });
 
     await handler({
@@ -481,7 +484,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     const handler = createTranscriptUpdateBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set<string>() },
-      sessionMessageSubscribers: { get: getSessionMessageSubscribers },
+      sessionMessageSubscribers: {
+        get: getSessionMessageSubscribers,
+        getNarration: () => new Set(),
+      },
     });
 
     await handler({
@@ -589,7 +595,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     const handler = createTranscriptUpdateBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set() },
-      sessionMessageSubscribers: { get: () => new Set() },
+      sessionMessageSubscribers: { get: () => new Set(), getNarration: () => new Set() },
     });
     projectChatDisplayMessageMock.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
 

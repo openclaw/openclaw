@@ -77,7 +77,7 @@ describe("chat.startup short references", () => {
           getSessionRowProjection: () => getSessionRowProjection(context),
           broadcastToConnIds,
           sessionEventSubscribers: subscribers,
-          sessionMessageSubscribers: { get: () => new Set() },
+          sessionMessageSubscribers: { get: () => new Set(), getNarration: () => new Set() },
         });
         const lateMessage = { role: "assistant", content: "Arrived during startup", timestamp: 2 };
         const readChatStartupProjection = vi.fn(async () => {

@@ -214,6 +214,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
       GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS,
       GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
+      GATEWAY_CLIENT_CAPS.NARRATION_MESSAGE_BODIES_OPTIONAL,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
       GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS,
@@ -240,6 +241,9 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS);
     expect(connectFrame.params.caps).not.toContain(
       GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
+    );
+    expect(connectFrame.params.caps).not.toContain(
+      GATEWAY_CLIENT_CAPS.NARRATION_MESSAGE_BODIES_OPTIONAL,
     );
     expect(connectFrame.params).not.toHaveProperty("includeSessionMessageBodies");
     expect(connectFrame.params.client.id).toBe("openclaw-macos");

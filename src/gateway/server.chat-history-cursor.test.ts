@@ -229,7 +229,10 @@ describe("chat.history cursor catch-up", () => {
       getSessionRowProjection: () => getSessionRowProjection(context),
       broadcastToConnIds: broadcast,
       sessionEventSubscribers: { getAll: () => new Set<string>() },
-      sessionMessageSubscribers: { get: () => new Set(["subscriber"]) },
+      sessionMessageSubscribers: {
+        get: () => new Set(["subscriber"]),
+        getNarration: () => new Set(),
+      },
     });
     const replay = (envelope: Envelope) => {
       projection = reduceSessionProjection(projection, {

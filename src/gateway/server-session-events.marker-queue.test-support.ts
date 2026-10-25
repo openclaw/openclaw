@@ -107,7 +107,7 @@ export function registerTranscriptMarkerQueueTests() {
     const handler = createTranscriptUpdateBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
-      sessionMessageSubscribers: { get: () => new Set<string>() },
+      sessionMessageSubscribers: { get: () => new Set<string>(), getNarration: () => new Set() },
       getSessionRowProjection: () => projection,
     });
     const tasks: ReturnType<typeof handler>[] = [];

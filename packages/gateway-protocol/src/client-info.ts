@@ -96,6 +96,7 @@ export const GATEWAY_CLIENT_CAPS = {
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
   MODEL_SELECTION_POLICY: "model-selection-policy",
   MODEL_WAIT_STATUS: "model-wait-status",
+  NARRATION_MESSAGE_BODIES_OPTIONAL: "narration-message-bodies-optional",
   RUN_TOOL_BINDINGS: "run-tool-bindings",
   ROSTER_MESSAGE_BODIES_OPTIONAL: "roster-message-bodies-optional",
   SESSION_SCOPED_EVENTS: "session-scoped-events",

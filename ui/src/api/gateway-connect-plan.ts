@@ -242,7 +242,12 @@ export async function buildBrowserGatewayConnectPlan({
           "session-scoped-events",
           "presence-deltas",
           ...(!nativeAuth
-            ? ["session-row-deltas", "session-event-field-refs", "roster-message-bodies-optional"]
+            ? [
+                "session-row-deltas",
+                "session-event-field-refs",
+                "roster-message-bodies-optional",
+                "narration-message-bodies-optional",
+              ]
             : []),
           "inline-widgets",
           "model-selection-policy",
