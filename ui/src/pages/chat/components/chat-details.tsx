@@ -133,7 +133,6 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const outputsDemand = createMemo(() =>
     desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
   );
-  // Load on first presentation, then retain disclosure state while closed.
   // Automatic content follows transcript paint; explicit opens bypass that wait.
   // After first mount, retain disclosure state while closed or reconnecting.
   const [sessionOpened] = createSignal<boolean>(

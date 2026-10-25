@@ -531,8 +531,13 @@ describe("SwarmRosterHydrator", () => {
     const f = fixture({ parent, list: () => children.promise });
     await f.start();
     expect(f.hydrator.rows).toEqual([parent]);
+    const settled = vi.fn(() => f.hydrator.childrenSettled);
+    onTestFinished(f.hydrator.subscribe(settled));
+    expect(f.hydrator.childrenSettled).toBe(false);
     children.reject(new Error("Child details temporarily unavailable"));
     await tick();
+    expect(settled).toHaveLastReturnedWith(true);
+    expect(f.hydrator.childrenRead).toBe(false);
     expect(f.hydrator.rows).toEqual([parent]);
   });
   it.each(["missing", "denied"])(

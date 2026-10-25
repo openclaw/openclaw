@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, createStore } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, createStore } from "solid-js";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
@@ -10,7 +10,6 @@ import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -76,21 +75,16 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
         props.props?.currentSessionId,
       ]);
     const identity = createMemo(readIdentity);
-    const readNavigationIdentity = () =>
-      JSON.stringify([readIdentity(), props.props?.selectedSession?.sessionId]);
-    createScrollPosition(() => {
-      const owner = processes();
-      return {
-        retain: props.scrollport
-          ? {
-              identity: [identity()],
-              target: props.scrollport,
-              presented: props.presented,
-              ready: isProcessesPresentationReady(owner, gateway?.read().snapshot),
-            }
-          : undefined,
-      };
-    });
+    createScrollPosition(() => ({
+      retain: props.scrollport
+        ? {
+            identity: [identity()],
+            target: props.scrollport,
+            presented: props.presented,
+            ready: isProcessesPresentationReady(processes(), gateway?.read().snapshot),
+          }
+        : undefined,
+    }));
     return (
       <Show when={identity()} keyed>
         {(_identity) => {
@@ -98,24 +92,17 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const [sectionChoices, setSectionChoices] = createStore<
             Partial<Record<ChatDetailsDesktopSectionId, boolean>>
           >({});
-          createLayoutMeasurement(
-            () =>
-              props.props?.subagentSessionsHydrated &&
-              (!props.props?.onOpenProcesses ||
-                isProcessesPresentationReady(processes(), gateway?.read().snapshot)),
-            (hydrated) => {
-              const layout = props.props?.widgetLayout;
-              const key = `details:v1:${props.scrollport?.clientWidth}:${getComputedStyle(host).font}:${document.documentElement.style.getPropertyValue("--control-ui-text-scale")}:${JSON.stringify([props.props?.desktopDisclosures?.expanded, sectionChoices])}`;
-              const height = host.firstElementChild?.getBoundingClientRect().height ?? 0;
-              return () => {
-                // Hold Progress in its saved slot until preceding live sections are known.
-                host.style.minHeight = hydrated ? "" : `${layout?.read(key) ?? 0}px`;
-                if (hydrated) {
-                  layout?.write(key, height);
-                }
-              };
-            },
-            { targets: () => (props.desktop ? [host] : []), changeTiming: "sync" },
+          // Hold only the initial reveal; live refreshes keep usable Details visible.
+          const [revealed] = createSignal(
+            (previous = false) =>
+              previous ||
+              (props.props?.subagentSessionsSettled !== false &&
+                (!props.props?.onOpenProcesses ||
+                  isProcessesPresentationReady(processes(), gateway?.read().snapshot))),
+          );
+          createEffect(
+            () => [props.scrollport, revealed()] as const,
+            ([body, ready]) => body?.style.setProperty("visibility", ready ? "" : "hidden"),
           );
           const desktopPresentation = () =>
             props.desktop ? props.props?.desktopPresentation : undefined;
@@ -210,7 +197,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             if (!snapshot) {
               return null;
             }
-            const navigationIdentity = readNavigationIdentity();
+            const navigationIdentity = `${readIdentity()}:${props.props?.selectedSession?.sessionId}`;
             const current = () =>
               host.isConnected && props.presented && props.props?.outputs === snapshot;
             return {
@@ -225,7 +212,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 if (
                   host.isConnected &&
                   props.presented &&
-                  readNavigationIdentity() === navigationIdentity
+                  `${readIdentity()}:${props.props?.selectedSession?.sessionId}` ===
+                    navigationIdentity
                 ) {
                   props.props?.outputs?.onViewAll();
                 }

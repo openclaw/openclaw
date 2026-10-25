@@ -24,6 +24,8 @@ export type SubagentRoster = {
    * take ancestry from the broad list, which outlives the child-link retention.
    */
   subagentSessionsRead?: boolean;
+  /** Initial acquisition completed or failed; absent when no roster read is acquired. */
+  subagentSessionsSettled?: boolean;
 };
 
 /** What a launch row needs to show its subagent's session and open it. */

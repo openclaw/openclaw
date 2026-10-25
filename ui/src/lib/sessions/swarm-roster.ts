@@ -97,6 +97,9 @@ export class SwarmRosterHydrator {
    * re-read keeps it, so it marks when seeded ancestry has been replaced.
    */
   childrenRead = false;
+  get childrenSettled(): boolean {
+    return this.childrenRead || this.retries.children.attempts > 0;
+  }
   private key = "";
   private generation = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -283,6 +286,9 @@ export class SwarmRosterHydrator {
     }
     const generation = this.generation;
     const delay = Math.min(30_000, 1_000 * 2 ** Math.min(retry.attempts++, 5));
+    if (owner === "children") {
+      this.publish();
+    }
     retry.timer = setTimeout(() => {
       retry.timer = null;
       if (owner === "parent") {

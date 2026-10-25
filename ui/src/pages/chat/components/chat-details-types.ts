@@ -85,11 +85,11 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "subagentParentKey"
     | "subagentSessionsHydrated"
     | "subagentSessionsRead"
+    | "subagentSessionsSettled"
     | "onOpenSubagent"
     | "onOpenSubagents"
     | "personActivity"
     | "onScrollPortRef"
-    | "widgetLayout"
   > & {
     desktopPresentation?: ChatDetailsDesktopPresentation;
     desktopDisclosures?: ChatDetailsDesktopDisclosures;

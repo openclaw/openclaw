@@ -70,7 +70,12 @@ it("retains cached Details while its descriptor arrives and replaces a new incar
   const view = mountDetails({
     selectedSession: undefined,
     detailsWorkspace: { root: null, label: null, branch: "feature/cached" },
+    onOpenSubagents() {},
   });
+  const body = view.container.querySelector<HTMLElement>(".chat-details-desktop-body")!;
+  expect(body.style.visibility).not.toBe("hidden");
+  view.update({ subagentSessionsSettled: false });
+  expect(body.style.visibility).not.toBe("hidden");
   const section = view.container.querySelector(".chat-details-session");
   const environment = view.group("environment");
   expect(environment).not.toBeNull();
