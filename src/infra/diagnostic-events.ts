@@ -56,6 +56,7 @@ import {
   CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY,
   type CoreSemanticRunProgressProvenance,
 } from "./diagnostic-semantic-run-progress-provenance.js";
+import type { DiagnosticToolExecutionErrorFields } from "./diagnostic-tool-error-types.js";
 import {
   consumeToolExecutionLivenessDiagnosticEvent,
   TOOL_EXECUTION_LIVENESS_METADATA_KEY,
@@ -77,6 +78,7 @@ export { isInternalDiagnosticEventMetadata } from "./diagnostic-event-snapshot.j
 export type { DiagnosticEventMetadata } from "./diagnostic-event-snapshot.js";
 
 export type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
+export type { DiagnosticToolTerminalReason } from "./diagnostic-tool-error-types.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
@@ -469,7 +471,6 @@ export type DiagnosticToolParamsSummary =
   | { kind: "number" | "boolean" | "null" | "undefined" | "other" };
 
 export type DiagnosticToolSource = "channel" | "core" | "mcp" | "plugin";
-export type DiagnosticToolTerminalReason = "failed" | "cancelled" | "timed_out";
 
 type DiagnosticToolExecutionBaseEvent = DiagnosticSessionEvent & {
   runId?: string;
@@ -494,13 +495,8 @@ type DiagnosticToolExecutionCompletedEvent = DiagnosticToolExecutionBaseEvent & 
   durationMs: number;
 };
 
-type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent & {
-  type: "tool.execution.error";
-  durationMs: number;
-  errorCategory: string;
-  errorCode?: string;
-  terminalReason?: DiagnosticToolTerminalReason;
-};
+type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent &
+  DiagnosticToolExecutionErrorFields;
 
 type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEvent & {
   type: "tool.execution.blocked";
