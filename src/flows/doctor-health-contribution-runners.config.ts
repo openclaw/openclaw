@@ -499,6 +499,20 @@ export async function runWriteConfigHealth(
       path: committed.path,
       hash: committed.persistedHash,
     };
+    if (
+      !ctx.configResult.sourceLastTouchedVersion &&
+      !resolveUpdateRehearsalRoot(ctx.env ?? process.env)
+    ) {
+      const { promoteConfigSnapshotToLastKnownGood } = await import("../config/config.js");
+      try {
+        await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot());
+      } catch (error) {
+        note(
+          `Config last-known-good refresh failed: ${formatErrorMessage(error)}`,
+          "Doctor warnings",
+        );
+      }
+    }
     // The atomic write committed: repair panels queued by the config flow are now
     // true statements about disk state, so print them exactly once.
     const pendingChangePanels = ctx.configResult.pendingChangePanels;

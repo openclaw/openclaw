@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
@@ -72,6 +72,58 @@ function withHome(
 const withQueueDefaultHome = useDoctorConfigPreflightHome();
 
 afterEach(closeOpenClawStateDatabaseForTest);
+
+it(
+  "keeps a valid Kubernetes reseed without metadata and refreshes recovery after Doctor writes",
+  withHome(async (home) => {
+    const configPath = await writeConfig(home, { gateway: { mode: "local", port: 19091 } });
+    await writeInitial(configPath);
+    const baseline = await readConfigFileSnapshot();
+    expect(await promoteConfigSnapshotToLastKnownGood(baseline)).toBe(true);
+    for (const suffix of [".bak", ".bak.1"]) {
+      await fs.copyFile(configPath, `${configPath}${suffix}`);
+    }
+    const { meta: _meta, ...reseeded } = await readJson(configPath);
+    reseeded.gateway.port = 19092;
+    const reseededRaw = JSON.stringify(reseeded, null, 2);
+    await fs.unlink(configPath);
+    await fs.writeFile(configPath, reseededRaw);
+
+    await using ctx = await prepareDoctorContext(configPath);
+    expect(ctx.cfg.gateway?.port).toBe(19092);
+    expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
+      "Kept valid config without meta",
+    );
+    await runInitialConfigWriteHealth(ctx);
+
+    const saved = await readJson(configPath);
+    expect(saved.gateway.port).toBe(19092);
+    expect(saved.meta.lastTouchedVersion).toEqual(expect.any(String));
+    expect(await readText(`${configPath}.last-good`)).toBe(await readText(configPath));
+    expect(await fs.readdir(path.dirname(configPath))).not.toEqual(
+      expect.arrayContaining([expect.stringContaining(".clobbered.")]),
+    );
+
+    const invalidRaw = '{ "gateway": { "mode": 123 } }';
+    await fs.writeFile(configPath, invalidRaw);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await using recovered = await prepareDoctorContext(configPath);
+      expect(recovered.cfg.gateway?.port).toBe(19092);
+      const clobbered = (await fs.readdir(path.dirname(configPath))).filter((name) =>
+        name.includes(".clobbered."),
+      );
+      expect(clobbered).toHaveLength(1);
+      const originalPath = path.join(path.dirname(configPath), clobbered[0]!);
+      expect(await readText(originalPath)).toBe(invalidRaw);
+      const warnings = warn.mock.calls.flat().join("\n");
+      expect(warnings).toContain(originalPath);
+      expect(warnings).toContain("to undo, stop the Gateway and copy it back");
+    } finally {
+      warn.mockRestore();
+    }
+  }),
+);
 
 it.each([
   { included: true, otherRepair: false, value: undefined },
