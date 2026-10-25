@@ -21,7 +21,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCronAutomationPrompt } from "./isolated-agent/run-automation-context.js";
 import { createCronMutationCompletion } from "./mutation-completion.js";
@@ -374,6 +373,7 @@ async function createFixture(jobIds = ["job-1"]) {
 
 describe("cron job scratch store", () => {
   it("reads current job and missing-heartbeat scratch once without read transactions", async () => {
+    const { requireNativeSqliteDatabase } = await import("../test-utils/native-sqlite.js");
     const fixture = await createFixture();
     const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(fixture.options).db);
     const tracker = trackSqliteStatementExecutions(db, ["reads"], (sql) =>
