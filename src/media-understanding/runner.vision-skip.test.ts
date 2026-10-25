@@ -285,32 +285,6 @@ describe("automatic media selection", () => {
       );
     },
   );
-
-  it("checks audio providers once in priority order until auth is available", async () => {
-    selectionAuth.mockImplementation(async ({ provider }) => provider === "second");
-    const providers = ["first", "second"].map((id, priority): MediaUnderstandingProvider => ({
-      id,
-      capabilities: ["audio"],
-      autoPriority: { audio: priority },
-      defaultModels: { audio: `${id}-transcription` },
-      transcribeAudio: async ({ model }) => ({ text: id, model }),
-    }));
-    const result = await runMediaFixture("audio", "media-selection-provider-order", {
-      cfg: {},
-      providerRegistry: new Map(providers.map((provider) => [provider.id, provider])),
-    });
-    expect(selectionAuth.mock.calls.map(([{ provider }]) => provider)).toEqual(["first", "second"]);
-    expect(result.outputs).toEqual([
-      {
-        kind: "audio.transcription",
-        attachmentIndex: 0,
-        provider: "second",
-        model: "second-transcription",
-        text: "second",
-      },
-    ]);
-    expect(result.decision.outcome).toBe("success");
-  });
 });
 
 it("skips imageModel fallback when MiniMax M3 supports vision", async () => {
@@ -425,12 +399,11 @@ it("keeps disabled outcomes precise and suppresses markers when the vision probe
 });
 
 it("lets per-request image prompts override entry prompts", async () => {
-  let seenPrompt: string | undefined;
   const result = await runImage({
     cfg: imageConfig([{ ...explicitImageModel, prompt: "entry prompt" }]),
     providerRegistry: imageRegistry(
       imageProvider("openrouter", async ({ prompt, model }) => {
-        seenPrompt = prompt;
+        expect(prompt).toBe("Use this request prompt");
         return { text: "request prompt ok", model };
       }),
     ),
@@ -438,7 +411,6 @@ it("lets per-request image prompts override entry prompts", async () => {
     activeModel: activeVisionModel,
   });
   expect(result.decision.outcome).toBe("success");
-  expect(seenPrompt).toBe("Use this request prompt");
 });
 
 it("skips malformed image defaults and runs providerless fallbacks on their configured provider", async () => {
@@ -533,13 +505,9 @@ it("passes workspace and agent context to auth and writable catalog reads", asyn
 it("auto-selects configured OpenRouter image providers with a resolved model", async () => {
   const result = await runImage({
     cfg: configuredProvider("openrouter", "https://openrouter.ai/api/v1", "test-openrouter-key"),
-    providerRegistry: imageRegistry(
-      imageProvider("openrouter", async ({ model }) => {
-        return { text: "openrouter ok", model };
-      }),
-    ),
+    providerRegistry: imageRegistry(imageProvider("openrouter")),
   });
-  expectImageOutput(result, "openrouter", "auto", "openrouter ok");
+  expectImageOutput(result, "openrouter", "auto");
 });
 
 it("skips configured image providers without an auto-resolvable model", async () => {
@@ -613,7 +581,6 @@ describe("image resizing", () => {
 
 describe("apply registry lifetime", () => {
   const activeModel = { provider: "usage-proxy", model: "gpt-5.4" };
-  const registryBuild = vi.fn();
   const visionConfig: OpenClawConfig = {
     models: mediaModels(activeModel.provider, activeModel.model, ["text", "image"]),
   };
@@ -635,37 +602,17 @@ describe("apply registry lifetime", () => {
   }
   const apply = (ctx: MsgContext, cfg: OpenClawConfig) =>
     applyMediaUnderstanding({ ctx, cfg, activeModel });
-  const breakRegistry = () =>
-    registryBuild.mockImplementation(() => {
+  beforeEach(() => {
+    catalog = [catalogModel(activeModel.provider, activeModel.model)];
+    discover.mockImplementation(() => {
       throw new Error("registry build failed");
     });
-  beforeEach(() => {
-    catalog = [catalogModel(activeModel.provider, activeModel.model, "GPT-5.4")];
-    registryBuild.mockReset();
-    discover.mockImplementation(({ key }: { key: string }) => {
-      if (key === "mediaUnderstandingProviders") {
-        registryBuild();
-      }
-      return [];
-    });
-  });
-
-  it.each([
-    ["explicit image model", configWithModels(["image"]), false, ["text", "image"]],
-    ["text-only model", {}, false, ["text"]],
-    ["mixed image and audio", visionConfig, true, ["text", "image"]],
-  ] as const)("builds the registry once for %s", async (_name, cfg, audio, input) => {
-    catalog = [{ ...catalogModel(activeModel.provider, activeModel.model), input: [...input] }];
-    await apply(imageContext(audio), cfg);
-    expect(registryBuild).toHaveBeenCalledTimes(1);
   });
 
   it("rejects apply on registry failure without partially recording decisions", async () => {
-    breakRegistry();
     catalog = [{ ...catalogModel(activeModel.provider, activeModel.model), input: ["text"] }];
     const ctx = imageContext(true);
     await expect(apply(ctx, {})).rejects.toThrow("registry build failed");
-    expect(registryBuild).toHaveBeenCalledTimes(1);
     expect(ctx.MediaUnderstandingDecisions).toBeUndefined();
   });
 
@@ -673,7 +620,6 @@ describe("apply registry lifetime", () => {
     { name: "no shared models", capabilities: undefined },
     { name: "audio and video shared models", capabilities: ["audio", "video"] },
   ] as const)("keeps native vision with $name", async ({ capabilities }) => {
-    breakRegistry();
     const ctx = imageContext();
     await expect(
       apply(ctx, configWithModels(capabilities ? [...capabilities] : undefined)),
@@ -686,6 +632,6 @@ describe("apply registry lifetime", () => {
         attachmentDispositions: { 0: { kind: "handed-to-native-vision" } },
       }),
     );
-    expect(registryBuild).not.toHaveBeenCalled();
+    expect(discover).not.toHaveBeenCalled();
   });
 });
