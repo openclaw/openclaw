@@ -36,15 +36,8 @@ const fixture = vi.hoisted(() => ({
   search: vi.fn<MemorySearchManager["search"]>(),
   searchClose: vi.fn(async () => {}),
   status: vi.fn(),
-  bootstrap: vi.fn(),
-  recovery: vi.fn(),
   memory: vi.fn(async () => {}),
   matrix: vi.fn(async (): Promise<unknown[]> => []),
-  config: vi.fn(() => ({
-    channels: {
-      matrix: { homeserver: "https://matrix.example.org", userId: "@fixture:example.org" },
-    },
-  })),
 }));
 
 vi.mock("../plugins/memory-runtime.js", async (importOriginal) => ({
@@ -97,117 +90,78 @@ function registerSyntheticPlugin(api: OpenClawPluginApi) {
       }
     });
   };
-  for (const operation of ["preview", "apply", "rollback"]) {
-    registerOwnedMethod(`fixture.batch.${operation}.owner`, async (params) => ({
-      execution: await fixture.executeBatch(),
-      ownerId: params.expectedOwnerId,
-    }));
-  }
-  for (const [operation, mock] of [
-    ["status", fixture.status],
-    ["bootstrap", fixture.bootstrap],
-    ["recoveryKey", fixture.recovery],
-  ] as const) {
-    registerOwnedMethod(`fixture.verify.${operation}.owner`, async (params) => ({
-      result: await mock({ cfg: api.runtime.config.current(), accountId: params.accountId }),
+  registerOwnedMethod("fixture.batch.apply.owner", async (params) => ({
+    execution: await fixture.executeBatch(),
+    ownerId: params.expectedOwnerId,
+  }));
+  registerOwnedMethod("fixture.verify.status.owner", async (params) => ({
+    result: await fixture.status({
+      cfg: api.runtime.config.current(),
       accountId: params.accountId,
-    }));
-  }
+    }),
+    accountId: params.accountId,
+  }));
   api.registerCli(({ program }) => {
-    program
-      .command("memory <operation> [value]")
-      .allowUnknownOption()
-      .allowExcessArguments()
+    const memory = program.command("memory");
+    for (const command of ["index", "status"]) {
+      memory.command(command).action(() =>
+        runWithLocalStateOwner({
+          method: "fixture.offline",
+          target: "fixture stores",
+          params: {},
+          onForeignOwner: "refuse",
+          runLocal: fixture.memory,
+        }),
+      );
+    }
+    memory
+      .command("session-backfill")
       .option("--apply")
-      .option("--rollback")
-      .option("--rem")
-      .option("--archive-files <path>")
+      .option("--json")
+      .action(runSyntheticBatches);
+    memory
+      .command("search <query>")
       .option("--json")
       .option("--agent <id>")
       .option("--max-results <n>", "limit", Number)
       .option("--min-score <n>", "score", Number)
       .action(
-        async (
-          operation: string,
-          value: string | undefined,
-          opts: {
-            apply?: boolean;
-            rollback?: boolean;
-            rem?: boolean;
-            archiveFiles?: string;
-            agent?: string;
-            maxResults?: number;
-            minScore?: number;
-          },
-        ) => {
-          if (operation === "session-backfill") {
-            await runSyntheticBatches(opts);
-          } else if (operation === "search") {
-            const result = await runWithLocalStateOwner<MemoryCliSearchOutcome | undefined>({
-              method: "memory.search.owner",
-              target: "fixture search",
-              databaseEngine: "configured",
-              params: {
-                query: value,
-                ...(opts.agent === undefined ? {} : { agentId: opts.agent }),
-                ...(opts.maxResults === undefined ? {} : { maxResults: opts.maxResults }),
-                ...(opts.minScore === undefined ? {} : { minScore: opts.minScore }),
-              },
-              runLocal: async () => {
-                await fixture.memory();
-                return undefined;
-              },
-            });
-            if (result) {
-              if ("status" in result && result.status === "failed") {
-                const message = `memory search failed (${result.agentId}): ${result.error}`;
-                console.error(message);
-                process.exitCode = 1;
-                printJson({
-                  agentId: result.agentId,
-                  ok: false,
-                  error: { type: "cli_error", message },
-                });
-              } else {
-                printJson(result);
-              }
-            }
-          } else {
-            await runWithLocalStateOwner({
-              method: "fixture.offline",
-              target: "fixture stores",
-              params: {},
-              onForeignOwner: "refuse",
-              runLocal: fixture.memory,
-            });
+        async (query: string, opts: { agent?: string; maxResults?: number; minScore?: number }) => {
+          const result = await runWithLocalStateOwner<MemoryCliSearchOutcome | undefined>({
+            method: "memory.search.owner",
+            target: "fixture search",
+            databaseEngine: "configured",
+            params: {
+              query,
+              ...(opts.agent === undefined ? {} : { agentId: opts.agent }),
+              ...(opts.maxResults === undefined ? {} : { maxResults: opts.maxResults }),
+              ...(opts.minScore === undefined ? {} : { minScore: opts.minScore }),
+            },
+            runLocal: async () => {
+              await fixture.memory();
+              return undefined;
+            },
+          });
+          if (result) {
+            printJson(result);
           }
         },
       );
     program
       .command("matrix")
-      .command("verify <operation> [value]")
+      .command("verify <operation>")
       .option("--json")
       .option("--account <id>")
       .option("--include-recovery-key")
-      .action(async (operation: string, _value: string | undefined, opts: { account?: string }) => {
+      .action(async (_operation: string, opts: { account?: string }) => {
         try {
-          const routed = ["status", "bootstrap", "device"].includes(operation);
           const result = await runWithLocalStateOwner<{ result: unknown }>({
-            method: routed
-              ? `fixture.verify.${operation === "device" ? "recoveryKey" : operation}.owner`
-              : "fixture.offline",
+            method: "fixture.verify.status.owner",
             target: "fixture account",
             params: { accountId: opts.account },
-            ...(routed ? {} : { onForeignOwner: "refuse" as const }),
-            runLocal: async () => {
-              fixture.config();
-              return { result: await fixture.matrix() };
-            },
+            runLocal: async () => ({ result: await fixture.matrix() }),
           });
           printJson(result.result);
-          if (operation === "bootstrap" && !(result.result as { success: boolean }).success) {
-            process.exitCode = 1;
-          }
         } catch (error) {
           process.exitCode = 1;
           printJson({ error: String(error) });
@@ -220,13 +174,7 @@ function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-async function runSyntheticBatches(opts: {
-  apply?: boolean;
-  rollback?: boolean;
-  rem?: boolean;
-  archiveFiles?: string;
-}) {
-  const operation = opts.rollback ? "rollback" : opts.apply ? "apply" : "preview";
+async function runSyntheticBatches() {
   let operationOwnerId: string | undefined;
   const batches: ReturnType<typeof backfillExecution>["result"][] = [];
   for (;;) {
@@ -234,10 +182,9 @@ async function runSyntheticBatches(opts: {
       execution: ReturnType<typeof backfillExecution>;
       ownerId: string;
     } | null>({
-      method: `fixture.batch.${operation}.owner`,
+      method: "fixture.batch.apply.owner",
       target: "fixture batches",
       params: { cliResult: true, ...(operationOwnerId ? { operationOwnerId } : {}) },
-      ...(opts.rem || opts.archiveFiles ? { onForeignOwner: "refuse" as const } : {}),
       runLocal: async () => {
         if (operationOwnerId) {
           throw new Error("The selected Gateway is no longer running");
@@ -251,7 +198,7 @@ async function runSyntheticBatches(opts: {
     }
     operationOwnerId ??= reply.ownerId;
     batches.push(reply.execution.result);
-    if (!opts.apply || !reply.execution.continuation.hasMore) {
+    if (!reply.execution.continuation.hasMore) {
       break;
     }
   }
@@ -310,15 +257,7 @@ function backfillExecution(
 ) {
   return {
     result: {
-      agentId: "main",
-      workspaceDir: "/gateway/workspace",
-      applied: true,
-      rem: false,
-      days: [
-        { day: "2026-10-01", candidateCount: 4, topCandidates: ["one", "two", "three", "four"] },
-      ],
       candidateCount: 4,
-      stagedEntries: 3,
       writtenDiaryEntries: 1,
       replacedDiaryEntries: 2,
     },
@@ -356,7 +295,6 @@ beforeEach(() => {
   fixture.external = false;
   fixture.memory.mockClear();
   fixture.matrix.mockClear();
-  fixture.config.mockClear();
   fixture.callGateway.mockReset().mockImplementation(dispatchToGateway);
   fixture.executeBatch.mockReset().mockResolvedValue(backfillExecution());
   fixture.search.mockReset().mockResolvedValue([]);
@@ -370,8 +308,6 @@ beforeEach(() => {
     searchForCli,
   });
   fixture.status.mockReset();
-  fixture.bootstrap.mockReset();
-  fixture.recovery.mockReset();
   process.exitCode = 0;
 });
 
@@ -478,24 +414,21 @@ describe("synthetic plugin commands respect the local state owner", () => {
       await occupyState();
       const entered = createDeferred();
       const finish = createDeferred();
+      const blockUntilReleased =
+        <T>(result: T) =>
+        async () => {
+          entered.resolve();
+          await finish.promise;
+          return result;
+        };
       if (family === "memory") {
-        fixture.executeBatch.mockImplementationOnce(async () => {
-          entered.resolve();
-          await finish.promise;
-          return backfillExecution();
-        });
+        fixture.executeBatch.mockImplementationOnce(blockUntilReleased(backfillExecution()));
       } else if (family === "search") {
-        fixture.search.mockImplementationOnce(async () => {
-          entered.resolve();
-          await finish.promise;
-          return [];
-        });
+        fixture.search.mockImplementationOnce(blockUntilReleased([]));
       } else {
-        fixture.status.mockImplementationOnce(async () => {
-          entered.resolve();
-          await finish.promise;
-          return { recoveryKey: "synthetic-key-must-not-escape" };
-        });
+        fixture.status.mockImplementationOnce(
+          blockUntilReleased({ recoveryKey: "synthetic-key-must-not-escape" }),
+        );
       }
       const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
       const operation = runCli(
