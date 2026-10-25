@@ -37,11 +37,23 @@ function meta(key: string, fields: Record<string, unknown> = {}) {
 function sessions(rows: GatewaySessionRow[]) {
   return { sessions: rows, hasMore: false };
 }
+function encodeCursor(value: unknown) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
 function fixture(rows: GatewaySessionRow[] = [], handler?: RequestHandler) {
   const request = vi.fn(
     handler ?? (async (method) => (method === "sessions.list" ? sessions(rows) : { ok: true })),
   );
   return { ...createTranslatorScenario(request, { sessions: [] }), request };
+}
+function pagedFixture(rows: GatewaySessionRow[]) {
+  return fixture([], async (method, params) => {
+    if (method !== "sessions.list") {
+      return { ok: true };
+    }
+    const limit = typeof params?.limit === "number" ? params.limit : rows.length;
+    return { ...sessions(rows.slice(0, limit)), hasMore: limit < rows.length };
+  });
 }
 
 it.each([
@@ -169,14 +181,14 @@ it.each([
 it.each([
   { cursor: "not-base64-json", error: "Invalid ACP session list cursor." },
   {
-    cursor: Buffer.from(JSON.stringify({ v: 1, offset: 10_101 })).toString("base64url"),
+    cursor: encodeCursor({ v: 1, offset: 10_101 }),
     error: "Invalid ACP session list cursor offset.",
   },
   {
-    cursor: Buffer.from(JSON.stringify({ v: 2, offset: 0 })).toString("base64url"),
+    cursor: encodeCursor({ v: 2, offset: 0 }),
     error: "Unsupported ACP session list cursor.",
   },
-  { cursor: Buffer.from("[]").toString("base64url"), error: "Invalid ACP session list cursor." },
+  { cursor: encodeCursor([]), error: "Invalid ACP session list cursor." },
 ])(
   "rejects invalid session/list cursors before querying the Gateway: $cursor",
   async ({ cursor, error }) => {
@@ -191,24 +203,18 @@ it("accepts a canonical session/list cursor and rejects altered spellings", asyn
     row(`session-${index}`, { spawnedCwd: "/tmp/work" }),
   );
   const { agent, request } = fixture(rows);
-  const canonical = Buffer.from(JSON.stringify({ v: 1, offset: 25, cwd: "/tmp/work" })).toString(
-    "base64url",
-  );
+  const canonical = encodeCursor({ v: 1, offset: 25, cwd: "/tmp/work" });
   const page = await agent.listSessions({
     cwd: "/tmp/work",
     cursor: canonical,
     _meta: { limit: 2 },
   });
   expect(page.sessions.map((session) => session.sessionId)).toEqual(["session-25", "session-26"]);
-  expect(page.nextCursor).toBe(
-    Buffer.from(JSON.stringify({ v: 1, offset: 27, cwd: "/tmp/work" })).toString("base64url"),
-  );
+  expect(page.nextCursor).toBe(encodeCursor({ v: 1, offset: 27, cwd: "/tmp/work" }));
   request.mockClear();
-  const extraField = Buffer.from(
-    JSON.stringify({ v: 1, offset: 25, cwd: "/tmp/work", extra: true }),
-  ).toString("base64url");
-  for (const cursor of [`${canonical}$`, extraField]) {
-    await expect(agent.listSessions({ cwd: "/tmp/work", cursor })).rejects.toThrow(
+  const extraField = encodeCursor({ v: 1, offset: 25, cwd: "/tmp/work", extra: true });
+  for (const invalidCursor of [`${canonical}$`, extraField]) {
+    await expect(agent.listSessions({ cwd: "/tmp/work", cursor: invalidCursor })).rejects.toThrow(
       "Invalid ACP session list cursor.",
     );
   }
@@ -222,10 +228,7 @@ it.each([
   { metadata: { limit: -1 }, expected: 1 },
 ])("clamps session/list page metadata: $metadata", async ({ metadata, expected }) => {
   const rows = Array.from({ length: 101 }, (_, index) => row(`session-${index}`));
-  const { agent, request } = fixture([], async (_method, params) => {
-    const limit = typeof params?.limit === "number" ? params.limit : rows.length;
-    return { ...sessions(rows.slice(0, limit)), hasMore: limit < rows.length };
-  });
+  const { agent, request } = pagedFixture(rows);
   const result = await agent.listSessions({ _meta: metadata });
   expect(result.sessions.map((session) => session.sessionId)).toEqual(
     rows.slice(0, expected).map((session) => session.key),
@@ -238,8 +241,12 @@ it.each([
 
 it("bounds the Gateway fetch at the maximum accepted session/list offset", async () => {
   const { agent, request } = fixture([], async () => ({ ...sessions([]), hasMore: true }));
-  const cursor = Buffer.from(JSON.stringify({ v: 1, offset: 10_000 })).toString("base64url");
-  await expect(agent.listSessions({ cursor })).resolves.toEqual({ sessions: [], nextCursor: null });
+  await expect(
+    agent.listSessions({ cursor: encodeCursor({ v: 1, offset: 10_000 }) }),
+  ).resolves.toEqual({
+    sessions: [],
+    nextCursor: null,
+  });
   expect(request.mock.calls).toEqual([
     ["sessions.list", { limit: 10_101, includeDerivedTitles: true }],
   ]);
@@ -260,16 +267,7 @@ it("paginates cwd-filtered sessions with lineage, safe timestamps, and filter-bo
     row("a3", { spawnedWorkspaceDir: "/work/a" }),
     row("a4", { spawnedWorkspaceDir: "/work/a" }),
   ];
-  const { agent, request } = fixture([], async (method, params) => {
-    if (method !== "sessions.list") {
-      return { ok: true };
-    }
-    const limit = typeof params?.limit === "number" ? params.limit : rows.length;
-    return {
-      ...sessions(rows.slice(0, limit)),
-      hasMore: limit < rows.length,
-    };
-  });
+  const { agent, request } = pagedFixture(rows);
   const first = await agent.listSessions({ cwd: "/work/a", _meta: { limit: 2 } });
   const second = await agent.listSessions({
     cwd: "/work/a",

@@ -28,6 +28,16 @@ const nativeDatabase = (options: { path: string }) =>
   requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
 const expectValues = (db: ReturnType<typeof nativeDatabase>, query: string) =>
   expect(db.prepare(`SELECT ${query}`).all().flatMap(Object.values));
+function workerFixture(options: { path: string }) {
+  const database = openOpenClawStateDatabase(options);
+  const context: WorkerWriteOperationContext = {
+    open: () => database,
+    stateOptions: () => ({ path: options.path, env: process.env }),
+    write: (operation) => runOpenClawStateWriteTransaction(operation, options),
+    writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, options),
+  };
+  return { db: requireNativeSqliteDatabase(database.db), context };
+}
 async function fixture(
   dir: string,
   { warm = 0 }: { warm?: number } = {},
@@ -99,14 +109,7 @@ describe("ACP replay worker", () => {
     const { options, session, record } = await fixture(dir);
     await record("prior payload");
     await closeOpenClawStateDatabaseAsync();
-    const database = openOpenClawStateDatabase(options);
-    const db = requireNativeSqliteDatabase(database.db);
-    const context: WorkerWriteOperationContext = {
-      open: () => database,
-      stateOptions: () => ({ path: options.path, env: process.env }),
-      write: (operation) => runOpenClawStateWriteTransaction(operation, options),
-      writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, options),
-    };
+    const { db, context } = workerFixture(options);
     db.setAuthorizer((action, table, column) =>
       action === constants.SQLITE_READ && table === "acp_replay_events" && column === "update_json"
         ? constants.SQLITE_DENY
@@ -171,8 +174,7 @@ describe("ACP replay worker", () => {
     "carries byte-budget accounting across ordered partial-session eviction (understated=%s)",
     async (understated, { dir }) => {
       const options = { path: path.join(dir, "state.sqlite") };
-      const database = openOpenClawStateDatabase(options);
-      const db = requireNativeSqliteDatabase(database.db);
+      const { db, context } = workerFixture(options);
       const updateJson = JSON.stringify(update("x".repeat(64 * 1024)));
       runOpenClawStateWriteTransaction(() => {
         const insertSession = db.prepare(
@@ -196,12 +198,6 @@ describe("ACP replay worker", () => {
           ? "budgetRead"
           : null,
       );
-      const context: WorkerWriteOperationContext = {
-        open: () => database,
-        stateOptions: () => ({ path: options.path, env: process.env }),
-        write: (operation) => runOpenClawStateWriteTransaction(operation, options),
-        writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, options),
-      };
       try {
         acpReplayOperations["acpReplay.start"](
           { session: { ...defaultSession, sessionId: "fresh" }, now: 200 },
