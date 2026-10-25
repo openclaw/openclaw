@@ -32,8 +32,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { createReadService } from "./cron-read.test-support.js";
-import { cronHandlers } from "./cron.js";
+import { callCron, createReadService } from "./cron-read.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const sessionKey = "agent:main:dashboard:webchat-conversation";
@@ -139,18 +138,7 @@ async function withWebchatTool(
         if (!isRecord(params)) {
           throw new Error("expected cron request record");
         }
-        const respond = vi.fn();
-        await expectDefined(
-          cronHandlers[method],
-          "cron handler",
-        )({
-          req: { type: "req", id: "webchat-cron-add", method, params },
-          params,
-          respond,
-          context,
-          client,
-          isWebchatConnect: () => false,
-        });
+        const respond = await callCron(context, method, params, { client });
         const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron response");
         if (!ok) {
           throw new Error(String(error.message));
