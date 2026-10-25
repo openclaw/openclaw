@@ -102,9 +102,7 @@ describe("setup wizard helpers", () => {
       existing: ["111"],
       token: "",
       parseId: (value) => (/^\d+$/.test(value.trim()) ? value.trim() : null),
-      resolveEntries: resolveEntries as Parameters<
-        typeof setup.promptResolvedAllowFrom
-      >[0]["resolveEntries"],
+      resolveEntries,
     });
 
     expect(result).toEqual(["111", "123"]);
@@ -144,9 +142,7 @@ describe("setup wizard helpers", () => {
         : { action };
     if (expected.action === "set") {
       vi.stubEnv("OPENCLAW_TEST_TOKEN", "secret-token");
-      onTestFinished(() => {
-        vi.unstubAllEnvs();
-      });
+      onTestFinished(() => vi.unstubAllEnvs());
     }
     const prompter = createPrompter(action === "set" ? ["OPENCLAW_TEST_TOKEN"] : [], {
       selects: action === "use-env" ? ["plaintext"] : ["ref", "env"],
@@ -277,19 +273,11 @@ describe("setup wizard helpers", () => {
       policyKey: "channels.line.dmPolicy",
       allowFromKey: "channels.line.allowFrom",
       getAllowFrom: (cfg) => setup.normalizeAllowFromEntries(cfg.channels?.line?.allowFrom ?? []),
-      getCurrent: (cfg) =>
-        (cfg.channels?.line?.dmPolicy as
-          | "open"
-          | "pairing"
-          | "allowlist"
-          | "disabled"
-          | undefined) ?? "pairing",
+      getCurrent: (cfg) => cfg.channels?.line?.dmPolicy ?? "pairing",
     });
 
     const next = dmPolicy.setPolicy(
-      {
-        channels: { line: { dmPolicy: "pairing", allowFrom: ["U123"] } },
-      },
+      { channels: { line: { dmPolicy: "pairing", allowFrom: ["U123"] } } },
       "open",
     );
 
@@ -414,32 +402,24 @@ describe("setup wizard helpers", () => {
     ).toEqual(expected);
   });
   it.each([undefined, "xoxb-test"])("resolves entries with token %s", async (token) => {
-    const entries = token ? ["alice"] : ["alice", "bob"];
-    const expected = token
-      ? [{ input: "alice", resolved: true, id: "xoxb-test:alice" }]
-      : [
-          { input: "alice", resolved: false, id: null },
-          { input: "bob", resolved: false, id: null },
-        ];
+    const entries = ["alice", "bob"];
     const resolveEntries = vi.fn(
       async ({ token: resolvedToken, entries: inputs }: { token: string; entries: string[] }) =>
-        inputs.map((input) => ({ input, resolved: true, id: `${resolvedToken}:${input}` })),
+        inputs.map((input) => `${resolvedToken}:${input}`),
     );
     if (!token) {
       resolveEntries.mockRejectedValue(new Error("should not run"));
     }
     await expect(
-      setup.resolveEntriesWithOptionalToken<{
-        input: string;
-        resolved: boolean;
-        id: string | null;
-      }>({
+      setup.resolveEntriesWithOptionalToken({
         token,
         entries,
-        buildWithoutToken: (input) => ({ input, resolved: false, id: null }),
+        buildWithoutToken: (input) => `unresolved:${input}`,
         resolveEntries,
       }),
-    ).resolves.toEqual(expected);
+    ).resolves.toEqual(
+      token ? ["xoxb-test:alice", "xoxb-test:bob"] : ["unresolved:alice", "unresolved:bob"],
+    );
     expect(resolveEntries).toHaveBeenCalledTimes(token ? 1 : 0);
   });
   it.each([

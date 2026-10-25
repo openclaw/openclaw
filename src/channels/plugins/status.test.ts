@@ -17,19 +17,15 @@ function snapshotAccount<T>(
   });
 }
 
-function runtimeOnly() {
-  return vi.fn(() => {
-    throw new Error("runtime hook received an inspection summary");
-  });
-}
-
 async function inspectSnapshot(
   inspected: object,
   runtime: ChannelAccountSnapshot,
   accountId = runtime.accountId,
   probe?: unknown,
 ) {
-  const runtimeHook = runtimeOnly();
+  const runtimeHook = vi.fn(() => {
+    throw new Error("runtime hook received an inspection summary");
+  });
   const plugin = {
     id: "inspection-fixture",
     config: {
@@ -65,9 +61,7 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
     const isLinked = vi.fn(() => "linked" as const);
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({ id: "test", config: { isConfigured, isLinked } }),
-      status: {
-        buildAccountSnapshot: async () => ({ accountId: "default" }),
-      },
+      status: { buildAccountSnapshot: async () => ({ accountId: "default" }) },
     };
     const pending = buildChannelAccountSnapshotFromAccount({
       plugin,
@@ -160,34 +154,28 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
     },
   );
 
-  it("redacts a custom status snapshot baseUrl without mutating the resolved account", async () => {
+  it("preserves custom lifecycle fields and redacts its URL without mutating the account", async () => {
     const rawBaseUrl = ["https://", "user:pass", "@chat.example.test/?token=", "secret"].join("");
-    const account = Object.freeze({ baseUrl: rawBaseUrl });
-    let receivedAccount: unknown;
-    const result = await snapshotAccount(account, {}, ({ account: hookAccount }) => {
-      receivedAccount = hookAccount;
-      return { accountId: "custom", baseUrl: hookAccount.baseUrl };
-    });
-
-    expect(receivedAccount).toBe(account);
-    expect(result.baseUrl).toBe("https://chat.example.test/?token=***");
-    expect(account.baseUrl).toBe(rawBaseUrl);
-  });
-
-  it("preserves lifecycle fields computed by a custom status adapter", async () => {
+    const account = Object.freeze({ enabled: true, configured: true, baseUrl: rawBaseUrl });
     const lifecycle = Object.freeze({
-      accountId: "default",
+      accountId: "custom",
       linked: true,
       running: false,
       connected: false,
       lastError: "probe failed",
     });
-    await expect(
-      snapshotAccount({ enabled: true, configured: true }, {}, () => lifecycle),
-    ).resolves.toMatchObject({
+    let receivedAccount: unknown;
+    const result = await snapshotAccount(account, {}, ({ account: hookAccount }) => {
+      receivedAccount = hookAccount;
+      return Object.freeze({ ...lifecycle, baseUrl: hookAccount.baseUrl });
+    });
+    expect(receivedAccount).toBe(account);
+    expect(result).toMatchObject({
       ...lifecycle,
       configured: true,
+      baseUrl: "https://chat.example.test/?token=***",
     });
+    expect(account.baseUrl).toBe(rawBaseUrl);
   });
 
   it("uses descriptor linkage when no live link resolver exists", async () => {
@@ -214,10 +202,7 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
     await expect(
       snapshotAccount(
         { enabled: true, configured: false },
-        {
-          isConfigured: () => false,
-          isLinked,
-        },
+        { isConfigured: () => false, isLinked },
       ),
     ).resolves.toMatchObject({
       configured: false,

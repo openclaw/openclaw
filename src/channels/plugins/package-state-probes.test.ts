@@ -52,12 +52,7 @@ function registerModule(
   pluginId = channel.id,
 ) {
   listChannelCatalogEntriesMock.mockReturnValue([
-    {
-      pluginId,
-      origin: "bundled",
-      rootDir,
-      channel,
-    } satisfies PluginChannelCatalogEntry,
+    { pluginId, origin: "bundled", rootDir, channel } satisfies PluginChannelCatalogEntry,
   ]);
 }
 
@@ -94,22 +89,18 @@ beforeEach(() => {
   probeLogWarnMock.mockReset();
 });
 
-afterEach(() => {
-  removeTempDirs();
-});
+afterEach(removeTempDirs);
 
 describe("channel package-state probes", () => {
   it("awaits the selected async checker and never retries a refusal through the sync checker", async () => {
     const root = tempRoot("openclaw-package-state-async-");
     writeProbe(
       root,
-      [
-        "module.exports.hasState = () => { throw new Error('sync checker must not run'); };",
-        "module.exports.hasStateAsync = async ({ env }) => {",
-        "  if (env.REFUSE) throw new Error('owner refused');",
-        "  return env.HAS_STATE === 'yes';",
-        "};",
-      ].join("\n"),
+      `module.exports.hasState = () => { throw new Error('sync checker must not run'); };
+module.exports.hasStateAsync = async ({ env }) => {
+  if (env.REFUSE) throw new Error('owner refused');
+  return env.HAS_STATE === 'yes';
+};`,
     );
     registerProbe(root, "fixture", { exportNameAsync: "hasStateAsync" });
     const probe = (env: NodeJS.ProcessEnv) =>
@@ -132,11 +123,9 @@ describe("channel package-state probes", () => {
     const database = resolveOpenClawStateSqlitePath(env);
     writeProbe(
       pluginRoot,
-      [
-        `const fs = require("node:fs");`,
-        `fs.writeFileSync(${JSON.stringify(marker)}, "loaded");`,
-        `module.exports.hasState = () => fs.existsSync(${JSON.stringify(database)});`,
-      ].join("\n"),
+      `const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(marker)}, "loaded");
+module.exports.hasState = () => fs.existsSync(${JSON.stringify(database)});`,
     );
     registerProbe(pluginRoot, "fixture", { backingStore: "plugin-state" });
     const probe = () => probeState("fixture", env);
