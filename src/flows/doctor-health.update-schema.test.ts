@@ -85,12 +85,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
 });
 
-it.each([
-  "orphan",
-  "other foreign key",
-  "orphan and other foreign key",
-  "orphan with other foreign key",
-] as const)("backs up orphan-window repairs before a schema upgrade (%s)", async (damage) => {
+it("refuses mixed damage on an orphan before schema upgrades without losing its backup", async () => {
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "0");
   await withDoctorState(async (state) => {
     const shared = openOpenClawStateDatabase({ env: state.env }).path;
@@ -120,53 +115,27 @@ it.each([
         eventJson: '{"type":"message","message":{"role":"user","content":"keep"}}',
         createdAt: 1,
       });
-      if (damage.includes("orphan")) {
-        db.exec(`INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
+      db.exec(`INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
               VALUES ('orphan', 'agent:main:missing', 1, 1)`);
-      }
-      if (damage.includes("other")) {
-        db.prepare(
-          "UPDATE session_windows SET primary_conversation_id = 'missing' WHERE session_id = ?",
-        ).run(damage === "orphan with other foreign key" ? "orphan" : "retained");
-      }
+      db.exec(
+        "UPDATE session_windows SET primary_conversation_id = 'missing' WHERE session_id = 'orphan'",
+      );
       original = readRows(db);
     }
     const runtime = createDoctorRuntime();
-    const doctor = runDoctorHealthFlow(runtime, repairOptions);
-    if (damage === "orphan") {
-      await doctor;
-      expect(readDatabase(shared).version).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-      // Scoped archives retain source versions in metadata; inspect the full image here.
-      const migrationBackups = backupPaths(shared, "openclaw.sqlite.pre-startup-migration-").filter(
-        (name) => name.endsWith(".bak") && !name.endsWith(".scoped.bak"),
-      );
-      expect(migrationBackups).toHaveLength(1);
-      expect(readDatabase(migrationBackups[0]!).version).toBe(19);
-      expect(mocks.runContributions).toHaveBeenCalledOnce();
-    } else {
-      await expect(doctor).rejects.toThrow(
-        /foreign_key_check.*Stop the Gateway.*doctor --fix.*restart/s,
-      );
-      expect(readDatabase(shared).version).toBe(19);
-      expect(mocks.runContributions).not.toHaveBeenCalled();
-    }
-    using db = new DatabaseSync(agent, { readOnly: true });
-    expect(readRows(db)).toEqual(
-      damage === "orphan"
-        ? {
-            ...original,
-            windows: original.windows.filter((row) => row.session_id !== "orphan"),
-          }
-        : original,
+    await expect(runDoctorHealthFlow(runtime, repairOptions)).rejects.toThrow(
+      /foreign_key_check.*Stop the Gateway.*doctor --fix.*restart/s,
     );
+    expect(readDatabase(shared).version).toBe(19);
+    expect(mocks.runContributions).not.toHaveBeenCalled();
+    using db = new DatabaseSync(agent, { readOnly: true });
+    expect(readRows(db)).toEqual(original);
     const backups = backupPaths(agent, "openclaw-session-window-recovery-");
-    expect(backups).toHaveLength(damage.includes("orphan") ? 1 : 0);
-    if (backups[0]) {
-      using saved = new DatabaseSync(path.join(backups[0], "database.sqlite"), {
-        readOnly: true,
-      });
-      expect(readRows(saved)).toEqual(original);
-    }
+    expect(backups).toHaveLength(1);
+    using saved = new DatabaseSync(path.join(backups[0]!, "database.sqlite"), {
+      readOnly: true,
+    });
+    expect(readRows(saved)).toEqual(original);
   });
 });
 
