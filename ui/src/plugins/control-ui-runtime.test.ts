@@ -96,13 +96,27 @@ const pluginDescriptor = (revision = "one", entryUrl = "/review.js") => ({
   entryUrl,
   styles: [],
 });
+const diagnostic = (message: string, pluginId = "review") => ({ pluginId, message });
+function initializeWith(
+  register: (
+    host: ReturnType<typeof createControlUiPluginHost>,
+    owner: Parameters<typeof controlUiLoader.initializeControlUiPlugin>[2],
+  ) => void | Promise<void>,
+) {
+  vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
+    async (getContext, runtime, owner) => {
+      const host = createControlUiPluginHost(getContext, runtime, owner);
+      await register(host, owner);
+      return Object.assign(owner, { host });
+    },
+  );
+}
 
 it("completes an unavailable catalog without requests or diagnostics for a limited connection", async () => {
   const request = vi.fn();
   const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
   context.gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
-  const runtime = new ControlUiPluginRuntime(() => context);
-  runtimes.push(runtime);
+  const runtime = runtimeFor(context);
   runtime.start();
   await runtime.refresh();
   await runtime.refresh();
@@ -121,20 +135,16 @@ it("dispatches only explicitly advertised inline versions and restores saved ver
     request: async () => ({ ...catalog([pluginDescriptor()]), inlineViews }),
   };
   const context = connectedContext(client, configForRuntime());
-  vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
-    async (getContext, runtime, owner) => {
-      const host = createControlUiPluginHost(getContext, runtime, owner);
-      host.ui.registerInlineView({ id: "incident", version: 1, mount: mounts[0]! });
-      host.ui.registerInlineView({ id: "incident", version: 2, mount: mounts[1]! });
-      expect(() =>
-        host.ui.registerInlineView({ id: "incident", version: 1, mount: mounts[0]! }),
-      ).toThrow("duplicate");
-      expect(() =>
-        host.ui.registerInlineView({ id: "invalid", version: 0, mount: mounts[0]! }),
-      ).toThrow("version");
-      return Object.assign(owner, { host });
-    },
-  );
+  initializeWith((host) => {
+    host.ui.registerInlineView({ id: "incident", version: 1, mount: mounts[0]! });
+    host.ui.registerInlineView({ id: "incident", version: 2, mount: mounts[1]! });
+    expect(() =>
+      host.ui.registerInlineView({ id: "incident", version: 1, mount: mounts[0]! }),
+    ).toThrow("duplicate");
+    expect(() =>
+      host.ui.registerInlineView({ id: "invalid", version: 0, mount: mounts[0]! }),
+    ).toThrow("version");
+  });
   const runtime = runtimeFor(context);
   runtime.start();
   await runtime.refresh();
@@ -180,18 +190,14 @@ it.each([false, true])(
       return { ok: true };
     });
     const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
-    vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
-      async (getContext, runtime, owner) => {
-        if (owner.descriptor.pluginId === "peer") {
-          const attempt = attempts++;
-          started[attempt]!.resolve();
-          await pending[attempt]!.promise;
-        }
-        const host = createControlUiPluginHost(getContext, runtime, owner);
-        host.ui.registerNavigation({ id: "page", label: "Page", page: { id: "page" } });
-        return Object.assign(owner, { host });
-      },
-    );
+    initializeWith(async (host, owner) => {
+      if (owner.descriptor.pluginId === "peer") {
+        const attempt = attempts++;
+        started[attempt]!.resolve();
+        await pending[attempt]!.promise;
+      }
+      host.ui.registerNavigation({ id: "page", label: "Page", page: { id: "page" } });
+    });
     const runtime = runtimeFor(context);
     runtime.subscribe(() => {
       if (runtime.registrations("navigation").some((entry) => entry.pluginId === "review")) {
@@ -230,19 +236,19 @@ it.each([false, true])(
         [
           "plugins.controlUi.report",
           {
-            reports: [
-              { pluginId: "review", revision: "one", status: "activated" },
-              { pluginId: "peer", revision: "one", status: "activated" },
-            ],
+            reports: ["review", "peer"].map((pluginId) => ({
+              pluginId,
+              revision: "one",
+              status: "activated",
+            })),
           },
         ],
       ]);
       reportFailure = new Error("Activation receipt unavailable");
       await runtime.refresh();
-      expect(runtime.errors).toEqual([
-        { pluginId: "review", message: "Activation receipt unavailable" },
-        { pluginId: "peer", message: "Activation receipt unavailable" },
-      ]);
+      expect(runtime.errors).toEqual(
+        ["review", "peer"].map((id) => diagnostic("Activation receipt unavailable", id)),
+      );
       expect(healthy.signal.aborted).toBe(false);
       reportFailure = new GatewayRequestError({
         code: "INVALID_REQUEST",
@@ -251,7 +257,7 @@ it.each([false, true])(
       });
       await runtime.refresh();
       expect(runtime.errors).toEqual([
-        { pluginId: "peer", message: "Activation report is for an inactive browser revision" },
+        diagnostic("Activation report is for an inactive browser revision", "peer"),
       ]);
     } finally {
       pending.forEach((activation) => activation.resolve());
@@ -396,10 +402,9 @@ it.each(["document", "published", "listener"] as const)(
       modules = [{ ...descriptor, imports: ["https://foreign.example/chunk.js"] }];
       await config.refresh();
       expect(links()).toEqual([]);
-      expect(runtime.errors).toContainEqual({
-        pluginId: "review",
-        message: "Native plugin assets must be served by this Control UI Gateway.",
-      });
+      expect(runtime.errors).toContainEqual(
+        diagnostic("Native plugin assets must be served by this Control UI Gateway."),
+      );
       modules = [];
       await config.refresh();
       expect(links()).toEqual([]);
@@ -424,18 +429,13 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
       method === "plugins.controlUi.list" ? response.promise : Promise.resolve({ ok: true }),
     );
     const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
-    vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
-      async (getContext, runtime, owner) => {
-        activationStarted.resolve();
-        await activation.promise;
-        if (outcome === "activation-failed") {
-          throw new Error("Plugin activation failed");
-        }
-        return Object.assign(owner, {
-          host: createControlUiPluginHost(getContext, runtime, owner),
-        });
-      },
-    );
+    initializeWith(async () => {
+      activationStarted.resolve();
+      await activation.promise;
+      if (outcome === "activation-failed") {
+        throw new Error("Plugin activation failed");
+      }
+    });
     const runtime = runtimeFor(context);
     runtime.subscribe(() => {
       if (runtime.registryStatus !== "pending") {
@@ -459,7 +459,7 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
       await completed.promise;
       expect(runtime.registryStatus).toBe(outcome === "catalog-failed" ? "failed" : "complete");
       if (outcome === "catalog-failed") {
-        expect(runtime.errors).toEqual([{ pluginId: "host", message: "Catalog unavailable" }]);
+        expect(runtime.errors).toEqual([diagnostic("Catalog unavailable", "host")]);
         expect(controlUiLoader.initializeControlUiPlugin).not.toHaveBeenCalled();
         expect(request.mock.calls).toEqual([["plugins.controlUi.list", {}]]);
         expect(runtime.isLoading("review")).toBe(false);
@@ -487,13 +487,9 @@ it("publishes a new revision for plugin-owned navigation mutations before notify
     },
     configForRuntime(),
   );
-  vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
-    async (getContext, runtime, owner) => {
-      const host = createControlUiPluginHost(getContext, runtime, owner);
-      host.ui.registerNavigation(navigation);
-      return Object.assign(owner, { host });
-    },
-  );
+  initializeWith((host) => {
+    host.ui.registerNavigation(navigation);
+  });
   const runtime = runtimeFor(context);
   expect(runtime.revision).toBe(0);
   runtime.subscribe(() => {
@@ -586,7 +582,7 @@ it.each([
     runtime.start();
     expect(refresh).toHaveBeenCalledTimes(remote ? 0 : 1);
     await runtime.refresh();
-    expect(runtime.errors).toEqual(error ? [{ pluginId: "review", message: error }] : []);
+    expect(runtime.errors).toEqual(error ? [diagnostic(error)] : []);
     const reports = request.mock.calls
       .filter(([method]) => method === "plugins.controlUi.report")
       .map(([, params]) => params);
@@ -650,18 +646,14 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       resourceBasePath: "",
       config: configForRuntime(),
     } as unknown as ApplicationContext;
-    vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
-      async (getContext, runtime, owner) => {
-        const host = createControlUiPluginHost(getContext, runtime, owner);
-        host.ui.registerReplacement({
-          id: "composer",
-          label: owner.descriptor.revision,
-          surface: "composer",
-          mount: () => undefined,
-        });
-        return Object.assign(owner, { host });
-      },
-    );
+    initializeWith((host, owner) => {
+      host.ui.registerReplacement({
+        id: "composer",
+        label: owner.descriptor.revision,
+        surface: "composer",
+        mount: () => undefined,
+      });
+    });
     const runtime = runtimeFor(context);
     const hello = {
       ...GATEWAY_STORE_TEST_HELLO,
@@ -703,18 +695,13 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
         mount: () => undefined,
       });
       expect(runtime.registrations("panels")).toHaveLength(1);
-      const warning = {
-        pluginId: "review",
-        message:
-          'Registered UI capability "panel" is missing from uiCapabilities in openclaw.plugin.json.',
-      };
+      const warning = diagnostic(
+        'Registered UI capability "panel" is missing from uiCapabilities in openclaw.plugin.json.',
+      );
       expect(runtime.errors).toContainEqual(warning);
       runtime.reportError("review", "Activation receipt unavailable");
       expect(runtime.errors).toContainEqual(warning);
-      expect(runtime.errors).toContainEqual({
-        pluginId: "review",
-        message: "Activation receipt unavailable",
-      });
+      expect(runtime.errors).toContainEqual(diagnostic("Activation receipt unavailable"));
 
       await changed("one");
       expect(runtime.selectedReplacement("composer")?.signal).toBe(first.signal);
