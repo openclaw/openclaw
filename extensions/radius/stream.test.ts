@@ -1,8 +1,4 @@
-import {
-  parseStreamingJson,
-  type AssistantMessageEvent,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import { parseStreamingJson, type Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createRadiusStreamFn } from "./stream.js";
 import { baseUrl, catalogModel, sse, usage } from "./test-support.js";
@@ -72,19 +68,16 @@ const toolEnd = (call: ReturnType<typeof toolCall>, contentIndex = 0) => ({
   toolCall: call,
 });
 const done = (reason = "stop") => ({ type: "done", reason, usage });
+const contentEvent = (type: string, contentIndex: number, fields = {}) => ({
+  type,
+  contentIndex,
+  ...fields,
+});
 const run = (extra: Parameters<ReturnType<typeof createRadiusStreamFn>>[2] = {}) =>
   createRadiusStreamFn()(model, context, { ...options, ...extra });
 const requestBody = () => new Response(fetchMock.mock.calls[0]![1]?.body).json();
 const mockEvents = (events: readonly unknown[]) =>
   fetchMock.mockResolvedValue(response(events).response);
-
-async function collect(stream: ReturnType<typeof run>) {
-  const events: AssistantMessageEvent[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -147,23 +140,19 @@ it("preserves signed content, authoritative tool calls and usage across fragment
   const signedTool = { ...toolCall({ city: "Vienna" }), thoughtSignature: "tool-signature" };
   mockEvents([
     { type: "start" },
-    { type: "thinking_start", contentIndex: 0 },
-    { type: "thinking_delta", contentIndex: 0, delta: "Consider" },
-    {
-      type: "thinking_end",
-      contentIndex: 0,
+    contentEvent("thinking_start", 0),
+    contentEvent("thinking_delta", 0, { delta: "Consider" }),
+    contentEvent("thinking_end", 0, {
       content: "Consider the result",
       contentSignature: "thinking-signature",
       redacted: true,
-    },
-    { type: "text_start", contentIndex: 1 },
-    { type: "text_delta", contentIndex: 1, delta: "Héllo" },
-    {
-      type: "text_end",
-      contentIndex: 1,
+    }),
+    contentEvent("text_start", 1),
+    contentEvent("text_delta", 1, { delta: "Héllo" }),
+    contentEvent("text_end", 1, {
       content: "Héllo!",
       contentSignature: "text-signature",
-    },
+    }),
     toolStart(2),
     { type: "toolcall_delta", contentIndex: 2, delta: '{"city":"Vie' },
     toolEnd(signedTool, 2),
@@ -178,8 +167,7 @@ it("preserves signed content, authoritative tool calls and usage across fragment
     toolChoice: "required",
   } as const;
   const stream = run(requestOptions);
-  const events = await collect(stream);
-  expect(events.map((event) => event.type)).toEqual(
+  expect(await Array.fromAsync(stream, (event) => event.type)).toEqual(
     "start thinking_start thinking_delta thinking_end text_start text_delta text_end toolcall_start toolcall_delta toolcall_end done".split(
       " ",
     ),
@@ -202,11 +190,7 @@ it("preserves signed content, authoritative tool calls and usage across fragment
   const [url, request] = fetchMock.mock.calls[0]!;
   expect(url).toBe("https://radius.pi.dev/v1/messages");
   expect(new Headers(request?.headers).get("authorization")).toBe("Bearer synthetic-radius-token");
-  expect(await requestBody()).toEqual({
-    model: model.id,
-    context,
-    options: requestOptions,
-  });
+  expect(await requestBody()).toEqual({ model: model.id, context, options: requestOptions });
 });
 
 it.each([200, 429])(
@@ -221,10 +205,7 @@ it.each([200, 429])(
     );
     const onResponse = vi.fn();
     const replacement = { model: "claude-sonnet-4", context: { messages: [] }, options: {} };
-    const stream = run({
-      onPayload: () => replacement,
-      onResponse,
-    });
+    const stream = run({ onPayload: () => replacement, onResponse });
     for await (const event of stream) {
       expect(onResponse).toHaveBeenCalledOnce();
       expect(event.type).toBe(status === 200 ? "done" : "error");
@@ -260,26 +241,17 @@ it.each(["error", "aborted"])("preserves %s terminal accounting", async (reason)
 it.each([
   [
     "missing terminal",
-    [
-      { type: "text_start", contentIndex: 0 },
-      { type: "text_delta", contentIndex: 0, delta: "partial" },
-    ],
+    [contentEvent("text_start", 0), contentEvent("text_delta", 0, { delta: "partial" })],
     "without a terminal event",
   ],
   ["unfinished tool", [toolStart(), done("toolUse")], "unfinished tool call"],
-  [
-    "invalid event",
-    [{ type: "text_delta", contentIndex: 0, delta: "orphan" }],
-    "content block sequence",
-  ],
+  ["invalid event", [contentEvent("text_delta", 0, { delta: "orphan" })], "content block sequence"],
   ["non-object tool arguments", [toolStart(), toolEnd(toolCall([]))], "tool"],
 ] as const)("fails %s instead of silently completing", async (_name, events, error) => {
   mockEvents(events);
   const stream = run();
-  const terminal = (await collect(stream)).filter(
-    ({ type }) => type === "error" || type === "done",
-  );
-  expect(terminal.map(({ type }) => type)).toEqual(["error"]);
+  const types = await Array.fromAsync(stream, (event) => event.type);
+  expect(types.filter((type) => type === "error" || type === "done")).toEqual(["error"]);
   expect(await stream.result()).toMatchObject({
     stopReason: "error",
     errorMessage: expect.stringContaining(error),

@@ -23,6 +23,8 @@ const device = (overrides: Record<string, unknown> = {}) =>
 const token = (overrides: Record<string, unknown> = {}) => reply({ ...tokenPayload, ...overrides });
 
 const formAt = (index: number) => Object.fromEntries(requestAt(index).init.body);
+const expectForm = (index: number, form: string) =>
+  expect(formAt(index)).toEqual(Object.fromEntries(new URLSearchParams(form)));
 let defaults: ReturnType<typeof context>;
 
 async function rejectLogin(message: string, ms = 1_000, ctx = defaults.ctx) {
@@ -85,16 +87,12 @@ it("pairs through the native device grant and slows subsequent polls after slow_
     requireHttps: true,
     policy: { hostnameAllowlist: ["radius.pi.dev"] },
   });
-  expect(formAt(0)).toEqual({
-    client_id: "pi-gateway",
-    scope: "gateway offline_access",
-  });
+  expectForm(0, "client_id=pi-gateway&scope=gateway+offline_access");
   expect(requestAt(1).url).toBe("https://radius.pi.dev/v1/oauth/token");
-  expect(formAt(1)).toEqual({
-    client_id: "pi-gateway",
-    grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-    device_code: "device-secret",
-  });
+  expectForm(
+    1,
+    "client_id=pi-gateway&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=device-secret",
+  );
   expect(release).toHaveBeenCalledTimes(4);
   expect(progress.stop).toHaveBeenCalledWith("Radius sign-in complete");
 });
@@ -195,11 +193,7 @@ it.each([undefined, "rotated-refresh"])("refresh rotation: %s", async (refreshTo
     refresh: refreshToken ?? "old-refresh",
     expires: Date.now() + 3_540_000,
   });
-  expect(formAt(0)).toEqual({
-    client_id: "pi-gateway",
-    grant_type: "refresh_token",
-    refresh_token: "old-refresh",
-  });
+  expectForm(0, "client_id=pi-gateway&grant_type=refresh_token&refresh_token=old-refresh");
   expect(release).toHaveBeenCalledTimes(1);
 });
 
