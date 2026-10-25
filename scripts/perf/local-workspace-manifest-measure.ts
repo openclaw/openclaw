@@ -189,7 +189,7 @@ if (mode === "prepare") {
     const launch = async (side: "base" | "candidate") => {
       const workerLabel = `${label}-${pass}-${side}`;
       const log = await fs.open(path.join(scratch, `${workerLabel}.log`), "wx");
-      const childEnv = {
+      const childEnv: NodeJS.ProcessEnv = {
         ...process.env,
         OPENCLAW_BENCH_TRACE_GC: pass === "promotion" ? "1" : "0",
       };
@@ -405,7 +405,7 @@ if (mode === "prepare") {
   } finally {
     await drainGlobalSingletonLifecycleState();
     if (process.connected) {
-      process.disconnect();
+      process.disconnect?.();
     }
   }
 }
