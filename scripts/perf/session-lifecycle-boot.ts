@@ -98,6 +98,8 @@ if (values.mode === "seed") {
   const config = {
     ...BASE_GATEWAY_BENCH_CONFIG,
     agents: {
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
       entries: Object.fromEntries(
         agentIds.map((id) => [id, { workspace: path.join(root, "workspace", id) }]),
       ),
@@ -288,7 +290,9 @@ if (values.mode === "seed") {
         },
         60_000,
       );
-      if (!connected.ok) throw new Error("Synthetic Gateway connect failed");
+      if (!connected.ok) {
+        throw new Error("Synthetic Gateway connect failed");
+      }
       const result = await client.request("sessions.list", { limit: 1 }, 60_000);
       if (
         !result.ok ||
