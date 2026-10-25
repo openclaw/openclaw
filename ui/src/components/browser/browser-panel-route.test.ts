@@ -471,42 +471,65 @@ it("discards an old route capture with the same target id before fetching or eva
   ).toBe(false);
 });
 
-it("prefers a usable default but keeps an explicitly selected blocked tab closable", async () => {
-  let tabs = [
-    {
-      ...makeTab("t1", "", "Blocked"),
-      urlUnavailableReason: "navigation_blocked",
-    },
-    makeTab("t2", "https://allowed.example/", "Allowed"),
-  ];
-  const gateway = createBrowserClient(async (request) => {
-    if (request.method === "DELETE") {
-      tabs = tabs.filter((tab) => `/tabs/${tab.tabId}` !== request.path);
-      return { ok: true };
+it.each(["navigation_blocked", "navigation_check_failed"] as const)(
+  "keeps unavailable tabs safe and recoverable: %s",
+  async (reason) => {
+    const allowedUrl = "https://allowed.example/";
+    let blocked = true;
+    let tabs = [
+      { ...makeTab("t1", "", "Kept title"), urlUnavailableReason: reason },
+      ...(reason === "navigation_blocked" ? [makeTab("t2", allowedUrl, "Allowed")] : []),
+    ];
+    const gateway = createBrowserClient(async (request) => {
+      if (request.method === "DELETE") {
+        tabs = tabs.filter((tab) => `/tabs/${tab.tabId}` !== request.path);
+        return { ok: true };
+      }
+      if (request.path === "/tabs") {
+        return { running: true, tabs: blocked ? tabs : [makeTab("t1", allowedUrl, "Kept title")] };
+      }
+      if (request.path === "/tabs/focus" && blocked) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Tab address is unavailable",
+          details: { reason: "navigation_blocked" },
+        });
+      }
+      if (request.path === "/screenshot") {
+        return { path: "/fresh.png", url: allowedUrl };
+      }
+      return pageResponse(request, allowedUrl, blocked ? "Allowed" : "Recovered");
+    });
+    const panel = await mountPanel(gateway.client, false);
+    panel.preferredTab = reason === "navigation_blocked" ? undefined : panel.preferredTab;
+    panel.presented = true;
+    const status = () => panel.querySelector('.bp-viewport [role="status"]');
+    if (reason === "navigation_blocked") {
+      await waitForTitle(panel, "Allowed");
+      const beforeBlocked = gateway.request.mock.calls.length;
+      panel.selectHostedTab("t1");
+      await panel.updateComplete;
+      expect(status()?.textContent).toContain("Select another tab");
+      expect(gateway.request).toHaveBeenCalledTimes(beforeBlocked);
+      await panel.closeHostedTab("t1");
+      await waitForTitle(panel, "Allowed");
+      expect(panel.hostedTabs.map((tab) => tab.id)).toEqual(["t2"]);
+    } else {
+      await waitForSolid(() => expect(status()?.textContent).toContain("Refresh to try again."));
+      expect(panel.textContent).toContain("Kept title");
+      expect(panel.querySelector(".bp-shot")).toBeNull();
+      expect(
+        requests(gateway).some((request) =>
+          ["/tabs/focus", "/screenshot", "/act"].includes(request.path),
+        ),
+      ).toBe(false);
+      blocked = false;
+      reloadButton(panel)?.click();
+      await waitForTitle(panel, "Recovered");
+      expect(status()).toBeNull();
     }
-    if (request.path === "/tabs") {
-      return { running: true, tabs };
-    }
-    if (request.path === "/screenshot") {
-      return { path: "/fresh.png", url: "https://allowed.example/" };
-    }
-    return metrics("https://allowed.example/", "Allowed");
-  });
-  const panel = await mountPanel(gateway.client, false);
-  panel.preferredTab = undefined;
-  panel.presented = true;
-  await waitForTitle(panel, "Allowed");
-  const beforeBlocked = gateway.request.mock.calls.length;
-  panel.selectHostedTab("t1");
-  await panel.updateComplete;
-  expect(panel.querySelector('.bp-viewport [role="status"]')?.textContent).toContain(
-    "Select another tab",
-  );
-  expect(gateway.request).toHaveBeenCalledTimes(beforeBlocked);
-  await panel.closeHostedTab("t1");
-  await waitForTitle(panel, "Allowed");
-  expect(panel.hostedTabs.map((tab) => tab.id)).toEqual(["t2"]);
-});
+  },
+);
 
 it.each(["/screenshot", "/act"])(
   "clears a current capture when %s reports a navigation denial",
@@ -535,48 +558,3 @@ it.each(["/screenshot", "/act"])(
     expect(panel.hostedTabs[0]?.url).toBe("");
   },
 );
-
-it("shows navigation_check_failed without capture and recovers after refresh", async () => {
-  let blocked = true;
-  const gateway = createBrowserClient(async (request) => {
-    if (request.path === "/tabs") {
-      return {
-        running: true,
-        tabs: [
-          {
-            ...makeTab("t1", blocked ? "" : "https://allowed.example/", "Kept title"),
-            ...(blocked ? { urlUnavailableReason: "navigation_check_failed" } : {}),
-          },
-        ],
-      };
-    }
-    if (request.path === "/tabs/focus" && blocked) {
-      throw new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "Tab address is unavailable",
-        details: { reason: "navigation_blocked" },
-      });
-    }
-    if (request.path === "/screenshot") {
-      return { path: "/fresh.png", url: "https://allowed.example/" };
-    }
-    return pageResponse(request, "https://allowed.example/", "Recovered");
-  });
-  const panel = await mountPanel(gateway.client);
-  await waitForSolid(() =>
-    expect(panel.querySelector('.bp-viewport [role="status"]')?.textContent).toContain(
-      "Refresh to try again.",
-    ),
-  );
-  expect(panel?.textContent).toContain("Kept title");
-  expect(panel.querySelector(".bp-shot")).toBeNull();
-  expect(
-    requests(gateway).some((request) =>
-      ["/tabs/focus", "/screenshot", "/act"].includes(request.path),
-    ),
-  ).toBe(false);
-  blocked = false;
-  reloadButton(panel)?.click();
-  await waitForTitle(panel, "Recovered");
-  expect(panel.querySelector('.bp-viewport [role="status"]')).toBeNull();
-});

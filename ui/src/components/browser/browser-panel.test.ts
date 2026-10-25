@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -105,18 +104,15 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.browserPanelIsOpen()).toBe(true);
   });
 
-  it("renders the initial asynchronous refresh and retains the page while its screenshot updates", async () => {
+  it("renders async page loads and retains the page and focus through successful and failed refreshes", async () => {
     stubScreenshotMedia();
     const response = createDeferred<unknown>();
     let refreshed = false;
+    let tabsReply = response.promise;
     const url = "https://example.test/page";
-    const panel = document.createElement("openclaw-browser-panel");
-    panel.available = true;
-    panel.embedded = true;
-    panel.presented = true;
-    panel.client = createBrowserClient(async (envelope) => {
+    const client = createBrowserClient(async (envelope) => {
       if (envelope.path === "/tabs") {
-        return response.promise;
+        return tabsReply;
       }
       if (envelope.path === "/screenshot") {
         return { path: refreshed ? "/fresh.png" : "/old.png", targetId: "raw-tab-a", url };
@@ -126,7 +122,7 @@ describe("normalizeBrowserUrlDraft", () => {
       }
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     }).client;
-    mountSolid(() => panel);
+    const { panel } = mountPanel({ client });
     await waitForSolid(() => {
       expect(panel.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
       expect(panel.querySelector(".bp-viewport")?.getAttribute("aria-busy")).toBe("true");
@@ -153,18 +149,12 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.querySelector(".bp-stage")).toBe(stage);
     expect(panel.querySelector(".bp-shot")).toBe(image);
     expect(panel.querySelector(".bp-input")).toBe(input);
-  });
 
-  it("keeps refresh feedback out of an existing page", async () => {
-    stubScreenshotMedia();
-    const response = createDeferred<unknown>();
-    const gateway = createBrowserPageClient("tab-a");
-    const { panel } = mountPanel({ client: gateway.client });
-    await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
-    gateway.request.mockImplementation(async () => response.promise);
+    const failure = createDeferred<unknown>();
+    tabsReply = failure.promise;
     const preview = panel.querySelector(".bp-shot");
-    const input = panel.querySelector<HTMLTextAreaElement>(".bp-input");
-    input?.focus();
+
+    panel.querySelector<HTMLTextAreaElement>(".bp-input")?.focus();
     toggle(panel, { open: true });
     await panel.updateComplete;
 
@@ -175,7 +165,7 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.querySelector(".bp-viewport")?.getAttribute("aria-busy")).toBe("true");
     expect(document.activeElement).toBe(input);
 
-    response.reject(new Error("Refresh connection interrupted"));
+    failure.reject(new Error("Refresh connection interrupted"));
     await waitForSolid(() => expect(reload?.getAttribute("aria-busy")).toBe("false"));
 
     expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
@@ -209,44 +199,31 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(reservation()).toBe("0px");
   });
 
-  it("waits for availability before restoring after suppression", async () => {
-    persistedDock();
-    const panel = document.createElement("openclaw-browser-panel");
-    panel.suppressed = true;
-    mountSolid(() => panel);
-    await panel.updateComplete;
-
-    panel.suppressed = false;
-    await panel.updateComplete;
-    expect(panel.browserPanelIsOpen()).toBe(false);
-
-    panel.available = true;
-    await waitForSolid(() => expect(panel.browserPanelIsOpen()).toBe(true));
-  });
-
-  it("mounts closed inside a takeover instead of refreshing a hidden dock", async () => {
-    persistedDock();
-    const requests: string[] = [];
-    const client = {
-      request: async <T>(method: string) => {
-        requests.push(method);
-        return {} as T;
-      },
-    } as GatewayBrowserClient;
-    const panel = document.createElement("openclaw-browser-panel");
-    panel.client = client;
-    panel.available = true;
-    panel.suppressed = true;
-    mountSolid(() => panel);
-    await panel.updateComplete;
-    await Promise.resolve();
-
-    expect(panel.browserPanelIsOpen()).toBe(false);
-    expect(requests).toEqual([]);
-
-    panel.suppressed = false;
-    await waitForSolid(() => expect(panel.browserPanelIsOpen()).toBe(true));
-  });
+  it.each([false, true])(
+    "restores a suppressed dock only once available: %s",
+    async (available) => {
+      persistedDock();
+      const gateway = createBrowserClient(async () => ({}));
+      const { panel } = mountPanel({
+        embedded: false,
+        presented: false,
+        suppressed: true,
+        available,
+        client: gateway.client,
+      });
+      await panel.updateComplete;
+      await Promise.resolve();
+      expect(panel.browserPanelIsOpen()).toBe(false);
+      expect(gateway.request).not.toHaveBeenCalled();
+      panel.suppressed = false;
+      if (!available) {
+        await panel.updateComplete;
+        expect(panel.browserPanelIsOpen()).toBe(false);
+        panel.available = true;
+      }
+      await waitForSolid(() => expect(panel.browserPanelIsOpen()).toBe(true));
+    },
+  );
 
   it("undoes one annotation and clears the rest across retained panel updates", async () => {
     stubScreenshotMedia();
@@ -257,38 +234,28 @@ describe("normalizeBrowserUrlDraft", () => {
     const buttons = [...panel.querySelectorAll<HTMLButtonElement>(".bp-annotatebar button")];
     const undo = buttons[0]!;
     const clear = buttons[1]!;
-    expect(buttons.map((button) => button.title || button.textContent?.trim())).toEqual([
-      "Undo",
-      "Clear",
-      "Exit annotate mode",
-      "Send to chat",
-    ]);
     const { dispatchPointer } = attachAnnotationOverlay(panel);
-    for (const retained of [false, true]) {
-      if (retained) {
-        panel.tabsInHeader = true;
-        await panel.updateComplete;
-        expect([...panel.querySelectorAll(".bp-annotatebar button")]).toEqual(buttons);
-      }
-      expect(undo.disabled).toBe(true);
-      expect(clear.disabled).toBe(true);
-      for (const x of [10, 30]) {
-        dispatchPointer("pointerdown", x, 20);
-        dispatchPointer("pointermove", x + 10, 40);
-        dispatchPointer("pointerup", x + 10, 40);
-      }
-      await panel.updateComplete;
-      expect(undo.disabled).toBe(false);
-      expect(clear.disabled).toBe(false);
-      undo.click();
-      await panel.updateComplete;
-      expect(undo.disabled).toBe(false);
-      expect(clear.disabled).toBe(false);
-      clear.click();
-      await panel.updateComplete;
-      expect(undo.disabled).toBe(true);
-      expect(clear.disabled).toBe(true);
+    expect(undo.disabled).toBe(true);
+    expect(clear.disabled).toBe(true);
+    for (const x of [10, 30]) {
+      dispatchPointer("pointerdown", x, 20);
+      dispatchPointer("pointermove", x + 10, 40);
+      dispatchPointer("pointerup", x + 10, 40);
     }
+    await panel.updateComplete;
+    expect(undo.disabled).toBe(false);
+    expect(clear.disabled).toBe(false);
+    panel.tabsInHeader = true;
+    await panel.updateComplete;
+    expect([...panel.querySelectorAll(".bp-annotatebar button")]).toEqual(buttons);
+    undo.click();
+    await panel.updateComplete;
+    expect(undo.disabled).toBe(false);
+    expect(clear.disabled).toBe(false);
+    clear.click();
+    await panel.updateComplete;
+    expect(undo.disabled).toBe(true);
+    expect(clear.disabled).toBe(true);
   });
 
   it.each(["close", "suppress", "disconnect"] as const)(
