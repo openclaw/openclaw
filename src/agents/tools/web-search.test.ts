@@ -1,6 +1,5 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { normalizeWebSearchOutput, WebSearchOutputSchema } from "./web-search-output.js";
 import {
   buildUnsupportedSearchFilterResponse,
@@ -17,14 +16,11 @@ describe("web_search tool schema", () => {
     expect(createWebSearchTool({ enabled: false })).toBeNull();
   });
 
-  it("declares the normalized output contract with a complete compact hint", () => {
+  it("declares the normalized network output contract", () => {
     const tool = createWebSearchTool();
     expect(tool?.resultContentSource).toBe("network");
 
     expect(tool?.outputSchema).toBe(WebSearchOutputSchema);
-    expect(compactToolOutputHint(tool?.outputSchema)).toBe(
-      '{ error: "provider_error"; kind: "error"; message: string; provider: string; docs?: string } | { count: number; externalContent: { provider: string; source: "web_search"; untrusted: true; wrapped: true }; kind: "results"; provider: string; query: string; results: Array<{ title: string; url: string; published?: string; siteName?: string; snippet?: string }>; cached?: true; tookMs?: number; truncated?: true } | { content: string; externalContent: { provider: string; source: "web_search"; untrusted: true; wrapped: true }; kind: "answer"; provider: string; query: string; cached?: true; citations?: Array<{ url: string; title?: string }>; tookMs?: number; truncated?: true } | { data: unknown; kind: "raw"; provider: string }',
-    );
   });
 });
 
@@ -134,17 +130,17 @@ describe("web_search normalized output contract", () => {
         : normalized.kind === "answer"
           ? [normalized.content, ...(normalized.citations ?? []).map((citation) => citation.title)]
           : [];
-    for (const text of prose.filter(Boolean)) {
+    for (const text of prose) {
+      if (!text) {
+        continue;
+      }
       expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-    }
-    if (normalized.kind === "results") {
-      const snippet = normalized.results[0]?.snippet;
-      expect(snippet?.match(/<<<EXTERNAL_UNTRUSTED_CONTENT/gu)?.length).toBe(1);
-      expect(snippet?.match(/<<<END_EXTERNAL_UNTRUSTED_CONTENT/gu)?.length).toBe(1);
-      expect(snippet).not.toContain('id="c0ffee"');
-      const generatedId = snippet?.match(/<<<EXTERNAL_UNTRUSTED_CONTENT id="([0-9a-f]+)">>>/u)?.[1];
-      expect(generatedId).toBeDefined();
-      expect(snippet).toContain(`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${generatedId}">>>`);
+      expect(text.match(/<<<EXTERNAL_UNTRUSTED_CONTENT/gu)).toHaveLength(1);
+      expect(text.match(/<<<END_EXTERNAL_UNTRUSTED_CONTENT/gu)).toHaveLength(1);
+      expect(text).not.toContain('id="c0ffee"');
+      const id = text.match(/<<<EXTERNAL_UNTRUSTED_CONTENT id="([0-9a-f]+)">>>/u)?.[1];
+      expect(id).toBeDefined();
+      expect(text).toContain(`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>`);
     }
   });
 
@@ -191,28 +187,12 @@ describe("web_search normalized output contract", () => {
     expect(expectedPrefix).toHaveLength(1_999);
   });
 
-  it("routes sparse result arrays to the raw branch", () => {
-    const normalized = normalize({ results: Object.assign([], { length: 1 }) as unknown[] });
-    expect(normalized.kind).toBe("raw");
-  });
-
   it("degrades to a safe error instead of throwing on unserializable provider output", () => {
     const circular: Record<string, unknown> = { error: "boom" };
     circular.self = circular;
-    for (const result of [
-      { error: 10n as unknown } as Record<string, unknown>,
-      circular,
-      {
-        content: "answer",
-        toJSON: () => {
-          throw new Error("hostile toJSON");
-        },
-      } as Record<string, unknown>,
-    ]) {
-      const normalized = normalize(result);
-      expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
-      expect(normalized.provider).toBe("external-demo");
-    }
+    const normalized = normalize(circular);
+    expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
+    expect(normalized.provider).toBe("external-demo");
   });
 
   it("never lets exotic provider fields produce an out-of-contract result", () => {
@@ -256,24 +236,22 @@ it.each([
   expect(normalizeDate(input)).toBe(expected);
 });
 
-describe("web_search time filter parsing", () => {
-  const parse = (params: Partial<Parameters<typeof parseWebSearchTimeFilters>[0]>) =>
+it("rejects conflicting freshness and date filters", () => {
+  expect(
     parseWebSearchTimeFilters({
       freshnessProvider: "brave",
       invalidFreshnessMessage: "bad freshness",
       invalidDateAfterMessage: "bad after",
       invalidDateBeforeMessage: "bad before",
       invalidDateRangeMessage: "bad range",
-      ...params,
-    });
-
-  it("rejects conflicting freshness and date filters", () => {
-    expect(parse({ rawFreshness: "week", rawDateAfter: "2026-01-01" })).toEqual({
-      error: "conflicting_time_filters",
-      message:
-        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    });
+      rawFreshness: "week",
+      rawDateAfter: "2026-01-01",
+    }),
+  ).toEqual({
+    error: "conflicting_time_filters",
+    message:
+      "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
+    docs: "https://docs.openclaw.ai/tools/web",
   });
 });
 

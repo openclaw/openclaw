@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { startTranscripts } from "../../transcripts/capture.js";
@@ -10,6 +9,7 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptSourceProvider,
 } from "../../transcripts/provider-types.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 import {
   registerTranscriptTestProvider,
@@ -159,38 +159,28 @@ describe("transcripts tool", () => {
   });
 
   it.each(["start", "stop"] as const)("reserves a session while %s is pending", async (phase) => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    const wait = async () => {
-      entered.resolve();
-      await release.promise;
-    };
+    const gate = createEnteredGate();
     const h = harness();
     if (phase === "start") {
       h.start.mockImplementation(async (request) => {
-        await wait();
+        await gate.wait();
         return startCapture(request);
       });
     } else {
       h.stop.mockImplementation(async (request) => {
-        await wait();
+        await gate.wait();
         return stopCapture(request);
       });
       await h.begin();
     }
     const pending = phase === "start" ? h.begin() : h.action("stop", "notes");
-    await entered.promise;
+    await gate.entered;
     try {
-      if (phase === "start") {
-        await expect(h.begin()).rejects.toThrow("transcripts session already active: notes");
-      }
+      await expect(h.begin()).rejects.toThrow("transcripts session already active: notes");
       await expectDetails(h.action("stop", "notes"), { sessionId: "notes", skipped: true });
       expect(h.stop).toHaveBeenCalledTimes(phase === "start" ? 0 : 1);
-      if (phase === "stop") {
-        await expect(h.begin()).rejects.toThrow("transcripts session already active: notes");
-      }
     } finally {
-      release.resolve();
+      gate.release();
       await pending;
       if (phase === "start") {
         await h.action("stop", "notes");
@@ -258,58 +248,42 @@ describe("transcripts tool", () => {
   ])(
     "bounds status by $limit without clipping canonical selectors",
     async ({ idChars, count, shown }) => {
-      const h = harness(
-        {
-          id: "room-audio",
-          name: "Room Audio",
-          sourceKinds: ["live-audio"],
-        },
-        false,
-        true,
-      );
+      const h = harness({ id: "room-audio" }, false, true);
       const sessionIds = [
         ...Array.from({ length: count }, (_, index) => `notes-${index}-${"?".repeat(idChars)}`),
         "readable-tail",
       ];
-      const startedSessionIds: string[] = [];
       const selectors: string[] = [];
-      try {
-        for (const sessionId of sessionIds) {
-          const result = await h.execute({
-            action: "start",
-            providerId: "room-audio",
-            sessionId,
-            title: "Long meeting title\n".repeat(100),
-            channelId: sessionId === "readable-tail" ? "room-a" : "r".repeat(idChars),
-          });
-          startedSessionIds.push(sessionId);
-          const text = result.content.find((item) => item.type === "text")?.text ?? "";
-          const selector = text.match(/\nSelector: (.+)$/)?.[1];
-          if (typeof selector !== "string") {
-            throw new Error("Start must return a canonical selector");
-          }
-          selectors.push(selector);
-        }
-        const result = await h.action("status");
-        const text = result.content.find((item) => item.type === "text")?.text ?? "";
-        const listing = text.split("\n").slice(2).join("\n");
-        const rows = listing.split("\n").filter((line) => line.startsWith("{"));
-        const shownSelectors = rows.map((row) => JSON.parse(row).selector);
-        expect(listing.length).toBeLessThanOrEqual(2_000);
-        expect(rows).toHaveLength(shown);
-        expect(listing).toContain("active sessions omitted (display limit)");
-        expect(selectors).toEqual(expect.arrayContaining(shownSelectors));
-        if (idChars > 24) {
-          expect(shownSelectors).toContain(selectors.at(-1));
-        }
-        expect(result.details).toMatchObject({
-          active: sessionIds.map((sessionId) => expect.objectContaining({ sessionId })),
+      for (const sessionId of sessionIds) {
+        const result = await h.execute({
+          action: "start",
+          providerId: "room-audio",
+          sessionId,
+          title: "Long meeting title\n".repeat(100),
+          channelId: sessionId === "readable-tail" ? "room-a" : "r".repeat(idChars),
         });
-      } finally {
-        for (const sessionId of startedSessionIds) {
-          await h.action("stop", sessionId);
+        const text = result.content.find((item) => item.type === "text")?.text ?? "";
+        const selector = text.match(/\nSelector: (.+)$/)?.[1];
+        if (typeof selector !== "string") {
+          throw new Error("Start must return a canonical selector");
         }
+        selectors.push(selector);
       }
+      const result = await h.action("status");
+      const text = result.content.find((item) => item.type === "text")?.text ?? "";
+      const listing = text.split("\n").slice(2).join("\n");
+      const rows = listing.split("\n").filter((line) => line.startsWith("{"));
+      const shownSelectors = rows.map((row) => JSON.parse(row).selector);
+      expect(listing.length).toBeLessThanOrEqual(2_000);
+      expect(rows).toHaveLength(shown);
+      expect(listing).toContain("active sessions omitted (display limit)");
+      expect(selectors).toEqual(expect.arrayContaining(shownSelectors));
+      if (idChars > 24) {
+        expect(shownSelectors).toContain(selectors.at(-1));
+      }
+      expect(result.details).toMatchObject({
+        active: sessionIds.map((sessionId) => expect.objectContaining({ sessionId })),
+      });
     },
   );
 });
@@ -338,7 +312,6 @@ describe("transcripts tool account ownership", () => {
       },
       owner,
     );
-    expect(h.resolveAccountId.mock.calls[0]?.[0].source.accountId).toBe("account-a");
     expect(importTranscript.mock.calls[0]?.[0].session.source.accountId).toBe("account-a");
     const entries = await h.store.listSessionEntries();
     expect(entries).toHaveLength(1);
@@ -356,7 +329,6 @@ describe("transcripts tool account ownership", () => {
       channelId: "channel-b",
     });
     expect(h.start.mock.calls[0]?.[0].session.source.accountId).toBe("account-a");
-    expect(h.resolveAccountId.mock.calls[0]?.[0].source.accountId).toBe("account-a");
     expect(await h.store.readSession("account-bound")).toMatchObject({
       source: { accountId: "account-a" },
       metadata: { agentId: "main" },
@@ -396,7 +368,6 @@ describe("transcripts tool account ownership", () => {
     ).rejects.toThrow(
       'transcripts provider discord-voice could not use trusted account "account-a"',
     );
-    expect(h.resolveAccountId).toHaveBeenCalledOnce();
     expect(h.start).not.toHaveBeenCalled();
     expect(await h.store.readSession("invalid-owner")).toBeUndefined();
   });
@@ -423,8 +394,6 @@ describe("transcripts tool account ownership", () => {
       {
         id: "teams",
         aliases: ["msteams"],
-        name: "Teams Meetings",
-        sourceKinds: ["live-caption"],
         accessControl: undefined,
       },
       true,

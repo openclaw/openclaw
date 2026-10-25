@@ -8,7 +8,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { clearCronJobActive, markCronJobActive } from "../../cron/active-jobs.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronJob } from "../../cron/types.js";
@@ -120,49 +119,6 @@ describe("automations output contract", () => {
     setRuntimeConfigSnapshot({});
     onTestFinished(clearRuntimeConfigSnapshot);
   });
-
-  it.each(["current"] as const)(
-    "accepts successful removal with pending %s session cleanup without retrying",
-    async (sessionTarget) => {
-      const { storePath } = await makeStorePath();
-      const cron = createCronService(storePath);
-      const input = {
-        ...createJob,
-        id: `code-mode-cleanup-${sessionTarget}`,
-        enabled: false,
-        sessionTarget,
-        sessionKey: "agent:main:cleanup-fixture",
-        payload: { kind: "agentTurn" as const, message: "Synthetic pending cleanup" },
-      };
-      const activeJob = await cron.add(input);
-      const marker = markCronJobActive(activeJob.id);
-      const gatewayCall = vi.fn().mockImplementation(async () => await cron.remove(activeJob.id));
-      mockGateway(gatewayCall);
-      const { run } = codeMode(createCronTool());
-      try {
-        const result = await run(
-          `return await automations({action:"remove",jobId:${JSON.stringify(activeJob.id)}});`,
-        );
-        expect(gatewayCall).toHaveBeenCalledOnce();
-        expect(gatewayCall.mock.calls[0]?.[0]).toBe("cron.remove");
-        expect(cron.getJob(activeJob.id)).toBeUndefined();
-        expect(result, JSON.stringify(result)).toMatchObject({
-          status: "completed",
-          value: {
-            ok: true,
-            removed: true,
-            activeRunCancellationRequested: true,
-            sessionCleanup: "pending",
-          },
-        });
-      } finally {
-        clearCronJobActive(activeJob.id, marker);
-        // Reusing the id joins the owner's deferred cleanup before fixture teardown.
-        await cron.add(input);
-        cron.stop();
-      }
-    },
-  );
 
   it("keeps older full inventories valid after compact fallback", async () => {
     const gatewayCall = vi
@@ -278,6 +234,12 @@ describe("automations output contract", () => {
       "cron.status": { enabled: true, jobs: 1 },
       "cron.get": job,
       "cron.runs": history,
+      "cron.remove": {
+        ok: true,
+        removed: true,
+        activeRunCancellationRequested: true,
+        sessionCleanup: "pending",
+      },
     };
     const gatewayCall = vi.fn().mockImplementation(async (method: string) => {
       if (!(method in replies)) {
@@ -328,27 +290,7 @@ describe("automations output contract", () => {
       }
       return await execute(...args);
     };
-    const { toolCall, run } = codeMode(tool);
-    for (const [variant, args] of [
-      ["direct", { action: "add", job: streamInput }],
-      ["declarative", { action: "add", job: { ...streamInput, declarationKey: "watcher" } }],
-      ["update", { action: "update", jobId: job.id, job: { enabled: true } }],
-    ] as const) {
-      const result = await toolCall.execute(`approval-${variant}`, { id: "automations", args });
-      expect(result.details).toMatchObject({ result: { details: approvedResults[variant] } });
-      const content = expectDefined(result.content[0], "model-visible dispatch result");
-      if (content.type !== "text") {
-        throw new Error("Expected model-visible dispatch text");
-      }
-      const envelope = JSON.parse(content.text);
-      expect(envelope).toMatchObject({
-        tool: { name: "automations" },
-        result: { content: [{ type: "text", text: expect.any(String) }] },
-      });
-      expect(JSON.parse(envelope.result.content[0].text)).toMatchObject({
-        streamExecutionApproval: receipt,
-      });
-    }
+    const { run } = codeMode(tool);
     const result = await run('return await API.read("tools/automations.d.ts");');
     expect(result).toMatchObject({ status: "completed" });
     const file = result.value as { content: string };
@@ -361,7 +303,9 @@ async function consume() {
   const direct = await automations({ action: "add", job: ${JSON.stringify(streamInput)} });
   const declarative = await automations({ action: "add", job: ${JSON.stringify({ ...streamInput, declarationKey: "watcher" })} });
   const updated = await automations({ action: "update", jobId: "invoice-check", job: { enabled: true } });
+  const removed = await automations({ action: "remove", jobId: "invoice-check" });
   return {
+    removed,
     names: listed.jobs.map(job => job.name), next: listed.nextOffset,
     includeDisabled: listed.includeDisabled, inventoryHint: listed.inventoryHint,
     enabled: status.enabled, jobCount: status.jobs, name: details.name,
@@ -425,6 +369,7 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
     expect(composed, JSON.stringify(composed)).toMatchObject({
       status: "completed",
       value: {
+        removed: replies["cron.remove"],
         names: [job.name],
         includeDisabled: false,
         inventoryHint: expect.stringContaining("get jobId"),
@@ -437,6 +382,6 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
         approvals: [receipt, receipt, receipt],
       },
     });
-    expect(gatewayCall).toHaveBeenCalledTimes(4);
+    expect(gatewayCall).toHaveBeenCalledTimes(5);
   });
 });

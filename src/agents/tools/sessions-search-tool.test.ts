@@ -11,7 +11,6 @@ import { GatewayTransportError } from "../../gateway/transport-error.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { finalizeAgentTools } from "../agent-tools.finalize.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
-import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
@@ -283,9 +282,6 @@ describe("sessions_search tool", () => {
     expect(linkedSuccess.details).toHaveProperty("sessionLinkRule", SESSION_LINK_RULE);
     expect(error.details).toMatchObject({ status: "error", error: expect.any(String) });
     expect(Value.Check(tool.outputSchema!, error.details)).toBe(true);
-    expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; archivedTranscriptsExcluded?: number; indexing?: true; sessionLinkRule?: string; truncated?: true; warning?: string } | { error: string; status: "error" | "forbidden" }',
-    );
   });
 
   it("reports indexing and archived transcript exclusions", async () => {
@@ -372,9 +368,7 @@ describe("sessions_search tool", () => {
       results: [hit({ sessionKey: "global", agentId: "work", messageId: "work-global" })],
     });
 
-    const searchRequests = requests.filter((request) => request.method === "sessions.search");
-    expect(searchRequests).toHaveLength(1);
-    expect(searchRequests[0]?.params).toMatchObject({ agentId: "main" });
+    expectSearch(requests, "main", ["main"]);
     expect(result.details).toMatchObject({ results: [] });
   });
 

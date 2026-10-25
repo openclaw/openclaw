@@ -70,6 +70,8 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         const sessionKey = "agent:main:pr-handoff";
         const sessionId = "pr-handoff";
         const runId = "pr-handoff-run";
+        const scope = { agentId: "main", sessionKey };
+        const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
         const scopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
         const config: OpenClawConfig = {
           agents: {
@@ -109,19 +111,16 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             gatewayAccessGrant: null,
           },
         };
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            sessionId,
-            updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: profileId },
-          },
-        );
+        await upsertSessionEntryCore(scope, {
+          sessionId,
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: profileId },
+        });
         const operation = createTestReplyOperation({
           sessionKey,
           sessionId,
           target: captureSessionTarget({
-            storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+            storeScope: storePath,
             sessionKey,
             incarnation: sessionId,
           }),
@@ -152,16 +151,10 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
           }
         });
         const publish = vi.fn<GatewayRequestHandler>(async (options) => {
-          const admitted = await prepareGitHubPublicationRequesterV2(options, {
-            agentId: "main",
-            sessionKey,
-          });
+          const admitted = await prepareGitHubPublicationRequesterV2(options, scope);
           try {
             admitted.requester.assertCurrent();
-            expect(
-              admitted.requester.snapshot,
-              JSON.stringify(admitted.requester.snapshot),
-            ).toMatchObject({
+            expect(admitted.requester.snapshot).toMatchObject({
               actor: { kind: "operator", profileId },
               scopes,
             });
@@ -199,11 +192,7 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             scopes,
           });
           const caller = expectDefined(
-            createAdmittedGatewayToolCallerIdentity({
-              admittedRunContext,
-              agentId: "main",
-              sessionKey,
-            }),
+            createAdmittedGatewayToolCallerIdentity({ admittedRunContext, ...scope }),
             "resumed guest caller",
           );
           await withGatewayToolCallerIdentity(caller, async () => {
@@ -213,7 +202,7 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             await expect(
               callAgentToolGatewayRequest({
                 method: "tools.effective",
-                params: { agentId: "main", sessionKey },
+                params: scope,
               }),
             ).rejects.toThrow("operator.read");
             await expect(
@@ -270,10 +259,11 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
               accepted: (async () => {
                 if (outcome === "reset") {
                   // A same-ID reset rotates the lifecycle before the abandoned resume reports.
-                  await upsertSessionEntryCore(
-                    { agentId: "main", sessionKey },
-                    { sessionId, updatedAt: 2, lifecycleRevision: "after-reset" },
-                  );
+                  await upsertSessionEntryCore(scope, {
+                    sessionId,
+                    updatedAt: 2,
+                    lifecycleRevision: "after-reset",
+                  });
                 }
                 return outcome === "undelivered" || outcome === "reset"
                   ? { ok: false as const, error: "Session event was abandoned before execution" }
@@ -286,6 +276,115 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
               }),
             };
           });
+        const exercise = async () => {
+          const wrapped = withSessionControllerOwner(operation, () =>
+            wrapToolWithAbortSignal(
+              createGitHubPublishTool({
+                sessionId,
+                runId,
+                // An ordinary local Docker conversation, as the visibility rule admits.
+                sandbox: createSandboxTestContext({
+                  overrides: {
+                    sessionKey,
+                    workspaceSource: undefined,
+                    backend: { id: "docker" } as never,
+                  },
+                }),
+                onYield() {
+                  order.push("yield");
+                  runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
+                  operation.completeWithAfterClearBarrier(
+                    cleanup.promise.then(() => {
+                      order.push("cleanup");
+                    }),
+                  );
+                },
+              }),
+              runAbort.signal,
+            ),
+          );
+          // Code Mode keeps the yielding call direct, as it does sessions_yield.
+          const surface = applyCodeModeCatalog({
+            tools: [...codeMode.tools, wrapped],
+            config: codeMode.config,
+            catalogRef: codeMode.catalogRef,
+          });
+          expect(
+            codeMode.catalogRef.current?.entries.some((entry) => entry.name === "github_publish"),
+          ).toBe(false);
+          const tool = expectDefined(
+            surface.tools.find((candidate) => candidate.name === "github_publish"),
+            "direct github_publish",
+          );
+          const result = await tool.execute("prepare", {
+            action: "prepare_pr",
+            pullRequestUrl: "https://github.com/example/repo/pull/1",
+          });
+          expect(result.details).toMatchObject({
+            status: "started",
+            async: true,
+            yielded: true,
+          });
+          expect(order).toEqual(["yield"]);
+          expect(endpoint).not.toHaveBeenCalled();
+          if (outcome === "stop") {
+            exec.cancelExecRequestOwners(exec.activeExecRequestOwners({ sessionKey }, () => true));
+          }
+          cleanup.resolve(undefined);
+          if (outcome === "stop") {
+            await operation.ownerSettlement;
+            expect(endpoint).not.toHaveBeenCalled();
+            expect(enqueue).not.toHaveBeenCalled();
+          } else {
+            expect(await resumed.promise).toContain(
+              outcome === "failed" ? "Saved source preserved" : '"status":"prepared"',
+            );
+            expect(order).toEqual(["yield", "cleanup", "prepare", "resume"]);
+            expect(enqueue).toHaveBeenCalledOnce();
+            expect(resumedCaller).toEqual({ identity: undefined });
+            if (outcome === "prepared") {
+              const settled = await withinTest(
+                expectDefined(receipt, "actual event receipt").settled,
+                signal,
+              );
+              expect(settled, settled.error).toMatchObject({
+                status: "completed",
+                executionStarted: true,
+              });
+              expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+              expect(inspect).not.toHaveBeenCalled();
+              expect(publish).toHaveBeenCalledOnce();
+              expect(admin).not.toHaveBeenCalled();
+            }
+          }
+          if (outcome === "undelivered" || outcome === "reset") {
+            await noticed.promise;
+            const history = await readSessionMessagesAsync(
+              {
+                ...scope,
+                sessionId,
+                storePath,
+              },
+              { mode: "full", reason: `${outcome} handoff notice` },
+            );
+            if (outcome === "reset") {
+              expect(JSON.stringify(history)).not.toContain("could not continue");
+              return;
+            }
+            const last = history.at(-1) as {
+              role?: string;
+              content?: Array<{ text?: string }>;
+            };
+            expect(last.role).toBe("assistant");
+            const text = last.content?.map((part) => part.text ?? "").join("") ?? "";
+            expect(text).toContain(
+              "PR preparation could not continue this conversation automatically: Session event was abandoned before execution",
+            );
+            expect(text).toContain('"status":"prepared"');
+          } else {
+            expect(notice).not.toHaveBeenCalled();
+          }
+        };
         try {
           await withPluginRuntimeGatewayRequestScope(
             {
@@ -296,135 +395,17 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             },
             () =>
               withOperatorToolGatewayAuthority({ scopes }, () =>
-                exec.withExecRequestTurn(
-                  { identity: { agentId: "main", sessionKey, sessionId, runId } },
-                  () =>
-                    // Production callers carry the turn batch receipt and the run abort signal.
-                    withGatewayToolCallerIdentity(
-                      {
-                        agentId: "main",
-                        sessionKey,
-                        operationalRunInstance: createOperationalRunInstanceRef(runId),
-                        receiptAuthority: () => !runAbort.signal.aborted,
-                        approvalSignals: [runAbort.signal],
-                      },
-                      async () => {
-                        const wrapped = withSessionControllerOwner(operation, () =>
-                          wrapToolWithAbortSignal(
-                            createGitHubPublishTool({
-                              sessionId,
-                              runId,
-                              // An ordinary local Docker conversation, as the visibility rule admits.
-                              sandbox: createSandboxTestContext({
-                                overrides: {
-                                  sessionKey,
-                                  workspaceSource: undefined,
-                                  backend: { id: "docker" } as never,
-                                },
-                              }),
-                              onYield() {
-                                order.push("yield");
-                                runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
-                                operation.completeWithAfterClearBarrier(
-                                  cleanup.promise.then(() => {
-                                    order.push("cleanup");
-                                  }),
-                                );
-                              },
-                            }),
-                            runAbort.signal,
-                          ),
-                        );
-                        // Code Mode keeps the yielding call direct, as it does sessions_yield.
-                        const surface = applyCodeModeCatalog({
-                          tools: [...codeMode.tools, wrapped],
-                          config: codeMode.config,
-                          catalogRef: codeMode.catalogRef,
-                        });
-                        expect(
-                          codeMode.catalogRef.current?.entries.some(
-                            (entry) => entry.name === "github_publish",
-                          ),
-                        ).toBe(false);
-                        const tool = expectDefined(
-                          surface.tools.find((candidate) => candidate.name === "github_publish"),
-                          "direct github_publish",
-                        );
-                        const result = await tool.execute("prepare", {
-                          action: "prepare_pr",
-                          pullRequestUrl: "https://github.com/example/repo/pull/1",
-                        });
-                        expect(result.details).toMatchObject({
-                          status: "started",
-                          async: true,
-                          yielded: true,
-                        });
-                        expect(order).toEqual(["yield"]);
-                        expect(endpoint).not.toHaveBeenCalled();
-                        if (outcome === "stop") {
-                          exec.cancelExecRequestOwners(
-                            exec.activeExecRequestOwners({ sessionKey }, () => true),
-                          );
-                        }
-                        cleanup.resolve(undefined);
-                        if (outcome === "stop") {
-                          await operation.ownerSettlement;
-                          expect(endpoint).not.toHaveBeenCalled();
-                          expect(enqueue).not.toHaveBeenCalled();
-                        } else {
-                          expect(await resumed.promise).toContain(
-                            outcome === "failed" ? "Saved source preserved" : '"status":"prepared"',
-                          );
-                          expect(order).toEqual(["yield", "cleanup", "prepare", "resume"]);
-                          expect(enqueue).toHaveBeenCalledOnce();
-                          expect(resumedCaller).toEqual({ identity: undefined });
-                          if (outcome === "prepared") {
-                            const settled = await withinTest(
-                              expectDefined(receipt, "actual event receipt").settled,
-                              signal,
-                            );
-                            expect(settled, settled.error).toMatchObject({
-                              status: "completed",
-                              executionStarted: true,
-                            });
-                            expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-                            expect(inspect).not.toHaveBeenCalled();
-                            expect(publish).toHaveBeenCalledOnce();
-                            expect(admin).not.toHaveBeenCalled();
-                          }
-                        }
-                        if (outcome === "undelivered" || outcome === "reset") {
-                          await noticed.promise;
-                          const history = await readSessionMessagesAsync(
-                            {
-                              agentId: "main",
-                              sessionKey,
-                              sessionId,
-                              storePath: resolveSessionStorePathCore(undefined, {
-                                agentId: "main",
-                              }),
-                            },
-                            { mode: "full", reason: `${outcome} handoff notice` },
-                          );
-                          if (outcome === "reset") {
-                            expect(JSON.stringify(history)).not.toContain("could not continue");
-                            return;
-                          }
-                          const last = history.at(-1) as {
-                            role?: string;
-                            content?: Array<{ text?: string }>;
-                          };
-                          expect(last.role).toBe("assistant");
-                          const text = last.content?.map((part) => part.text ?? "").join("") ?? "";
-                          expect(text).toContain(
-                            "PR preparation could not continue this conversation automatically: Session event was abandoned before execution",
-                          );
-                          expect(text).toContain('"status":"prepared"');
-                        } else {
-                          expect(notice).not.toHaveBeenCalled();
-                        }
-                      },
-                    ),
+                exec.withExecRequestTurn({ identity: { ...scope, sessionId, runId } }, () =>
+                  // Production callers carry the turn batch receipt and the run abort signal.
+                  withGatewayToolCallerIdentity(
+                    {
+                      ...scope,
+                      operationalRunInstance: createOperationalRunInstanceRef(runId),
+                      receiptAuthority: () => !runAbort.signal.aborted,
+                      approvalSignals: [runAbort.signal],
+                    },
+                    exercise,
+                  ),
                 ),
               ),
           );
