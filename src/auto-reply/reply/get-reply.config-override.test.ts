@@ -64,6 +64,12 @@ const resolvedConfig: OpenClawConfig = {
   channels: { telegram: { botToken: "resolved-telegram-token" } },
   agents: { defaults: { userTimezone: "America/New_York" } },
 };
+const baseline = (sessionId: string): Awaited<ReturnType<CaptureSessionDiffBaseline>> => ({
+  version: 1,
+  sessionId,
+  root: "/workspace",
+  files: [],
+});
 
 beforeEach(() => {
   vi.unstubAllEnvs();
@@ -164,12 +170,7 @@ describe("getReplyFromConfig configOverride", () => {
       { snapshot: true },
     );
     mocks.initSessionState.mockResolvedValue(session.fixture);
-    mocks.captureBaseline.mockImplementation(async ({ sessionId }) => ({
-      version: 1,
-      sessionId,
-      root: "/workspace",
-      files: [],
-    }));
+    mocks.captureBaseline.mockImplementation(async ({ sessionId }) => baseline(sessionId));
   });
 
   it("rejects forged operator authority at the public SDK reply entry", async () => {
@@ -388,12 +389,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       await beforeSettlement(modelStarted.promise, reply, signal, "model did not start");
       expect(events).toEqual(["model"]);
     } finally {
-      capture.resolve({
-        version: 1,
-        sessionId: "overlapping-baseline",
-        root: "/workspace",
-        files: [],
-      });
+      capture.resolve(baseline("overlapping-baseline"));
       await reply.catch(() => undefined);
     }
     await expect(reply).resolves.toEqual({ text: "ok" });

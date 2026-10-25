@@ -229,16 +229,19 @@ it.each([
 ] as const)("retains accepted input custody until capacity admission (%s)", async (outcome) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = recoveryScope(state.sessionsDir(), "capacity-admission");
-    const entry: InternalSessionEntry = {
-      sessionId: "capacity-session",
-      lifecycleRevision: "capacity-revision",
-      updatedAt: 1,
+    const acceptedInput = {
       lifecycleRunId: "accepted-input",
       activeWriterRunId: "previous-writer",
       restartRecoveryDeliveryRunId: "accepted-input",
       restartRecoveryDeliverySourceRunId: "accepted-input",
-      restartRecoverySourceIngress: "control-ui",
+      restartRecoverySourceIngress: "control-ui" as const,
       restartRecoveryDeliveryRequestFingerprint: "accepted-fingerprint",
+    };
+    const entry: InternalSessionEntry = {
+      ...acceptedInput,
+      sessionId: "capacity-session",
+      lifecycleRevision: "capacity-revision",
+      updatedAt: 1,
     };
     const completion: HarnessCompletionRecovery | undefined =
       outcome === "execute" || outcome === "source-replaced"
@@ -280,6 +283,11 @@ it.each([
         },
         { include: ["worker.request"] },
       );
+      const expectWrites = async (expected: string[]) => {
+        await waitForDiagnosticEventsDrained();
+        expect(writes).toEqual(expected);
+        writes.length = 0;
+      };
       const sourceAdmission =
         completion &&
         prepareSystemAgentRunAdmission(
@@ -292,13 +300,8 @@ it.each([
       try {
         const admittedRunContext = await sourceAdmission?.admit("embedded");
         await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-        await waitForDiagnosticEventsDrained();
-        expect(writes).toEqual([]);
-        expect(loadSessionEntry(scope)).toMatchObject({
-          lifecycleRunId: "accepted-input",
-          activeWriterRunId: "previous-writer",
-          restartRecoveryDeliveryRequestFingerprint: "accepted-fingerprint",
-        });
+        await expectWrites([]);
+        expect(loadSessionEntry(scope)).toMatchObject(acceptedInput);
         const claimWriter = () =>
           claimAgentSessionWriter({
             ...scope,
@@ -339,8 +342,7 @@ it.each([
               updatedAt: activityAt,
             },
           });
-          await waitForDiagnosticEventsDrained();
-          expect(writes).toEqual(["session.actor.adoptRun"]);
+          await expectWrites(["session.actor.adoptRun"]);
         } else if (outcome === "source-replaced" && completion) {
           await patchEntry(
             {
@@ -351,8 +353,7 @@ it.each([
           await waitForDiagnosticEventsDrained();
           writes.length = 0;
           await expect(claimWriter()).rejects.toThrow();
-          await waitForDiagnosticEventsDrained();
-          expect(writes).toEqual([]);
+          await expectWrites([]);
         } else if (outcome === "admission-rejected") {
           const { actor } = expectDefined(await fixture.acquireSessionActor(), "admitted actor");
           using adoptionAttempt = vi.spyOn(actor, "adoptRun");
@@ -360,9 +361,8 @@ it.each([
           await expect(claimWriter()).rejects.toThrow();
           await expect(claimWriter()).rejects.toThrow();
           await controller.clear();
-          await waitForDiagnosticEventsDrained();
+          await expectWrites(["session.entry.patch.commit"]);
           expect(adoptionAttempt).toHaveBeenCalledOnce();
-          expect(writes).toEqual(["session.entry.patch.commit"]);
         } else if (outcome === "unknown" || outcome === "rollback") {
           const { actor } = expectDefined(await fixture.acquireSessionActor(), "admitted actor");
           const adopt = actor.adoptRun.bind(actor);
@@ -420,13 +420,12 @@ it.each([
           }
           await expect(claimWriter()).rejects.toThrow(error);
           await controller.clear();
-          await waitForDiagnosticEventsDrained();
-          expect(adoptionAttempt).toHaveBeenCalledOnce();
-          expect(writes).toEqual(
+          await expectWrites(
             outcome === "rollback"
               ? ["session.actor.adoptRun", "session.entry.patch.commit"]
               : ["session.actor.adoptRun"],
           );
+          expect(adoptionAttempt).toHaveBeenCalledOnce();
         } else {
           await controller.clear();
         }
@@ -435,9 +434,7 @@ it.each([
         unsubscribe();
       }
     }
-    await closeOpenClawAgentDatabasesAsync(state.root);
-    closeOpenClawAgentDatabasesForTest(state.root);
-    const persisted = expectDefined(loadSessionEntry(scope), "queued input survives reopen");
+    const persisted = await reopen(scope, state.root);
     if (outcome === "execute" || outcome === "unknown") {
       expect(persisted).toMatchObject({
         lifecycleRunId: "capacity-execution",
@@ -454,12 +451,7 @@ it.each([
       expect(persisted.restartRecoveryDeliveryRunId).toBeUndefined();
       expect(persisted.activeWriterRunId).toBe("previous-writer");
     } else {
-      expect(persisted).toMatchObject({
-        lifecycleRunId: "accepted-input",
-        activeWriterRunId: "previous-writer",
-        restartRecoveryDeliveryRunId: "accepted-input",
-        restartRecoveryDeliveryRequestFingerprint: "accepted-fingerprint",
-      });
+      expect(persisted).toMatchObject(acceptedInput);
     }
   });
 });

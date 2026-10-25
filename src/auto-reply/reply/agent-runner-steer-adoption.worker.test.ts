@@ -45,6 +45,41 @@ async function prepareOperation(run: FollowupRun) {
   return { operation, fingerprint };
 }
 
+function createIncoming(
+  prompt: string,
+  messageId: string,
+  sessionKey: string,
+  overrides: Partial<FollowupRun["run"]> = {},
+) {
+  const run = createQueueTestRun({ prompt, messageId, originatingChannel: "webchat" });
+  Object.assign(run.run, { agentId: "main", sessionKey, senderIsOwner: true }, overrides);
+  return run;
+}
+
+function cleanup(key: string, operation: ReturnType<typeof createTestReplyOperation>) {
+  clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
+  operation.complete();
+}
+
+function startSteering(
+  run: FollowupRun,
+  operation: ReturnType<typeof createTestReplyOperation>,
+  overrides: Partial<Parameters<typeof createSteerParams>[3]> = {},
+) {
+  const resultState: ReplyOperationRunState = {};
+  const followup = vi.fn(async () => {});
+  const start = () =>
+    runActiveReplySteer(
+      createSteerParams(run.run.sessionKey!, run, operation, {
+        opts: { runId: run.messageId },
+        replyOperationRunState: resultState,
+        runFollowup: followup,
+        ...overrides,
+      }),
+    );
+  return { resultState, followup, start };
+}
+
 function steeringRequester() {
   return createAdmittedRunOperatorAuthority({
     profileId: "steering-requester",
@@ -73,12 +108,7 @@ function preparedDelivery(
 it("consumes human steering once after the same logical owner recovers its detached backend", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:recovered-worker-steering";
-    const run = createQueueTestRun({
-      prompt: "use these new human requirements",
-      messageId: "recovery-human-input",
-      originatingChannel: "webchat",
-    });
-    Object.assign(run.run, { agentId: "main", sessionKey: key, senderIsOwner: true });
+    const run = createIncoming("use these new human requirements", "recovery-human-input", key);
     const { operation, fingerprint } = await prepareOperation(run);
     const oldQueue = vi.fn(async () => {});
     attachSteerBackend(operation, fingerprint, { runId: "old-attempt", queueMessage: oldQueue });
@@ -87,32 +117,18 @@ it("consumes human steering once after the same logical owner recovers its detac
     operation.detachBackend(oldBackend!);
     // Observe the real readiness call without replacing its result or authority.
     const readiness = vi.spyOn(controllerState, "waitForReplyOperationBackend");
-    const followup = vi.fn(async () => {});
-    const resultState: ReplyOperationRunState = {};
+    const { followup, resultState, start } = startSteering(run, operation);
     const delivered: string[] = [];
     const recoveredQueue = vi.fn<
       NonNullable<Parameters<typeof attachSteerBackend>[2]["queueMessageAsync"]>
-    >(async (text, options, preparation) => {
-      await preparation.prepareCurrent();
-      preparation.assertCurrent();
-      delivered.push(text);
-      options?.onQueueAccepted?.(true);
-    });
-    const steering = runActiveReplySteer(
-      createSteerParams(key, run, operation, {
-        opts: { runId: run.messageId },
-        replyOperationRunState: resultState,
-        runFollowup: followup,
-      }),
-    );
+    >(preparedDelivery(delivered).queueMessageAsync!);
+    const steering = start();
     try {
       await vi.waitFor(() => expect(readiness).toHaveBeenCalledOnce());
       expect(oldQueue).not.toHaveBeenCalled();
       attachSteerBackend(operation, fingerprint, {
         runId: "recovered-attempt",
-        async queueMessage() {
-          throw new Error("Expected awaited steering preparation");
-        },
+        ...preparedDelivery(delivered),
         queueMessageAsync: recoveredQueue,
       });
       await expect(steering).resolves.toBe("handled");
@@ -123,8 +139,7 @@ it("consumes human steering once after the same logical owner recovers its detac
       expect(followup).not.toHaveBeenCalled();
     } finally {
       readiness.mockRestore();
-      clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
-      operation.complete();
+      cleanup(key, operation);
       await steering;
     }
   });
@@ -143,46 +158,28 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
       { agentId: "main", sessionKey: policyKey },
       { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
     );
-    const run = createQueueTestRun({
-      prompt: "use the new requirements",
-      messageId: "incoming-steer",
-      originatingChannel: "webchat",
-    });
-    run.operatorAuthority = steeringRequester();
-    Object.assign(run.run, {
-      agentId: "main",
-      sessionKey: key,
+    const run = createIncoming("use the new requirements", "incoming-steer", key, {
       runtimePolicySessionKey: policyKey,
-      senderIsOwner: true,
       config,
     });
+    run.operatorAuthority = steeringRequester();
     const { operation, fingerprint } = await prepareOperation(run);
     const delivered: string[] = [];
     attachSteerBackend(operation, fingerprint, {
       cancel() {},
       ...preparedDelivery(delivered),
     });
-    const resultState: ReplyOperationRunState = {};
-    const followup = vi.fn(async () => {});
+    const { resultState, followup, start } = startSteering(run, operation);
     const calls = observeMainThreadSql();
     try {
-      await expect(
-        runActiveReplySteer(
-          createSteerParams(key, run, operation, {
-            opts: { runId: "incoming-steer" },
-            replyOperationRunState: resultState,
-            runFollowup: followup,
-          }),
-        ),
-      ).resolves.toBe("handled");
+      await expect(start()).resolves.toBe("handled");
       expect(delivered).toEqual([run.prompt]);
       expect(resultState.admission).toEqual({ status: "accepted", mode: "steer" });
       expect(followup).not.toHaveBeenCalled();
       calls.expectIdle();
     } finally {
       calls.restore();
-      clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
-      operation.complete();
+      cleanup(key, operation);
     }
   });
 });
@@ -357,8 +354,7 @@ it.for(
       } finally {
         resume.resolve();
         await settlement;
-        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
-        operation.complete();
+        cleanup(key, operation);
         await Promise.allSettled(pendingFollowups);
       }
     });
@@ -400,21 +396,13 @@ it.for([
         originatingChannel: "discord",
       });
       run.run = { ...original.run, gitContributorProfileId: incoming };
-      const resultState: ReplyOperationRunState = {};
       const followupDelivered = createDeferred<FollowupRun>();
       const followup = vi.fn(async (value: FollowupRun) => {
         followupDelivered.resolve(value);
       });
+      const { resultState, start } = startSteering(run, operation, { runFollowup: followup });
       try {
-        await expect(
-          runActiveReplySteer(
-            createSteerParams(key, run, operation, {
-              opts: { runId: "incoming-request" },
-              replyOperationRunState: resultState,
-              runFollowup: followup,
-            }),
-          ),
-        ).resolves.toBe("handled");
+        await expect(start()).resolves.toBe("handled");
         expect(delivered).toEqual(steered ? [run.prompt] : []);
         expect(resultState.admission).toEqual({
           status: "accepted",
@@ -432,8 +420,7 @@ it.for([
           expect(followup).toHaveBeenCalledOnce();
         }
       } finally {
-        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
-        operation.complete();
+        cleanup(key, operation);
       }
     });
   },

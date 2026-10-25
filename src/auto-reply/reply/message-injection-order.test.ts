@@ -298,9 +298,7 @@ it.each([
 );
 
 it("classifies refused caller policy projection as an authority mismatch before backend invocation", async () => {
-  const refusedSessionId = "refused-projection";
-  const refusedSessionKey = "agent:main:refused-projection";
-  const operation = createOperation({ sessionId: refusedSessionId, sessionKey: refusedSessionKey });
+  const operation = createOperation();
   const projectAsync = vi.fn(async () => {
     throw new Error("caller policy differs");
   });
@@ -314,23 +312,8 @@ it("classifies refused caller policy projection as an authority mismatch before 
   });
   await operation.bindToolAuthorityRouteAsync({ provider: "test", model: "test" });
   const queueMessage = vi.fn(async () => {});
-  const handle = {
-    ...createHandle({ runId: "refused-run", toolAuthorityFingerprint: "creator" }),
-    messageInjectionV2: {
-      version: 2 as const,
-      isAvailable: () => true,
-      queueMessage,
-      queueMessageAsync: queueMessage,
-    },
-  };
-  registerTestEmbeddedRun(
-    refusedSessionId,
-    handle,
-    refusedSessionKey,
-    undefined,
-    undefined,
-    operation,
-  );
+  const handle = makeBackend("refused-run", "creator", queueMessage);
+  registerTestEmbeddedRun(sessionId, handle, sessionKey, undefined, undefined, operation);
   operation.setPhase("running");
   await expect(
     steerSessionControllerOperation({

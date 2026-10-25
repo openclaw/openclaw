@@ -184,6 +184,9 @@ function expectLastMutation(enabled: boolean) {
   ]);
 }
 
+const runWrite = (command: string) =>
+  runCommand(command, { gatewayClientScopes: WRITE_GATEWAY_SCOPES });
+
 function expectNoMutation(beforeRead = false) {
   if (beforeRead) {
     expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
@@ -316,9 +319,7 @@ describe("handlePluginsCommand", () => {
 
   it("rejects invalid config before loading plugin state", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({ valid: false, path: "/tmp/openclaw.json" });
-    const result = await runCommand("/plugins enable pack/one", {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
+    const result = await runWrite("/plugins enable pack/one");
     expect(result?.reply?.text).toBe("⚠️ Config file is invalid; fix it before using /plugins.");
     expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
     expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
@@ -388,9 +389,7 @@ describe("handlePluginsCommand", () => {
         });
       }
     });
-    const result = await runCommand("/plugins enable superpowers", {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
+    const result = await runWrite("/plugins enable superpowers");
     expect(result?.reply?.text).toContain("Tools: superpowers_run");
     expect(result?.reply?.text).toContain("Integrity: sha512-superpowers");
     expect(result?.reply?.text).toContain(
@@ -398,9 +397,7 @@ describe("handlePluginsCommand", () => {
     );
     expectNoMutation();
 
-    const accepted = await runCommand("/plugins enable superpowers --accept-capabilities", {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
+    const accepted = await runWrite("/plugins enable superpowers --accept-capabilities");
 
     expect(accepted?.reply?.text).toContain('Plugin "superpowers" enabled');
     expectLastMutation(true);
@@ -411,9 +408,7 @@ describe("handlePluginsCommand", () => {
     "--accept-capabilities superpowers",
     "superpowers --accept-capabilities --accept-capabilities",
   ])("rejects malformed enable consent flags: %s", async (argumentsText) => {
-    const result = await runCommand(`/plugins enable ${argumentsText}`, {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
+    const result = await runWrite(`/plugins enable ${argumentsText}`);
 
     expect(result?.reply?.text).toContain(
       "Usage: /plugins enable <plugin-id-or-name> [--accept-capabilities]",
@@ -424,9 +419,7 @@ describe("handlePluginsCommand", () => {
 
   it("refuses plugin enablement in Nix mode before reading or replacing config", async () => {
     await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
-      const result = await runCommand("/plugins enable superpowers", {
-        gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-      });
+      const result = await runWrite("/plugins enable superpowers");
       expect(result?.reply?.text).toContain("OPENCLAW_NIX_MODE=1");
       expect(result?.reply?.text).toContain("nix-openclaw#quick-start");
       expectNoMutation(true);
@@ -438,9 +431,7 @@ describe("handlePluginsCommand", () => {
       workspaceDir: "/tmp/plugins-workspace",
       plugins: [{ ...pluginSummary, name: "Super Powers" }],
     });
-    const result = await runCommand("/plugins enable Super Powers", {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
+    const result = await runWrite("/plugins enable Super Powers");
     expect(result?.reply?.text).toContain('Plugin "superpowers" enabled');
     expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalledTimes(1);
     expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
