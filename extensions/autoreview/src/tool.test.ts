@@ -71,11 +71,11 @@ function fixture(
     ...overrides.request,
   };
   const helper = Promise.withResolvers<ReturnType<typeof json>>();
-  let response:
-    | { pass: number; status: string; output: string | null; model: string | null }
-    | undefined;
-  let cwd: string | undefined;
-  let helperArgv: readonly string[] | undefined;
+  const observed: {
+    response?: { pass: number; status: string; output: string | null; model: string | null };
+    cwd?: string;
+    helperArgv?: readonly string[];
+  } = {};
   const command = vi
     .mocked(runCommandWithTimeout)
     .mockReset()
@@ -87,12 +87,11 @@ function fixture(
       expect(options.baseEnv).toBeUndefined();
       expect(options.input).toBe(prompt);
       expect(options).toMatchObject({ killProcessTree: true, killGraceMs: 5_000 });
-      cwd = options.cwd;
-      expect(await fs.readdir(cwd!)).toEqual([]);
+      observed.cwd = options.cwd;
+      expect(await fs.readdir(observed.cwd!)).toEqual([]);
       return commandResult({
         stdout: "complete",
         cleanup: "normal",
-        noOutputTimedOut: false,
         ...overrides.result,
       });
     });
@@ -116,16 +115,16 @@ function fixture(
       installedSkillRoots: { autoreview: "/protected/autoreview" },
       async run({ argv, input, signal }) {
         if (argv.includes("--native-handoff")) {
-          helperArgv = argv;
+          observed.helperArgv = argv;
           return Promise.race([
             helper.promise,
             rejectOnAbort(signal, new DOMException("Cancelled", "AbortError")),
           ]);
         }
         if (argv.includes("--native-submit")) {
-          response = JSON.parse(input!);
-          const done = response?.status === "done";
-          if (!done || response?.pass === request.passes) {
+          observed.response = JSON.parse(input!);
+          const done = observed.response?.status === "done";
+          if (!done || observed.response?.pass === request.passes) {
             const details = overrides.helperFailure
               ? { report: null, status: null }
               : reportDetails(request.model);
@@ -147,11 +146,9 @@ function fixture(
     context,
     command,
     admitted,
+    observed,
     execute: (input: Parameters<typeof tool.execute>[1] = params, signal?: AbortSignal) =>
       tool.execute("review", input, signal),
-    response: () => response,
-    cwd: () => cwd,
-    helperArgv: () => helperArgv,
     argv: () => command.mock.calls[0]![0],
   };
 }
@@ -167,61 +164,43 @@ it("preserves settings, isolation, and complete output", async () => {
       agent_override: { skills: ["private-host-skill"] },
     },
   });
+  const { observed } = test;
   const result = await test.execute();
   const text = JSON.stringify(reportDetails("fixture/preferred"));
   expect(result.content).toEqual([{ type: "text", text }]);
-  expect(test.response()).toMatchObject({ status: "done", output, model: "fixture/preferred" });
+  expect(observed.response).toMatchObject({ status: "done", output, model: "fixture/preferred" });
   for (const flag of ["--model", "--thinking", "--engine-timeout-seconds", "--max-review-passes"]) {
-    expect(test.helperArgv()).not.toContain(flag);
+    expect(observed.helperArgv).not.toContain(flag);
   }
   const argv = test.argv();
   expect(argv).toEqual(expect.arrayContaining(["--code-mode", "direct"]));
-  for (const flag of ["--model", "--thinking", "--timeout"]) {
-    expect(argv).not.toContain(flag);
-  }
+  expect(argv.filter((arg) => ["--model", "--thinking", "--timeout"].includes(arg))).toEqual([]);
   const overrides = argv.flatMap((arg, index) =>
     arg === "--config-override" ? [JSON.parse(argv[index + 1]!)] : [],
   );
-  const caller = {
-    skills: [],
-    contextInjection: "never",
-    nativeRuntimeConsent: [],
-    model: { primary: "fixture/preferred", fallbacks: [] },
-    tools: toolPolicy("Fixture/Preferred"),
-  };
-  expect(overrides).toEqual([
-    {
-      tools: {
-        ...toolPolicy("FIXTURE"),
-        deny: ["*"],
-        toolSearch: false,
-        codeMode: { enabled: false },
-      },
-      agents: {
-        defaults: { systemAgent: { agentId: "caller" } },
-        entries: { caller },
+  expect(overrides).toHaveLength(1);
+  const [{ tools, agents, ...rest }] = overrides;
+  expect(rest).toEqual({});
+  expect(tools).toEqual({
+    ...toolPolicy("FIXTURE"),
+    deny: ["*"],
+    toolSearch: false,
+    codeMode: { enabled: false },
+  });
+  expect(agents).toEqual({
+    defaults: { systemAgent: { agentId: "caller" } },
+    entries: {
+      caller: {
+        skills: [],
+        contextInjection: "never",
+        nativeRuntimeConsent: [],
+        model: { primary: "fixture/preferred", fallbacks: [] },
+        tools: toolPolicy("Fixture/Preferred"),
       },
     },
-  ]);
-  expect(test.admitted.mock.calls[0]![0]).toEqual({ model: "fixture/preferred", explicit: false });
-  await expect(fs.stat(path.dirname(test.cwd()!))).rejects.toMatchObject({ code: "ENOENT" });
-});
-
-it("forwards changed defaults and requested overrides", async () => {
-  const test = fixture({ request: { model: "fixture/new-default", thinking: "high" } });
-  await test.execute({ ...params, maxPriority: "P2", passes: 12, timeoutSeconds: 900 });
-  expect(test.admitted.mock.calls[0]![0]).toEqual({
-    model: "fixture/new-default",
-    explicit: false,
   });
-  for (const pair of [
-    ["--max-priority", "P2"],
-    ["--max-review-passes", "12"],
-    ["--engine-timeout-seconds", "900"],
-  ]) {
-    expect(test.helperArgv()).toEqual(expect.arrayContaining(pair));
-  }
-  expect(test.argv()).toEqual(expect.arrayContaining(["--thinking", "high"]));
+  expect(test.admitted.mock.calls[0]![0]).toEqual({ model: "fixture/preferred", explicit: false });
+  await expect(fs.stat(path.dirname(observed.cwd!))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it.each([{ model: "other" }, { passes: 3 }])("rejects plan changes: %j", async (next) => {
@@ -258,7 +237,7 @@ it.each([
   expect(failure.message).toContain(`Reviewer command failed (${diagnostic}`);
   expect(failure.message).not.toContain("unrelated-fake-secret-token");
   expect(failure.message.length).toBeLessThan(4300);
-  expect(test.response()).toMatchObject({ status: "failed", output: null, model: null });
+  expect(test.observed.response).toMatchObject({ status: "failed", output: null, model: null });
   expect(test.command).toHaveBeenCalledOnce();
 });
 
@@ -277,11 +256,25 @@ it.each(["installation", "authority"])("requires protected %s", (requirement) =>
   expect(createAutoReviewTool(context)).toBeNull();
 });
 
-it.each([null, 900.25])("retains timeout %s across passes", async (timeoutSeconds) => {
-  const test = fixture({ request: { passes: 2, engine_timeout_seconds: timeoutSeconds } });
-  await test.execute();
+it.each([null, 900.25])("forwards settings with per-pass timeout %s", async (timeoutSeconds) => {
+  const model = "fixture/new-default";
+  const test = fixture({
+    request: {
+      model,
+      thinking: "high",
+      passes: 2,
+      engine_timeout_seconds: timeoutSeconds,
+    },
+  });
+  await test.execute({ ...params, maxPriority: "P2", passes: 12, timeoutSeconds: 900 });
+  expect(test.admitted.mock.calls[0]![0]).toEqual({ model, explicit: false });
+  const helper = test.observed.helperArgv;
+  expect(helper).toEqual(expect.arrayContaining(["--max-priority", "P2"]));
+  expect(helper).toEqual(expect.arrayContaining(["--max-review-passes", "12"]));
+  expect(helper).toEqual(expect.arrayContaining(["--engine-timeout-seconds", "900"]));
   expect(test.command).toHaveBeenCalledTimes(2);
   for (const [argv, options] of test.command.mock.calls) {
+    expect(argv).toEqual(expect.arrayContaining(["--thinking", "high"]));
     if (timeoutSeconds === null) {
       expect(argv).not.toContain("--timeout");
     } else {
@@ -289,7 +282,7 @@ it.each([null, 900.25])("retains timeout %s across passes", async (timeoutSecond
     }
     expect(options).toMatchObject({ timeoutMs: timeoutSeconds === null ? undefined : 900_250 });
   }
-  expect(test.response()).toMatchObject({ pass: 2, status: "done" });
+  expect(test.observed.response).toMatchObject({ pass: 2, status: "done" });
 });
 
 it.each(["caller", "model authority"])("cancels after %s revocation", async (owner) => {
@@ -312,6 +305,6 @@ it.each(["caller", "model authority"])("cancels after %s revocation", async (own
   authority.abort(cancellation);
   await rejected;
   expect(options.signal?.aborted).toBe(true);
-  expect(test.response()).toBeUndefined();
+  expect(test.observed.response).toBeUndefined();
   await expect(fs.stat(path.dirname(options.cwd!))).rejects.toMatchObject({ code: "ENOENT" });
 });
