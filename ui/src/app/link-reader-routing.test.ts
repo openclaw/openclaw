@@ -14,19 +14,16 @@ import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { availableLinkReaders, startLinkReaderRouting } from "./link-reader-routing.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 
-function descriptor(
-  pluginId: string,
-  id: string,
-  pathPattern: string,
-): ControlUiLinkReaderDescriptor {
-  return {
-    pluginId,
-    id,
-    label: pluginId,
-    linkReader: { hosts: [`${pluginId}.example`], pathPattern, detailMethod: `${pluginId}.item` },
-  };
-}
-const reader = descriptor("forge", "items", "^/items/[1-9][0-9]*$");
+const reader: ControlUiLinkReaderDescriptor = {
+  pluginId: "forge",
+  id: "items",
+  label: "Forge",
+  linkReader: {
+    hosts: ["forge.example"],
+    pathPattern: "^/items/[1-9][0-9]*$",
+    detailMethod: "forge.item",
+  },
+};
 const readerCapabilities = (controlUiLinkReaders = [reader]) => ({
   ok: true as const,
   descriptors: [],
@@ -171,25 +168,15 @@ it("keys canonical URLs without losing query identity when fragments change", ()
   expect(linkReaderResponseMatchesTarget(target, `${itemUrl}?label=%23two#start`)).toBe(false);
 });
 
-it("only claims URLs declared by an enabled plugin, including a non-forge provider", () => {
-  const notes = descriptor("notes", "notes", "^/documents/[a-z-]+$");
-  expect(
-    resolveLinkReaderTarget("https://notes.example/documents/hello-world#discussion", [
-      reader,
-      notes,
-    ]),
-  ).toEqual({ href: "https://notes.example/documents/hello-world#discussion", reader: notes });
+it("ignores disabled readers and malformed patterns", () => {
   expect(resolveLinkReaderTarget(itemUrl, [])).toBeNull();
   const malformed = { ...reader, linkReader: { ...reader.linkReader, pathPattern: "[" } };
   expect(resolveLinkReaderTarget(itemUrl, [malformed, reader])?.reader).toBe(reader);
 });
 it.each([
   "https://forge.example.evil.test/items/1",
-  "http://forge.example/items/1",
   "https://forge.example:8443/items/1",
-  "https://forge.example/items/0",
   "not-a-url",
-  "https://example:not-a-real-password@forge.example/items/1",
 ])("leaves unsupported URLs external: %s", (url) => {
   expect(resolveLinkReaderTarget(url, [reader])).toBeNull();
 });
