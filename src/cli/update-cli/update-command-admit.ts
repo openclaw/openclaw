@@ -15,6 +15,8 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { compareOpenClawVersions, normalizeOpenClawVersionBase } from "../../config/version.js";
 import { resolveCronJobsStorePathFromConfig } from "../../cron/store/paths.js";
+import { resolveDatabaseEngineSelection } from "../../infra/database-engine/config.js";
+import { withDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
@@ -317,9 +319,15 @@ async function inspectUpdateAdmission(
       if (databaseContext && schemasAccepted) {
         try {
           const snapshot = databaseContext.configSnapshot;
-          await assertHeartbeatScratchMigrationUnambiguous(
-            snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+          const selection = await resolveDatabaseEngineSelection(
+            databaseContext.config,
             databaseContext.env,
+          );
+          await withDatabaseEngineSelection(selection, () =>
+            assertHeartbeatScratchMigrationUnambiguous(
+              snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+              databaseContext.env,
+            ),
           );
         } catch (error) {
           // A valid refusal keeps shipped drivers from falling back to their older admission.
