@@ -56,55 +56,46 @@ function render(
 }
 
 describe("buildDeveloperInstructions deferred tool discovery", () => {
-  it.each([false, true])("advertises JavaScript discovery only when enabled (%s)", (enabled) => {
-    const instructions = render(
-      {},
-      {
-        nativeCodeModeEnabled: enabled,
-        dynamicTools: [namespace([tool("dashboard", {}, true)])],
-      },
-    );
-    expect(instructions).toContain("openclaw.dashboard");
-    expect(instructions.includes("ALL_TOOLS")).toBe(enabled);
-    if (enabled) {
-      expect(instructions).toContain("native JavaScript `exec`");
-    } else {
-      expect(instructions).toContain("Shell command tools execute operating-system commands");
-    }
-  });
-
-  it.each([false, true])(
-    "does not advertise discovery for a restricted direct surface (%s)",
-    (enabled) => {
+  it.each([
+    [false, false, false],
+    [true, false, false],
+    [false, false, true],
+    [true, false, true],
+    [true, true, false],
+  ] as const)(
+    "selects discovery (JavaScript: %s, code-only: %s, restricted: %s)",
+    (enabled, codeOnly, restricted) => {
       const instructions = render(
-        {
-          toolsAllow: ["message"],
-          sourceReplyDeliveryMode: "message_tool_only",
-        },
+        restricted ? { toolsAllow: ["message"], sourceReplyDeliveryMode: "message_tool_only" } : {},
         {
           nativeCodeModeEnabled: enabled,
-          dynamicTools: [tool("message")],
+          nativeCodeModeOnlyEnabled: codeOnly,
+          dynamicTools: codeOnly
+            ? []
+            : restricted
+              ? [tool("message")]
+              : [namespace([tool("dashboard", {}, true)])],
         },
       );
-      expect(instructions).not.toContain("ALL_TOOLS");
-      expect(instructions).not.toContain("`tool_search`");
-      expect(instructions).not.toContain("spawn_agent");
+      if (restricted) {
+        for (const name of ["ALL_TOOLS", "`tool_search`", "spawn_agent"]) {
+          expect(instructions).not.toContain(name);
+        }
+      } else {
+        expect(instructions.includes("ALL_TOOLS")).toBe(enabled);
+        expect(instructions).toContain(
+          enabled
+            ? "native JavaScript `exec`"
+            : "Shell command tools execute operating-system commands",
+        );
+        if (!codeOnly) {
+          expect(instructions).toContain("openclaw.dashboard");
+        } else {
+          expect(instructions).not.toContain("`tool_search`");
+        }
+      }
     },
   );
-
-  it("preserves JavaScript discovery for code-mode-only threads", () => {
-    const instructions = render(
-      {},
-      {
-        nativeCodeModeEnabled: true,
-        nativeCodeModeOnlyEnabled: true,
-        dynamicTools: [],
-      },
-    );
-    expect(instructions).toContain("native JavaScript `exec`");
-    expect(instructions).toContain("ALL_TOOLS");
-    expect(instructions).not.toContain("`tool_search`");
-  });
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {

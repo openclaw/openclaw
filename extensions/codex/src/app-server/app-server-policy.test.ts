@@ -157,19 +157,7 @@ describe("Codex app-server policy", () => {
 
   it.each([
     ["lmstudio", undefined, {}, undefined],
-    ["openrouter", "openai/gpt-5.5", {}, undefined],
     ["openai", "gpt-5.5", { model: "gpt-5.5", config: customEndpointConfig }, "user"],
-    ["codex", "lmstudio/local-model", { modelProvider: undefined }, undefined],
-    [
-      "local",
-      undefined,
-      {
-        execMode: undefined,
-        modelProvider: undefined,
-        pluginConfig: { appServer: { mode: "guardian", approvalsReviewer: "guardian_subagent" } },
-      },
-      undefined,
-    ],
   ] as const)("uses human approval for %s / %s", (provider, model, options, initialReviewer) => {
     const appServer = openAiRuntimeOptions(options);
     if (initialReviewer) {

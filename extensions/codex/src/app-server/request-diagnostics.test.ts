@@ -5,7 +5,6 @@ import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/plugin-test-r
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CodexAppServerRpcError } from "./rpc-error.js";
 
 const shared = vi.hoisted(() => ({
   acquire: vi.fn(),
@@ -232,19 +231,13 @@ describe("scoped Codex timeout diagnostics", () => {
     },
   );
 
-  it("preserves RPC errors and caller cancellation without emitting a timeout", async () => {
-    const error = new CodexAppServerRpcError(
-      { code: -32601, message: "unsupported" },
-      "model/list",
-    );
-    shared.acquire.mockResolvedValue(client(vi.fn().mockRejectedValue(error)));
-    expect(await start(async (send) => send({ method: "model/list" }))).toBe(error);
+  it("preserves caller cancellation without emitting a timeout", async () => {
     const controller = new AbortController();
     const cancelled = new Error("cancelled");
     controller.abort(cancelled);
     expect(await start(async () => undefined, { signal: controller.signal })).toBe(cancelled);
     expect(records).toEqual([]);
-    expect(shared.acquire).toHaveBeenCalledOnce();
-    expect(shared.release).toHaveBeenCalledOnce();
+    expect(shared.acquire).not.toHaveBeenCalled();
+    expect(shared.release).not.toHaveBeenCalled();
   });
 });

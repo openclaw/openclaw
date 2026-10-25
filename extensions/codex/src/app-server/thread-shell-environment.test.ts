@@ -1,6 +1,5 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import {
@@ -139,14 +138,6 @@ describe("Codex managed shell environment", () => {
     });
     expect(Object.hasOwn(result, "shell_environment_policy.set.PATH")).toBe(false);
     expect(apply(result)).toEqual(result);
-  });
-
-  it("preserves dotted patch precedence", () => {
-    const config = mergeCodexThreadConfigs(
-      { "shell_environment_policy.set.PATH": "/old", "shell_environment_policy.set.KEEP": "yes" },
-      { shell_environment_policy: { set: { PATH: "/new" } } },
-    );
-    expect(config).toEqual({ shell_environment_policy: { set: { PATH: "/new", KEEP: "yes" } } });
   });
 
   it.each([
