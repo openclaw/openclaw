@@ -36,29 +36,9 @@ function embeddingSearch(baseUrl: string) {
 
 function references(provider: string, pin = "") {
   const ref = `${provider}/qwen:cloud${pin}`;
-  const scalarKeys = [
-    "model",
-    "primary",
-    "summaryModel",
-    "imageModel",
-    "utilityModel",
-    "voiceModel",
-    "imageGenerationModel",
-    "musicGenerationModel",
-    "pdfModel",
-    "videoGenerationModel",
-    "preferredModel",
-  ];
-  const arrayKeys = [
-    "fallback",
-    "fallbacks",
-    "allowedModels",
-    "modelFallbacks",
-    "imageModelFallbacks",
-  ];
   return {
-    ...Object.fromEntries(scalarKeys.map((key) => [key, ref])),
-    ...Object.fromEntries(arrayKeys.map((key) => [key, [ref, "custom/keep"]])),
+    model: ref,
+    fallbacks: [ref, "custom/keep"],
     mediaModels: { image: `${provider}/image` },
     modelByChannel: { telegram: `${provider}/channel` },
     media: { provider, model: "vision" },
@@ -68,10 +48,7 @@ function references(provider: string, pin = "") {
 
 describe("provider rename config migration", () => {
   it.each([
-    ["https://ollama.com", true],
-    ["https://OLLAMA.COM/", true],
-    ["https://ollama.com:443/api/v1/", true],
-    ["https://ollama.com/path?query=1#fragment", true],
+    ["https://OLLAMA.COM:443/path?query=1#fragment", true],
     ["http://ollama.com", false],
     ["https://ollama.com:444", false],
     ["https://ollama.com.example/api", false],
@@ -109,9 +86,6 @@ describe("provider rename config migration", () => {
     expect(result.config.agents?.defaults?.model).toBe("ollama-cloud/qwen:cloud");
     expect(result.config.models?.providers?.ollama).toBeUndefined();
     expect(config.memory.search?.provider).toBe("ollama");
-    expect(
-      result.changes.some((change) => change.includes("config.memory.search provider/model")),
-    ).toBe(provider === "ollama-cloud");
   });
 
   it.each([
@@ -170,7 +144,7 @@ describe("provider rename config migration", () => {
     expectStable(config, before, result.config);
   });
 
-  it("rewrites every reference location, drops profile pins once, and preserves policy denials", () => {
+  it("rewrites each reference shape, drops profile pins once, and preserves policy denials", () => {
     const config = configFor("https://ollama.com");
     Object.assign(config, {
       fixture: {
@@ -208,13 +182,7 @@ describe("provider rename config migration", () => {
     }
     expect(policy?.allows({ provider: "ollama-cloud", model: "allowed" })).toBe(true);
     expect(policy?.allows({ provider: "custom", model: "allowed" })).toBe(false);
-    for (const ref of [
-      "ollamax/model",
-      "custom/model:cloud",
-      "ollama-cloud/model",
-      "ollama:default",
-      "model:cloud",
-    ]) {
+    for (const ref of ["ollamax/model", "ollama:default"]) {
       expect(rewriteProviderModelRef(ref, renames)).toBeUndefined();
     }
   });

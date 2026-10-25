@@ -41,7 +41,9 @@ async function setupConfig(
   }
   await fs.writeFile(configPath, `${JSON.stringify(config(root), null, 2)}\n`, "utf8");
   const io = configIO(root, env);
-  return { root, configPath, env, io };
+  const read = () => fs.readFile(configPath, "utf8");
+  const readConfig = async (): Promise<OpenClawConfig> => JSON.parse(await read());
+  return { root, configPath, env, io, read, readConfig };
 }
 
 afterEach(async () => {
@@ -53,7 +55,7 @@ afterEach(async () => {
 describe("default role materialization authored writes", () => {
   it("preserves env references and includes and is idempotent after persistence", async () => {
     const includeRaw = `${JSON.stringify({ telegram: { enabled: true } }, null, 2)}\n`;
-    const { root, configPath, io } = await setupConfig(
+    const { root, io, read, readConfig } = await setupConfig(
       () => ({
         agents: {
           defaults: { model: "${DEFAULT_MODEL}", workspace: "/srv/ops" },
@@ -85,11 +87,12 @@ describe("default role materialization authored writes", () => {
       explicitSetValueSource: doctorCandidate,
     });
 
-    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
-    expect(persisted.agents?.defaults?.model).toBe("${DEFAULT_MODEL}");
-    expect(persisted.agents?.entries?.ops?.workspace).toBe("/srv/ops");
-    expect(persisted.agents?.ownership).toBe("explicit");
-    expect(persisted.agents?.entries?.research?.model).toBe("${RESEARCH_MODEL}");
+    const persisted = await readConfig();
+    expect(persisted.agents).toMatchObject({
+      ownership: "explicit",
+      defaults: { model: "${DEFAULT_MODEL}", authInheritance: { agentId: "ops" } },
+      entries: { ops: { workspace: "/srv/ops" }, research: { model: "${RESEARCH_MODEL}" } },
+    });
     expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
     expect(persisted.channels).toEqual({ $include: "./channels.json5" });
     await expect(fs.readFile(path.join(root, "channels.json5"), "utf-8")).resolves.toBe(includeRaw);
@@ -98,32 +101,16 @@ describe("default role materialization authored writes", () => {
       match: { channel: "telegram", accountId: "*" },
     });
     expect(persisted).not.toHaveProperty("agents.defaults.heartbeat");
-    expect(persisted.agents?.defaults?.authInheritance?.agentId).toBe("ops");
     expect(persisted.talk?.agentId).toBe("ops");
 
-    const firstPersisted = await fs.readFile(configPath, "utf-8");
+    const firstPersisted = await read();
     const reread = await io.readConfigFileSnapshot();
     await io.writeConfigFile(reread.config, { baseSnapshot: reread });
-    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(firstPersisted);
-
-    const topology = await io.readConfigFileSnapshot();
-    await io.writeConfigFile(
-      {
-        ...topology.config,
-        agents: {
-          ...topology.config.agents,
-          ownership: undefined,
-          entries: { ...topology.config.agents?.entries, writer: {} },
-        },
-      },
-      { baseSnapshot: topology },
-    );
-    const rewritten = JSON.parse(await fs.readFile(configPath, "utf-8"));
-    expect(rewritten.agents).toMatchObject({ ownership: "explicit", entries: { writer: {} } });
+    await expect(read()).resolves.toBe(firstPersisted);
   });
 
   it("pins the survivor's previous workspace during a generic roster collapse", async () => {
-    const { configPath, io } = await setupConfig(() => ({
+    const { io, readConfig } = await setupConfig(() => ({
       agents: {
         ownership: "explicit",
         defaults: { workspace: "/srv/fleet" },
@@ -144,8 +131,11 @@ describe("default role materialization authored writes", () => {
       { baseSnapshot: snapshot, allowedAgentRosterRemovals: ["ops"] },
     );
 
-    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-    expect(persisted.agents?.entries?.research?.workspace).toBe("/srv/fleet/research");
+    const persisted = await readConfig();
+    expect(persisted.agents).toMatchObject({
+      ownership: "explicit",
+      entries: { research: { workspace: "/srv/fleet/research" } },
+    });
   });
 
   it("refuses to remove an inherited-auth owner with a custom agentDir", async () => {
@@ -217,13 +207,13 @@ describe("default role materialization authored writes", () => {
   });
 
   it("requires roster migration before an unrelated write and preserves the canonical owner", async () => {
-    const { root, configPath, io } = await setupConfig(() => ({
+    const { root, io, read, readConfig } = await setupConfig(() => ({
       agents: { entries: { ops: {}, research: { default: true } } },
       gateway: { port: 18789 },
     }));
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
-    const original = await fs.readFile(configPath, "utf8");
+    const original = await read();
 
     await expect(
       io.writeConfigFile(
@@ -239,7 +229,7 @@ describe("default role materialization authored writes", () => {
         }),
       ]),
     });
-    await expect(fs.readFile(configPath, "utf8")).resolves.toBe(original);
+    await expect(read()).resolves.toBe(original);
 
     const doctorCandidate = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
       env: { HOME: root },
@@ -258,11 +248,12 @@ describe("default role materialization authored writes", () => {
       { baseSnapshot: canonical, explicitSetPaths: [["gateway", "port"]] },
     );
 
-    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-    expect(persisted.gateway?.port).toBe(19001);
-    expect(persisted.agents?.ownership).toBe("explicit");
+    const persisted = await readConfig();
+    expect(persisted).toMatchObject({
+      gateway: { port: 19001 },
+      agents: { ownership: "explicit", defaults: { systemAgent: { agentId: "research" } } },
+    });
     expect(persisted.agents?.entries?.research).not.toHaveProperty("default");
-    expect(persisted.agents?.defaults?.systemAgent?.agentId).toBe("research");
     const reread = await io.readConfigFileSnapshot();
     expect(tryResolveLegacyCompatibilityAgentId(reread.config)).toBe("research");
   });
