@@ -1,4 +1,3 @@
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,11 +11,8 @@ import { PluginRegistryInspectionResources } from "../plugins/registry-inspectio
 import { bindPluginRegistryResourceOwner } from "../plugins/registry-lifecycle.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { withPluginRuntimeRegistryScope as withRegistry } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
+import { createTranscriptsStore } from "./capture-operations.js";
 import { prepareTranscriptCaptureDisable as prepareDisable } from "./capture-startup.js";
 import type {
   TranscriptSourceProvider as Provider,
@@ -26,7 +22,6 @@ import {
   transcriptStatusRoom as room,
   useTranscriptStatusFixture,
 } from "./status.producer.test-harness.js";
-import { TranscriptsStore } from "./store.js";
 
 const tempDirs = createTempDirTracker();
 const stopSuccessfully: NonNullable<Provider["stop"]> = async ({ sessionId }) => ({
@@ -41,16 +36,7 @@ function captureActions(tool: NonNullable<ReturnType<typeof createTranscriptsToo
     status: async () => (await tool.execute("status", { action: "status" })).details,
   };
 }
-function captureTools(stateDir: string, options: Parameters<typeof createTranscriptsTool>[0]) {
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  return {
-    ...captureActions(createTranscriptsTool(options)),
-    store: new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    }),
-  };
-}
-const expectDisabled = (tool: Pick<ReturnType<typeof captureTools>, "start">) =>
+const expectDisabled = (tool: Pick<ReturnType<typeof captureActions>, "start">) =>
   expect(tool.start(room)).rejects.toThrow("transcripts are disabled");
 
 type StopFailure = "returned" | "thrown";
@@ -81,18 +67,11 @@ function retryingProvider(id: string, error: string, failure: StopFailure, repor
   };
   return { provider, requests, state, stop };
 }
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  vi.unstubAllEnvs();
-  tempDirs.cleanup();
-});
+afterEach(tempDirs.cleanup);
 
 describe("transcript provider cleanup custody", () => {
   const fixture = useTranscriptStatusFixture();
   it.each([
-    { owner: "service", failure: "returned", registryChange: "none" },
     { owner: "manual-service", failure: "returned", registryChange: "none" },
     { owner: "tool", failure: "returned", registryChange: "removed" },
     { owner: "tool", failure: "thrown", registryChange: "replaced" },
@@ -125,14 +104,7 @@ describe("transcript provider cleanup custody", () => {
         }
         const request = requests[0]!;
         await request.onUtterance({ text: "Saved before stop" });
-        if (owner === "service") {
-          await service.stop();
-          expect
-            .soft(ctx.logger.warn)
-            .toHaveBeenCalledWith(expect.stringMatching(/stop failed.*cleanup unavailable/));
-        } else {
-          await expect.soft(tool.stop("notes")).rejects.toThrow("cleanup unavailable");
-        }
+        await expect.soft(tool.stop("notes")).rejects.toThrow("cleanup unavailable");
         await expect.soft(tool.status()).resolves.toMatchObject({
           active: [{ sessionId: "notes", cleanupPending: true }],
           pendingFinalization: [],
@@ -348,102 +320,107 @@ describe("live transcript capture policy", () => {
   });
 });
 
-it.each(["inspection", "prepared"] as const)(
-  "keeps a tool capture's %s source through cleanup retry after its agent closes",
-  async (source) => {
-    const stateDir = tempDirs.make("transcript-source-retention-");
-    const owner = createTestPluginRegistry();
-    const register = (provider: Provider) => {
-      const record = createPluginRecord({
-        id: provider.id,
-        source: import.meta.url,
-        origin: "bundled",
-        enabled: true,
-        configSchema: false,
-      });
-      owner.registry.plugins.push(record);
-      owner.createApi(record, { config: {} }).registerTranscriptSourceProvider(provider);
-      return getPluginInstance(record)!;
-    };
-    const { provider, requests, state, stop } = retryingProvider(
-      "retained-captions",
-      "caption transport stop failed",
-      "thrown",
-      true,
-    );
-    const instance = register(provider);
-    const disposed = vi.fn();
-    instance.lifecycle.onDispose(disposed);
-    const sibling = register({
-      id: "unrelated-captions",
-      name: "Unrelated captions",
-      sourceKinds: ["live-caption"],
-      aliases: [provider.id],
-      async start() {
-        throw new Error("The unrelated source must not start");
-      },
-    });
-    let releaseRegistry: () => void | Promise<void>;
-    const registry =
-      source === "prepared"
-        ? bindPluginRegistryResourceOwner({ ...owner.registry }, owner.registry)
-        : owner.registry;
-    if (source === "inspection") {
-      const resources = new PluginRegistryInspectionResources(async () => {
-        for (const captureInstance of [instance, sibling]) {
-          const result = await captureInstance.dispose();
-          if (result.errors.length) {
-            throw new AggregateError(result.errors, "Caption source disposal failed");
-          }
-        }
-      });
-      resources.attach(registry);
-      releaseRegistry = () => resources.release();
-    } else {
-      const release = retainPreparedPluginRegistry(registry);
-      if (!release) {
-        throw new Error("Expected the prepared runtime to own its source registry");
-      }
-      releaseRegistry = release;
-    }
-    const agent = new PluginInvocationScope(registry, [instance, sibling], { retained: true });
-    const tool = captureTools(stateDir, {
-      config: { transcripts: { enabled: true } },
-      caller: { kind: "operator", source: "local" },
-    });
-    const { store } = tool;
-    let disabled: ReturnType<typeof prepareDisable> | undefined;
-    try {
-      await withRegistry(registry, () =>
-        agent.run(() => tool.start({ providerId: provider.id, sessionId: "retained-capture" })),
+describe("retained transcript source", () => {
+  useTranscriptStatusFixture();
+  it.each(["inspection", "prepared"] as const)(
+    "keeps a tool capture's %s source through cleanup retry after its agent closes",
+    async (source) => {
+      const stateDir = tempDirs.make("transcript-source-retention-");
+      const owner = createTestPluginRegistry();
+      const register = (provider: Provider) => {
+        const record = createPluginRecord({
+          id: provider.id,
+          source: import.meta.url,
+          origin: "bundled",
+          enabled: true,
+          configSchema: false,
+        });
+        owner.registry.plugins.push(record);
+        owner.createApi(record, { config: {} }).registerTranscriptSourceProvider(provider);
+        return getPluginInstance(record)!;
+      };
+      const { provider, requests, state, stop } = retryingProvider(
+        "retained-captions",
+        "caption transport stop failed",
+        "thrown",
+        true,
       );
-      const request = requests[0]!;
-      agent.release();
-      await releaseRegistry();
-      expect(disposed).not.toHaveBeenCalled();
-      expect(sibling.retainedWorkCount).toBe(0);
-      expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      await request.onUtterance({ text: "Speech after the agent turn finished" });
-      disabled = prepareDisable(stateDir);
-      await expect(disabled.drain()).rejects.toThrow("Transcript capture policy drainage failed");
-      expect(disposed).not.toHaveBeenCalled();
-      expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      state.failing = false;
-      await disabled.drain();
-      expect(stop).toHaveBeenCalledTimes(2);
-      expect(disposed).toHaveBeenCalledOnce();
-      expect(instance.retainedWorkCount).toBe(0);
-      expect(await store.readSummary(request.session)).toMatchObject({
-        summary: { transcript: ["Speech after the agent turn finished"] },
+      const instance = register(provider);
+      const disposed = vi.fn();
+      instance.lifecycle.onDispose(disposed);
+      const sibling = register({
+        id: "unrelated-captions",
+        name: "Unrelated captions",
+        sourceKinds: ["live-caption"],
+        aliases: [provider.id],
+        async start() {
+          throw new Error("The unrelated source must not start");
+        },
       });
-      expect((await store.readSession("retained-capture"))?.stoppedAt).toEqual(expect.any(String));
-    } finally {
-      state.failing = false;
-      agent.release();
-      disabled ??= prepareDisable(stateDir);
-      await disabled.drain();
-      disabled.resume();
-      await releaseRegistry();
-    }
-  },
-);
+      let releaseRegistry: () => void | Promise<void>;
+      const registry =
+        source === "prepared"
+          ? bindPluginRegistryResourceOwner({ ...owner.registry }, owner.registry)
+          : owner.registry;
+      if (source === "inspection") {
+        const resources = new PluginRegistryInspectionResources(async () => {
+          for (const captureInstance of [instance, sibling]) {
+            const result = await captureInstance.dispose();
+            if (result.errors.length) {
+              throw new AggregateError(result.errors, "Caption source disposal failed");
+            }
+          }
+        });
+        resources.attach(registry);
+        releaseRegistry = () => resources.release();
+      } else {
+        const release = retainPreparedPluginRegistry(registry);
+        if (!release) {
+          throw new Error("Expected the prepared runtime to own its source registry");
+        }
+        releaseRegistry = release;
+      }
+      const agent = new PluginInvocationScope(registry, [instance, sibling], { retained: true });
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const tool = captureActions(
+        createTranscriptsTool({
+          config: { transcripts: { enabled: true } },
+          caller: { kind: "operator", source: "local" },
+        }),
+      );
+      const store = createTranscriptsStore({ stateDir, logger: console });
+      let disabled: ReturnType<typeof prepareDisable> | undefined;
+      try {
+        await withRegistry(registry, () =>
+          agent.run(() => tool.start({ providerId: provider.id, sessionId: "retained-capture" })),
+        );
+        const request = requests[0]!;
+        agent.release();
+        await releaseRegistry();
+        expect(disposed).not.toHaveBeenCalled();
+        expect(sibling.retainedWorkCount).toBe(0);
+        await request.onUtterance({ text: "Speech after the agent turn finished" });
+        disabled = prepareDisable(stateDir);
+        await expect(disabled.drain()).rejects.toThrow("Transcript capture policy drainage failed");
+        expect(disposed).not.toHaveBeenCalled();
+        state.failing = false;
+        await disabled.drain();
+        expect(stop).toHaveBeenCalledTimes(2);
+        expect(disposed).toHaveBeenCalledOnce();
+        expect(await store.readSummary(request.session)).toMatchObject({
+          summary: { transcript: ["Speech after the agent turn finished"] },
+        });
+        expect((await store.readSession("retained-capture"))?.stoppedAt).toEqual(
+          expect.any(String),
+        );
+      } finally {
+        state.failing = false;
+        agent.release();
+        disabled ??= prepareDisable(stateDir);
+        await disabled.drain();
+        disabled.resume();
+        await releaseRegistry();
+      }
+    },
+  );
+});

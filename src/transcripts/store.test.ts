@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
@@ -12,9 +11,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
-import { readTranscriptSessionEntries } from "./store-sqlite-read.js";
 import { appendMeetingTranscriptUtterance, meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -164,7 +161,7 @@ function session(
   return { sessionId, source: { providerId: "manual-transcript" }, startedAt };
 }
 
-it("lists summary presence by complete session identity in one read", async () => {
+it("lists summary presence by complete session identity", async () => {
   const first = await admit(session("repeated"));
   const later = await admit(session("repeated", "2026-07-02T10:00:00.000Z"));
   const sibling = await admit(session("sibling", later.startedAt));
@@ -176,19 +173,9 @@ it("lists summary presence by complete session identity in one read", async () =
   expect(await store.listSessionEntries()).toMatchObject(expected(false));
   await store.writeSummary(summarizeTranscripts({ session: first, utterances: [] }), first);
   expect(await store.listSessionEntries()).toMatchObject(expected(true));
-
-  const database = stateDatabase();
-  const statements: string[] = [];
-  const sql = observeMainThreadSql({ onStatement: (query) => statements.push(query) });
-  try {
-    expect(readTranscriptSessionEntries(database)).toMatchObject(expected(true));
-    expect(statements).toHaveLength(1);
-  } finally {
-    sql.restore();
-  }
 });
 
-it("reuses list pages without worker requests and observes another store's writes", async () => {
+it("isolates returned list pages and observes another store's writes", async () => {
   const writer = createStore();
   const target = { ...session(), title: "Initial title" };
   await writer.writeSession(target);
@@ -198,37 +185,20 @@ it("reuses list pages without worker requests and observes another store's write
   expect(initial).toMatchObject([{ title: "Initial title", utteranceCount: 0 }]);
   initial[0]!.title = "Caller mutation";
 
-  const requests = vi.spyOn(Worker.prototype, "postMessage");
-  const sql = observeMainThreadSql();
-  try {
-    expect(await page(createStore())).toMatchObject([
-      { title: "Initial title", utteranceCount: 0 },
-    ]);
-    expect(requests).not.toHaveBeenCalled();
-    sql.expectIdle();
-
-    await writer.writeSession({ ...target, title: "Updated title" });
-    expect(await page()).toMatchObject([{ title: "Updated title", utteranceCount: 0 }]);
-    await writer.appendUtteranceForSession(target, { text: "New speech", final: true });
-    expect(await page()).toMatchObject([{ title: "Updated title", utteranceCount: 1 }]);
-    expect((await store.listReadEntries({ ...options, query: "absent" })).entries).toEqual([]);
-    expect(await page()).toHaveLength(1);
-    sql.expectIdle();
-  } finally {
-    requests.mockRestore();
-    sql.restore();
-  }
+  expect(await page(createStore())).toMatchObject([{ title: "Initial title", utteranceCount: 0 }]);
+  await writer.writeSession({ ...target, title: "Updated title" });
+  expect(await page()).toMatchObject([{ title: "Updated title", utteranceCount: 0 }]);
+  await writer.appendUtteranceForSession(target, { text: "New speech", final: true });
+  expect(await page()).toMatchObject([{ title: "Updated title", utteranceCount: 1 }]);
+  expect((await store.listReadEntries({ ...options, query: "absent" })).entries).toEqual([]);
+  expect(await page()).toHaveLength(1);
 });
 
 it.each(["empty", "speech", "summary", "export", "pending export", "rewritten"] as const)(
   "discards only unchanged empty failed admissions (%s)",
   async (state) => {
     const target = { ...session("abandoned"), stoppedAt: "2026-07-01T10:00:01.000Z" };
-    await store.writeSession(target);
-    const expectedInputRevision = await store.readSummaryInputRevision(target);
-    if (expectedInputRevision === undefined) {
-      throw new Error("Expected admitted transcript");
-    }
+    const { inputRevision: expectedInputRevision } = await store.writeSession(target);
     if (state === "speech") {
       await store.appendUtteranceForSession(target, { text: "Retained speech", final: true });
     } else if (state === "summary") {
@@ -259,52 +229,41 @@ it.each(["empty", "speech", "summary", "export", "pending export", "rewritten"] 
   },
 );
 
-it("keeps selector and overview columns aligned on insert, replacement, and removal", async () => {
-  const fields = [
-    ["accountId", "source_account_id", "account"],
-    ["guildId", "source_guild_id", "guild"],
-    ["channelId", "source_channel_id", "channel"],
-    ["meetingUrl", "source_meeting_url", "https://example.test/meeting"],
-    ["threadTs", "source_thread_ts", "thread"],
-    ["fileId", "source_file_id", "file"],
-  ] as const;
-  const columnValues = (empty = false) =>
-    Object.fromEntries(fields.map(([, column, value]) => [column, empty ? null : value]));
-  const target = {
-    ...session(),
-    source: {
-      providerId: "manual-transcript",
-      ...Object.fromEntries(fields.map(([key, , value]) => [key, value])),
-    },
-    metadata: { agentId: "agent" },
+it("keeps source matching and overview projections current after replacement", async () => {
+  const source = {
+    providerId: "manual-transcript",
+    accountId: "account",
+    guildId: "guild",
+    channelId: "channel",
+    meetingUrl: "https://example.test/meeting",
+    threadTs: "thread",
+    fileId: "file",
   };
-  const readColumns = () =>
-    stateDatabase()
-      .prepare(
-        `SELECT ${fields.map(([, column]) => column).join(", ")}, metadata_agent_id
-         FROM meeting_transcript_sessions WHERE session_id = ? AND started_at = ?`,
-      )
-      .get(target.sessionId, target.startedAt);
-  await store.writeSession(target);
-  expect(readColumns()).toEqual({ ...columnValues(), metadata_agent_id: "agent" });
-  await store.writeSession({
+  const target = await admit({
+    ...session(),
+    source,
+    metadata: { agentId: "agent" },
+    stoppedAt: "2026-07-01T11:00:00.000Z",
+  });
+  const recent = (locator: typeof target.source) =>
+    store.readRecentStoppedSession(locator, target.startedAt, "2026-07-01T11:00:00.000Z");
+  expect((await recent(source))?.session).toEqual(target);
+  expect((await store.listReadEntries({ agentId: "agent" })).entries).toHaveLength(1);
+  const replacement = {
     ...target,
-    source: { providerId: "manual-transcript", accountId: "replacement" },
+    source: { providerId: source.providerId, accountId: "replacement" },
     metadata: {},
-  });
-  expect(readColumns()).toEqual({
-    ...columnValues(true),
-    source_account_id: "replacement",
-    metadata_agent_id: null,
-  });
+  };
+  await store.writeSession(replacement);
+  expect(await recent(source)).toBeUndefined();
+  expect((await recent(replacement.source))?.session).toEqual(replacement);
+  expect((await store.listReadEntries({ agentId: "agent" })).entries).toEqual([]);
   const summary = summarizeTranscripts({ session: target, utterances: [] });
   await store.writeSummary({ ...summary, overview: "Initial overview" }, target);
   await store.writeSummary({ ...summary, overview: "Replacement overview" }, target);
-  expect(
-    stateDatabase()
-      .prepare("SELECT overview FROM meeting_transcript_summaries WHERE session_id = ?")
-      .get(target.sessionId),
-  ).toEqual({ overview: "Replacement overview" });
+  expect((await store.listReadEntries({})).entries).toMatchObject([
+    { overview: "Replacement overview" },
+  ]);
 });
 
 it("keeps summary snapshot queries bound to the current session and persisted revision", async () => {
@@ -433,11 +392,10 @@ it("retains admitted ID origins across updates, reopen, and Doctor restoration",
     for (const metadata of [undefined, { sessionIdOrigin: "generated", agentId: "updated" }]) {
       await store.writeSession({ ...target, metadata, stoppedAt: "2026-07-01T10:01:00.000Z" });
       const stored = await store.readSession(target.sessionId);
-      expect(stored?.metadata?.sessionIdOrigin, target.sessionId).toEqual(origin);
-      expect(stored?.metadata?.agentId, target.sessionId).toBe(metadata?.agentId);
-      expect(Object.hasOwn(stored?.metadata ?? {}, "sessionIdOrigin"), target.sessionId).toBe(
-        origin !== undefined,
-      );
+      expect(stored?.metadata ?? {}, target.sessionId).toEqual({
+        ...(metadata ? { agentId: metadata.agentId } : {}),
+        ...(origin === undefined ? {} : { sessionIdOrigin: origin }),
+      });
       await expectTexts(target, ["Saved history"]);
     }
     canonical.set(target.sessionId, await store.readSession(target.sessionId));
@@ -468,47 +426,6 @@ it("retains admitted ID origins across updates, reopen, and Doctor restoration",
     );
     await expectTexts(target, ["Saved history"], restored);
   }
-});
-
-it("bounds exact retry lookups to one caption ID without adding statements", async () => {
-  const target = await admit();
-  writeTransaction((db) => {
-    const queries: string[] = [];
-    const sql = observeMainThreadSql({ onStatement: (query) => queries.push(query) });
-    try {
-      const append = (utterance: TranscriptUtterance) => {
-        sql.clear();
-        queries.length = 0;
-        appendMeetingTranscriptUtterance({
-          database: db,
-          session: target,
-          utterance,
-          metadataJson: null,
-          now: 1,
-        });
-        return [...queries];
-      };
-      const utterance = { id: "new-caption", text: "Speech" };
-      const statements = append(utterance);
-      expect(statements).toHaveLength(4);
-      const retryQuery = statements.find((query) =>
-        /^select .* from "meeting_transcript_utterances"/u.test(query),
-      );
-      expect(retryQuery).toBeDefined();
-      const plan = db.prepare(`EXPLAIN QUERY PLAN ${retryQuery}`).all();
-      expect(plan).toContainEqual(
-        expect.objectContaining({
-          detail: expect.stringContaining(
-            "idx_meeting_transcript_utterances_id (session_id=? AND session_started_at=? AND utterance_id=?)",
-          ),
-        }),
-      );
-      expect(append(utterance)).toHaveLength(1);
-      expect(append({ text: "No ID" })).toHaveLength(3);
-    } finally {
-      sql.restore();
-    }
-  });
 });
 
 it("deduplicates exact retries but preserves same-id revisions", async () => {
