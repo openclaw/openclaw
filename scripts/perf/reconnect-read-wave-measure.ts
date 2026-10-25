@@ -1,9 +1,8 @@
 // Build the Gateway first (pnpm build); this measures dist/entry.js, never a dev server.
 // Synthetic state only. Run with node --enable-source-maps --import ./scripts/tsx.mjs.
-// --list-mix interleaves search, paging and involvement; --profile captures list-phase CPU.
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
@@ -34,7 +33,6 @@ import {
 import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.ts";
 import { toErrorObject } from "../lib/error-format.mts";
 import { stopChild, stopGatewayGracefully } from "../lib/gateway-bench-child.ts";
-import { controlGatewayProfile } from "../lib/gateway-bench-profile.ts";
 import {
   createGatewayBenchEnv,
   buildGatewayBenchChildArgs,
@@ -44,10 +42,10 @@ import {
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import {
-  runSessionRowChurnListRound,
-  runSteadySessionRowListPages,
-  sessionRowChurnListParams,
-} from "./session-row-churn-queries.ts";
+  runColdSessionRead,
+  observeSessionListChurnGateway,
+  runSessionListChurnWorkload,
+} from "./session-list-churn-workload.ts";
 
 const observerArgs: unknown = JSON.parse(
   new URL(import.meta.url).searchParams.get("args") ?? "null",
@@ -66,7 +64,8 @@ const { values } = parseArgs({
     sync: { type: "string" },
     side: { type: "string" },
     retention: { type: "boolean", default: false },
-    "list-mix": { type: "boolean", default: false },
+    "list-stress": { type: "boolean", default: false },
+    "stress-seconds": { type: "string", default: "30" },
     profile: { type: "boolean", default: false },
     entry: { type: "string", default: "dist/entry.js" },
   },
@@ -117,6 +116,10 @@ async function observeGateway() {
     "private benchmark child required",
   );
   writeFileSync(path.join(output, "gateway.pid"), `${process.pid}\n`);
+  if (values["list-stress"]) {
+    await observeSessionListChurnGateway(port, output);
+    return;
+  }
   // The existing IPC profiler tracks workers without exposing a debug listener or product RPC.
   await import("../lib/gateway-bench-profile-preload.ts");
   const { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } =
@@ -599,6 +602,7 @@ async function runController() {
         "--entry",
         entry,
         ...(values.retention ? ["--retention"] : []),
+        ...(values["list-stress"] ? ["--list-stress"] : []),
       ]),
     );
     const stopPreload = new URL("../lib/gateway-bench-stop-preload.mjs", import.meta.url);
@@ -767,43 +771,16 @@ async function runController() {
     );
     return peer;
   };
-  const boot = async (peer: Peer, index: number, window: string) => {
-    const key = `agent:main:team-shape-session-${index}`;
-    const roster = rpc(peer, "sessions.subscribe", {}, window);
-    const list = rpc(peer, "sessions.list", sessionRowChurnListParams(0, "initial"), window);
-    const subscribed = rpc(
+  const boot = (peer: Peer, index: number, window: string) =>
+    runColdSessionRead({
       peer,
-      "sessions.messages.subscribe",
-      { key, includeApprovals: true, subscriptionId: randomUUID() },
+      index,
       window,
-    );
-    const catalog = catalogs.get(peer);
-    let catalogTimer: ReturnType<typeof setTimeout> | undefined;
-    const modelReady = catalog
-      ? Promise.race([
-          catalog,
-          new Promise<never>((_, reject) => {
-            catalogTimer = setTimeout(
-              () => reject(new Error("models.snapshot timeout")),
-              timeoutMs,
-            );
-          }),
-        ]).finally(() => clearTimeout(catalogTimer))
-      : rpc(peer, "models.list", { agentId: "main", sessionKey: key, view: "configured" }, window);
-    const results = await Promise.allSettled([
-      roster,
-      list,
-      subscribed,
-      rpc(peer, "sessions.observer.visibility", { visible: true }, window),
-      rpc(peer, "sessions.resolve", { key, agentId: "main" }, window),
-      rpc(peer, "board.get", { sessionKey: key, agentId: "main" }, window),
-      rpc(peer, "agents.list", {}, window),
-      rpc(peer, "users.list", {}, window),
-      modelReady,
-      subscribed.then(() => rpc(peer, "chat.startup", { sessionKey: key, limit: 80 }, window)),
-    ]);
-    return results.every((result) => result.status === "fulfilled");
-  };
+      request: rpc,
+      modelCatalog: catalogs.get(peer),
+      timeoutMs,
+    });
+
   const closePeers = async () => {
     await Promise.all(
       [...peers].map(
@@ -832,7 +809,7 @@ async function runController() {
     await launch("pairing");
     for (let index = 0; index <= clientCount; index++) {
       const peer = await connect(index, "setup");
-      if (index < clientCount) {
+      if (index < clientCount && !values["list-stress"]) {
         await rpc(
           peer,
           "board.widget.put",
@@ -855,6 +832,28 @@ async function runController() {
     await stopGatewayGracefully(child!, timeoutMs);
     child = undefined;
     const gateway = await launch("measured");
+    if (values["list-stress"]) {
+      const readers = await Promise.all(Array.from({ length: 65 }, (_, i) => connect(i, "setup")));
+      const appenders = await Promise.all(
+        Array.from({ length: 20 }, (_, i) => connect(i, "setup")),
+      );
+      await runSessionListChurnWorkload({
+        gateway,
+        readers,
+        writers: appenders,
+        request: rpc,
+        command,
+        output,
+        durationMs: integer(values["stress-seconds"], "--stress-seconds", 10) * 1000,
+        profile: values.profile,
+        retention: values.retention,
+      });
+      await closePeers();
+      await command(gateway, { action: "stop" });
+      await stopGatewayGracefully(gateway, timeoutMs);
+      child = undefined;
+      return;
+    }
     const waveReports: Array<Record<string, unknown>> = [];
     const writerKeys = Array.from({ length: 250 }, (_, i) => i)
       .filter((i) => i % 5 !== 0)
@@ -1017,14 +1016,6 @@ async function runController() {
       );
       const coldElapsedMs = performance.now() - at;
       const rounds: Array<Record<string, unknown>> = [];
-      if (values.profile) {
-        await controlGatewayProfile(
-          gateway,
-          "cpu",
-          "start",
-          path.join(output, `${label}.cpuprofile`),
-        );
-      }
       let previous = 0;
       for (let round = 0; round < 3; round++) {
         const threshold = Math.max([20, 80, 140][round]!, previous + 20);
@@ -1033,7 +1024,28 @@ async function runController() {
         assert(completed < 200, "search must start while writer remains active");
         const before = completed;
         const roundAt = performance.now() - at;
-        await runSessionRowChurnListRound(peers, rpc, label, round, values["list-mix"]);
+        await Promise.all(
+          [...peers].map(async (peer) => {
+            await rpc(
+              peer,
+              "sessions.list",
+              {
+                agentId: "main",
+                limit: 200,
+                rowMode: "sidebar",
+                source: "agent-roster",
+                search: "team-shape",
+                configuredAgentsOnly: true,
+                excludeDock: true,
+                includeGlobal: true,
+                includeUnknown: true,
+                includeDerivedTitles: true,
+                includeLastMessage: true,
+              },
+              `${label}:search-${round + 1}`,
+            );
+          }),
+        );
         rounds.push({
           round: round + 1,
           startedAtMs: roundAt,
@@ -1044,21 +1056,10 @@ async function runController() {
         previous = before;
       }
       await writing;
-      if (values.profile) {
-        await controlGatewayProfile(
-          gateway,
-          "cpu",
-          "stop",
-          path.join(output, `${label}.cpuprofile`),
-        );
-      }
       assert(submitted === 200 && completed === 200);
       await command(gateway, { action: "end" });
       if (values.retention) {
         await command(gateway, { action: "retain", point: "subscribed", window: label });
-      }
-      if (values["list-mix"]) {
-        await runSteadySessionRowListPages(peers, rpc, label);
       }
       peers.add(writer);
       await closePeers();
