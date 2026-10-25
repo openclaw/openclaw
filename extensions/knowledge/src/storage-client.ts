@@ -1,14 +1,19 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import {
+  createPluginRuntimeProcessEntrypoint,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import type { VaultAccess } from "./access.js";
-import { pluginFilesLocation, workerUrl } from "./plugin-files.js";
+import { pluginFilesLocation } from "./plugin-files.js";
 import type { StoreConfig } from "./real-vault.js";
 import type { StorageOperations } from "./storage-host.js";
 import { AUTHORITY_REVOKED, type HostMessage, type WorkerMessage } from "./storage-protocol.js";
 
 type Output<Op extends keyof StorageOperations> = Awaited<ReturnType<StorageOperations[Op]>>;
 type Input<Op extends keyof StorageOperations> = Parameters<StorageOperations[Op]>[2];
+const storageEntrypoint = createPluginRuntimeProcessEntrypoint("knowledgeStorage", import.meta.url);
 type Call = {
   access: VaultAccess;
   resolve(value: unknown): void;
@@ -90,7 +95,7 @@ export class StorageClient {
     if (this.worker) {
       return this.worker;
     }
-    const worker = new Worker(workerUrl("storage"), {
+    const worker = new Worker(resolveRuntimeWorkerUrl(storageEntrypoint), {
       workerData: {
         sdk: sdkUrls(),
         files: pluginFilesLocation(),
