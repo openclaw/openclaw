@@ -24,6 +24,7 @@ import {
   sha256File,
   STANDALONE_USAGE,
 } from "./lib/bun-standalone-contract.mjs";
+import { standaloneEmbeddedPathsExpression } from "./lib/bun-standalone-data.mjs";
 import { createStandaloneEntrySource } from "./lib/bun-standalone-entry.mjs";
 import { rewriteStandaloneImports } from "./lib/bun-standalone-imports.mjs";
 import { createStandaloneMetadataAdapter } from "./lib/bun-standalone-metadata.mjs";
@@ -359,13 +360,11 @@ const root = path.join(path.dirname(process.execPath), "runtime");
 globalThis.__openclawStandaloneRootUrl = pathToFileURL(root + "/").href;
 globalThis.__openclawStandaloneBuildInfo = Object.freeze(${JSON.stringify(STANDALONE_BUILD_MARKER)});
 ${mode === "aot" ? "globalThis.__zod_globalConfig = { ...globalThis.__zod_globalConfig, jitless: true };" : ""}
-const entries = ${JSON.stringify(embeddedPaths)};
-const embeddedEntries = new Set(Object.values(entries));
+const entries = ${standaloneEmbeddedPathsExpression(embeddedPaths)};
 const commonJsEntries = new Set(${JSON.stringify(commonJsEntries)});
 function embedded(pathname) {
   pathname = globalThis.__openclawStandaloneOriginalPath?.(pathname) ?? pathname;
-  if (embeddedEntries.has(pathname)) return pathname;
-  return entries[pathname] ?? entries[path.relative(root, pathname).split(path.sep).join("/")];
+  return entries(pathname) ?? entries(path.relative(root, pathname).split(path.sep).join("/"));
 }
 globalThis.__openclawStandaloneEmbeddedPath = embedded;
 ${artifacts.bootstrap}

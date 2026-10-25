@@ -59,6 +59,11 @@ standalone-jit/
 Move or distribute the complete directory. `runtime/` is resolved relative to
 the executable; moving only `openclaw` leaves required resources behind.
 
+Embedded routing and file metadata are decoded on demand. Unused module aliases
+stay in immutable embedded text instead of being expanded into lookup objects
+in every worker. Each worker caches the rows it uses, preserving its own
+module-resolution context.
+
 ## Choose a compilation mode
 
 | Mode     | Builder option  | Behavior                                                                            |
