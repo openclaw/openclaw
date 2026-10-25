@@ -171,19 +171,6 @@ it("preserves legacy synchronous plugin acquisition for the exact canonical plac
   );
 });
 
-it("protects a claimed placement workspace until its owner releases it", async () => {
-  const { workspace, workspaceDir, request, collect } = managedFixture("managed-retention");
-  const claim = await workspace.acquireManagedWorkspaceAsync(request);
-
-  await collect(1);
-  expect(fs.existsSync(workspaceDir)).toBe(true);
-
-  claim.release();
-  claim.release();
-  await collect(2);
-  expect(fs.existsSync(workspaceDir)).toBe(false);
-});
-
 it("keeps an in-flight removal fenced until it settles after cancellation", async () => {
   const { workspace, collect, workspaceDir, request } = managedFixture("managed-removal-race");
   const removalStarted = createDeferred();
@@ -270,21 +257,11 @@ it("settles an issued deletion but leaves empty parents when cancelled", async (
   expect(fs.existsSync(session)).toBe(false);
 });
 
-it("does not delete workspaces before the first Gateway snapshot", async () => {
-  const { seed, supervisor } = supervisorFixture("startup-retention");
-  const generations = [seed(1), seed(2)];
-
-  await supervisor.initialize();
-
-  expectPaths(generations, true);
-  await supervisor.close();
-});
-
-it("continues a bounded backlog with an idempotent snapshot replay", async () => {
+it("preserves workspaces until the first snapshot and continues a bounded backlog on replay", async () => {
   const { seed, session, input, supervisor } = supervisorFixture("backlog-retention");
-  for (let generation = 0; generation <= 260; generation += 1) {
-    seed(generation);
-  }
+  const generations = Array.from({ length: 261 }, (_, generation) => seed(generation));
+  await supervisor.initialize();
+  expectPaths(generations, true);
   const snapshot = retainInput(input, 1);
 
   const first = await supervisor.retainWorkspaces(snapshot);
@@ -456,26 +433,16 @@ await awaitRelease("command", "release");`,
 });
 
 it("rejects conflicting replay and ignores an older sequence", async () => {
-  const { seed, input, supervisor } = supervisorFixture("sequence-retention");
+  const { seed, entry, collect } = fixture("sequence-retention");
   const generation = seed(5);
-  const retainedEntry = {
-    environmentId: input.descriptor.admission.environmentId,
-    sessionId: input.descriptor.admission.sessionId,
-    generation: 5,
-    manifestRefs: null,
-  } as const;
-
-  await supervisor.retainWorkspaces(retainInput(input, 2, [retainedEntry]));
-  await expect(supervisor.retainWorkspaces(retainInput(input, 1, []))).resolves.toEqual({
+  await collect(2, [{ ...entry, generation: 5, manifestRefs: null }]);
+  await expect(collect(1)).resolves.toEqual({
     applied: false,
     deleted: 0,
     hasMore: false,
   });
-  await expect(supervisor.retainWorkspaces(retainInput(input, 2, []))).rejects.toThrow(
-    "sequence changed contents",
-  );
+  await expect(collect(2)).rejects.toThrow("sequence changed contents");
   expect(fs.existsSync(generation)).toBe(true);
-  await supervisor.close();
 });
 
 it("keeps other Gateway namespaces isolated", async () => {

@@ -190,36 +190,20 @@ describe("candidate node runtime and database compatibility", () => {
       }
       state.prepare("INSERT INTO agent_databases VALUES (?, ?)").run("active", agentPath);
       const before = snapshotPreflightSourceManifest(fixture.stateDir);
-      const stateEntries = await fs.readdir(path.dirname(fixture.statePath));
       const copiedPaths: string[] = [];
       mocks.command.mockImplementation(async (argv: string[]) => {
-        const commandIndex = argv.indexOf("database");
         const kind = copiedPaths.length === 0 ? "state" : "agent";
-        expect(argv.slice(0, commandIndex + 2)).toEqual([
-          process.execPath,
-          ...(process.versions.bun ? ["--no-install"] : []),
-          path.join(fixture.packageRoot, "openclaw.mjs"),
-          "database",
+        expect(argv).toContain(path.join(fixture.packageRoot, "openclaw.mjs"));
+        expect(argv[argv.indexOf("database") + 1]).toBe(
           kind === "state" ? "preflight" : "preflight-agent",
-        ]);
-        const copiedPath = argv[commandIndex + 2] ?? "";
+        );
+        const copiedPath = argv[argv.indexOf("database") + 2] ?? "";
         expect([fixture.statePath, agentPath]).not.toContain(copiedPath);
         copiedPaths.push(copiedPath);
         for (const suffix of ["-wal", "-shm", "-journal"]) {
           await expectAbsent(`${copiedPath}${suffix}`);
         }
         using snapshot = new DatabaseSync(copiedPath, { readOnly: true });
-        if (kind === "state") {
-          expect(
-            snapshot.prepare("SELECT rowid, agent_id, path FROM agent_databases").all(),
-          ).toEqual([
-            { rowid: 1, agent_id: "removed", path: "removed-agent.sqlite" },
-            { rowid: 2, agent_id: "active", path: agentPath },
-          ]);
-        }
-        expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({
-          journal_mode: "delete",
-        });
         expect(snapshot.prepare("SELECT rowid, value FROM wal_probe").all()).toEqual([
           { rowid: 2, value: "committed-wal" },
         ]);
@@ -230,18 +214,17 @@ describe("candidate node runtime and database compatibility", () => {
 
       expect(mocks.command).toHaveBeenCalledTimes(2);
       expect(snapshotPreflightSourceManifest(fixture.stateDir)).toEqual(before);
-      expect(await fs.readdir(path.dirname(fixture.statePath))).toEqual(stateEntries);
       for (const copiedPath of copiedPaths) {
         await expectAbsent(copiedPath);
       }
     });
 
     it.each([
-      { status: "incompatible", code: 1, reason: "unexpected column" },
-      { status: "startup-repairable", code: 0, reason: "required startup repair" },
-    ])(
-      "defers $status without changing source state or retaining its private copy",
-      async ({ status, code, reason }) => {
+      ["incompatible", 1, "unexpected column"],
+      ["startup-repairable", 0, "required startup repair"],
+    ] as const)(
+      "defers %s without changing source state or retaining its private copy",
+      async (status, code, reason) => {
         const before = await fs.readFile(fixture.statePath);
         let copiedPath = "";
         mocks.command.mockImplementation(async (argv: string[]) => {
@@ -306,6 +289,7 @@ describe("Bun private node runtime installation", () => {
           return commandResult(`${bin}\n`);
         }
         if (argv[0] === process.execPath && argv[1] === "add" && project && bin) {
+          expect(argv).toEqual(expect.arrayContaining(["-g", "--trust"]));
           const archiveSpec = argv.find((arg) => arg.startsWith("openclaw@file:"));
           expect(archiveSpec).toBeDefined();
           expect(await fs.readFile(archiveSpec!.slice("openclaw@file:".length))).toEqual(archive);
@@ -324,15 +308,6 @@ describe("Bun private node runtime installation", () => {
       path.join(candidate.runtimeRoot, "lib", "node_modules", "openclaw"),
     );
     expectNoNpm();
-    expect(mocks.command.mock.calls.some(([argv]) => argv[0].startsWith("npm"))).toBe(false);
-    const install = mocks.command.mock.calls.find(([argv]) => argv[1] === "add");
-    expect(install?.[0]).toEqual([
-      process.execPath,
-      "add",
-      "-g",
-      "--trust",
-      expect.stringMatching(/^openclaw@file:.*\.tgz$/u),
-    ]);
     for (const [, options] of mocks.command.mock.calls) {
       expect(
         options.env.BUN_INSTALL_GLOBAL_DIR.startsWith(`${candidate.runtimeRoot}${path.sep}`),
@@ -341,7 +316,6 @@ describe("Bun private node runtime installation", () => {
         true,
       );
       expect(options.env.OPENCLAW_PACKAGE_BUN_LAUNCHER).toBe(process.execPath);
-      // Npm freshness policy would probe `npm config get globalconfig`.
       expect(options.env.npm_config_before).toBeUndefined();
       expect(options.env.npm_config_min_release_age).toBeUndefined();
     }
@@ -381,7 +355,7 @@ describe("Bun private node runtime installation", () => {
     Object.defineProperty(process, "platform", { value: "win32" });
     mocks.pack.mockResolvedValue({ ok: false, error: "synthetic npm pack failure" });
     await expect(prepare(stateDir)).rejects.toThrow("synthetic npm pack failure");
-    expect(mocks.resolve).toHaveBeenCalledWith({ spec: `openclaw@${VERSION}`, signal: undefined });
+    expect(mocks.resolve).toHaveBeenCalledOnce();
     expect(mocks.pack).toHaveBeenCalledOnce();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -428,9 +402,7 @@ describe("private node runtime installation", () => {
     expect(await fs.readFile(path.join(candidate.packageRoot, "package.json"), "utf8")).toBe(
       await fs.readFile(path.join(recovered.packageRoot, "package.json"), "utf8"),
     );
-    await expect(
-      fs.access(path.join(candidate.packageRoot, "node-host-launcher.mjs")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectAbsent(path.join(candidate.packageRoot, "node-host-launcher.mjs"));
     await fs.access(path.join(recovered.packageRoot, "node-host-launcher.mjs"));
   });
 

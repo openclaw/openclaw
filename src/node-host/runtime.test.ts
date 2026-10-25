@@ -158,13 +158,17 @@ describe("node-host invocation cancellation", () => {
     await runtime.close();
   });
 
-  it.each(["supervisor", "MCP"] as const)(
+  it.each(["supervisor", "MCP", "plugin"] as const)(
     "retains %s retirement failure with its retry policy",
     async (owner) => {
       const failure = new Error(`${owner} close failed`);
       const retiring = createDeferred();
       const entered = createDeferred();
-      const close = owner === "supervisor" ? mocks.closeWorkerSupervisor : mocks.closeMcp;
+      const close = {
+        supervisor: mocks.closeWorkerSupervisor,
+        MCP: mocks.closeMcp,
+        plugin: mocks.disconnectPlugins,
+      }[owner];
       close.mockImplementationOnce(async () => {
         entered.resolve();
         await retiring.promise;
@@ -180,13 +184,13 @@ describe("node-host invocation cancellation", () => {
         await observed;
         expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
         expect(mocks.closeMcp).toHaveBeenCalledOnce();
-        if (owner === "supervisor") {
-          await expect(runtime.close()).resolves.toBeUndefined();
-          expect(mocks.closeWorkerSupervisor).toHaveBeenCalledTimes(2);
-        } else {
+        if (owner === "MCP") {
           await expect(runtime.close()).rejects.toBe(failure);
-          expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+        } else {
+          await expect(runtime.close()).resolves.toBeUndefined();
         }
+        expect(mocks.closeWorkerSupervisor).toHaveBeenCalledTimes(owner === "supervisor" ? 2 : 1);
+        expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(owner === "plugin" ? 2 : 1);
         expect(mocks.closeMcp).toHaveBeenCalledOnce();
       } finally {
         retiring.resolve();
@@ -194,17 +198,6 @@ describe("node-host invocation cancellation", () => {
       }
     },
   );
-
-  it("retries failed plugin cleanup on explicit close", async () => {
-    const failure = new Error("disconnect cleanup failed");
-    mocks.disconnectPlugins.mockRejectedValueOnce(failure);
-    const runtime = await startRuntime();
-    await expect(runtime.close()).rejects.toBe(failure);
-    await expect(runtime.close()).resolves.toBeUndefined();
-    expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(2);
-    expect(mocks.closeMcp).toHaveBeenCalledOnce();
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-  });
 
   it.each(["close", "cancelAll"] as const)(
     "joins cleanup when %s synchronously reenters close",
