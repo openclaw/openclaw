@@ -50,10 +50,7 @@ import {
   isSessionCostUsageRefreshRunning as isRefreshing,
   prepareSessionCostUsageRefreshLock as prepareLock,
 } from "./session-cost-usage-cache.sqlite.js";
-import {
-  pruneUsageCostRollupsForTest as pruneRows,
-  readSessionCostUsageRollupRows as readRows,
-} from "./session-cost-usage-cache.test-support.js";
+import { readSessionCostUsageRollupRows as readRows } from "./session-cost-usage-cache.test-support.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
 import { withSessionCostUsageWorkerDatabases as withUsageDatabases } from "./session-cost-usage-worker-scope.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "./sqlite-database-admission.js";
@@ -131,49 +128,33 @@ it.each(["rollup", "prune"] as const)(
     const root = tempDirs.make("openclaw-usage-writer-reservation-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       const agentId = "usage-test";
-      const database = openOpenClawAgentDatabase({ agentId });
-      const databasePath = database.path;
-      runOpenClawAgentWriteTransaction(
-        ({ db }) => writeRollups(db, [rollupRow("session.jsonl", '{"totalTokens":1}', 1)]),
-        { agentId, path: databasePath },
-        { operationLabel: "session-cost-usage.rollup.write" },
+      const databasePath = openOpenClawAgentDatabase({ agentId }).path;
+      await using owner = await acquireUsageLock(agentId, databasePath);
+      expect(await owner.writeRollup([rollupRow("session.jsonl", '{"totalTokens":1}', 1)])).toBe(
+        true,
       );
-      await using lock =
-        operation === "rollup" ? await acquireUsageLock(agentId, databasePath) : undefined;
-      const readLock = () =>
-        database.db
-          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
-          .get("session-cost-usage", "refresh-lock");
-      const readSnapshot = () => ({ lock: readLock(), rows: readRows(agentId, databasePath) });
-      const before = readSnapshot();
+      const before = readRows(agentId, databasePath);
       const { entered, release, reservation } = holdWriter({ agentId, path: databasePath });
       await entered.promise;
       let settled = false;
-      const writing = (async () => {
-        switch (operation) {
-          case "rollup":
-            expect(
-              await lock!.writeRollup([rollupRow("session.jsonl", '{"totalTokens":2}', 2)]),
-            ).toBe(true);
-            break;
-          case "prune":
-            await pruneRows({ agentId, databasePath, rows: before.rows, liveKeys: new Set() });
-            break;
-        }
-      })().finally(() => {
+      const writing = (
+        operation === "rollup"
+          ? owner.writeRollup([rollupRow("session.jsonl", '{"totalTokens":2}', 2)])
+          : owner.pruneRows(before)
+      ).finally(() => {
         settled = true;
       });
       const written = Promise.allSettled([writing]);
       try {
         await setImmediate();
-        expect(readSnapshot()).toEqual(before);
+        expect(readRows(agentId, databasePath)).toEqual(before);
         expect(settled).toBe(false);
       } finally {
         release.resolve();
         await reservation;
         await written;
       }
-      await expect(writing).resolves.toBeUndefined();
+      await expect(writing).resolves.toBe(operation === "rollup" ? true : undefined);
       expect(readRows(agentId, databasePath)).toEqual(
         operation === "prune" ? [] : [storedRow("session.jsonl", '{"totalTokens":2}', 2)],
       );
