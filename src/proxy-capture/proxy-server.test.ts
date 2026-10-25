@@ -11,7 +11,6 @@ import net, { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { text } from "node:stream/consumers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
@@ -81,9 +80,12 @@ async function listenOrigin(server: Server, path = "") {
 
 async function startLargeBodyOrigin(responseBody: string) {
   let receivedBody = "";
-  const server = createHttpServer(async (req, res) => {
-    receivedBody = await text(req);
-    respond(res, responseBody);
+  const server = createHttpServer((req, res) => {
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      receivedBody += chunk;
+    });
+    req.on("end", () => respond(res, responseBody));
   });
   return {
     ...(await listenOrigin(server, "/capture")),

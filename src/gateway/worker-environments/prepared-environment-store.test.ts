@@ -170,7 +170,7 @@ describe("prepared environment ownership", () => {
             admit(entry, grant);
           }, attachment),
         );
-      onTestFinished(admission.mockRestore);
+      onTestFinished(() => admission.mockRestore());
       await expect(
         placements.bindPreparedEnvironment({
           ...request,
