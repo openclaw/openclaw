@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { runWithSqliteWorkerStateContext as withWorkerState } from "../../infra/sqlite-worker-state-context.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -7,6 +8,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { claimCronRecoveryReceipt } from "../service/run-recovery.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -339,5 +341,74 @@ it("keeps requested occurrences and siblings intact when activation rolls back",
     expect(drain().launches.map((entry) => entry.runReceipt.receiptId)).toEqual(
       requests.map((request) => request.receiptId),
     );
+  });
+});
+
+it("reads one receipt set while preserving capacity and cancellation contexts", async () => {
+  await withOpenClawTestState({ label: "cron-drain-receipt-reads" }, async (fixture) => {
+    const storeKey = fixture.statePath("cron", "local.json");
+    const foreignStoreKey = fixture.statePath("cron", "foreign.json");
+    const jobs = ["blocker", "z-first", "a-second", "cancelled", "omitted"].map((id) =>
+      queueJob(id, now),
+    );
+    const foreignJob = queueJob("foreign-cancelled", now);
+    await saveCronStore(storeKey, { version: 1, jobs });
+    await saveCronStore(foreignStoreKey, { version: 1, jobs: [foreignJob] });
+    await closeOpenClawStateDatabaseAsync();
+    const database = openOpenClawStateDatabase();
+    withWorkerState({ environment: { OPENCLAW_STATE_DIR: fixture.stateDir } }, () => {
+      const requests = jobs.map((job) => scheduled(storeKey, job, now));
+      const [blocker, first, second, cancelled, omitted] = requests;
+      const foreign = scheduled(foreignStoreKey, foreignJob, now);
+      const request = (key: string, entries: typeof requests) =>
+        requestCronRunsInWorker(database, { storeKey: key, nowMs: now, requests: entries });
+      const drain = (contexts: typeof requests, maxConcurrentRuns: number, nowMs = now + 3) =>
+        drainCronQueueInWorker(database, {
+          storeKey,
+          nowMs,
+          requests: contexts,
+          maxConcurrentRuns,
+        });
+      request(storeKey, [blocker!]);
+      expect(drain([], 1, now + 1).launches.map(({ job }) => job.id)).toEqual(["blocker"]);
+      request(storeKey, [second!, cancelled!, omitted!, first!]);
+      request(foreignStoreKey, [foreign]);
+      for (const [key, entries] of [
+        [storeKey, [cancelled!, omitted!]],
+        [foreignStoreKey, [foreign]],
+      ] as const) {
+        expect(
+          cancelCronRequestsInWorker(database, {
+            storeKey: key,
+            receiptIds: entries.map(({ receiptId }) => receiptId),
+            nowMs: now + 2,
+            reason: "",
+          }).skipped,
+        ).toHaveLength(entries.length);
+      }
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["receipts"],
+        (sql) =>
+          /^select\b/i.test(sql) && /\bfrom\s+"cron_run_receipts"(?:\s|$)/i.test(sql)
+            ? "receipts"
+            : null,
+      );
+      try {
+        const withoutContexts = drain([], 2);
+        const emptyReads = reads.counts.receipts;
+        const withContexts = drain([cancelled!, foreign], 3);
+        expect(withoutContexts.launches.map(({ job }) => job.id)).toEqual(["z-first"]);
+        expect(withContexts.launches.map(({ job }) => job.id)).toEqual(["a-second"]);
+        expect(withoutContexts.skipped).toEqual([]);
+        expect(
+          withContexts.skipped.map(({ runReceipt, error }) => [runReceipt.receiptId, error]),
+        ).toEqual([[cancelled!.receiptId, ""]]);
+        // The empty drain stays at one SELECT; the contextful drain removes its second SELECT.
+        expect([emptyReads, reads.counts.receipts]).toEqual([1, 2]);
+      } finally {
+        reads.restore();
+      }
+    });
   });
 });

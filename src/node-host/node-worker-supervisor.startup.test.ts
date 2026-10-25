@@ -8,6 +8,7 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   awaitGateBeforeSettlement,
@@ -93,24 +94,35 @@ function writeWorker(bundleRoot: string, input: ReturnType<typeof launchInput>, 
 
 describe("node worker startup", () => {
   it.runIf(process.platform === "linux" || process.platform === "darwin").each([
-    { build: "lineage-only", lineage: true },
-    { build: "released", lineage: false },
+    { build: "native-v1", lineage: true, nativeOwner: "v1" },
+    { build: "native-v2", lineage: true, nativeOwner: "v2" },
+    { build: "lineage-only", lineage: true, nativeOwner: "none" },
+    { build: "released", lineage: false, nativeOwner: "none" },
+    { build: "native-v2-without-lineage", lineage: false, nativeOwner: "v2" },
   ])(
     "preserves the $build worker's start envelope and process group",
-    async ({ build, lineage }) => {
+    async ({ build, lineage, nativeOwner }) => {
       await using f = fixture();
       const { bundleRoot, workspaceDir } = f;
       const input = launchInput(workspaceDir, `start-contract-${build}`);
-      input.descriptor.admission.handshake.openclawVersion = "2026.9.4";
+      input.descriptor.admission.handshake.openclawVersion =
+        nativeOwner === "v2" ? "2026.10.7" : "2026.9.4";
       input.descriptor.admission.handshake.protocolFeatures =
         input.descriptor.admission.handshake.protocolFeatures.filter(
           (feature) =>
-            feature !== WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE &&
+            (feature !== WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE || nativeOwner === "v1") &&
+            (feature !== WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE || nativeOwner === "v2") &&
             (lineage ||
               (feature !== WORKER_LINEAGE_START_PROTOCOL_FEATURE &&
                 feature !== WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE)),
         );
-      const expectedKeys = lineage ? ["lineageFds", "type"] : ["type"];
+      const native =
+        lineage && (nativeOwner === "v2" || (process.platform === "linux" && nativeOwner === "v1"));
+      const expectedKeys = [
+        ...(lineage ? ["lineageFds"] : []),
+        ...(native ? ["nativeProcessOwner"] : []),
+        "type",
+      ];
       const reportPath = f.file("start-contract.json");
       writeWorker(
         bundleRoot,

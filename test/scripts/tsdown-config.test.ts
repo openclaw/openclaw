@@ -863,8 +863,9 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   return resolved;
 } });
 assert.throws(() => createRequire(entry).resolve("tree-sitter-bash"), { code: "MODULE_NOT_FOUND" });
-const { parseBashForCommandExplanation } = await import(entry.href);
-const tree = await parseBashForCommandExplanation('printf "%s" "$(whoami)" | cat');
+const { getBashParserForCommandExplanation } = await import(entry.href);
+const parse = await getBashParserForCommandExplanation();
+const tree = parse('printf "%s" "$(whoami)" | cat');
 try {
   assert.equal(tree.rootNode.hasError, false);
   assert.deepEqual(tree.rootNode.descendantsOfType("command").map(node => node.childForFieldName("name").text), ["printf", "whoami", "cat"]);

@@ -6,7 +6,8 @@ import type { GatewayProtocolRequestOptions } from "../../../../packages/gateway
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import { gatewayRequest } from "./session-fixtures.test-support.ts";
+import { useFakeClock as fakeTimers } from "../../test-helpers/fake-clock.ts";
+import { sessionRequest as gatewayRequest } from "./hydration-family.test-support.ts";
 import {
   deleteSessionPlacementDraft,
   startSessionPlacementInitialTurn,
@@ -63,13 +64,6 @@ function deleteDraft(request: ReturnType<typeof vi.fn>, recovered = false) {
 
 function placement(state: string, environmentId = "environment-1") {
   return { placement: { state, environmentId } };
-}
-
-function fakeTimers() {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
 }
 
 function expectReclaim(request: ReturnType<typeof vi.fn>, call: number) {

@@ -7,6 +7,7 @@ import {
   type PluginsInspectResult,
   type PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import {
   joinClawHubPluginCatalog,
   joinLocalPluginDetail,
@@ -56,7 +57,7 @@ describe("plugin discovery identity and local join", () => {
       const inspection: PluginsInspectResult = {
         ok: true,
         plugin,
-        declared: {
+        declared: createPluginDeclaredSurface({
           channels: ["sibling-channel"],
           providers: ["media-models", "sibling-models"],
           tools,
@@ -67,13 +68,8 @@ describe("plugin discovery identity and local join", () => {
             "videoGenerationProviders: sibling-video",
             ...(includeTools ? ["tools: media_render"] : []),
           ],
-          hooks: [],
           mcpServers: ["supported", "unsupported"],
-          cliCommands: [],
-          cliBackends: [],
-          skills: [],
-          dangerousConfigFlags: [],
-        },
+        }),
         ...(includeOverview
           ? {
               overview: {

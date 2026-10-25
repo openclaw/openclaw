@@ -12,8 +12,8 @@ import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatCountdown } from "../lib/format.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
+import { projectAgentRowContext } from "../lib/reactive/agent-row-context.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
-import { projectAgentIdentity, projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
@@ -21,7 +21,7 @@ import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
   ApprovalCountdown,
   approvalRemainingLabel,
-  useApprovalClock,
+  readApprovalTime,
 } from "./approval-countdown.tsx";
 import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
 import {
@@ -89,19 +89,11 @@ export type SidebarApprovalRowProps = {
 };
 
 export function ApprovalAgentAvatar(props: { agentId: string; class?: string }) {
-  const app = useOptionalApplication();
-  const agents = app ? projectAgents(app.agents) : undefined;
-  const identity = app
-    ? projectAgentIdentity({
-        identities: app.agentIdentity,
-        get agentId() {
-          return props.agentId;
-        },
-      })
-    : undefined;
+  const context = projectAgentRowContext(useOptionalApplication());
   const avatar = createMemo(() => {
-    const agent = agents?.read().agentsList?.agents.find((entry) => entry.id === props.agentId);
-    const hydrated = identity?.read();
+    const app = context.read();
+    const agent = app?.agents.state.agentsList?.agents.find((entry) => entry.id === props.agentId);
+    const hydrated = app?.agentIdentity.get(props.agentId);
     return {
       id: props.agentId,
       avatar: resolveAgentAvatarUrl(agent ?? {}, hydrated),
@@ -201,7 +193,7 @@ export function approvalTitle(active: ExecApprovalRequest): string {
 
 export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
   const approval = createMemo(() => props.approval);
-  const nowMs = useApprovalClock();
+  const nowMs = createMemo(() => readApprovalTime(approval().expiresAtMs));
   const expired = () => approval().expiresAtMs <= nowMs();
   const command = createMemo(() => compactApprovalCommand(approval().request.command));
   const sessionTitle = createMemo(() => {

@@ -23,11 +23,11 @@ import {
   createMinimalRunAgentTurnParams,
   expectMockCallArgFields,
   getExecuteAgentTurnForTest,
-  initialFallbackAttemptOptions,
   makeTestSessionStorePath,
   requireMockCall,
   requireRecord,
   setupAgentRunnerExecutionTestState,
+  runFallbackCandidate,
 } from "./agent-runner-execution.test-support.js";
 import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
 
@@ -476,16 +476,9 @@ describe("executeAgentTurn: CLI session routing", () => {
   it("preserves a reused binding after an operator aborts a channel turn", async () => {
     const sessionKey = "agent:main:direct:aborted-run";
     state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(
-        "claude-cli",
-        "claude-opus-4-8",
-        initialFallbackAttemptOptions(params),
-      ),
-      provider: "claude-cli",
-      model: "claude-opus-4-8",
-      attempts: [],
-    }));
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, "claude-cli", "claude-opus-4-8"),
+    );
     state.runCliAgentMock.mockRejectedValueOnce(
       Object.assign(new Error("CLI run aborted"), { name: "AbortError" }),
     );

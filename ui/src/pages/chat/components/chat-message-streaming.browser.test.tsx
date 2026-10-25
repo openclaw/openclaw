@@ -7,6 +7,7 @@ import {
   readMarkdownCodeBlockCopyText,
 } from "../../../components/markdown-code-blocks.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
+import { loadStreamingMarkdown } from "../../../components/markdown-live-loader.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -160,6 +161,7 @@ describe("streaming Markdown DOM", () => {
   });
 
   it("keeps visible plain text in place when deferred formatting catches up", async () => {
+    await loadStreamingMarkdown.preload();
     vi.useFakeTimers();
     const mutations: MutationRecord[] = [];
     const observer = new MutationObserver((records) => mutations.push(...records));
@@ -168,6 +170,7 @@ describe("streaming Markdown DOM", () => {
       draw("A growing reply with more text");
       const text = container.querySelector("p")?.textContent;
       observer.observe(container, { characterData: true, subtree: true });
+      draw("A growing reply with more text");
       await vi.advanceTimersByTimeAsync(50);
       expect(container.querySelector("p")?.textContent).toBe(text);
       expect([...mutations, ...observer.takeRecords()]).toHaveLength(0);

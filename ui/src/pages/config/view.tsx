@@ -6,15 +6,14 @@ import {
   Errored,
   For,
   isPending,
+  lazy,
   latest,
   Loading,
   Show,
   untrack,
 } from "solid-js";
 import "../../styles/lobster-pet.css";
-import { ConfigForm } from "../../components/config-form.render.tsx";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
-import { HighlightedJson } from "../../components/solid/highlighted-json.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
@@ -26,10 +25,9 @@ import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
-import { NotificationsSection } from "./notifications-section.tsx";
-import { SetupSection } from "./setup.tsx";
 import { AppearanceSection } from "./view-appearance.tsx";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
+import { ConfigForm, NotificationsSection, SetupSection } from "./view-lazy.ts";
 import {
   CATEGORISED_KEYS,
   ConfigAccordionNav,
@@ -55,8 +53,12 @@ import type { ConfigProps } from "./view-types.ts";
 registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
 void warmJson5().catch(() => undefined);
+const HighlightedJson = lazy(() => import("../../components/solid/highlighted-json.tsx"), {
+  export: "HighlightedJson",
+});
 
 export function Config(props: ConfigProps) {
+  const plainIssues = () => <pre class="code-block">{JSON.stringify(props.issues, null, 2)}</pre>;
   let content: HTMLDivElement | undefined;
   function resetContentScroll() {
     queueMicrotask(() => {
@@ -81,13 +83,11 @@ export function Config(props: ConfigProps) {
     return props.viewState;
   };
   const schema = createMemo(() => asConfigSchema(props.schema));
-  const includeSections = createMemo(() => props.includeSections);
-  const excludeSections = createMemo(() => props.excludeSections);
   const includedSections = createMemo(() =>
-    includeSections()?.length ? new Set(includeSections()) : null,
+    props.includeSections?.length ? new Set(props.includeSections) : null,
   );
   const excludedSections = createMemo(() =>
-    excludeSections()?.length ? new Set(excludeSections()) : null,
+    props.excludeSections?.length ? new Set(props.excludeSections) : null,
   );
   const schemaAnalysis = createMemo(() =>
     getConfigSchemaAnalysis(schema(), includedSections(), excludedSections()),
@@ -95,7 +95,6 @@ export function Config(props: ConfigProps) {
   const state = createMemo(() => {
     const viewState = view();
     const showModeToggle = props.showModeToggle ?? false;
-    const includeVirtualSections = props.includeVirtualSections ?? true;
     const analysis = schemaAnalysis();
     const unsupportedActivePaths = analysis.unsupportedPaths.filter(
       (path) =>
@@ -124,7 +123,7 @@ export function Config(props: ConfigProps) {
     const schemaProps = analysis.schema?.properties ?? {};
     const virtualSections = new Set(["__appearance__", "__notifications__"]);
     const visibleVirtual = (key: string) =>
-      includeVirtualSections &&
+      (props.includeVirtualSections ?? true) &&
       virtualSections.has(key) &&
       (key === "__appearance__" || includedSections()?.has(key) === true);
     const sectionLabel = (key: string) =>
@@ -218,7 +217,7 @@ export function Config(props: ConfigProps) {
     const sensitiveCount = countSensitiveConfigValues(props.formValue, [], props.uiHints);
     return {
       showModeToggle,
-      includeVirtualSections,
+      includeVirtualSections: props.includeVirtualSections ?? true,
       include: includedSections(),
       analysis,
       unsupportedActivePaths,
@@ -692,7 +691,11 @@ export function Config(props: ConfigProps) {
         {props.issues.length > 0 ? (
           <div class="config-content-callout">
             <div class="callout danger">
-              <HighlightedJson class="code-block" value={props.issues} />
+              <Errored fallback={plainIssues}>
+                <Loading fallback={plainIssues()}>
+                  <HighlightedJson class="code-block" value={props.issues} />
+                </Loading>
+              </Errored>
             </div>
           </div>
         ) : null}

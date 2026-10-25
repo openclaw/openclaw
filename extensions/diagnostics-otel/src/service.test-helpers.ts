@@ -276,3 +276,14 @@ export function snapshotOtelEnv(keys: readonly string[]) {
     }
   };
 }
+
+export type MetricArgs = [
+  name: string,
+  value: number,
+  attributes: unknown,
+  position?: "first" | "last",
+  omittedText?: string[],
+];
+export type MetricExpectation = [kind: "counter" | "histogram", ...MetricArgs];
+export const counter = (...args: MetricArgs): MetricExpectation => ["counter", ...args];
+export const histogram = (...args: MetricArgs): MetricExpectation => ["histogram", ...args];

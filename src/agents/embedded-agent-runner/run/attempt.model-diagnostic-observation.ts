@@ -37,6 +37,7 @@ type ModelCallObservationState = {
   terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
   timeToFirstByteMs?: number;
   providerProcessingMs?: number;
+  responseModel?: string;
   reasoningSuppressed?: boolean;
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
@@ -200,6 +201,10 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
   let rawUsage: unknown;
   try {
     rawUsage = value.usage;
+    const responseModel = value.responseModel;
+    if (typeof responseModel === "string" && responseModel.trim()) {
+      state.responseModel = responseModel.trim();
+    }
     state.reasoningSuppressed ||=
       value.role === "assistant" &&
       Array.isArray(value.diagnostics) &&
@@ -406,8 +411,11 @@ export function createModelObserver(params: {
           }
         : undefined;
     },
-    usageField() {
-      return state.usage ? { usage: state.usage } : {};
+    terminalFields() {
+      return {
+        ...(state.usage ? { usage: state.usage } : {}),
+        ...(state.responseModel ? { responseModel: state.responseModel } : {}),
+      };
     },
   };
 }

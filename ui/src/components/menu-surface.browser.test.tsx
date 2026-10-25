@@ -89,9 +89,13 @@ function mountMenu(props: MenuProps, container?: HTMLElement) {
 
 async function openMenu(host: HTMLElement, selector = ".oc-menu-trigger") {
   const { page } = await import("vitest/browser");
-  await page.elementLocator(query(host, selector)).click();
   const menu = query(host, ".oc-menu");
-  await expect.poll(() => menu.dataset.phase).toBe("open");
+  const shown = new Promise<void>((resolve) => {
+    menu.addEventListener("overlay-after-show", () => resolve(), { once: true });
+  });
+  await page.elementLocator(query(host, selector)).click();
+  await shown;
+  expect(menu.dataset.phase).toBe("open");
   return menu;
 }
 
@@ -339,11 +343,11 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         { container: host },
       );
       await openMenu(host, '[aria-haspopup="menu"]');
-      await expect.poll(() => host.querySelector('[data-value="photo"]')).not.toBeNull();
-      const photo = query(host, '[data-value="photo"]');
+      await expect.poll(() => host.querySelector('[data-value="media"]')).not.toBeNull();
+      const media = query(host, '[data-value="media"]');
       const skills = query(host, '[data-value="open-skills"]');
-      await hoverBackground(photo, highlight);
-      const attachmentHover = getComputedStyle(photo).backgroundColor;
+      await hoverBackground(media, highlight);
+      const attachmentHover = getComputedStyle(media).backgroundColor;
       await hoverBackground(skills, attachmentHover);
     });
 

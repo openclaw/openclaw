@@ -1,4 +1,3 @@
-import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { expect, vi } from "vitest";
 import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
 import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js";
@@ -7,6 +6,7 @@ import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -379,14 +379,7 @@ export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshin
 }
 
 export async function preloadUsage(page: TestUsagePage): Promise<void> {
-  const options = {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: { pathname: "/usage", search: "", hash: "" },
-    deps: "",
-    cause: "navigation",
-  } satisfies RouteLoaderOptions;
+  const options = createRouteLoaderOptions({ pathname: "/usage", search: "", hash: "" });
   page.routeData = (await usageRoute.loader!(page.context, options)) as UsageRouteData;
   await page.updateComplete;
 }

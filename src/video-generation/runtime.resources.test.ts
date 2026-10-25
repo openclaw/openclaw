@@ -12,6 +12,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -106,12 +107,7 @@ function fixtureFor(id: string, outcome: Mode, holdLookup = false, deliveryUrl?:
       resume.resolve();
     },
     cleanup() {
-      for (const { database } of connections) {
-        if (database.isOpen) {
-          database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, key);
+      cleanupNativeFixture(key, connections);
     },
   };
 }
@@ -176,11 +172,7 @@ async function exercise([, mode, owner, selection]: Scenario, deliveryUrl?: stri
     timeoutMs: 12_345,
     providerOptions: { seed: 42 },
   };
-  const env = {
-    OPENCLAW_HOME: fixture.dir,
-    OPENCLAW_STATE_DIR: fixture.dir,
-    OPENCLAW_CONFIG_PATH: path.join(fixture.dir, "config.json"),
-  };
+  const env = nativeFixtureEnv(fixture.dir);
   try {
     await withEnvAsync(env, async () => {
       useNoBundledPlugins();

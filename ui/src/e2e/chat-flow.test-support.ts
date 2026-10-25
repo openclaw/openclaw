@@ -11,6 +11,7 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 
 export { expectDefined, installMockGateway };
+export { exactButton } from "./chat-presentation.test-support.ts";
 export { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 export {
   controlUiSessionPath,
@@ -30,10 +31,6 @@ export async function newChatPage(
 
 export function textContent(text: string) {
   return [{ type: "text", text }];
-}
-
-export function exactButton(root: Page | Locator, name: string) {
-  return root.getByRole("button", { name, exact: true });
 }
 
 export function chatMessage(role: string, text: string, extra?: Record<string, unknown>) {

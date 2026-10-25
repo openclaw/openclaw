@@ -1,6 +1,6 @@
 import { createRouter } from "@openclaw/uirouter";
 import { createSignal, onCleanup } from "solid-js";
-import { vi } from "vitest";
+import { beforeAll, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationTheme } from "../../app/context-types.ts";
@@ -12,8 +12,13 @@ import {
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { preloadConfigSection } from "./view-lazy.ts";
 import { createConfigViewState } from "./view-state.ts";
 import { Config, type ConfigProps } from "./view.tsx";
+
+beforeAll(() =>
+  Promise.all([preloadConfigSection(null), preloadConfigSection("__notifications__")]),
+);
 
 const views = new WeakMap<HTMLElement, (props: ConfigProps) => void>();
 const activePresentation = Promise.withResolvers<void>().promise;

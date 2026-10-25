@@ -32,19 +32,6 @@ const fsToolsDisabled = () => ({
   deny: ["write", "edit", "apply_patch"],
 });
 
-function hasFinding(
-  checkId:
-    | "tools.exec.auto_allow_skills_enabled"
-    | "tools.exec.allowlist_interpreter_without_strict_inline_eval"
-    | "security.exposure.open_channels_with_exec"
-    | "tools.exec.security_full_configured"
-    | "tools.exec.fs_tools_disabled_but_exec_enabled",
-  severity: "warn" | "critical",
-  findings: SecurityAuditFinding[],
-) {
-  return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
-}
-
 function requireFinding(
   findings: SecurityAuditFinding[],
   checkId: string,
@@ -56,6 +43,11 @@ function requireFinding(
   );
   expect(finding).toMatchObject(expected);
   return finding;
+}
+function expectPresence(findings: SecurityAuditFinding[], checkId: string, present: boolean) {
+  expect(
+    findings.some((finding) => finding.checkId === checkId && finding.severity === "warn"),
+  ).toBe(present);
 }
 
 describe("security audit exec surface findings", () => {
@@ -79,12 +71,7 @@ describe("security audit exec surface findings", () => {
   });
 
   it("warns when exec approvals enable autoAllowSkills", async () => {
-    saveExecApprovals({
-      version: 1,
-      defaults: { autoAllowSkills: true },
-      agents: {},
-    });
-
+    saveExecApprovals({ version: 1, defaults: { autoAllowSkills: true }, agents: {} });
     requireFinding(await collectSecurityAuditFindings({}), "tools.exec.auto_allow_skills_enabled", {
       severity: "warn",
     });
@@ -99,16 +86,14 @@ describe("security audit exec surface findings", () => {
       agents: { ops: { allowlist: [{ pattern: "/usr/bin/python3" }] } },
     });
 
-    expect(
-      hasFinding(
-        "tools.exec.allowlist_interpreter_without_strict_inline_eval",
-        "warn",
-        await collectSecurityAuditFindings({
-          agents: { entries: { ops } },
-          tools: { exec: { strictInlineEval: true } },
-        }),
-      ),
-    ).toBe(warns);
+    expectPresence(
+      await collectSecurityAuditFindings({
+        agents: { entries: { ops } },
+        tools: { exec: { strictInlineEval: true } },
+      }),
+      "tools.exec.allowlist_interpreter_without_strict_inline_eval",
+      warns,
+    );
   });
 
   it.each([
@@ -116,9 +101,9 @@ describe("security audit exec surface findings", () => {
     [{ slack: { dmPolicy: "open" } }, { mode: "full" }, "critical"],
   ] as const)("reports open channel exec exposure: %j", async (channels, exec, severity) => {
     const findings = await collectSecurityAuditFindings({ channels, tools: { exec } });
-    expect(hasFinding("security.exposure.open_channels_with_exec", severity, findings)).toBe(true);
+    requireFinding(findings, "security.exposure.open_channels_with_exec", { severity });
     if (severity === "critical") {
-      expect(hasFinding("tools.exec.security_full_configured", severity, findings)).toBe(true);
+      requireFinding(findings, "tools.exec.security_full_configured", { severity });
     }
   });
 
@@ -136,10 +121,6 @@ describe("security audit exec surface findings", () => {
           extensions: ["./index.js"],
           channel: {
             id: "audit-fixture",
-            label: "Audit fixture",
-            selectionLabel: "Audit fixture",
-            docsPath: "/channels/audit-fixture",
-            blurb: "Synthetic audit metadata",
             doctorCapabilities: { dmAllowFromMode: "nestedOnly" },
           },
         },
@@ -206,9 +187,8 @@ describe("security audit exec surface findings", () => {
   });
 
   it("reports canonical agent paths for filesystem policy drift", async () => {
-    const tools = fsToolsDisabled();
     const findings = await collectSecurityAuditFindings({
-      agents: { entries: { ops: { tools } } },
+      agents: { entries: { ops: { tools: fsToolsDisabled() } } },
     });
     requireFinding(findings, "tools.exec.fs_tools_disabled_but_exec_enabled", {
       detail: expect.stringContaining("agents.entries.ops.tools"),
@@ -217,15 +197,11 @@ describe("security audit exec surface findings", () => {
 
   it("does not warn when sandbox filesystem policy constrains exec", async () => {
     const findings = await collectSecurityAuditFindings({
-      agents: {
-        defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } },
-      },
+      agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } },
       tools: fsToolsDisabled(),
     });
 
-    expect(hasFinding("tools.exec.fs_tools_disabled_but_exec_enabled", "warn", findings)).toBe(
-      false,
-    );
+    expectPresence(findings, "tools.exec.fs_tools_disabled_but_exec_enabled", false);
   });
 
   async function registryFixture() {
@@ -268,7 +244,6 @@ describe("security audit exec surface findings", () => {
       agents: { entries: { main: {} } },
       tools: { elevated: { allowFrom: { whatsapp: ["*"] } } },
     });
-
     requireFinding(findings, "tools.elevated.allowFrom.whatsapp.wildcard", {
       severity: "critical",
     });
@@ -343,6 +318,7 @@ describe("security audit exec surface findings", () => {
     const dangerousDetail = (detail: string) =>
       expect.objectContaining({
         checkId,
+        severity: "warn",
         detail: expect.stringContaining(detail),
       });
     const suppression = { checkId, detailIncludes: gmailFlag, reason: "test suppression" };

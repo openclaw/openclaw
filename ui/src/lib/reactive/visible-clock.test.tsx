@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApprovalCountdown } from "../../components/approval-countdown.tsx";
 import { ElapsedTime } from "../../components/elapsed-time.tsx";
 import { RelativeTime } from "../../components/relative-time.tsx";
+import { CardActivity } from "../../components/session-progress-card-content.tsx";
+import { progressCardPresentation } from "../../components/session-progress-card.ts";
 import "../../components/working-phrase-solid.tsx";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { ContentPresentation } from "../solid/presentation.ts";
 
 const NOW = 2_000_000_000;
 const ROWS = Array.from({ length: 100 }, (_, index) => index);
@@ -26,6 +30,29 @@ function ClockRows(props: { running: boolean }) {
         </div>
       )}
     </For>
+  );
+}
+
+function ApprovalProgressRows(props: { presented: boolean; approvals: boolean }) {
+  const activity = progressCardPresentation({
+    sessionKey: "agent:main:clock-fixture",
+    revision: 1,
+    updatedAt: NOW - 35_000,
+    markdown: "Clock fixture",
+  });
+  return (
+    <ContentPresentation value={() => props.presented}>
+      <For each={ROWS}>
+        {() => (
+          <div>
+            <CardActivity view={() => activity} />
+            <Show when={props.approvals}>
+              <ApprovalCountdown expiresAtMs={NOW + 90_500} />
+            </Show>
+          </div>
+        )}
+      </For>
+    </ContentPresentation>
   );
 }
 
@@ -119,6 +146,78 @@ describe("shared visible presentation clocks", () => {
     second.dispose();
     await settle();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("shares progress and approval ticks, catches up after hiding, and parks retained cards", async () => {
+    const view = mount(ApprovalProgressRows, { presented: true, approvals: true });
+    await settle();
+    const activity = view.container.querySelector("time")!;
+    const approval = view.container.querySelector("openclaw-approval-countdown")!;
+    expect(view.container.querySelectorAll("time")).toHaveLength(100);
+    expect(view.container.querySelectorAll("openclaw-approval-countdown")).toHaveLength(100);
+    expect(activity.textContent).toBe("Updated just now");
+    expect(approval.textContent).toBe("expires in 1:31");
+    expect(vi.getTimerCount()).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(activity.textContent).toBe("Updated 1m ago");
+    expect(approval.textContent).toBe("expires in 1:01");
+    setVisibility("hidden");
+    expect(vi.getTimerCount()).toBe(0);
+    const beforeHidden = view.container.textContent;
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(view.container.textContent).toBe(beforeHidden);
+
+    setVisibility("visible");
+    await settle();
+    expect(approval.textContent).toBe("expired");
+    expect(view.container.querySelector("time")).toBe(activity);
+    expect(vi.getTimerCount()).toBe(1);
+
+    view.update({ presented: false, approvals: true });
+    await settle();
+    expect(vi.getTimerCount()).toBe(0);
+    const beforeParked = activity.textContent;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(activity.textContent).toBe(beforeParked);
+
+    view.update({ presented: false, approvals: false });
+    await settle();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(view.container.querySelector("time")).toBe(activity);
+  });
+
+  it("retires expired approval readers and observes a future replacement deadline", async () => {
+    const view = mount(
+      (props: { expiresAtMs: number }) => (
+        <div>
+          <ApprovalCountdown expiresAtMs={props.expiresAtMs} />
+          <ApprovalCountdown expiresAtMs={props.expiresAtMs} compact />
+        </div>
+      ),
+      { expiresAtMs: NOW - 1 },
+    );
+    const labels = () =>
+      [...view.container.querySelectorAll("openclaw-approval-countdown")].map(
+        (element) => element.textContent,
+      );
+    await settle();
+    expect(labels()).toEqual(["expired", "0:00"]);
+    expect(vi.getTimerCount()).toBe(0);
+
+    view.update({ expiresAtMs: NOW + 1_500 });
+    await settle();
+    expect(labels()).toEqual(["expires in 0:02", "0:02"]);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settle();
+    expect(labels()).toEqual(["expired", "0:00"]);
+    expect(vi.getTimerCount()).toBe(0);
+
+    view.update({ expiresAtMs: NOW + 3_000 });
+    await settle();
+    expect(labels()).toEqual(["expires in 0:01", "0:01"]);
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it("mounts hidden without scheduling and catches up when shown", async () => {

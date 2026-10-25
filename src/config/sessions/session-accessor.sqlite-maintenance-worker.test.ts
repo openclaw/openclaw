@@ -169,7 +169,7 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       if (!remove) {
         expect(parentSql).toEqual([]);
       }
-      expect(planningPhases).toEqual(["prepared", "planning"]);
+      expect(planningPhases).toEqual(remove ? ["prepared", "planning"] : ["prepared"]);
       expect(workerThreadIds[0]).toBeGreaterThan(0);
       expect(writeOutcomes).toEqual([
         { kind: remove ? "committed" : "not-committed", admitted: remove },
@@ -410,7 +410,7 @@ it.each([
       };
       const workerThreadIds: number[] = [];
       observeSessionMaintenancePlanningWorker({
-        beforeExecute() {
+        afterPrepare() {
           if (boundary === "before-authorization" && !changed) {
             mutate();
           }

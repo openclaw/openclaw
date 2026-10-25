@@ -12,7 +12,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import {
-  callGateway,
+  connectChatGateway,
   createChatGatewayInstance,
   gatewayChatUrl,
 } from "./chat-real-gateway.test-support.ts";
@@ -56,6 +56,7 @@ type Frame = {
 };
 let artifactDir: string;
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 let provider: Awaited<ReturnType<typeof startProvider>>;
 async function startProvider() {
   const completion = createDeferred();
@@ -120,6 +121,14 @@ async function startProvider() {
 const suite = createControlUiE2eSuite({
   name: "Chat Stop after a real Gateway finished the run",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     artifactDir = createControlUiE2eArtifactDir("stop-finished-run");
     provider = await startProvider();
@@ -173,11 +182,8 @@ suite.define(() => {
         let dropped = 0;
         let delayTerminalDescriptors = true;
         const deferredDescriptors: Array<() => void> = [];
-        const call = async (method: string, params: Record<string, unknown>) => {
-          return JSON.parse(await callGateway(instance, method, params));
-        };
         const sessionRow = async () => {
-          const result: SessionsListResult = await call("sessions.list", {
+          const result = await client.request<SessionsListResult>("sessions.list", {
             agentId: "main",
             limit: 50,
           });
@@ -228,7 +234,7 @@ suite.define(() => {
           }
           return false;
         };
-        await call("sessions.create", {
+        await client.request("sessions.create", {
           key: sessionKey,
           agentId: "main",
           label: "Stop finished run",

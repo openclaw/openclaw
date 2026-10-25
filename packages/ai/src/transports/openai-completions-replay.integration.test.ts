@@ -1,10 +1,15 @@
 import { createServer } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../../src/test-utils/port-claims.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import type { Context } from "../types.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
-import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
+import {
+  makeCompletionsChunk,
+  makeCompletionsModel,
+  makeCompletionsToolDelta,
+} from "./openai-completions.test-support.js";
 
 describe("streamed Chat Completions reasoning replay on the wire", () => {
   let fixture: Awaited<ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>>;
@@ -28,16 +33,7 @@ describe("streamed Chat Completions reasoning replay on the wire", () => {
                 ? [
                     makeCompletionsChunk({ [reasoningField]: "Check the forecast." }),
                     makeCompletionsChunk(
-                      {
-                        tool_calls: [
-                          {
-                            index: 0,
-                            id: "call_weather",
-                            type: "function",
-                            function: { name: "weather", arguments: "{}" },
-                          },
-                        ],
-                      },
+                      makeCompletionsToolDelta("call_weather", "weather", "{}"),
                       "tool_calls",
                     ),
                   ]
@@ -116,14 +112,10 @@ describe("streamed Chat Completions reasoning replay on the wire", () => {
         thinkingSignature:
           provider === "opencode-go" && mode === "direct" ? "reasoning_content" : field,
       });
-      context.messages.push(first, {
-        role: "toolResult",
-        toolCallId: "call_weather",
-        toolName: "weather",
-        content: [{ type: "text", text: "sunny" }],
-        isError: false,
-        timestamp: 2,
-      });
+      context.messages.push(
+        first,
+        makeTextToolResult("call_weather", "weather", "sunny", false, 2),
+      );
       const second = await (
         await stream(switchModel ? { ...model, id: "other-model" } : model, context, options)
       ).result();

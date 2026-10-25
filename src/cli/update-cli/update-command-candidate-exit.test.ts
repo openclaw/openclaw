@@ -12,8 +12,8 @@ import * as repairAgent from "../../infra/update-repair-agent.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { updateCandidateExitEntrypoints } from "../cli-entrypoint.test-support.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -69,11 +69,7 @@ vi.mock("../../infra/update-triage.js", () => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 it("settles a failed candidate without inference repair and preserves its process exit", async () => {
   const base = dirs.make("candidate-repair-exit-");

@@ -44,6 +44,15 @@ The manifest reads the OpenClaw version and commit from `dist/build-info.json`.
 Rerun `pnpm build` after source changes; changing the checkout alone does not update
 the identity of an existing runtime build.
 
+Bundling runs from the temporary staging root so generated chunk names and module
+paths do not depend on the checkout or output directory. Reproducibility checks
+must still pin the source, dependency tree, compiler, target, and build timestamp,
+and compare unsigned outputs before signing.
+
+JIT, bytecode, and AOT compilation pass the module inventory through a build
+driver, so large plugin selections do not hit the operating system's
+command-line argument limit.
+
 On macOS, the builder uses `scripts/build-mac-sqlite.sh` and the pin in
 `scripts/lib/sqlite-macos.json` to include `runtime/lib/libsqlite3.dylib` for the
 target architecture. It respects `OPENCLAW_MACOS_DEPLOYMENT_TARGET` (default
@@ -95,6 +104,23 @@ builds with `--disallow-code-generation-from-strings=strict` still report action
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw
 does not silently switch executors.
 
+The sidecar retains the canonical worker deployment archive for transfer to paired
+nodes. It does not retain loose host worker modules. A standalone node uses the
+same executable's generic Bun runner to prewarm and execute a transferred worker
+bundle, preserving its normal bundle and protocol checks. In a run-only AOT build,
+that portable worker graph runs interpreted; embedded host worker threads still
+execute their compiled entries. Worker repository synchronization and project-setup
+Git commands are generated from configuration data without requiring retained
+function bodies. Qualify this child path on the exact signed artifact without
+adding JIT entitlements or substituting a host runtime.
+
+Portable workers delegate exec process ownership to their admitted host's native
+anchor. The same executable runs that declared entry outside generic Bun mode;
+macOS keeps process-group cleanup and Linux keeps native subreaper cleanup.
+macOS delegates only to bundles advertising the platform-aware native-owner
+capability; older bundles retain their existing startup envelope. Linux also
+accepts the earlier Linux-native-owner capability.
+
 ### Original TypeScript and compiler options
 
 `--compile-aot` compiles the completed JavaScript runtime build. `--aot-source` resolves
@@ -103,6 +129,11 @@ and compiles their original TypeScript. Both modes preserve named entry contract
 shared chunks remain reachable imports. The completed `pnpm build` is required
 for generated files, runtime resources, and source-to-emitted module URL metadata.
 Rerun it when the builder reports missing or stale metadata.
+After source discovery, source AOT relinks the emitted graph from its declared
+entries so exports used only by removed imports do not fail module URL validation.
+This packaging pass preserves the original TypeScript inputs for native compilation.
+Emitted-JavaScript builds keep the first bundle and its resource ownership; they
+may retain unused outputs from eliminated dynamic imports.
 Source AOT also requires the repository-supported Node executable on `PATH` for
 syntax analysis of TypeScript forms that the packaging parser cannot read.
 This analysis preserves source offsets; native compilation receives the original
@@ -124,7 +155,10 @@ do not match their declared types. Type errors still stop compilation.
 AOT-only options apply to either input mode:
 
 - `--trim` removes unused compiler/runtime features. `--trim-locales <locale,...>`
-  requires `--trim` and retains the selected locales.
+  requires `--trim` or `--trim-allow` and retains the selected locales.
+- `--trim-allow run[,jit]` enables trimming while retaining Bun's subprocess runner
+  and, optionally, its JIT. Both AOT modes pass these retention options through
+  the compiler's build API. The JIT support companion does not inherit AOT options.
 - `--no-compile-function-source` omits function source text. Source serialization
   consumers need their own qualification with this option.
 - `--disallow-code-generation-from-strings` denies ordinary string evaluation;
@@ -193,7 +227,11 @@ of identical prepared inputs share that identity; changing compiled code or nati
 resources invalidates it.
 For reproducible preparation, set the same `OPENCLAW_BUILD_TIMESTAMP` when running
 `pnpm build` in each checkout. Local cache freshness stamps are omitted from the
-standalone runtime. Compare executable hashes before timestamped signing;
+standalone runtime. Retained plugin-loader bytes and free CommonJS `__dirname` /
+`__filename` references use relocated runtime paths instead of staging directory
+names. Native package routing metadata is serialized independently of module
+discovery order.
+Compare executable hashes before timestamped signing;
 a matching build identity alone does not prove byte-identical executables.
 
 For breakpoints, the companion also retains the selected input runtime, its
@@ -256,6 +294,11 @@ unknown IDs and empty list elements fail before the runtime snapshot is copied.
 IDs come from `openclaw.plugin.json`, which can differ from the source directory
 name. The selected plugins must already be present in `dist/extensions`; run
 `pnpm build` first.
+
+Selected plugins follow the normal discovery entry contract. A plugin without
+`package.json` or an `openclaw.extensions` declaration uses its default index
+entry. Invalid or empty declarations still fail, and runtime and setup entries
+must be present in the compiled image.
 
 An omitted plugin must have an npm or ClawHub installation route in the existing
 official external catalogs. Unpublished core plugins must remain embedded; the
@@ -376,7 +419,8 @@ state before upgrading; see [Updating](/install/updating).
 Worker and child-process targets come from the shared runtime-process manifest.
 The same declarations resolve source workers, installed Node/Bun workers, and
 selected plugin workers. The standalone builder requires every declared output
-before compiling; a filename ending in `.worker.js` does not
+before bundling and verifies that each declared worker or child entry maps to an
+emitted module before compiling the executable; a filename ending in `.worker.js` does not
 declare an entry. Doctor database inspection, database discovery and backup,
 update helpers, workspace leases, certificate warmup, directory watching, hashing,
 the shutdown watchdog, update gates, retired-worktree cleanup, and file-transfer
@@ -399,6 +443,22 @@ sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:g
 `pnpm runtime:scripts:check` verifies freshness before building. The runtime does
 not need to serialize function bodies or retain loose JavaScript for these scripts.
 
+Local repository snapshots, workspace manifest publication, Git history, and
+publication restore use declared module entries. Resident workspace manifest
+computation calls a generated static module with its own imports. Shell snapshots
+capture their filtered environment through a declared entry as well.
+
+Probes of an external runtime's version and SQLite support execute declared program
+files with that selected runtime. Each temporary program has a private directory
+that is removed after the process finishes. The current process checks its loaded SQLite
+binding once during boot admission, using a fixed in-memory database that closes
+before the shared result resolves. This bootstrap check stays self-contained in
+relocated CLI and portable worker builds and in sealed recovery helpers.
+
+Metadata inventory uses the image's declared entry when it executes the image
+itself. The npm launcher discovery preload is a generated data-URL asset so delayed
+manager descendants can still load it after discovery finishes.
+
 The builder embeds the application modules, bundled plugin entrypoints, worker
 programs, and generated metadata needed by the runtime. It preserves lazy module
 boundaries. The sidecar contains the resources read from disk:
@@ -412,7 +472,7 @@ boundaries. The sidecar contains the resources read from disk:
 - Session-card fonts, HTML export templates, and bundled hook metadata.
 - Native addons, shared libraries, dependency resources, and their package and
   license metadata.
-- The host-owned plugin transform package for JIT and bytecode builds.
+- The host-owned plugin loading and transform package.
 - Runtime identity and startup metadata, install-owner metadata, and license notices.
 
 The builder removes embedded application and bundled plugin JavaScript, source
@@ -423,20 +483,19 @@ executable metadata supplies bundled plugin source checks and Doctor contract
 hashes. Installed plugins keep their normal filesystem admission and loading
 rules and live in the configured state directory.
 
-JIT and bytecode builds, including the matched JIT companion, retain Jiti and its
-lazy Babel transformer in one host-owned package under
+Standalone builds retain native plugin loading, Jiti, and its lazy Babel transformer
+in one host-owned package under
 `runtime/node_modules/@openclaw/plugin-loader/`. The package loads only when a
-plugin needs source transformation; native JavaScript loading, including supported
-native ESM entry behavior, keeps its existing path. The `pluginLoader` resource
-category includes the bundle, package metadata, and license.
+plugin needs source transformation or an AOT host loads an external module.
+Native plugin loading leaves Jiti and Babel uninitialized. The `pluginLoader`
+resource category includes the bundle, package metadata, and license.
 
-AOT builds admit only compiler-embedded plugin modules; an install does not add
-code to the executable. An AOT build without `--support-output` omits the loader
-package. A paired AOT/JIT build keeps the same resource snapshot in both sidecars,
-including the inactive loader package in the AOT sidecar. Only the JIT artifact
-publishes its lazy loader
-factory; the AOT artifact does not enable it. The compiled entry contract and
-presence of package files do not establish source-plugin support.
+AOT builds keep bundled plugins and the host SDK in the compiled image. Fetched
+plugins load through the declared external loader and run interpreted against
+that same SDK; installing one does not change the executable. Existing plugin
+admission and generation ownership still apply. A paired AOT/JIT build keeps the
+same loader resource snapshot in both sidecars. Strict code-generation policies
+can still reject interpreted plugins with runtime execution guidance.
 
 On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
 the standalone executable's Bun mode. This preserves npm registry authentication,

@@ -62,7 +62,7 @@ export function bindSubagentSpawnCleanup(params: {
     return (
       !currentRun ||
       (currentRun === acceptedRun?.entry &&
-        currentRun.adapter.operationalRunInstance === acceptedRun?.operationalRunInstance &&
+        currentRun.adapter.operationalRunInstance === acceptedRun.operationalRunInstance &&
         getRpcSourceIdentity(currentRun).sessionKey === params.childSessionKey &&
         getRpcSourceIdentity(currentRun).sessionId === identity.expectedSessionId)
     );

@@ -8,8 +8,11 @@ gateway-prewarm.mjs
 gateway-shutdown-budget.mjs
 worker-heap-flag.mjs
 node-runtime-env.mjs
+node-sqlite-capabilities.mjs
 node-sqlite.mjs
 node-version.mjs
+runtime-process-bootstrap.generated.mjs
+runtime-process-scripts.generated.mjs
 standalone-runtime-profile.mjs
 package.json
 packages/acp-core/package.json
@@ -226,6 +229,7 @@ scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-runtime.mts
 scripts/lib/test-selector-source-facts.mts
+scripts/lib/test-selector-source-facts.worker.mts
 scripts/lib/test-source-term-matcher.mts
 scripts/lib/tsdown-declaration-boundary.mts
 scripts/lib/tsgo-core-test-shards.mts
@@ -403,6 +407,7 @@ src/infra/database-engine/postgres-search.ts
 src/infra/database-engine/postgres-store-metadata.ts
 src/infra/database-engine/postgres-vector.ts
 src/infra/database-engine/registry.ts
+src/infra/database-engine/scalar.ts
 src/infra/database-engine/search-admission.ts
 src/infra/database-engine/search-extension.ts
 src/infra/database-engine/search.ts
@@ -418,6 +423,7 @@ src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/idle-bridges.ts
+src/infra/postgres-sync/pool.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
 src/infra/sql-connection.ts
@@ -927,6 +933,8 @@ src/infra/boundary-file-read.ts
 src/infra/boundary-path.ts
 src/infra/bun-sqlite-close-probe.ts
 src/infra/bun-sqlite-close-probe.worker.ts
+src/infra/bun-sqlite-library-probe.generated.ts
+src/infra/bun-sqlite-library-probe.ts
 src/infra/bun-sqlite-library.ts
 src/infra/clawhub-integrity.ts
 src/infra/clawhub-spec.ts
@@ -1054,6 +1062,7 @@ src/infra/map-size.ts
 src/infra/mutation-authority.ts
 src/infra/native-error-response-schema.ts
 src/infra/native-error-response.ts
+src/infra/native-module-format.ts
 src/infra/net/configured-local-origin-bypass.ts
 src/infra/net/fetch-guard.ts
 src/infra/net/fetch-request-authority.ts
@@ -1121,8 +1130,10 @@ src/infra/retry.ts
 src/infra/root-walk.ts
 src/infra/runtime-capabilities.ts
 src/infra/runtime-dependency-ownership.ts
+src/infra/runtime-process-dependency-url.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
+src/infra/runtime-process-script-file.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts
@@ -1587,6 +1598,7 @@ src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
 src/plugins/plugin-instance-owned-values.ts
+src/plugins/plugin-instance-replacement.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
@@ -1990,6 +2002,7 @@ src/state/openclaw-state-db-existing-write.ts
 src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
+src/state/openclaw-state-db-index-ordering-migrations.ts
 src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-integrity-admission.ts
 src/state/openclaw-state-db-legacy-backfills.ts
@@ -2276,6 +2289,7 @@ src/infra/session-cost-usage-worker.types.ts
 src/sessions/session-agent-work-admission.ts
 src/sessions/session-lifecycle-identity.ts
 src/config/sessions/cli-history-boundary.ts
+src/config/sessions/session-accessor.sqlite-archive-worker-lifetime.ts
 src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts
@@ -2721,6 +2735,7 @@ src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
+src/shared/state-lease-loss.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts
 src/infra/sqlite-readonly-inspection.ts

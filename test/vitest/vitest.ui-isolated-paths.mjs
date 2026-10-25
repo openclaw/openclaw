@@ -29,6 +29,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/components/mcp-app-bridge.test.ts",
   "ui/src/components/mcp-app-panel.test.tsx",
   "ui/src/components/mcp-app-view-lifecycle.test.ts",
+  "ui/src/components/mcp-app-view-resize.test.ts",
   "ui/src/components/mcp-app-view.test.ts",
   "ui/src/components/promise-modal-host-loading.test.ts",
   "ui/src/components/resizable-divider.test.ts",
