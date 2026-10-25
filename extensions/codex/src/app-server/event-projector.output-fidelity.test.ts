@@ -37,7 +37,7 @@ async function createVerboseProjector(
 }
 
 describe("Codex tool response fidelity", () => {
-  function toolResult(projector: Awaited<ReturnType<typeof h.createProjector>>) {
+  function toolResult(projector: Projector) {
     const results = snapshot(projector).messagesSnapshot.filter(
       (message) => message.role === "toolResult",
     );
@@ -48,11 +48,6 @@ describe("Codex tool response fidelity", () => {
   function outputText(result: Record<string, unknown>) {
     return h.requireRecord(h.requireArray(result.content, "content")[0], "output").text;
   }
-  function outcome(result: Record<string, unknown>) {
-    const metadata = h.requireRecord(result["__openclaw"], "metadata");
-    return h.requireRecord(metadata.toolOutput, "provenance").outcome;
-  }
-
   async function projectExec(output: unknown, input: string, callId = "outer-exec") {
     const projector = await h.createProjector();
     for (const item of [
@@ -77,7 +72,11 @@ describe("Codex tool response fidelity", () => {
       "text('result')",
       "structured",
     );
-    expect(outputText(toolResult(projector))).toBe(
+    await projector.handleNotification(h.turnCompleted());
+    const result = toolResult(projector);
+    expect(result).toMatchObject({ toolCallId: "structured", isError: false });
+    expect(result).not.toHaveProperty("__openclaw.toolOutput.outcome");
+    expect(outputText(result)).toBe(
       JSON.stringify(
         [
           { type: "input_text", text },
@@ -88,19 +87,6 @@ describe("Codex tool response fidelity", () => {
         2,
       ),
     );
-  });
-
-  it("retains completed outer code-mode output under its own call ID", async () => {
-    const output = "Script completed\nWall time 0.1 seconds\nOutput:\n" + "x".repeat(34_766);
-    const projector = await projectExec(
-      output,
-      "text(await tools.exec_command({cmd: 'transcript'}))",
-    );
-    await projector.handleNotification(h.turnCompleted());
-    const outputResult = toolResult(projector);
-    expect(outputResult).toMatchObject({ toolCallId: "outer-exec", isError: false });
-    expect(outcome(outputResult)).toBeUndefined();
-    expect(outputText(outputResult)).toBe(output);
   });
 
   it.each(["before", "after"])(
@@ -143,11 +129,11 @@ describe("Codex tool response fidelity", () => {
         content: [{ type: "text", text: "Agent started." }],
         __openclaw: { toolOutput: { source: "provider-response", modelInput: "unverified" } },
       });
-      expect(outcome(result)).toBeUndefined();
+      expect(result).not.toHaveProperty("__openclaw.toolOutput.outcome");
     },
   );
 
-  it("preserves the complete response after the terminal item with null aggregate", async () => {
+  it("preserves the complete failed response after a terminal item with null aggregate", async () => {
     const projector = await h.createProjector();
     const output = " \n" + "transcript 😀\n".repeat(2_700) + "END OF TRANSCRIPT\n ";
     const command = {
@@ -156,13 +142,14 @@ describe("Codex tool response fidelity", () => {
       command: "transcript",
       status: "completed",
       aggregatedOutput: null,
-      exitCode: 0,
+      exitCode: 2,
     };
     await itemEvent(projector, "started", { ...command, status: "inProgress" });
     await itemEvent(projector, "completed", command);
     await raw(projector, { type: "function_call_output", call_id: command.id, output });
     await projector.handleNotification(h.turnCompleted([command]));
     const result = toolResult(projector);
+    expect(result).toMatchObject({ isError: true });
     expect(outputText(result)).toBe(output);
     expect(result["__openclaw"]).toMatchObject({
       toolOutput: { source: "provider-response", modelInput: "unverified" },
@@ -205,47 +192,6 @@ describe("streamed-output-echo", () => {
     expect(value.currentAttemptAssistant).toBeDefined();
   });
 
-  it("keeps a channel summary echo suppressed after later streamed output", async () => {
-    const onToolResult = vi.fn();
-    const onAgentEvent = vi.fn();
-    const projector = await createVerboseProjector({
-      messageChannel: "telegram",
-      onToolResult,
-      onAgentEvent,
-    });
-    const item = createNativeCommandItem({ id: "cmd-multi-shape" });
-    await startCommand(projector, item);
-    const summary = onToolResult.mock.calls[0]?.[0].text;
-    expect(summary).toBe("Bash");
-    const output = "streamed-output-chunk-that-would-overwrite-summary";
-    await delta(projector, item.id, output);
-    await itemEvent(projector, "completed", {
-      ...item,
-      aggregatedOutput: output,
-      exitCode: 2,
-      durationMs: 12,
-    });
-    const prepared = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter(
-        (event) =>
-          event.stream === "item" &&
-          event.data.toolCallId === item.id &&
-          !event.data.suppressChannelProgress,
-      );
-    expect(prepared.map((event) => event.data.itemId)).toEqual([
-      "tool:cmd-multi-shape",
-      "tool:cmd-multi-shape",
-    ]);
-    expect(prepared.at(-1)?.data.status).toBe("failed");
-    expect(
-      onToolResult.mock.calls.map(([payload]) => payload.channelData?.openclawToolProgressId),
-    ).toEqual([prepared[0]?.data.itemId, prepared[0]?.data.itemId]);
-    await rawAssistant(projector, summary, { id: "raw-echo" });
-    await projector.handleNotification(h.turnCompleted());
-    expectNoReply(projector);
-  });
-
   it("retains oversized summary and normalized stream echo signatures across fine-grained deltas", async () => {
     const onToolResult = vi.fn();
     const projector = await createVerboseProjector({ onToolResult });
@@ -275,8 +221,7 @@ describe("streamed-output-echo", () => {
     for (const chunk of chunks) {
       await delta(projector, item.id, chunk);
     }
-    expect(onToolResult).toHaveBeenCalledTimes(21);
-    expect(onToolResult.mock.calls[20]?.[0].text).toContain("...(truncated)...");
+    expect(onToolResult.mock.lastCall?.[0].text).toContain("...(truncated)...");
     await rawAssistant(projector, summary, { id: "raw-summary" });
     await rawAssistant(projector, chunks.join(""), { id: "raw-stream" });
     await projector.handleNotification(

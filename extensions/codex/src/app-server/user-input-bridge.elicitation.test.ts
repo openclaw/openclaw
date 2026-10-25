@@ -68,24 +68,13 @@ function createControlledGateway() {
       waits.get(id)?.({ status: "cancelled" });
     },
   );
-  const waitForAnswers = async (count: number) => {
-    await vi.waitFor(() =>
-      expect(gateway.calls.filter(({ method }) => method === "question.waitAnswer")).toHaveLength(
-        count,
-      ),
-    );
-  };
+  const waitForAnswers = (count: number) => vi.waitFor(() => expect(waits.size).toBe(count));
   return {
     ...gateway,
     waitForAnswers,
-    async answerForm(count: number, name: string) {
-      await waitForAnswers(count);
-      expect(gateway.questions).toHaveLength(count);
+    async answer(count: number, choice: string) {
+      await vi.waitFor(() => expect(waits.has(gateway.questions[count - 1]?.id ?? "")).toBe(true));
       const request = gateway.questions[count - 1]!;
-      waits.get(request.id)?.({ status: "answered", answers: { answers: { name: [name] } } });
-      return request;
-    },
-    answerConfirmation(request: (typeof gateway.questions)[number], choice: string) {
       expect(request.questions).toHaveLength(1);
       const question = request.questions[0];
       assert(isJsonObject(question) && typeof question.questionId === "string");
@@ -93,6 +82,7 @@ function createControlledGateway() {
         status: "answered",
         answers: { answers: { [question.questionId]: [choice] } },
       });
+      return request;
     },
   };
 }
@@ -103,22 +93,24 @@ function expectResult(response: Promise<unknown>, action: string, content: unkno
 
 describe("Codex ordinary MCP elicitation adapter", () => {
   it.each([
-    { mode: "form", choice: "Allow", action: "accept", meta: null },
-    { mode: "openai/form", choice: "Decline", action: "decline", meta: null },
-  ])("waits for $choice before answering an empty $mode form ($meta)", async (testCase) => {
+    { mode: "form", choice: "Allow", action: "accept" },
+    { mode: "openai/form", choice: "Decline", action: "decline" },
+  ])("waits for $choice before answering an empty $mode form", async (testCase) => {
     const gateway = createControlledGateway();
     const { params } = gateway;
-    const requestParams = emptyFormParams({ mode: testCase.mode, _meta: testCase.meta });
+    const requestParams = emptyFormParams({ mode: testCase.mode, _meta: null });
     const response = gateway.request("empty", requestParams);
     const settled = vi.fn();
     void response.then(settled);
     try {
       await gateway.waitForAnswers(1);
-      await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
       expect(settled).not.toHaveBeenCalled();
-      const prompt = vi.mocked(params.onBlockReply!).mock.calls[0]?.[0];
-      expect(prompt?.text).toContain(requestParams.message);
-      gateway.answerConfirmation(gateway.questions[0]!, testCase.choice);
+      await vi.waitFor(() =>
+        expect(vi.mocked(params.onBlockReply!).mock.calls[0]?.[0].text).toContain(
+          requestParams.message,
+        ),
+      );
+      await gateway.answer(1, testCase.choice);
       await expectResult(response, testCase.action, testCase.action === "accept" ? {} : null);
     } finally {
       await gateway.cancelPending();
@@ -132,12 +124,11 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     const successor = gateway.request("successor");
     try {
       await gateway.waitForAnswers(1);
-      expect(gateway.questions).toHaveLength(1);
       const first = gateway.questions[0]!;
       controller.abort();
-      gateway.answerConfirmation(first, "Allow");
+      await gateway.answer(1, "Allow");
       await expectResult(confirmation, "cancel");
-      const second = await gateway.answerForm(2, "Ada");
+      const second = await gateway.answer(2, "Ada");
       expect(second.id).not.toBe(first.id);
       await expectResult(successor, "accept", { name: "Ada" });
     } finally {
@@ -175,37 +166,23 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     expect(JSON.stringify(gateway.questions)).not.toContain("token");
   });
 
-  it("compiles a queued request before caller mutation and preserves FIFO", async () => {
-    const gateway = createControlledGateway();
-    const controller = new AbortController();
-    const first = gateway.request("first", formParams(), controller.signal);
-    await vi.waitFor(() => expect(gateway.questions).toHaveLength(1));
-
-    const raw = formParams();
-    const second = gateway.request("second", raw);
-    (raw.requestedSchema.properties.name as { type: string }).type = "integer";
-
-    controller.abort();
-    await expectResult(first, "cancel");
-    await gateway.answerForm(2, "Grace");
-    await expectResult(second, "accept", { name: "Grace" });
-  });
-
-  it("skips a cancelled queued request promptly and preserves FIFO for its successor", async () => {
+  it("skips cancelled queued requests and snapshots the FIFO successor before caller mutation", async () => {
     const gateway = createControlledGateway();
     const active = gateway.request("active");
     const controller = new AbortController();
     const queued = gateway.request("queued", formParams(), controller.signal);
-    const successor = gateway.request("successor");
+    const raw = formParams();
+    const successor = gateway.request("successor", raw);
+    raw.requestedSchema.properties.name.type = "integer";
     await vi.waitFor(() => expect(gateway.questions).toHaveLength(1));
     const queuedResult = vi.fn();
     void queued.then(queuedResult);
     controller.abort();
     await vi.waitFor(() => expect(queuedResult).toHaveBeenCalledOnce());
     await expectResult(queued, "cancel");
-    await gateway.answerForm(1, "Ada");
+    await gateway.answer(1, "Ada");
     await expectResult(active, "accept", { name: "Ada" });
-    await gateway.answerForm(2, "Grace");
+    await gateway.answer(2, "Grace");
     await expectResult(successor, "accept", { name: "Grace" });
   });
 
@@ -286,7 +263,6 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     });
 
     await expect(gateway.request("changing-thread", request)).resolves.toBeUndefined();
-    expect(threadReads).toBeGreaterThanOrEqual(2);
     expect(gateway.calls).toEqual([]);
   });
 

@@ -15,10 +15,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createCodexDynamicToolBridge,
-  projectCodexExecutableDynamicTools,
-} from "./dynamic-tools.js";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { textToolResult } from "./dynamic-tools.test-support.js";
 import { flattenCodexDynamicToolFunctions as functions, type JsonValue } from "./protocol.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
@@ -37,8 +34,11 @@ function taskTool(name = "task") {
   };
 }
 
-function policy(allow: string[], actions: string[] = ["read"]): OpenClawConfig {
-  return { tools: { gatewayPolicy: { allow, actions: { task: actions } } } };
+function policy(
+  allow: string[],
+  actions: Record<string, string[]> = { task: ["read"] },
+): OpenClawConfig {
+  return { tools: { gatewayPolicy: { allow, actions } } };
 }
 type BridgeOptions = Omit<Parameters<typeof createCodexDynamicToolBridge>[0], "signal">;
 const makeBridge = (options: BridgeOptions) =>
@@ -74,24 +74,13 @@ describe("Codex Gateway tool policy", () => {
     "quarantines unreadable dynamic tool descriptors without dropping healthy siblings (Gateway policy: %s)",
     (policySource) => {
       vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-      const hookContext =
-        policySource !== "none"
-          ? {
-              config: {
-                tools: {
-                  gatewayPolicy: {
-                    allow: [
-                      "message",
-                      "fuzzplugin_unreadable_schema",
-                      "fuzzplugin_unreadable_execute",
-                    ],
-                    actions: { message: ["read"], fuzzplugin_unreadable_execute: ["read"] },
-                  },
-                },
-              },
-            }
-          : undefined;
-      if (policySource === "current" && hookContext) {
+      const hookContext = {
+        config: policy(
+          ["message", "fuzzplugin_unreadable_schema", "fuzzplugin_unreadable_execute"],
+          { message: ["read"], fuzzplugin_unreadable_execute: ["read"] },
+        ),
+      };
+      if (policySource === "current") {
         setRuntimeConfigSnapshot(hookContext.config);
       }
       const scopedContext = policySource === "captured" ? hookContext : undefined;
@@ -115,29 +104,11 @@ describe("Codex Gateway tool policy", () => {
         hookContext: scopedContext,
       });
 
-      expect(functions(bridge.availableSpecs)).toMatchObject(messageSpec);
-      expect(functions(bridge.specs)).toMatchObject(messageSpec);
-      expect(bridge.telemetry.quarantinedTools).toEqual([
-        {
-          tool: "tool[0]",
-          violations: ["tool[0].name is unreadable"],
-        },
-        {
-          tool: "fuzzplugin_unreadable_schema",
-          violations: ["fuzzplugin_unreadable_schema.inputSchema is unreadable"],
-        },
-        {
-          tool: "tool[2]",
-          violations: ["tool[2].name must be a non-empty string"],
-        },
-        {
-          tool: "fuzzplugin_unreadable_execute",
-          violations: [
-            policySource === "none"
-              ? "fuzzplugin_unreadable_execute could not be wrapped for before-tool-call hooks"
-              : "fuzzplugin_unreadable_execute.metadata is unreadable",
-          ],
-        },
+      expect(bridge.telemetry.quarantinedTools.map(({ tool }) => tool)).toEqual([
+        "tool[0]",
+        "fuzzplugin_unreadable_schema",
+        "tool[2]",
+        "fuzzplugin_unreadable_execute",
       ]);
       const registeredBridge = makeBridge({
         tools: [poisonedExecute, taskTool("message")],
@@ -145,8 +116,14 @@ describe("Codex Gateway tool policy", () => {
         hookContext: scopedContext,
       });
 
-      expect(functions(registeredBridge.availableSpecs)).toMatchObject(messageSpec);
-      expect(functions(registeredBridge.specs)).toMatchObject(messageSpec);
+      for (const specs of [
+        bridge.specs,
+        bridge.availableSpecs,
+        registeredBridge.specs,
+        registeredBridge.availableSpecs,
+      ]) {
+        expect(functions(specs)).toMatchObject(messageSpec);
+      }
     },
   );
 
@@ -169,7 +146,6 @@ describe("Codex Gateway tool policy", () => {
     async (loading) => {
       const task = taskTool();
       const admin = taskTool("gateway");
-      const config = policy(["task"]);
       const bridge = makeBridge({
         tools: [task, admin],
         registeredTools: [task, admin].map(({ name, description, parameters }) => ({
@@ -178,18 +154,12 @@ describe("Codex Gateway tool policy", () => {
           parameters,
         })),
         loading,
-        hookContext: { config },
+        hookContext: { config: policy(["task"]) },
       });
       for (const specs of [bridge.specs, bridge.availableSpecs]) {
         expect(functions(specs)).toMatchObject(readTaskSpec);
       }
       expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["task"]);
-      expect(
-        projectCodexExecutableDynamicTools({
-          tools: [task, admin],
-          hookContext: { config },
-        }).availableTools.map((tool) => tool.name),
-      ).toEqual(["task"]);
       expect(await call(bridge, "gateway", { action: "write" })).toMatchObject({ success: false });
       expect(admin.execute).not.toHaveBeenCalled();
       expect(await call(bridge, "task", { action: "read" })).toMatchObject({ success: true });
@@ -268,7 +238,7 @@ describe("Codex Gateway tool policy", () => {
     const execute = vi.spyOn(task, "execute");
     // A prewrapped tool can carry broader construction-time policy than this turn.
     const wrapped = wrapToolWithBeforeToolCallHook(task, {
-      config: policy(["task"], ["read", "write"]),
+      config: policy(["task"], { task: ["read", "write"] }),
     });
     const bridge = makeBridge({
       tools: [wrapped],

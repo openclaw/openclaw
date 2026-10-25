@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessCompactParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -156,14 +154,6 @@ it(
           "request_max_retries=0",
           "stream_max_retries=0",
         ].join("\n"),
-      );
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName: "before_prompt_build",
-            handler: () => ({ systemPrompt: "Reply with only COMPACT_READY. Do not use tools." }),
-          },
-        ]),
       );
       const factory: CodexAppServerClientFactory = async (options) => {
         options?.assertCurrent?.();

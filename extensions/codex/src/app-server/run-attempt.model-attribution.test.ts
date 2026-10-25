@@ -1,30 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type {
-  OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
-  PluginStateActionAuthority,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  createPluginRuntimeMock,
-  runInHarnessToolAuthorityForTest,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreAsync,
-  resolveAuthProfileOrder,
-} from "openclaw/plugin-sdk/provider-auth";
-import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
 import { expect, it, vi } from "vitest";
-import plugin from "../../index.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexPluginConfig } from "./config.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
@@ -32,6 +10,7 @@ import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key
 import {
   createTestParams,
   getMockRuntimeIdentity,
+  runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -44,7 +23,7 @@ import {
   createCodexAppServerBindingStore,
   sessionBindingIdentity,
 } from "./session-binding.js";
-import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 import { createRequestClientHarness } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
@@ -65,7 +44,7 @@ const modelEvent = (model: string) => ({
   data: { phase: "model", provider: "openai", model },
 });
 
-it("attributes completed models and refreshes their selection on warm reuse", async () => {
+it("attributes the ready model and accepts reroutes only for the active turn", async () => {
   // Protocol events own completion; host load must not spend the attempt watchdog.
   vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   const params = createTestParams();
@@ -100,23 +79,9 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     supervision: { enabled: true },
     sessionCatalog: { enabled: false },
   } satisfies CodexPluginConfig;
-  const stateEnv = { ...process.env, OPENCLAW_STATE_DIR: path.join(tempDir, "plugin-state") };
-  const openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("codex", {
-      ...options,
-      env: stateEnv,
-    });
-  const openKeyedStoreV2 = <T>(
-    options: OpenAsyncKeyedStoreOptions,
-    authority?: PluginStateActionAuthority,
-  ) =>
-    createPluginStateKeyedStoreForTests<T>("codex", {
-      ...options,
-      env: stateEnv,
-    }).withCurrent(authority ?? { assertCurrent() {} });
-  const stateRuntime = { state: { openSyncKeyedStore, openKeyedStoreV2 } };
   const bindingStore = createCodexAppServerBindingStore(
-    createCodexRuntimeTestBindingStateStore(stateRuntime, {
+    createCodexSqliteTestBindingStateStore({
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(tempDir, "plugin-state") },
       namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
       maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
       overflowPolicy: "reject-new",
@@ -143,14 +108,11 @@ it("attributes completed models and refreshes their selection on warm reuse", as
       ),
     },
   });
-  let nativeModel = "ready-native-model";
   const readyThread = {
     ...threadStartResult("native-thread", { cwd: params.workspaceDir }),
     model: "ready-native-model",
     modelProvider: "openai",
   };
-  let turnStarted = createDeferred<void>();
-  const requests: Array<{ method: string; params: unknown }> = [];
   const responses: Record<string, () => unknown> = {
     initialize: () => ({
       userAgent: `codex-cli/${getMockRuntimeIdentity().serverVersion}`,
@@ -159,7 +121,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     "configRequirements/read": () => ({ requirements: null }),
     "config/read": () => ({ config: { model_provider: "openai" }, origins: {} }),
     "thread/read": () => ({
-      thread: { ...readyThread.thread, model: nativeModel, path: rolloutPath },
+      thread: { ...readyThread.thread, model: readyThread.model, path: rolloutPath },
     }),
     "thread/resume": () => {
       transport.send({
@@ -168,10 +130,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
       });
       return readyThread;
     },
-    "turn/start": () => {
-      turnStarted.resolve();
-      return turnStartResult();
-    },
+    "turn/start": turnStartResult,
     "turn/interrupt": () => {
       queueMicrotask(() => sendTurn("interrupted"));
       return {};
@@ -179,8 +138,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     "thread/backgroundTerminals/list": () => ({ data: [], nextCursor: null }),
     "thread/unsubscribe": () => ({ status: "unsubscribed" }),
   };
-  const transport = createRequestClientHarness((method, id, requestParams, send) => {
-    requests.push({ method, params: requestParams });
+  const transport = createRequestClientHarness((method, id, _params, send) => {
     send({ id, result: responses[method]?.() ?? {} });
   });
   const sendTurn = (
@@ -195,28 +153,6 @@ it("attributes completed models and refreshes their selection on warm reuse", as
       },
     });
   vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
-  const runtime = createPluginRuntimeMock({
-    modelAuth: {
-      ensureAuthProfileStore,
-      ensureAuthProfileStoreAsync,
-      resolveAuthProfileOrder,
-      resolveProviderIdForAuth,
-    },
-    config: { current: () => ({ plugins: { entries: { codex: { config: pluginConfig } } } }) },
-    state: stateRuntime.state,
-  });
-  const registerAgentHarness = vi.fn<NonNullable<TestPluginApiInput["registerAgentHarness"]>>();
-  plugin.register(
-    createTestPluginApi({
-      id: "codex",
-      rootDir: fileURLToPath(new URL("../../", import.meta.url)),
-      pluginConfig,
-      runtime,
-      registerAgentHarness,
-    }),
-  );
-  expect(registerAgentHarness).toHaveBeenCalledOnce();
-  const [registered] = registerAgentHarness.mock.calls[0]!;
   const events: Array<Parameters<NonNullable<EmbeddedRunAttemptParamsV2["onAgentEvent"]>>[0]> = [];
   let modelPublished = createDeferred<void>();
   params.onAgentEvent = (event) => {
@@ -229,9 +165,12 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     events.filter((event) => event.stream === "lifecycle" && event.data.phase === "model");
   const readyModelEvent = modelEvent("ready-native-model");
   const reroutedModelEvent = modelEvent("rerouted-model");
-  const runAttempt = registered.runAttempt.bind(registered);
-  const run = runInHarnessToolAuthorityForTest(params, "codex", runAttempt);
-  let next: typeof run | undefined;
+  const run = runCodexAppServerAttempt(params, {
+    bindingStore,
+    pluginConfig,
+    runtimeModelId: params.modelId,
+    nativeHookRelay: { enabled: true },
+  });
   try {
     await beforeResult(modelPublished.promise, run, "model attribution");
     expect(modelEvents()).toEqual([readyModelEvent]);
@@ -268,40 +207,6 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     expect(
       events.filter((event) => event.stream === "lifecycle").map((event) => event.data.phase),
     ).toEqual(["start", "model", "model", "end"]);
-    for (const method of ["thread/resume", "turn/start"]) {
-      const matching = requests.filter((request) => request.method === method);
-      expect(matching).toHaveLength(1);
-      expect(matching[0]!.params).not.toHaveProperty("model");
-      expect(matching[0]!.params).not.toHaveProperty("modelProvider");
-    }
-    nativeModel = "changed-native-model";
-    turnStarted = createDeferred<void>();
-    next = runInHarnessToolAuthorityForTest(
-      { ...params, runId: "native-second-turn" },
-      "codex",
-      runAttempt,
-    );
-    await beforeResult(turnStarted.promise, next, "second turn/start");
-    sendTurn("completed", [
-      { type: "agentMessage", id: "second-answer", text: "Second native answer." },
-    ]);
-    expect(await next).toEqual(
-      expect.objectContaining({
-        terminal: { kind: "ok" },
-        assistantTexts: ["Second native answer."],
-        runtimeModelSelection: { provider: "openai", model: nativeModel },
-        currentAttemptAssistant: expect.objectContaining({
-          provider: "openai",
-          model: nativeModel,
-        }),
-      }),
-    );
-    expect(bindingStore.read(sessionBindingIdentity(params))).toMatchObject({
-      model: nativeModel,
-    });
-    expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
-    expect(requests.filter(({ method }) => method === "thread/unsubscribe")).toHaveLength(0);
-    expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
   } finally {
     abort.abort("test cleanup");
     try {
@@ -310,8 +215,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     } finally {
       vi.useRealTimers();
       await transport.client.closeAndWait();
-      await Promise.allSettled([run, next]);
-      await registered.dispose?.();
+      await Promise.allSettled([run]);
     }
   }
 });

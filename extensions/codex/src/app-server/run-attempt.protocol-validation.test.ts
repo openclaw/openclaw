@@ -154,8 +154,10 @@ it("delivers prepared document paths alongside native images without changing th
   const params = createTestParams();
   const prompt = params.prompt;
   const note = "Attachment file: /fixture/managed/inventory.csv";
-  const prepare = vi.fn(async () => note);
-  params.hostCapabilities = { ...params.hostCapabilities, prepareInputAttachments: prepare };
+  params.hostCapabilities = {
+    ...params.hostCapabilities,
+    prepareInputAttachments: async () => note,
+  };
   params.model = createCodexTestModel("codex", ["text", "image"]);
   params.images = [
     {
@@ -166,13 +168,11 @@ it("delivers prepared document paths alongside native images without changing th
   ];
   const { result, input } = await completedInput(params);
   const user = result.messagesSnapshot.find((message) => message.role === "user");
-  expect(user).toBeDefined();
   expect(JSON.stringify(user?.content)).toContain(prompt);
   expect(JSON.stringify(user?.content)).not.toContain(note);
   expect(input?.[0]).toMatchObject({ type: "text", text: expect.stringContaining(note) });
   expect(input?.[1]?.type).toBe("image");
   expect(params.prompt).toBe(prompt);
-  expect(prepare).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])(

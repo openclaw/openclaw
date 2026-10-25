@@ -47,6 +47,12 @@ function fixture(
   destructive: CodexPluginDestructivePolicy = true,
   sharedReadOnly?: boolean,
 ) {
+  const owners: Array<[string, boolean | undefined, CodexPluginDestructivePolicy]> = [
+    ["sample", readOnly, destructive],
+  ];
+  if (sharedReadOnly !== undefined) {
+    owners.push(["shared", sharedReadOnly, true]);
+  }
   let tools: Tool[] | undefined = [
     tool("browse", true),
     tool("manage", false),
@@ -71,12 +77,9 @@ function fixture(
       return { config: nativeConfig, layers: [] };
     }
     if (method === "plugin/installed" || method === "plugin/list") {
-      return pluginInstalled([
-        pluginSummary("sample", { installed: true, enabled: true }),
-        ...(sharedReadOnly === undefined
-          ? []
-          : [pluginSummary("shared", { installed: true, enabled: true })]),
-      ]);
+      return pluginInstalled(
+        owners.map(([name]) => pluginSummary(name, { installed: true, enabled: true })),
+      );
     }
     if (method === "plugin/read") {
       const { pluginName } = params as CodexAppServerRequestParams<"plugin/read">;
@@ -103,20 +106,12 @@ function fixture(
     build: () =>
       buildCodexPluginThreadConfig({
         pluginConfig: codexPluginConfig({
-          plugins: {
-            sample: curatedPlugin("sample", {
-              read_only: readOnly,
-              allow_destructive_actions: destructive,
-            }),
-            ...(sharedReadOnly === undefined
-              ? {}
-              : {
-                  shared: curatedPlugin("shared", {
-                    read_only: sharedReadOnly,
-                    allow_destructive_actions: true,
-                  }),
-                }),
-          },
+          plugins: Object.fromEntries(
+            owners.map(([name, read_only, allow_destructive_actions]) => [
+              name,
+              curatedPlugin(name, { read_only, allow_destructive_actions }),
+            ]),
+          ),
         }),
         request,
         appCache: new CodexAppInventoryCache(),
