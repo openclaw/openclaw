@@ -152,6 +152,14 @@ const repositoryScriptEntries = [
   "scripts/perf/mention-inbox-measure.ts!",
   // scripts/perf/README.md invokes this main-thread stall measurement CLI by path.
   "scripts/perf/main-thread-stall-measure.mjs!",
+  // scripts/perf/README.md invokes these measurement commands by path.
+  "scripts/perf/cron-delivery-gateway-entry.ts!",
+  "scripts/perf/plugin-policy-read-measure.mjs!",
+  "scripts/perf/prompt-cache-observation-measure.ts!",
+  "scripts/perf/reconnect-read-wave-measure.ts!",
+  "scripts/perf/session-actor-retention-measure.ts!",
+  // The row-churn instrumenter injects this probe from its compiled source path.
+  "scripts/perf/session-row-churn-probe.ts!",
   // scripts/perf/README.md invokes this synthetic reload fixture by path.
   "scripts/perf/control-ui-reload-fixture.ts!",
   // docs/ci/checkout.md invokes this checkout materialization benchmark by path.
