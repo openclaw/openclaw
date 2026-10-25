@@ -58,24 +58,22 @@ function waitForSequence(
   });
 }
 
-describe("waitForQaTransportAccountReady", () => {
-  it("keeps channel-status probes inside the readiness deadline", async () => {
-    const call = vi.fn().mockResolvedValue({ channelAccounts: {} });
+it("keeps channel-status probes inside the readiness deadline", async () => {
+  const call = vi.fn().mockResolvedValue({ channelAccounts: {} });
 
-    await expect(
-      waitForQaTransportAccountReady({
-        accountId: "sut",
-        channel: "slack",
-        gateway: { call },
-        pollIntervalMs: Number.MAX_SAFE_INTEGER,
-        timeoutMs: 5,
-      }),
-    ).rejects.toThrow("timed out after 5ms waiting for slack ready");
+  await expect(
+    waitForQaTransportAccountReady({
+      accountId: "sut",
+      channel: "slack",
+      gateway: { call },
+      pollIntervalMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: 5,
+    }),
+  ).rejects.toThrow("timed out after 5ms waiting for slack ready");
 
-    const [, probe, request] = call.mock.calls[0] ?? [];
-    expect(probe.timeoutMs).toBeLessThanOrEqual(5);
-    expect(request.timeoutMs).toBeLessThanOrEqual(5);
-  });
+  const [, probe, request] = call.mock.calls[0] ?? [];
+  expect(probe.timeoutMs).toBeLessThanOrEqual(5);
+  expect(request.timeoutMs).toBeLessThanOrEqual(5);
 });
 
 describe("createQaStateBackedTransportAdapter", () => {

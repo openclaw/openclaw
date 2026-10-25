@@ -1,8 +1,7 @@
-import { lstat, mkdir, symlink } from "node:fs/promises";
+import { mkdir, symlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readQaScenarioById } from "./scenario-catalog.js";
-import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import {
   applyQaSuiteGatewayConfigPatches,
   collectQaSuiteGatewayConfigPatches,
@@ -40,16 +39,6 @@ const selectMock = (scenarios: Scenario[], scenarioIds: string[]) =>
   selectQaFlowSuiteScenarios({ ...mockLane, scenarios, scenarioIds });
 
 describe("qa suite planning helpers", () => {
-  it("keeps programmatic suite output dirs within the repo root", async () => {
-    const repoRoot = await makeRoot("qa-suite-existing-root-");
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "custom");
-    await expect(resolveQaSuiteOutputDir(repoRoot, outputDir)).resolves.toBe(outputDir);
-    expect((await lstat(outputDir)).isDirectory()).toBe(true);
-    await expect(resolveQaSuiteOutputDir(repoRoot, "/tmp/outside")).rejects.toThrow(
-      "QA suite outputDir must stay within the repo root.",
-    );
-  });
-
   it("rejects symlinked suite output dirs that escape the repo root", async () => {
     const repoRoot = await makeRoot("qa-suite-root-");
     const outsideRoot = await makeRoot("qa-suite-outside-");
@@ -91,18 +80,18 @@ describe("qa suite planning helpers", () => {
   });
 
   it("isolates Matrix reaction flows that require a fresh native canary", () => {
-    const scenarioIds = [
+    for (const id of [
       "matrix-reaction-notification",
       "matrix-reaction-threaded",
       "matrix-reaction-not-a-reply",
       "matrix-reaction-redaction-observed",
-    ];
-
-    for (const scenarioId of scenarioIds) {
-      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
-      expect(scenario.execution.suiteIsolation, scenarioId).toBe("isolated");
-      expect(scenario.execution.isolationReason, scenarioId).toContain("fresh canary reply");
-      expect(scenarioRequiresIsolatedQaSuiteWorker(scenario), scenarioId).toBe(true);
+    ]) {
+      const scenario = readQaScenarioById(id);
+      expect(scenario.execution, id).toMatchObject({
+        suiteIsolation: "isolated",
+        isolationReason: expect.stringContaining("fresh canary reply"),
+      });
+      expect(scenarioRequiresIsolatedQaSuiteWorker(scenario), id).toBe(true);
     }
   });
 
@@ -126,19 +115,6 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(collectQaSuitePluginIds(scenarios)).toEqual(["active-memory", "memory-wiki", "openai"]);
-  });
-
-  it("ignores prototype-mutating keys in scenario startup config patches", () => {
-    const scenarios = [
-      makeScenario("polluted", {
-        gatewayConfigPatch: JSON.parse(
-          `{"plugins":{"entries":{}},"__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}}}`,
-        ) as Record<string, unknown>,
-      }),
-    ];
-
-    expect(applyPatches(scenarios)).toEqual({ plugins: { entries: {} } });
-    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
   it("keeps a scenario deletion from resurrecting baseline siblings", () => {

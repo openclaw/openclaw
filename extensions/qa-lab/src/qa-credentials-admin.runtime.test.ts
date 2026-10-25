@@ -30,21 +30,13 @@ function mockFetch(response: unknown, status = 200) {
   );
 }
 
-function fetchCall(fetchImpl: ReturnType<typeof mockFetch>) {
-  const [call] = fetchImpl.mock.calls;
-  if (!call?.[1]) {
-    throw new Error("expected fetch call and init");
-  }
-  return { input: call[0], init: call[1] };
-}
-
 async function expectQaCredentialAdminError(promise: Promise<unknown>, code: string) {
   await expect(promise).rejects.toBeInstanceOf(QaCredentialAdminError);
   await expect(promise).rejects.toMatchObject({ name: "QaCredentialAdminError", code });
 }
 
 function requestBody(fetchImpl: ReturnType<typeof mockFetch>) {
-  const body = fetchCall(fetchImpl).init.body;
+  const body = fetchImpl.mock.calls[0]?.[1]?.body;
   expect(typeof body).toBe("string");
   return JSON.parse(body as string) as Record<string, unknown>;
 }
@@ -73,12 +65,10 @@ describe("qa credential admin runtime", () => {
       credentialId: "cred-1",
       credentialFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{16}$/),
     });
-    expect(fetchCall(fetchImpl).input).toBe(
-      "https://first-schnauzer-821.convex.site/qa-credentials/v1/admin/add",
-    );
-    expect(fetchCall(fetchImpl).init.headers).toMatchObject({
-      authorization: "Bearer maint-secret",
-    });
+    expect(fetchImpl.mock.calls[0]).toMatchObject([
+      `${adminOptions.siteUrl}/qa-credentials/v1/admin/add`,
+      { headers: { authorization: "Bearer maint-secret" } },
+    ]);
     const body = requestBody(fetchImpl);
     expect(body).toMatchObject({ kind: "telegram", actorId: "maintainer-local" });
     expect(body.payload).toEqual(payload);
@@ -110,7 +100,7 @@ describe("qa credential admin runtime", () => {
     });
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(fetchCall(fetchImpl).init.signal).toBe(timeoutController.signal);
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBe(timeoutController.signal);
   });
 
   it("surfaces broker error codes for remove", async () => {

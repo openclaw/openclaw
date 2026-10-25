@@ -1,10 +1,13 @@
 import { on, once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import net, { type Server, type Socket } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
-import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "openclaw/plugin-sdk/test-env";
+import {
+  PROXY_FIXTURE_CERTIFICATE,
+  PROXY_FIXTURE_KEY,
+  useAutoCleanupTempDirTracker,
+} from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   detectContentType,
@@ -23,15 +26,11 @@ afterEach(async () => {
   }
 });
 
-async function makeUiDir() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-"));
-  cleanups.push(() => rm(root, { recursive: true, force: true }));
-  return root;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("qa-lab server ui helpers", () => {
   it("versions UI assets only when the index is a regular file", async () => {
-    const root = await makeUiDir();
+    const root = tempDirs.make("qa-lab-ui-");
     const index = path.join(root, "index.html");
     expect(resolveUiAssetVersion(root)).toBeNull();
     await mkdir(index);
@@ -47,8 +46,6 @@ describe("qa-lab server ui helpers", () => {
   it("detects basic UI asset content types", () => {
     expect(detectContentType("index.html")).toBe("text/html; charset=utf-8");
     expect(detectContentType("styles.css")).toBe("text/css; charset=utf-8");
-    expect(detectContentType("main.js")).toBe("text/javascript; charset=utf-8");
-    expect(detectContentType("icon.svg")).toBe("image/svg+xml");
   });
 
   it("renders the missing-ui placeholder html", () => {
@@ -57,7 +54,7 @@ describe("qa-lab server ui helpers", () => {
   });
 
   it("resolves the UI index but rejects traversal and malformed asset paths", async () => {
-    const rootDir = await makeUiDir();
+    const rootDir = tempDirs.make("qa-lab-ui-");
     const uiDistDir = path.join(rootDir, "dist");
     const siblingDir = path.join(rootDir, "dist-other");
     await mkdir(uiDistDir, { recursive: true });

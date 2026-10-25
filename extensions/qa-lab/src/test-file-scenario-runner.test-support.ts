@@ -20,14 +20,10 @@ export async function withQaScenarioCommand<T>(
   if (!runCommand) {
     return run();
   }
-  const command = vi
+  using _ = vi
     .spyOn(commandLifecycle, "runQaScenarioCommandLifecycle")
     .mockImplementation(runCommand);
-  try {
-    return await run();
-  } finally {
-    command.mockRestore();
-  }
+  return await run();
 }
 
 export async function runQaTestFileScenariosWithCommand({
@@ -164,7 +160,6 @@ type ScriptProducerEvidenceParams = {
   coverage?: QaEvidenceSummaryJson["entries"][number]["coverage"];
   failureReason?: string;
   producerId?: string;
-  profile?: string;
   status: "blocked" | "fail" | "pass" | "skipped";
 };
 
@@ -176,7 +171,6 @@ export function buildScriptProducerEvidence(
     schemaVersion: 2,
     generatedAt: "2026-06-14T00:00:00.000Z",
     evidenceMode: "full",
-    ...(params.profile ? { profile: params.profile } : {}),
     entries: [
       {
         test: {
