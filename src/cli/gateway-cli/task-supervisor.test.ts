@@ -17,8 +17,10 @@ vi.mock("../../process/supervisor/service-child-windows-task-launcher.js", () =>
   bindWindowsTaskLauncher,
 }));
 
+// mock-isolation: Capture supervisor diagnostics without initializing real log transports.
 vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
 vi.mock("../../logging/logger.js", () => ({ flushLogger }));
+// mock-isolation: Keep supervisor tests from launching real child processes.
 vi.mock("../../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ spawn }) }));
 
 function readSpawnRestartExitCode(input: SpawnInput): number {

@@ -235,7 +235,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     const nextConfig: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        defaults: { model: { primary: "anthropic/global" } },
+        defaults: {
+          systemAgent: { agentId: "ops" },
+          model: { primary: "anthropic/global" },
+        },
         entries: {
           main: { model: { primary: "anthropic/main" } },
           ops: { model: { primary: "openai/ops" } },

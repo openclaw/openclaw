@@ -5,6 +5,7 @@ import type { OnboardOptions } from "../../onboard-types.js";
 import { applyNonInteractiveGatewayConfig } from "./gateway-config.js";
 
 const randomToken = vi.hoisted(() => vi.fn(() => "generated-random-token"));
+// mock-isolation: Keep generated credentials deterministic while exercising the real normalizer.
 vi.mock("../../random-token.js", () => ({ randomToken }));
 
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
