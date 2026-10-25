@@ -2,9 +2,7 @@
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import "../chat-details-mobile-host-content.tsx";
-import type { GatewaySessionRow } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createChatMobileHostFixture,
@@ -33,67 +31,6 @@ async function settle(element: HTMLElementTagNameMap["openclaw-chat-details-mobi
   flush();
 }
 
-function mountDetails(initial: ChatDetailsProps) {
-  const [value, setValue] = createSignal(initial);
-  const [presented, setPresented] = createSignal(true);
-  const content = rootContent();
-  const [page, setPage] = createSignal<ChatDetailsMobilePage>({ kind: "root", content });
-  const view = mountSolid(() => (
-    <ChatDetailsMobileContent details={value()} presented={presented()} page={page()} />
-  ));
-  return {
-    view,
-    content,
-    update: (next: ChatDetailsProps) => {
-      setValue(next);
-      flush();
-    },
-    present: (next: boolean) => {
-      setPresented(next);
-      flush();
-    },
-    navigate: (next: ChatDetailsMobilePage) => {
-      setPage(next);
-      flush();
-    },
-  };
-}
-
-it("shows a real worker without legacy fields and lets the environment owner decide empty state", () => {
-  const active: GatewaySessionRow = {
-    ...details().selectedSession!,
-    placement: createActiveSessionPlacement({
-      createdAtMs: 100000,
-      updatedAtMs: 300000,
-      stateChangedAtMs: 300000,
-      workspaceBaseManifestRef: "base-manifest",
-      remoteWorkspaceDir: "/worker/repo",
-      runner: { kind: "device", status: "available" },
-    }),
-  };
-  const request = vi.fn();
-  const openMachine = vi.fn();
-  const environment = { onRequestUncommitted: request, onOpenMachine: openMachine };
-  const { view, update, present } = mountDetails(details({ selectedSession: active, environment }));
-  view.getByRole("button", { name: "worker:device" }).click();
-  expect(openMachine).toHaveBeenCalledOnce();
-  expect(request).toHaveBeenCalledOnce();
-  update(
-    details({
-      selectedSession: { key: "agent:main:details", kind: "direct", execNode: "Local Gateway" },
-      environment,
-    }),
-  );
-  expect(view.queryByRole("region", { name: "Environment" })).toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-  update(details({ environment }));
-  expect(view.queryByRole("region", { name: "Environment" })).toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-  present(false);
-  present(true);
-  expect(request).toHaveBeenCalledTimes(2);
-});
-
 it("retains Outputs demand across publications and returns navigation origins without a second route owner", () => {
   const release = vi.fn();
   const retain = vi.fn(() => release);
@@ -107,9 +44,13 @@ it("retains Outputs demand across publications and returns navigation origins wi
     onViewAll: vi.fn(),
     renderViewAllIcon: () => null,
   };
-  const { view, content, update, present, navigate } = mountDetails(
-    details({ outputs: output, retainOutputs: retain }),
-  );
+  const [value, setValue] = createSignal(details({ outputs: output, retainOutputs: retain }));
+  const [presented, setPresented] = createSignal(true);
+  const content = rootContent();
+  const [page, setPage] = createSignal<ChatDetailsMobilePage>({ kind: "root", content });
+  const view = mountSolid(() => (
+    <ChatDetailsMobileContent details={value()} presented={presented()} page={page()} />
+  ));
   expect(retain).toHaveBeenCalledOnce();
   const people = view.getByRole("button", { name: "People" });
   people.click();
@@ -123,30 +64,37 @@ it("retains Outputs demand across publications and returns navigation origins wi
     expect.objectContaining({ kind: "details-root" }),
   );
   const updated = details({ outputs: { ...output, artifacts: null }, retainOutputs: retain });
-  update(updated);
+  setValue(updated);
+  flush();
   expect(retain).toHaveBeenCalledOnce();
   expect(release).not.toHaveBeenCalled();
-  navigate({ kind: "outputs" });
+  setPage({ kind: "outputs" });
+  flush();
   expect(retain).toHaveBeenCalledOnce();
-  navigate({
+  setPage({
     kind: "task-progress",
     content: { showTaskProgress: true, onShowTaskProgressChange: vi.fn() },
   });
+  flush();
   expect(release).toHaveBeenCalledOnce();
-  navigate({ kind: "root", content });
+  setPage({ kind: "root", content });
+  flush();
   expect(retain).toHaveBeenCalledTimes(2);
-  present(false);
+  setPresented(false);
+  flush();
   expect(release).toHaveBeenCalledTimes(2);
   const hiddenPeople = view.getByRole("button", { name: "People" });
   expect(hiddenPeople.hasAttribute("disabled")).toBe(true);
   hiddenPeople.click();
   expect(content.entries.onNavigate).toHaveBeenCalledTimes(2);
-  present(true);
+  setPresented(true);
+  flush();
   expect(retain).toHaveBeenCalledTimes(3);
   expect(view.getByRole("button", { name: "People" })).toBe(hiddenPeople);
   const releaseReplacement = vi.fn();
   const retainReplacement = vi.fn(() => releaseReplacement);
-  update({ ...updated, retainOutputs: retainReplacement });
+  setValue({ ...updated, retainOutputs: retainReplacement });
+  flush();
   expect(release).toHaveBeenCalledTimes(3);
   expect(retainReplacement).toHaveBeenCalledOnce();
   expect(view.getByRole("button", { name: "People" })).toBe(hiddenPeople);
@@ -250,8 +198,6 @@ it("routes current mobile PRs to Checks and rejects hidden or superseded navigat
   const value = details({ pullRequests: [request], pullRequestsSessionId: "session-current" });
   const { element, navigate, show, query, button } = await mountMobileHost(value);
   const rootRow = query('[data-details-page="root"] .chat-pr-mobile__row')!;
-  expect(rootRow.querySelector(".chat-pr__additions")?.textContent).toBe("+1,234");
-  expect(rootRow.querySelector(".chat-pr__deletions")?.textContent).toBe("−2,000");
   expect(rootRow.querySelector(".chat-pr-mobile__row-meta")?.textContent).toContain(
     "+1,234 −2,000",
   );

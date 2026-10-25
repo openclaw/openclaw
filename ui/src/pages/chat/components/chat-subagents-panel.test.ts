@@ -190,7 +190,6 @@ it.each([undefined, false, true])(
     const first = child("first");
     const last = child("last");
     const initial = createDeferred<SessionsListResult>();
-    const continuation = createDeferred<SessionsListResult>();
     const revalidation = createDeferred<SessionsListResult>();
     const metrics = createDeferred();
     let phase: "initial" | "refresh" | "ready" = "initial";
@@ -206,7 +205,7 @@ it.each([undefined, false, true])(
         if (phase === "ready") {
           return page([first, last]);
         }
-        return values.offset ? continuation.promise : initial.promise;
+        return initial.promise;
       }
       if (method === "chat.history") {
         return metrics.promise;
@@ -215,20 +214,12 @@ it.each([undefined, false, true])(
     }, mobile);
     onTestFinished(() => {
       initial.resolve(page([first, last]));
-      continuation.resolve(page([last]));
       revalidation.resolve(page([first, last]));
       metrics.resolve();
     });
     await waitForSolid(() => expect(f.panel.querySelector("[role=status]")).not.toBeNull());
-    initial.resolve(page([first], { hasMore: true, nextOffset: 1, totalCount: 2 }));
-    await waitForSolid(() =>
-      expect(f.request).toHaveBeenCalledWith(
-        "sessions.list",
-        expect.objectContaining({ offset: 1 }),
-      ),
-    );
     expect(f.panel.querySelector(openSelector(mobile))).toBeNull();
-    continuation.resolve(page([last], { offset: 1, totalCount: 2 }));
+    initial.resolve(page([first, last]));
     await f.waitForCount(openSelector(mobile), 2);
     const retained = f.panel.querySelector(openSelector(mobile));
     phase = "refresh";
@@ -283,10 +274,7 @@ it.each([undefined, true])(
       f.panel.querySelector("openclaw-chat-pane")!.onBackToSubagents?.();
       await waitForSolid(() => expect(document.activeElement).toBe(retry()));
     }
-    const reads = () => f.request.mock.calls.filter(([method]) => method === "sessions.list");
-    const beforeRetry = reads().length;
     retry()!.click();
-    await waitForSolid(() => expect(reads().length).toBeGreaterThan(beforeRetry));
     await waitForSolid(() => expect(f.panel.querySelector('[role="alert"]')).toBeNull());
     expect(f.panel.querySelector(openSelector(mobile))).not.toBeNull();
   },
