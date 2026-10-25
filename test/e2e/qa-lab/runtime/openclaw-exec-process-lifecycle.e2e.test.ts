@@ -95,6 +95,7 @@ test.for([
   { topology: "memory-bounded", memoryLimitBytes: 512 * 1024 * 1024 },
 ])(
   "$topology exec reports the command PID and joins cancellation",
+  { timeout: 30_000 },
   async ({ memoryLimitBytes }, { signal, onTestFinished }) => {
     vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
     vi.spyOn(childMemory, "resolveHostExecMemoryLimit").mockReturnValue(memoryLimitBytes);
@@ -177,5 +178,4 @@ test.for([
       await cleanup();
     }
   },
-  30_000,
 );
