@@ -1,6 +1,7 @@
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
@@ -13,6 +14,7 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type {
   SidebarSessionOwnerFilter,
   SidebarSessionStatusFilter,
+  SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 
 // Chat panes announce catalog adoptions so rows bind immediately.
@@ -59,19 +61,21 @@ export function publishSidebarSessionError(
   }
 }
 
-function pruneSidebarAgentSessionCaches(
-  owner: SidebarSessionListOwner,
-  agentIds: readonly string[],
+export function clearSidebarSessionError(owner: SidebarSessionListOwner): void {
+  publishSidebarSessionError(owner, null, "action");
+  owner.requestSessionDataUpdate();
+}
+
+export function publishScopedSessionError(
+  owner: SidebarSessionListOwner & {
+    isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean;
+  },
+  scope: SidebarSessionMutationScope,
+  error: unknown,
 ): void {
-  const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
-  const entries = Object.entries(owner.sessionResultsByAgent);
-  const retained = entries.filter(([agentId]) => retainedAgentIds.has(agentId));
-  if (retained.length !== entries.length) {
-    owner.sessionResultsByAgent = Object.fromEntries(retained);
-  }
-  if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
-    owner.sessionsResult = null;
-    owner.sessionsAgentId = null;
+  if (owner.isSessionMutationScopeCurrent(scope)) {
+    publishSidebarSessionError(owner, formatUiError(error), "action");
+    owner.requestSessionDataUpdate();
   }
 }
 
@@ -84,13 +88,21 @@ export function subscribeSidebarAgentSessionCaches(
     const roster = agents.state.agentsList;
     // A null roster is transient during reconnect; only a concrete list can evict agent caches.
     if (roster) {
-      pruneSidebarAgentSessionCaches(
-        owner,
-        roster.agents.map((agent) => agent.id),
-      );
+      const agentIds = roster.agents.map((agent) => agent.id);
+      const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
+      const entries = Object.entries(owner.sessionResultsByAgent);
+      const retained = entries.filter(([agentId]) => retainedAgentIds.has(agentId));
+      if (retained.length !== entries.length) {
+        owner.sessionResultsByAgent = Object.fromEntries(retained);
+      }
+      if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
+        owner.sessionsResult = null;
+        owner.sessionsAgentId = null;
+      }
     }
   };
   synchronize();
+  // Prune removed-agent caches before publishing the owner update.
   return agents.subscribe(() => {
     synchronize();
     notify();
@@ -145,6 +157,7 @@ export function subscribeFilteredSidebarSessions(
   scope: SessionListOptions,
   isCurrent: () => boolean,
 ): () => void {
+  const bootstrap = owner.context?.connectionBootstrap;
   const apply = (snapshot: SessionListSnapshot) => {
     if (!isCurrent()) {
       return;
@@ -159,11 +172,13 @@ export function subscribeFilteredSidebarSessions(
   };
   const unsubscribe = sessions.subscribeList(scope, apply);
   apply(sessions.listSnapshot(scope));
-  return () => {
+  const stop = () => {
+    bootstrap?.cancelQueued(stop);
     unsubscribe();
     owner.sessionsStartupPending = false;
     publishSidebarSessionError(owner, null, "list");
   };
+  return stop;
 }
 
 export function scheduleFilteredSidebarSessions(

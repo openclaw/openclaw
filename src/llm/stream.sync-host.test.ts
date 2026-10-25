@@ -7,28 +7,34 @@ import type {
   Model,
 } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
+import { formatUserFacingAssistantErrorText } from "../agents/embedded-agent-helpers/error-text.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import { decodePostgresError } from "../infra/postgres-sync/protocol.js";
+import {
+  classifyGatewayStorageFailure,
+  isLocalStorageOutcomeError,
+} from "../infra/sqlite-error-diagnostics.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-error.js";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
 import { stream, streamSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
+import { isRetryableAssistantError } from "./utils/retry.js";
 
 describe("LLM synchronous stream transport host", () => {
   it("defers provider streams until runtime transport ports are installed", async () => {
     const registry = createApiRegistry();
     const runtime = createLlmRuntime(registry);
     const inertWrapper = getAiTransportHost().plugin.wrapSimpleCompletionStream;
-    const model = {
+    const model = makeProviderModelFixture({
       api: "test-sync-runtime-host-api",
       provider: "test-sync-runtime-host",
       id: "test-sync-runtime-host-model",
       name: "Test Sync Runtime Host Model",
       baseUrl: "https://example.test",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 1024,
       maxTokens: 512,
-    } satisfies Model;
+    });
     const message = {
       role: "assistant",
       content: [{ type: "text", text: "configured" }],
@@ -80,5 +86,57 @@ describe("LLM synchronous stream transport host", () => {
       errorCode: "SQLITE_BUSY",
       errorMessage: "private native detail",
     });
+
+    providerStream.mockImplementation(() => {
+      throw new Error("Outer runtime failure", {
+        cause: decodePostgresError({
+          name: "error",
+          message: "canceling statement due to user request PRIVATE_STORAGE_DETAIL",
+          code: "57014",
+        }),
+      });
+    });
+    for (const run of [stream, streamSimple]) {
+      const failure = await run(boundModel, { messages: [] }).result();
+      expect(failure).toMatchObject({
+        stopReason: "error",
+        errorCode: "57014",
+        errorType: "PostgresQueryCanceledError",
+      });
+      expect(classifyGatewayStorageFailure(failure)).toBe("57014");
+    }
+    providerStream.mockImplementation(() => {
+      throw new SqliteWorkerError("private rollback detail", "unavailable");
+    });
+    for (const run of [stream, streamSimple]) {
+      const failure = await run(boundModel, { messages: [] }).result();
+      expect(classifyGatewayStorageFailure(failure)).toBe("unavailable");
+      expect(isLocalStorageOutcomeError(failure)).toBe(false);
+      expect(formatUserFacingAssistantErrorText(failure)).toMatch(/rolled back/i);
+      expect(formatUserFacingAssistantErrorText(failure)).toMatch(/retry/i);
+      const providerFailure = { ...failure, errorType: undefined };
+      expect(classifyGatewayStorageFailure(providerFailure)).toBeUndefined();
+      expect(isRetryableAssistantError(failure)).toBe(isRetryableAssistantError(providerFailure));
+    }
+    const rollback = new SqliteWorkerError("private rollback detail", "unavailable");
+    providerStream.mockImplementation(() => {
+      throw new AggregateError(
+        [rollback, new SqliteWorkerError("private settlement detail", "outcome-unknown")],
+        "private cleanup detail",
+        { cause: rollback },
+      );
+    });
+    const uncertain = await stream(boundModel, { messages: [] }).result();
+    expect(classifyGatewayStorageFailure(uncertain)).toBe("session_actor_reconciliation");
+    expect(isLocalStorageOutcomeError(uncertain)).toBe(true);
+    expect(isRetryableAssistantError(uncertain)).toBe(false);
+    expect(formatUserFacingAssistantErrorText(uncertain)).toMatch(/check.*history/i);
+
+    providerStream.mockImplementation(() => {
+      throw Object.assign(new Error("provider capacity failure"), { code: "unavailable" });
+    });
+    expect(
+      classifyGatewayStorageFailure(await stream(boundModel, { messages: [] }).result()),
+    ).toBeUndefined();
   });
 });

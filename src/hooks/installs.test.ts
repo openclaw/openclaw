@@ -1,25 +1,29 @@
 import fs from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { persistHookPackInstall } from "../cli/hook-install-persistence.js";
-import { readConfigFileSnapshotForWrite } from "../config/config.js";
+import { runPluginInstallCommand } from "../cli/plugins-install-command.js";
+import { runWithLocalPluginState } from "../cli/plugins-local-state.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { writeHookFixture } from "./hook-fixture.test-support.js";
 import { stageHookInstall } from "./install-record-transaction.js";
+import * as hookInstaller from "./install.js";
 import { readHookInstalls, readHookInstallsAsync, recordHookInstall } from "./installs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     await closeStateDatabaseForTest();
+    vi.restoreAllMocks();
     cleanup();
   });
 });
@@ -29,7 +33,10 @@ const readPayload = (dir: string) => readText(join(dir, "payload.txt"));
 const readEntry = (file: string) =>
   JSON.parse(readText(file)).hooks?.internal?.entries?.["command-audit"]?.enabled;
 
-type PersistOptions = Parameters<typeof persistHookPackInstall>[0];
+type InstallOptions = {
+  beforePersistentApply?: () => void;
+  log?: RuntimeEnv["log"];
+};
 
 it("reads newly recorded packs after a worker read", async () => {
   const stateDir = tempDirs.make("openclaw-hook-installs-");
@@ -50,7 +57,7 @@ async function withHookInstallFixture(
     sourceDir: string;
     targetDir: string;
     payloadTransaction: ReturnType<typeof resolvePackageDirInstallTransaction>;
-    persist: (overrides: Partial<PersistOptions>) => ReturnType<typeof persistHookPackInstall>;
+    persist: (overrides: InstallOptions) => Promise<void>;
   }) => Promise<void>,
 ) {
   const root = tempDirs.make("openclaw-hook-commit-");
@@ -61,68 +68,97 @@ async function withHookInstallFixture(
   fs.mkdirSync(sourceDir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
   fs.writeFileSync(join(sourceDir, "payload.txt"), "candidate");
+  fs.writeFileSync(
+    join(sourceDir, "package.json"),
+    JSON.stringify({ name: "alpha", version: "2.0.0", openclaw: { hooks: ["./command-audit"] } }),
+  );
+  writeHookFixture(
+    join(sourceDir, "command-audit"),
+    '---\nname: command-audit\ndescription: "Fixture hook"\n---\n',
+    "export default () => {};\n",
+    "handler.js",
+  );
   fs.writeFileSync(configPath, "{}\n");
   await withEnvAsync(
     { OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
     async () =>
-      withPluginLifecycleLease({}, async () => {
-        if (mode === "update") {
-          fs.mkdirSync(targetDir, { recursive: true });
-          fs.writeFileSync(join(targetDir, "payload.txt"), "previous");
-          writeConfigMachineState("hooks.internal.installs", {
-            alpha: { source: "path", installPath: targetDir, version: "1.0.0" },
-          });
-        }
-        const result =
-          mode === "link"
-            ? undefined
-            : await installPackageDir(
-                requestDeferredPackageDirInstall({
-                  sourceDir,
-                  targetDir,
-                  mode,
-                  timeoutMs: 30_000,
-                  copyErrorPrefix: "fixture copy failed",
-                  hasDeps: false,
-                  depsLogMessage: "unused",
-                }),
-              );
-        if (result && !result.ok) {
-          throw new Error(result.error);
-        }
-        const payloadTransaction = result ? resolvePackageDirInstallTransaction(result) : undefined;
-        await run({
-          configPath,
-          sourceDir,
-          targetDir,
-          payloadTransaction,
-          async persist(overrides) {
-            const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-            return persistHookPackInstall({
-              snapshot: {
-                config: snapshot.config,
-                baseHash: snapshot.hash ?? undefined,
-                writeOptions,
-              },
+      runWithLocalPluginState("hook install fixture", () =>
+        withPluginLifecycleLease({}, async () => {
+          if (mode === "update") {
+            fs.mkdirSync(targetDir, { recursive: true });
+            fs.writeFileSync(join(targetDir, "payload.txt"), "previous");
+            writeConfigMachineState("hooks.internal.installs", {
+              alpha: { source: "path", installPath: targetDir, version: "1.0.0" },
+            });
+          }
+          const result =
+            mode === "link"
+              ? undefined
+              : await installPackageDir(
+                  requestDeferredPackageDirInstall({
+                    sourceDir,
+                    targetDir,
+                    mode,
+                    timeoutMs: 30_000,
+                    copyErrorPrefix: "fixture copy failed",
+                    hasDeps: false,
+                    depsLogMessage: "unused",
+                  }),
+                );
+          if (result && !result.ok) {
+            throw new Error(result.error);
+          }
+          const payloadTransaction = result
+            ? resolvePackageDirInstallTransaction(result)
+            : undefined;
+          let readyForPersistence = false;
+          // Retain the real installer's payload transaction; this suite owns the later
+          // record/config commit rather than repeating artifact discovery and copying.
+          vi.spyOn(hookInstaller, "installHooksFromPath").mockImplementation(async () => {
+            readyForPersistence = true;
+            return {
+              ...result,
+              ok: true,
               hookPackId: "alpha",
               hooks: ["command-audit"],
-              // Undefined optional fields must match their persisted JSON representation.
-              install: { source: "path", installPath: targetDir, version: undefined },
-              payloadTransaction,
-              ...overrides,
-            });
-          },
-        });
-      }),
+              targetDir,
+              version: "2.0.0",
+            };
+          });
+          await run({
+            configPath,
+            sourceDir,
+            targetDir,
+            payloadTransaction,
+            async persist(overrides) {
+              const errors: string[] = [];
+              await runPluginInstallCommand({
+                raw: sourceDir,
+                opts: { force: true, acceptCapabilities: true, link: mode === "link" },
+                allowInstallPolicyWarningPrompt: false,
+                beforePersistentApply() {
+                  if (readyForPersistence) {
+                    overrides.beforePersistentApply?.();
+                  }
+                },
+                runtime: {
+                  log: overrides.log ?? (() => {}),
+                  error: (...messages) => errors.push(messages.map(String).join(" ")),
+                  exit: () => {
+                    throw new Error(errors.at(-1) ?? "unexpected exit");
+                  },
+                },
+              });
+            },
+          });
+        }),
+      ),
   );
 }
 
 it.each(
   (["install", "update", "link"] as const).flatMap((mode) =>
-    (["before record", "after record", "after config"] as const).map((phase) => ({
-      mode,
-      phase,
-    })),
+    (["before record", "after record", "after config"] as const).map((phase) => ({ mode, phase })),
   ),
 )("compensates $mode cancellation $phase without touching its source", async ({ mode, phase }) =>
   withHookInstallFixture(mode, async ({ configPath, sourceDir, targetDir, persist }) => {
@@ -221,26 +257,19 @@ it.each(["logging", "cleanup"] as const)(
         if (!payloadTransaction) {
           throw new Error("expected payload transaction");
         }
+        if (failure === "cleanup") {
+          const commit = payloadTransaction.commit.bind(payloadTransaction);
+          vi.spyOn(payloadTransaction, "commit").mockImplementation(async () => {
+            await commit();
+            throw new Error("cleanup unavailable");
+          });
+        }
         await expect(
           persist({
-            install: { source: "path", installPath: targetDir, version: "2.0.0" },
-            payloadTransaction: {
-              ...payloadTransaction,
-              async commit() {
-                await payloadTransaction.commit();
-                if (failure === "cleanup") {
-                  throw new Error("cleanup unavailable");
-                }
-              },
-            },
-            runtime: {
-              log() {
+            log(message) {
+              if (String(message).startsWith("Installed hook pack:")) {
                 throw new Error("logging unavailable");
-              },
-              error() {},
-              exit() {
-                throw new Error("unexpected exit");
-              },
+              }
             },
           }),
         ).rejects.toThrow(failure === "cleanup" ? "committed" : "logging unavailable");

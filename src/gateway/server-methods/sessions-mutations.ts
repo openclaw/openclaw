@@ -32,6 +32,7 @@ import {
   projectSessionActor,
 } from "../session-identity-projection.js";
 import { loadSessionLifecycleRuntime } from "../session-lifecycle-runtime-loader.js";
+import { sessionMutationForbiddenError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
@@ -44,6 +45,7 @@ import type { SessionActorProfileIdentity } from "../session-utils-contracts.js"
 import { projectSessionPatchResult } from "../session-utils-model.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
@@ -53,7 +55,7 @@ import { createCommitGuard } from "./sessions-patch-errors.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function createSessionPatchHandler(
   method: "sessions.patch" | "sessions.patchMany",
@@ -88,7 +90,7 @@ function createSessionPatchHandler(
         request = { many: false, params };
       }
       const inputPatch = request.many ? request.params.patch : request.params;
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      const scopes = client?.connect.scopes ?? [];
       if (
         (inputPatch.permissionMode === "full" ||
           inputPatch.sandboxMode !== undefined ||
@@ -231,395 +233,352 @@ function createSessionPatchHandler(
 export const sessionMutationHandlers: GatewayRequestHandlers = {
   "sessions.patchMany": createSessionPatchHandler("sessions.patchMany"),
   "sessions.patch": createSessionPatchHandler("sessions.patch"),
-  "sessions.setInvolvement": async ({ params, respond, context, client }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionsSetInvolvementParams,
-        "sessions.setInvolvement",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const profileId = client?.authenticatedUserProfile?.profileId;
-    const profile = profileId && resolveCurrentUserProfileDisplay(profileId);
-    if (
-      !client ||
-      client.invalidated ||
-      client.connectionSignal?.aborted ||
-      isSyntheticGatewayCaller(client) ||
-      !profile ||
-      profile.kind !== "resolved"
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
+  "sessions.setInvolvement": defineValidatedGatewayHandler(
+    "sessions.setInvolvement",
+    validateSessionsSetInvolvementParams,
+    async ({ params, respond, context, client }) => {
+      const profileId = client?.authenticatedUserProfile?.profileId;
+      const profile = profileId && resolveCurrentUserProfileDisplay(profileId);
+      if (
+        !client ||
+        client.invalidated ||
+        client.connectionSignal?.aborted ||
+        isSyntheticGatewayCaller(client) ||
+        !profile ||
+        profile.kind !== "resolved"
+      ) {
+        respondError(
+          respond,
           ErrorCodes.FORBIDDEN,
           "Personal session visibility requires a signed-in profile.",
-        ),
-      );
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedSessionAgentId(cfg, params.key, params.agentId);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const facts = await prepareSessionMutationFacts({
-      cfg,
-      sessionKey: params.key,
-      agentId: requestedAgent.agentId,
-      allowMissing: true,
-    });
-    try {
-      const target = facts.readCurrent(context.getRuntimeConfig()).target;
-      if (
-        !target ||
-        target.entry.sessionId !== params.expectedSessionId ||
-        target.entry.incognito ||
-        authorizeIncognitoSessionTarget({ client, sessionKey: params.key, target }) ||
-        createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
+        );
+        return;
+      }
+      const cfg = context.getRuntimeConfig();
+      const requestedAgent = resolveRequestedSessionAgentId(cfg, params.key, params.agentId);
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      const facts = await prepareSessionMutationFacts({
+        cfg,
+        sessionKey: params.key,
+        agentId: requestedAgent.agentId,
+        allowMissing: true,
+      });
+      try {
+        const target = facts.readCurrent(context.getRuntimeConfig()).target;
+        if (
+          !target ||
+          target.entry.sessionId !== params.expectedSessionId ||
+          target.entry.incognito ||
+          authorizeIncognitoSessionTarget({ client, sessionKey: params.key, target }) ||
+          createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false
+        ) {
+          respondError(
+            respond,
             ErrorCodes.INVALID_REQUEST,
             "Session is unavailable or changed. Refresh the session list.",
-          ),
-        );
-        return;
-      }
-      const updated = await updateSessionProfileInvolvementAsync(
-        { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
-        {
-          expectedSessionId: params.expectedSessionId,
-          expectedEntry: target.entry,
-          profileIds: [profile.profileId],
-          change: { kind: "visibility", hidden: params.hidden },
-          assertCurrent: () => {
-            const currentCfg = context.getRuntimeConfig();
-            const current = facts.readCurrent(currentCfg).target;
-            const currentProfile = client.authenticatedUserProfile?.profileId;
-            if (
-              client.invalidated ||
-              client.connectionSignal?.aborted ||
-              currentProfile !== profileId ||
-              !current ||
-              current.entry.sessionId !== params.expectedSessionId ||
-              current.entry.incognito ||
-              createSessionListEntryFilter({ client, cfg: currentCfg })?.(
-                current.storeKey,
-                current.entry,
-              ) === false
-            ) {
-              throw new SessionMutationAuthorizationChangedError(
-                errorShape(
-                  ErrorCodes.FORBIDDEN,
+          );
+          return;
+        }
+        const updated = await updateSessionProfileInvolvementAsync(
+          { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
+          {
+            expectedSessionId: params.expectedSessionId,
+            expectedEntry: target.entry,
+            profileIds: [profile.profileId],
+            change: { kind: "visibility", hidden: params.hidden },
+            assertCurrent: () => {
+              const currentCfg = context.getRuntimeConfig();
+              const current = facts.readCurrent(currentCfg).target;
+              const currentProfile = client.authenticatedUserProfile?.profileId;
+              if (
+                client.invalidated ||
+                client.connectionSignal?.aborted ||
+                currentProfile !== profileId ||
+                !current ||
+                current.entry.sessionId !== params.expectedSessionId ||
+                current.entry.incognito ||
+                createSessionListEntryFilter({ client, cfg: currentCfg })?.(
+                  current.storeKey,
+                  current.entry,
+                ) === false
+              ) {
+                throw sessionMutationForbiddenError(
                   "Session access changed. Refresh the session list.",
-                ),
-              );
-            }
+                );
+              }
+            },
           },
-        },
-      );
-      if (!updated) {
+        );
+        if (!updated) {
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "Session changed. Refresh the session list.",
+          );
+          return;
+        }
         respond(
-          false,
+          true,
+          { ok: true, key: target.canonicalKey, hiddenFromInvolvingMe: params.hidden },
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Session changed. Refresh the session list."),
+        );
+      } finally {
+        facts.release();
+      }
+    },
+  ),
+  "sessions.assignOwner": defineValidatedGatewayHandler(
+    "sessions.assignOwner",
+    validateSessionsAssignOwnerParams,
+    async ({ params, respond, context, client, signal, sessionMutationAuthorization }) => {
+      const key = requireSessionKey(params.key, respond);
+      if (!key) {
+        return;
+      }
+      const respondUnknownSession = () => {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`);
+      };
+      const runtimeAgentId = normalizeOptionalString(
+        client?.internal?.agentRuntimeIdentity?.agentId,
+      );
+      const agentToolCallerId =
+        client?.internal?.syntheticClient === true
+          ? normalizeOptionalString(client.internal.agentToolCaller?.agentId)
+          : undefined;
+      const trustedAgentId = runtimeAgentId ?? agentToolCallerId;
+      const humanActor = gatewayClientSessionCreator(client);
+      const assignedBy = trustedAgentId
+        ? ({ type: "agent", id: trustedAgentId } as const)
+        : humanActor
+          ? ({ type: "human", id: humanActor.id } as const)
+          : null;
+      if (!assignedBy) {
+        respondError(
+          respond,
+          ErrorCodes.FORBIDDEN,
+          "sessions.assignOwner requires an identified caller",
         );
         return;
       }
-      respond(
-        true,
-        { ok: true, key: target.canonicalKey, hiddenFromInvolvingMe: params.hidden },
-        undefined,
-      );
-    } finally {
-      facts.release();
-    }
-  },
-  "sessions.assignOwner": async ({
-    params,
-    respond,
-    context,
-    client,
-    signal,
-    sessionMutationAuthorization,
-  }) => {
-    if (
-      !assertValidParams(params, validateSessionsAssignOwnerParams, "sessions.assignOwner", respond)
-    ) {
-      return;
-    }
-    const key = requireSessionKey(params.key, respond);
-    if (!key) {
-      return;
-    }
-    const respondUnknownSession = () => {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`));
-    };
-    const runtimeAgentId = normalizeOptionalString(client?.internal?.agentRuntimeIdentity?.agentId);
-    const agentToolCallerId =
-      client?.internal?.syntheticClient === true
-        ? normalizeOptionalString(client.internal.agentToolCaller?.agentId)
-        : undefined;
-    const trustedAgentId = runtimeAgentId ?? agentToolCallerId;
-    const humanActor = gatewayClientSessionCreator(client);
-    const assignedBy = trustedAgentId
-      ? ({ type: "agent", id: trustedAgentId } as const)
-      : humanActor
-        ? ({ type: "human", id: humanActor.id } as const)
-        : null;
-    if (!assignedBy) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "sessions.assignOwner requires an identified caller"),
-      );
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const facts = await prepareSessionMutationFacts({
-      cfg,
-      sessionKey: key,
-      agentId: requestedAgent.agentId,
-      allowMissing: true,
-    });
-    try {
-      const target = facts.readCurrent(context.getRuntimeConfig()).target;
-      if (!target) {
-        respondUnknownSession();
+      const cfg = context.getRuntimeConfig();
+      const requestedAgent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
         return;
       }
-      const authorizeView = (
-        candidate: NonNullable<typeof target>,
-        currentCfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
-      ) =>
-        authorizeIncognitoSessionTarget({ client, sessionKey: key, target: candidate }) ??
-        (createSessionListEntryFilter({ client, cfg: currentCfg })?.(
-          candidate.storeKey,
-          candidate.entry,
-        ) === false
-          ? errorShape(ErrorCodes.FORBIDDEN, "session is not visible to this connection")
-          : null);
-      const visibilityError = authorizeView(target);
-      if (visibilityError) {
-        respond(false, undefined, visibilityError);
-        return;
-      }
-      const ownerIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
-      const projectedOwner = projectAssignableSessionOwner(params.owner, ownerIdentityById, cfg);
-      if (!projectedOwner) {
-        respond(
-          false,
-          undefined,
-          errorShape(
+      const facts = await prepareSessionMutationFacts({
+        cfg,
+        sessionKey: key,
+        agentId: requestedAgent.agentId,
+        allowMissing: true,
+      });
+      try {
+        const target = facts.readCurrent(context.getRuntimeConfig()).target;
+        if (!target) {
+          respondUnknownSession();
+          return;
+        }
+        const authorizeView = (
+          candidate: NonNullable<typeof target>,
+          currentCfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
+        ) =>
+          authorizeIncognitoSessionTarget({ client, sessionKey: key, target: candidate }) ??
+          (createSessionListEntryFilter({ client, cfg: currentCfg })?.(
+            candidate.storeKey,
+            candidate.entry,
+          ) === false
+            ? errorShape(ErrorCodes.FORBIDDEN, "session is not visible to this connection")
+            : null);
+        const visibilityError = authorizeView(target);
+        if (visibilityError) {
+          respond(false, undefined, visibilityError);
+          return;
+        }
+        const ownerIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
+        const projectedOwner = projectAssignableSessionOwner(params.owner, ownerIdentityById, cfg);
+        if (!projectedOwner) {
+          respondError(
+            respond,
             ErrorCodes.INVALID_REQUEST,
             `unknown session owner "${params.owner.id}". ${
               params.owner.type === "human"
                 ? "Human owners require a Gateway profile ID, not a channel sender ID. Select a registered person or use Assign to me in the Control UI."
                 : "Agent owners must name a configured agent."
             }`,
-          ),
-        );
-        return;
-      }
-      const owner = { type: projectedOwner.type, id: projectedOwner.id };
-      const expectedSessionId = target.entry.sessionId;
-      const assertCurrent = () => {
-        signal?.throwIfAborted();
-        sessionMutationAuthorization?.assertCurrent();
-        const currentCfg = context.getRuntimeConfig();
-        const current = facts.readCurrent(currentCfg).target;
-        ownerIdentityById.clear();
-        const currentOwner = projectAssignableSessionOwner(
-          params.owner,
-          ownerIdentityById,
-          currentCfg,
-        );
-        const currentError = current
-          ? authorizeView(current, context.getCommittedRuntimeConfig?.() ?? currentCfg)
-          : null;
-        if (
-          !current ||
-          current.agentId !== target.agentId ||
-          current.canonicalKey !== target.canonicalKey ||
-          current.storeKey !== target.storeKey ||
-          current.storePath !== target.storePath ||
-          current.entry.sessionId !== expectedSessionId ||
-          currentOwner?.id !== owner.id ||
-          currentOwner.type !== owner.type ||
-          currentError
-        ) {
-          throw new SessionMutationAuthorizationChangedError(
-            currentError ??
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                "session changed before sessions.assignOwner; retry the request",
-              ),
           );
+          return;
         }
-      };
-      const assignment = await runSessionMutation({
-        diagnosticLabel: "assign-owner",
-        target: captureSessionTarget({
-          storeScope: target.storePath,
-          sessionKey: target.canonicalKey,
-          aliases: [target.storeKey],
-          incarnation: expectedSessionId,
-          agentId: target.agentId,
-        }),
-        requiredSessionId: expectedSessionId,
-        policy: "allow-live",
-        signal,
-        run: () =>
-          assignSessionOwnerInWorker(
-            { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
-            {
-              owner,
-              assignedBy,
-              expectedSessionId,
-              expectedEntry: {
-                ...sharingExpectedEntry(target),
-                lifecycleRevision: target.entry.lifecycleRevision,
+        const owner = { type: projectedOwner.type, id: projectedOwner.id };
+        const expectedSessionId = target.entry.sessionId;
+        const assertCurrent = () => {
+          signal?.throwIfAborted();
+          sessionMutationAuthorization?.assertCurrent();
+          const currentCfg = context.getRuntimeConfig();
+          const current = facts.readCurrent(currentCfg).target;
+          ownerIdentityById.clear();
+          const currentOwner = projectAssignableSessionOwner(
+            params.owner,
+            ownerIdentityById,
+            currentCfg,
+          );
+          const currentError = current
+            ? authorizeView(current, context.getCommittedRuntimeConfig?.() ?? currentCfg)
+            : null;
+          if (
+            !current ||
+            current.agentId !== target.agentId ||
+            current.canonicalKey !== target.canonicalKey ||
+            current.storeKey !== target.storeKey ||
+            current.storePath !== target.storePath ||
+            current.entry.sessionId !== expectedSessionId ||
+            currentOwner?.id !== owner.id ||
+            currentOwner.type !== owner.type ||
+            currentError
+          ) {
+            throw new SessionMutationAuthorizationChangedError(
+              currentError ??
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  "session changed before sessions.assignOwner; retry the request",
+                ),
+            );
+          }
+        };
+        const assignment = await runSessionMutation({
+          diagnosticLabel: "assign-owner",
+          target: captureSessionTarget({
+            storeScope: target.storePath,
+            sessionKey: target.canonicalKey,
+            aliases: [target.storeKey],
+            incarnation: expectedSessionId,
+            agentId: target.agentId,
+          }),
+          requiredSessionId: expectedSessionId,
+          policy: "allow-live",
+          signal,
+          run: () =>
+            assignSessionOwnerInWorker(
+              { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
+              {
+                owner,
+                assignedBy,
+                expectedSessionId,
+                expectedEntry: {
+                  ...sharingExpectedEntry(target),
+                  lifecycleRevision: target.entry.lifecycleRevision,
+                },
               },
-            },
-            assertCurrent,
-          ),
-      });
-      const projectedActor = assignment
-        ? projectAssignableSessionOwner(assignment.actor, ownerIdentityById, cfg)
-        : null;
-      const projectedAssignedBy = assignment?.assignedBy
-        ? projectSessionActor(assignment.assignedBy, new Map(), cfg)
-        : undefined;
-      const projected =
-        assignment && projectedActor
-          ? {
-              actor: projectedActor,
-              ...(projectedAssignedBy ? { assignedBy: projectedAssignedBy } : {}),
-              ...(assignment.assignedAt !== undefined ? { assignedAt: assignment.assignedAt } : {}),
-            }
+              assertCurrent,
+            ),
+        });
+        const projectedActor = assignment
+          ? projectAssignableSessionOwner(assignment.actor, ownerIdentityById, cfg)
+          : null;
+        const projectedAssignedBy = assignment?.assignedBy
+          ? projectSessionActor(assignment.assignedBy, new Map(), cfg)
           : undefined;
-      if (!projected) {
-        respondUnknownSession();
+        const projected =
+          assignment && projectedActor
+            ? {
+                actor: projectedActor,
+                ...(projectedAssignedBy ? { assignedBy: projectedAssignedBy } : {}),
+                ...(assignment.assignedAt !== undefined
+                  ? { assignedAt: assignment.assignedAt }
+                  : {}),
+              }
+            : undefined;
+        if (!projected) {
+          respondUnknownSession();
+          return;
+        }
+        respond(true, { ok: true, key: target.canonicalKey, owner: projected }, undefined);
+        emitSessionsChanged(context, {
+          sessionKey: target.canonicalKey,
+          agentId: target.agentId,
+          reason: "owner",
+        });
+      } finally {
+        facts.release();
+      }
+    },
+  ),
+  "sessions.pluginPatch": defineValidatedGatewayHandler(
+    "sessions.pluginPatch",
+    validateSessionsPluginPatchParams,
+    async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+      const key = requireSessionKey(params.key, respond);
+      if (!key) {
         return;
       }
-      respond(true, { ok: true, key: target.canonicalKey, owner: projected }, undefined);
-      emitSessionsChanged(context, {
-        sessionKey: target.canonicalKey,
-        agentId: target.agentId,
-        reason: "owner",
-      });
-    } finally {
-      facts.release();
-    }
-  },
-  "sessions.pluginPatch": async ({
-    params,
-    respond,
-    context,
-    client,
-    sessionMutationAuthorization,
-  }) => {
-    if (
-      !assertValidParams(params, validateSessionsPluginPatchParams, "sessions.pluginPatch", respond)
-    ) {
-      return;
-    }
-    const key = requireSessionKey(params.key, respond);
-    if (!key) {
-      return;
-    }
-    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-    if (!scopes.includes(ADMIN_SCOPE)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
+      if (!client?.connect.scopes?.includes(ADMIN_SCOPE)) {
+        respondError(
+          respond,
           ErrorCodes.INVALID_REQUEST,
           `sessions.pluginPatch requires gateway scope: ${ADMIN_SCOPE}`,
-        ),
-      );
-      return;
-    }
-    const pluginId = normalizeOptionalString(params.pluginId);
-    const namespace = normalizeOptionalString(params.namespace);
-    if (!pluginId || !namespace) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "pluginId and namespace are required"),
-      );
-      return;
-    }
-    if (params.unset === true && params.value !== undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(
+        );
+        return;
+      }
+      const pluginId = normalizeOptionalString(params.pluginId);
+      const namespace = normalizeOptionalString(params.namespace);
+      if (!pluginId || !namespace) {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "pluginId and namespace are required");
+        return;
+      }
+      if (params.unset === true && params.value !== undefined) {
+        respondError(
+          respond,
           ErrorCodes.INVALID_REQUEST,
           "sessions.pluginPatch cannot specify both unset and value",
-        ),
-      );
-      return;
-    }
-    if (params.value !== undefined && !isPluginJsonValue(params.value)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
+        );
+        return;
+      }
+      if (params.value !== undefined && !isPluginJsonValue(params.value)) {
+        respondError(
+          respond,
           ErrorCodes.INVALID_REQUEST,
           "sessions.pluginPatch value must be JSON-compatible",
-        ),
+        );
+        return;
+      }
+      const requestedAgent = resolveRequestedSessionAgentId(
+        context.getRuntimeConfig(),
+        key,
+        params.agentId,
       );
-      return;
-    }
-    const requestedAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      key,
-      params.agentId,
-    );
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const canonicalKey = resolveStoredSessionKeyForAgentStore({
-      cfg: context.getRuntimeConfig(),
-      agentId: requestedAgent.agentId,
-      sessionKey: key,
-    });
-    const patched = await patchPluginSessionExtension({
-      cfg: context.getRuntimeConfig(),
-      sessionKey: canonicalKey,
-      agentId: requestedAgent.agentId,
-      pluginId,
-      namespace,
-      value: params.value,
-      unset: params.unset === true,
-      assertCurrent: sessionMutationAuthorization?.assertCurrent,
-    });
-    if (!patched.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, patched.error));
-      return;
-    }
-    respond(true, { ok: true, key: patched.key, value: patched.value }, undefined);
-    emitSessionsChanged(context, {
-      sessionKey: patched.key,
-      agentId: requestedAgent.agentId,
-      reason: "plugin-patch",
-    });
-  },
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      const canonicalKey = resolveStoredSessionKeyForAgentStore({
+        cfg: context.getRuntimeConfig(),
+        agentId: requestedAgent.agentId,
+        sessionKey: key,
+      });
+      const patched = await patchPluginSessionExtension({
+        cfg: context.getRuntimeConfig(),
+        sessionKey: canonicalKey,
+        agentId: requestedAgent.agentId,
+        pluginId,
+        namespace,
+        value: params.value,
+        unset: params.unset === true,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
+      });
+      if (!patched.ok) {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, patched.error);
+        return;
+      }
+      respond(true, { ok: true, key: patched.key, value: patched.value }, undefined);
+      emitSessionsChanged(context, {
+        sessionKey: patched.key,
+        agentId: requestedAgent.agentId,
+        reason: "plugin-patch",
+      });
+    },
+  ),
   "sessions.reset": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;

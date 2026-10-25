@@ -15,8 +15,9 @@ import { auditDocsConfigExamples } from "./docs-config-examples.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const fence = (body: string, info = "json5") => `\`\`\`${info}\n${body}\n\`\`\``;
 const pluginFence = (key: string, value: string) =>
-  `\`\`\`json5\n{ plugins: { entries: { openai: { config: { ${key}: "${value}" } } } } }\n\`\`\``;
+  fence(`{ plugins: { entries: { openai: { config: { ${key}: "${value}" } } } } }`);
 type SkipStat = "skippedFragment" | "skippedNonObject" | "skippedOptOut" | "skippedParseFailure";
 
 function auditMarkdown(markdown: string): ReturnType<typeof auditDocsConfigExamples> {
@@ -28,52 +29,25 @@ function auditMarkdown(markdown: string): ReturnType<typeof auditDocsConfigExamp
 }
 
 describe("docs config examples", () => {
-  it.each<[string, string, SkipStat?, string?]>([
+  it.each<[string, SkipStat?, string?]>([
+    [fence("{ agents: { defaults: { promptOverlays: {} } } }"), undefined, "agents.defaults"],
     [
-      "reports a retired nested key in a whole config",
-      "```json5\n{ agents: { defaults: { promptOverlays: {} } } }\n```",
-      undefined,
-      "agents.defaults",
-    ],
-    [
-      "validates a canonical roster in an indented MDX component fence",
       '<Accordion title="Agent roster">\n    ```json5\n    { agents: { entries: { main: {} } } }\n    ````\n</Accordion>',
     ],
+    [fence("{ agents: {}, payloads: [] }"), "skippedFragment"],
     [
-      "skips a fragment without a recognized-key majority",
-      "```json5\n{ agents: {}, payloads: [] }\n```",
-      "skippedFragment",
-    ],
-    [
-      "skips an explicit opt-out",
       '```json5 title="legacy config" validate=false\n{ agents: { defaults: { promptOverlays: {} } } }\n```',
       "skippedOptOut",
     ],
-    ["skips invalid JSON5", "```json5\n{ agents: {\n```", "skippedParseFailure"],
-    ["validates JSON fences", '```json\n{ "gateway": { "port": 18789 } }\n```'],
-    [
-      "validates JSONC tilde fences",
-      '~~~JSONC\n{ // comment\n  "gateway": { "port": 18789 }\n}\n~~~',
-    ],
-    ["skips arrays", "```json5\n[{ gateway: {} }]\n```", "skippedNonObject"],
-    [
-      "reports a retired root key beside a recognized key",
-      "```json5\n{ agents: {}, gateway: {}, promptOverlays: {} }\n```",
-      undefined,
-      "",
-    ],
-    [
-      "reports a retired bundled channel key",
-      '```json5\n{ channels: { slack: { identity: "bot" } } }\n```',
-      undefined,
-      "channels.slack",
-    ],
-    ["accepts a supported OpenAI plugin config value", pluginFence("personality", "off")],
-    [
-      "drops nested include directives before validation",
-      '```json5\n{ agents: { $include: "./agents.json5" }, gateway: { port: 18789 } }\n```',
-    ],
-  ])("%s", (_name, markdown, skipped, issuePath) => {
+    [fence("{ agents: {"), "skippedParseFailure"],
+    [fence('{ "gateway": { "port": 18789 } }', "json")],
+    ['~~~JSONC\n{ // comment\n  "gateway": { "port": 18789 }\n}\n~~~'],
+    [fence("[{ gateway: {} }]"), "skippedNonObject"],
+    [fence("{ agents: {}, gateway: {}, promptOverlays: {} }"), undefined, ""],
+    [fence('{ channels: { slack: { identity: "bot" } } }'), undefined, "channels.slack"],
+    [pluginFence("personality", "off")],
+    [fence('{ agents: { $include: "./agents.json5" }, gateway: { port: 18789 } }')],
+  ])("audits %s", (markdown, skipped, issuePath) => {
     const audit = auditMarkdown(markdown);
     expect(audit.findings).toHaveLength(issuePath !== undefined ? 1 : 0);
     expect(audit.stats.candidatesValidated).toBe(skipped ? 0 : 1);

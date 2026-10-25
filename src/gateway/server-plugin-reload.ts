@@ -309,7 +309,6 @@ export async function reloadGatewayPlugins(
       resourceHandoffIds,
       drainSignal,
       pluginRuntimeGeneration.setReloadStatus,
-      checkpoint,
     );
     await checkpoint();
     pluginRuntimeGeneration.setReloadStatus({
@@ -721,6 +720,6 @@ export async function reloadGatewayPlugins(
       recovery.unavailablePluginIds,
       restartDrainSignal.aborted ? undefined : log.error,
     );
-    recovery.dispose();
+    await recovery.dispose();
   }
 }

@@ -145,7 +145,7 @@ it("publishes committed memory changes after projection without exposing private
         ...scope,
         facts: {
           kind: "replacement",
-          communicationBinding: JSON.stringify([entry.sessionId, ...Array(11).fill(null)]),
+          communicationBinding: JSON.stringify([entry.sessionId, ...Array(12).fill(null)]),
           membership: [scope.sessionKey, null, [], {}, entry.sessionId],
           lifecycleChanged: false,
         },

@@ -1,47 +1,44 @@
 import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
+import { bootstrapSizeCheck as check } from "./doctor-core-bootstrap-size-check.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
-import type { HealthCheck } from "./health-checks.js";
+import { runDoctorLintChecks } from "./doctor-lint-flow.js";
+import type { HealthFinding } from "./health-checks.js";
 
 const runtime = { log() {}, error() {}, exit() {} };
 
-function getBootstrapSizeCheck(): HealthCheck {
-  const check = CORE_HEALTH_CHECKS.find(
-    (candidate) => candidate.id === "core/doctor/bootstrap-size",
+function expectFinding(findings: readonly HealthFinding[], fields: Partial<HealthFinding>) {
+  expect(findings).toContainEqual(
+    expect.objectContaining({ checkId: "core/doctor/bootstrap-size", ...fields }),
   );
-  if (!check || !("detect" in check)) {
-    throw new Error("missing bootstrap-size health check");
-  }
-  return check;
 }
 
 describe("core/doctor/bootstrap-size", () => {
   let tmp: string | undefined;
-
-  afterEach(async () => {
-    vi.unstubAllEnvs();
-    if (tmp !== undefined) {
-      await fs.rm(tmp, { recursive: true, force: true });
-      tmp = undefined;
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
+  async function workspace(files: Record<string, string>) {
+    tmp = dirs.make("openclaw-health-bootstrap-");
+    for (const [name, content] of Object.entries(files)) {
+      await fs.mkdir(dirname(join(tmp, name)), { recursive: true });
+      await fs.writeFile(join(tmp, name), content, "utf-8");
     }
-  });
+    return tmp;
+  }
+  function detect(cfg: OpenClawConfig = { agents: { defaults: { workspace: tmp } } }) {
+    return check.detect({ mode: "lint", runtime, cfg, cwd: tmp });
+  }
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it("does not create shared state while inspecting bootstrap files", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-readonly-"));
-    await fs.writeFile(join(tmp, "AGENTS.md"), "bootstrap", "utf-8");
-    const stateDir = join(tmp, "state-root");
+    const stateDir = join(await workspace({ "AGENTS.md": "bootstrap" }), "state-root");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
-    await expect(
-      getBootstrapSizeCheck().detect({
-        mode: "lint",
-        runtime,
-        cfg: { agents: { defaults: { workspace: tmp } } },
-        cwd: tmp,
-      }),
-    ).resolves.toEqual([]);
+    await expect(detect()).resolves.toEqual([]);
     await expect(fs.stat(join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -50,62 +47,48 @@ describe("core/doctor/bootstrap-size", () => {
   it("reports a hook-added extra file the total bootstrap budget dropped", async () => {
     // The extra repeats the root basename, so only source-path identity can tell
     // the doctor that this file received no injected bytes at all.
-    tmp = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-drop-")));
-    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(1_000), "utf-8");
-    await fs.mkdir(join(tmp, "packages", "core"), { recursive: true });
-    await fs.writeFile(join(tmp, "packages", "core", "AGENTS.md"), "b".repeat(500), "utf-8");
+    const root = await workspace({
+      "AGENTS.md": "a".repeat(1_000),
+      "packages/core/AGENTS.md": "b".repeat(500),
+    });
 
-    const findings = await getBootstrapSizeCheck().detect({
-      mode: "lint",
-      runtime,
-      cfg: {
-        agents: { defaults: { workspace: tmp, bootstrapTotalMaxChars: 1_000 } },
-        hooks: {
-          internal: {
-            entries: {
-              "bootstrap-extra-files": { enabled: true, paths: ["packages/*/AGENTS.md"] },
-            },
+    const findings = await detect({
+      agents: { defaults: { workspace: tmp, bootstrapTotalMaxChars: 1_000 } },
+      hooks: {
+        internal: {
+          entries: {
+            "bootstrap-extra-files": { enabled: true, paths: ["packages/*/AGENTS.md"] },
           },
         },
       },
-      cwd: tmp,
     });
 
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "warning",
-        message: expect.stringContaining("AGENTS.md"),
-        path: join(tmp, "packages", "core", "AGENTS.md"),
-      }),
-    );
+    expectFinding(findings, {
+      severity: "warning",
+      message: expect.stringContaining("AGENTS.md"),
+      path: join(root, "packages", "core", "AGENTS.md"),
+    });
+    expectFinding(findings, {
+      message: expect.stringContaining("No content from this file reaches the model."),
+    });
   });
 
   it("honors the per-agent bootstrapMaxChars override in health findings", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-"));
-    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(15_000), "utf-8");
-
-    const check = getBootstrapSizeCheck();
-    const findings = await check.detect({
-      mode: "lint",
-      runtime,
-      cfg: {
-        agents: {
-          defaults: { workspace: tmp, bootstrapMaxChars: 20_000 },
-          entries: { "custom-agent": { bootstrapMaxChars: 10_000 } },
-        },
+    await workspace({ "AGENTS.md": "a".repeat(15_000) });
+    const findings = await detect({
+      agents: {
+        defaults: { workspace: tmp, bootstrapMaxChars: 20_000 },
+        entries: { "custom-agent": { bootstrapMaxChars: 10_000 } },
       },
-      cwd: tmp,
     });
 
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "warning",
-        message: expect.stringContaining("AGENTS.md"),
-        fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
-      }),
-    );
+    expectFinding(findings, {
+      severity: "warning",
+      message: expect.stringContaining(
+        "The model receives start/end excerpts as space permits, plus a bounded policy digest when available; other middle text is omitted.",
+      ),
+      fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
+    });
     await expect(
       check.detect({
         mode: "lint",
@@ -113,10 +96,7 @@ describe("core/doctor/bootstrap-size", () => {
         cfg: {
           agents: {
             defaults: { bootstrapMaxChars: 20_000 },
-            entries: {
-              alpha: { workspace: tmp, bootstrapMaxChars: 10_000 },
-              beta: {},
-            },
+            entries: { alpha: { workspace: tmp, bootstrapMaxChars: 10_000 }, beta: {} },
           },
         },
       }),
@@ -124,44 +104,26 @@ describe("core/doctor/bootstrap-size", () => {
   });
 
   it("keeps tuning advice for other files while USER.md near-limit names the fixed cap", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-user-near-"));
-    await fs.writeFile(join(tmp, "USER.md"), "u".repeat(3_900), "utf-8");
-    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(18_000), "utf-8");
-
-    const findings = await getBootstrapSizeCheck().detect({
-      mode: "lint",
-      runtime,
-      cfg: { agents: { defaults: { workspace: tmp } } },
-      cwd: tmp,
-    });
+    await workspace({ "USER.md": "u".repeat(3_900), "AGENTS.md": "a".repeat(18_000) });
+    const findings = await detect();
 
     const userFinding = findings.find((finding) => finding.message.includes("USER.md"));
-    expect(userFinding).toEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "info",
-        fixHint: expect.stringContaining("fixed 4,000-character bootstrap cap"),
-      }),
-    );
+    expect(userFinding).toMatchObject({
+      checkId: "core/doctor/bootstrap-size",
+      severity: "info",
+      fixHint: expect.stringContaining("fixed 4,000-character bootstrap cap"),
+    });
     expect(userFinding?.fixHint).not.toContain("tune");
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/bootstrap-size",
-        message: expect.stringContaining("AGENTS.md"),
-        fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
-      }),
-    );
+    expectFinding(findings, {
+      message: expect.stringContaining("AGENTS.md"),
+      fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
+    });
   });
 
   it("retains total-budget guidance when missing-file markers exhaust the USER.md budget", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-user-total-"));
-    await fs.writeFile(join(tmp, "USER.md"), "u".repeat(5_000), "utf-8");
-
-    const findings = await getBootstrapSizeCheck().detect({
-      mode: "lint",
-      runtime,
-      cfg: { agents: { defaults: { workspace: tmp, bootstrapTotalMaxChars: 256 } } },
-      cwd: tmp,
+    await workspace({ "USER.md": "u".repeat(5_000) });
+    const findings = await detect({
+      agents: { defaults: { workspace: tmp, bootstrapTotalMaxChars: 256 } },
     });
 
     const userFinding = findings.find((finding) => finding.message.includes("USER.md"));
@@ -171,5 +133,80 @@ describe("core/doctor/bootstrap-size", () => {
     expect(findings.some((finding) => finding.message.startsWith("Total bootstrap context"))).toBe(
       false,
     );
+  });
+});
+
+describe("core/doctor/skill-workshop-tool-policy", () => {
+  const workshopCheck = CORE_HEALTH_CHECKS.find(
+    (entry) => entry.id === "core/doctor/skill-workshop-tool-policy",
+  )!;
+  const workshop = (mode: "auto" | "off" = "auto") => ({ autonomous: { mode } });
+  const context = (cfg: OpenClawConfig, mode: "doctor" | "lint" = "doctor") => ({
+    mode,
+    runtime,
+    cfg: { skills: { workshop: workshop() }, ...cfg },
+  });
+  const detect = (cfg: OpenClawConfig) => workshopCheck.detect(context(cfg));
+  const warning = (prefix = "", target?: string) =>
+    expect.objectContaining({
+      severity: "warning",
+      ...(target ? { target } : {}),
+      message: `${prefix}tools.profile: "messaging" does not include "skill_workshop".`,
+      path: `${prefix}tools.profile`,
+      fixHint: `Add ${prefix}tools.alsoAllow: ["skill_workshop"].`,
+    });
+
+  it("warns when autonomous capture is enabled but policy hides its tool", async () => {
+    expect(await detect({ tools: { profile: "messaging" } })).toEqual([warning()]);
+  });
+
+  it("checks every explicit-roster agent without turning selection into a health error", async () => {
+    const result = await runDoctorLintChecks(
+      context(
+        {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: {
+              main: { tools: { profile: "coding" } },
+              helper: { tools: { profile: "messaging" } },
+              reader: { tools: { profile: "minimal", deny: ["group:agents"] } },
+              third: { tools: { profile: "coding" } },
+            },
+          },
+        },
+        "lint",
+      ),
+      { checks: [workshopCheck] },
+    );
+    expect(result.findings).toEqual([warning("agents.entries.helper.", "helper")]);
+  });
+
+  it.each([
+    {
+      cfg: {
+        agents: { entries: { solo: { tools: { profile: "messaging" } } } },
+      } satisfies OpenClawConfig,
+      target: "solo",
+    },
+    {
+      cfg: createCanonicalAgentConfigFixture({
+        agents: {
+          list: [
+            { id: "owner", default: true, tools: { profile: "messaging" } },
+            { id: "helper", tools: { profile: "coding" } },
+          ],
+        },
+      }).config,
+      target: "owner",
+    },
+  ])("preserves normal diagnostics for roster target $target", async ({ cfg, target }) => {
+    expect(await detect(cfg)).toEqual([expect.objectContaining({ severity: "warning", target })]);
+  });
+
+  it("does not warn when autonomous capture is disabled", async () => {
+    await expect(
+      detect({ skills: { workshop: workshop("off") }, tools: { profile: "messaging" } }),
+    ).resolves.toEqual([]);
   });
 });

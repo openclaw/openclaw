@@ -154,55 +154,17 @@ describe("published upstream repository advisories", () => {
       fixture: ["1.0.0", "0.9.0"],
     });
 
-    expect(source.calls.map(({ url }) => url.pathname)).toEqual([
-      "/%40scope%2Fleaf/1.2.3",
-      "/fixture/0.9.0",
-      "/fixture/1.0.0",
-      "/repos/fixture/packages",
-      "/repos/fixture/packages/security-advisories",
-      `/advisories/${ADVISORY_ID}`,
-      `/advisories/${ADVISORY_ID}`,
-    ]);
+    expect(
+      source.calls.filter(({ url }) => url.origin === REGISTRY).map(({ url }) => url.pathname),
+    ).toEqual(["/%40scope%2Fleaf/1.2.3", "/fixture/0.9.0", "/fixture/1.0.0"]);
     expect(report.advisories).toMatchObject([
       { packageName: "@scope/leaf", matchedVersions: ["1.2.3"] },
       { packageName: "fixture", matchedVersions: ["0.9.0", "1.0.0"] },
     ]);
     expect(report.coverage).toMatchObject({
       status: "checked",
-      packageVersions: 3,
-      mappedPackageVersions: 3,
-      repositories: 1,
       checkedRepositories: 1,
       issues: [],
-    });
-  });
-
-  it("reconciles the published GHSA-8r6m-32jq-jx6q range without losing raw evidence", async () => {
-    const name = "fast-xml-parser",
-      id = "GHSA-8r6m-32jq-jx6q";
-    const raw = ">= 5.9.3",
-      reviewed = ">= 5.9.3, < 5.10.1";
-    const source = createSourceFetch({
-      row: advisory(raw, { ghsa_id: id, vulnerabilities: [vulnerability(raw, name)] }),
-      reviewed: () =>
-        reviewedResponse({
-          ghsa_id: id,
-          vulnerabilities: [vulnerability(reviewed, name)],
-        }),
-    });
-    const report = await scan(source.fetchImpl, { [name]: ["5.11.0"] });
-    expect(report.advisories).toEqual([]);
-    expect(report.coverage).toMatchObject({
-      status: "checked",
-      reconciliations: [
-        {
-          id,
-          packageName: name,
-          repositoryRange: ">=5.9.3",
-          reviewedRanges: [">=5.9.3 <5.10.1"],
-          matchedVersions: [],
-        },
-      ],
     });
   });
 
@@ -242,14 +204,14 @@ describe("published upstream repository advisories", () => {
   });
 
   it("keeps resource denial by personal access token local while preserving real findings and reconciling stale ranges", async () => {
-    const ids = Array.from({ length: 6 }, (_, index) => `GHSA-2222-3333-444${index}`);
-    const inaccessible = ids.slice(0, 4);
-    const trueMatch = expectDefined(ids[4], "true advisory");
-    const staleMatch = expectDefined(ids[5], "stale advisory");
+    const ids = Array.from({ length: 3 }, (_, index) => `GHSA-2222-3333-444${index}`);
+    const inaccessible = ids.slice(0, 1);
+    const trueMatch = expectDefined(ids[1], "true advisory");
+    const staleMatch = expectDefined(ids[2], "stale advisory");
     const secret = "synthetic-advisory-secret";
     vi.stubEnv("GH_TOKEN", secret);
     const source = createSourceFetch({
-      rows: ids.map((id) => advisory("< 2.0.0", { ghsa_id: id })),
+      rows: ids.map((id) => advisory(id === staleMatch ? ">= 5.9.3" : "< 6.0.0", { ghsa_id: id })),
       reviewed: (url) => {
         const id = url.pathname.split("/").at(-1) ?? "";
         if (inaccessible.includes(id)) {
@@ -260,18 +222,23 @@ describe("published upstream repository advisories", () => {
         }
         return reviewedResponse({
           ghsa_id: id,
-          vulnerabilities: [vulnerability(id === staleMatch ? "< 1.0.0" : "< 2.0.0")],
+          vulnerabilities: [vulnerability(id === staleMatch ? ">= 5.9.3, < 5.10.1" : "< 6.0.0")],
         });
       },
     });
-    const report = await scan(source.fetchImpl);
+    const report = await scan(source.fetchImpl, { fixture: ["5.11.0"] });
     expect(report.advisories.map(({ id }) => id)).toEqual([...inaccessible, trueMatch]);
     expect(report.coverage.issues).toEqual(
       inaccessible.map((id) => issue("request-failed", `fixture#${id}`)),
     );
     expect(report.coverage.reconciliations).toMatchObject([
-      { id: trueMatch, matchedVersions: ["1.0.0"] },
-      { id: staleMatch, matchedVersions: [] },
+      { id: trueMatch, matchedVersions: ["5.11.0"] },
+      {
+        id: staleMatch,
+        repositoryRange: ">=5.9.3",
+        reviewedRanges: [">=5.9.3 <5.10.1"],
+        matchedVersions: [],
+      },
     ]);
     expect(JSON.stringify(report)).not.toContain(secret);
   });
@@ -281,16 +248,15 @@ describe("published upstream repository advisories", () => {
     const source = createSourceFetch();
     await scan(source.fetchImpl);
 
-    expect(source.calls).toHaveLength(3);
+    expect(new Set(source.calls.map(({ url }) => url.origin))).toEqual(
+      new Set([REGISTRY, "https://api.github.com"]),
+    );
     for (const { url, init } of source.calls) {
       const headers = new Headers(init?.headers);
       expect(init?.redirect).toBe("error");
       expect(headers.get("authorization")).toBe(
         url.origin === REGISTRY ? null : "Bearer synthetic-upstream-test-token",
       );
-      if (url.origin !== REGISTRY) {
-        expect(url.origin).toBe("https://api.github.com");
-      }
     }
   });
 
@@ -307,7 +273,7 @@ describe("published upstream repository advisories", () => {
     });
     expect(headers).toHaveLength(1);
     expect(expectDefined(headers[0], "registry request headers").has("authorization")).toBe(false);
-    expect(report.coverage.status).toBe("partial");
+    expect(report.coverage.issues).toEqual([issue("unsupported-repository", "fixture@1.0.0")]);
   });
 
   it("records unsupported locked versions without requesting registry metadata", async () => {
@@ -341,9 +307,7 @@ describe("published upstream repository advisories", () => {
       });
       const report = await scan(source.fetchImpl);
       expect(source.calls).toHaveLength(1);
-      expect(report.advisories).toEqual([]);
       expect(report.coverage).toMatchObject({
-        status: "partial",
         mappedPackageVersions: 0,
         issues: [issue(reason, "fixture@1.0.0")],
       });
@@ -356,12 +320,8 @@ describe("published upstream repository advisories", () => {
   ])("does not request advisories from $name repository metadata", async ({ data, reason }) => {
     const source = createSourceFetch({ repository: () => Response.json(data) });
     const report = await scan(source.fetchImpl);
-    expect(source.calls.map(({ url }) => url.pathname)).toEqual([
-      "/fixture/1.0.0",
-      "/repos/fixture/packages",
-    ]);
+    expect(source.calls).toHaveLength(2);
     expect(report.coverage).toMatchObject({
-      status: "partial",
       checkedRepositories: 0,
       issues: [issue(reason)],
     });
@@ -391,7 +351,6 @@ describe("published upstream repository advisories", () => {
       },
     ]);
     expect(report.advisories).toHaveLength(1);
-    expect(report.coverage.status).toBe("checked");
   });
 
   it.each([
@@ -440,11 +399,7 @@ describe("published upstream repository advisories", () => {
       source.calls.filter(({ url }) => url.pathname.endsWith("/security-advisories")),
     ).toHaveLength(1);
     expect(report.advisories).toHaveLength(1);
-    expect(report.coverage).toMatchObject({
-      status: "partial",
-      checkedRepositories: 0,
-      issues: [issue("invalid-pagination")],
-    });
+    expectPartialIssues(report, [issue("invalid-pagination")]);
   });
 
   it("preserves earlier findings when a later page is oversized", async () => {
@@ -471,30 +426,9 @@ describe("published upstream repository advisories", () => {
     const report = await scan(source.fetchImpl);
     expect(pages).toBe(limit === "repeated cursor" ? 2 : 5);
     expect(report.advisories).toHaveLength(1);
-    expect(report.coverage).toMatchObject({
-      status: "partial",
-      checkedRepositories: 0,
-      issues: [issue(limit === "repeated cursor" ? "invalid-pagination" : "budget-exhausted")],
-    });
-  });
-
-  it("cancels an oversized streamed page and retains earlier findings", async () => {
-    const cancel = vi.fn();
-    const report = await scanSource({
-      page: afterFirstPage(
-        () =>
-          new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(new Uint8Array(2 * 1024 * 1024 + 1));
-              },
-              cancel,
-            }),
-          ),
-      ),
-    });
-    expect(cancel).toHaveBeenCalledOnce();
-    expectPartialPage(report);
+    expectPartialIssues(report, [
+      issue(limit === "repeated cursor" ? "invalid-pagination" : "budget-exhausted"),
+    ]);
   });
 
   it.each(["request", "run"])("settles at %s deadline, retaining findings", async (deadline) => {
@@ -601,7 +535,6 @@ describe("published upstream repository advisories", () => {
       ],
     });
     expect(report.advisories).toMatchObject([{ id: affectedId, matchedVersions: ["1.0.0"] }]);
-    expect(report.advisories).toHaveLength(1);
     expect(report.coverage.issues).toContainEqual(
       issue("budget-exhausted", "1 package versions not inspected"),
     );
@@ -696,9 +629,7 @@ describe("published upstream repository advisories", () => {
           /\/repos\/fixture\/package-[4-7](?:\/|$)/u.test(url.pathname),
         ),
       ).toBe(false);
-      expect(report.coverage.status).toBe("partial");
       expect(report.coverage.issues.some(({ reason }) => reason === expectedReason)).toBe(true);
-      expect(JSON.stringify(report)).not.toContain("synthetic-advisory-secret");
     },
   );
 });

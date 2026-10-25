@@ -9,7 +9,6 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   createCatalogFixture,
   catalogEntry,
@@ -189,17 +188,10 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     { agentCount: 1, publication: "individual" },
   );
   const snapshot = fleet.snapshots[0]!;
-  const failures: Error[] = [];
-  let waiting: ReturnType<typeof createDeferred<ModelCatalogSnapshot>> | undefined;
+  const failures: string[] = [];
   unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
     if (event.phase === "catalog-failed") {
-      failures.push(event.error);
-      waiting?.reject(event.error);
-    } else if (event.phase === "catalog-published" && snapshot.isCurrent()) {
-      const catalog = snapshot.readFullModelCatalog!();
-      if (catalog?.entries.some((entry) => entry.id === "native-admitted")) {
-        waiting?.resolve(catalog);
-      }
+      failures.push(event.phase);
     }
   });
   const started = performance.now();
@@ -240,11 +232,9 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         .split("\n")
         .map((line) => JSON.parse(line)),
     refresh() {
-      const completion = createDeferred<ModelCatalogSnapshot>();
-      waiting = completion;
       const foreground = snapshot.loadFullModelCatalog!({ refresh: true });
-      void foreground.catch(completion.reject);
-      const completed = completion.promise;
+      void foreground.catch(() => {});
+      const completed = snapshot.loadFullModelCatalog!({ refresh: true, wait: true });
       void completed.catch(() => {});
       return { foreground, completed };
     },
@@ -269,7 +259,7 @@ it("reuses progressing native admission across Gateway refreshes", async ({ sign
   }
   const catalog = await fixture.settled(first.completed);
   expect(catalog.entries).toContainEqual(catalogEntry("native-admitted"));
-  // Publication precedes acquisition settlement; the next turn starts a separate refresh.
+  // The completed acquisition leaves the next turn free to start a separate refresh.
   await checkpoint();
   const refreshed = await fixture.settled(fixture.refresh().completed);
   expect(refreshed.entries).toEqual(catalog.entries);
@@ -314,10 +304,10 @@ it("keeps stalled native admission terminal after parent auth failure", async ({
   await fixture.wait(auth.entered, auth.completed, "Parent auth probe did not enter");
   await vi.advanceTimersByTimeAsync(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS - 1_000);
   expect(fixture.failures).toHaveLength(1);
-  const failure = fixture.failures[0]!;
+  const failure = await first.completed.catch((error: unknown) => error);
   expect(failure).toMatchObject({ name: "PreparedModelCatalogAdmissionStalledError" });
-  expect(failure.message).toContain(PROVIDER_ID);
-  expect(failure.message).toContain("native reference verification");
+  await expect(first.completed).rejects.toThrow(PROVIDER_ID);
+  await expect(first.completed).rejects.toThrow("native reference verification");
   await expect(first.completed).rejects.toBe(failure);
   const retained = await fixture.settled(first.foreground);
   expect([retained.refreshFailed, retained.pendingProviders]).toEqual([true, undefined]);

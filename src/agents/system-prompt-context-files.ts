@@ -25,8 +25,7 @@ export function isBootstrapContextFile(pathValue: string): boolean {
 }
 
 function sanitizeContextFileContentForPrompt(content: string): string {
-  // Old workspace templates otherwise route Claude subscriptions to paid extra
-  // usage; heartbeat behavior remains in the actual scheduled user turn.
+  // Old workspace templates otherwise route Claude subscriptions to paid extra usage.
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 

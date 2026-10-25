@@ -48,6 +48,9 @@ export type GitReadOperations = {
       scope: "context" | "refs" | "worktree" | "diff";
       branch?: string;
       defaultBranch?: string;
+      summaryOnly?: boolean;
+      /** Previously displayed paths whose Git attributes can affect the cached diff. */
+      paths?: string[];
     };
     output: string | null;
   };

@@ -1,8 +1,7 @@
-// Covers wired plugin hook dispatch before replies.
-
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
+import { withClaimingHookAdmission } from "./hook-claim-admission.js";
 import type {
   PluginHookRegistrationOptions,
   PluginHookReplyDispatchContext,
@@ -10,6 +9,11 @@ import type {
 import { createHookRunner } from "./hooks.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import {
+  nativeSubagentRuntime,
+  withNativeSubagentRequest,
+  withNativeSubagentRuntimeGuard,
+} from "./runtime/native-subagent-context.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 const replyDispatchEvent = {
@@ -37,10 +41,6 @@ const replyDispatchCtx = {
   markIdle: () => {},
 };
 
-function firstErrorLog(logger: { error: ReturnType<typeof vi.fn> }) {
-  return logger.error.mock.calls[0];
-}
-
 function createRegisteredReplyHook(eligibleDispatchKinds: unknown) {
   const builder = createTestPluginRegistry();
   const api = builder.createApi(createPluginRecord({ id: "scoped-dispatch", origin: "bundled" }), {
@@ -56,6 +56,126 @@ function createRegisteredReplyHook(eligibleDispatchKinds: unknown) {
 }
 
 describe("reply_dispatch hook runner", () => {
+  it.each([
+    { outcome: "timeout", captured: false },
+    { outcome: "timeout", captured: true },
+    { outcome: "declined", captured: true },
+    { outcome: "rejected", captured: true },
+  ])(
+    "closes native requester custody after $outcome (captured admission=$captured)",
+    async ({ outcome, captured }) => {
+      vi.useFakeTimers();
+      const late = createDeferred();
+      const nextStarted = createDeferred();
+      const releaseFirst = createDeferred();
+      const releaseNext = createDeferred();
+      const spawn = vi.fn().mockResolvedValue({
+        runId: "child",
+        childSessionKey: "agent:test:subagent:child",
+        completionMode: "collect" as const,
+      });
+      let detached: Promise<unknown> | undefined;
+      const { runner } = createHookRunnerWithRegistry(
+        [
+          {
+            hookName: "reply_dispatch",
+            pluginId: "first",
+            timeoutMs: 5,
+            handler: async (_event, context) =>
+              withNativeSubagentRuntimeGuard(
+                { pluginId: "first", assertCurrent() {} },
+                async () => {
+                  if (captured) {
+                    await nativeSubagentRuntime.spawn({
+                      requestId: "first",
+                      task: "active first hook",
+                    });
+                  }
+                  detached = late.promise.then(() => {
+                    const invoke = () =>
+                      nativeSubagentRuntime.spawn({
+                        requestId: "reopened",
+                        task: "must not start",
+                      });
+                    if (!captured) {
+                      return invoke();
+                    }
+                    // A plugin can retain the admission capability from its public context.
+                    if (!context || typeof context !== "object") {
+                      throw new Error("reply hook context was not supplied");
+                    }
+                    const admission = Reflect.get(
+                      context,
+                      Symbol.for("openclaw.claimingHookAdmission"),
+                    );
+                    return typeof admission?.run === "function" ? admission.run(invoke) : invoke();
+                  });
+                  if (outcome === "timeout") {
+                    await releaseFirst.promise;
+                  }
+                  if (outcome === "rejected") {
+                    throw new Error("first hook failed");
+                  }
+                },
+              ),
+          },
+          {
+            hookName: "reply_dispatch",
+            pluginId: "next",
+            handler: async () =>
+              withNativeSubagentRuntimeGuard({ pluginId: "next", assertCurrent() {} }, async () => {
+                await nativeSubagentRuntime.spawn({
+                  requestId: "current",
+                  task: "current request",
+                });
+                nextStarted.resolve();
+                if (captured) {
+                  await releaseNext.promise;
+                }
+                return {
+                  handled: true,
+                  queuedFinal: false,
+                  counts: { tool: 0, block: 0, final: 0 },
+                };
+              }),
+          },
+        ],
+        { logger: { error: vi.fn(), warn: vi.fn() } },
+      );
+      const work = runner.runReplyDispatch(
+        replyDispatchEvent,
+        captured
+          ? withClaimingHookAdmission({ ...replyDispatchCtx }, { assertCurrent() {} })
+          : { ...replyDispatchCtx },
+        (invoke) =>
+          withNativeSubagentRequest(
+            () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
+            invoke,
+          ),
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(5);
+        await nextStarted.promise;
+        if (!captured) {
+          await expect(work).resolves.toMatchObject({ handled: true });
+        }
+        late.resolve();
+        await expect(detached).rejects.toThrow("requester-bound");
+        expect(spawn.mock.calls).toEqual([
+          ...(captured ? [[{ requestId: "first", task: "active first hook" }]] : []),
+          [{ requestId: "current", task: "current request" }],
+        ]);
+        releaseNext.resolve();
+        await expect(work).resolves.toMatchObject({ handled: true });
+      } finally {
+        releaseFirst.resolve();
+        releaseNext.resolve();
+        await work;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     { dispatchKind: "agent", eligible: false },
     { dispatchKind: "acp", eligible: true },
@@ -90,37 +210,28 @@ describe("reply_dispatch hook runner", () => {
   it("honors per-hook registration timeouts and continues to the next handler", async () => {
     vi.useFakeTimers();
     try {
-      const logger = {
-        warn: vi.fn(),
-        error: vi.fn(),
-      };
+      const logger = { warn: vi.fn(), error: vi.fn() };
       const slow = vi.fn(() => new Promise(() => {}));
-      const succeeding = vi.fn().mockResolvedValue({
+      const result = {
         handled: true,
         queuedFinal: false,
         counts: { tool: 1, block: 0, final: 0 },
-      });
-      const { registry, runner } = createHookRunnerWithRegistry(
+      };
+      const succeeding = vi.fn().mockResolvedValue(result);
+      const { runner } = createHookRunnerWithRegistry(
         [
-          { hookName: "reply_dispatch", handler: slow },
+          { hookName: "reply_dispatch", handler: slow, timeoutMs: 5 },
           { hookName: "reply_dispatch", handler: succeeding },
         ],
         { logger },
       );
-      expectDefined(registry.typedHooks[0], "registry.typedHooks[0] test invariant").timeoutMs = 5;
-
       const run = runner.runReplyDispatch(replyDispatchEvent, replyDispatchCtx);
       await vi.advanceTimersByTimeAsync(5);
 
-      await expect(run).resolves.toEqual({
-        handled: true,
-        queuedFinal: false,
-        counts: { tool: 1, block: 0, final: 0 },
-      });
-      expect(logger.error).toHaveBeenCalledTimes(1);
-      expect(firstErrorLog(logger)).toEqual([
+      await expect(run).resolves.toEqual(result);
+      expect(logger.error).toHaveBeenCalledExactlyOnceWith(
         "[hooks] reply_dispatch handler from test-plugin failed: timed out after 5ms",
-      ]);
+      );
       expect(succeeding).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

@@ -310,6 +310,25 @@ it("requires the worker rejection in a synchronized exhaustive report", () => {
   );
 });
 
+it("tolerates optional Kitchen Sink 0.4.1 registrar probe diagnostics", () => {
+  const registrarProbeDiagnostics = [
+    "Gateway access policy requires an authorize handler",
+    "invalid versioned decision provider contract",
+    "storage provider registration missing label",
+  ];
+  const report = (messages: string[]) =>
+    runAssertInstalled({
+      diagnostics: diagnosticErrors([...REQUIRED_FULL_DIAGNOSTIC_CANARIES, ...messages]),
+    });
+  const tolerated = report(registrarProbeDiagnostics);
+  expect(tolerated.status, tolerated.stderr).toBe(0);
+  expectFailure(
+    report([...registrarProbeDiagnostics, "unrelated registrar failure"]),
+    "unexpected kitchen-sink diagnostic error: unrelated registrar failure",
+    "stderr",
+  );
+});
+
 const inspect = fullSurfaceInspectPayload();
 const canaries = diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES);
 const rejections: Array<[string, Parameters<typeof runAssertInstalled>[0], string, string?]> = [

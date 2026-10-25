@@ -507,9 +507,6 @@ export async function inspectCurrentConversationBindingRecordAsync(
   if (!result) {
     return null;
   }
-  if (!result.ok || result.type !== "conversationBindings.inspect") {
-    throw new Error("Unexpected current conversation binding inspection result");
-  }
   return result.record;
 }
 
@@ -623,7 +620,6 @@ export function captureGenericBindingSupport(ref: ConversationRef) {
       throw new SessionBindingError(
         "BINDING_ADAPTER_UNAVAILABLE",
         "Generic conversation binding owner is no longer available",
-        { channel: ref.channel, accountId: ref.accountId },
       );
     }
   };

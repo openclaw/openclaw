@@ -1,150 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
-import * as terminalTable from "../../../packages/terminal-core/src/table.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { ProgressReporter } from "../../cli/progress.js";
-import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import type { resolveStatusServiceSummaries } from "../status-runtime-shared.ts";
-import { createStatusGatewayProbeBudget } from "../status.gateway-probe-budget.js";
-import type { resolveNodeOnlyGatewayInfo } from "../status.node-mode.js";
-import type { collectStatusScanOverview } from "../status.scan-overview.ts";
 import {
   baseStatusGatewaySnapshot,
   baseStatusOverviewSurface,
   createStatusScanResultFixture,
 } from "../status.test-support.ts";
-
-const mocks = vi.hoisted(() => ({
-  collectStatusScanOverview: vi.fn(),
-  resolveStatusServiceSummaries: vi.fn(),
-  resolveNodeOnlyGatewayInfo: vi.fn(),
-  progress: { setLabel: vi.fn(), tick: vi.fn(), setPercent: vi.fn(), done: vi.fn() },
-  history: vi.fn<typeof import("../../infra/update-run-reader.js").getUpdateRunHistoryStatusAsync>(
-    async () => ({}),
-  ),
-  getUpdateRun: vi.fn<(runId: string) => UpdateRunRecord | undefined>(),
-  readRestartSentinelReadOnly: vi.fn<() => Promise<{ payload: RestartSentinelPayload } | null>>(
-    async () => null,
-  ),
-  buildStatusAllOverviewRows: vi.fn<
-    typeof import("../status-overview-rows.ts").buildStatusAllOverviewRows
-  >(() => []),
-  readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
-  inspectPortUsage: vi.fn(async () => null),
-  resolveGatewayBindHost: vi.fn(async () => "127.0.0.1"),
-  resolveStatusGatewayDiagnosticsSafe: vi.fn(async () => ({ ok: true, value: {} })),
-  resolveStatusGatewayHealthSafe: vi.fn(async () => undefined),
-  resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
-  loadExecApprovalsReadOnly: vi.fn(() => ({ version: 1, agents: {} })),
-  buildWorkspaceSkillReadiness: vi.fn<
-    typeof import("../../skills/discovery/status.js").buildWorkspaceSkillReadiness
-  >(() => ({ workspaceDir: "/tmp/mock-skills", eligible: 0, missing: 0 })),
-  resolveStatusSummaryFromOverview: vi.fn(async (_params: unknown) => ({})),
-}));
-
-// mock-isolation: Database inspection is covered at its owner, not by unrelated local diagnostics.
-vi.mock("../status-database-engines.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../status-database-engines.js")>()),
-  resolveStatusDatabaseEngines: async () => ({ source: "admitted", stores: [] }),
-}));
-
-// mock-isolation: Supply scan/service facts without probing operator state or a live Gateway.
-vi.mock("../../cli/progress.js", () => ({
-  withProgress: async <T>(_options: unknown, run: (progress: ProgressReporter) => Promise<T>) =>
-    run(mocks.progress),
-}));
-// mock-isolation: The command consumes the selected service projection without opening service state.
-vi.mock("../status.node-mode.js", () => ({
-  resolveNodeOnlyGatewayInfo: mocks.resolveNodeOnlyGatewayInfo,
-}));
-vi.mock("../../../packages/terminal-core/src/table.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../packages/terminal-core/src/table.js")>()),
-  renderTable: vi.fn(({ rows }: { rows: Array<Record<string, string>> }) =>
-    rows.map((row) => Object.values(row).join(": ")).join("\n"),
-  ),
-}));
-
-vi.mock("../../agents/exec-defaults.js", () => ({
-  resolveNodeExecEligibility: mocks.resolveNodeExecEligibility,
-}));
-vi.mock("../../config/config.js", () => ({
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-  resolveGatewayPort: () => 18789,
-}));
-vi.mock("../../daemon/diagnostics.js", () => ({
-  readLastGatewayErrorLine: async () => null,
-}));
-vi.mock("../../gateway/net.js", () => ({
-  resolveGatewayBindHost: mocks.resolveGatewayBindHost,
-  resolveGatewayRequiredListenHosts: (bindHost: string) =>
-    bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
-}));
-vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.inspectPortUsage }));
-vi.mock("../../infra/exec-approvals.js", () => ({
-  loadExecApprovalsReadOnly: mocks.loadExecApprovalsReadOnly,
-}));
-vi.mock("../../infra/update-run-ledger.js", () => ({
-  getUpdateRun: mocks.getUpdateRun,
-  getUpdateRunAsync: async (runId: string) => mocks.getUpdateRun(runId),
-  reconcileAbandonedUpdateRunsAsync: async () => [],
-}));
-vi.mock("../../infra/update-run-reader.js", () => ({
-  getUpdateRunHistoryStatusAsync: mocks.history,
-}));
-vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/restart-sentinel.js")>()),
-  readRestartSentinelReadOnly: mocks.readRestartSentinelReadOnly,
-}));
-vi.mock("../../plugins/status.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/status.js")>()),
-  buildPluginCompatibilityNotices: () => [],
-  withPluginDiagnosticsReport: async <T>(
-    _params: unknown,
-    consume: (report: object) => T | Promise<T>,
-  ) => consume({}),
-}));
-vi.mock("../../skills/discovery/status.js", () => ({
-  buildWorkspaceSkillReadiness: mocks.buildWorkspaceSkillReadiness,
-}));
-vi.mock("../../skills/runtime/remote.js", () => ({ getRemoteSkillEligibility: () => ({}) }));
-vi.mock("../status-overview-rows.ts", () => ({
-  buildStatusAllOverviewRows: mocks.buildStatusAllOverviewRows,
-}));
-// mock-isolation: Keep live service, usage, and Gateway probes outside command rendering fixtures.
-vi.mock("../status-runtime-shared.ts", () => ({
-  resolveStatusServiceSummaries: mocks.resolveStatusServiceSummaries,
-  resolveStatusGatewayDiagnosticsSafe: mocks.resolveStatusGatewayDiagnosticsSafe,
-  resolveStatusGatewayHealthSafe: mocks.resolveStatusGatewayHealthSafe,
-}));
-vi.mock("../status.gateway-connection.ts", () => ({
-  resolveStatusAllConnectionDetails: () => "",
-}));
-// mock-isolation: Reuse fixed scan facts while retaining the real downstream report rendering.
-vi.mock("../status.scan-overview.ts", () => ({
-  collectStatusScanOverview: mocks.collectStatusScanOverview,
-  prepareStatusSummaryFromOverview: async (params: unknown) => {
-    const summary = await mocks.resolveStatusSummaryFromOverview(params);
-    return { publish: () => ({ summary, sessionStores: undefined }) };
-  },
-}));
-
-vi.mock("../../daemon/restart-logs.js", () => ({
-  resolveGatewayLogPaths: () => {
-    throw new Error("No fixture logs");
-  },
-  resolveGatewaySupervisorLogPaths: () => {
-    throw new Error("No fixture logs");
-  },
-  resolveGatewayRestartLogPath: () => "/tmp/fixture-restart.log",
-}));
-
-import { statusAllCommand } from "../status-all.js";
-import * as statusDiagnosis from "./diagnosis.js";
+import {
+  mocks,
+  runStatusAllReport,
+  reportText,
+  expectReport,
+  setupStatusAllReportTest,
+} from "./report-data.test-support.js";
 
 const localGatewaySnapshot = {
   gatewayReachable: false,
@@ -157,55 +29,64 @@ function localOverview() {
   return {
     cfg: {},
     gatewaySnapshot: { ...localGatewaySnapshot },
-    secretDiagnostics: [],
     tailscaleMode: "off",
     tailscaleDns: null,
     agentStatus: { agents: [], defaultId: null },
-    channels: { rows: [], details: [] },
-    channelIssues: [],
     osSummary: { label: "test" },
   };
 }
 
-async function runStatusAllReport(params: {
-  overview: Awaited<ReturnType<typeof collectStatusScanOverview>>;
-  daemon?: Awaited<ReturnType<typeof resolveStatusServiceSummaries>>[0];
-  nodeService?: Awaited<ReturnType<typeof resolveStatusServiceSummaries>>[1];
-  nodeOnlyGateway?: Awaited<ReturnType<typeof resolveNodeOnlyGatewayInfo>>;
-}) {
-  mocks.collectStatusScanOverview.mockResolvedValueOnce(params.overview);
-  mocks.resolveStatusServiceSummaries.mockResolvedValueOnce([
-    params.daemon ?? {},
-    params.nodeService ?? {},
-  ]);
-  mocks.resolveNodeOnlyGatewayInfo.mockResolvedValueOnce(params.nodeOnlyGateway ?? null);
-  const log = vi.fn();
-  await statusAllCommand({ log, error: vi.fn(), exit: vi.fn() }, createStatusGatewayProbeBudget());
-  expect(log).toHaveBeenCalledOnce();
-  return stripAnsi(String(log.mock.calls[0]?.[0])).split("\n");
-}
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("statusAllCommand local diagnosis", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(terminalTable.renderTable).mockImplementation(({ rows }) =>
-      rows.map((row) => Object.values(row).join(": ")).join("\n"),
-    );
-    mocks.buildWorkspaceSkillReadiness
-      .mockReset()
-      .mockReturnValue({ workspaceDir: "/tmp/mock-skills", eligible: 0, missing: 0 });
-    vi.spyOn(performance, "now").mockReturnValue(0);
-    mocks.history.mockResolvedValue({});
-    mocks.getUpdateRun.mockReturnValue(undefined);
-    mocks.readRestartSentinelReadOnly.mockResolvedValue(null);
-    mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValue({ ok: true, value: {} });
-    mocks.resolveStatusGatewayHealthSafe.mockResolvedValue(undefined);
-  });
+describe("statusAllCommand report data", () => {
+  setupStatusAllReportTest();
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  it("reconciles runtime secret owners and local diagnostics in the complete report", async () => {
+    const rows = await vi.importActual<typeof import("../status-overview-rows.ts")>(
+      "../status-overview-rows.ts",
+    );
+    mocks.buildStatusAllOverviewRows.mockImplementationOnce(rows.buildStatusAllOverviewRows);
+    const output = await reportText({
+      overview: {
+        runtimeDegradation: {
+          degradedSecretOwners: [
+            {
+              ownerKind: "capability",
+              ownerId: "tts",
+              state: "unavailable",
+              degradationState: "cold",
+              paths: ["tts.providers.elevenlabs.apiKey"],
+              reason: "secret reference was not found",
+            },
+            {
+              ownerKind: "provider",
+              ownerId: "openai",
+              state: "unavailable",
+              degradationState: "stale",
+              paths: ["models.providers.openai.apiKey"],
+              reason: "secret provider failed",
+            },
+          ],
+          degradedPlugins: [],
+        },
+        secretDiagnostics: [
+          "status --all: tts.providers.elevenlabs.apiKey is unavailable in this command path; continuing with degraded read-only config.",
+          "channels.discord.accounts.ops.token: token=synthetic-secret",
+        ],
+      },
+    });
+    expectReport(
+      output,
+      [
+        "Secrets: 3 diagnostics",
+        "! Secret diagnostics (3)",
+        "cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
+        "stale provider:openai (models.providers.openai.apiKey): secret provider failed",
+        "channels.discord.accounts.ops.token: ***",
+        "Retry: openclaw secrets reload",
+      ],
+      ["synthetic-secret", "✓ Secret diagnostics (0)"],
+    );
   });
 
   const success = "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).";
@@ -304,7 +185,6 @@ describe("statusAllCommand local diagnosis", () => {
       }
       const report = await runStatusAllReport({
         overview: {
-          ...baseStatusOverviewSurface,
           ...localOverview(),
           update: { ...baseStatusOverviewSurface.update, registry: { latestVersion: "9999.1.1" } },
           gatewaySnapshot: {
@@ -488,13 +368,7 @@ describe("statusAllCommand local diagnosis", () => {
     const actual = await vi.importActual<
       typeof import("../../../packages/terminal-core/src/table.js")
     >("../../../packages/terminal-core/src/table.js");
-    vi.mocked(terminalTable.renderTable).mockImplementation(actual.renderTable);
-    const diagnosisSpy = vi
-      .spyOn(statusDiagnosis, "appendStatusAllDiagnosis")
-      .mockImplementation(({ lines }) => {
-        renderingEvents.push("diagnosis");
-        lines.push("diagnosis body", "");
-      });
+    mocks.renderTable.mockImplementation(actual.renderTable);
     mocks.buildStatusAllOverviewRows.mockReturnValueOnce([
       {
         get Item() {
@@ -507,13 +381,6 @@ describe("statusAllCommand local diagnosis", () => {
     const scan = createStatusScanResultFixture();
     const lines = await runStatusAllReport({
       overview: {
-        ...scan,
-        coldStart: false,
-        hasConfiguredChannels: true,
-        skipColdStartNetworkChecks: false,
-        gatewaySnapshot: baseStatusGatewaySnapshot,
-        runtimeDegradation: null,
-        channelsStatus: null,
         configDiagnostics: {
           path: "/tmp/openclaw.json",
           issues: [{ path: "gateway.port", message: "invalid" }],
@@ -581,20 +448,21 @@ describe("statusAllCommand local diagnosis", () => {
       "prepare detail",
       "prepare agent",
       "render Overview",
-      "diagnosis",
     ]);
     const output = lines.join("\n");
-    expect(output).toContain("Bootstrap file");
-    expect(output).toContain("PRESENT");
-    expect(output).toContain("ABSENT");
-    expect(output).toContain("Config diagnostics:");
-    expect(output).toContain("Config file is invalid: /tmp/openclaw.json");
-    expect(output).toContain("gateway.port: invalid");
-    expect(output).toContain("Fix: openclaw doctor --fix");
+    expectReport(output, [
+      "Bootstrap file",
+      "PRESENT",
+      "ABSENT",
+      "Config diagnostics:",
+      "Config file is invalid: /tmp/openclaw.json",
+      "gateway.port: invalid",
+      "Fix: openclaw doctor --fix",
+    ]);
     expect(output.indexOf("Config diagnostics:")).toBeLessThan(
       output.indexOf("OpenClaw status --all"),
     );
-    expect(output).not.toContain(String.fromCharCode(0xd83d));
+    expect(output).not.toContain(`${String.fromCharCode(0xd83d)}…`);
     expect(
       lines.filter((line) =>
         /^(Overview|Channels|Discord accounts|Empty accounts|Agents|Diagnosis \(read-only\))$/.test(
@@ -609,8 +477,17 @@ describe("statusAllCommand local diagnosis", () => {
       "Agents",
       "Diagnosis (read-only)",
     ]);
-    expect(lines.slice(-4)).toEqual(["", "Diagnosis (read-only)", "diagnosis body", ""]);
-    expect(diagnosisSpy).toHaveBeenCalledOnce();
-    expect(diagnosisSpy).toHaveBeenCalledWith(expect.objectContaining({ secretDiagnostics: [] }));
+    expect(output.indexOf("Agents")).toBeLessThan(output.indexOf("Diagnosis (read-only)"));
+    expect(output.indexOf("Diagnosis (read-only)")).toBeLessThan(
+      output.indexOf("Gateway connection details:"),
+    );
+    expect(output).toContain("✓ Secret diagnostics (0)");
+    expect(lines.slice(-5)).toEqual([
+      "",
+      "Pasteable debug report. Auth tokens redacted.",
+      "Troubleshooting: https://docs.openclaw.ai/troubleshooting",
+      "Support: https://community.openclaw.ai/",
+      "",
+    ]);
   });
 });

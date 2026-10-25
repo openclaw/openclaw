@@ -40,18 +40,6 @@ export function extractExecDirective(rawBody?: string): ExecDirectiveParse {
   const parsed: ExecDirectiveParse = {
     cleaned: body,
     hasDirective: match !== null,
-    ...(match
-      ? {
-          execHost: undefined,
-          execSecurity: undefined,
-          execAsk: undefined,
-          execNode: undefined,
-          rawExecHost: undefined,
-          rawExecSecurity: undefined,
-          rawExecAsk: undefined,
-          rawExecNode: undefined,
-        }
-      : {}),
     hasExecOptions: false,
     invalidHost: false,
     invalidSecurity: false,

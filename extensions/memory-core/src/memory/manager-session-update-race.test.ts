@@ -33,7 +33,6 @@ import {
   memoryIndexFixtureWriter,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
-import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 
 const cacheHashes = (db: DatabaseSync) =>
   db.prepare("SELECT hash FROM memory_embedding_cache").all();
@@ -308,7 +307,6 @@ describe("memory session update sync", () => {
     const updatedMarker = "UPDATE DURING ACTIVE SYNC 811";
     const manager = await getFreshManager(sessionConfig(), "cli");
     const owner = manager as unknown as {
-      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       sessionPendingTargets: Map<string, MemorySessionSyncTarget>;
       sessionsDirty: boolean;
       sessionsReconcileDirty: boolean;
@@ -317,13 +315,6 @@ describe("memory session update sync", () => {
     };
     const activeSyncGate = createDeferred<void>();
     const activeSyncIndexed = createDeferred<void>();
-    const sessionSyncQueued = createDeferred<void>();
-    const enqueue = owner.sessionSyncQueue.enqueue.bind(owner.sessionSyncQueue);
-    const enqueueSpy = vi.spyOn(owner.sessionSyncQueue, "enqueue").mockImplementation((params) => {
-      const pending = enqueue(params);
-      sessionSyncQueued.resolve();
-      return pending;
-    });
     let sessionUpdateBatch: Promise<void> | undefined;
     let syncArchiveFilesSpy: { mockRestore: () => void } | undefined;
     try {
@@ -346,13 +337,9 @@ describe("memory session update sync", () => {
       await seed(sessionId, sessionKey, updatedMarker, "assistant", Date.now());
       owner.sessionPendingTargets.set(sessionKey, { agentId: "main", sessionId, sessionKey });
       sessionUpdateBatch = owner.processSessionUpdateBatch();
-      await sessionSyncQueued.promise;
-      const queuedSessionSync = owner.sessionSyncQueue.pending;
-      expect(queuedSessionSync).not.toBeNull();
 
       activeSyncGate.resolve();
       await activeSync;
-      await queuedSessionSync;
       await sessionUpdateBatch;
 
       using observer = openObserver();
@@ -366,7 +353,6 @@ describe("memory session update sync", () => {
       expect(manager.status().dirty).toBe(false);
     } finally {
       syncArchiveFilesSpy?.mockRestore();
-      enqueueSpy.mockRestore();
       activeSyncGate.resolve();
       await sessionUpdateBatch?.catch(() => undefined);
       await manager.close?.();
@@ -439,19 +425,8 @@ describe("memory session update sync", () => {
     const reads = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexRead");
     try {
       await manager.sync({ reason: "index-before-forget", force: true });
-      // Forget checks must not serialize the source's chunks and embeddings.
-      const sessionChecks = reads.mock.calls.flatMap(([, command]) =>
-        command.type === "session.current" ? [command.input] : [],
-      );
-      expect(sessionChecks).toEqual(
-        expect.arrayContaining([
-          { agentId: "main", sessionId },
-          { agentId: "main", sessionId: decoyId },
-        ]),
-      );
-      for (const input of sessionChecks) {
-        expect(input).toStrictEqual({ agentId: "main", sessionId: input.sessionId });
-      }
+      // Live publication enforces forget authority without one preflight request per session.
+      expect(reads.mock.calls.map(([, command]) => command.type)).not.toContain("session.current");
     } finally {
       reads.mockRestore();
     }
@@ -689,40 +664,77 @@ describe("memory session update sync", () => {
     }
   });
 
-  it("excludes system-only archives without deleting from a fresh rebuild", async () => {
-    const archiveName = "internal-turn.jsonl.deleted.2026-08-26T11-00-00.000Z";
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const record = {
-      type: "message",
-      message: {
-        role: "user",
-        content: "Internal system-generated fragment",
-        provenance: { kind: "internal_system", sourceTool: "internal-maintenance" },
-      },
-    };
-    const archivePath = path.join(sessionsDir, archiveName);
-    await fs.writeFile(archivePath, JSON.stringify(record) + "\n");
-    const manager = await getFreshManager(sessionConfig(), "cli");
-    const deletion = vi.spyOn(MemoryIndexDatabase.prototype, "deleteSource");
-    try {
-      await manager.sync({ reason: "forced-reindex", force: true });
-      expect(deletion).not.toHaveBeenCalled();
-    } finally {
-      deletion.mockRestore();
-    }
-    const db = Reflect.get(manager, "db") as DatabaseSync;
-    expect(selectIndex(db, "chunks", "DISTINCT path", "WHERE source = 'sessions'").all()).toEqual(
-      [],
-    );
-    const sessionPath = `sessions/main/${archiveName}`;
-    const writer = memoryIndexFixtureWriter(manager);
-    seedIndexedSession(writer, sessionPath, "Stale violet internal fragment.");
-    // Forget can leave chunks without a source row; published cleanup still owns them.
-    writer.prepare("DELETE FROM memory_index_sources WHERE path = ?").run(sessionPath);
-    await manager.sync({ reason: "archive-cleanup", archiveFiles: [archivePath] });
-    expectSessionIndexRemoved(db, sessionPath);
-  });
+  it.each(["absent", "replaced"] as const)(
+    "cleans system-only archives when source is %s",
+    async (sourceState) => {
+      const archiveName = "internal-turn.jsonl.deleted.2026-08-26T11-00-00.000Z";
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const record = {
+        type: "message",
+        message: {
+          role: "user",
+          content: "Internal system-generated fragment",
+          provenance: { kind: "internal_system", sourceTool: "internal-maintenance" },
+        },
+      };
+      const archivePath = path.join(sessionsDir, archiveName);
+      await fs.writeFile(archivePath, JSON.stringify(record) + "\n");
+      const manager = await getFreshManager(sessionConfig(), "cli");
+      const deletion = vi.spyOn(MemoryIndexDatabase.prototype, "deleteSource");
+      try {
+        await manager.sync({ reason: "forced-reindex", force: true });
+        expect(deletion).not.toHaveBeenCalled();
+      } finally {
+        deletion.mockRestore();
+      }
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      expect(selectIndex(db, "chunks", "DISTINCT path", "WHERE source = 'sessions'").all()).toEqual(
+        [],
+      );
+      const sessionPath = `sessions/main/${archiveName}`;
+      const writer = memoryIndexFixtureWriter(manager);
+      seedIndexedSession(writer, sessionPath, "Stale violet internal fragment.");
+      // Forget can leave chunks without a source row; published cleanup still owns them.
+      writer.prepare("DELETE FROM memory_index_sources WHERE path = ?").run(sessionPath);
+      const orphaned = readPublishedSessionIndex(db, sessionPath, "violet");
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted database receiver.
+      const readSourceState = MemoryIndexDatabase.prototype.readSourceState;
+      const inventory = vi
+        .spyOn(MemoryIndexDatabase.prototype, "readSourceState")
+        .mockImplementation(async function (this: MemoryIndexDatabase, query) {
+          const rows = await readSourceState.call(this, query);
+          if (query.paths?.includes(sessionPath)) {
+            expect(rows).toEqual([]);
+            if (sourceState === "replaced") {
+              writer
+                .prepare(
+                  "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'sessions', 'newer-session', 30, 40)",
+                )
+                .run(sessionPath);
+            }
+          }
+          return rows;
+        });
+      const reads = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexRead");
+      try {
+        await manager.sync({ reason: "archive-cleanup", archiveFiles: [archivePath] });
+        expect(inventory).toHaveBeenCalledWith({ source: "sessions", paths: [sessionPath] });
+        if (sourceState === "replaced") {
+          const retained = readPublishedSessionIndex(db, sessionPath, "violet");
+          expect(retained.source?.hash).toBe("newer-session");
+          expect(retained.chunks).toEqual(orphaned.chunks);
+          expect(retained.search).toEqual(orphaned.search);
+        } else {
+          expectSessionIndexRemoved(db, sessionPath);
+        }
+        expect(reads.mock.calls.map(([, command]) => command.type)).not.toContain("source.hash");
+      } finally {
+        inventory.mockRestore();
+        reads.mockRestore();
+      }
+    },
+  );
 
   it.each([
     {

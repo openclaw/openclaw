@@ -1,54 +1,20 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { CronCompactJob, CronJobsListResult } from "../../api/types.ts";
+import {
+  readCanonicalCronListPage,
+  resolveCronListPageNextOffset,
+} from "../../../../src/cron/service/list-page-validation.js";
+import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import type { CronJobsState } from "./types.ts";
 
-export function readCanonicalCronJobsPage<Row>(
-  value: CronJobsListResult<Row>,
-  requestedLimit: number,
-): CronJobsListResult<Row> {
-  if (
-    !isRecord(value) ||
-    !Array.isArray(value.jobs) ||
-    typeof value.snapshotRevision !== "string" ||
-    value.snapshotRevision.length === 0 ||
-    typeof value.total !== "number" ||
-    !Number.isSafeInteger(value.total) ||
-    value.total < 0 ||
-    typeof value.offset !== "number" ||
-    !Number.isSafeInteger(value.offset) ||
-    value.offset < 0 ||
-    typeof value.limit !== "number" ||
-    !Number.isSafeInteger(value.limit) ||
-    value.limit < 1 ||
-    value.limit > requestedLimit ||
-    value.jobs.length > value.limit ||
-    typeof value.hasMore !== "boolean" ||
-    (value.nextOffset !== null &&
-      (typeof value.nextOffset !== "number" ||
-        !Number.isSafeInteger(value.nextOffset) ||
-        value.nextOffset < 0))
-  ) {
-    throw new Error("cron.list returned an invalid inventory page");
-  }
-  return value;
-}
-
-export function assertCanonicalCronJobsCursor(
-  page: CronJobsListResult<unknown>,
-  requestedOffset: number,
-) {
-  const nextOffset = requestedOffset + page.jobs.length;
-  if (
-    page.offset !== requestedOffset ||
-    !Number.isSafeInteger(nextOffset) ||
-    nextOffset > page.total ||
-    (page.hasMore
-      ? page.nextOffset !== nextOffset || nextOffset <= requestedOffset || nextOffset >= page.total
-      : page.nextOffset !== null || nextOffset !== page.total)
-  ) {
-    throw new Error("cron.list returned an invalid inventory page");
-  }
+function clearCronJobsSnapshot(state: CronJobsState<unknown>) {
+  state.cronJobs = [];
+  state.cronJobsSnapshotRevision = null;
+  state.cronJobsTotal = 0;
+  state.cronJobsHasMore = false;
+  state.cronJobsNextOffset = null;
 }
 
 function queueCronJobsSnapshotRecovery<Row>(state: CronJobsState<Row>, tableFilters: boolean) {
@@ -59,7 +25,7 @@ function queueCronJobsSnapshotRecovery<Row>(state: CronJobsState<Row>, tableFilt
   state.cronJobsReloadPendingTableFilters = tableFilters;
 }
 
-async function drainPendingCronJobsReload<Row>(
+async function drainPendingCronJobsReload<Row extends CronInventoryJob>(
   state: CronJobsState<Row>,
   projection: CronJobsProjection<Row>,
 ) {
@@ -72,10 +38,29 @@ async function drainPendingCronJobsReload<Row>(
   await loadCronJobsProjectionPage(state, projection, { tableFilters });
 }
 
-export type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean };
-export type CronJobsProjection<Row> = {
+type CronInventoryJob = Pick<CronJob, "id" | "name" | "agentId" | "enabled" | "updatedAtMs">;
+type CronRuntimeState = Pick<
+  CronJob["state"],
+  | "nextRunAtMs"
+  | "lastRunAtMs"
+  | "lastRunStatus"
+  | "lastStatus"
+  | "runningAtMs"
+  | "autoDisabled"
+  | "lastError"
+  | "lastDurationMs"
+  | "lastMeaningfulResult"
+  | "lastTriggerEvalAtMs"
+>;
+
+export type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean; event?: unknown };
+export type CronJobsProjection<Row extends CronInventoryJob> = {
   compact?: true;
-  readRows: (rows: Row[]) => Row[];
+  applyRuntime: (
+    state: CronJobsState<Row>,
+    index: number,
+    update: { updatedAtMs: number; runtime: CronRuntimeState; finished: boolean },
+  ) => boolean;
 };
 
 const cronInventoryScopes = new WeakMap<
@@ -84,60 +69,105 @@ const cronInventoryScopes = new WeakMap<
 >();
 const cronInventoryRequests = new WeakMap<CronJobsState<unknown>, object>();
 
-export function isCronJobsScopeCurrent(state: CronJobsState<unknown>): boolean {
-  return cronInventoryScopes.get(state) === (state.cronSessionFilter ?? state.cronAgentId);
-}
-
 export function retireCronJobsRequest(state: CronJobsState<unknown>) {
   cronInventoryRequests.delete(state);
   state.cronLoading = false;
   state.cronJobsLoadingMore = false;
 }
 
-function isCronInventoryTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-function hasCompactCronInventoryFacts(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const autoDisabled = value.autoDisabled;
-  return (
-    typeof value.id === "string" &&
-    value.id.trim().length > 0 &&
-    typeof value.name === "string" &&
-    (value.agentId === undefined || typeof value.agentId === "string") &&
-    typeof value.enabled === "boolean" &&
-    isCronInventoryTimestamp(value.updatedAtMs) &&
-    (value.nextRunAtMs === null || isCronInventoryTimestamp(value.nextRunAtMs)) &&
-    (value.lastRunAtMs === null || isCronInventoryTimestamp(value.lastRunAtMs)) &&
-    (value.lastRunStatus === null ||
-      value.lastRunStatus === "ok" ||
-      value.lastRunStatus === "error" ||
-      value.lastRunStatus === "skipped") &&
-    (value.runningAtMs === undefined || isCronInventoryTimestamp(value.runningAtMs)) &&
-    (autoDisabled === undefined ||
-      (isRecord(autoDisabled) &&
-        (autoDisabled.reason === "consecutive-failures" ||
-          autoDisabled.reason === "schedule-errors") &&
-        isCronInventoryTimestamp(autoDisabled.atMs) &&
-        typeof autoDisabled.consecutiveErrors === "number" &&
-        Number.isSafeInteger(autoDisabled.consecutiveErrors) &&
-        autoDisabled.consecutiveErrors > 0))
-  );
-}
-
 const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
   compact: true,
-  readRows: (rows) => {
-    // A partial inventory cannot establish absence or retire dismissed alerts.
-    if (!rows.every(hasCompactCronInventoryFacts)) {
-      throw new Error("cron.list returned an invalid compact inventory row");
+  applyRuntime: (state, index, { updatedAtMs, runtime, finished }) => {
+    // Runtime facts preserve name order; other compact orderings need an authoritative page.
+    if (state.cronJobsSortBy !== "name") {
+      return false;
     }
-    return rows;
+    const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } =
+      runtime;
+    state.cronJobs = state.cronJobs.with(index, {
+      ...state.cronJobs[index]!,
+      updatedAtMs,
+      nextRunAt: timestampMsToIsoString(nextRunAtMs) ?? null,
+      nextRunAtMs: nextRunAtMs ?? null,
+      lastRunAt: timestampMsToIsoString(lastRunAtMs) ?? null,
+      lastRunAtMs: lastRunAtMs ?? null,
+      lastRunStatus: lastRunStatus ?? lastStatus ?? null,
+      runningAtMs,
+      autoDisabled,
+      lastDurationMs: runtime.lastDurationMs,
+      lastMeaningfulResult: runtime.lastMeaningfulResult,
+      lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
+      ...(finished ? { lastRunError: runtime.lastError ?? null } : {}),
+    });
+    return true;
   },
 };
+
+function applyCronJobsEvent<Row extends CronInventoryJob>(
+  state: CronJobsState<Row>,
+  projection: CronJobsProjection<Row>,
+  payload: unknown,
+): boolean {
+  if (
+    state.cronLoading ||
+    state.cronJobsLoadingMore ||
+    state.cronJobsReloadPending ||
+    !state.cronJobsSnapshotRevision ||
+    state.cronJobsError ||
+    state.cronJobsHasMore ||
+    state.cronJobs.length !== state.cronJobsTotal ||
+    !(cronInventoryScopes.get(state) === (state.cronSessionFilter ?? state.cronAgentId)) ||
+    state.cronJobsLastStatusFilter !== "all" ||
+    !isRecord(payload) ||
+    !["started", "finished", "scheduled"].includes(String(payload.action)) ||
+    !isRecord(payload.job) ||
+    !isRecord(payload.job.state) ||
+    payload.jobId !== payload.job.id
+  ) {
+    return false;
+  }
+  // Definitions, unknown membership, filtered status and incomplete windows need a list read.
+  const index = state.cronJobs.findIndex((job) => job.id === payload.jobId);
+  const previous = state.cronJobs[index];
+  if (
+    !previous ||
+    previous.name !== payload.job.name ||
+    previous.agentId !== payload.job.agentId ||
+    previous.enabled !== payload.job.enabled ||
+    typeof payload.job.updatedAtMs !== "number"
+  ) {
+    return false;
+  }
+  if (payload.job.updatedAtMs < previous.updatedAtMs) {
+    return true;
+  }
+  // SAFETY: The authenticated cron publisher owns this compact runtime projection.
+  const runtime = payload.job.state as CronRuntimeState;
+  const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } =
+    runtime;
+  const finished = payload.action === "finished";
+  return projection.applyRuntime(state, index, {
+    updatedAtMs: payload.job.updatedAtMs,
+    runtime: {
+      nextRunAtMs,
+      lastRunAtMs,
+      lastRunStatus,
+      lastStatus,
+      runningAtMs,
+      autoDisabled,
+      lastDurationMs: runtime.lastDurationMs,
+      lastMeaningfulResult: runtime.lastMeaningfulResult,
+      lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
+      ...(finished
+        ? {
+            lastError: typeof payload.error === "string" ? payload.error : undefined,
+            lastDurationMs: typeof payload.durationMs === "number" ? payload.durationMs : undefined,
+          }
+        : {}),
+    },
+    finished,
+  });
+}
 
 export function loadCompactCronJobsPage(
   state: CronJobsState<CronCompactJob>,
@@ -146,12 +176,15 @@ export function loadCompactCronJobsPage(
   return loadCronJobsProjectionPage(state, compactCronJobsProjection, opts);
 }
 
-export async function loadCronJobsProjectionPage<Row>(
+export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
   state: CronJobsState<Row>,
   projection: CronJobsProjection<Row>,
   opts?: CronJobsPageOptions,
 ) {
   if (!state.client || !state.connected || state.canRefresh?.() === false) {
+    return;
+  }
+  if (opts?.event && applyCronJobsEvent(state, projection, opts.event)) {
     return;
   }
   const scope = state.cronSessionFilter ?? state.cronAgentId;
@@ -162,11 +195,7 @@ export async function loadCronJobsProjectionPage<Row>(
   // An editor can survive scope hydration; its inventory cannot. Retire both
   // retained rows and late responses before a failed replacement can expose them.
   if (cronInventoryScopes.has(state) && cronInventoryScopes.get(state) !== scope) {
-    state.cronJobs = [];
-    state.cronJobsSnapshotRevision = null;
-    state.cronJobsTotal = 0;
-    state.cronJobsHasMore = false;
-    state.cronJobsNextOffset = null;
+    clearCronJobsSnapshot(state);
   }
   cronInventoryScopes.set(state, scope);
   const append = opts?.append === true;
@@ -184,6 +213,7 @@ export async function loadCronJobsProjectionPage<Row>(
   cronInventoryRequests.set(state, request);
   state[loadingKey] = true;
   state.cronJobsError = null;
+  state.cronJobsReadDenied = false;
   try {
     const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
     const res = await state.client.request<CronJobsListResult<Row>>("cron.list", {
@@ -208,7 +238,7 @@ export async function loadCronJobsProjectionPage<Row>(
     if (!isCurrentScope()) {
       return;
     }
-    const page = readCanonicalCronJobsPage<Row>(res, state.cronJobsLimit);
+    const page = readCanonicalCronListPage<Row>(res, state.cronJobsLimit);
     if (
       append &&
       (page.snapshotRevision !== state.cronJobsSnapshotRevision ||
@@ -219,9 +249,8 @@ export async function loadCronJobsProjectionPage<Row>(
       queueCronJobsSnapshotRecovery(state, opts?.tableFilters === true);
       return;
     }
-    assertCanonicalCronJobsCursor(page, offset);
-    const jobs = projection.readRows(page.jobs);
-    state.cronJobs = append ? [...state.cronJobs, ...jobs] : jobs;
+    resolveCronListPageNextOffset(page, offset);
+    state.cronJobs = append ? [...state.cronJobs, ...page.jobs] : page.jobs;
     state.cronJobsSnapshotRevision = page.snapshotRevision;
     state.cronJobsTotal = page.total;
     state.cronJobsHasMore = page.hasMore;
@@ -231,6 +260,14 @@ export async function loadCronJobsProjectionPage<Row>(
   } catch (err) {
     if (isCurrentScope()) {
       state.cronJobsError = formatUiError(err);
+      state.cronJobsReadDenied =
+        err instanceof GatewayProtocolRequestError && err.gatewayCode === "FORBIDDEN";
+      if (state.cronJobsReadDenied) {
+        clearCronJobsSnapshot(state);
+        // A queued invalidation cannot extend a read that was authoritatively refused.
+        state.cronJobsReloadPending = false;
+        state.cronJobsReloadPendingTableFilters = false;
+      }
     }
   } finally {
     if (cronInventoryRequests.get(state) === request) {

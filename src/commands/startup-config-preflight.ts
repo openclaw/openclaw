@@ -43,7 +43,7 @@ export type StartupConfigPreflightResult = ReturnType<typeof result> & {
   pluginCache?: PluginCache;
 };
 
-/** Prepare current runtime state; legacy imports and repair receipts belong to Doctor. */
+/** Prepare runtime state, including backed-up client credential migration through Doctor custody. */
 export async function runStartupConfigPreflight(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
@@ -126,6 +126,10 @@ async function prepareStartupConfig(
       readSnapshot,
       validateConfig: options.validateStartupConfig,
       beforeStatePreparation,
+      prepareClientCredentials: async (snapshot) => {
+        const { prepareStartupClientCredentials } = await import("./startup-client-credentials.js");
+        await prepareStartupClientCredentials({ env, config: snapshot.config });
+      },
     });
   let read = await readAdmitted();
   env = cloneEnvWithPlatformSemantics(process.env);
@@ -221,6 +225,7 @@ async function prepareStartupConfig(
             manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
             pluginIds: pendingWebhookChannels,
             historicalWebhookListeners: true,
+            historicalWebhookCompletion: { marker: webhookCompletion },
             startup: true,
           }),
         );
@@ -255,7 +260,16 @@ async function prepareStartupConfig(
       read.pluginMetadataSnapshot
         ? getPluginMetadataSnapshotCache(read.pluginMetadataSnapshot)
         : getPluginCache(),
-      () => refreshStartupPluginQuarantine({ cfg: read.snapshot.sourceConfig, env, measure }),
+      () =>
+        refreshStartupPluginQuarantine({
+          cfg: read.snapshot.sourceConfig,
+          env,
+          measure,
+          beforePersistentEffect: async () => {
+            await beforeStatePreparation(read.snapshot);
+            assertLeaseCurrent();
+          },
+        }),
     );
     setActiveDegradedPlugins(verification.quarantinedPlugins);
     recordStartupMigrationWarnings([

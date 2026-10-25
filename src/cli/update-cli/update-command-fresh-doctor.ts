@@ -1,6 +1,5 @@
 // Runs post-plugin convergence checks without retaining pre-update plugin modules.
 import os from "node:os";
-import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
@@ -19,6 +18,10 @@ import {
   readDeferredPluginMigrationsAsync,
 } from "../../infra/deferred-plugin-migrations.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { collectStateDatabasePaths } from "../../infra/update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "../../infra/update-candidate-state.sizes.js";
@@ -37,6 +40,7 @@ import {
   UpdateDoctorDeferredInspectionCheckIdsSchema,
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import { UPDATE_DOCTOR_HISTORICAL_SCANS_ENV } from "../../infra/update-doctor-scan-receipts.js";
 import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
@@ -56,7 +60,10 @@ import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } fr
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
-import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
+import {
+  consumeUpdateDoctorHistoricalScans,
+  recordUpdateDatabaseWrites,
+} from "./update-command-database-receipts.js";
 import {
   assertUpdateDoctorChildSucceeded,
   inspectUpdateDoctorChildSupport,
@@ -137,6 +144,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   ];
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
+  delete baseEnv[UPDATE_DOCTOR_HISTORICAL_SCANS_ENV];
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
   let doctorResult: UpdatePostInstallDoctorResult | null | undefined;
   let doctorSettled = true;
@@ -170,19 +178,31 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
         ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
       },
     };
-    const workerCommand = [
-      params.nodeRunner ?? resolveNodeRunner(),
-      path.join(
-        params.root,
-        "dist",
-        runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
-      ),
-    ];
+    const reusableScans =
+      params.phase === "post-plugin" && params.databaseBackup
+        ? consumeUpdateDoctorHistoricalScans(params.databaseBackup, {
+            ...baseEnv,
+            ...commandOptions.env,
+            ...sectionTiming.env,
+          })
+        : undefined;
+    if (reusableScans) {
+      commandOptions.env = {
+        ...commandOptions.env,
+        [UPDATE_DOCTOR_HISTORICAL_SCANS_ENV]: reusableScans,
+      };
+    }
+    const workerRuntime = params.nodeRunner ?? resolveNodeRunner();
+    const workerUrl = resolveRuntimeWorkerUrl({
+      ...runtimeProcessEntrypoints.updateMigratedFinalize,
+      root: params.root,
+    });
+    const workerCommand = [workerRuntime, ...resolveRuntimeWorkerArgv(workerUrl, workerRuntime)];
     const doctorConfigWrites =
       run &&
       (params.doctorConfigWrites ??
         (await inspectUpdateDoctorChildSupport(
-          workerCommand,
+          { workerUrl, argv: workerCommand },
           {
             cwd: params.root,
             timeoutMs: params.timeoutMs,
@@ -457,15 +477,12 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       params.onDoctorStep?.(doctorStep);
     }
     if (params.databaseBackup) {
-      const step: UpdateStepResult = {
-        name: "database migration writes",
-        command: "record Doctor database write fingerprints",
-        cwd: params.root,
-        durationMs: 0,
-        exitCode: 0,
-      };
-      recordUpdateDatabaseWrites(params.databaseBackup, doctorResult?.databaseWrites, step);
-      params.onDoctorStep?.(step);
+      const receipt = recordUpdateDatabaseWrites(
+        params.databaseBackup,
+        doctorResult?.databaseWrites,
+        { name: `${params.phase} doctor` },
+      );
+      params.onDoctorStep?.(receipt);
     }
     if (doctorResult?.warnings?.length) {
       params.onWarnings?.(doctorResult.warnings);

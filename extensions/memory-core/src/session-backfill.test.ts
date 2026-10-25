@@ -506,26 +506,13 @@ describe("runSessionBackfill", () => {
   it("stages idempotently, converges duplicate facts, and rolls back staged artifacts", async () => {
     const workspaceDir = await createIsolatedWorkspace("apply-");
     await seedCanonicalTranscript("repeat", [
-      {
-        role: "user",
-        content: "The preferred editor is Nova",
-        timestamp: "2026-03-01T10:00:00.000Z",
-        owner: true,
-      },
-      {
-        role: "user",
-        content: "The preferred editor is Nova",
-        timestamp: "2026-03-01T11:00:00.000Z",
-        owner: true,
-      },
+      ownerMessage("The preferred editor is Nova", "2026-03-01T10:00:00.000Z"),
+      ownerMessage("The preferred editor is Nova", "2026-03-01T11:00:00.000Z"),
     ]);
 
-    const first = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
+    const first = await runBackfill(workspaceDir, {
       apply: true,
       nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
-      timezone: "UTC",
     });
     const afterFirst = await readShortTermRecallEntries({ workspaceDir });
     const firstContentHash = hashStagedContent(afterFirst);
@@ -535,12 +522,9 @@ describe("runSessionBackfill", () => {
     expect(afterFirst).toHaveLength(1);
     expect(afterFirst[0]?.snippet).toBe("The preferred editor is Nova");
 
-    const second = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
+    const second = await runBackfill(workspaceDir, {
       apply: true,
       nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
-      timezone: "UTC",
     });
     expect(second.candidateCount).toBe(0);
     expect(second.stagedEntries).toBe(0);
@@ -562,12 +546,9 @@ describe("runSessionBackfill", () => {
     expect(await fs.readFile(dreamsPath, "utf-8")).not.toContain(
       "openclaw:dreaming:backfill-entry",
     );
-    const reapplied = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
+    const reapplied = await runBackfill(workspaceDir, {
       apply: true,
       nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
-      timezone: "UTC",
     });
     const afterReapply = await readShortTermRecallEntries({ workspaceDir });
     expect(reapplied.candidateCount).toBe(2);

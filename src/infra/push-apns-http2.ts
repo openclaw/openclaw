@@ -229,10 +229,9 @@ export function createApnsResponseBodyCapture(): ApnsResponseBodyCapture {
 export function appendApnsResponseBodyCapture(
   capture: ApnsResponseBodyCapture,
   chunk: unknown,
-  maxBytes = APNS_RESPONSE_BODY_MAX_BYTES,
 ): void {
   const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-  const remaining = maxBytes - capture.capturedBytes;
+  const remaining = APNS_RESPONSE_BODY_MAX_BYTES - capture.capturedBytes;
   if (remaining <= 0) {
     capture.truncated = capture.truncated || buffer.byteLength > 0;
     return;

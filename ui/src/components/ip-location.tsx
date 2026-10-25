@@ -1,15 +1,13 @@
 import { sleepWithAbort } from "@openclaw/retry";
 import { createMemo, Loading, onCleanup, Show } from "solid-js";
 import { lookupClientGeolocation, type ClientGeolocation } from "../lib/geolocation-lookup.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
-
-type IpLocationProps = { ip: string | undefined };
 
 // The first lookup can wait for a database download; unavailable answers retry.
 const RETRY_DELAYS_MS = [5_000, 15_000, 45_000];
 
-function IpLocationContent(props: IpLocationProps, host: HTMLElement) {
+export function IpLocation(props: { ip?: string }) {
+  let host!: HTMLElement;
   const ip = createMemo(() => props.ip?.trim());
   const location = createMemo(async (): Promise<ClientGeolocation | null> => {
     const address = ip();
@@ -36,43 +34,31 @@ function IpLocationContent(props: IpLocationProps, host: HTMLElement) {
     }
     return null;
   });
-  const label = createMemo(() =>
-    [location()?.city, location()?.region ?? location()?.country].filter(Boolean).join(", "),
-  );
+  const label = () =>
+    [location()?.city, location()?.region ?? location()?.country].filter(Boolean).join(", ");
   return (
-    <Loading on={ip()} fallback={null}>
-      <Show when={label()}>
-        <span class="activity-feed__device-location">
-          {label()}
-          <Show when={location()?.attribution}>
-            {(attribution) => (
-              <a
-                class="activity-feed__device-attribution"
-                href={attribution().url}
-                target="_blank"
-                rel="noreferrer noopener"
-                aria-label={attribution().text}
-                title={attribution().text}
-              >
-                <Icon name="info" />
-              </a>
-            )}
-          </Show>
-        </span>
-      </Show>
-    </Loading>
+    <openclaw-ip-location ref={(element) => (host = element)} style="display: contents">
+      <Loading on={ip()} fallback={null}>
+        <Show when={label()}>
+          <span class="activity-feed__device-location">
+            {label()}
+            <Show when={location()?.attribution}>
+              {(attribution) => (
+                <a
+                  class="activity-feed__device-attribution"
+                  href={attribution().url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  aria-label={attribution().text}
+                  title={attribution().text}
+                >
+                  <Icon name="info" />
+                </a>
+              )}
+            </Show>
+          </span>
+        </Show>
+      </Loading>
+    </openclaw-ip-location>
   );
-}
-
-defineSolidBridge<IpLocationProps>("openclaw-ip-location", IpLocationContent, {
-  properties: { ip: { default: undefined, attribute: false } },
-  connected: (host) => {
-    host.style.display = "contents";
-  },
-});
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-ip-location": SolidBridgeElement<IpLocationProps>;
-  }
 }

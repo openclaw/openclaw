@@ -21,8 +21,5 @@ export function worktreeOwnerMatches(
   record: ManagedWorktreeRecord,
   params: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
 ): boolean {
-  return (
-    record.ownerKind === (params.ownerKind ?? "manual") &&
-    (record.ownerId ?? undefined) === (params.ownerId ?? undefined)
-  );
+  return record.ownerKind === (params.ownerKind ?? "manual") && record.ownerId === params.ownerId;
 }

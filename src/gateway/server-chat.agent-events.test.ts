@@ -1,4 +1,4 @@
-// Server chat agent-event tests protect event fanout, heartbeat visibility,
+// Server chat agent-event tests protect event fanout, visibility,
 // session lifecycle persistence, and subscriber registry behavior.
 
 import { expectDefined } from "@openclaw/normalization-core";
@@ -64,14 +64,6 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../infra/heartbeat-visibility.js", () => ({
-  resolveHeartbeatVisibility: vi.fn(() => ({
-    showOk: false,
-    showAlerts: true,
-    useIndicator: true,
-  })),
-}));
-
 // mock-isolation: Session projection fixtures own their entries without native database admission.
 const loadSessionEntryAsync = vi.hoisted(() =>
   vi.fn<typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync>(),
@@ -82,8 +74,8 @@ vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async () => await loadSessionEntryAsync("session-1"),
 }));
 
+import { waitForFast } from "../../test/helpers/vitest-wait.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -105,24 +97,12 @@ import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.j
 import * as sessionEventRows from "./session-event-prepared-row.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 describe("agent event handler", () => {
   let lineageProjection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
   beforeEach(() => {
     lineageProjection = undefined;
     resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
-    vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
-      showOk: false,
-      showAlerts: true,
-      useIndicator: true,
-    });
     vi.mocked(loadSessionEntryAsync).mockReset().mockResolvedValue(emptySessionLookup());
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     loadGatewaySessionLifecycleSnapshotMock
@@ -242,19 +222,6 @@ describe("agent event handler", () => {
   });
 
   registerBoundedWidgetSnapshotsTest({ createHarness, widgetResult, logWarnMock });
-
-  it("does not revive widgets from a hidden heartbeat turn", async () => {
-    const h = createHarness();
-    h.registerNamed("widgets");
-    registerAgentRunContext("run-widgets", { sessionKey: "session-widgets", isHeartbeat: true });
-    await h.emitMany("run-widgets", [
-      ["tool", { phase: "result", name: "show_widget", result: widgetResult("hidden") }],
-      ["assistant", { text: "" }],
-      ["lifecycle", { phase: "end", terminalReply: { disposition: "empty" } }],
-    ]);
-    expect(h.chat().at(-1)?.[1].message).toBeUndefined();
-    await h.handler.dispose();
-  });
 
   it("drops failed-attempt widgets before a runtime retry succeeds", async () => {
     vi.useFakeTimers();
@@ -1262,7 +1229,6 @@ describe("agent event handler", () => {
     registerAgentRunContext(runId, {
       sessionKey,
       isControlUiVisible: true,
-      isHeartbeat: false,
       verboseLevel: "full",
     });
     h.toolEventRecipients.add(runId, "conn-selected");
@@ -1457,36 +1423,6 @@ describe("agent event handler", () => {
       expect(result.details.tool.id).toBe("mcp_report");
     },
   );
-
-  it("suppresses heartbeat tool events for Control UI and verbose node subscribers", async () => {
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-heartbeat",
-    });
-
-    registerAgentRunContext("run-heartbeat-tool", {
-      sessionKey: "session-heartbeat",
-      isHeartbeat: true,
-      verboseLevel: "on",
-    });
-    h.toolEventRecipients.add("run-heartbeat-tool", "conn-run");
-    h.sessionEventSubscribers.subscribe("conn-session");
-
-    await h.emit(
-      "run-heartbeat-tool",
-      "tool",
-      {
-        phase: "start",
-        name: "read",
-        toolCallId: "tool-heartbeat-1",
-        args: { path: "HEARTBEAT.md" },
-      },
-      { ts: 1_234 },
-    );
-
-    expect(h.broadcastToConnIds).not.toHaveBeenCalled();
-    const nodeToolCalls = h.nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
-    expect(nodeToolCalls).toHaveLength(0);
-  });
 
   it("broadcasts terminal session status to session subscribers on lifecycle end", async () => {
     const runId = "provider-run";
@@ -2133,7 +2069,6 @@ describe("agent event handler", () => {
         h.chat().filter(([, event]) => ["final", "error", "aborted"].includes(event.state));
       h.register(runId, "session-provider-detail", runId);
       const state: AgentAttemptLifecycleState = {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       };

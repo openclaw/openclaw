@@ -178,10 +178,12 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       );
       usePlugins([record]);
       const { getSecretTargetRegistry } = await import("./target-registry-data.js");
+      const { buildSecretRefCredentialMatrix } =
+        await import("./credential-matrix.test-support.js");
       expect(
         getSecretTargetRegistry({ config: {}, env: {} }).map((entry) => entry.id),
       ).not.toContain("channels.blocked.token");
-      expect(() => getSecretTargetRegistry({ sourceTree: true })).toThrow(
+      expect(() => buildSecretRefCredentialMatrix()).toThrow(
         "Unable to open channel secret contract for blocked",
       );
     },

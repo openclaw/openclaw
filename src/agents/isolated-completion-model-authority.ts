@@ -1,8 +1,69 @@
+import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
+import type { Model } from "../llm/types.js";
 import {
   bindOperatorModelExecution,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
+import type { AgentHarness, AgentHarnessIsolatedCompletionParamsV2 } from "./harness/types.js";
 import type { ModelRef } from "./model-ref-shared.js";
+import {
+  unwrapModelHeaderSentinelsForProviderEgress,
+  unwrapSecretSentinelsForProviderEgress,
+} from "./provider-secret-egress.js";
+
+export type AgentHarnessIsolatedCompletionParams = Parameters<
+  NonNullable<AgentHarness["runIsolatedCompletion"]>
+>[0];
+
+export function resolveIsolatedStreamParams(
+  {
+    answerTokenBudget,
+    streamParams,
+    thinkLevel,
+  }: {
+    answerTokenBudget?: number;
+    streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
+    thinkLevel?: ThinkLevel;
+  },
+  model?: Model,
+): AgentHarnessIsolatedCompletionParamsV2["streamParams"] {
+  let maxTokens = answerTokenBudget ?? streamParams?.maxTokens;
+  if (maxTokens === undefined) {
+    return streamParams;
+  }
+  const modelMaxTokens = model?.maxTokens ?? Number.POSITIVE_INFINITY;
+  if (answerTokenBudget !== undefined && model?.reasoning && thinkLevel !== "off") {
+    maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "medium").maxTokens;
+  }
+  return {
+    ...streamParams,
+    maxTokens: Math.min(maxTokens, modelMaxTokens, streamParams?.maxTokens ?? maxTokens),
+  };
+}
+
+export function prepareIsolatedHostAuthorization<
+  T extends Pick<AgentHarnessIsolatedCompletionParams, "model" | "auth">,
+>(harness: AgentHarness, authorization: T): T {
+  if (harness.id === "openclaw") {
+    return authorization;
+  }
+  // External harnesses are the provider egress boundary. Keep credentials
+  // sentinelized until this owner is selected, then hand it usable values.
+  const boundary = "plugin harness isolated completion handoff";
+  const apiKey = authorization.auth.apiKey
+    ? unwrapSecretSentinelsForProviderEgress(authorization.auth.apiKey, boundary)
+    : authorization.auth.apiKey;
+  const model = unwrapModelHeaderSentinelsForProviderEgress(authorization.model, boundary);
+  if (apiKey === authorization.auth.apiKey && model === authorization.model) {
+    return authorization;
+  }
+  return {
+    ...authorization,
+    model,
+    auth: { ...authorization.auth, apiKey },
+  };
+}
 
 /** A completion keeps its selected-model fence through the runtime's physical cleanup. */
 export function createIsolatedCompletionModelAuthority(params: {

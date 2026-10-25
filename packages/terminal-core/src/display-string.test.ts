@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDisplayStringFormatter } from "./display-string.js";
+import { renderTable } from "./table.js";
 
 function stubHome(home: string, openclawHome = ""): void {
   vi.stubEnv("HOME", home);
@@ -10,7 +10,17 @@ function stubHome(home: string, openclawHome = ""): void {
   vi.stubEnv("OPENCLAW_HOME", openclawHome);
 }
 
-describe("createDisplayStringFormatter", () => {
+function displayString(input: string): string | undefined {
+  return renderTable({
+    columns: [{ key: "value", header: "Path" }],
+    rows: [{ value: input }],
+  })
+    .split("\n")[3]
+    ?.slice(2, -2)
+    .trimEnd();
+}
+
+describe("renderTable home display", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -18,7 +28,6 @@ describe("createDisplayStringFormatter", () => {
   it("shortens whole-value homes and child paths without clipping sibling prefixes", () => {
     const home = path.resolve("test-home", "alice");
     stubHome(home);
-    const displayString = createDisplayStringFormatter();
 
     expect(displayString(home)).toBe("~");
     expect(displayString(`${home}/project`)).toBe("~/project");
@@ -41,7 +50,6 @@ describe("createDisplayStringFormatter", () => {
     const home = path.resolve("test-home", "alice");
     const openclawHome = path.resolve("test-openclaw-home");
     stubHome(home, openclawHome);
-    const displayString = createDisplayStringFormatter();
 
     expect(displayString(openclawHome)).toBe("$OPENCLAW_HOME");
     expect(displayString(`${openclawHome}/state`)).toBe("$OPENCLAW_HOME/state");
@@ -51,7 +59,6 @@ describe("createDisplayStringFormatter", () => {
   it("keeps replacement syntax literal when expanding OPENCLAW_HOME", () => {
     const home = path.resolve("test-home", "$&user");
     stubHome(home, "~/state");
-    const displayString = createDisplayStringFormatter();
 
     expect(displayString(path.join(home, "state", "project"))).toBe(
       `$OPENCLAW_HOME${path.sep}project`,
@@ -66,7 +73,6 @@ describe("createDisplayStringFormatter", () => {
         const homeAlias = home.toUpperCase();
         expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
         stubHome(home);
-        const displayString = createDisplayStringFormatter();
 
         expect(displayString(`Workspace: ${homeAlias}\\project`)).toBe("Workspace: ~\\project");
         expect(displayString(`İ Workspace: ${homeAlias}\\project`)).toBe("İ Workspace: ~\\project");

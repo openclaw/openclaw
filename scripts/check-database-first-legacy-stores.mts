@@ -3,7 +3,7 @@
 // Guards database-first state ownership by blocking legacy store writes in runtime code.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import {
   explicitUndefinedLegacyObjectPropertyValue,
   mergeConditionalLegacyObjectPropertyValue,
@@ -321,7 +321,6 @@ function isGeneratedAssetSourceFile(filePath: string) {
   const normalized = filePath.replaceAll(path.sep, "/");
   return (
     /(?:^|\/)extensions\/[^/]+\/(?:assets|dist)\/.+\.[cm]?js$/u.test(normalized) ||
-    /(?:^|\/)extensions\/canvas\/src\/host\/a2ui\/[^/]+\.bundle\.js$/u.test(normalized) ||
     /(?:^|\/)packages\/[^/]+\/dist\/.+\.[cm]?js$/u.test(normalized)
   );
 }

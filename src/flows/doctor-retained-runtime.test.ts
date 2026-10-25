@@ -5,14 +5,20 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import * as containerEnvironment from "../infra/container-environment.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import * as processArgv from "../infra/gateway-process-argv.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
 import {
   resolvePackageActivationAnchor,
   resolvePackageActivationJournalPath,
 } from "../infra/package-update-activation-paths.js";
+import * as processGroups from "../process/supervisor/service-child-group-ownership.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
+  createDoctorRuntimeProjection,
   createDoctorHealthFlowContext,
+  doctorRuntimeProjectedPath as projectedPath,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
@@ -58,22 +64,8 @@ afterEach(() => {
   mocks.serviceCommand.mockReset();
 });
 
-function projectedPath(directory: string, source: string): string {
-  const base = path.parse(source).root;
-  return path.join(
-    directory,
-    "tree",
-    Buffer.from(base).toString("hex"),
-    path.relative(base, source),
-  );
-}
-
 function projection(suffix: string, root = parent): string {
-  const directory = path.join(root, `openclaw-update-runtime-${suffix}`);
-  const projectedRoot = projectedPath(directory, packageRoot);
-  fs.mkdirSync(projectedRoot, { recursive: true });
-  fs.copyFileSync(path.join(packageRoot, "package.json"), path.join(projectedRoot, "package.json"));
-  return directory;
+  return createDoctorRuntimeProjection(root, packageRoot, suffix);
 }
 
 async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
@@ -175,6 +167,56 @@ it("Doctor does not search unrelated checkout ancestors", async () => {
   expect(output).not.toContain(directory);
 });
 
+it("Doctor scopes holders to each runtime and reports unknown custody once", async () => {
+  const held = projection("Held01");
+  const free = projection("Free01");
+  const warning = "Could not verify runtime custody for PID 4242: working directory is unavailable";
+  mocks.census.mockReturnValue({ pids: [4242], warnings: [warning] });
+  expect((await runDoctor(true)).split(warning)).toHaveLength(2);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(fs.existsSync(free)).toBe(true);
+  mocks.note.mockClear();
+  mocks.census.mockImplementation((directory) => ({ pids: directory === held ? [4243] : [] }));
+  const output = await runDoctor(true);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(fs.existsSync(free)).toBe(false);
+  expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
+});
+
+it("Doctor reclaims an abandoned runtime despite unrelated helpers with unreadable cwd", async () => {
+  const held = projection("Held01");
+  const free = projection("Free01");
+  const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
+    "../infra/openclaw-process-census.js",
+  );
+  mocks.census.mockImplementation(actual.inspectOtherOpenClawProcesses);
+  mockProcessPlatform("linux");
+  vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
+  vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
+    for (const [pid, argv] of [
+      [process.pid, ["openclaw-doctor"]],
+      [4242, ["/usr/bin/gpg-agent", "--supervised"]],
+      [4243, ["/usr/bin/fusermount3", "-o", "subtype=portal"]],
+      [4244, ["/bin/sleep", "600"]],
+    ] as const) {
+      yield { pid, pgid: process.pid, state: "S", command: { ppid: 0, argv: [...argv] } };
+    }
+  });
+  vi.spyOn(processArgv, "readProcessWorkingDirectories").mockReturnValue(
+    new Map([
+      [process.pid, parent],
+      [4244, held],
+    ]),
+  );
+  const output = await runDoctor(true);
+  expect(fs.existsSync(free)).toBe(false);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
+  expect(output).toContain("PIDs: 4244");
+  expect(output).not.toContain("4242");
+  expect(output).not.toContain("4243");
+});
+
 it("Doctor reclaims an npm-prefix runtime and releases its activation journal hardlink", async () => {
   const installed = path.join(parent, "prefix/lib/node_modules/openclaw");
   fs.mkdirSync(path.dirname(installed), { recursive: true });
@@ -198,24 +240,15 @@ it("Doctor reclaims an npm-prefix runtime and releases its activation journal ha
 });
 
 it.each([
-  { reason: "Doctor does not hold Gateway maintenance", maintenance: false, census: { pids: [] } },
-  { reason: "PIDs: 4242", maintenance: true, census: { pids: [4242] } },
-  {
-    reason: "fixture census unavailable",
-    maintenance: true,
-    census: { error: "fixture census unavailable" },
-  },
-  {
-    reason: "the creating update still owns this runtime",
-    maintenance: true,
-    census: { pids: [] },
-    creator: true,
-  },
-])(
-  "Doctor preserves a projection when $reason",
-  async ({ reason, maintenance, census, creator }) => {
+  ["Doctor does not hold Gateway maintenance", false, { pids: [] }, false],
+  ["PIDs: 4242", true, { pids: [4242] }, false],
+  ["fixture census unavailable", true, { error: "fixture census unavailable" }, false],
+  ["the creating update still owns this runtime", true, { pids: [] }, true],
+] as const)(
+  "Doctor preserves a projection when %s",
+  async (reason, maintenance, census, creator) => {
     const directory = projection("Old002");
-    mocks.census.mockReturnValue(census);
+    mocks.census.mockReturnValue("error" in census ? census : { pids: [...census.pids] });
     const { registerRetainedUpdateRuntime } = await import("../infra/temp-artifact-cleanup.js");
     const release = creator ? registerRetainedUpdateRuntime(directory) : undefined;
     try {

@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import * as terminalNote from "../../../packages/terminal-core/src/note.js";
+import * as doctorUi from "../../commands/doctor-ui.js";
 import * as doctor from "../../flows/doctor-health.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -18,6 +21,110 @@ import {
 } from "./update-command-migrate.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const readText = (file: string) => fs.readFile(file, "utf8");
+
+it("migrates retired heartbeat config with its backed-up state only once", async () => {
+  await withOpenClawTestState(
+    {
+      scenario: "minimal",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
+    },
+    async (state) => {
+      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+      await state.writeConfig({
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "17m",
+              target: "none",
+              prompt: "Check the synthetic checklist.",
+              activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+            },
+          },
+          entries: { main: { workspace: state.workspaceDir } },
+        },
+        plugins: { enabled: false },
+        gateway: { mode: "local", controlUi: { enabled: false }, auth: { mode: "none" } },
+      });
+      const original = await readText(state.configPath);
+      const databasePath = openOpenClawStateDatabase().path;
+      await closeOpenClawStateDatabaseAsync();
+      {
+        using db = new DatabaseSync(databasePath);
+        // Schema 30 changed the scheduler contract, not the schema 29 table layout.
+        db.exec(`
+          PRAGMA user_version=29;
+          UPDATE schema_meta SET schema_version=29 WHERE meta_key='primary';
+          UPDATE config_machine_state SET value_json='29'
+            WHERE state_key='state.schema.contentVersion';
+        `);
+      }
+      const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+      const backupRoot = state.path("heartbeat-recovery", "native");
+      await updateMigrateCommand(backupRoot);
+      const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
+      expect(receipt.status).toBe("migrated");
+      expect(receipt.configFiles).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: state.configPath, raw: original }),
+        ]),
+      );
+      const saved = JSON.parse(await readText(state.configPath));
+      expect(saved.agents.defaults).not.toHaveProperty("heartbeat");
+      const readJobs = () => {
+        using db = new DatabaseSync(databasePath, { readOnly: true });
+        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_STATE_SCHEMA_VERSION,
+        );
+        return db
+          .prepare("SELECT job_json FROM cron_jobs ORDER BY job_id")
+          .all()
+          .map((row) => JSON.parse(String(row.job_json)));
+      };
+      const jobs = readJobs();
+      expect(jobs).toEqual([
+        expect.objectContaining({
+          agentId: "main",
+          enabled: true,
+          schedule: expect.objectContaining({ kind: "every", everyMs: 1_020_000 }),
+          activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+          payload: expect.objectContaining({
+            kind: "agentTurn",
+            message: "Check the synthetic checklist.",
+          }),
+          delivery: { mode: "none" },
+        }),
+      ]);
+      await updateMigrateCommand(state.path("second-recovery", "native"));
+      expect(readJobs()).toEqual(jobs);
+      expect(
+        note.mock.calls.filter(([, title]) => title === "Heartbeat delivery changed"),
+      ).toHaveLength(1);
+      await updateRestoreCommand(backupRoot);
+      expect(await readText(state.configPath)).toBe(original);
+      using restored = new DatabaseSync(databasePath, { readOnly: true });
+      expect(restored.prepare("PRAGMA user_version").get()?.user_version).toBe(29);
+      expect(restored.prepare("SELECT count(*) AS count FROM cron_jobs").get()?.count).toBe(0);
+    },
+  );
+});
+
+it.each([
+  { heartbeat: { every: "not-an-interval" } },
+  { heartbeat: { every: "30m" }, unknownSetting: true },
+])("refuses invalid heartbeat migration input before backup: %j", async (defaults) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await state.writeConfig({ agents: { defaults } });
+    const original = await readText(state.configPath);
+    const backupRoot = state.path("invalid-recovery", "native");
+    await expect(updateMigrateCommand(backupRoot)).rejects.toMatchObject({
+      reason: "invalid-config",
+    });
+    expect(await readText(state.configPath)).toBe(original);
+    await expect(fs.stat(`${backupRoot}.receipt.json`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
 
 it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unchanged"] as const)(
   "settles native migration recovery as %s",
@@ -54,40 +161,36 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
         backupRoot = path.join(alias, "native");
       }
       const receiptPath = `${backupRoot}.receipt.json`;
+      const readReceipt = async () => JSON.parse(await readText(receiptPath));
+      const restore = () => updateRestoreCommand(backupRoot);
       const runDoctor = vi
         .spyOn(doctor, "runDoctorHealthFlow")
         .mockImplementation(async (_runtime, _options, _authority, preflight) => {
-          const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
+          const receipt = await readReceipt();
           expect(receipt.status).toBe("backed-up");
           const [agentIdentity, sharedIdentity] = await Promise.all([
             fs.stat(agentPath, { bigint: true }),
             fs.stat(shared.path, { bigint: true }),
           ]);
-          expect(preflight?.verifiedSnapshots).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                sourcePath: agentPath,
-                role: "agent",
-                agentId: "main",
-                dev: agentIdentity.dev,
-                ino: agentIdentity.ino,
-              }),
-              expect.objectContaining({
-                sourcePath: shared.path,
-                role: "global",
-                dev: sharedIdentity.dev,
-                ino: sharedIdentity.ino,
-              }),
-            ]),
-          );
-          expect(receipt.databaseIdentities[agentPath]).toEqual({
-            dev: Number(agentIdentity.dev),
-            ino: Number(agentIdentity.ino),
-          });
-          expect(receipt.databaseIdentities[shared.path]).toEqual({
-            dev: Number(sharedIdentity.dev),
-            ino: Number(sharedIdentity.ino),
-          });
+          for (const [file, identity, owner] of [
+            [agentPath, agentIdentity, { role: "agent", agentId: "main" }],
+            [shared.path, sharedIdentity, { role: "global" }],
+          ] as const) {
+            expect(preflight?.verifiedSnapshots).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  sourcePath: file,
+                  ...owner,
+                  dev: identity.dev,
+                  ino: identity.ino,
+                }),
+              ]),
+            );
+            expect(receipt.databaseIdentities[file]).toEqual({
+              dev: Number(identity.dev),
+              ino: Number(identity.ino),
+            });
+          }
           using database = new DatabaseSync(agentPath);
           database.exec("UPDATE update_witness SET value='candidate';");
           await fs.writeFile(state.configPath, '{"gateway":{"mode":"local"}}\n');
@@ -104,18 +207,13 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
         await updateMigrateCommand(backupRoot);
       }
       expect(runDoctor).toHaveBeenCalledOnce();
-      expect(JSON.parse(await fs.readFile(receiptPath, "utf8")).status).toBe(
-        fail ? "failed" : "migrated",
-      );
+      expect((await readReceipt()).status).toBe(fail ? "failed" : "migrated");
       if (outcome === "finished") {
         await updateFinishCommand(backupRoot);
-        const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
-        expect(receipt.status).toBe("finished");
-        expect(receipt.configFiles).toEqual([]);
+        const receipt = await readReceipt();
+        expect(receipt).toMatchObject({ status: "finished", configFiles: [] });
         await expect(fs.stat(receipt.backup.directory)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(updateRestoreCommand(backupRoot)).rejects.toThrow(
-          "rollback backup has been retired",
-        );
+        await expect(restore()).rejects.toThrow("rollback backup has been retired");
         return;
       }
       if (outcome === "retried") {
@@ -128,32 +226,28 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
           }
           return write(...args);
         });
-        await expect(updateRestoreCommand(backupRoot)).rejects.toThrow(
-          "synthetic include restoration failure",
-        );
-        expect(JSON.parse(await fs.readFile(receiptPath, "utf8")).status).toBe("restoring-config");
+        await expect(restore()).rejects.toThrow("synthetic include restoration failure");
+        expect((await readReceipt()).status).toBe("restoring-config");
         const later = '{"gateway":{"mode":"local","port":19999}}\n';
         await fs.writeFile(state.configPath, later);
-        await expect(updateRestoreCommand(backupRoot)).rejects.toThrow(
-          "newer bytes were preserved",
-        );
-        expect(await fs.readFile(state.configPath, "utf8")).toBe(later);
+        await expect(restore()).rejects.toThrow("newer bytes were preserved");
+        expect(await readText(state.configPath)).toBe(later);
         await fs.writeFile(state.configPath, original);
       }
-      await updateRestoreCommand(backupRoot);
-      const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
+      await restore();
+      const receipt = await readReceipt();
       expect(receipt.status).toBe("restored");
       if (outcome === "absent") {
         await expect(fs.stat(state.configPath)).rejects.toMatchObject({ code: "ENOENT" });
         expect(receipt.configIdentity).toBeNull();
       } else {
-        expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
+        expect(await readText(state.configPath)).toBe(original);
         expect(receipt.configIdentity.ino).toBe((await fs.stat(state.configPath)).ino);
       }
-      expect(await fs.readFile(included, "utf8")).toBe(originalIncluded);
+      expect(await readText(included)).toBe(originalIncluded);
       if (outcome === "symlink") {
         expect((await fs.lstat(included)).isSymbolicLink()).toBe(true);
-        expect(await fs.readFile(includeTarget, "utf8")).toBe(originalIncluded);
+        expect(await readText(includeTarget)).toBe(originalIncluded);
       }
       if (outcome === "unchanged") {
         expect((await fs.stat(included)).ino).toBe(originalIncludeIdentity.ino);
@@ -164,9 +258,9 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
           : [state.configPath, outcome === "symlink" ? includeTarget : included]
       ).map((file) => `${file}.migrated-${receipt.runId}`);
       expect(receipt.displacedConfigFiles).toEqual(displaced);
-      expect(await fs.readFile(displaced[0]!, "utf8")).toBe('{"gateway":{"mode":"local"}}\n');
+      expect(await readText(displaced[0]!)).toBe('{"gateway":{"mode":"local"}}\n');
       if (outcome !== "absent" && outcome !== "unchanged") {
-        expect(await fs.readFile(displaced[1]!, "utf8")).toBe("{}\n");
+        expect(await readText(displaced[1]!)).toBe("{}\n");
       }
       using restored = new DatabaseSync(agentPath, { readOnly: true });
       expect(restored.prepare("SELECT value FROM update_witness").get()?.value).toBe("before");

@@ -394,6 +394,8 @@ describe("config form and navigation", () => {
       formValue: {},
       webPush: {
         supported: true,
+        canManage: true,
+        canReadPreferences: true,
         permission: "default",
         subscription: "missing",
         loading: false,

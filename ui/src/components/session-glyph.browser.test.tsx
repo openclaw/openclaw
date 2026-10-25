@@ -1,4 +1,4 @@
-import { createComponent } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../test-helpers/load-styles.ts";
@@ -61,9 +61,9 @@ describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
           ),
           { container: host },
         );
+        flush();
         const chip = host.querySelector("openclaw-session-owner-chip");
         if (chip) {
-          await chip.updateComplete;
           await Promise.all(
             [...chip.querySelectorAll("openclaw-viewer-avatar")].map(
               (avatar) => avatar.updateComplete,

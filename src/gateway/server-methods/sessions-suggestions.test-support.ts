@@ -12,20 +12,19 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 export const sessionKey = "agent:main:main";
 
-const defaultSuggestionSession = {
-  sessionId: "session-main",
-  updatedAt: 1,
-  createdActor: { type: "human", source: "profile", id: "owner" },
-  visibility: "suggest",
-} as const;
-
 export function upsertDefaultSuggestionSession(
   patch: Parameters<typeof upsertSessionEntryCore>[1] = {},
   key = sessionKey,
 ) {
   return upsertSessionEntryCore(
     { agentId: "main", sessionKey: key },
-    { ...defaultSuggestionSession, ...patch },
+    {
+      sessionId: "session-main",
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: "owner" },
+      visibility: "suggest",
+      ...patch,
+    },
   );
 }
 
@@ -62,11 +61,7 @@ export function context(
 }
 
 export async function call(
-  method:
-    | "session.suggestions.add"
-    | "session.suggestions.list"
-    | "session.suggestions.resolve"
-    | "session.typing",
+  method: `session.suggestions.${"add" | "list" | "resolve"}` | "session.typing",
   params: Record<string, unknown>,
   requestClient: GatewayClient | null,
   requestContext = context(),
@@ -108,8 +103,7 @@ export function registerSessionSuggestionTestLifecycle(mocks: {
   presence: unknown[];
 }): void {
   beforeEach(() => {
-    mocks.handleChatSend.mockReset();
-    mocks.handleChatSend.mockImplementation(({ respond }: { respond: RespondFn }) => {
+    mocks.handleChatSend.mockReset().mockImplementation(({ respond }: { respond: RespondFn }) => {
       respond(true, { runId: "suggestion-run", status: "started" });
     });
     mocks.suggestionMutationFailure = undefined;

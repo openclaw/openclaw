@@ -1,5 +1,4 @@
 import { isMainThread } from "node:worker_threads";
-import { expressionBuilder } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import {
@@ -7,6 +6,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
+import { boundedUsageCacheColumn, usageCacheJsonText } from "./session-cost-usage-expressions.js";
 import {
   USAGE_COST_PARTITION_SCOPE,
   readUsageCostPartitionKey,
@@ -26,35 +26,46 @@ function assertUsagePartitionWorker(): void {
 
 export function deleteSessionCostUsagePartitionsInDatabase(
   db: EngineConnection,
-  params: {
+  params: readonly {
     rollupId: string;
     removedDates?: string[];
     replacePartitions?: boolean;
-  },
+  }[],
 ): void {
   assertUsagePartitionWorker();
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
-  if (params.replacePartitions) {
+  for (const replacements of chunkItems(
+    params.filter((row) => row.replacePartitions),
+    100,
+  )) {
     executeSqliteQuerySync(
       db,
-      kysely
-        .deleteFrom("cache_entries")
-        .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
-        .where("key", ">=", usageCostPartitionKey(params.rollupId, ""))
-        .where("key", "<=", usageCostPartitionKey(params.rollupId, "\uffff")),
+      kysely.deleteFrom("cache_entries").where((eb) =>
+        eb.or(
+          replacements.map((row) =>
+            // Keep scope in each arm so SQLite seeks each composite-key range.
+            eb.and([
+              eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
+              eb("key", ">=", usageCostPartitionKey(row.rollupId, "")),
+              eb("key", "<=", usageCostPartitionKey(row.rollupId, "\uffff")),
+            ]),
+          ),
+        ),
+      ),
     );
   }
-  for (const dates of chunkItems(params.removedDates ?? [], 100)) {
+  const removedKeys = params.flatMap((row) =>
+    row.replacePartitions
+      ? []
+      : (row.removedDates ?? []).map((date) => usageCostPartitionKey(row.rollupId, date)),
+  );
+  for (const keys of chunkItems(removedKeys, 100)) {
     executeSqliteQuerySync(
       db,
       kysely
         .deleteFrom("cache_entries")
         .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
-        .where(
-          "key",
-          "in",
-          dates.map((date) => usageCostPartitionKey(params.rollupId, date)),
-        ),
+        .where("key", "in", keys),
     );
   }
 }
@@ -79,28 +90,8 @@ export function readSessionCostUsagePartitionsInDatabase(
       .selectFrom("cache_entries")
       .select("key")
       .select((eb) => [
-        (budget
-          ? eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["value_json"]), "<=", 64 * 1024)
-              .then(eb.ref("value_json"))
-              .else(null)
-              .end()
-          : eb.ref("value_json")
-        ).as("value_json"),
-        (budget
-          ? eb
-              .case()
-              .when(
-                eb.fn<number>("length", ["blob"]),
-                "<=",
-                Math.min(1024 * 1024, budget.remainingBytes),
-              )
-              .then(eb.ref("blob"))
-              .else(null)
-              .end()
-          : eb.ref("blob")
-        ).as("blob"),
+        boundedUsageCacheColumn("value_json", budget).as("value_json"),
+        boundedUsageCacheColumn("blob", budget).as("blob"),
         eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
         eb.fn<number>("length", ["blob"]).as("body_bytes"),
       ])
@@ -200,12 +191,7 @@ export function pruneSessionCostUsagePartitionsInDatabase(
 ): void {
   assertUsagePartitionWorker();
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
-  const expression = expressionBuilder<CacheDatabase, "cache_entries">();
   for (const row of existing) {
-    const value =
-      typeof row.valueJson === "string"
-        ? row.valueJson
-        : expression.cast<string>(expression.val(row.valueJson), "text");
     const current = executeSqliteQuerySync(
       db,
       kysely
@@ -213,7 +199,7 @@ export function pruneSessionCostUsagePartitionsInDatabase(
         .select("key")
         .where("scope", "=", USAGE_COST_ROLLUP_SCOPE)
         .where("key", "=", row.key)
-        .where("value_json", "=", value)
+        .where("value_json", "=", usageCacheJsonText(row.valueJson))
         .where("updated_at", "=", row.updatedAt),
     ).rows[0];
     if (current) {

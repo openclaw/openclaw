@@ -1,11 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
+import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { liveValue as createLiveValue } from "../lib/reactive/live-value.ts";
-import { createResizeObserver } from "../lib/reactive/observers.ts";
 
 export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
 
-type CommandPaletteInputProps = {
+export function CommandPaletteInput(props: {
   value: string;
   placeholder: string;
   onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
@@ -17,18 +17,16 @@ type CommandPaletteInputProps = {
   onCompositionEnd?: () => void;
   actions?: JSX.Element;
   onPaste?: (event: ClipboardEvent) => void;
-  disabled?: boolean;
+  busy?: boolean;
   readOnly?: boolean;
   controls?: string;
   activeDescendant?: string;
   describedBy?: string;
-};
-
-export function CommandPaletteInput(props: CommandPaletteInputProps) {
+}) {
   let textarea!: HTMLTextAreaElement;
   let entry!: HTMLDivElement;
+  let widthReference!: HTMLDivElement;
   let actions!: HTMLDivElement;
-  let frame: number | undefined;
   let measuredValue: string | undefined;
   let measuredPlaceholder: string | undefined;
   // Browser composition and selection belong to the live field until its value changes.
@@ -72,44 +70,34 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
     updateOverflow();
   }
 
-  const scheduleLayout = () => {
-    if (frame !== undefined) {
-      return;
-    }
-    frame = requestAnimationFrame(() => {
-      frame = undefined;
-      if (!textarea.isConnected) {
-        return;
-      }
+  createLayoutMeasurement(
+    () => {
+      const value = committedValue();
+      const placeholder = committedPlaceholder();
+      // Input events already measured the edit; result navigation needs no layout.
+      return value !== measuredValue || placeholder !== measuredPlaceholder
+        ? [value, placeholder]
+        : undefined;
+    },
+    () => {
+      // Intrinsic sizing writes before reading scrollHeight and must stay atomic.
       updateLayout();
       measuredValue = textarea.value;
       measuredPlaceholder = textarea.placeholder;
-    });
-  };
-  createEffect(
-    () => ({ value: committedValue(), placeholder: committedPlaceholder() }),
-    ({ value, placeholder }) => {
-      // Input events already measured the edit. Selection and search updates
-      // leave the caret, scroll position, and existing geometry untouched.
-      if (value !== measuredValue || placeholder !== measuredPlaceholder) {
-        scheduleLayout();
-      }
     },
+    // The entry height follows the textarea; observe only its available width.
+    { targets: () => [widthReference, actions], fonts: true },
   );
-  createResizeObserver(() => [entry, actions], scheduleLayout);
   onSettled(() => {
     props.onInputRef(textarea);
-    scheduleLayout();
-  });
-  onCleanup(() => {
-    // A replacement field can mount before the old interop root is disposed.
-    props.onInputRef(undefined, textarea);
-    if (frame !== undefined) {
-      cancelAnimationFrame(frame);
-    }
+    return () => {
+      // A replacement field can mount before the old interop root is disposed.
+      props.onInputRef(undefined, textarea);
+    };
   });
   return (
     <div ref={(element) => (entry = element)} class="cmd-palette__entry">
+      <div ref={(element) => (widthReference = element)} aria-hidden="true" />
       <div class="cmd-palette__input-scroll">
         <textarea
           ref={[
@@ -121,6 +109,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
           ]}
           autofocus
           rows={1}
+          enterkeyhint="enter"
           id={COMMAND_PALETTE_INPUT_ID}
           class="cmd-palette__input"
           aria-label={props.placeholder}
@@ -130,7 +119,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
           aria-activedescendant={props.activeDescendant}
           aria-describedby={props.describedBy}
           placeholder={committedPlaceholder()}
-          disabled={props.disabled}
+          aria-busy={props.busy ? "true" : undefined}
           readonly={props.readOnly}
           onScroll={() => textarea.isConnected && updateOverflow()}
           onPaste={(event) => props.onPaste?.(event)}

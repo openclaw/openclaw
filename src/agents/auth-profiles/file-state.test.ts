@@ -16,20 +16,20 @@ import {
   readAuthProfileDatabaseIdentity,
   noteAuthProfileFileWrite,
   refreshAuthProfileFileState,
-  registerAuthProfileFileChangeListener,
+  authProfileFileChanges,
 } from "./file-state.js";
 import { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
-const subscriptions: Array<() => void> = [];
+const publishFileChange = authProfileFileChanges.onChange;
 vi.mock("node:worker_threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:worker_threads")>()),
   isMainThread: true,
 }));
 
 afterEach(async () => {
-  subscriptions.splice(0).forEach((unsubscribe) => unsubscribe());
+  authProfileFileChanges.onChange = publishFileChange;
   runtimeAuthProfileRowsCache.clear();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
@@ -54,6 +54,19 @@ it.skipIf(process.platform === "win32")(
         throw new Error("Worker auth observation requested a row child");
       };
       fs.watch = () => { throw new Error("synthetic unavailable watcher"); };
+      // macOS admits hosted watchers by opening their directory before spawning.
+      const watchDirectories = new Set();
+      for (let current = workerData.directory; ; current = path.dirname(current)) {
+        watchDirectories.add(current);
+        if (path.dirname(current) === current) break;
+      }
+      const openSync = fs.openSync;
+      fs.openSync = (file, ...args) => {
+        if (process.platform === "darwin" && watchDirectories.has(file)) {
+          throw new Error("synthetic unavailable watcher");
+        }
+        return openSync(file, ...args);
+      };
       syncBuiltinESMExports();
       (async () => {
         const { register } = await import(workerData.loader);
@@ -84,7 +97,7 @@ it.skipIf(process.platform === "win32")(
         };
         const writer = create(databasePath, "worker-original");
         const changes = [];
-        let unsubscribe = () => {};
+        const publishChange = files.authProfileFileChanges.onChange;
         try {
           writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)");
           const acquired = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
@@ -95,7 +108,10 @@ it.skipIf(process.platform === "win32")(
             store("worker-original"), databasePath, workerData.directory, owner
           );
           snapshots.recordRuntimeAuthProfilePersistedStore(databasePath, store("worker-original"));
-          unsubscribe = files.registerAuthProfileFileChangeListener((change) => changes.push(change));
+          files.authProfileFileChanges.onChange = async (change) => {
+            await publishChange?.(change);
+            changes.push(change);
+          };
           writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{"fixture":"fixture"}}');
           assert.ok(fs.statSync(databasePath + "-wal").size > 0);
           await runInDetachedAsyncContext(files.refreshAuthProfileFileState);
@@ -114,7 +130,7 @@ it.skipIf(process.platform === "win32")(
             status: "readable", raw: store("worker-replacement")
           });
         } finally {
-          unsubscribe();
+          files.authProfileFileChanges.onChange = publishChange;
           if (writer.isOpen) writer.close();
           snapshots.clearRuntimeAuthProfileStoreSnapshots();
           await closeOpenClawStateDatabaseAsync();
@@ -170,24 +186,20 @@ function disableWatcher() {
 }
 function nextChange(directory: string) {
   return new Promise<void>((resolve) => {
-    const unsubscribe = listen(directory, () => {
-      unsubscribe();
+    listen(directory, () => {
+      authProfileFileChanges.onChange = publishFileChange;
       resolve();
     });
   });
 }
 
-function listen(
-  directory: string,
-  listener: Parameters<typeof registerAuthProfileFileChangeListener>[0],
-) {
-  const unsubscribe = registerAuthProfileFileChangeListener((change) => {
+function listen(directory: string, listener: NonNullable<typeof authProfileFileChanges.onChange>) {
+  authProfileFileChanges.onChange = async (change) => {
+    await publishFileChange?.(change);
     if (change.directory === directory) {
       return listener(change);
     }
-  });
-  subscriptions.push(unsubscribe);
-  return unsubscribe;
+  };
 }
 
 function replaceFile(databasePath: string) {

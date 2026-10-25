@@ -4,7 +4,7 @@ import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-
 import {
   clearAllRuntimeAuthMaterializations,
   getPreparedRuntimeAuthMaterializations,
-  registerRuntimeAuthMaterializationMutationListener,
+  runtimeAuthMaterializationChanges,
 } from "../auth-profiles/runtime-materializations.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { copyAttemptDeliveryState } from "./run/attempt-delivery-state.js";
@@ -76,7 +76,11 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
 
   it("publishes an identical prepared API-key success only once", () => {
     const listener = vi.fn();
-    const unregister = registerRuntimeAuthMaterializationMutationListener(listener);
+    const publishMaterialization = runtimeAuthMaterializationChanges.onChange;
+    runtimeAuthMaterializationChanges.onChange = (event) => {
+      publishMaterialization?.(event);
+      listener(event);
+    };
     try {
       reportEmbeddedRunSuccessfulAuthBinding(preparedBinding);
       reportEmbeddedRunSuccessfulAuthBinding(preparedBinding);
@@ -90,7 +94,7 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
       ]);
       expect(listener).toHaveBeenCalledOnce();
     } finally {
-      unregister();
+      runtimeAuthMaterializationChanges.onChange = publishMaterialization;
     }
   });
 

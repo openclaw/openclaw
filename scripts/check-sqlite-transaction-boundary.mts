@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,

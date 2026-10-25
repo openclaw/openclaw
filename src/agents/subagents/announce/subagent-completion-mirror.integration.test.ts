@@ -15,6 +15,7 @@ import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { deliverCompletionDirect } from "./subagent-announce-completion-delivery.js";
 
@@ -23,10 +24,8 @@ vi.mock("../../../infra/outbound/message.js", async (importOriginal) => ({
   sendMessage: vi.fn(),
 }));
 
-it("settles a direct child result before its mirror waits behind the requester's controller turn", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ label: "direct-completion-mirror" }, async (state) => {
+it("settles child delivery before a blocked requester mirror", ({ signal }) =>
+  withOpenClawTestState({ label: "direct-completion-mirror" }, async (state) => {
     const target = {
       agentId: "main",
       sessionId: "requester",
@@ -94,36 +93,27 @@ it("settles a direct child result before its mirror waits behind the requester's
       await withinTest(entered.promise, signal);
       const onDeliveryResult = vi.fn();
       const deliveryWork = new AsyncWorkScope();
+      const deliver = () =>
+        deliverCompletionDirect({
+          cfg,
+          requesterSessionKey: target.sessionKey,
+          requesterSessionId: target.sessionId,
+          requesterAgentId: target.agentId,
+          directIdempotencyKey: "announce:v1:child:run",
+          deliveryTarget: { deliver: true, channel: "discord", to: "dm:mirror-fixture" },
+          contentKind: "completed_result",
+          agentResult: { payloads: [{ text: "Synthetic child result" }] },
+          internalEvents: taskCompletionEvents({
+            childSessionKey: "agent:main:subagent:child",
+            taskLabel: "synthetic child",
+            statusLabel: "completed",
+            result: "Synthetic child result",
+          }),
+          onDeliveryResult,
+        });
       const result = await withinTest(
         deliveryWork.track(() =>
-          runWithGatewayIndependentRootWorkAdmission(
-            () =>
-              deliverCompletionDirect({
-                cfg,
-                requesterSessionKey: target.sessionKey,
-                requesterSessionId: target.sessionId,
-                requesterAgentId: target.agentId,
-                directIdempotencyKey: "announce:v1:child:run",
-                deliveryTarget: { deliver: true, channel: "discord", to: "dm:mirror-fixture" },
-                contentKind: "completed_result",
-                agentResult: { payloads: [{ text: "Synthetic child result" }] },
-                internalEvents: [
-                  {
-                    type: "task_completion",
-                    source: "subagent",
-                    childSessionKey: "agent:main:subagent:child",
-                    announceType: "subagent task",
-                    taskLabel: "synthetic child",
-                    status: "ok",
-                    statusLabel: "completed",
-                    result: "Synthetic child result",
-                    replyInstruction: "Summarize the result.",
-                  },
-                ],
-                onDeliveryResult,
-              }),
-            "direct-child-result",
-          ),
+          runWithGatewayIndependentRootWorkAdmission(deliver, "direct-child-result"),
         ),
         signal,
       );
@@ -153,5 +143,4 @@ it("settles a direct child result before its mirror waits behind the requester's
       await Promise.allSettled([turn, settleMirrors()]);
       send.mockReset();
     }
-  });
-});
+  }));

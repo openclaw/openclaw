@@ -86,9 +86,7 @@ const roots = createSuiteTempRootTracker({ prefix: "openclaw-devices-cli-scopes-
 const targetDeviceId = "device-1";
 const warn = vi.fn();
 
-beforeAll(async () => {
-  await roots.setup();
-});
+beforeAll(() => roots.setup());
 beforeEach(async () => {
   vi.clearAllMocks();
   transport.activeOwner.mockResolvedValue(undefined);
@@ -99,9 +97,22 @@ afterEach(() => {
   resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
-afterAll(async () => {
-  await roots.cleanup();
-});
+afterAll(() => roots.cleanup());
+
+function unavailable(requestDispatched = false) {
+  return new GatewayTransportError({
+    kind: "closed",
+    connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "local loopback", message: "" },
+    message: "Gateway not reachable",
+    ...(requestDispatched ? { requestDispatched } : {}),
+  });
+}
+
+async function run(...args: string[]) {
+  const program = new Command();
+  registerDevicesCli(program);
+  await program.parseAsync(["devices", ...args], { from: "user" });
+}
 
 async function pairOperator(deviceId: string, scopes: string[], tokenScopes = scopes) {
   const pending = await requestDevicePairing({
@@ -161,55 +172,28 @@ async function installTransport(callerDeviceId?: string) {
 }
 
 async function runTokenCommand(command: string, scopes?: string[]) {
-  const program = new Command();
-  registerDevicesCli(program);
-  const argv = [
-    "devices",
+  await run(
     command,
     "--device",
     ` ${targetDeviceId} `,
     "--role",
     " operator ",
     "--json",
-  ];
-  for (const scope of scopes ?? []) {
-    argv.push("--scope", scope);
-  }
-  await program.parseAsync(argv, { from: "user" });
+    ...(scopes ?? []).flatMap((scope) => ["--scope", scope]),
+  );
 }
 
-it.each([
-  {
-    command: "rotate",
-    caller: "self",
-    scopes: ["operator.pairing", "operator.write"],
-    requested: undefined,
-    connection: ["operator.pairing", "operator.read", "operator.write"],
-  },
-  {
-    command: "revoke",
-    caller: "self",
-    scopes: ["operator.pairing", "operator.read"],
-    requested: undefined,
-    connection: ["operator.pairing", "operator.read"],
-  },
-  {
-    command: "rotate",
-    caller: "admin-cross-device",
-    scopes: ["operator.admin"],
-    requested: ["operator.read"],
-    connection: ["operator.admin"],
-  },
-  {
-    command: "rotate",
-    caller: "shared",
-    scopes: ["operator.pairing", "operator.write"],
-    requested: ["operator.admin"],
-    connection: ["operator.admin"],
-  },
+const pairingRead = ["operator.pairing", "operator.read"];
+const pairingWrite = ["operator.pairing", "operator.write"];
+const admin = ["operator.admin"];
+it.each<[string, string, string[], string[] | undefined, string[]]>([
+  ["rotate", "self", pairingWrite, undefined, [...pairingRead, "operator.write"]],
+  ["revoke", "self", pairingRead, undefined, pairingRead],
+  ["rotate", "admin-cross-device", admin, ["operator.read"], admin],
+  ["rotate", "shared", pairingWrite, admin, admin],
 ])(
-  "$command with $caller authority preserves the approval ceiling",
-  async ({ command, caller, scopes, requested, connection }) => {
+  "%s with %s authority preserves the approval ceiling",
+  async (command, caller, scopes, requested, connection) => {
     await pairOperator(targetDeviceId, ["operator.admin"], scopes);
     if (caller === "admin-cross-device") {
       await pairOperator("caller", ["operator.admin"]);
@@ -303,23 +287,9 @@ it("resolves PostgreSQL before a device-list fallback can open local state", asy
       plugins: { enabled: false },
     });
     resetDatabaseEngineSelectionForTest();
-    transport.request.mockRejectedValue(
-      new GatewayTransportError({
-        kind: "closed",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
-        message: "Gateway not reachable",
-      }),
-    );
+    transport.request.mockRejectedValue(unavailable());
     try {
-      const program = new Command();
-      registerDevicesCli(program);
-      await expect(
-        program.parseAsync(["devices", "list", "--json"], { from: "user" }),
-      ).rejects.toThrow("SecretRef is unresolved");
+      await expect(run("list", "--json")).rejects.toThrow("SecretRef is unresolved");
       expect(
         (await fs.readdir(state.stateDir, { recursive: true })).filter((file) =>
           file.endsWith(".sqlite"),
@@ -355,22 +325,9 @@ it.each(["live", "offline", "uncertain"] as const)(
     transport.request.mockRejectedValue(
       mode === "live"
         ? new Error(`device pairing required (requestId: ${requestId})`)
-        : new GatewayTransportError({
-            kind: "closed",
-            connectionDetails: {
-              url: "ws://127.0.0.1:18789",
-              urlSource: "local loopback",
-              message: "",
-            },
-            message: "Gateway not reachable",
-            ...(mode === "uncertain" ? { requestDispatched: true } : {}),
-          }),
+        : unavailable(mode === "uncertain"),
     );
-    const program = new Command();
-    registerDevicesCli(program);
-    const approval = program.parseAsync(["devices", "approve", requestId, "--json"], {
-      from: "user",
-    });
+    const approval = run("approve", requestId, "--json");
     if (mode === "offline") {
       await approval;
       expect(await getPendingDevicePairing(requestId)).toBeNull();

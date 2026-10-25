@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { getQaBusState, pollQaBus, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
 
 const guardedFetchCalls = vi.hoisted(
@@ -52,19 +53,9 @@ async function listenLoopbackServer(server: Server) {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server failed to bind");
-  }
+  const port = await listenOnLoopback(server);
   return {
-    port: address.port,
+    port,
     stop: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -76,10 +67,7 @@ async function listenLoopbackServer(server: Server) {
 }
 
 function createOversizedJsonServer(pathname: string): { server: Server; closed: Promise<number> } {
-  let resolveClosed: (sentBytes: number) => void = () => {};
-  const closed = new Promise<number>((resolve) => {
-    resolveClosed = resolve;
-  });
+  const { promise: closed, resolve: resolveClosed } = Promise.withResolvers<number>();
   const server = createServer((req, res) => {
     if (req.url !== pathname) {
       res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
@@ -447,16 +435,13 @@ describe("qa-bus client", () => {
   });
 
   it("bounds message responses that stall after headers", async () => {
-    let markBodyStarted: () => void = () => {};
-    const bodyStarted = new Promise<void>((resolve) => {
-      markBodyStarted = resolve;
-    });
+    const { promise: bodyStarted, resolve: markBodyStarted } = Promise.withResolvers<void>();
     const server = createServer((_req, res) => {
       res.writeHead(200, {
         "content-type": "application/json; charset=utf-8",
         "content-length": "128",
       });
-      res.write('{"message":', markBodyStarted);
+      res.write('{"message":', () => markBodyStarted());
     });
     const { port, stop } = await listenLoopbackServer(server);
     stops.push(stop);

@@ -194,6 +194,9 @@ merge_outcome_load_local() {
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
         (if has("localHead") then (.localHead | oid) else true end) and
         (.attempt | attempt) and recovery and
+        (if has("workflowRecovery") then has("recovery") and
+          (.workflowRecovery | keys == ["binding","from","to"] and all(.[]; oid))
+         else true end) and
         (if has("cancellation") then . as $record | .route == "auto" and
           (.cancellation |
             (if has("observedHead") then keys == ["actor","observedHead","outcome","state"] and
@@ -242,10 +245,21 @@ merge_outcome_load_local() {
       merge_outcome_stop "invalid retained repository identity"; return 1;
     }
     parents=$(GIT_NO_LAZY_FETCH=1 pr_git cat-file commit "$MERGE_OUTCOME_OID" | awk 'NF == 0 {exit} $1 == "parent" {printf "%s ", $2}') || return 1
-    for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead] | .[] | select(. != null)'); do
+    for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead,.workflowRecovery.binding,.workflowRecovery.from,.workflowRecovery.to] | .[] | select(. != null)'); do
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
       GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
     done
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("workflowRecovery")' >/dev/null; then
+      local workflow_binding workflow_from workflow_to workflow_record
+      IFS=$'\t' read -r workflow_binding workflow_from workflow_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.workflowRecovery | [.binding,.from,.to] | @tsv')
+      workflow_record=$(GIT_NO_LAZY_FETCH=1 pr_git show "$workflow_binding:binding.json") || return 1
+      printf '%s\n' "$workflow_record" | jq -e --arg from "$workflow_from" --arg pr "$pr" \
+        '.version == 1 and .source == $from and .pr == $pr' >/dev/null &&
+        [ "$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse "$workflow_binding^@")" = "$workflow_from" ] &&
+        GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$workflow_from" "$workflow_to" || {
+        merge_outcome_stop "invalid retained workflow recovery provenance"; return 1;
+      }
+    fi
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("legacyRefusal")' >/dev/null; then
       local name expected actual
       while IFS=$'\t' read -r name expected; do
@@ -369,7 +383,7 @@ merge_outcome_write() {
   shift
   mark_pr_operation_side_effects_started || return 1
   local parents=()
-  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead] | unique | .[] | select(. != null)'); do
+  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead,.workflowRecovery.binding,.workflowRecovery.from,.workflowRecovery.to] | unique | .[] | select(. != null)'); do
     parents+=(-p "$parent")
   done
   [ -z "$MERGE_OUTCOME_OID" ] || parents+=(-p "$MERGE_OUTCOME_OID")
@@ -1457,6 +1471,13 @@ merge_outcome_require_cleanup_absent() {
   [ "$ref_status" -eq 2 ] || { echo "Completion requires authoritative remote branch absence; no deletion attempted." >&2; return 1; }
 }
 
+retire_pr_workflow_binding() {
+  [ -n "${PR_WORKFLOW_BINDING_OID:-}" ] || return 0
+  [ "$PR_WORKFLOW_PR" = "$1" ] || return 1
+  pr_batch_wrapper_git workflow-retire "$canonical_repo_root" "$1" "$PR_WORKFLOW_BINDING_OID" "${PR_WORKFLOW_TRUST_ANCHOR:-refs/remotes/origin/main}" || return 1
+  PR_WORKFLOW_BINDING_OID=""
+}
+
 merge_complete() {
   local pr="$1" expected_oid="$2" phase body="" audit
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
@@ -1471,6 +1492,7 @@ merge_complete() {
   merge_outcome_reconcile "$pr" || return 1
   phase=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .phase) || return 1
   if [ "$phase" = complete ]; then
+    retire_pr_workflow_binding "$pr" || return 1
     echo "merge-complete already complete for PR #$pr; no side effects."
     return 0
   fi
@@ -1505,6 +1527,7 @@ merge_complete() {
   merge_outcome_require_cleanup_absent "$pr" || return 1
   merge_outcome_stable "$pr" || return 1
   merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="complete"')" || return 1
+  retire_pr_workflow_binding "$pr" || return 1
   echo "merge-complete complete for PR #$pr"
   echo "completion comment: $MERGE_COMPLETION_COMMENT_URL"
 }
@@ -1523,6 +1546,7 @@ merge_outcome_resume() {
   fi
   if [ "$phase" = complete ]; then
     echo "merge-run already complete for PR #$pr; no side effects."
+    retire_pr_workflow_binding "$pr" || return 1
   else
     echo "Merge confirmed; completion pending. Recovery does not repeat comment POST or cleanup. Inspect the completion marker in PR comments and any remaining .worktrees/pr-$pr/local branches; verify their ownership before manual cleanup."
     echo "After cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"

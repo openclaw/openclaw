@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
@@ -64,7 +65,7 @@ async function connectWriter(port: number, email: string, scopes = writerScopes)
       browserOrigin: origin,
       skipDefaultAuth: true,
       scopes,
-      deviceIdentityPath: path.join(temps.make("policy-writer-"), "device.sqlite"),
+      deviceIdentityPath: path.join(temps.make("policy-writer-"), "client", "credentials.sqlite"),
     });
     expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
     return { ws, connected, [Symbol.dispose]: () => ws.close() };
@@ -80,6 +81,7 @@ test.each([false, true])(
     const email = "writer@example.invalid";
     await configureWriters({ [email]: writerScopes }, required);
     await gateway.withGatewayServer(async ({ port }) => {
+      await waitForGatewayStartup(port);
       using connection = await connectWriter(port, email);
       const { ws, connected } = connection;
       expect((connected.payload as HelloOk).auth.scopes).not.toContain("operator.write");
@@ -183,6 +185,7 @@ test("required placement survives disconnect but stops setup when committed call
   });
 
   await gateway.withGatewayServer(async ({ port }) => {
+    await waitForGatewayStartup(port);
     using adminConnection = await connectWriter(port, admin, ["operator.admin"]);
     const adminWs = adminConnection.ws;
     const commitConfigPatch = async (patch: Record<string, unknown>) => {

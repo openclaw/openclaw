@@ -395,18 +395,27 @@ it("repairs a stale caption owner for the committed meeting session", async () =
 });
 
 it("disconnects caption capture when finalizing a transcript", async () => {
-  const first = await runCaptionRows([captionRow("Final caption")]);
+  vi.useFakeTimers();
+  const first = await runCaptionRows([captionRow("Final caption", "17")], undefined, {
+    captionsInitiallyOn: true,
+  });
   const captions = first.window[CAPTIONS] as Record<string, unknown>;
+  expect(captions.settleTimer).toBeDefined();
   captions.observer = { disconnect };
   captions.observerInstalled = true;
   transcriptReader(first.window, { finalize: true })();
 
   expect(disconnect).toHaveBeenCalledOnce();
   expect(captions).toMatchObject({
+    settleTimer: undefined,
+    visible: [],
     observerInstalled: false,
     identity,
     finalizedAt: expect.any(Number),
   });
+
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(captions.lines).toMatchObject([{ text: "Final caption" }]);
 
   const refreshed = await runCaptionRows([captionRow("Late caption")], undefined, {
     priorCaptions: captions,

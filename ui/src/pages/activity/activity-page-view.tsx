@@ -9,7 +9,6 @@ import "../../styles/agent-row-chip.css";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
-  createEffect,
   createMemo,
   createSignal,
   createStore,
@@ -19,26 +18,23 @@ import {
   Switch,
   For,
 } from "solid-js";
-import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsStatus, SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { createMsFormatter } from "../../lib/format.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import {
-  PRESENCE_ACTIVE_WINDOW_MS,
-  presenceViewerLastActivity,
-  projectPresencePayload,
-} from "../../lib/presence-users.ts";
+import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
+import { projectPresencePayload } from "../../lib/presence-users.ts";
 import { t, getLocale, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
 import {
   isUiGlobalScopeConfigured,
@@ -168,6 +164,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
   });
   onSettled(() => {
     let previous = liveSnapshot();
+    // Ordered append/reset receipts preserve stream-follow intent across each publication.
     return pageProps.page.liveActivity.subscribe(() => {
       const current = liveSnapshot();
       if (current.revision !== previous.revision) {
@@ -181,38 +178,16 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     });
   });
   const [presentationTime, setPresentationTime] = createSignal(Date.now());
-  const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
-  const visibilityChanged = () => {
-    setVisible(document.visibilityState !== "hidden");
-    if (document.visibilityState !== "hidden") {
-      setPresentationTime(Date.now());
-    }
-  };
-  onSettled(() => listen(document, "visibilitychange", visibilityChanged));
-  const expiry = createMemo(() => {
-    pageRevision();
-    presentationTime();
-    if (!visible()) {
-      return undefined;
-    }
-    const now = Date.now();
-    const deadlines = presence().flatMap((viewer) => {
-      const activity = presenceViewerLastActivity(viewer);
-      const deadline = activity === undefined ? undefined : activity + PRESENCE_ACTIVE_WINDOW_MS;
-      return deadline !== undefined && deadline > now ? [deadline] : [];
-    });
-    return deadlines.length ? Math.min(...deadlines) : undefined;
-  });
-  // The browser clock expires presence even when no Gateway event arrives.
-  createEffect(expiry, (deadline) => {
-    if (deadline === undefined) {
-      return undefined;
-    }
-    const timer = setTimeout(
-      () => setPresentationTime(Date.now()),
-      Math.max(0, deadline - Date.now()),
-    );
-    return () => clearTimeout(timer);
+  const activityExpiry = createPresenceActivityLifecycle(presence, () =>
+    setPresentationTime(Date.now()),
+  );
+  onSettled(() => {
+    const stop = pageProps.page.subscribe(() => activityExpiry.sync());
+    activityExpiry.connect();
+    return () => {
+      stop();
+      activityExpiry.disconnect();
+    };
   });
   function LiveActivityView(liveProps: { basePath: string; entries: readonly ActivityEntry[] }) {
     function StatusFilter(props: { status: ActivityStatus }) {
@@ -236,68 +211,44 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     }
 
     function ToolFilter(props: { toolNames: string[] }) {
-      let anchor!: HTMLButtonElement;
       let popover: PopoverHandle | undefined;
       return (
-        <>
-          <button
-            ref={(node) => {
-              anchor = node;
-            }}
-            id="activity-live-filter-trigger"
-            type="button"
-            class={[
-              "btn btn--sm activity-live-filter-trigger",
-              { active: Boolean(filters.toolFilter) },
-            ]}
-            title={t("activity.filters")}
-            aria-label={t("activity.filters")}
-            aria-haspopup="dialog"
-            aria-controls="activity-live-filter-popover"
-            aria-expanded="false"
-            onClick={() => popover?.overlay.request(!popover.overlay.open)}
-          >
-            <Icon name="listFilter" />
-          </button>
-          <Popover
-            id="activity-live-filter-popover"
-            ref={(handle) => {
-              popover = handle;
-            }}
-            anchor={anchor}
-            label={t("activity.filters")}
-            class="activity-live-filter-popover"
-            placement="bottom-end"
-            onOpenChange={(open) => {
-              if (open) {
-                popover?.overlay.surface.focus({ preventScroll: true });
-              }
-            }}
-          >
-            <div class="activity-live-filter-popover__panel">
-              <label class="field">
-                <span>{t("activity.toolFilter")}</span>
-                <select
-                  class="settings-select"
-                  aria-label={t("activity.toolFilter")}
-                  value={filters.toolFilter}
-                  onChange={(event) => update({ toolFilter: event.currentTarget.value })}
-                >
-                  <option value="" selected={filters.toolFilter === ""}>
-                    {t("activity.allTools")}
-                  </option>
-                  <For each={props.toolNames}>
-                    {(name) => (
-                      <option value={name} selected={name === filters.toolFilter}>
-                        {name}
-                      </option>
-                    )}
-                  </For>
-                </select>
-              </label>
-            </div>
-          </Popover>
-        </>
+        <Popover
+          id="activity-live-filter-popover"
+          triggerId="activity-live-filter-trigger"
+          triggerClass={[
+            "btn btn--sm activity-live-filter-trigger",
+            { active: Boolean(filters.toolFilter) },
+          ]}
+          triggerTitle={t("activity.filters")}
+          trigger={<Icon name="listFilter" />}
+          ref={(handle) => {
+            popover = handle;
+          }}
+          label={t("activity.filters")}
+          class="activity-live-filter-popover"
+          placement="bottom-end"
+          onOpenChange={(open) => {
+            if (open) {
+              popover?.overlay.surface.focus({ preventScroll: true });
+            }
+          }}
+        >
+          <div class="activity-live-filter-popover__panel">
+            <label class="field">
+              <span>{t("activity.toolFilter")}</span>
+              <SettingsSelect
+                aria-label={t("activity.toolFilter")}
+                value={filters.toolFilter}
+                onChange={(event) => update({ toolFilter: event.currentTarget.value })}
+                options={[
+                  { value: "", label: t("activity.allTools") },
+                  ...props.toolNames.map((name) => ({ value: name, label: name })),
+                ]}
+              />
+            </label>
+          </div>
+        </Popover>
       );
     }
 
@@ -507,15 +458,12 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
 
   return (
     <Show when={Boolean(route() && location())} fallback={<LoadingState />}>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true, activityPage: true }}>
-        <section class="content-header">
-          <div>
-            <div class="page-title">{titleForRoute("activity")}</div>
-            <Show when={route()?.mode !== "live"}>
-              <div class="page-sub">{t("subtitles.activity")}</div>
-            </Show>
-          </div>
-        </section>
+      <ShellLayoutBoundary traits={{ activityPage: true }}>
+        <HubPageHeader
+          active="activity"
+          wide
+          docsUrl="https://docs.openclaw.ai/web/control-ui/settings#activity-tab"
+        />
       </ShellLayoutBoundary>
       <SettingsWorkspace fillHeight>
         <Show when={route()?.mode !== "run"}>
@@ -548,7 +496,6 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           <Switch>
             <Match when={route()?.mode === "sessions"}>
               <SessionActivityView
-                context={state().context}
                 expandedAutomationDays={expandedAutomationDays()}
                 filters={{
                   ...(sessionRoute()?.filters ?? {
@@ -564,7 +511,8 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                 presenceViewers={presence()}
                 presentationRevision={pageRevision() + presentationTime()}
                 result={state().sessionActivity.result}
-                loading={pending() || state().sessionActivity.loading}
+                read={state().sessionActivity.read}
+                loading={pending()}
                 retrying={state().sessionActivity.retrying}
                 error={state().sessionActivity.error}
                 onRetry={() => pageProps.page.syncSessionActivity("retry")}
@@ -607,6 +555,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                   basePath={state().context.basePath}
                   connected={state().context.gateway.snapshot.phase === "connected"}
                   state={state().runInspector}
+                  request={state().inspectorRead}
                   selector={runRoute()?.selector ?? null}
                   selectorId={runRoute()?.selectorId ?? null}
                   onLoadMoreExecutions={() => pageProps.page.loadMoreInspectorPage("executions")}
@@ -632,7 +581,8 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                   navigate={state().context.navigate}
                   connected={state().context.gateway.snapshot.phase === "connected"}
                   result={state().sessionActivity.result}
-                  loading={pending() || state().sessionActivity.loading}
+                  read={state().sessionActivity.read}
+                  loading={pending() || state().sessionActivity.incomplete}
                   incomplete={state().sessionActivity.incomplete}
                   error={state().sessionActivity.error}
                   onRetry={() => pageProps.page.syncSessionActivity("retry")}

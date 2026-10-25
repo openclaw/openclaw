@@ -1,5 +1,5 @@
 import { PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
-import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
+import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { raceWithTimeout } from "@openclaw/retry";
 import type { ApplicationContext } from "../app/context.ts";
@@ -48,6 +48,7 @@ export function createMcpAppView(
   host: McpAppViewElement,
   context: ApplicationContext,
   afterSettlement: (callback: () => void) => void,
+  publishState: () => void,
 ) {
   let inactive: "ended" | "reconstructed" | null = null;
   let errorState: unknown = null;
@@ -57,8 +58,6 @@ export function createMcpAppView(
   let setupAbort: AbortController | undefined;
   let requestAbort = new AbortController();
   const confirmation = createMcpAppConfirm();
-  const listeners = new Set<() => void>();
-  const publishState = () => listeners.forEach((listener) => listener());
   let started = false;
   let disposed = false;
   let retired = false;
@@ -135,6 +134,7 @@ export function createMcpAppView(
   function start() {
     started = true;
     let { client, phase, hello } = context.gateway.snapshot;
+    // Connection receipts retire frame requests before a replacement binding is admitted.
     stopConnection = context.gateway.subscribe((snapshot) => {
       if (snapshot.client !== client || snapshot.phase !== phase || snapshot.hello !== hello) {
         connectionChanged();
@@ -143,6 +143,7 @@ export function createMcpAppView(
       // Scope, generation, and access can change without replacing the snapshot's objects.
       inputChanged();
     });
+    // The protocol owner updates the iframe's native title outside Solid rendering.
     stopLocale = i18n.subscribe(updateTitle);
     inputChanged();
   }
@@ -355,7 +356,7 @@ export function createMcpAppView(
 
   /** Restarts a torn-down view only when its parent kept the element connected. */
   function restartAfterTeardown() {
-    if (!host.isConnected || activeResources || teardownPromise) {
+    if (!retired || !host.isConnected || activeResources || teardownPromise) {
       return;
     }
     requestAbort = new AbortController();
@@ -420,10 +421,7 @@ export function createMcpAppView(
     };
   }
 
-  async function setupResources(
-    binding: McpAppBinding,
-    signal: AbortSignal,
-  ): Promise<McpAppResources> {
+  async function setupResources(binding: McpAppBinding, signal: AbortSignal): Promise<void> {
     const { sessionKey, viewId, agentId } = binding;
     let resources: McpAppResources | null = null;
     try {
@@ -692,6 +690,7 @@ export function createMcpAppView(
           await refreshModelContext();
         }
       };
+      // Theme receipts update the remote app's host context through its live bridge.
       addResourceCleanup(createdResources, context.theme.subscribe(updateHostContext));
       if (typeof ResizeObserver !== "undefined") {
         const hostResizeObserver = new ResizeObserver(updateHostContext);
@@ -705,7 +704,6 @@ export function createMcpAppView(
       });
       await bridge.sendToolResult(payload.toolResult);
       signal.throwIfAborted();
-      return createdResources;
     } catch (error) {
       await teardownResources(resources);
       throw error;
@@ -723,10 +721,6 @@ export function createMcpAppView(
     read: () => ({ inactive, error: errorState }),
     setMount: (element: HTMLDivElement) => {
       mountElement = element;
-    },
-    subscribe(notify: () => void) {
-      listeners.add(notify);
-      return () => listeners.delete(notify);
     },
   };
 }

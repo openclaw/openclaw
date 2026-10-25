@@ -27,18 +27,18 @@ function makeTempDir() {
 
 function makeOpenClawDevSourceRoot() {
   const root = makeTempDir();
-  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
-  fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: [extensions/*]\n");
+  writeTextFile(root, "package.json", JSON.stringify({ name: "openclaw" }));
+  writeTextFile(root, "pnpm-workspace.yaml", "packages: [extensions/*]\n");
   mkdirSafe(path.join(root, "src"));
   mkdirSafe(path.join(root, "extensions"));
   return root;
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
+  writeTextFile(
+    dir,
+    "openclaw.plugin.json",
     JSON.stringify({ configSchema: { type: "object" }, ...manifest }),
-    "utf-8",
   );
 }
 
@@ -189,26 +189,18 @@ function expectDiagnosticFields(
   );
 }
 
-function prepareLinkedManifestFixture(mode: "symlink" | "hardlink") {
-  const rootDir = makeTempDir();
-  const outsideDir = makeTempDir();
-  const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
-  const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
-  fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
-  writeManifest(outsideDir, { id: "linked" });
-
+function linkFile(mode: "symlink" | "hardlink", source: string, target: string) {
   try {
-    if (mode === "symlink") {
-      fs.symlinkSync(outsideManifest, linkedManifest);
-    } else {
-      fs.linkSync(outsideManifest, linkedManifest);
+    (mode === "symlink" ? fs.symlinkSync : fs.linkSync)(source, target);
+    return true;
+  } catch (error) {
+    if (
+      mode === "symlink" ||
+      (error instanceof Error && "code" in error && error.code === "EXDEV")
+    ) {
+      return false;
     }
-    return { rootDir, linked: true };
-  } catch (err) {
-    if (mode === "symlink" || (err as NodeJS.ErrnoException).code === "EXDEV") {
-      return { rootDir, linked: false };
-    }
-    throw err;
+    throw error;
   }
 }
 
@@ -535,29 +527,26 @@ describe("loadPluginManifestRegistry", () => {
     },
   );
 
-  it.each(["dist-runtime/extensions"])(
-    "prefers dev %s plugins over installed globals with the same id",
-    (tree) => {
-      const devSourceRoot = makeOpenClawDevSourceRoot();
-      const bundledDir = path.join(devSourceRoot, tree, "codex");
-      const globalDir = makePluginDir("codex");
-      mkdirSafe(bundledDir);
-      writeManifest(bundledDir, { id: "codex" });
+  it("prefers dev dist-runtime plugins over installed globals with the same id", () => {
+    const devSourceRoot = makeOpenClawDevSourceRoot();
+    const bundledDir = path.join(devSourceRoot, "dist-runtime/extensions/codex");
+    const globalDir = makePluginDir("codex");
+    mkdirSafe(bundledDir);
+    writeManifest(bundledDir, { id: "codex" });
 
-      const registry = loadPluginManifestRegistryCore({
-        env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
-        installRecords: {
-          codex: { source: "npm", installPath: globalDir },
-        },
-        candidates: [
-          createPluginCandidate("codex", bundledDir, "bundled"),
-          createPluginCandidate("codex", globalDir, "global", { installOwner: "codex" }),
-        ],
-      });
+    const registry = loadPluginManifestRegistryCore({
+      env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
+      installRecords: {
+        codex: { source: "npm", installPath: globalDir },
+      },
+      candidates: [
+        createPluginCandidate("codex", bundledDir, "bundled"),
+        createPluginCandidate("codex", globalDir, "global", { installOwner: "codex" }),
+      ],
+    });
 
-      expect(registry.plugins).toMatchObject([{ origin: "bundled" }]);
-    },
-  );
+    expect(registry.plugins).toMatchObject([{ origin: "bundled" }]);
+  });
 
   it("associates official trust with every child owned by the installed package", () => {
     const dir = makePluginDir("diffs");
@@ -850,23 +839,11 @@ describe("loadPluginManifestRegistry", () => {
     const outsideEntry = path.join(root, "outside/provider-discovery.js");
     writeTextFile(root, "outside/provider-discovery.js", "export default {};\n");
     mkdirSafe(dir);
-    if (mode === "symlink" || mode === "hardlink") {
-      try {
-        const linkedEntry = path.join(dir, "provider-discovery.js");
-        if (mode === "symlink") {
-          fs.symlinkSync(outsideEntry, linkedEntry);
-        } else {
-          fs.linkSync(outsideEntry, linkedEntry);
-        }
-      } catch (error) {
-        if (
-          mode === "symlink" ||
-          (error instanceof Error && "code" in error && error.code === "EXDEV")
-        ) {
-          return;
-        }
-        throw error;
-      }
+    if (
+      (mode === "symlink" || mode === "hardlink") &&
+      !linkFile(mode, outsideEntry, path.join(dir, "provider-discovery.js"))
+    ) {
+      return;
     }
     writeManifest(dir, {
       id: "boundary-provider",
@@ -1176,13 +1153,21 @@ describe("loadPluginManifestRegistry", () => {
       if (mode === "hardlink" && process.platform === "win32") {
         return;
       }
-      const fixture = prepareLinkedManifestFixture(mode);
-      if (!fixture.linked) {
+      const rootDir = makeTempDir();
+      const outsideDir = makePluginDir("linked");
+      writeTextFile(rootDir, "index.ts", "export default function () {}");
+      if (
+        !linkFile(
+          mode,
+          path.join(outsideDir, "openclaw.plugin.json"),
+          path.join(rootDir, "openclaw.plugin.json"),
+        )
+      ) {
         return;
       }
       const registry = loadPluginManifestRegistryCore({
         env: hermeticEnv({ OPENCLAW_NIX_MODE: nix }),
-        candidates: [createPluginCandidate("linked", fixture.rootDir, origin)],
+        candidates: [createPluginCandidate("linked", rootDir, origin)],
       });
       expect(registry.plugins.map((plugin) => plugin.id)).toEqual(accepted ? ["linked"] : []);
       expect(

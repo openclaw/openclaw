@@ -93,10 +93,10 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
   setDisplayName(alice.id, "Alice");
   setDisplayName(bob.id, "Bob");
   setDisplayName(carol.id, "Carol");
-  const aliceClient = { ...identifiedClient(alice.id, "Alice"), connId: "alice" };
-  const bobClient = { ...identifiedClient(bob.id, "Bob"), connId: "bob-one" };
-  const bobSecond = { ...identifiedClient(bob.id, "Bob"), connId: "bob-two" };
-  const carolClient = { ...identifiedClient(carol.id, "Carol"), connId: "carol" };
+  const aliceClient = Object.assign(identifiedClient(alice.id, "Alice"), { connId: "alice" });
+  const bobClient = Object.assign(identifiedClient(bob.id, "Bob"), { connId: "bob-one" });
+  const bobSecond = Object.assign(identifiedClient(bob.id, "Bob"), { connId: "bob-two" });
+  const carolClient = Object.assign(identifiedClient(carol.id, "Carol"), { connId: "carol" });
   const clients: GatewayClient[] = [aliceClient, bobClient, bobSecond, carolClient];
   const broadcast = vi.fn();
   const push = vi.fn<NonNullable<Parameters<typeof createMentionInbox>[0]["onMentionCreated"]>>();

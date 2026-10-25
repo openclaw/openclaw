@@ -13,6 +13,8 @@ import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { sha256 as digest, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import {
   captureWorkspaceManifest,
+  captureWorkspaceManifestDocument,
+  captureWorkspaceManifestReference,
   captureWorkspaceSnapshot,
   parseWorkspaceManifestPair,
 } from "./workspace-manifest-worker.js";
@@ -38,10 +40,11 @@ const pair = (base: ReturnType<typeof encode>, current: ReturnType<typeof encode
   currentRaw: current.raw,
   currentRef: current.ref,
 });
-async function runScript(script: string, timeoutMs = 60_000) {
+async function runScript(script: string, timeoutMs = 60_000, execArgv: string[] = []) {
   const result = await runCommandWithTimeout(
     [
       process.execPath,
+      ...execArgv,
       ...resolveRuntimeWorkerArgv(adapterUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
@@ -52,6 +55,68 @@ async function runScript(script: string, timeoutMs = 60_000) {
   expect(result.code, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
 }
+
+it("releases decoded tree entries while their encoded worker operation is pending", async () => {
+  const result = await runScript(
+    `
+      import { setImmediate } from "node:timers/promises";
+      import { computeWorkspaceManifest, prepareWorkspaceTreeInput } from ${JSON.stringify(adapterUrl.href)};
+      await computeWorkspaceManifest({
+        type: "workspace.manifest.parse",
+        input: { raw: new TextEncoder().encode(JSON.stringify({ version: 1, baseCommit: null, entries: [] })) },
+      });
+      const pool = globalThis[Symbol.for("openclaw.gitOperations")].workspace;
+      const deferred = Promise.withResolvers();
+      let submitted;
+      // Hold execution after real broker admission so collection is independent of filesystem speed.
+      pool.run = (command) => {
+        submitted = JSON.parse(new TextDecoder().decode(command.input.payload));
+        return deferred.promise;
+      };
+      let inputRef;
+      let entriesRef;
+      const operation = (() => {
+        const input = {
+          inputPath: "/synthetic/snapshot-input",
+          ref: "refs/heads/snapshot",
+          source: { root: "/synthetic" },
+          entries: [{ path: "file.txt", type: "file", mode: 420, size: 0, sha256: "a".repeat(64) }],
+        };
+        inputRef = new WeakRef(input);
+        entriesRef = new WeakRef(input.entries);
+        return prepareWorkspaceTreeInput(input);
+      })();
+      let settled = false;
+      const outcome = operation.then(
+        () => { settled = true; return "unexpected success"; },
+        error => { settled = true; return error.message; },
+      );
+      for (let index = 0; index < 4; index++) {
+        await setImmediate();
+        global.gc();
+      }
+      const retained = { input: inputRef.deref() !== undefined, entries: entriesRef.deref() !== undefined };
+      const pending = !settled;
+      deferred.reject(new Error("worker failed"));
+      const failure = await outcome;
+      await pool.close();
+      process.stdout.write(JSON.stringify({ retained, pending, submitted, failure }));
+    `,
+    20_000,
+    ["--expose-gc"],
+  );
+  expect(result).toEqual({
+    retained: { input: false, entries: false },
+    pending: true,
+    submitted: {
+      inputPath: "/synthetic/snapshot-input",
+      ref: "refs/heads/snapshot",
+      source: { root: "/synthetic" },
+      entries: [{ path: "file.txt", type: "file", mode: 0o644, size: 0, sha256: "a".repeat(64) }],
+    },
+    failure: "worker failed",
+  });
+});
 
 it("settles private Git-input staging before a cancelled tree read returns", async () => {
   const root = tempDirs.make("workspace-tree-input-cancel-");
@@ -128,7 +193,6 @@ it("does not create or return an implicit hash memo for an uncached capture", as
   expect(result.hashes).toEqual([]);
   expect(result.metrics).toEqual({
     contentHashCount: 0,
-    contentHashDurationMs: 0,
     memoHitCount: 0,
   });
 });
@@ -152,7 +216,7 @@ it("captures eligible files outside the Gateway thread and returns the canonical
     return await lstat(...args);
   });
   const memo = new Map<string, string>();
-  const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
+  const metrics = { contentHashCount: 0, memoHitCount: 0 };
   const capture = () =>
     withWorkspaceHashMemo(memo, () => captureWorkspaceManifest(selection), metrics);
   const first = await capture();
@@ -166,9 +230,23 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   );
   expect({ manifest: snapshot.manifest, manifestRef: snapshot.manifestRef }).toEqual(first);
   expect(snapshot.manifestRef).toBe(`sha256:${digest(snapshot.rawManifest)}`);
+  const document = await withWorkspaceHashMemo(
+    memo,
+    () => captureWorkspaceManifestDocument(selection),
+    metrics,
+  );
+  expect(document).toEqual({
+    manifestRef: snapshot.manifestRef,
+    rawManifest: snapshot.rawManifest,
+  });
+  const reference = () =>
+    withWorkspaceHashMemo(memo, () => captureWorkspaceManifestReference(selection), metrics);
+  expect(await reference()).toBe(first.manifestRef);
   const empty = await captureWorkspaceManifest({ ...selection, includePaths: new Set<string>() });
   expect(empty.manifest).toMatchObject({ entries: [], directories: [] });
-  expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 1 });
+  expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 3 });
+  await fs.unlink(path.join(root, "input.txt"));
+  expect(await reference()).not.toBe(first.manifestRef);
 });
 
 it("authenticates both manifests before selecting changed transfer payloads", async () => {

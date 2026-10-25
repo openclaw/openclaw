@@ -114,10 +114,15 @@ export async function configureOmlxInteractive(
 ): Promise<ProviderAuthResult> {
   const baseUrl = await ctx.prompter.text({
     message: "oMLX base URL",
-    initialValue: ctx.config.models?.providers?.omlx?.baseUrl ?? OMLX_DEFAULT_BASE_URL,
+    // Prefill only a saved URL: a prefilled default makes typed input append to it.
+    initialValue: ctx.config.models?.providers?.omlx?.baseUrl,
+    placeholder: OMLX_DEFAULT_BASE_URL,
     validate: (value) => {
+      if (!value.trim()) {
+        return undefined;
+      }
       try {
-        const url = new URL(value ?? "");
+        const url = new URL(value);
         return ["http:", "https:"].includes(url.protocol) ? undefined : "Use an HTTP or HTTPS URL";
       } catch {
         return "Enter the oMLX OpenAI-compatible base URL, including /v1";
@@ -146,7 +151,7 @@ export async function configureOmlxInteractive(
   const listing = await listOmlxModels({
     ...ctx,
     env: ctx.env ?? process.env,
-    baseUrl,
+    baseUrl: baseUrl.trim() || undefined,
     apiKey,
     replaceAuth: true,
   });

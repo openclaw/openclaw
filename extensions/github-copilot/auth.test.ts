@@ -123,7 +123,6 @@ describe("resolveFirstGithubToken", () => {
       }),
     ).resolves.toEqual({
       githubToken: testCase.expectedToken,
-      hasProfile: true,
       ...(testCase.expectedToken ? { profileId: "github-copilot:preferred" } : {}),
     });
   });
@@ -159,11 +158,10 @@ describe("resolveFirstGithubToken", () => {
       testCase.expectedDomain
         ? {
             githubToken: "durable-github-token",
-            hasProfile: true,
             githubDomain: testCase.expectedDomain,
             profileId: "github-copilot:preferred",
           }
-        : { githubToken: "", hasProfile: true },
+        : { githubToken: "" },
     );
   });
 
@@ -190,7 +188,6 @@ describe("resolveFirstGithubToken", () => {
       }),
     ).resolves.toEqual({
       githubToken: "preferred-token",
-      hasProfile: true,
       profileId: "github-copilot:preferred",
     });
   });
@@ -221,7 +218,7 @@ describe("resolveFirstGithubToken", () => {
 
     const result = await resolveToken({ config, env, authProfileMode: "api_key" });
 
-    expect(result).toEqual({ githubToken: "test-token-placeholder", hasProfile: false });
+    expect(result).toEqual({ githubToken: "test-token-placeholder" });
     expect(resolveConfiguredSecretInputWithFallbackMock).toHaveBeenCalledWith({
       config,
       env,
@@ -242,14 +239,13 @@ describe("resolveFirstGithubToken", () => {
         config,
         env: { COPILOT_GITHUB_TOKEN: "ambient-token" } as NodeJS.ProcessEnv,
       }),
-    ).resolves.toEqual({ githubToken: "ambient-token", hasProfile: false });
+    ).resolves.toEqual({ githubToken: "ambient-token" });
     expect(resolveConfiguredSecretInputWithFallbackMock).not.toHaveBeenCalled();
 
     setProfiles({});
     resolveConfiguredSecretInputWithFallbackMock.mockResolvedValue({ secretRefConfigured: false });
     await expect(resolveToken({ config })).resolves.toEqual({
       githubToken: "",
-      hasProfile: false,
     });
     expect(resolveConfiguredSecretInputWithFallbackMock).toHaveBeenCalledWith(
       expect.objectContaining({ value: undefined }),
@@ -260,7 +256,6 @@ describe("resolveFirstGithubToken", () => {
     setProfiles({});
     await expect(resolveToken({ env: { [key]: "generic-token" } })).resolves.toEqual({
       githubToken: "",
-      hasProfile: false,
     });
   });
 
@@ -274,7 +269,7 @@ describe("resolveFirstGithubToken", () => {
         env: { COPILOT_GITHUB_TOKEN: "ambient-token" },
         profileId: "github-copilot:missing",
       }),
-    ).resolves.toEqual({ githubToken: "", hasProfile: true });
+    ).resolves.toEqual({ githubToken: "" });
     expect(resolveRequiredConfiguredSecretRefInputStringMock).not.toHaveBeenCalled();
   });
 
@@ -308,7 +303,6 @@ describe("resolveFirstGithubToken", () => {
 
     expect(result).toEqual({
       githubToken: "resolved-profile-token",
-      hasProfile: true,
       profileId: "github-copilot:github",
     });
     expect(resolveRequiredConfiguredSecretRefInputStringMock).toHaveBeenCalledWith({

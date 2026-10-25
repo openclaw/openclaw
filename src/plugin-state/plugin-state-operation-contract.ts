@@ -6,6 +6,7 @@ export type PluginStateOperationInput = {
   exportName: string;
   stores: readonly Omit<PreparedKeyedStoreOptions, "env">[];
   writeStores: readonly number[];
+  ifEmpty?: { store: number; value: unknown };
   command: { type: string; input: unknown };
   receiptId: string;
 };
@@ -16,5 +17,5 @@ export type PluginStateOperationResult = {
 };
 
 export type PluginStateOperationCommit = {
-  pluginStateOperation: { receiptId: string; validUntil: number | undefined };
+  pluginStateOperation: { receiptId: string };
 };

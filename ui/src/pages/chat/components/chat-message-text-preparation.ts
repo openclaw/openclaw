@@ -1,9 +1,13 @@
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import {
+  MARKDOWN_PARSE_LIMIT,
+  type MarkdownRenderOptions,
+} from "../../../components/markdown-render-options.ts";
 import {
   partitionMarkdownHtml,
   toSanitizedMarkdownHtml,
-  toStreamingMarkdownParts,
+  toStreamingMarkdownDomParts,
 } from "../../../components/markdown.ts";
+import { markdownContentHtml, type MarkdownContent } from "../../../lib/markdown-content.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
 export type DuplicateSuffix = {
@@ -45,28 +49,46 @@ export function prepareMessageMarkdown(
   const options: MarkdownRenderOptions = recovered
     ? { ...markdownRenderOptions, mode: "document" }
     : markdownRenderOptions;
-  const parts: [string, string] = opts.isStreaming
-    ? toStreamingMarkdownParts(source, options, isAssistant ? messageKey : undefined)
-    : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
-  if (duplicateSuffix) {
-    const terminalPart = parts[1].trim() ? 1 : 0;
-    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
-  }
-  return { messageKey, source, parts, recoverFullMessage };
-}
+  const streaming = opts.isStreaming;
+  const prepare = () => {
+    const parts: [MarkdownContent, MarkdownContent] = streaming
+      ? toStreamingMarkdownDomParts(source, options, isAssistant ? messageKey : undefined)
+      : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
+    if (duplicateSuffix) {
+      const terminalPart = markdownContentHtml(parts[1]).trim() ? 1 : 0;
+      const template = document.createElement("template");
+      const content = parts[terminalPart];
+      if (typeof content === "string") {
+        template.innerHTML = content;
+      } else {
+        template.content.append(content.fragment.cloneNode(true));
+      }
+      const terminalBlock = template.content.lastElementChild;
+      const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
 
-function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
-  const template = document.createElement("template");
-  template.innerHTML = rendered;
-  const terminalBlock = template.content.lastElementChild;
-  const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
-
-  const badge = document.createElement("span");
-  badge.className = "chat-duplicate-count";
-  badge.setAttribute("aria-label", suffix.label);
-  badge.textContent = `×${suffix.count}`;
-  (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
-  return template.innerHTML;
+      const badge = document.createElement("span");
+      badge.className = "chat-duplicate-count";
+      badge.setAttribute("aria-label", duplicateSuffix.label);
+      badge.textContent = `×${duplicateSuffix.count}`;
+      (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
+      parts[terminalPart] =
+        typeof content === "string"
+          ? template.innerHTML
+          : { html: template.innerHTML, fragment: template.content };
+    }
+    return parts;
+  };
+  // Settled content must be prepared before the row's first measurement.
+  const deferFormatting =
+    streaming && !recovered && !duplicateSuffix && source.length <= MARKDOWN_PARSE_LIMIT;
+  const eagerParts = deferFormatting ? undefined : prepare();
+  return {
+    messageKey,
+    source,
+    parts: eagerParts ? () => eagerParts : prepare,
+    deferFormatting,
+    recoverFullMessage,
+  };
 }
 
 function duplicateSuffixTextOwner(block: Element): Element | null {

@@ -1,10 +1,7 @@
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
-import type {
-  BrowserRequestClient,
-  BrowserInspectedNode,
-  BrowserPanelTab,
-} from "./browser-client.ts";
+import type { BrowserRequestClient, BrowserInspectedNode } from "./browser-client.ts";
 import {
   clickBrowserCoords,
   inspectBrowserElementAt,
@@ -15,6 +12,7 @@ import {
 } from "./browser-client.ts";
 import type { BrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import {
   browserPanelInspectHighlightRegion,
@@ -23,27 +21,26 @@ import {
   browserPanelShouldForwardKey,
   dispatchCompositedBrowserAnnotation,
   paintBrowserPanelOverlay,
-  type BrowserPanelView,
 } from "./browser-panel-surface.ts";
+
+registerBrowserEnglish();
 
 const INSPECT_THROTTLE_MS = 120;
 const STREAM_WHEEL_INTERVAL_MS = 50;
 const SNAPSHOT_WHEEL_INTERVAL_MS = 150;
 
-type BrowserPanelInputState = {
-  mode: "interact" | "annotate" | "inspect";
-  strokes: AnnotationStroke[];
-  view: BrowserPanelView | null;
-  tabs: BrowserPanelTab[];
-  activeTargetId: string | null;
-  inspected: BrowserInspectedNode | null;
-  inspectPointer: { x: number; y: number } | null;
-  evaluateUnavailable: boolean;
-  errorText: string | null;
-  noticeText: string | null;
-};
-
-interface BrowserPanelInputHost extends BrowserPanelInputState {
+interface BrowserPanelInputHost extends BrowserPanelStateWriter<
+  | "mode"
+  | "strokes"
+  | "view"
+  | "tabs"
+  | "activeTargetId"
+  | "inspected"
+  | "inspectPointer"
+  | "evaluateUnavailable"
+  | "errorText"
+  | "noticeText"
+> {
   readonly stream: Pick<BrowserPanelStream, "ownsView">;
   readonly operations: Pick<
     BrowserPanelOperations,
@@ -53,10 +50,6 @@ interface BrowserPanelInputHost extends BrowserPanelInputState {
     BrowserPanelPendingInput,
     "clearInput" | "queueInspection" | "queueWheel"
   >;
-  setState<Key extends keyof BrowserPanelInputState>(
-    key: Key,
-    value: BrowserPanelInputState[Key],
-  ): void;
   runAction(
     action: (client: BrowserRequestClient) => Promise<void>,
     refreshView?: boolean,

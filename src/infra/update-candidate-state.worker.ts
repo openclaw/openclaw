@@ -64,7 +64,7 @@ async function snapshotCandidateState(): Promise<unknown> {
     }
     case "database-generations": {
       const { readUpdatePhysicalDatabaseGenerations } =
-        await import("./update-database-generations.js");
+        await import("./update-physical-database-generations.js");
       return readUpdatePhysicalDatabaseGenerations(input.paths, input.pluginOwners);
     }
     case "inventory": {
@@ -95,6 +95,7 @@ async function snapshotCandidateState(): Promise<unknown> {
       return snapshotUpdateCandidateState({
         ...input,
         includeLocalStoreVersions: input.includeLocalStoreVersions === true,
+        includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
     case "discover":
@@ -106,6 +107,7 @@ async function snapshotCandidateState(): Promise<unknown> {
       return readUpdateStateSchemaVersionsInProcess({
         ...input,
         includeLocalStoreVersions: input.includeLocalStoreVersions === true,
+        includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.inspectionPlan),
       });
     default:
@@ -156,6 +158,9 @@ if (parentPort) {
       ),
   );
 } else {
+  // Stdout carries only the JSON result; raised console levels must not prefix it.
+  const { routeLogsToStderr } = await import("../logging/console.js");
+  routeLogsToStderr();
   const { formatUpdateStateInspectionError } =
     await import("./update-candidate-state.diagnostics.js");
   void snapshotCandidateState()

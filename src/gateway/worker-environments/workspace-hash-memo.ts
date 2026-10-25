@@ -4,7 +4,6 @@ import { z } from "zod";
 
 export type WorkspaceHashMetrics = {
   contentHashCount: number;
-  contentHashDurationMs: number;
   memoHitCount: number;
 };
 
@@ -28,10 +27,8 @@ const remoteWorkspaceManifestEnvelopeSchema = z
     metrics: z
       .object({
         contentHashCount: z.number().finite().nonnegative(),
-        contentHashDurationMs: z.number().finite().nonnegative(),
         memoHitCount: z.number().finite().nonnegative(),
         memoTruncatedCount: z.number().finite().nonnegative(),
-        totalDurationMs: z.number().finite().nonnegative(),
       })
       .strict(),
   })
@@ -112,14 +109,13 @@ export async function withoutWorkspaceHashContext<T>(operation: () => Promise<T>
 // crosses the shared byte cap so one placement cannot hold unbounded hash state.
 export function pruneWorkspaceHashMemo(memo: WorkspaceHashMemo): void {
   let bytes = 0;
-  for (const [identity, sha256] of memo) {
+  memo.forEach((sha256, identity) => {
     // Identities and digests are ASCII, so string length equals byte length.
     bytes += identity.length + sha256.length;
     if (bytes > MAX_WORKSPACE_HASH_MEMO_BYTES) {
       memo.clear();
-      return;
     }
-  }
+  });
 }
 
 /** Returns the placement-owned memo for a key, pruning it before each reuse. */

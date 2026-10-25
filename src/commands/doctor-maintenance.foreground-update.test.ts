@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TICK_INTERVAL_MS } from "../gateway/server-constants.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import {
   acquireGatewayLock,
   readLockPayloadSync,
@@ -24,6 +25,7 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -72,6 +74,7 @@ function fixture(published: boolean) {
     databasePath,
     payload: {
       pid: process.pid,
+      processNamespace: readGatewayLockProcessNamespace(),
       role: "gateway",
       createdAt: new Date().toISOString(),
       configPath: path.join(stateDir, "openclaw.json"),
@@ -94,9 +97,7 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
     let settled = false;
     let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>> | undefined;
     let failure: unknown;
-    const result = beginDoctorMaintenance({
-      options: { repair: true, nonInteractive: true },
-      root: null,
+    const result = beginDoctorRepair({
       runtime: { log: () => waiting.resolve(), error: vi.fn(), exit: vi.fn() },
       assertCurrent: () => {
         if (!authorized) {
@@ -175,11 +176,7 @@ it("keeps the published legacy startup gate through nested Doctor work and resou
   await withOpenClawTestState(
     { scenario: "external-service", label: "doctor-legacy-startup-exclusion" },
     async (state) => {
-      const maintenance = await beginDoctorMaintenance({
-        options: { repair: true, nonInteractive: true },
-        root: null,
-        runtime: { log() {}, error() {}, exit() {} },
-      });
+      const maintenance = await beginDoctorRepair();
       if (!maintenance) {
         throw new Error("Expected Doctor maintenance ownership");
       }

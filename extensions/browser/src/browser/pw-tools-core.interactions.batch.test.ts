@@ -107,6 +107,7 @@ function expectProxyGuard() {
     onPolicyCheckStarted: expect.any(Function),
     onPolicyDenied: expect.any(Function),
     page,
+    signal: expect.any(AbortSignal),
     ...proxyPolicy,
   });
 }
@@ -218,6 +219,7 @@ describe("executeActViaPlaywright batches", () => {
         ...target,
         page,
         response: null,
+        signal: expect.any(AbortSignal),
         ...proxyPolicy,
       });
     },

@@ -5,7 +5,6 @@ import {
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   submitRealtimeTalkAgentControl,
   submitRealtimeTalkConsult,
-  type RealtimeTalkEventInput,
   type RealtimeTalkTransportContext,
 } from "./shared.ts";
 
@@ -25,7 +24,6 @@ export type GoogleLiveFunctionCall = {
 
 type GoogleLiveToolOwnerOptions = {
   ctx: RealtimeTalkTransportContext;
-  emitTalkEvent: (input: RealtimeTalkEventInput) => void;
   isClosed: () => boolean;
   failConnection: (detail: string) => void;
   isDescribeViewActive: () => boolean;
@@ -80,23 +78,10 @@ export class GoogleLiveToolOwner {
       name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
     ) {
       const message = `Tool "${name}" is not available in browser Talk`;
-      if (!this.submitResult(callId, { error: message })) {
-        return;
-      }
-      this.options.emitTalkEvent({
-        type: "tool.error",
-        callId,
-        final: true,
-        payload: { name, message },
-      });
+      this.submitResult(callId, { error: message });
       return;
     }
 
-    this.options.emitTalkEvent({
-      type: "tool.call",
-      callId,
-      payload: { name, args: call.args ?? {} },
-    });
     if (name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME) {
       this.submitDescribeView(callId);
       return;
@@ -144,7 +129,6 @@ export class GoogleLiveToolOwner {
         callId,
         args: args ?? {},
         signal: abortController.signal,
-        emitTalkEvent: this.options.emitTalkEvent,
         submit: (toolCallId: string, result: unknown) => {
           this.submitResult(toolCallId, result);
         },
@@ -170,37 +154,23 @@ export class GoogleLiveToolOwner {
 
   private submitDescribeView(callId: string): void {
     const active = this.options.isDescribeViewActive();
-    if (
-      !this.submitResult(
-        callId,
-        active ? { ok: true, cameraStreamActive: true } : { ok: false, error: "camera is off" },
-      )
-    ) {
-      return;
-    }
-    this.options.emitTalkEvent({
-      type: active ? "tool.result" : "tool.error",
+    this.submitResult(
       callId,
-      final: true,
-      payload: {
-        name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-        cameraStreamActive: active,
-      },
-    });
+      active ? { ok: true, cameraStreamActive: true } : { ok: false, error: "camera is off" },
+    );
   }
 
-  private submitResult(callId: string, result: unknown): boolean {
+  private submitResult(callId: string, result: unknown): void {
     const call = this.pendingCalls.get(callId);
     if (!call || call.cancelled) {
-      return false;
+      return;
     }
     try {
       this.options.sendResult(callId, call.name, result);
     } catch (error) {
       this.options.failConnection(formatUiError(error));
-      return false;
+      return;
     }
     this.pendingCalls.delete(callId);
-    return true;
   }
 }

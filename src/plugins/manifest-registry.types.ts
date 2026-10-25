@@ -20,7 +20,7 @@ import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 export type PluginManifestContractListKey = Exclude<
   keyof PluginManifestContracts,
-  "embeddedExtensionFactories" | "agentToolResultMiddleware" | "trustedToolPolicies" | "tools"
+  "agentToolResultMiddleware" | "trustedToolPolicies" | "tools"
 >;
 
 type PluginManifestRecordStatic = Omit<

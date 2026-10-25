@@ -9,8 +9,7 @@ import {
 
 type Assistant = Extract<AgentMessage, { role: "assistant" }>;
 type ToolResult = Extract<AgentMessage, { role: "toolResult" }>;
-type Classification = ReturnType<typeof classifyToolUseResultPairing>;
-type Frame = Classification["frames"][number];
+type Frame = ReturnType<typeof classifyToolUseResultPairing>[number];
 
 export const PREFIX_TOOL_OWNER = Symbol("model-context-prefix-tool-owner");
 type Owner = Assistant | typeof PREFIX_TOOL_OWNER;
@@ -95,10 +94,7 @@ function compactFrame(
 export function createModelContextPairing(
   messages: readonly AgentMessage[],
   retainedMessages: readonly AgentMessage[],
-  limits: { maxOccurrences?: number; maxBytes?: number } = {},
 ): ModelContextPairing {
-  const maxOccurrences = limits.maxOccurrences ?? 256;
-  const maxBytes = limits.maxBytes ?? 128 * 1024;
   let frames: CompactFrame[] = [];
   let unknownPrefix = false;
   let unavailableLastFrame = false;
@@ -107,11 +103,11 @@ export function createModelContextPairing(
   let snapshot: ReturnType<ModelContextPairing["read"]> | undefined;
 
   function install(
-    classified: Classification,
+    classified: Frame[],
     identities: ReadonlyMap<Assistant, OwnedResult>,
     resolveSource: (source: ToolResult) => ToolResult | undefined,
   ) {
-    frames = classified.frames.map((frame, index) => {
+    frames = classified.map((frame, index) => {
       const identity = identities.get(frame.assistant) ?? {
         owner: frame.assistant,
         order: nextOrder++,
@@ -122,7 +118,7 @@ export function createModelContextPairing(
           owned.set(source, identity);
         }
       }
-      return compactFrame(frame, identity, resolveSource, index === classified.frames.length - 1);
+      return compactFrame(frame, identity, resolveSource, index === classified.length - 1);
     });
     unavailableLastFrame = false;
     boundPrefixFrames();
@@ -147,7 +143,7 @@ export function createModelContextPairing(
       const frameBytes = Buffer.byteLength(
         JSON.stringify([frame.assistant, ...frame.results.map(({ message }) => message)]),
       );
-      if (count + occurrences > maxOccurrences || bytes + frameBytes > maxBytes) {
+      if (count + occurrences > 256 || bytes + frameBytes > 128 * 1024) {
         unknownPrefix ||=
           frame.results.length < occurrences ||
           frame.results.some(({ message }) => isSyntheticMissingToolResult(message));
@@ -223,7 +219,7 @@ export function createModelContextPairing(
       const classified = classifyToolUseResultPairing(input, { preserveUnframedToolResults: true });
       if (
         unknownPrefix &&
-        classified.frames.some(
+        classified.some(
           (frame) =>
             frame.remainder.some(
               (message) =>

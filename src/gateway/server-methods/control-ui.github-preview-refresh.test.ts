@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
-import { createControlUiHandlers } from "./control-ui.js";
+import { controlUiHandlers } from "./control-ui.js";
 import { soloClient } from "./sessions-sharing.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
@@ -127,7 +127,7 @@ it.for(["unchanged", "removed", "rotated"] as const)(
           ...soloClient(),
           connId: "preview-refresh-connection",
         };
-        const handlers = createControlUiHandlers();
+        const handlers = controlUiHandlers;
         const rpc = async () => {
           const respond = vi.fn<RespondFn>();
           const params = {

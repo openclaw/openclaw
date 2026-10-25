@@ -2,8 +2,8 @@
 
 // Enforces Kysely and SQLite guardrails in infrastructure code.
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import type { Expression, ImportDeclaration, Node, SourceFile } from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
+import type { Expression, ImportDeclaration, Node, SourceFile } from "typescript/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
@@ -69,6 +69,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-schema-contract.ts",
     // Cross-store reservations own native BEGIN/ROLLBACK, without application queries.
     "src/infra/sqlite-source-fence.ts",
+    "src/infra/sqlite-staging-token.ts",
     "src/infra/sqlite-strict.ts",
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-user-version.ts",
@@ -165,7 +166,6 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.debug-proxy.ts",
     "src/infra/state-migrations.meeting-transcripts-detection.ts",
     "src/infra/state-migrations.meeting-transcripts-files.ts",
-    "src/infra/state-migrations.meeting-transcripts-verify.ts",
     "src/infra/state-migrations.media-persistence.ts",
     // Doctor FK PRAGMAs classify repair eligibility; row operations still use Kysely.
     "src/infra/state-migrations.session-window-repair.ts",

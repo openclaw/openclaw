@@ -37,6 +37,7 @@ import {
   type AdmittedFollowupTurn,
   type FollowupRunnerParams,
 } from "./reply-agent-turn-preparation.js";
+import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
 import { resolveReplyAdmissionRunId } from "./source-turn-id.js";
 import {
   isReplyOperationStalledBeforeOutput,
@@ -250,13 +251,16 @@ export function createFollowupRunner(
           : undefined,
       );
       executionEntered = true;
-      const execution = await runWithGoalReturn(() =>
-        executeFollowupTurn({
-          turn,
-          defaults,
-          onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
-          onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
-        }),
+      // Nested backend preparation borrows this successor, never the waking predecessor.
+      const execution = await runWithReplyOperationLifecycleAdmission(turn.operation, () =>
+        runWithGoalReturn(() =>
+          executeFollowupTurn({
+            turn,
+            defaults,
+            onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
+            onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
+          }),
+        ),
       );
       // A closed execution result is terminal queue work. Commit consumption
       // before accounting/delivery so their failures cannot replay model or tool effects.
@@ -508,9 +512,13 @@ export function createFollowupRunner(
       if (admittedTurn?.runId) {
         clearAgentRunContext(admittedTurn.runId);
       }
-      operation?.complete();
-      defaults.typing.markRunComplete();
-      defaults.typing.markDispatchIdle();
+      try {
+        await admittedTurn?.releaseSourceAdmission?.();
+      } finally {
+        operation?.complete();
+        defaults.typing.markRunComplete();
+        defaults.typing.markDispatchIdle();
+      }
     }
 
     if (disposition.kind === "retry") {

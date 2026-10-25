@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { createRuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
@@ -13,8 +14,8 @@ import {
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../../test-helpers/storage.ts";
-import { createChatPageStateContext } from "../chat-page.test-support.ts";
 import { stopChatRealtimeTalk, type ChatRealtimeState } from "../chat-realtime.ts";
+import { createChatPageStateContext } from "../chat-state-context.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
 
 type AudioProcessor = {
@@ -224,7 +225,11 @@ function harness(provider?: string) {
       expect(request).toHaveBeenCalledWith(
         "chat.send",
         expect.objectContaining({ sessionKey, message: transcript, ...extra }),
-        { timeoutMs: 30_000 },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
+        },
       ),
     requireReview: () => {
       state.sessionsResult = sessionsResult(

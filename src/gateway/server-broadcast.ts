@@ -9,9 +9,11 @@ import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { projectHealthSummary } from "./health/presentation.js";
+import type { HealthSummary } from "./health/types.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import { acceptsPresenceDeltas, preparePresenceDelivery } from "./presence-delivery.js";
-import { concatGatewayFrame } from "./serialized-json.js";
+import { SerializedGatewayFrame } from "./serialized-json.js";
 import {
   createGatewayLiveTextDelivery,
   type LiveTextPublication,
@@ -61,6 +63,7 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
 
 type EncodedSessionPayload = readonly [Buffer] | readonly [Buffer, Buffer, Buffer];
 type FramePayload = string | Buffer | EncodedSessionPayload;
+type RecipientFrames = Map<string | undefined, Map<number, SerializedGatewayFrame>>;
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string;
 function serializeFrameField(
@@ -154,6 +157,8 @@ type FrameBase = FrameFields & {
 type PreparedFrames = {
   fields?: FrameFields;
   snapshot?: FrameBase;
+  healthSummary?: FrameBase;
+  toolNarration?: FrameBase;
   delta?: FrameBase;
   reservedBytes?: number;
 };
@@ -168,21 +173,21 @@ function frameWithSequence(
   seq: number,
   payload: FramePayload,
   recipientProfileId?: string,
-): Buffer {
+): SerializedGatewayFrame {
   const recipient =
     recipientProfileId === undefined
       ? ""
       : `,"recipientProfileId":${JSON.stringify(recipientProfileId)}`;
   const suffix = Buffer.from(`,"seq":${seq}${base.stateVersionFragment}${recipient}}`);
   if (Buffer.isBuffer(payload)) {
-    return concatGatewayFrame([base.prefix, payload, suffix]);
+    return new SerializedGatewayFrame([base.prefix, payload, suffix]);
   }
   const chunks = typeof payload === "string" ? ([Buffer.from(payload)] as const) : payload;
   if (chunks.length === 1) {
-    return Buffer.concat([base.prefix, chunks[0], suffix]);
+    return new SerializedGatewayFrame([base.prefix, chunks[0], suffix]);
   }
   // Preserve compression boundaries while copying the already encoded recipient envelope.
-  return concatGatewayFrame([
+  return new SerializedGatewayFrame([
     Buffer.concat([base.prefix, chunks[0]]),
     chunks[1],
     Buffer.concat([chunks[2], suffix]),
@@ -241,7 +246,6 @@ export function createGatewayBroadcaster(params: {
     explicitPluginScope?: GatewayPluginEventScope,
     retained?: {
       client: GatewayWsClient;
-      socket: GatewayWsClient["socket"];
       frames: PreparedFrames;
       publication?: LiveTextPublication;
     },
@@ -301,10 +305,11 @@ export function createGatewayBroadcaster(params: {
       isPlainEventPayload(payload) &&
       payload.state === "status" &&
       payload.phase === "waiting_for_model";
+    const toolNarrationPayload = narration.prepareToolPayload(event, payload);
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
-        (event === "users.prefs.changed" && isTargeted) ||
+        ((event === "users.prefs.changed" || event === "mentions.changed") && isTargeted) ||
         (params.canReceiveSessionEvent !== undefined &&
           sessionKeys.length > 0 &&
           sessionKeys.every((key) => key.trim().length > 0)) ||
@@ -319,7 +324,7 @@ export function createGatewayBroadcaster(params: {
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
-    const encodedFrames = new Map<FramePayload, Map<string | undefined, Map<number, Buffer>>>();
+    const encodedFrames = new Map<FramePayload, RecipientFrames>();
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
     let mergedFrames: Map<unknown, { payload: unknown; frames: PreparedFrames }> | undefined;
@@ -350,7 +355,6 @@ export function createGatewayBroadcaster(params: {
       // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
       if (
         !params.clients.has(c) ||
-        (retained && c.socket !== retained.socket) ||
         c.invalidated === true ||
         c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE ||
         (modelWaitStatus &&
@@ -414,14 +418,7 @@ export function createGatewayBroadcaster(params: {
       }
       // Narration consumes producer snapshots before the per-socket wire
       // projection below removes cumulative text from foreground appends.
-      if (
-        (event === "session.narration" && !narration.isNarration(c.connId, sessionKeys)) ||
-        ((event === "chat" ||
-          event === "agent" ||
-          event === "session.tool" ||
-          event === "session.observer") &&
-          narration.consume(c, event, payload, sessionKeys, opts))
-      ) {
+      if (narration.consume(c, event, payload, sessionKeys, opts)) {
         continue;
       }
       if (!outboundEventLogged) {
@@ -509,7 +506,7 @@ export function createGatewayBroadcaster(params: {
             const fieldPrefixBytes = Buffer.byteLength(',"payload":');
             prepared.fields = getFrameFields();
             prepared.reservedBytes =
-              Buffer.byteLength(frameWithSequence(base, Number.MAX_SAFE_INTEGER, "")) +
+              frameWithSequence(base, Number.MAX_SAFE_INTEGER, "").byteLength +
               (estimator
                 ? fieldPrefixBytes + estimator(nextPayload, payloadBytes - fieldPrefixBytes)
                 : payloadBytes) +
@@ -524,7 +521,6 @@ export function createGatewayBroadcaster(params: {
             if (previous) {
               delivery.takePending(state, previous);
             }
-            const socket = c.socket;
             const queuedPublication = delivery.coalescePublication(
               publication,
               previous?.publication,
@@ -539,7 +535,6 @@ export function createGatewayBroadcaster(params: {
               send: () =>
                 broadcastInternal(event, nextPayload, opts, targetConnIds, explicitPluginScope, {
                   client: c,
-                  socket,
                   frames: prepared,
                   publication: queuedPublication,
                 }),
@@ -558,7 +553,6 @@ export function createGatewayBroadcaster(params: {
         delivery.drain(state, live.group);
         broadcastInternal(event, payload, opts, targetConnIds, explicitPluginScope, {
           client: c,
-          socket: c.socket,
           frames,
           publication,
         });
@@ -571,11 +565,18 @@ export function createGatewayBroadcaster(params: {
       const useDelta = delivery.canSendDelta(state, live, publication);
       const projection = live?.projection;
       const getDeliveryFrameBase = () =>
-        useDelta && projection
-          ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
-          : (frames.snapshot ??= frameBaseFor(payload));
-      let frame: Buffer | undefined;
-      let delivered: (() => void) | undefined;
+        toolNarrationPayload && narration.isNarration(c.connId, sessionKeys)
+          ? (frames.toolNarration ??= frameBaseFor(toolNarrationPayload()))
+          : event === "health" && c.connect.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
+            ? (frames.healthSummary ??= frameBaseFor(
+                // SAFETY: Only internal health producers can publish this reserved event.
+                projectHealthSummary(payload as HealthSummary),
+              ))
+            : useDelta && projection
+              ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
+              : (frames.snapshot ??= frameBaseFor(payload));
+      let frame: SerializedGatewayFrame | undefined;
+      let delivered: SessionEventProjection["delivered"];
       let presenceDelivery: ReturnType<typeof preparePresenceDelivery> | undefined;
       try {
         if (!sessionProjectionPrepared) {
@@ -692,8 +693,7 @@ export function createGatewayBroadcaster(params: {
         }
         finished = true;
         state.inFlight -= 1;
-        // ws fails every queued write when compression loses its socket. Settle
-        // each callback, but retire this delivery generation only once.
+        // Settle each queued write callback, but retire this delivery generation only once.
         if (state.retired) {
           return;
         }
@@ -710,9 +710,9 @@ export function createGatewayBroadcaster(params: {
       };
       try {
         // Publish the baseline before send can reenter; failures retire this transport.
-        delivered?.();
+        delivered?.(c);
         state.socket.batchWrites?.();
-        state.socket.send(frame, { binary: false }, sent);
+        const wireBytes = state.socket.send(frame, { binary: false }, sent);
         if (presenceDelivery && !state.retired) {
           c.presenceSnapshot = presenceDelivery.snapshot;
         }
@@ -721,6 +721,7 @@ export function createGatewayBroadcaster(params: {
           frame,
           sessionEventMetrics?.(c.connId),
           presenceDelivery?.mode ?? (presencePayload ? "legacy" : undefined),
+          wireBytes,
         );
       } catch (err) {
         sent(err instanceof Error ? err : new Error(String(err)));
@@ -733,9 +734,8 @@ export function createGatewayBroadcaster(params: {
     broadcastInternal(event, payload, opts);
   };
 
-  const broadcastToConnIds: GatewayBroadcastToConnIdsFn = (event, payload, connIds, opts) => {
+  const broadcastToConnIds: GatewayBroadcastToConnIdsFn = (event, payload, connIds, opts) =>
     broadcastInternal(event, payload, opts, connIds);
-  };
 
   const getBufferedAmount: GatewayBufferedAmountFn = (connId) => {
     const client = params.clients.getByConnectionId(connId);

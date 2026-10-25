@@ -23,9 +23,9 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createExecApprovalPolicySnapshot } from "./exec-approvals-allow-always.js";
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
-import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { prepareCronExecHostPolicyUse } from "./exec-approvals-cron-policy.js";
+import { currentPolicyExec } from "./exec-approvals-current-policy.test-support.js";
 import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
@@ -34,6 +34,7 @@ import {
   execApprovalsPublication,
   type ExecApprovalsPublicationValue,
 } from "./exec-approvals-publication.js";
+import * as execApprovalsSocket from "./exec-approvals-socket.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
@@ -125,6 +126,38 @@ async function removeAgentPolicies<T>(agentId: string, commit: () => Promise<T>)
   );
 }
 
+function authorizeEcho(command = "echo before") {
+  const entry = { id: "echo", pattern: "/usr/bin/echo" };
+  saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
+  return { ...currentPolicyExec(command), matches: [entry] };
+}
+
+function replacePolicy(
+  file: ExecApprovalsFile,
+  options: Omit<Parameters<typeof updateExecApprovals>[0], "update"> & {
+    preserveSocket?: boolean;
+  } = {},
+) {
+  const { preserveSocket, ...rest } = options;
+  return updateExecApprovals({ ...rest, update: { kind: "replace", file, preserveSocket } });
+}
+
+async function pauseDeletion(agentId: string) {
+  const started = createDeferred();
+  const gate = createDeferred();
+  const deletion = removeAgentPolicies(agentId, async () => {
+    started.resolve();
+    await gate.promise;
+    return "committed";
+  });
+  await awaitGateBeforeSettlement(
+    started.promise,
+    deletion,
+    "Deletion settled before roster commit",
+  );
+  return { deletion, finish: gate.resolve };
+}
+
 beforeEach(() => {
   createStateDir();
   loggerWarn.mockReset();
@@ -173,7 +206,7 @@ describe("exec approvals SQLite store", () => {
       defaults: { ask: "always" },
       agents: { runner: { ask: "invalid" } },
     } as unknown as ExecApprovalsFile;
-    const written = await updateExecApprovals({ update: { kind: "replace", file } });
+    const written = await replacePolicy(file);
     expect(written?.file.defaults).toMatchObject({ security: "deny", ask: "off" });
     expect(written?.raw).toBe(serializeExecApprovals(file));
     expect(readExecApprovalsSnapshot().raw).toBe(serializeExecApprovals(file));
@@ -221,21 +254,55 @@ describe("exec approvals SQLite store", () => {
     }
   });
 
-  it("mints one socket token and reuses it on later initialization", async () => {
-    const first = (await ensureExecApprovalsSnapshot()).file;
-    const transactions = vi.fn();
-    workerProbe.admission(workerAdmission, (request, grant, admit) => {
-      if (request.stage === "transaction") {
-        transactions();
-      }
-      admit(request, grant);
-    });
-    const second = (await ensureExecApprovalsSnapshot()).file;
-    expect(transactions).not.toHaveBeenCalled();
+  it("keeps socket credentials local across initialization and policy CAS", async () => {
+    const initialized = await ensureExecApprovalsSnapshot();
+    const first = initialized.file;
+    const policyRow = row();
+    const repeated = await ensureExecApprovalsSnapshot();
+    const second = repeated.file;
+    expect(row()).toEqual(policyRow);
+    expect(repeated.hash).toBe(initialized.hash);
     expect(first.socket?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(first.socket?.token).toBe(second.socket?.token);
     expect(first.socket?.path).toBe(second.socket?.path);
-    expect(row()).toMatchObject({ has_socket_token: 1, socket_path: first.socket?.path });
+    expect(row()).toMatchObject({ has_socket_token: 0, socket_path: null });
+    expect(row()?.raw_json).not.toContain(first.socket?.token);
+    expect(readExecApprovalsSnapshot().file.socket?.token).toBeUndefined();
+    const rotated = await replacePolicy(
+      { ...first, socket: { ...first.socket, token: "synthetic-rotated-socket-token" } },
+      { baseHash: initialized.hash, preserveSocket: true },
+    );
+    expect(rotated?.file.socket?.token).toBe("synthetic-rotated-socket-token");
+    expect(rotated?.hash).toBe(initialized.hash);
+    expect(row()).toEqual(policyRow);
+    await expect(
+      replacePolicy(first, { baseHash: "stale-policy-hash", preserveSocket: true }),
+    ).resolves.toBeNull();
+    expect((await ensureExecApprovalsSnapshot()).file.socket?.token).toBe(
+      "synthetic-rotated-socket-token",
+    );
+  });
+
+  it("reports a saved policy when local socket attachment fails after commit", async () => {
+    const before = await ensureExecApprovalsSnapshot();
+    const security = before.file.defaults?.security === "deny" ? "allowlist" : "deny";
+    vi.spyOn(execApprovalsSocket, "attachExecApprovalsSocket").mockRejectedValueOnce(
+      new Error("client credentials are busy"),
+    );
+    await expect(
+      replacePolicy(
+        { ...before.file, defaults: { security } },
+        {
+          baseHash: before.hash,
+          preserveSocket: true,
+        },
+      ),
+    ).rejects.toThrow(
+      "Exec approval policy was saved, but local socket credentials could not be updated",
+    );
+    const after = readExecApprovalsSnapshot();
+    expect(after.file.defaults?.security).toBe(security);
+    expect(after.hash).not.toBe(before.hash);
   });
 
   it("throws typed snapshot failures while enforcement reads fail closed", () => {
@@ -265,35 +332,15 @@ describe("exec approvals SQLite store", () => {
         kept: { security: "deny" },
       },
     });
-    const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
-    const { promise: commitGate, resolve: finishCommit } = createDeferred();
-    const deletion = removeAgentPolicies("removed", async () => {
-      notifyCommitStarted();
-      await commitGate;
-      return "committed";
-    });
-
-    await awaitGateBeforeSettlement(
-      commitStarted,
-      deletion,
-      "Deletion settled before roster commit",
-    );
+    const { deletion, finish } = await pauseDeletion("removed");
     try {
       const file = loadExecApprovals();
       expect(file.agents).toEqual({ kept: { security: "deny" } });
       await expect(
-        updateExecApprovals({
-          update: {
-            kind: "replace",
-            file: {
-              ...file,
-              agents: { ...file.agents, removed: { security: "full" } },
-            },
-          },
-        }),
+        replacePolicy({ ...file, agents: { ...file.agents, removed: { security: "full" } } }),
       ).rejects.toMatchObject({ name: "ExecApprovalsMutationFencedError" });
     } finally {
-      finishCommit();
+      finish();
     }
 
     await expect(deletion).resolves.toBe("committed");
@@ -301,18 +348,7 @@ describe("exec approvals SQLite store", () => {
 
   it("allows unrelated writers while deleting an agent with no approval policy", async () => {
     saveExecApprovals({ version: 1, agents: { kept: { security: "deny" } } });
-    const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
-    const { promise: commitGate, resolve: finishCommit } = createDeferred();
-    const deletion = removeAgentPolicies("missing", async () => {
-      notifyCommitStarted();
-      await commitGate;
-    });
-
-    await awaitGateBeforeSettlement(
-      commitStarted,
-      deletion,
-      "Deletion settled before roster commit",
-    );
+    const { deletion, finish } = await pauseDeletion("missing");
     try {
       saveExecApprovals({
         version: 1,
@@ -320,7 +356,7 @@ describe("exec approvals SQLite store", () => {
       });
       expect(loadExecApprovals().agents?.kept?.security).toBe("full");
     } finally {
-      finishCommit();
+      finish();
     }
     await deletion;
   });
@@ -456,9 +492,7 @@ describe("exec approvals SQLite store", () => {
 
   it("restores snapshots and honors rollback CAS", async () => {
     const missing = readExecApprovalsSnapshot();
-    const first = await updateExecApprovals({
-      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" }, agents: {} } },
-    });
+    const first = await replacePolicy({ version: 1, defaults: { security: "deny" }, agents: {} });
     if (!first) {
       throw new Error("missing first snapshot");
     }
@@ -467,9 +501,7 @@ describe("exec approvals SQLite store", () => {
 
     saveExecApprovals({ version: 1, defaults: { security: "allowlist" }, agents: {} });
     const original = readExecApprovalsSnapshot();
-    const newer = await updateExecApprovals({
-      update: { kind: "replace", file: { ...original.file, defaults: { security: "full" } } },
-    });
+    const newer = await replacePolicy({ ...original.file, defaults: { security: "full" } });
     if (!newer) {
       throw new Error("missing newer snapshot");
     }
@@ -509,12 +541,7 @@ describe("exec approvals SQLite store", () => {
       expect(current.file.defaults?.security).toBe("full");
       const sql = observeMainThreadSql();
       try {
-        await expect(
-          updateExecApprovals({
-            baseHash: stale.hash,
-            update: { kind: "replace", file: stale.file },
-          }),
-        ).resolves.toBeNull();
+        await expect(replacePolicy(stale.file, { baseHash: stale.hash })).resolves.toBeNull();
         const updated = await updateExecApprovals({
           update: { kind: "ensure-agent", agentId: "added", policy: { security: "allowlist" } },
         });
@@ -537,17 +564,14 @@ describe("exec approvals SQLite store", () => {
     const sql = observeMainThreadSql();
     try {
       const [first, second] = await Promise.all([
-        updateExecApprovals({
-          baseHash: before.hash,
-          update: {
-            kind: "replace",
-            file: { ...before.file, defaults: { security: "allowlist" } },
-          },
-        }),
-        updateExecApprovals({
-          baseHash: before.hash,
-          update: { kind: "replace", file: { ...before.file, defaults: { security: "deny" } } },
-        }),
+        replacePolicy(
+          { ...before.file, defaults: { security: "allowlist" } },
+          { baseHash: before.hash },
+        ),
+        replacePolicy(
+          { ...before.file, defaults: { security: "deny" } },
+          { baseHash: before.hash },
+        ),
       ]);
       expect(first?.file.defaults?.security).toBe("allowlist");
       expect(second).toBeNull();
@@ -561,19 +585,7 @@ describe("exec approvals SQLite store", () => {
   it.each(["usage", "one-shot", "allow-always"] as const)(
     "fences concurrent %s writes only when they can change policy",
     async (kind) => {
-      const entry = { id: "echo", pattern: "/usr/bin/echo" };
-      saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
-      const input: ExecAuthorizationCommitInput = {
-        agentId: "main",
-        matches: [entry],
-        command: "echo before",
-        authorization: {
-          source: "current-policy",
-          security: "allowlist",
-          ask: "on-miss",
-          allowlistSatisfied: true,
-        },
-      };
+      const input = authorizeEcho();
       const assertCurrent = await commitExecAuthorizationLocked(input);
       const failures: unknown[] = [];
       const stages: string[] = [];
@@ -630,19 +642,7 @@ describe("exec approvals SQLite store", () => {
   );
 
   it("does not batch authorizations across an intervening policy denial", async () => {
-    const entry = { id: "echo", pattern: "/usr/bin/echo" };
-    saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
-    const input: ExecAuthorizationCommitInput = {
-      agentId: "main",
-      matches: [entry],
-      command: "echo before",
-      authorization: {
-        source: "current-policy",
-        security: "allowlist",
-        ask: "on-miss",
-        allowlistSatisfied: true,
-      },
-    };
+    const input = authorizeEcho();
     const sql = observeMainThreadSql();
     const publications: ExecApprovalsPublicationValue[] = [];
     const releaseFacts = execApprovalsPublication.subscribeFacts((change) => {
@@ -691,19 +691,7 @@ describe("exec approvals SQLite store", () => {
   });
 
   it("settles authorizations with independent request lifetimes separately", async () => {
-    const entry = { id: "echo", pattern: "/usr/bin/echo" };
-    saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
-    const input: ExecAuthorizationCommitInput = {
-      agentId: "main",
-      matches: [entry],
-      command: "echo canceled",
-      authorization: {
-        source: "current-policy",
-        security: "allowlist",
-        ask: "on-miss",
-        allowlistSatisfied: true,
-      },
-    };
+    const input = authorizeEcho("echo canceled");
     let canceled = false;
     workerProbe.admission(workerAdmission, (request, grant, admit) => {
       if (request.stage === "commit") {

@@ -7,23 +7,18 @@ import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-vi
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 
 let fixture: HTMLElement | undefined;
-let container: HTMLElement | undefined;
 afterEach(() => {
   if (fixture) {
     disposeChatView(fixture);
     fixture.remove();
     fixture = undefined;
   }
-  container?.remove();
-  container = undefined;
 });
 it("reconciles persisted voice while preserving the live tail", async () => {
   await page.viewport(1440, 900);
-  fixture = document.createElement("test-talk-reconciliation");
+  fixture = createComposerContainer();
   fixture.style.cssText = "display:block;height:900px;width:100%";
-  container = createComposerContainer();
-  container.append(fixture);
-  document.body.append(container);
+  document.body.append(fixture);
   const transcript = createChatTranscript(() => "talk-reconciliation", {
     canFollowEnd: () => true,
   });
@@ -66,6 +61,7 @@ it("reconciles persisted voice while preserving the live tail", async () => {
     },
   ];
   renderChatPropsInto(fixture, props);
+  await expect.poll(() => fixture!.querySelectorAll(".chat-text").length).toBe(2);
   expect(fixture.querySelectorAll(".agent-chat__voice-turn")).toHaveLength(1);
   const renderedMessages = [...fixture.querySelectorAll(".chat-text")]
     .map((element) => element.textContent)

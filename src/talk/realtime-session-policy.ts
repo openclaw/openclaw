@@ -54,21 +54,39 @@ export function resolveRealtimeVoiceSessionPolicy(params: {
   const consultPolicy =
     params.configuredConsultPolicy ??
     (params.isAgentProxy && !handlesAgentConsult ? "always" : "auto");
-  const wakeNamePolicy = resolveRealtimeVoiceWakeNamePolicy({
-    ...params,
-    supportsActivationNameGating:
-      !handlesAgentConsult &&
-      (params.capabilities?.supportsActivationNameGating ?? params.supportsActivationNameGating) ===
-        true,
-  });
-  const wakeNames =
-    wakeNamePolicy === "never"
-      ? []
-      : resolveRealtimeVoiceWakeNames({
-          configuredWakeNames: params.configuredWakeNames,
-          cfg: params.cfg,
-          agentId: params.agentId,
-        });
+  const supportsActivationNameGating =
+    !handlesAgentConsult &&
+    (params.capabilities?.supportsActivationNameGating ?? params.supportsActivationNameGating) ===
+      true;
+  const wakeNamePolicy: RealtimeVoiceWakeNamePolicy =
+    !params.isAgentProxy || !supportsActivationNameGating
+      ? "never"
+      : params.requireWakeName === true
+        ? "always"
+        : params.requireWakeName === false
+          ? "never"
+          : "automatic";
+  let wakeNames: string[] = [];
+  if (wakeNamePolicy !== "never") {
+    if (params.configuredWakeNames !== undefined) {
+      const configured = params.configuredWakeNames
+        .map((name) => normalizeSupportedRealtimeVoiceActivationName(name))
+        .filter((name): name is string => Boolean(name));
+      wakeNames = sortRealtimeVoiceActivationNames(uniqueStrings(configured));
+    } else {
+      const agent = resolveAgentEntry(params.cfg, params.agentId);
+      const configuredAgentNames = [agent?.name, agent?.identity?.name]
+        .map((name) => normalizeSupportedRealtimeVoiceActivationName(name))
+        .filter((name): name is string => Boolean(name));
+      const defaults =
+        configuredAgentNames.length > 0
+          ? [...configuredAgentNames, "openclaw"]
+          : [normalizeSupportedRealtimeVoiceActivationName(params.agentId), "openclaw"].filter(
+              (name): name is string => Boolean(name),
+            );
+      wakeNames = sortRealtimeVoiceActivationNames(uniqueStrings(defaults));
+    }
+  }
 
   return {
     handlesAgentConsult,
@@ -110,45 +128,4 @@ export function resolveRealtimeVoiceBargeIn(params: {
 
 export function resolveRealtimeVoiceMinBargeInAudioEndMs(configured: number | undefined): number {
   return configured ?? 250;
-}
-
-function resolveRealtimeVoiceWakeNamePolicy(params: {
-  isAgentProxy: boolean;
-  supportsActivationNameGating: boolean;
-  requireWakeName: boolean | undefined;
-}): RealtimeVoiceWakeNamePolicy {
-  if (!params.isAgentProxy || !params.supportsActivationNameGating) {
-    return "never";
-  }
-  if (params.requireWakeName === true) {
-    return "always";
-  }
-  if (params.requireWakeName === false) {
-    return "never";
-  }
-  return "automatic";
-}
-
-function resolveRealtimeVoiceWakeNames(params: {
-  configuredWakeNames: string[] | undefined;
-  cfg: OpenClawConfig;
-  agentId: string;
-}): string[] {
-  if (params.configuredWakeNames !== undefined) {
-    const configured = params.configuredWakeNames
-      .map((name) => normalizeSupportedRealtimeVoiceActivationName(name))
-      .filter((name): name is string => Boolean(name));
-    return sortRealtimeVoiceActivationNames(uniqueStrings(configured));
-  }
-  const agent = resolveAgentEntry(params.cfg, params.agentId);
-  const configuredAgentNames = [agent?.name, agent?.identity?.name]
-    .map((name) => normalizeSupportedRealtimeVoiceActivationName(name))
-    .filter((name): name is string => Boolean(name));
-  const defaults =
-    configuredAgentNames.length > 0
-      ? [...configuredAgentNames, "openclaw"]
-      : [normalizeSupportedRealtimeVoiceActivationName(params.agentId), "openclaw"].filter(
-          (name): name is string => Boolean(name),
-        );
-  return sortRealtimeVoiceActivationNames(uniqueStrings(defaults));
 }

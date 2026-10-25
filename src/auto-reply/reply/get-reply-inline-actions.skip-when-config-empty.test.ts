@@ -7,9 +7,10 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
-import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { routeReplyDirectivesForTest } from "./get-reply-directives-routing.test-support.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
+import { replyDirectiveParams } from "./get-reply-directives.target-session.test-helpers.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runInlineFixture } from "./get-reply-inline-actions.shard-test-support.js";
@@ -22,13 +23,22 @@ import {
   runTestInlineActions as runBaseInlineActions,
   type HandleInlineActionsInput,
 } from "./get-reply-inline-actions.test-support.js";
-import { prepareReplyConversation } from "./prompt-session-context.js";
 import { stripInlineStatus } from "./reply-inline.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 function commandCtx(body: string, overrides: Parameters<typeof buildTestCtx>[0] = {}) {
   return buildTestCtx({ Body: body, CommandBody: body, ...overrides });
 }
+
+const makeEntry = (
+  sessionId: string,
+  parentSessionKey?: string,
+  updatedAt = Date.now(),
+): SessionEntry => ({
+  sessionId,
+  updatedAt,
+  ...(parentSessionKey ? { parentSessionKey } : {}),
+});
 
 type InlineInput = Parameters<typeof runBaseInlineActions>[0];
 function runTestInlineActions(
@@ -87,6 +97,8 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
   getLoadedChannelPluginById: (id: string) =>
     id === "slack"
       ? {
+          id: "slack",
+          config: {},
           mentions: {
             stripPatterns: () => [renderedSlackMentionPattern, "<@[^>\\s]+>"],
           },
@@ -104,19 +116,7 @@ async function routeSender(ctx: ReturnType<typeof buildTestCtx>, isGroup: boolea
     shouldContinue: true,
     ...(command.commandBodyNormalized === "/help" ? { reply: { text: "Sender help output" } } : {}),
   }));
-  const routing = resolveReplyDirectiveRouting({
-    commandText: ctx.commandText,
-    agentText: ctx.agentText,
-    modelAliases: [],
-    canInterpretTextDirectives: true,
-    isAuthorizedSender: true,
-    isGroup,
-    wasMentioned: isGroup,
-    ctx,
-    cfg: { commands: { text: true } },
-    agentId: "main",
-    resetTriggered: false,
-  });
+  const routing = await routeReplyDirectivesForTest({ ...ctx, WasMentioned: isGroup }, { isGroup });
   const result = await runTestInlineActions({
     ctx,
     cleanedBody: routing.cleanedBody,
@@ -212,9 +212,7 @@ describe("handleInlineActions", () => {
     const result = await runTestInlineActions({
       ctx,
       overrides: {
-        opts: {
-          onSessionMetadataChanges,
-        } as unknown as HandleInlineActionsInput["opts"],
+        opts: { onSessionMetadataChanges },
       },
     });
 
@@ -265,18 +263,8 @@ describe("handleInlineActions", () => {
       },
       overrides: {
         inlineStatusRequested: true,
-        sessionEntry: {
-          sessionId: "wrapper-session",
-          updatedAt: Date.now(),
-          parentSessionKey: "wrapper-parent",
-        } as SessionEntry,
-        sessionStore: {
-          "s:main": {
-            sessionId: "target-session",
-            updatedAt: Date.now(),
-            parentSessionKey: "target-parent",
-          } as SessionEntry,
-        },
+        sessionEntry: makeEntry("wrapper-session", "wrapper-parent"),
+        sessionStore: { "s:main": makeEntry("target-session", "target-parent") },
       },
     });
 
@@ -545,40 +533,28 @@ describe("handleInlineActions", () => {
   });
 
   it("passes requesterAgentIdOverride into inline tool runtimes", async () => {
-    const { typing, toolExecute, ctx, skillCommands } = toolFixture("spawn_subagent", async () => ({
-      text: "spawned",
-    }));
-
-    const result = await runTool(
-      { ctx, typing, skillCommands },
-      {
-        agentId: "named-worker",
-      },
-    );
+    const fixture = toolFixture("spawn_subagent", async () => ({ text: "spawned" }));
+    const result = await runTool(fixture, { agentId: "named-worker" });
 
     expectReply(result, "✅ Done.");
     expect(createOpenClawToolsMock.mock.calls[0]?.[0]).toMatchObject({
       requesterAgentIdOverride: "named-worker",
     });
-    expect(toolExecute).toHaveBeenCalledTimes(1);
+    expect(fixture.toolExecute).toHaveBeenCalledTimes(1);
   });
 
   it("passes sender identity into inline tool runtimes", async () => {
-    const { typing, toolExecute, ctx, skillCommands } = toolFixture(
-      "set_profile",
-      async () => ({ text: "updated" }),
-      {
-        skill: {
-          name: "set_profile",
-          skillName: "matrix-profile",
-          description: "Set Matrix profile",
-          skillSource: "workspace",
-        },
-        nativeChannelId: "oc_native_chat",
+    const fixture = toolFixture("set_profile", async () => ({ text: "updated" }), {
+      skill: {
+        name: "set_profile",
+        skillName: "matrix-profile",
+        description: "Set Matrix profile",
+        skillSource: "workspace",
       },
-    );
+      nativeChannelId: "oc_native_chat",
+    });
 
-    const result = await runTool({ ctx, typing, skillCommands });
+    const result = await runTool(fixture);
 
     expectReply(result, "✅ Done.");
     const toolsArgs = createOpenClawToolsMock.mock.calls[0]?.[0];
@@ -596,7 +572,7 @@ describe("handleInlineActions", () => {
         },
       },
     });
-    const toolCall = mockCallArgs(toolExecute, "toolExecute");
+    const toolCall = mockCallArgs(fixture.toolExecute, "toolExecute");
     expect(toolCall).toEqual([
       expect.stringMatching(/^cmd_/),
       {
@@ -610,7 +586,7 @@ describe("handleInlineActions", () => {
 
   it("honors construction-time before-tool-call blocks for inline tool dispatch", async () => {
     const abortController = new AbortController();
-    const { typing, toolExecute, ctx, skillCommands } = toolFixture("set_profile", async () => ({
+    const fixture = toolFixture("set_profile", async () => ({
       content: [{ type: "text", text: "denied by policy" }],
       details: {
         status: "blocked",
@@ -619,36 +595,25 @@ describe("handleInlineActions", () => {
       },
     }));
 
-    const result = await runTool(
-      { ctx, typing, skillCommands },
-      {
-        cfg: {
-          commands: { text: true },
-          tools: {
-            loopDetection: {
-              enabled: true,
-            },
-          },
-        },
-        agentId: "main",
-        opts: { abortSignal: abortController.signal },
-        sessionEntry: {
-          sessionId: "wrapper-session",
-          updatedAt: 0,
-        },
-        sessionStore: {
-          "s:main": {
-            sessionId: "target-session",
-            updatedAt: 0,
+    const result = await runTool(fixture, {
+      cfg: {
+        commands: { text: true },
+        tools: {
+          loopDetection: {
+            enabled: true,
           },
         },
       },
-    );
+      agentId: "main",
+      opts: { abortSignal: abortController.signal },
+      sessionEntry: makeEntry("wrapper-session", undefined, 0),
+      sessionStore: { "s:main": makeEntry("target-session", undefined, 0) },
+    });
 
     expectReply(result, "❌ Tool call blocked: denied by policy");
     const toolsArgs = createOpenClawToolsMock.mock.calls[0]?.[0];
     expect(toolsArgs).toMatchObject({ sessionId: "target-session", currentChannelId: "whatsapp" });
-    const blockedToolCall = mockCallArgs(toolExecute, "toolExecute");
+    const blockedToolCall = mockCallArgs(fixture.toolExecute, "toolExecute");
     expect(blockedToolCall).toEqual([
       expect.stringMatching(/^cmd_/),
       {
@@ -658,7 +623,7 @@ describe("handleInlineActions", () => {
       },
       abortController.signal,
     ]);
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(fixture.typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it.each<{
@@ -708,41 +673,31 @@ describe("handleInlineActions", () => {
       },
     );
 
-    const { typing, toolExecute, ctx, skillCommands } = toolFixture("spawn_subagent", async () => ({
-      content: "spawned",
-    }));
+    const fixture = toolFixture("spawn_subagent", async () => ({ content: "spawned" }));
 
-    const result = await runTool(
-      { ctx, typing, skillCommands },
-      {
-        cfg: {
-          commands: { text: true },
-          session: { store: storeTemplate },
-          agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
-        },
-        sessionKey: "agent:main:acp:leaf",
+    const result = await runTool(fixture, {
+      cfg: {
+        commands: { text: true },
+        session: { store: storeTemplate },
+        agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
       },
-    );
+      sessionKey: "agent:main:acp:leaf",
+    });
 
     expectReply(result, "❌ Tool not available: sessions_spawn");
-    expect(toolExecute).not.toHaveBeenCalled();
+    expect(fixture.toolExecute).not.toHaveBeenCalled();
   });
 
   it("passes sandboxed runtime state into inline tool construction", async () => {
-    const { typing, toolExecute, ctx, skillCommands } = toolFixture("list_sessions", async () => ({
-      content: "listed",
-    }));
+    const fixture = toolFixture("list_sessions", async () => ({ content: "listed" }));
 
-    const result = await runTool(
-      { ctx, typing, skillCommands },
-      {
-        cfg: {
-          commands: { text: true },
-          agents: { defaults: { sandbox: { mode: "all" } } },
-        },
-        sessionKey: "agent:main:thread",
+    const result = await runTool(fixture, {
+      cfg: {
+        commands: { text: true },
+        agents: { defaults: { sandbox: { mode: "all" } } },
       },
-    );
+      sessionKey: "agent:main:thread",
+    });
 
     expectReply(result, "listed");
     expect(createOpenClawToolsMock).toHaveBeenCalledWith(
@@ -750,7 +705,7 @@ describe("handleInlineActions", () => {
         sandboxed: true,
       }),
     );
-    expect(toolExecute).toHaveBeenCalled();
+    expect(fixture.toolExecute).toHaveBeenCalled();
   });
 
   it("marks command-handler terminal replies for direct delivery (#87107)", async () => {
@@ -969,31 +924,20 @@ describe("sender command dispatch ownership", () => {
           : { shouldContinue: true },
       );
 
-      const directiveResult = await resolveReplyDirectives({
-        ctx,
-        cfg,
-        agentId: "main",
-        agentDir: "/tmp/main-agent",
-        workspaceDir: "/tmp",
-        agentCfg: cfg.agents.defaults,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: {},
-        sessionKey: "agent:main:discord:direct:123456789012345678",
-        sessionScope: "per-sender",
-        conversation: prepareReplyConversation({ ctx: sessionCtx, sessionEntry }),
-        isGroup: false,
-        triggerBodyNormalized: ctx.commandText,
-        resetTriggered: false,
-        commandAuthorized: true,
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o-mini",
-        aliasIndex: { byAlias: new Map(), byKey: new Map() },
-        provider: "openai",
-        model: "gpt-4o-mini",
-        hasResolvedHeartbeatModelOverride: false,
-        typing,
-      });
+      const directiveResult = await resolveReplyDirectives(
+        replyDirectiveParams({
+          ctx,
+          cfg,
+          agentCfg: cfg.agents.defaults,
+          sessionCtx,
+          sessionEntry,
+          sessionKey: "agent:main:discord:direct:123456789012345678",
+          storePath: undefined,
+          triggerBodyNormalized: ctx.commandText,
+          commandAuthorized: true,
+          typing,
+        }),
+      );
       expect(directiveResult.kind).toBe("continue");
       if (directiveResult.kind !== "continue") {
         throw new Error("expected command routing continuation");

@@ -1,13 +1,13 @@
 import { ErrorCodes, GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
+import { sessionListAgentMatcher } from "./session-list-query.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionRefreshOutcome,
   SessionState,
-} from "./session-capability.ts";
-import { sessionListAgentMatcher } from "./session-list-query.ts";
+} from "./session-types.ts";
 
 type Host = {
   connection: SessionConnectionOwner;

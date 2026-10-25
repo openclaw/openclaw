@@ -331,11 +331,20 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `7bd4fdff3d4035bcea50718673c663f5474bae89` with WebKit
-`f8521bb45429b3e1df6bc6d9b98b8df4376a89c5` in prerelease
-`openclaw-v1.4.4-20261017-7bd4fdff3d-webkit-f8521bb454`.
-It includes the Bun 1.4.4 upstream sync, honors disabled source maps in the
-transpiler cache, and shares identical `node:vm` source buffers and source-map URIs.
+The pinned build pairs Bun `807211511f81e0a6639bc9eb41d67120f6b85316` with WebKit
+`a2976f02e69fde8ccc45dc8fb346173f9d63f8a1` in prerelease
+`openclaw-v1.4.4-20261024-807211511f-webkit-a2976f02e6`.
+
+It restores SNI set with `tlsSocket.setServername()` before connecting, including
+with `autoSelectFamily` ([fork change #197](https://github.com/openclaw/bun/pull/197)).
+The Buffer copy reduction was withdrawn pending a container-neutral design;
+serialization remains unchanged from the previous `ef37c31de3` pin.
+
+It includes 58 upstream Bun commits through `ad4089bf`, including native
+lint/format performance improvements and `--no-script` to bypass package scripts.
+The engine replays the 16 fork patches onto upstream WebKit `87ee10da`.
+It retains disabled source-map handling in the transpiler cache and shares
+identical `node:vm` source buffers and source-map URIs.
 This build preserves `DONT_CONTEXTIFY` global receiver identity for jsdom, keeps
 `availableParallelism()` independent of `navigator`, and fixes `SourceMap.findOrigin()`
 coordinates. It registers `fs.watch` callbacks on the returned watcher, treats
@@ -441,14 +450,14 @@ newest patch. Compare exact versions when measuring a toolchain change, and
 measure setup separately from the test body.
 
 Preflight's manifest bootstrap uses the exact `NODE_VERSION` pin in `ci.yml`
-(24.21.0). Unlike the repository helper, `actions/setup-node` can satisfy a
+(24.22.1). Unlike the repository helper, `actions/setup-node` can satisfy a
 `24.x` request from an older cached patch below OpenClaw's support floor.
 
 CI's execution version does not define the supported user runtime matrix.
-`package.json` accepts Node 24.16+ and Node 26.1+. The full manual CI graph checks
-the Node 24.16.0 floor; `node-runtime-compat.yml` checks Node 26.1.0 weekly and on
+`package.json` accepts Node 24.22.1+ and Node 26.12.1+. The full manual CI graph checks
+the Node 24.22.1 floor; `node-runtime-compat.yml` checks Node 26.12.1 weekly and on
 dispatch. Current packaged fresh-install and upgrade checks run on both
-Node 24.21.0 and Node 26.1.0, with Windows Node 24 fresh-install proof on 24.16.0.
+Node 24.22.1 and Node 26.12.1, with Windows Node 24 fresh-install proof on 24.22.1.
 Both runtime variants use the same candidate package. These support cells stay
 independent of changes to the ordinary execution pin; source/build smoke alone
 does not prove an installed upgrade. See the
@@ -481,6 +490,13 @@ separate package graphs previously ran before the app build in one job; a hosted
 baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilation
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
+
+Package tests start after preflight and do not consume the Linux runtime artifact.
+App tests wait for `build-artifacts` before allocating their macOS runner, so Linux
+runner queueing cannot consume the native test job's 30-minute budget. They download
+the producer's artifact by its output ID and verify the selected checkout SHA before
+execution. Failed-job reruns retain the successful producer's artifact output.
+The aggregate CI gate still requires the Linux checks and both native phases.
 
 Full nonpublishing manual validation also stages the exact candidate runtime and runs
 ordinary bundled recovery and relaunch through two fresh `.app` test-host processes.
@@ -639,7 +655,9 @@ existing CI job retains its check with the same name.
 GitHub requires both the check and the commit status when both share a required
 context. Missing approval, failed CI, or evaluation errors fail the review status.
 Missing or running CI leaves it pending and keeps merging blocked. CI completion
-automatically evaluates it again. Approval comments do not rerun the test suite.
+automatically evaluates it again. An unfinished run-list entry is refreshed by
+exact run ID before waiting, so delayed list updates do not hide a completed
+attempt. Approval comments do not rerun the test suite.
 
 Every ten minutes, the resolver reconciles CI completions
 from five minutes before the previous successful scheduled pass started until
@@ -1111,6 +1129,11 @@ installed Node, Vite, and dependencies. The temporary base's CSS sidecars are
 normalized through the candidate's pinned compressor before comparison. The
 report identifies both revisions and the toolchain. There is no manually updated
 CSS baseline, and the cumulative ceilings still bound a series of small changes.
+If a base already exceeds a size ceiling, the head may hold or reduce that
+surface, but growth beyond 64 bytes of gzip build variance fails the check.
+Request counts have no variance allowance. Locale comparisons track each locale
+separately, so shrinking one catalog cannot hide growth in another. Absolute
+checks and newly introduced violations fail locally and in GitHub Actions.
 
 Run the same comparison locally after installing dependencies:
 

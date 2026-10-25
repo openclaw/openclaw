@@ -41,7 +41,6 @@ describe("standalone resource allowlist", () => {
     ["custodian-skills/recover/SKILL.md", "skills"],
     ["dist/control-ui/assets/index.js", "controlUi"],
     ["dist/assets/session-card/Lato-Regular.ttf", "runtimeAssets"],
-    ["dist/canvas-host/a2ui/a2ui.bundle.js", "runtimeAssets"],
     ["dist/export-html/template.js", "templates"],
     ["dist/bundled/session-memory/HOOK.md", "hookMetadata"],
     ["dist/bundled/session-memory/handler.js", undefined],

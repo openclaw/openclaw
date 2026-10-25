@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://catalog-pane-disconnect.test/"} */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   SessionsCatalogListResult,
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { requestCalls } from "./chat-host.test-support.ts";
+import { catalogList } from "./chat-pane-catalog.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createGatewayBrowserClientFixture, type TestChatPane } from "./chat-pane.test-support.ts";
 import {
@@ -16,33 +18,18 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 
 const key = { catalogId: "fixture", hostId: "gateway:local", threadId: "closed-pane" };
-const listed: SessionsCatalogListResult = {
-  catalogs: [
-    {
-      id: key.catalogId,
-      label: "Fixture catalog",
-      capabilities: { continueSession: false, archive: false },
-      hosts: [
-        {
-          hostId: key.hostId,
-          label: "Local fixture",
-          kind: "gateway",
-          connected: true,
-          sessions: [
-            {
-              threadId: key.threadId,
-              name: "Closed pane fixture",
-              status: "stored",
-              archived: false,
-              canContinue: false,
-              canArchive: false,
-            },
-          ],
-        },
-      ],
-    },
-  ],
+const listMethod = "sessions.catalog.list";
+const readMethod = "sessions.catalog.read";
+const session = {
+  threadId: key.threadId,
+  status: "stored" as const,
+  archived: false,
+  canContinue: false,
+  canArchive: false,
 };
+const listed = catalogList(key, [session], {
+  capabilities: { continueSession: false, archive: false },
+});
 const readResult: SessionsCatalogReadResult = {
   hostId: key.hostId,
   threadId: key.threadId,
@@ -53,18 +40,15 @@ beforeEach(installTranscriptDomMocks);
 afterEach(async () => {
   resetTranscriptTestDom();
   await vi.dynamicImportSettled();
-  vi.restoreAllMocks();
 });
 
 function mountCatalogPane(request: ReturnType<typeof vi.fn<(method: string) => Promise<unknown>>>) {
   const client = createGatewayBrowserClientFixture();
   vi.spyOn(client, "request").mockImplementation(request);
   const fixture = createRefreshChatPane(client);
-  fixture.context.config.subscribe = () => () => {};
   const pane = fixture.pane as unknown as TestChatPane;
   pane.sessionKey = buildCatalogSessionKey(key, "main");
   const loads = vi.spyOn(pane, "loadCatalogSession");
-  // The render fixture keeps the real DOM connection and teardown callbacks.
   document.body.append(pane.element);
   return { pane, client, context: fixture.context, loads };
 }
@@ -73,109 +57,82 @@ function pendingLoads(loads: ReturnType<typeof mountCatalogPane>["loads"]) {
   return loads.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : []));
 }
 
-describe("catalog pane disconnect ownership", () => {
-  it.each(["before", "after"] as const)(
-    "does not start a transcript read when the pane disconnects %s lookup settles",
-    async (disconnectTiming) => {
-      const lookup = createDeferred<SessionsCatalogListResult>();
-      const request = vi.fn((method: string) => {
-        if (method === "sessions.catalog.list") {
-          return lookup.promise;
-        }
-        if (method === "sessions.catalog.read") {
-          return Promise.resolve(readResult);
-        }
-        return Promise.resolve({});
-      });
-      const { pane, client, context, loads } = mountCatalogPane(request);
-      try {
-        await vi.waitFor(() =>
-          expect(request.mock.calls.some(([method]) => method === "sessions.catalog.list")).toBe(
-            true,
-          ),
-        );
-        const active = pendingLoads(loads);
+function expectClosed({ pane, context, client }: ReturnType<typeof mountCatalogPane>) {
+  expect(pane).toMatchObject({ isConnected: false, state: undefined });
+  expect(context.gateway.snapshot.client).toBe(client);
+  expect(context.gateway.snapshot.phase).toBe("connected");
+}
+
+function waitForRequest(request: Parameters<typeof requestCalls>[0], method: string) {
+  return vi.waitFor(() => expect(requestCalls(request, method).length).toBeGreaterThan(0));
+}
+
+it.each(["lookup-before", "lookup-after", "read-resolve", "read-reject"] as const)(
+  "fences catalog work when disconnecting at %s",
+  async (timing) => {
+    const lookupStage = timing.startsWith("lookup");
+    const lookup = createDeferred<SessionsCatalogListResult>();
+    const read = createDeferred<SessionsCatalogReadResult>();
+    const respond = (method: string) => {
+      if (method === listMethod) {
+        return lookup.promise;
+      }
+      if (method === readMethod) {
+        return read.promise;
+      }
+      return Promise.resolve({});
+    };
+    const request = vi.fn(lookupStage ? respond : async (method: string) => await respond(method));
+    if (lookupStage) {
+      read.resolve(readResult);
+    } else {
+      lookup.resolve(listed);
+    }
+    const fixture = mountCatalogPane(request);
+    const { pane, loads } = fixture;
+    try {
+      await waitForRequest(request, lookupStage ? listMethod : readMethod);
+      const active = pendingLoads(loads);
+      const readCount = requestCalls(request, readMethod).length;
+      const state = pane.state;
+      let history = { ...pane.history };
+      let error = state.lastError;
+      if (lookupStage) {
         expect(active.length).toBeGreaterThan(0);
         expect(pane.isConnected).toBe(true);
-        const messagesBeforeClose = pane.history.catalogMessages;
-        const sessionBeforeClose = pane.history.catalogSession;
-        if (disconnectTiming === "before") {
+        if (timing === "lookup-before") {
           pane.remove();
           lookup.resolve(listed);
         } else {
           lookup.resolve(listed);
-          // Retire the pane after the lookup helper resumes but before its caller does.
+          // Between the lookup helper resuming and its caller resuming.
           queueMicrotask(() => pane.remove());
         }
-        await Promise.all(active);
-
-        expect(pane.isConnected).toBe(false);
-        expect(pane.state).toBeUndefined();
-        expect(context.gateway.snapshot.client).toBe(client);
-        expect(context.gateway.snapshot.phase).toBe("connected");
-        expect
-          .soft(request.mock.calls.filter(([method]) => method === "sessions.catalog.read"))
-          .toHaveLength(0);
-        expect.soft(pane.history.catalogMessages).toEqual(messagesBeforeClose);
-        expect.soft(pane.history.catalogSession).toEqual(sessionBeforeClose);
-      } finally {
+      } else {
         pane.remove();
-        lookup.resolve(listed);
-        await Promise.allSettled(pendingLoads(loads));
-      }
-    },
-  );
-
-  it.each(["resolve", "reject"] as const)(
-    "does not publish when an outstanding transcript read %ss after disconnect",
-    async (settlement) => {
-      const read = createDeferred<SessionsCatalogReadResult>();
-      const request = vi.fn(async (method: string) => {
-        if (method === "sessions.catalog.list") {
-          return listed;
-        }
-        if (method === "sessions.catalog.read") {
-          return await read.promise;
-        }
-        return {};
-      });
-      const { pane, client, context, loads } = mountCatalogPane(request);
-      try {
-        await vi.waitFor(() =>
-          expect(request.mock.calls.some(([method]) => method === "sessions.catalog.read")).toBe(
-            true,
-          ),
-        );
-        const active = pendingLoads(loads);
-        const readCount = request.mock.calls.filter(
-          ([method]) => method === "sessions.catalog.read",
-        ).length;
-        const state = pane.state;
-        pane.remove();
-        expect(pane.isConnected).toBe(false);
-        expect(pane.state).toBeUndefined();
-        expect(context.gateway.snapshot.client).toBe(client);
-        expect(context.gateway.snapshot.phase).toBe("connected");
-        const messagesAfterClose = pane.history.catalogMessages;
-        const errorAfterClose = state.lastError;
-
-        if (settlement === "resolve") {
-          read.resolve(readResult);
-        } else {
+        expectClosed(fixture);
+        history = { ...pane.history };
+        error = state.lastError;
+        if (timing === "read-reject") {
           read.reject(new Error("Late closed-pane failure"));
+        } else {
+          read.resolve(readResult);
         }
-        await Promise.all(active);
-
-        expect
-          .soft(request.mock.calls.filter(([method]) => method === "sessions.catalog.read"))
-          .toHaveLength(readCount);
-        expect.soft(pane.history.catalogMessages).toEqual(messagesAfterClose);
-        expect.soft(state.lastError).toBe(errorAfterClose);
-      } finally {
-        pane.remove();
-        read.resolve(readResult);
-        await Promise.allSettled(pendingLoads(loads));
       }
-    },
-  );
-});
+      await Promise.all(active);
+      expectClosed(fixture);
+      expect.soft(requestCalls(request, readMethod)).toHaveLength(lookupStage ? 0 : readCount);
+      expect.soft(pane.history.catalogMessages).toEqual(history.catalogMessages);
+      if (lookupStage) {
+        expect.soft(pane.history.catalogSession).toEqual(history.catalogSession);
+      } else {
+        expect.soft(state.lastError).toBe(error);
+      }
+    } finally {
+      pane.remove();
+      lookup.resolve(listed);
+      read.resolve(readResult);
+      await Promise.allSettled(pendingLoads(loads));
+    }
+  },
+);

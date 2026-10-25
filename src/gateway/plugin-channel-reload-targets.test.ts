@@ -11,10 +11,11 @@ describe("plugin channel reload targets", () => {
   it("matches channel plugin config changes by owning plugin id", () => {
     const targets = listChannelPluginConfigTargetIds({
       channelId: "matrix",
-      pluginId: "acme-chat",
-      aliases: ["matrix-chat"],
+      pluginId: " acme-chat ",
+      aliases: [" matrix ", " ", "acme-chat", " matrix-chat "],
     });
 
+    expect([...targets]).toEqual(["matrix", "acme-chat", "matrix-chat"]);
     expect(pluginConfigTargetsChanged(targets, ["plugins.entries.acme-chat.config.mode"])).toBe(
       true,
     );

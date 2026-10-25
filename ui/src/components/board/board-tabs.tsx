@@ -1,9 +1,12 @@
 import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../../lib/reactive/observers.ts";
 import { Menu } from "../solid/menu.tsx";
 import { Tabs } from "../solid/tabs.tsx";
+
+registerEnglishCatalog(registerBoardDocumentEnglish);
 
 export function orderedBoardTabs(tabs: readonly BoardTab[]): BoardTab[] {
   return tabs.toSorted(
@@ -19,10 +22,9 @@ export function BoardTabs(props: {
 }) {
   const overflowId = createUniqueId();
   const showTabs = createMemo(() => props.tabs.length > 1);
-  const activeTabId = createMemo(() => props.activeTabId);
   const visible = createMemo(() => {
     const tabs = props.tabs.slice(0, 6);
-    const active = props.tabs.find((tab) => tab.tabId === activeTabId());
+    const active = props.tabs.find((tab) => tab.tabId === props.activeTabId);
     if (active && !tabs.some((tab) => tab.tabId === active.tabId)) {
       tabs[tabs.length - 1] = active;
     }
@@ -37,7 +39,7 @@ export function BoardTabs(props: {
     tab: (value: string) => HTMLElement | undefined;
   }>();
   const layoutKey = createMemo(() =>
-    JSON.stringify([activeTabId(), visible().map((tab) => tab.tabId)]),
+    JSON.stringify([props.activeTabId, visible().map((tab) => tab.tabId)]),
   );
   createResizeObserver(
     () => {
@@ -49,12 +51,12 @@ export function BoardTabs(props: {
       if (!current) {
         return [];
       }
-      const selected = current.tab(activeTabId());
+      const selected = current.tab(props.activeTabId);
       return selected ? [current.track, selected] : [current.track];
     },
     () => {
       const current = nodes();
-      const selected = current?.tab(activeTabId());
+      const selected = current?.tab(props.activeTabId);
       if (!current || !selected) {
         return;
       }

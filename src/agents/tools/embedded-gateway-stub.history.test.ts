@@ -8,7 +8,7 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as serverConstants from "../../gateway/server-constants.js";
+import * as historyBudget from "../../gateway/chat-history-budget.js";
 import * as historyPages from "../../gateway/server-methods/chat-history-pages.js";
 import { readChatHistoryMessageId } from "../../gateway/session-history-tail.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
@@ -282,7 +282,7 @@ describe("embedded session history anchors", () => {
   });
 
   it("preserves the anchor when the embedded transport byte cap drops neighbors", async () => {
-    vi.spyOn(serverConstants, "getMaxChatHistoryMessagesBytes").mockReturnValue(1_200);
+    vi.spyOn(historyBudget, "getMaxChatHistoryMessagesBytes").mockReturnValue(1_200);
     const result = await callGateway<{ messages: unknown[] }>({
       method: "chat.history",
       params: { ...selector, limit: 3 },

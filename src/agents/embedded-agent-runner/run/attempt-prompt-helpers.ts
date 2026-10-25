@@ -1,3 +1,4 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
@@ -26,7 +27,6 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js"
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { normalizeContextTokenBudget } from "../utils.js";
 import type { DecisionPromptBuildFields } from "./attempt-decision-prefilter.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -36,10 +36,8 @@ export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & 
 };
 
 type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
-  Partial<Pick<HookRunner, "runAgentTurnPrepare" | "runHeartbeatPromptContribution">> & {
-    hasHooks: (
-      hookName: "agent_turn_prepare" | "heartbeat_prompt_contribution" | "before_prompt_build",
-    ) => boolean;
+  Partial<Pick<HookRunner, "runAgentTurnPrepare">> & {
+    hasHooks: (hookName: "agent_turn_prepare" | "before_prompt_build") => boolean;
   };
 
 export async function resolvePromptBuildHookResult(params: {
@@ -54,21 +52,6 @@ export async function resolvePromptBuildHookResult(params: {
     log.warn(`${hookName} hook failed: ${String(hookErr)}`);
     return undefined;
   };
-  const heartbeatContribution =
-    params.hookCtx.trigger === "heartbeat" &&
-    params.hookRunner?.runHeartbeatPromptContribution &&
-    params.hookRunner.hasHooks("heartbeat_prompt_contribution")
-      ? await params.hookRunner
-          .runHeartbeatPromptContribution(
-            {
-              sessionKey: params.hookCtx.sessionKey,
-              agentId: params.hookCtx.agentId,
-              heartbeatName: "heartbeat",
-            },
-            params.hookCtx,
-          )
-          .catch(logHookFailure("heartbeat_prompt_contribution"))
-      : undefined;
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
         .runBeforePromptBuild(
@@ -97,7 +80,7 @@ export async function resolvePromptBuildHookResult(params: {
         ),
       )
     : undefined;
-  const pendingContext = [turnContext, heartbeatContribution];
+  const pendingContext = [turnContext];
   const joinContext = (key: "prependContext" | "appendContext") =>
     joinPresentTextSegments([...pendingContext, promptBuildResult].map((source) => source?.[key]));
   return {
@@ -416,8 +399,8 @@ export function buildAfterTurnRuntimeContext(params: {
           ...(target?.threadId !== undefined ? { threadId: target.threadId } : {}),
         }
       : undefined;
-  const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
-  const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
+  const tokenBudget = floorPositiveFiniteNumber(params.tokenBudget);
+  const currentTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
   return {
     ...buildEmbeddedCompactionRuntimeContext(
       {

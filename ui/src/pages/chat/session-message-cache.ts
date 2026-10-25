@@ -31,39 +31,27 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   if (existing) {
     return existing;
   }
-  const {
-    key,
-    kind,
-    label,
-    displayName,
-    derivedTitle,
-    classification,
-    participants,
-    expandedParticipants,
-    owner,
-    lastRunId,
-    status,
-    runtimeMs,
-  } = row;
   const metadata = {
-    key,
-    kind,
-    label,
-    displayName,
-    derivedTitle,
-    classification,
-    participants,
-    expandedParticipants,
-    owner,
-    lastRunId,
-    status,
-    runtimeMs,
+    key: row.key,
+    kind: row.kind,
+    label: row.label,
+    displayName: row.displayName,
+    derivedTitle: row.derivedTitle,
+    classification: row.classification,
+    participants: row.participants,
+    expandedParticipants: row.expandedParticipants,
+    owner: row.owner,
+    lastRunId: row.lastRunId,
+    status: row.status,
+    runtimeMs: row.runtimeMs,
   };
   transcriptMetadata.set(row, metadata);
   return metadata;
 }
 
 export type ChatSessionSnapshot = {
+  // The board provider validates cached payloads before they can reach a view.
+  board?: { snapshot: unknown; receivedAtMs: number } | null;
   widgetHeights?: Record<string, number>;
   transcriptMetadata?: ChatTranscriptMetadata;
   progressCard?: ProgressCard | null;
@@ -318,10 +306,15 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.sessionId === incoming.sessionId
       ? { ...incoming, progressCard: existing.snapshot.progressCard }
       : incoming;
-  const snapshot =
+  const withWidgetHeights =
     withProgress.widgetHeights === undefined && existing?.snapshot.sessionId === incoming.sessionId
       ? { ...withProgress, widgetHeights: existing.snapshot.widgetHeights }
       : withProgress;
+  // Boards belong to the scoped conversation key, independently of transcript resets.
+  const snapshot =
+    withWidgetHeights.board === undefined && existing?.snapshot.board !== undefined
+      ? { ...withWidgetHeights, board: existing.snapshot.board }
+      : withWidgetHeights;
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
@@ -331,6 +324,7 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.transcriptMetadata === snapshot.transcriptMetadata &&
     existing.snapshot.progressCard === snapshot.progressCard &&
     existing.snapshot.widgetHeights === snapshot.widgetHeights &&
+    existing.snapshot.board === snapshot.board &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;
@@ -338,6 +332,7 @@ export function cacheChatSessionSnapshot(
   if (
     snapshot.messages.length === 0 &&
     snapshot.sessionId === null &&
+    snapshot.board === undefined &&
     !snapshot.pagination.hasMore &&
     (snapshot.pagination.totalMessages ?? 0) === 0 &&
     snapshot.pagination.completeSnapshot !== true

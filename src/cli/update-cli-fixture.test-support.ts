@@ -45,7 +45,7 @@ export function createUpdateCliFixture() {
   // Real-I/O callers create the directory; others only need a stable path.
   const createCaseDir = (prefix: string) => path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
 
-  const initializeExistingUpdateProfile = update.createUpdateStateProfileInitializer(fixtureRoot);
+  const { initializeExistingUpdateProfile } = update;
 
   const baseConfig: OpenClawConfig = {};
   const baseSnapshot = configs.createUpdateCliBaseSnapshot(baseConfig);
@@ -234,10 +234,6 @@ export function createUpdateCliFixture() {
     ...packageFixtures,
     baseConfig,
     baseSnapshot,
-    clawHubRiskWarning:
-      "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
-      "│ Outcome: Review                                         │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯",
     clawHubSuspiciousPayloadWarning:
       "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
       "│ Outcome: Review                                         │\n" +

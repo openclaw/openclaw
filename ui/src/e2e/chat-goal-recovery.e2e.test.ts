@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails } from "./chat-details.test-support.ts";
 import { chatMessage, exactButton, requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -214,9 +215,14 @@ suite.define(() => {
         expect(await gateway.getRequests(method)).toHaveLength(action === "resume" ? 2 : 1);
         if (action === "resume") {
           await page.setViewportSize({ width: 390, height: 844 });
-          await page.locator(".agent-chat__goal-label").waitFor({ state: "visible" });
-          await checkOutcome.waitFor({ state: "visible" });
+          const goalEntry = page.locator('.chat-activity-pills [data-family="goal"]');
+          await goalEntry.waitFor({ state: "visible" });
+          await goalEntry.click();
+          const mobileGoal = page.locator('.chat-mobile-details-page[data-details-page="goal"]');
+          await mobileGoal.getByText(goal.objective, { exact: true }).waitFor();
+          await mobileGoal.getByRole("button", { name: "Retry resume", exact: true }).waitFor();
           expect(await checkOutcome.isVisible()).toBe(true);
+          await closeChatDetails(page);
           await page.setViewportSize(viewport);
         }
         await page.reload();

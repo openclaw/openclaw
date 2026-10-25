@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, type Mock } from "vitest";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -75,12 +76,10 @@ export function registerTerminalStateSignalAuthorityTests({
               return captureSessionEntryCurrentRead(target, owner);
             },
           );
-          if (!current.source) {
-            throw new Error("Terminal fixture requires a durable child source");
-          }
+          const source = expectDefined(current.source, "durable child source");
           const writer = openOpenClawAgentDatabase({
             agentId: "main",
-            path: current.source.path,
+            path: source.path,
             env: database.env,
           });
           changeNativeEntry = () => {
@@ -92,7 +91,7 @@ export function registerTerminalStateSignalAuthorityTests({
             });
           };
           nativeCheck = {
-            source: current.source,
+            source,
             assertCurrent(facts) {
               current.assertSourceCurrent();
               if (facts?.lifecycleRunId !== sessionEntry.lifecycleRunId) {
@@ -102,14 +101,16 @@ export function registerTerminalStateSignalAuthorityTests({
           };
         }
         const runs = new Map<string, SubagentRunRecord>();
-        await mutateSubagentRuns(
-          [entry.runId],
-          () => ({
-            value: undefined,
-            postimages: new Map([[entry.runId, entry]]),
-          }),
-          { runs },
-        );
+        const write = (update: (current: SubagentRunRecord | undefined) => SubagentRunRecord) =>
+          mutateSubagentRuns(
+            [entry.runId],
+            (rows) => ({
+              value: undefined,
+              postimages: new Map([[entry.runId, update(rows.get(entry.runId))]]),
+            }),
+            { runs },
+          );
+        await write(() => entry);
         let sessionCurrent = true;
         controller = createLifecycleController({ entry, runs, realWorker: true });
         let observed = false;
@@ -121,26 +122,15 @@ export function registerTerminalStateSignalAuthorityTests({
             observed = true;
             changeNativeEntry?.();
             if (serializedSuccessor) {
-              successorWrite = mutateSubagentRuns(
-                [entry.runId],
-                (rows) => {
-                  const current = rows.get(entry.runId);
-                  if (!current) {
-                    throw new Error("Terminal fixture lost admitted run");
-                  }
-                  const draft = structuredClone(current);
-                  if (change === "provisional kill") {
-                    draft.killReconciliation = { killedAt: 4_001 };
-                  } else {
-                    draft.execution = {
-                      ...draft.execution,
-                      outcome: { status: "error", error: "corrected outcome" },
-                    };
-                  }
-                  return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
-                },
-                { runs },
-              );
+              successorWrite = write((current) => {
+                const draft = structuredClone(expectDefined(current, "admitted run"));
+                if (change === "provisional kill") {
+                  draft.killReconciliation = { killedAt: 4_001 };
+                } else {
+                  draft.execution.outcome = { status: "error", error: "corrected outcome" };
+                }
+                return draft;
+              });
               void successorWrite.catch(() => {});
             } else if (change === "newer session run") {
               const successor = createRunEntry({
@@ -181,26 +171,22 @@ export function registerTerminalStateSignalAuthorityTests({
           await expect(completion).rejects.toMatchObject({ outcome: "not-committed" });
         }
         expect(observed).toBe(true);
-        const events = (
-          await sessionStateEvents.listSessionStateEventsSince(
-            entry.childSessionKey,
-            "main",
-            0,
-            200,
-          )
-        ).events;
+        const { events } = await sessionStateEvents.listSessionStateEventsSince(
+          entry.childSessionKey,
+          "main",
+          0,
+          200,
+        );
         const stored = loadSubagentRegistryFromSqlite().get(entry.runId);
         if (commits) {
           expect(events).toMatchObject([{ kind: "run_completed", runId: entry.runId }]);
-          expect(stored?.execution.status).toBe("terminal");
-          if (change === "corrected outcome") {
-            expect(stored?.execution.outcome).toMatchObject({
-              status: "error",
-              error: "corrected outcome",
-            });
-          } else {
-            expect(stored?.execution.outcome).toMatchObject({ status: "ok" });
-          }
+          expect(stored?.execution).toMatchObject({
+            status: "terminal",
+            outcome:
+              change === "corrected outcome"
+                ? { status: "error", error: "corrected outcome" }
+                : { status: "ok" },
+          });
           if (change === "provisional kill") {
             expect(stored?.killReconciliation).toEqual({ killedAt: 4_001 });
           }

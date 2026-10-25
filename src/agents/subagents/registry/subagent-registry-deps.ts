@@ -69,10 +69,3 @@ export async function resolveSubagentRegistryContextEngine(
     initialize: runtime.ensureContextEnginesInitialized,
   });
 }
-
-export function resetSubagentRegistryRuntimeLoadersForTests() {
-  subagentRegistryRuntimeLoader.clear();
-  subagentRegistryPluginRuntimeLoader.clear();
-  subagentAnnounceLoader.clear();
-  browserCleanupLoader.clear();
-}

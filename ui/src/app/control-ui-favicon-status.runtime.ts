@@ -166,6 +166,7 @@ export function connectControlUiFavicon(
     synchronize();
   }
 
+  // Track completion transitions and write the document favicon outside Solid rendering.
   const stops = [
     context.gateway.subscribe(synchronizeGateway),
     context.gateway.subscribeEvents((event) => handleQuestionPromptEvent(questions, event)),
@@ -176,11 +177,38 @@ export function connectControlUiFavicon(
     listen(shell, CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize),
     listen(shell, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, synchronize),
   ];
-  const palette = new MutationObserver(() => {
+  const root = document.documentElement;
+  // Shell geometry and its derived chrome color cannot change favicon colors.
+  // Read inline declarations without forcing style for unrelated route commits.
+  const paletteStyle = () =>
+    JSON.stringify(
+      [...root.style]
+        .filter(
+          (property) =>
+            property !== "--shell-viewport-height" &&
+            property !== "--shell-safe-area-bottom" &&
+            property !== "--control-ui-system-chrome-background",
+        )
+        .map((property) => [
+          property,
+          root.style.getPropertyValue(property),
+          root.style.getPropertyPriority(property),
+        ]),
+    );
+  let previousPaletteStyle = paletteStyle();
+  const palette = new MutationObserver((records) => {
+    const nextPaletteStyle = paletteStyle();
+    if (
+      records.every((record) => record.attributeName === "style") &&
+      nextPaletteStyle === previousPaletteStyle
+    ) {
+      return;
+    }
+    previousPaletteStyle = nextPaletteStyle;
     invalidateControlUiFaviconPalette();
     synchronize();
   });
-  palette.observe(document.documentElement, {
+  palette.observe(root, {
     attributes: true,
     attributeFilter: ["style", "data-theme", "data-theme-mode", "data-theme-mascot"],
   });

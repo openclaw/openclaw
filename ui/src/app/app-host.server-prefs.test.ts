@@ -13,7 +13,7 @@ import { loadSettings, patchSettings } from "./settings.ts";
 function createPreferenceShell(
   prefs: Record<string, string>,
   theme: Pick<ApplicationContext["theme"], "refresh"> &
-    Partial<Pick<ApplicationContext["theme"], "recordServerSelection" | "serverSelection">>,
+    Partial<Pick<ApplicationContext["theme"], "recordServerSelection">>,
   scope = "ws://locale.test",
 ) {
   const state = { configSnapshot: { config: { ui: { prefs } }, hash: scope } };
@@ -69,7 +69,7 @@ describe("OpenClaw shell locale preferences", () => {
     const recordServerSelection = vi.fn();
     const { shell, state, runtimeConfig } = createPreferenceShell(
       { theme: "custom" },
-      { recordServerSelection, refresh: vi.fn(), serverSelection: null },
+      { recordServerSelection, refresh: vi.fn() },
       "ws://theme.test",
     );
 

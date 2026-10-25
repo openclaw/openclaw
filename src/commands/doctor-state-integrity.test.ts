@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type * as BundledIds from "../channels/plugins/bundled-ids.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -113,6 +114,7 @@ describe("doctor state integrity", () => {
     deleteTestEnvValue("OPENCLAW_AGENT_DIR");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     noteMock.mockClear();
+    vi.spyOn(terminalNote, "note").mockImplementation(noteMock);
   });
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -225,7 +227,7 @@ describe("doctor state integrity", () => {
       ),
     ).toEqual([]);
     const confirmRuntimeRepair = decline();
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair });
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(false);
     const text = stateIntegrityText();
     expect(text).toContain("OAuth dir not present");
@@ -241,17 +243,28 @@ describe("doctor state integrity", () => {
   });
 
   it.each(["pairing", "explicit"])(
-    "requires missing OAuth storage for %s configuration",
+    "warns without blocking readiness when legacy OAuth storage is missing for %s configuration",
     async (mode) => {
       if (mode === "explicit") {
         setTestEnvValue("OPENCLAW_OAUTH_DIR", path.join(tempHome, ".oauth"));
       }
       const cfg: OpenClawConfig =
         mode === "pairing" ? { channels: { telegram: { dmPolicy: "pairing" } } } : {};
+      const findings = detectStateIntegrityHealthIssues(cfg).map(
+        stateIntegrityIssueToHealthFinding,
+      );
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          message: "OAuth dir is missing.",
+          severity: "warning",
+        }),
+      );
+      expect(findings.some((finding) => finding.severity === "error")).toBe(false);
       const confirmRuntimeRepair = decline();
-      await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+      await noteStateIntegrity(cfg, { confirmRuntimeRepair });
       expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(true);
-      expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+      expect(stateIntegrityText()).toContain("OAuth dir missing");
+      expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
     },
   );
 
@@ -300,7 +313,6 @@ describe("doctor state integrity", () => {
       {
         confirmRuntimeRepair: async ({ message }) =>
           message.includes("Clear stale aborted recovery flags"),
-        note: noteMock,
       },
     );
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
@@ -365,6 +377,8 @@ describe("doctor state integrity", () => {
 });
 
 describe("doctor retained session integrity", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("repairs canonical recovery state without editing retained rows deleted from SQLite", async () => {
     await withOpenClawTestState({ label: "retained-session-integrity" }, async (state) => {
       const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
@@ -407,10 +421,10 @@ describe("doctor retained session integrity", () => {
         resolvedPluginIds: ["fixture-plugin"],
       });
 
+      vi.spyOn(terminalNote, "note").mockImplementation(() => {});
       await noteStateIntegrityRaw(cfg, {
         confirmRuntimeRepair: async ({ message }) =>
           message.startsWith("Clear stale aborted recovery flags"),
-        note: vi.fn(),
       });
 
       expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.abortedLastRun).toBe(

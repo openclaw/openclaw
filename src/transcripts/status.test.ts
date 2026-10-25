@@ -38,6 +38,7 @@ import {
 import { createTranscriptsAutoStartService } from "./auto-start.js";
 import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import { activeSessions } from "./capture-startup.js";
+import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
 import type {
   TranscriptOccupancyWatchRequest,
   TranscriptSessionDescriptor,
@@ -428,18 +429,22 @@ it("offers a cold manifest source before and after scoped registration without d
     }
   });
 });
-
-describe("configured transcript shutdown cleanup", () => {
+describe("configured transcript cleanup custody", () => {
   const fixture = useTranscriptStatusFixture();
   it.each([
-    { whenOccupied: false, fault: "returned-stop" },
-    { whenOccupied: true, fault: "thrown-stop" },
-    { whenOccupied: false, fault: "session-write" },
-    { whenOccupied: true, fault: "summary-write" },
+    { phase: "adoption", whenOccupied: false, fault: "thrown-stop" },
+    { phase: "adoption", whenOccupied: false, fault: "summary-write" },
+    { phase: "shutdown", whenOccupied: false, fault: "returned-stop" },
+    { phase: "shutdown", whenOccupied: true, fault: "thrown-stop" },
+    { phase: "shutdown", whenOccupied: false, fault: "session-write" },
+    { phase: "shutdown", whenOccupied: true, fault: "summary-write" },
   ])(
-    "retains and drains late $fault after shutdown (occupied=$whenOccupied)",
-    async ({ whenOccupied, fault }) => {
+    "retains and drains $fault cleanup after $phase (occupied=$whenOccupied)",
+    async ({ phase, fault, whenOccupied }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const adoption = phase === "adoption";
+      const check = adoption ? expect.soft : expect;
+      const text = adoption ? "Admitted note" : "Before shutdown";
       const f = fixture({ transcripts: { autoStart: [{ ...room, whenOccupied }] } });
       const watches: TranscriptOccupancyWatchRequest[] = [];
       const unwatch = vi.fn();
@@ -461,12 +466,16 @@ describe("configured transcript shutdown cleanup", () => {
         }
       });
       const start = vi.fn(async (request: TranscriptStartRequest) => {
-        await request.onUtterance({ text: "Before shutdown" });
-        // Shutdown starts only after the pre-shutdown note is durably recorded.
+        await request.onUtterance({ text, ...(adoption ? { final: true } : {}) });
         started.resolve(request);
-        await gate.promise;
-        await request.onUtterance({ text: "After shutdown" });
-        return { ok: true as const, session: { ...request.session, title: "Late title" } };
+        if (!adoption) {
+          await gate.promise;
+          await request.onUtterance({ text: "After shutdown" });
+        }
+        return {
+          ok: true as const,
+          session: { ...request.session, title: adoption ? "Room title" : "Late title" },
+        };
       });
       f.provider.start = start;
       let cleanupFails = true;
@@ -479,44 +488,66 @@ describe("configured transcript shutdown cleanup", () => {
         }
         return { ok: true, sessionId };
       });
-      const writeSession = f.store.writeSession.bind(f.store);
+      const originalWrite = f.store.writeSession.bind(f.store);
+      let titleFailed = false;
       vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(
         async (session, condition) => {
+          if (adoption && session.title === "Room title" && !titleFailed) {
+            titleFailed = true;
+            throw new Error("title write unavailable");
+          }
           if (cleanupFails && fault === "session-write" && session.stoppedAt) {
             throw new Error("final session unavailable");
           }
-          return writeSession(session, condition);
+          return originalWrite(session, condition);
         },
       );
-      const writeSummary = f.store.writeSummary.bind(f.store);
+      const originalSummary = f.store.writeSummary.bind(f.store);
       vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockImplementation(async (...args) => {
-        if (cleanupFails && fault === "summary-write") {
-          throw new Error("summary unavailable");
+        if (fault === "summary-write" && cleanupFails) {
+          throw new Error("summary write unavailable");
         }
-        return writeSummary(...args);
+        return originalSummary(...args);
       });
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
-        service.start();
+        const startup = service.start().settled;
         const request = await started.promise;
-        expect(start).toHaveBeenCalledOnce();
         const session = request.session;
-        const stopping = service.stop();
-        await vi.advanceTimersByTimeAsync(5_000);
-        await stopping;
-        expect(f.ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining("stop timed out"));
-        expect(unwatch).toHaveBeenCalledTimes(whenOccupied ? 1 : 0);
-        expect(request.abortSignal?.aborted).toBe(true);
-        gate.resolve();
-        // A failed late drain must be visible and still owned after startup settles.
-        await lateDrain.promise;
-        expect(f.ctx.logger.warn).toHaveBeenCalledWith(
-          expect.stringContaining("transcripts autoStart session="),
-        );
+        if (adoption) {
+          await startup;
+          expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe(
+            "admitted-start-failed",
+          );
+          await vi.advanceTimersByTimeAsync(65_000);
+          expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe(
+            "admitted-start-failed",
+          );
+          expect.soft(await f.store.listSessionEntries()).toHaveLength(1);
+          expect
+            .soft((await f.read()).configuredSources[0]?.startDiagnostic)
+            .toBe("admitted-start-failed");
+          await request.onUtterance({ text: "Late failed-start note", final: true });
+        } else {
+          const stopping = service.stop();
+          await vi.advanceTimersByTimeAsync(5_000);
+          await stopping;
+          expect(f.ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining("stop timed out"));
+          expect(unwatch).toHaveBeenCalledTimes(whenOccupied ? 1 : 0);
+          expect(request.abortSignal?.aborted).toBe(true);
+          gate.resolve();
+          await lateDrain.promise;
+          expect(f.ctx.logger.warn).toHaveBeenCalledWith(
+            expect.stringContaining("transcripts autoStart session="),
+          );
+        }
+        check(start).toHaveBeenCalledOnce();
         const terminal = fault === "session-write" || fault === "summary-write";
         await expect(f.tool.execute("status", { action: "status" })).resolves.toMatchObject({
           details: {
-            [terminal ? "pendingFinalization" : "active"]: [{ sessionId: session.sessionId }],
+            [terminal ? "pendingFinalization" : "active"]: [
+              expect.objectContaining({ sessionId: session.sessionId }),
+            ],
           },
         });
         const otherConfig = {
@@ -524,8 +555,11 @@ describe("configured transcript shutdown cleanup", () => {
         };
         const other = createTranscriptsAutoStartService({ ...f.ctx, config: otherConfig });
         try {
-          other.start();
-          await conflict.promise;
+          const otherStarting = other.start().settled;
+          if (!adoption) {
+            await conflict.promise;
+          }
+          await otherStarting;
           expect(
             (await readTranscriptLibraryStatus(f.store, otherConfig)).configuredSources[0]
               ?.startDiagnostic,
@@ -533,35 +567,45 @@ describe("configured transcript shutdown cleanup", () => {
         } finally {
           await other.stop();
         }
-        expect(stop).toHaveBeenCalledTimes(terminal ? 1 : 2);
+        check(stop).toHaveBeenCalledTimes(adoption || terminal ? 1 : 2);
+        if (adoption) {
+          await service.stop();
+        }
         cleanupFails = false;
         await service.stop();
-        expect(stop).toHaveBeenCalledTimes(terminal ? 1 : 3);
-        expect(activeSessions.has(session.sessionId)).toBe(false);
-        expect((await f.store.readSession(session.sessionId))?.stoppedAt).toEqual(
-          expect.any(String),
-        );
-        expect(await f.store.readSummary(session)).toMatchObject({
-          summary: { transcript: ["Before shutdown"] },
+        check(stop).toHaveBeenCalledTimes(terminal ? 1 : 3);
+        check(activeSessions.has(session.sessionId)).toBe(false);
+        const stored = (await f.store.readSession(session.sessionId))!;
+        check(stored.stoppedAt).toEqual(expect.any(String));
+        if (adoption) {
+          expect.soft(stored).toMatchObject({
+            sessionId: session.sessionId,
+            startedAt: session.startedAt,
+            title: "Room title",
+          });
+          expect.soft(stored.source).toEqual(session.source);
+        }
+        check(await f.store.readSummary(stored)).toMatchObject({
+          summary: { transcript: [text] },
         });
-        watches[0]?.onEmpty();
-        watches[0]?.onOccupied();
-        await request.onUtterance({ text: "Retired callback" });
-        await request.onStatus?.({ active: false });
-        await vi.advanceTimersByTimeAsync(65_000);
-        expect(start).toHaveBeenCalledOnce();
-        expect(await f.store.listSessionEntries()).toHaveLength(1);
-        expect(await f.store.readUtterancesForSession(session)).toMatchObject([
-          { text: "Before shutdown" },
-        ]);
-        // Even the same raw ID on a later day belongs to a distinct lifecycle.
-        vi.setSystemTime(new Date(Date.parse(session.startedAt) + 86_400_000));
-        await f.start({ ...room, sessionId: session.sessionId });
-        await service.stop();
-        expect(stop).toHaveBeenCalledTimes(terminal ? 1 : 3);
-        expect((await f.read()).active).toMatchObject([
-          { sessionId: session.sessionId, activeSubscription: true },
-        ]);
+        if (!adoption) {
+          watches[0]?.onEmpty();
+          watches[0]?.onOccupied();
+          await request.onUtterance({ text: "Retired callback" });
+          await request.onStatus?.({ active: false });
+          await vi.advanceTimersByTimeAsync(65_000);
+          expect(start).toHaveBeenCalledOnce();
+          expect(await f.store.listSessionEntries()).toHaveLength(1);
+          expect(await f.store.readUtterancesForSession(session)).toMatchObject([{ text }]);
+          // The same raw ID on a later day belongs to a distinct lifecycle.
+          vi.setSystemTime(new Date(Date.parse(session.startedAt) + 86_400_000));
+          await f.start({ ...room, sessionId: session.sessionId });
+          await service.stop();
+          expect(stop).toHaveBeenCalledTimes(terminal ? 1 : 3);
+          expect((await f.read()).active).toMatchObject([
+            { sessionId: session.sessionId, activeSubscription: true },
+          ]);
+        }
       } finally {
         cleanupFails = false;
         gate.resolve();
@@ -569,7 +613,9 @@ describe("configured transcript shutdown cleanup", () => {
         for (const [request] of start.mock.calls) {
           await f.tool.execute("cleanup", {
             action: "stop",
-            selector: transcriptSessionSelector(request.session),
+            ...(adoption
+              ? { sessionId: request.session.sessionId }
+              : { selector: transcriptSessionSelector(request.session) }),
           });
         }
       }

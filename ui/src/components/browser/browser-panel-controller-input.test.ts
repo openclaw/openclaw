@@ -14,6 +14,7 @@ import {
   createPointer,
   createView,
   flushBrowserResponses,
+  openBrowserActions,
   setupBrowserPanelTestCleanup,
   stubScreenshotMedia,
   TestBrowserPanelHost,
@@ -611,24 +612,21 @@ describe("BrowserPanel capture and input ownership", () => {
     expect(controller.mode).toBe("inspect");
     expect(controller.evaluateUnavailable).toBe(false);
     expect(controller.inspected).toBeNull();
-    const renderedPanel = document.createElement("div");
     const [revision, setRevision] = createSignal(0);
-    mountSolid(
-      () =>
-        createComponent(BrowserPanelChrome, {
-          get controller() {
-            revision();
-            return controller;
-          },
-          dock: "right",
-          height: 400,
-          width: 400,
-          onDockChange() {},
-          onClose() {},
-          embedded: false,
-          tabsInHeader: false,
-        }),
-      { container: renderedPanel },
+    const { container: renderedPanel } = mountSolid(() =>
+      createComponent(BrowserPanelChrome, {
+        get controller() {
+          revision();
+          return controller;
+        },
+        dock: "right",
+        height: 400,
+        width: 400,
+        onDockChange() {},
+        onClose() {},
+        embedded: false,
+        tabsInHeader: false,
+      }),
     );
     flush();
     vi.spyOn(renderedPanel.querySelector(".bp-stage")!, "getBoundingClientRect").mockReturnValue(
@@ -648,10 +646,11 @@ describe("BrowserPanel capture and input ownership", () => {
     setRevision((value) => value + 1);
     flush();
     expect(renderedPanel.querySelector('[role="alert"]')).toBeNull();
-    expect(
-      renderedPanel.querySelector<HTMLButtonElement>('button[aria-label="Inspect element"]')
-        ?.disabled,
-    ).toBe(false);
+    const inspect = (await openBrowserActions(renderedPanel)).querySelector(
+      '[role="menuitem"][aria-label="Inspect element"]',
+    );
+    expect(inspect).not.toBeNull();
+    expect(inspect?.getAttribute("aria-disabled")).not.toBe("true");
   });
 
   it.each([

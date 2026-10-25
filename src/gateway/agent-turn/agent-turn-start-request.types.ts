@@ -12,6 +12,7 @@ export type AgentTurnStartRequest = {
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
   assertAdmissionCurrent?: () => void;
+  assertCancellationCurrent?: () => void;
   executionSource?: SessionSourceAssertion;
   assertInputCommitAllowed?: () => void;
   hasCurrentClientAuthority?: () => boolean;

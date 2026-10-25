@@ -9,10 +9,11 @@ import {
 } from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subscribeBrowserHttpFailures } from "../../app/browser-http.ts";
+import { bindBrowserHttpFailures } from "../../app/browser-http.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
@@ -76,21 +77,16 @@ async function transportFixture(scopes: string[], firstStatus: number, signal: A
       clients.push(client);
       return client;
     };
-    const snapshot: ApplicationGatewaySnapshot = {
+    const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
       client: createClient(),
       phase: "connected",
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
       hello: {
         type: "hello-ok",
         protocol: 3,
         auth: { role: "operator", scopes, deviceToken: "fixture-device-token" },
       },
-      assistantAgentId: null,
       sessionKey: "main",
-      lastError: null,
-      lastErrorCode: null,
-    };
+    });
     const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
     const retained = createDeferred<ControlUiChannelSettingsContext>();
     const application = {
@@ -250,7 +246,7 @@ it.for(["admin", "client", "presentation"] as const)(
   "rejects credential retry and retained HTTP dispatch after %s retirement",
   async (cause, { signal }) => {
     const f = await transportFixture(["operator.admin"], 401, signal);
-    const stop = subscribeBrowserHttpFailures(() => f.retire(cause));
+    const stop = bindBrowserHttpFailures(() => f.retire(cause));
     try {
       await expect(f.request()).rejects.toThrow();
       await expect(f.request()).rejects.toThrow();

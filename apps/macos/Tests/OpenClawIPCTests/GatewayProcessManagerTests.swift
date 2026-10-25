@@ -417,7 +417,7 @@ struct GatewayProcessManagerTests {
         commandHook: (@Sendable ([String]) async -> Void)? = nil,
         _ body: () async throws -> T) async throws -> T
     {
-        let marker = FileManager.default.temporaryDirectory
+        let marker = temporaryDirectoryForTests()
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
         return try await self.withGatewayConfig(mode: mode, port: port, homeDirectory: homeDirectory) {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
@@ -514,6 +514,7 @@ struct GatewayProcessManagerTests {
 
     private nonisolated func gatewayTask(
         healthSucceedsAfter unavailableResponses: Int?,
+        coreReadyAfter pendingResponses: Int? = nil,
         stallsFirstHealthResponse: Bool = false,
         healthResponseGates: [AsyncTestGate] = [],
         firstHealthRequest: AsyncTestGate? = nil) -> GatewayTestWebSocketTask
@@ -545,7 +546,16 @@ struct GatewayProcessManagerTests {
                     task.emitReceiveSuccess(.data(response))
                     return
                 }
-                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                if let pendingResponses {
+                    let response = Data(
+                        """
+                        {"type":"res","id":"\(id)","ok":true,
+                         "payload":{"coreReady":\(healthIndex > pendingResponses)}}
+                        """.utf8)
+                    task.emitReceiveSuccess(.data(response))
+                } else {
+                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                }
             })
     }
 
@@ -2383,7 +2393,7 @@ struct GatewayProcessManagerTests {
                     },
                     wait: {
                         await exits[index].wait()
-                        return "fixture startup failed"
+                        return .launch("fixture startup failed")
                     },
                     terminate: { exits[index].open() })
             }
@@ -2562,11 +2572,12 @@ struct GatewayProcessManagerTests {
     func `first run waits for persisted identity maintenance within its readiness budget`(
         maintenanceFinishes: Bool) async throws
     {
-        let stateDir = FileManager.default.temporaryDirectory
+        let stateDir = temporaryDirectoryForTests()
             .appendingPathComponent("openclaw-identity-maintenance-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stateDir) }
         let databaseURL = stateDir.appendingPathComponent("state/openclaw.sqlite")
+        let credentialsURL = OpenClawClientCredentialStore.databaseURL(rootURL: stateDir)
         let ownerURL = try OpenClawNativeStateAdmission.processOwnerURL(databaseURL: databaseURL, uid: getuid())
         try FileManager.default.createDirectory(
             at: ownerURL.deletingLastPathComponent(),
@@ -2591,6 +2602,7 @@ struct GatewayProcessManagerTests {
                         // The first real handshake could not read or create an identity.
                         #expect(session.latestTask()?.snapshotSendCount() == 0)
                         #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+                        #expect(!FileManager.default.fileExists(atPath: credentialsURL.path))
                         if maintenanceFinishes { try FileManager.default.removeItem(at: ownerURL) }
                     }
                     return .init(config: (url: url, token: nil, password: nil), routeAuthority: nil)
@@ -2626,7 +2638,8 @@ struct GatewayProcessManagerTests {
             #expect(completed == maintenanceFinishes)
             #expect((fallback == nil) == maintenanceFinishes)
             #expect(!manager._testHasLaunchAgentReadinessFailure())
-            #expect(FileManager.default.fileExists(atPath: databaseURL.path) == maintenanceFinishes)
+            #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+            #expect(FileManager.default.fileExists(atPath: credentialsURL.path) == maintenanceFinishes)
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }
@@ -2684,14 +2697,18 @@ struct GatewayProcessManagerTests {
     }
 
     @Test(arguments: [
-        (Duration.zero, Duration.milliseconds(300), true),
-        (.milliseconds(600), .milliseconds(300), true),
-        (.milliseconds(900), .milliseconds(100), false),
+        (Duration.zero, Duration.milliseconds(300), true, false),
+        (.milliseconds(600), .milliseconds(300), true, false),
+        (.milliseconds(900), .milliseconds(100), false, false),
+        (.zero, .milliseconds(300), true, true),
+        (.milliseconds(600), .milliseconds(300), true, true),
+        (.milliseconds(900), .milliseconds(100), false, true),
     ])
-    func `transient unavailable health response retries within its budget`(
+    func `transient health startup response retries within its budget`(
         responseDelay: Duration,
         retryDelay: Duration,
-        becomesReady: Bool) async throws
+        becomesReady: Bool,
+        coreReadyInPayload: Bool) async throws
     {
         let stateDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-ready-\(UUID().uuidString)", isDirectory: true)
@@ -2709,7 +2726,8 @@ struct GatewayProcessManagerTests {
                 defer { responseGate.open() }
                 let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url, clock: clock) {
                     self.gatewayTask(
-                        healthSucceedsAfter: 1,
+                        healthSucceedsAfter: coreReadyInPayload ? 0 : 1,
+                        coreReadyAfter: coreReadyInPayload ? 1 : nil,
                         healthResponseGates: [responseGate],
                         firstHealthRequest: firstHealthRequest)
                 }
@@ -2746,6 +2764,8 @@ struct GatewayProcessManagerTests {
                 #expect(session.latestTask()?.snapshotSendCount() == (becomesReady ? 4 : 3))
                 #expect(manager.status == (becomesReady ? .running(details: "pid 4242") : .starting))
                 #expect(!manager._testHasLaunchAgentReadinessFailure())
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .allSatisfy { $0.first != "install" })
 
                 await connection.shutdown()
                 await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)

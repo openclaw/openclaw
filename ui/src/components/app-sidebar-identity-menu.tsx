@@ -1,31 +1,82 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
+import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
+import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import {
   COMMAND_VALUE_PREFIX,
   renderSidebarHelpMenu,
   selectSidebarHelpLink,
-} from "./app-sidebar-agent-menu.tsx";
-import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
-import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
+} from "./sidebar-identity-menu-links.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
-import { createMenuControls, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
-import "./viewer-facepile.ts";
-import "./theme-mode-toggle.ts";
+import {
+  createMenuControls,
+  type MenuEntry,
+  type MenuItem,
+  type MenuItemBindings,
+} from "./solid/menu.tsx";
+import "./solid/viewer-facepile.tsx";
+import "./tooltip.ts";
+
+function ThemeModeToggle(props: {
+  mode: ThemeMode;
+  menuAttributes?: MenuItemBindings;
+  onChange?: (mode: ThemeMode, element: HTMLElement) => void;
+}) {
+  const label = () =>
+    t(`common.${props.mode === "system" ? "system" : props.mode === "light" ? "light" : "dark"}`);
+  const tooltip = () => t("common.colorModeOption", { mode: label() });
+  return (
+    <openclaw-theme-mode-toggle style={{ display: "contents" }}>
+      <openclaw-tooltip prop:content={tooltip()}>
+        <button
+          {...props.menuAttributes}
+          type="button"
+          class="theme-mode-toggle"
+          aria-label={tooltip()}
+          onClick={(event) => {
+            props.onChange?.(
+              props.mode === "system" ? "light" : props.mode === "light" ? "dark" : "system",
+              event.currentTarget,
+            );
+            const onClick = props.menuAttributes?.onClick;
+            if (typeof onClick === "function") {
+              onClick(event);
+            }
+          }}
+        >
+          <Icon
+            name={props.mode === "system" ? "monitor" : props.mode === "light" ? "sun" : "moon"}
+          />
+        </button>
+      </openclaw-tooltip>
+    </openclaw-theme-mode-toggle>
+  );
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-theme-mode-toggle": HTMLAttributes<HTMLElement>;
+    }
+  }
+}
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 type SidebarIdentityMenuParams = {
-  position: { x: number; bottom: number; width: number };
+  position: { x: number; bottom: number; width: number; placement?: "right-end" };
   anchor?: HTMLElement;
-  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   canPairDevice: boolean;
   basePath: string;
@@ -34,6 +85,7 @@ type SidebarIdentityMenuParams = {
   profileViewer?: PresenceViewer;
   canRetryConnection: boolean;
   themeMode: ThemeMode;
+  onThemeChange?: (mode: ThemeMode, element: HTMLElement) => void;
   triggerWidth: number;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
@@ -41,20 +93,23 @@ type SidebarIdentityMenuParams = {
   onRetryConnect?: () => void;
 };
 
+// The slot shares the command icon column so dots, glyphs, and labels line up.
 function renderGatewayHealth(health: NativeGatewaysSnapshot["gateways"][number]["health"]) {
   return (
-    <span
-      class="sidebar-gateway-health"
-      data-health={health}
-      role="img"
-      aria-label={
-        {
-          ok: t("nav.gateway.connected"),
-          error: t("nav.gateway.unreachable"),
-          unknown: t("nav.gateway.unknown"),
-        }[health]
-      }
-    />
+    <span class="sidebar-gateway-health-slot">
+      <span
+        class="sidebar-gateway-health"
+        data-health={health}
+        role="img"
+        aria-label={
+          {
+            ok: t("nav.gateway.connected"),
+            error: t("nav.gateway.unreachable"),
+            unknown: t("nav.gateway.unknown"),
+          }[health]
+        }
+      />
+    </span>
   );
 }
 
@@ -113,7 +168,7 @@ function renderIdentityGateways(
           ),
         ]
       : []),
-    renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "server"),
+    renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "settings"),
   ];
   return [
     {
@@ -139,9 +194,8 @@ function renderIdentityGateways(
   ];
 }
 
-export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JSX.Element {
+export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): SolidJSX.Element {
   const controls = createMenuControls();
-  const position = params.position;
   const profileName = () =>
     params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
@@ -154,7 +208,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
     params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
       : null;
-  const items = (): MenuEntry[] => {
+  const items = createMemo<MenuEntry[]>(() => {
     const help = renderSidebarHelpMenu();
     return [
       {
@@ -282,10 +336,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
             closeOnSelect: false,
             render: (menuAttributes) => (
               <span class="sidebar-mode-switch">
-                <openclaw-theme-mode-toggle
-                  prop:mode={params.themeMode}
-                  prop:menuItem={true}
-                  prop:menuAttributes={menuAttributes}
+                <ThemeModeToggle
+                  mode={params.themeMode}
+                  menuAttributes={menuAttributes}
+                  onChange={params.onThemeChange}
                 />
               </span>
             ),
@@ -293,14 +347,13 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
         ],
       },
     ];
-  };
+  });
   return (
     <SidebarDropdown
       controls={controls}
       class="sidebar-customize-menu sidebar-identity-menu"
-      position={position}
+      position={params.position}
       anchor={params.anchor}
-      tabFocusTarget={params.tabFocusTarget}
       label={t("profilePage.identity.menuLabel")}
       panelStyle={{ "--sidebar-identity-menu-min-width": `${params.triggerWidth}px` }}
       items={items()}

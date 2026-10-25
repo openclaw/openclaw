@@ -36,7 +36,6 @@ export type ToolStreamEntry = {
   toolCallId: string;
   parentToolCallId?: string;
   runId: string;
-  sessionKey?: string;
   name: string;
   args?: unknown;
   output?: string;
@@ -84,8 +83,6 @@ export type FallbackStatus = {
 };
 
 export type WaitingApprovalStatus = {
-  approvalId: string;
-  toolCallId: string | null;
   runId: string;
 };
 

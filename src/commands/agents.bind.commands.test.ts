@@ -1,6 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { defaultRuntime } from "../runtime.js";
 import {
   loadFreshAgentsBindCommandModuleForTest,
   readConfigFileSnapshotMock,
@@ -48,10 +49,10 @@ vi.mock("../channels/plugins/bundled.js", () => ({
 
 let commands: Awaited<ReturnType<typeof loadFreshAgentsBindCommandModuleForTest>>;
 type UpdateOptions = Parameters<typeof commands.agentsUpdateBindingsCommand>[1];
-const update = (operation: "bind" | "unbind" | "list", options: UpdateOptions, output = runtime) =>
+const update = (operation: "bind" | "unbind" | "list", options: UpdateOptions) =>
   operation === "list"
-    ? commands.agentsBindingsCommand(options, output)
-    : commands.agentsUpdateBindingsCommand(operation, options, output);
+    ? commands.agentsBindingsCommand(options)
+    : commands.agentsUpdateBindingsCommand(operation, options);
 const setConfig = (config: OpenClawConfig) =>
   readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot, config });
 const route = (channel: string, accountId?: string, agentId = "main") => ({
@@ -63,7 +64,7 @@ const conflictConfig: OpenClawConfig = {
   agents: { entries: { ops: { workspace: "/tmp/ops" } } },
   bindings: [route("telegram", "ops")],
 };
-const jsonRuntime = () => ({ ...runtime, writeStdout: vi.fn(), writeJson: vi.fn() });
+const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 const expectNoCalls = (...mocks: ReturnType<typeof vi.fn>[]) =>
   mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
 const unknownAgent = (id: string) =>
@@ -72,10 +73,12 @@ const explicitAgents = { ownership: "explicit" as const, entries: { main: {}, op
 type Rejection = [Parameters<typeof update>[0], UpdateOptions, string];
 
 describe("agents bind/unbind commands", () => {
+  afterAll(() => vi.restoreAllMocks());
   beforeAll(async () => {
     commands = await loadFreshAgentsBindCommandModuleForTest();
   });
   beforeEach(() => {
+    json.mockClear();
     resetAgentsBindTestHarness();
     listContributions.mockReset().mockReturnValue(["external-chat"]);
     setConfig({});
@@ -108,11 +111,10 @@ describe("agents bind/unbind commands", () => {
   it("matches normalized account identities for conflicts, repeats, and removal", async () => {
     const config = { agents: explicitAgents, bindings: [route("telegram", "Work", "ops")] };
     setConfig(config);
-    const output = jsonRuntime();
-    await update("bind", { agent: "main", bind: ["telegram:work"], json: true }, output);
+    await update("bind", { agent: "main", bind: ["telegram:work"], json: true });
     expect(writeConfigFileMock).not.toHaveBeenCalled();
-    expect(output.exit).toHaveBeenCalledWith(1);
-    expect(output.writeJson.mock.lastCall).toEqual([
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(json.mock.lastCall).toEqual([
       expect.objectContaining({ conflicts: ["telegram accountId=work (agent=ops)"] }),
       2,
     ]);
@@ -184,10 +186,9 @@ describe("agents bind/unbind commands", () => {
   });
 
   it("reports empty unbind-all as JSON without writes or text logs", async () => {
-    const output = jsonRuntime();
-    await update("unbind", { agent: "main", all: true, json: true }, output);
-    expectNoCalls(writeConfigFileMock, output.log, output.exit);
-    expect(output.writeJson.mock.calls).toEqual([
+    await update("unbind", { agent: "main", all: true, json: true });
+    expectNoCalls(writeConfigFileMock, runtime.log, runtime.exit);
+    expect(json.mock.calls).toEqual([
       [{ agentId: "main", removed: [], missing: [], conflicts: [] }, 2],
     ]);
   });

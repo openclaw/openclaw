@@ -13,7 +13,11 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
   EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
 } from "./constants.js";
-import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
+import { normalizeBrowserWaitFunctionSource } from "./evaluate-source.js";
+import {
+  evaluateBrowserWaitPredicate,
+  type BrowserWaitPredicateState,
+} from "./page-function-runtime.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   ensurePageState,
@@ -24,13 +28,11 @@ import {
 import {
   assertInteractionCurrent,
   awaitActionWithAbort,
-  awaitNavigationGuardedInteraction,
-  createAbortPromiseWithListener,
   type GuardedInteractionOptions,
   type InteractionTargetOptions,
-  interactionNavigationPolicy,
   reconcileRemoteDialogAfterActionSettled,
   runCancellablePageInteraction,
+  runGuardedPageInteraction,
   throwIfInteractionAborted,
 } from "./pw-tools-core.interactions.navigation.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
@@ -105,46 +107,6 @@ async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { 
   );
 }
 
-type BrowserWaitPredicateState = {
-  document: unknown;
-  pending?: boolean;
-  predicate?: () => unknown;
-  settled?: { kind: "value"; value: unknown } | { error: unknown; kind: "error" };
-};
-
-function createBrowserWaitPredicate(source: string): (state: BrowserWaitPredicateState) => boolean {
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- compile only; Playwright runs it in-page
-  return new Function(
-    "state",
-    `
-      if (state.document !== this.document) throw "Wait predicate document changed";
-      state.predicate ??= (${source});
-      var settled = state.settled;
-      if (settled) {
-        delete state.settled;
-        if (settled.kind === "error") throw settled.error;
-        if (!!settled.value) return true;
-      }
-      if (state.pending) return false;
-      var predicate = state.predicate;
-      var value = predicate();
-      if (!value || typeof value.then !== "function") return !!value;
-      state.pending = true;
-      value.then(
-        function(resolved) {
-          state.settled = { kind: "value", value: resolved };
-          delete state.pending;
-        },
-        function(error) {
-          state.settled = { error: error, kind: "error" };
-          delete state.pending;
-        }
-      );
-      return false;
-    `,
-  ) as (state: BrowserWaitPredicateState) => boolean;
-}
-
 export async function waitForViaPlaywright(
   opts: GuardedInteractionOptions & {
     timeMs?: number;
@@ -160,12 +122,10 @@ export async function waitForViaPlaywright(
   const page = await getPageForTargetId(opts);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
   const fn = opts.fn;
-  const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
-  const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
+  const predicateSource = fn ? normalizeBrowserWaitFunctionSource(fn) : "";
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
-    await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
+    await awaitActionWithAbort(stepPromise, opts.signal, reconcileRemoteDialog);
   };
   const waitForSettledStep = async <T>(stepPromise: Promise<T>) => {
     await stepPromise;
@@ -213,9 +173,10 @@ export async function waitForViaPlaywright(
         throwIfInteractionAborted(opts.signal);
         await waitFor(
           page.waitForFunction(
-            predicate!,
+            evaluateBrowserWaitPredicate,
             {
               document: documentHandle,
+              source: predicateSource,
             } satisfies BrowserWaitPredicateState,
             { timeout },
           ),
@@ -226,32 +187,16 @@ export async function waitForViaPlaywright(
     }
   };
 
-  try {
-    // Playwright exposes no per-wait cancellation; retiring the shared
-    // connection would disrupt sibling tabs. Only executable waits need the
-    // request guard, which must own the full sequence before their predicate.
-    // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
-    // this guard owns navigation during the action, not jobs trusted JS schedules later.
-    if (!fn) {
-      await runWaitSequence(waitForStep);
-      return;
-    }
-    await awaitNavigationGuardedInteraction(
-      {
-        action: async () => await runWaitSequence(waitForSettledStep),
-        cdpUrl: opts.cdpUrl,
-        page,
-        ...interactionNavigationPolicy(opts),
-        targetId: opts.targetId,
-        assertCurrent: opts.assertCurrent,
-      },
-      abortPromise,
-      opts.signal,
-      reconcileRemoteDialog,
-    );
-  } finally {
-    cleanup();
+  // Playwright exposes no per-wait cancellation; retiring the shared
+  // connection would disrupt sibling tabs. Only executable waits need the
+  // request guard, which must own the full sequence before their predicate.
+  // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
+  // this guard owns navigation during the action, not jobs trusted JS schedules later.
+  if (!fn) {
+    await runWaitSequence(waitForStep);
+    return;
   }
+  await runGuardedPageInteraction(page, opts, () => runWaitSequence(waitForSettledStep));
 }
 
 type ScreenshotOptions = {

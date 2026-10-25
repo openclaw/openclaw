@@ -1,13 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
-import {
-  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-  type NodeRunnerInventoryIssue,
-} from "../../infra/node-runner-inventory.js";
+import type { NodeRunnerInventoryIssue } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import {
@@ -15,6 +9,7 @@ import {
   createDeviceWorkerRuntime,
   reconcileDeviceWorker,
 } from "./device-provider.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 
 const DEVICE_ID = "device-session-host";
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -38,17 +33,14 @@ function pairedDevice(
 }
 
 function connectedNode(deviceId = DEVICE_ID, available = true): NodeWorkerSupervisorNodeProof {
-  return {
+  return createNodeWorkerBundleTestNode({
     nodeId: deviceId,
     connId: `conn-${deviceId}`,
     pairingIdentity: `identity-${deviceId}`,
     pairingGeneration: `generation-${deviceId}`,
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: GATEWAY_CLIENT_MODES.NODE,
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: { enabled: true, capacity: { total: 2, available: available ? 2 : 0 } },
     commands: ["system.run"],
-  };
+  });
 }
 
 function deviceRuntime(params: {
@@ -75,6 +67,54 @@ function deviceRuntime(params: {
 }
 
 describe("device worker provider", () => {
+  it.each(["pairing", "presence"] as const)(
+    "cancels an in-flight %s inspection without waiting for the read",
+    async (phase) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      const read = async (current: typeof phase) => {
+        if (phase === current) {
+          entered.resolve();
+          await release.promise;
+        }
+      };
+      const listCurrentNodes = vi.fn(async () => {
+        await read("presence");
+        return [connectedNode()];
+      });
+      const { provider } = deviceRuntime({
+        getPairedDevice: async () => {
+          await read("pairing");
+          return pairedDevice();
+        },
+        listCurrentNodes,
+      });
+      let outcome: unknown;
+      const inspection = provider.inspect({ ...LEASE, signal: controller.signal }).then(
+        (result) => {
+          outcome = result;
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+      try {
+        await entered.promise;
+        controller.abort();
+        await vi.waitFor(() =>
+          expect(outcome).toMatchObject({ name: "AbortError", cause: controller.signal.reason }),
+        );
+        if (phase === "pairing") {
+          expect(listCurrentNodes).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        await inspection;
+      }
+    },
+  );
+
   it("binds targeted device reconciliation to the active worker service", async () => {
     const service = {};
     const reconcile = async (deviceId: string) => [`environment:${deviceId}`];

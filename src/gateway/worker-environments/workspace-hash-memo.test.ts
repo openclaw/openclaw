@@ -14,6 +14,7 @@ import {
   type WorkspaceHashMemo,
   type RemoteWorkspaceManifestEnvelope,
 } from "./workspace-hash-memo.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import { workspaceManifest } from "./workspace-manifest-fixtures.test-support.js";
 import { captureWorkspaceManifest, preflightWorkspaceApply } from "./workspace-manifest-worker.js";
 
@@ -30,7 +31,7 @@ const remoteWorkspaceManifestScript = REMOTE_WORKSPACE_MANIFEST_JS;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const hashMetrics = () => ({ contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 });
+const hashMetrics = () => ({ contentHashCount: 0, memoHitCount: 0 });
 function remoteCapture(workspace: string, home: string, script = remoteWorkspaceManifestScript) {
   return async (memo: [string, string][]): Promise<RemoteWorkspaceManifestEnvelope> => {
     const result = await runCommandWithTimeout(
@@ -94,7 +95,8 @@ it("reuses local workspace nodes within one preflight but not across fences", as
     directories: ["parent"],
   };
   const metrics = hashMetrics();
-  const preflight = () => preflightWorkspaceApply({ root, base, current });
+  const prepared = prepareWorkspaceReconciliation(base, current).preflight;
+  const preflight = () => preflightWorkspaceApply({ root, ...prepared });
   const first = await withWorkspaceHashMemo(new Map(), preflight, metrics);
   expect([...first.applyPaths].toSorted()).toEqual([
     "parent",
@@ -105,6 +107,11 @@ it("reuses local workspace nodes within one preflight but not across fences", as
 
   await withWorkspaceHashMemo(new Map(), preflight, metrics);
   expect(metrics).toMatchObject({ contentHashCount: 2, memoHitCount: 0 });
+
+  await fs.writeFile(path.join(root, "parent"), "local replacement");
+  const conflict = await withWorkspaceHashMemo(new Map(), preflight, metrics);
+  expect([...conflict.applyPaths]).toEqual([]);
+  expect(conflict.conflictPaths).toEqual(["parent"]);
 });
 
 it("bounds a maximum-entry memo envelope", () => {
@@ -124,10 +131,8 @@ it("bounds a maximum-entry memo envelope", () => {
       memo: JSON.parse(serializeRemoteWorkspaceHashMemo(memo)),
       metrics: {
         contentHashCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
-        contentHashDurationMs: Number.MAX_SAFE_INTEGER,
         memoHitCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
         memoTruncatedCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
-        totalDurationMs: Number.MAX_SAFE_INTEGER,
       },
     })}\n`,
   );

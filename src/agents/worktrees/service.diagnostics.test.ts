@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { promisify } from "node:util";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -20,29 +18,23 @@ import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { WORKTREE_MUTATION_LEASE_SCOPE } from "./capacity-contract.js";
 import * as worktreeRunLease from "./run-lease.js";
 import { ManagedWorktreeService, WorktreeSnapshotError } from "./service.js";
 import {
+  git,
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
-const execFileAsync = promisify(execFile);
 const realRunCommand = commandExec.runCommandWithTimeout;
 const realRunGitWorkerOperation = gitWorker.runGitWorkerOperation;
 const realAbortWorktreeRemoval = worktreeRunLease.abortWorktreeRemoval;
-const emptyFailure: SpawnResult = {
-  stdout: "",
-  stderr: "",
-  code: 73,
-  signal: null,
-  killed: false,
-  termination: "exit",
-};
+const emptyFailure: SpawnResult = createCommandResult({ code: 73 });
 
 async function failureMessage(operation: Promise<unknown>): Promise<string> {
   const failure: unknown = await operation.then(
@@ -56,11 +48,6 @@ async function failureMessage(operation: Promise<unknown>): Promise<string> {
 const expectAbsent = (file: string) =>
   expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 const readme = (directory: string) => path.join(directory, "README.md");
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args]);
-  return stdout.trim();
-}
 
 function gitCommandArgs(argv: readonly string[]): readonly string[] {
   let command = argv[0] === "nice" ? 3 : 0;

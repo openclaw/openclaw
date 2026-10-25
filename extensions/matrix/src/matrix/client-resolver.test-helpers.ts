@@ -8,9 +8,6 @@ type MatrixClientResolverMocks = {
   acquireSharedMatrixClientMock: Mock<(...args: unknown[]) => Promise<SharedMatrixClientLease>>;
   sharedLeaseReleaseMock: Mock<(...args: unknown[]) => Promise<void>>;
   sharedLeaseStartMock: Mock<(...args: unknown[]) => Promise<void>>;
-  resolveMatrixAuthContextMock: Mock<
-    (params: { cfg: unknown; accountId?: string | null }) => unknown
-  >;
 };
 
 export const matrixClientResolverMocks: MatrixClientResolverMocks = {
@@ -18,7 +15,6 @@ export const matrixClientResolverMocks: MatrixClientResolverMocks = {
   acquireSharedMatrixClientMock: vi.fn(),
   sharedLeaseReleaseMock: vi.fn(),
   sharedLeaseStartMock: vi.fn(),
-  resolveMatrixAuthContextMock: vi.fn(),
 };
 
 export function createMockMatrixClient(): MatrixClient {
@@ -50,19 +46,12 @@ export function setAcquiredMatrixClient(client: MatrixClient): SharedMatrixClien
 }
 
 export function primeMatrixClientResolverMocks() {
-  const {
-    acquireSharedMatrixClientMock,
-    sharedLeaseReleaseMock,
-    sharedLeaseStartMock,
-    resolveMatrixAuthContextMock,
-  } = matrixClientResolverMocks;
+  const { acquireSharedMatrixClientMock, sharedLeaseReleaseMock, sharedLeaseStartMock } =
+    matrixClientResolverMocks;
 
   vi.clearAllMocks();
   sharedLeaseReleaseMock.mockReset().mockResolvedValue(undefined);
   sharedLeaseStartMock.mockReset();
-  resolveMatrixAuthContextMock.mockImplementation(({ accountId }) => ({
-    accountId: accountId ?? "default",
-  }));
   acquireSharedMatrixClientMock.mockReset();
   setAcquiredMatrixClient(createMockMatrixClient());
 }
@@ -86,7 +75,6 @@ export async function expectOneOffSharedMatrixClient(params?: {
     cfg: params?.cfg ?? {},
     timeoutMs: params?.timeoutMs,
     accountId,
-    startClient: false,
     role: "transient",
   });
 
@@ -99,20 +87,14 @@ export async function expectOneOffSharedMatrixClient(params?: {
 }
 
 export function expectExplicitMatrixClientConfig(params: { cfg: unknown; accountId?: string }) {
-  const { getMatrixRuntimeMock, resolveMatrixAuthContextMock, acquireSharedMatrixClientMock } =
-    matrixClientResolverMocks;
+  const { getMatrixRuntimeMock, acquireSharedMatrixClientMock } = matrixClientResolverMocks;
   const accountId = params.accountId ?? "default";
 
   expect(getMatrixRuntimeMock).not.toHaveBeenCalled();
-  expect(resolveMatrixAuthContextMock).toHaveBeenCalledWith({
-    cfg: params.cfg,
-    accountId,
-  });
   expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
     cfg: params.cfg,
     timeoutMs: undefined,
     accountId,
-    startClient: false,
     role: "transient",
   });
 }

@@ -8,7 +8,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { toClientToolDefinitions, toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import {
@@ -24,16 +23,14 @@ import {
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "./agent-session-loop-correctness.test-support.js";
-import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const stateDir of tempDirs.dirs) {
-      await cleanupSessionStateForTest({ stateDir });
-    }
-    cleanup();
+    await cleanupTrackedSessionState(tempDirs.dirs, cleanup);
   }),
 );
 registerAgentSessionLoopTestLifecycle();
@@ -61,7 +58,7 @@ function mockExchange(content: AssistantMessage["content"], reply: string) {
       createAssistantResultStream(createAssistant(model, content, "toolUse")),
     )
     .mockImplementation((model: Model) =>
-      createAssistantResultStream(createAssistant(model, [text(reply)])),
+      createAssistantResultStream(createAssistant(model, reply)),
     );
 }
 
@@ -210,12 +207,7 @@ it.each(["value", "apiKey", "account"])(
   async (field) => {
     const client = field !== "value";
     const dir = tempDirs.make("openclaw-runtime-projection-");
-    const scope = {
-      agentId: "main",
-      sessionId: "runtime-projection",
-      sessionKey: "agent:main:runtime-projection",
-      storePath: path.join(dir, "sessions.json"),
-    };
+    const scope = sessionScope(path.join(dir, "sessions.json"), "runtime-projection");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const sessionManager = SessionManager.open(scope, dir);
     guardSessionManager(sessionManager, { config: {}, allowedToolNames: ["lookup"] });
@@ -267,10 +259,11 @@ it.each(["value", "apiKey", "account"])(
         },
       };
     };
-    const resourceLoader = client
-      ? createResourceLoader(new Map([["message_end", [extendReply]]]))
-      : undefined;
-    const { session } = await createTestSession({ sessionManager, customTools, resourceLoader });
+    const { session } = await createTestSession({
+      sessionManager,
+      customTools,
+      extension: client ? (api) => api.on("message_end", extendReply) : undefined,
+    });
     const started: string[] = [];
     session.subscribe((event) => {
       if (event.type === "tool_execution_start") {

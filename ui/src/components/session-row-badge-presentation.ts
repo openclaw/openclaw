@@ -15,14 +15,6 @@ export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>[
 
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
-function formatSessionPullRequestSummary(
-  summary: SessionCatalogPullRequestSummary,
-  translate: typeof t,
-): string {
-  const numbers = summary.numbers.map((number) => `#${number}`).join(", ");
-  return `${numbers} · ${translate(`chat.pullRequests.${summary.state}`)}`;
-}
-
 export type SessionRowBadgesParams = {
   isChild?: boolean;
   incognito?: boolean;
@@ -63,7 +55,7 @@ export function resolveSessionRowBadges(
   translate = t,
 ): SessionRowBadge[] {
   const pullRequestLabel = params.pullRequest
-    ? formatSessionPullRequestSummary(params.pullRequest, translate)
+    ? `${params.pullRequest.numbers.map((number) => `#${number}`).join(", ")} · ${translate(`chat.pullRequests.${params.pullRequest.state}`)}`
     : undefined;
   const pullRequestState = params.pullRequest?.state;
   const placementState = params.isChild ? undefined : params.placementState;

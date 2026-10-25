@@ -7,6 +7,7 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { racePromiseWithAbortSignal, sleepWithAbort } from "@openclaw/retry";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -113,7 +114,7 @@ export async function ensureModelProviderLocalService(
       {
         providerId: model.provider,
         baseUrl: model.baseUrl,
-        headers: buildHealthProbeHeaders(model.headers, probeHeaders),
+        headers: buildHealthProbeHeaders(omitNullRequestHeaders(model.headers), probeHeaders),
         service: getModelProviderLocalService(model),
         reconcile: getModelProviderLocalServiceReconciler(model),
       },
@@ -409,9 +410,7 @@ async function startAndWaitForLocalService(params: {
 
   const startedAt = Date.now();
   const diagnostics: LocalServiceDiagnostics = {
-    providerId: provider,
     healthUrl,
-    startedAt,
     stderrTail: "",
   };
   managed.diagnostics = diagnostics;
@@ -448,7 +447,6 @@ async function startAndWaitForLocalService(params: {
   child.unref();
   child.once("exit", (code, signalLocal) => {
     const exit = { code, signal: signalLocal };
-    diagnostics.lastExit = exit;
     log.info(
       `${provider} local service exited: ${signalLocal ? `signal=${signalLocal}` : `code=${code ?? 0}`}`,
     );
@@ -472,7 +470,6 @@ async function startAndWaitForLocalService(params: {
   for (;;) {
     if (await probeHealth(healthUrl, healthHeaders, signal, assertAuthCurrent)) {
       diagnostics.readyAt = Date.now();
-      diagnostics.lastHealthyAt = diagnostics.readyAt;
       // Drain readiness diagnostics so pipes cannot pin one-shot hosts.
       diagnostics.stderrTail = "";
       drainLocalServiceOutput(child);
@@ -531,7 +528,7 @@ function scheduleIdleStop(
       }
     }, idleStopMs),
   );
-  managed.idleTimer.unref?.();
+  managed.idleTimer.unref();
 }
 
 function clearIdleTimer(managed: ManagedLocalService) {
@@ -562,7 +559,7 @@ function stopManagedService(
       }
       // Startup reports its error to its caller; shutdown must still join its tail.
       await starting?.catch(() => {});
-      await stopManagedProcess(managed, new AbortController().signal);
+      await stopManagedProcess(managed);
       if (services.get(key) === managed) {
         services.delete(key);
       }
@@ -579,7 +576,7 @@ function stopManagedService(
   return pending;
 }
 
-async function stopManagedProcess(managed: ManagedLocalService, signal: AbortSignal) {
+async function stopManagedProcess(managed: ManagedLocalService, signal?: AbortSignal) {
   throwIfAborted(signal);
   const owned = managed.process;
   managed.lastExit = undefined;

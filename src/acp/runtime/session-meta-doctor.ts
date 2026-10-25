@@ -58,7 +58,6 @@ type DoctorAcpScope = { config: OpenClawConfig; env: NodeJS.ProcessEnv; pluginId
 export type AcpSessionKeyRepairReport = {
   found: number;
   repaired: number;
-  scannedRows: number;
   warnings: string[];
   backups?: string[];
 };
@@ -79,7 +78,6 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
   const result: AcpSessionKeyRepairReport = {
     found: 0,
     repaired: 0,
-    scannedRows: 0,
     warnings: [],
   };
   if (params.apply && !params.authority) {
@@ -105,7 +103,6 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
     } finally {
       database.walMaintenance.close();
     }
-    result.scannedRows = rows.length;
     const candidateAgentIds = [
       ...new Set([...listAgentIds(params.cfg), ...targets.map((target) => target.agentId)]),
     ];

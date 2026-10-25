@@ -41,8 +41,6 @@ import {
 } from "./pw-tools-core.interactions.navigation.js";
 import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-core.snapshot.js";
 
-const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
-
 type ActionExecutionOptions = GuardedInteractionOptions & {
   evaluateEnabled?: boolean;
 };
@@ -201,8 +199,6 @@ export async function executeActViaPlaywright(
   const drainDownloads = async (firstEventGraceMs = downloadGraceMs) =>
     await downloadCapture.drain({
       firstEventGraceMs,
-      maxWaitMs: ACT_DOWNLOAD_MAX_DRAIN_MS,
-      quietMs: BROWSER_ACTION_NAVIGATION_GRACE_MS,
     });
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
@@ -322,7 +318,6 @@ async function batchViaPlaywright(
       if (page.isClosed()) {
         return finishAborted("closed", index, page.url(), opts.actions.length - index);
       }
-      navigated = false;
       let result: BrowserBatchActionResult;
       try {
         await executeSingleAction(action, { ...opts, ...navigationPolicy });

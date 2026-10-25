@@ -67,16 +67,13 @@ async function writeLegacyRecord(overrides: Partial<LegacyRecord> = {}, index = 
   return { sourcePath, originalPath, record, read: () => readManagedImageRecord(id, stateDir) };
 }
 
-function migrate(
-  overrides: Partial<Parameters<typeof migrateLegacyManagedOutgoingImages>[0]> = {},
-) {
+function migrate() {
   return migrateLegacyManagedOutgoingImages({
     detected: detectLegacyManagedOutgoingImages({
       stateDir,
       doctorOnlyStateMigrations: true,
     }),
     stateDir,
-    ...overrides,
   });
 }
 
@@ -89,6 +86,20 @@ describe("legacy managed outgoing image migration", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fsp.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const legacy = await writeLegacyRecord({ alt: "utf8-marker" });
+    const bytes = await fsp.readFile(legacy.sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fsp.writeFile(legacy.sourcePath, bytes);
+    const result = migrate();
+    expect(result.changes).toEqual([]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(await fsp.readFile(legacy.sourcePath)).toEqual(bytes);
+    await expect(fsp.readFile(legacy.originalPath, "utf8")).resolves.toBe("image-bytes");
+    await expect(legacy.read()).resolves.toBeNull();
   });
 
   it("reports an invalid records directory instead of silently skipping migration", async () => {
@@ -146,7 +157,7 @@ describe("legacy managed outgoing image migration", () => {
 
   it("retries expired attachment cleanup without importing metadata", async () => {
     const legacy = await writeLegacyRecord({ messageId: null, retentionClass: "transient" });
-    const expire = () => migrate({ nowMs: Date.parse("2026-07-15T00:16:00.000Z") });
+    using _ = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-15T00:16:00.000Z"));
     const remove = fs.rmSync;
     let attachmentRemovalFailed = false;
     const rmSpy = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
@@ -159,7 +170,7 @@ describe("legacy managed outgoing image migration", () => {
 
     let result!: ReturnType<typeof migrate>;
     try {
-      result = expire();
+      result = migrate();
     } finally {
       rmSpy.mockRestore();
     }
@@ -169,7 +180,7 @@ describe("legacy managed outgoing image migration", () => {
     await fsp.access(legacy.sourcePath);
     await fsp.access(legacy.originalPath);
     expect(await legacy.read()).toBeNull();
-    const retried = expire();
+    const retried = migrate();
     expect(retried.warnings).toEqual([]);
     expect(retried.changes.join("\n")).toContain("Discarded 1 expired managed outgoing image");
     expect(await legacy.read()).toBeNull();
@@ -251,27 +262,96 @@ describe("legacy managed outgoing image migration", () => {
     expect(await legacy.read()).toBeNull();
   });
 
-  it.each([
-    ["beforeClaim", "Failed claiming legacy managed outgoing"],
-    ["removeSource", "synthetic remove failure"],
-  ] as const)("preserves sources after %s failure", async (hook, warning) => {
-    const legacy = await writeLegacyRecord();
-    const result = migrate({
-      [hook]: () => {
-        if (hook === "removeSource") {
-          throw new Error(warning);
+  it.each([false, true])(
+    "retries partial JSON cleanup after a committed import (expired second: %s)",
+    async (expired) => {
+      const first = await writeLegacyRecord();
+      const second = await writeLegacyRecord(
+        expired ? { messageId: null, retentionClass: "transient" } : {},
+        2,
+      );
+      const unlink = fs.unlinkSync;
+      const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
+        if (target === second.sourcePath) {
+          throw new Error("synthetic remove failure");
         }
-        fs.appendFileSync(legacy.sourcePath, "\n");
-      },
-    });
-    expect(result.warnings.join("\n")).toContain(warning);
-    await fsp.access(legacy.sourcePath);
-    if (hook === "beforeClaim") {
-      expect(await legacy.read()).toBeNull();
-      return;
-    }
-    const retried = migrate();
-    expect(retried.warnings).toEqual([]);
-    await expect(fsp.access(legacy.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+        unlink(target);
+      });
+      let result!: ReturnType<typeof migrate>;
+      try {
+        result = migrate();
+      } finally {
+        unlinkSpy.mockRestore();
+      }
+
+      expect(result.warnings.join("\n")).toContain("synthetic remove failure");
+      expect(await first.read()).toMatchObject({ attachmentId: first.record.attachmentId });
+      await expect(fsp.access(first.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await fsp.access(first.originalPath);
+      await fsp.access(second.sourcePath);
+      if (expired) {
+        expect(await second.read()).toBeNull();
+        await expect(fsp.access(second.originalPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(await second.read()).toMatchObject({ attachmentId: second.record.attachmentId });
+        await fsp.access(second.originalPath);
+      }
+
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      const retried = migrate();
+      expect(retried.warnings).toEqual([]);
+      await expect(fsp.access(second.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await first.read()).toMatchObject({ attachmentId: first.record.attachmentId });
+      if (expired) {
+        expect(await second.read()).toBeNull();
+      } else {
+        expect(await second.read()).toMatchObject({ attachmentId: second.record.attachmentId });
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps changed later JSON and attachment at cleanup (expired second: %s)",
+    async (expired) => {
+      const first = await writeLegacyRecord();
+      const second = await writeLegacyRecord(
+        expired ? { messageId: null, retentionClass: "transient" } : {},
+        2,
+      );
+      const changedRecord = {
+        ...second.record,
+        messageId: "new-message",
+        retentionClass: "history",
+      };
+      const changedJson = JSON.stringify(changedRecord);
+      const unlink = fs.unlinkSync;
+      const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
+        unlink(target);
+        if (target === first.sourcePath) {
+          fs.writeFileSync(second.sourcePath, changedJson);
+        }
+      });
+      let result!: ReturnType<typeof migrate>;
+      try {
+        result = migrate();
+      } finally {
+        unlinkSpy.mockRestore();
+      }
+
+      expect(result.warnings.join("\n")).toContain("source changed after doctor loaded it");
+      expect(await fsp.readFile(second.sourcePath, "utf8")).toBe(changedJson);
+      await fsp.access(second.originalPath);
+      if (expired) {
+        expect(await second.read()).toBeNull();
+        expect(migrate().warnings).toEqual([]);
+        expect(await second.read()).toMatchObject({ messageId: "new-message" });
+      } else {
+        expect(await second.read()).toMatchObject({ messageId: "message-1" });
+        expect(migrate().warnings.join("\n")).toContain("conflicts with shared SQLite state");
+        expect(await fsp.readFile(second.sourcePath, "utf8")).toBe(changedJson);
+      }
+      await fsp.access(second.originalPath);
+    },
+  );
 });

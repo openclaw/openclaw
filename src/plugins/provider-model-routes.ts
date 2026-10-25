@@ -76,13 +76,10 @@ export function resolveProviderModelCatalogId(params: {
   provider: string;
   modelId: string;
   surface?: BundledProviderPolicySurface | null;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): string | null {
   const provider = normalizeProviderId(params.provider);
   const surface =
-    params.surface === undefined
-      ? resolveProviderModelPolicySurface(provider, params.metadataSnapshot)
-      : params.surface;
+    params.surface === undefined ? resolveProviderModelPolicySurface(provider) : params.surface;
   const normalized = surface?.normalizeModelCatalogId?.({
     provider,
     modelId: params.modelId,

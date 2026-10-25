@@ -18,9 +18,11 @@ import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.
 import { stopLaunchAgent } from "../../daemon/launchd-stop.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import * as ancestry from "../../infra/restart-stale-pids.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import * as bootReader from "../../infra/update-managed-service-handoff-boot.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
@@ -119,6 +121,10 @@ it
         createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
         const metaPath = await writeHandoffMeta(home, callerRoot, runId, claim.lease.owner);
         revokeAt("unrecorded");
+        vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+          platform: "darwin",
+          identity: "01234567-89ab-cdef-0123-456789abcdef",
+        }));
         mockProcessPlatform("darwin");
         if (caller) {
           // Admission still checks both live identities and the lease after handoff.
@@ -170,7 +176,12 @@ it
           now + 300000,
           now,
           JSON.stringify({
-            owner: { pid: gatewayPid, host: hostname(), startedAt },
+            owner: {
+              pid: gatewayPid,
+              host: hostname(),
+              startedAt,
+              processNamespace: readGatewayLockProcessNamespace(),
+            },
             port: 43210,
             mode: "supervised",
             supervisor: { kind: "launchd", name: label },

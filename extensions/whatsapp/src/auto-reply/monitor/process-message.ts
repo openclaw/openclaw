@@ -27,10 +27,6 @@ import type { WhatsAppInboundAdmission } from "../../inbound/admission.js";
 import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { formatError } from "../../session.js";
-import {
-  resolveWhatsAppDirectSystemPrompt,
-  resolveWhatsAppGroupSystemPrompt,
-} from "../../system-prompt.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -48,8 +44,7 @@ import {
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
-import { buildInboundLine } from "./message-line.js";
-import { resolveWhatsAppResponsePrefix } from "./response-prefix.js";
+import { formatInboundEnvelope as formatWhatsAppInboundEnvelope } from "./message-line.runtime.js";
 import {
   buildHistoryContextFromEntries,
   createChannelMessageReplyPipeline,
@@ -58,6 +53,7 @@ import {
   normalizeE164,
   resolveChannelContextVisibilityMode,
   resolveInboundSessionEnvelopeContextAsync,
+  resolveIdentityNamePrefix,
   resolvePinnedMainDmOwnerFromAllowlist,
   isControlCommandMessage,
   shouldComputeCommandAuthorized,
@@ -237,11 +233,28 @@ export async function processMessage(params: {
     groupAllowFrom: inboundPolicy.groupAllowFrom,
   });
 
-  let combinedBody = buildInboundLine({
-    msg: msgForAgent,
+  let replyContext: string | null = null;
+  if (visibleReplyTo?.body) {
+    const replySender =
+      visibleReplyTo.sender?.label ?? visibleReplyTo.sender?.e164 ?? "unknown sender";
+    const idPart = visibleReplyTo.id ? ` id:${visibleReplyTo.id}` : "";
+    replyContext = `[Replying to ${replySender}${idPart}]\n${visibleReplyTo.body}\n[/Replying]`;
+  }
+  const envelopeSender = getSenderIdentity(msgForAgent);
+  let combinedBody = formatWhatsAppInboundEnvelope({
+    channel: "WhatsApp",
+    from: conversationKind === "group" ? conversationId : conversationId.replace(/^whatsapp:/, ""),
+    timestamp: msgForAgent.event.timestamp,
+    body: `${msgForAgent.payload.body}${replyContext ? `\n\n${replyContext}` : ""}`,
+    chatType: conversationKind,
+    sender: {
+      name: envelopeSender.name ?? undefined,
+      e164: envelopeSender.e164 ?? undefined,
+      id: getPrimaryIdentityId(envelopeSender) ?? undefined,
+    },
     previousTimestamp,
     envelope: envelopeOptions,
-    visibleReplyTo,
+    fromMe: msgForAgent.platform.fromMe,
   });
   const visibleGroupHistory =
     conversationKind === "group"
@@ -340,27 +353,28 @@ export async function processMessage(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
-  const responsePrefix = resolveWhatsAppResponsePrefix({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    isSelfChat: conversationKind !== "group" && inboundPolicy.isSelfChat,
-    pipelineResponsePrefix: replyPipeline.responsePrefix,
-  });
+  const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
+  const responsePrefix =
+    replyPipeline.responsePrefix ??
+    (configuredResponsePrefix === "auto"
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
+      : configuredResponsePrefix) ??
+    (conversationKind !== "group" && inboundPolicy.isSelfChat
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
+      : undefined);
   const replyThreading = resolveBatchedReplyThreadingPolicy(
     account.replyToMode ?? "off",
     params.msg.event.isBatched === true,
   );
 
-  const conversationSystemPrompt =
-    conversationKind === "group"
-      ? resolveWhatsAppGroupSystemPrompt({
-          accountConfig: account,
-          groupId: conversationId,
-        })
-      : resolveWhatsAppDirectSystemPrompt({
-          accountConfig: account,
-          peerId: dmRouteTarget ?? conversationId,
-        });
+  const conversationPrompts = conversationKind === "group" ? account.groups : account.direct;
+  const promptTargetId =
+    conversationKind === "group" ? conversationId : (dmRouteTarget ?? conversationId);
+  const selectedPrompt = promptTargetId
+    ? (conversationPrompts?.[promptTargetId]?.systemPrompt ??
+      conversationPrompts?.["*"]?.systemPrompt)
+    : undefined;
+  const conversationSystemPrompt = selectedPrompt?.trim() || undefined;
 
   const prepared = await prepareWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,

@@ -19,7 +19,7 @@ import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-
 import type { GatewaySessionStoreSourceRequest } from "./session-utils-store.types.js";
 
 type GatewaySessionStoreDiscovery = {
-  existing: SessionStoreTarget[];
+  existing: readonly Readonly<SessionStoreTarget>[];
   fallback: SessionStoreTarget;
 };
 
@@ -72,7 +72,7 @@ export function resolveGatewaySessionStoreLookupCandidates(params: {
 }): {
   configured: boolean;
   fallback: SessionStoreTarget;
-  candidates: SessionStoreTarget[];
+  candidates: readonly Readonly<SessionStoreTarget>[];
   readSources?: SessionEntryReadSource[];
 } {
   const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);

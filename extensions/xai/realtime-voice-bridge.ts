@@ -11,7 +11,6 @@ import {
   RealtimeVoiceWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveXaiRealtimeApiKey } from "./realtime-voice-auth.runtime.js";
 import {
   XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
   XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR,
@@ -202,9 +201,7 @@ export class XaiRealtimeVoiceBridge
     url: string;
     headers: Record<string, string>;
   }> {
-    const apiKey = this.config.resolveApiKey
-      ? await this.config.resolveApiKey()
-      : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg, this.config.agentId);
+    const apiKey = await this.config.resolveApiKey();
     const model = this.config.model ?? XAI_REALTIME_DEFAULT_MODEL;
     const url = toXaiRealtimeWsUrl(
       this.config.baseUrl,

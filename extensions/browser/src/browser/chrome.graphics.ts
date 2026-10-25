@@ -20,13 +20,6 @@ import type {
   BrowserGraphicsDiagnostics,
 } from "./client.types.js";
 
-type ChromeGraphicsProbeOptions = {
-  httpTimeoutMs?: number;
-  handshakeTimeoutMs?: number;
-  commandTimeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
-};
-
 function readChromeString(value: unknown): string {
   return normalizeOptionalString(value) ?? "";
 }
@@ -99,72 +92,13 @@ function classifyGraphicsAcceleration(params: {
   return coreFeatureStatuses.some((status) => status.includes("software")) ? "software" : "unknown";
 }
 
-function normalizeChromeGraphicsInfo(
-  value: unknown,
-  observedAt: number,
-): BrowserGraphicsDiagnostics {
-  const result = asNullableRecord(value);
-  const gpu = asNullableRecord(result?.gpu);
-  if (!gpu) {
-    return {
-      status: "unavailable",
-      observedAt,
-      reason: "SystemInfo.getInfo returned no GPU information",
-    };
-  }
-
-  const attributes = readStringRecord(gpu.auxAttributes);
-  const featureStatus = readStringRecord(gpu.featureStatus);
-  const devices = readRecordArray(gpu.devices).map((device) => ({
-    vendorId: readChromeNumber(device.vendorId),
-    deviceId: readChromeNumber(device.deviceId),
-    vendor: readChromeString(device.vendorString),
-    device: readChromeString(device.deviceString),
-    driverVendor: readChromeString(device.driverVendor),
-    driverVersion: readChromeString(device.driverVersion),
-  }));
-  const renderer = firstAttribute(attributes, ["glRenderer", "angleRenderer", "webglRenderer"]);
-  const disabledFeatures = Object.entries(featureStatus)
-    .filter(([, status]) => !status.toLowerCase().startsWith("enabled"))
-    .map(([feature, status]) => ({ feature, status }));
-
-  return {
-    status: "available",
-    observedAt,
-    acceleration: classifyGraphicsAcceleration({ renderer, devices, featureStatus }),
-    renderer,
-    vendor: firstAttribute(attributes, ["glVendor", "angleVendor", "webglVendor"]),
-    version: firstAttribute(attributes, ["glVersion", "angleVersion"]),
-    backend: firstAttribute(attributes, ["glImplementationParts", "displayType"]),
-    devices,
-    featureStatus,
-    disabledFeatures,
-    driverBugWorkarounds: filterStringEntries(gpu.driverBugWorkarounds),
-    videoDecoding: readRecordArray(gpu.videoDecoding).map((capability) => ({
-      profile: readChromeString(capability.profile),
-      minResolution: readSize(capability.minResolution),
-      maxResolution: readSize(capability.maxResolution),
-    })),
-    videoEncoding: readRecordArray(gpu.videoEncoding).map((capability) => ({
-      profile: readChromeString(capability.profile),
-      maxResolution: readSize(capability.maxResolution),
-      maxFramerateNumerator: readChromeNumber(capability.maxFramerateNumerator),
-      maxFramerateDenominator: readChromeNumber(capability.maxFramerateDenominator),
-    })),
-  };
-}
-
-export async function inspectChromeGraphicsDiagnostics(
+async function inspectChromeGraphicsDiagnostics(
   cdpUrl: string,
-  options: ChromeGraphicsProbeOptions = {},
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<BrowserGraphicsDiagnostics> {
   const observedAt = Date.now();
   try {
-    const endpoint = await getChromeWebSocketEndpoint(
-      cdpUrl,
-      options.httpTimeoutMs,
-      options.ssrfPolicy,
-    );
+    const endpoint = await getChromeWebSocketEndpoint(cdpUrl, 300, ssrfPolicy);
     if (!endpoint) {
       return {
         status: "unavailable",
@@ -176,13 +110,61 @@ export async function inspectChromeGraphicsDiagnostics(
       endpoint.url,
       async (send) => await send("SystemInfo.getInfo"),
       {
-        handshakeTimeoutMs: options.handshakeTimeoutMs,
-        commandTimeoutMs: options.commandTimeoutMs,
+        handshakeTimeoutMs: 600,
+        commandTimeoutMs: 1_000,
         handshakeRetries: 0,
         lookup: endpoint.lookup,
       },
     );
-    return normalizeChromeGraphicsInfo(result, observedAt);
+    const info = asNullableRecord(result);
+    const gpu = asNullableRecord(info?.gpu);
+    if (!gpu) {
+      return {
+        status: "unavailable",
+        observedAt,
+        reason: "SystemInfo.getInfo returned no GPU information",
+      };
+    }
+
+    const attributes = readStringRecord(gpu.auxAttributes);
+    const featureStatus = readStringRecord(gpu.featureStatus);
+    const devices = readRecordArray(gpu.devices).map((device) => ({
+      vendorId: readChromeNumber(device.vendorId),
+      deviceId: readChromeNumber(device.deviceId),
+      vendor: readChromeString(device.vendorString),
+      device: readChromeString(device.deviceString),
+      driverVendor: readChromeString(device.driverVendor),
+      driverVersion: readChromeString(device.driverVersion),
+    }));
+    const renderer = firstAttribute(attributes, ["glRenderer", "angleRenderer", "webglRenderer"]);
+    const disabledFeatures = Object.entries(featureStatus)
+      .filter(([, status]) => !status.toLowerCase().startsWith("enabled"))
+      .map(([feature, status]) => ({ feature, status }));
+
+    return {
+      status: "available",
+      observedAt,
+      acceleration: classifyGraphicsAcceleration({ renderer, devices, featureStatus }),
+      renderer,
+      vendor: firstAttribute(attributes, ["glVendor", "angleVendor", "webglVendor"]),
+      version: firstAttribute(attributes, ["glVersion", "angleVersion"]),
+      backend: firstAttribute(attributes, ["glImplementationParts", "displayType"]),
+      devices,
+      featureStatus,
+      disabledFeatures,
+      driverBugWorkarounds: filterStringEntries(gpu.driverBugWorkarounds),
+      videoDecoding: readRecordArray(gpu.videoDecoding).map((capability) => ({
+        profile: readChromeString(capability.profile),
+        minResolution: readSize(capability.minResolution),
+        maxResolution: readSize(capability.maxResolution),
+      })),
+      videoEncoding: readRecordArray(gpu.videoEncoding).map((capability) => ({
+        profile: readChromeString(capability.profile),
+        maxResolution: readSize(capability.maxResolution),
+        maxFramerateNumerator: readChromeNumber(capability.maxFramerateNumerator),
+        maxFramerateDenominator: readChromeNumber(capability.maxFramerateDenominator),
+      })),
+    };
   } catch (error) {
     return {
       status: "unavailable",
@@ -194,12 +176,15 @@ export async function inspectChromeGraphicsDiagnostics(
 
 export async function getCachedChromeGraphicsDiagnostics(
   running: RunningChrome,
-  load: () => Promise<BrowserGraphicsDiagnostics>,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<BrowserGraphicsDiagnostics> {
   if (running.graphicsDiagnostics) {
     return running.graphicsDiagnostics;
   }
-  running.graphicsDiagnosticsPending ??= load();
+  running.graphicsDiagnosticsPending ??= inspectChromeGraphicsDiagnostics(
+    `http://127.0.0.1:${running.cdpPort}`,
+    ssrfPolicy,
+  );
   try {
     const diagnostics = await running.graphicsDiagnosticsPending;
     if (diagnostics.status === "available") {

@@ -1,13 +1,28 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, ModelCatalogResult, SessionsListResult } from "../../api/types.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
-import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.ts";
-import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
+import {
+  buildCatalogDisplayLookup,
+  buildQualifiedChatModelValue,
+  formatCatalogChatModelDisplayFromLookup,
+  resolvePreferredServerChatModelValue,
+} from "../../lib/chat/model-ref.ts";
+import {
+  normalizeChatFastModeInput,
+  resolveChatModelOverrideValue,
+  resolveChatModelSelectState,
+} from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isSessionRuntimePinned } from "../../lib/model-runtime-choice.ts";
+import {
+  isSessionRuntimePinned,
+  resolveModelRuntimeEntry,
+} from "../../lib/model-runtime-choice.ts";
 import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
 import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
 import {
@@ -51,7 +66,8 @@ type ChatModelSettingsHost = ChatSessionRefreshHost & {
   chatError?: string | null;
   chatModelCatalog: Parameters<typeof resolveChatModelOverrideValue>[0]["chatModelCatalog"];
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
-  chatThinkingLevel: string | null;
+  chatMessages?: unknown[];
+  chatModelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
   sessions: SessionCapability;
   sessionsResult?: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
@@ -189,7 +205,6 @@ async function applyChatSetting(
   captured: ReturnType<typeof captureChatSettingsTarget>,
   patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">,
   settingName: "thinking level" | "speed" | "context window",
-  synchronize?: (receipt?: SessionPatchResult | null) => void,
 ): Promise<boolean> {
   const canDispatch = (receipt?: SessionPatchResult | null) =>
     (captured.isCurrent() || Boolean(captured.row(receipt))) &&
@@ -200,12 +215,11 @@ async function applyChatSetting(
       session: captured.row(receipt),
     }).allowed;
   setChatError(host, null);
-  let receipt: SessionPatchResult | null = null;
   try {
     if (!canDispatch()) {
       return false;
     }
-    const pending = patchChatSessionSettings(host, sessionKey, patch, {
+    const receipt = await patchChatSessionSettings(host, sessionKey, patch, {
       ...captured.agentParams,
       expectedSessionId: captured.sessionId,
       canDispatch,
@@ -215,13 +229,9 @@ async function applyChatSetting(
         }
       },
     });
-    synchronize?.();
-    receipt = await pending;
     return receipt !== null;
   } catch {
     return false;
-  } finally {
-    synchronize?.(receipt);
   }
 }
 
@@ -237,12 +247,7 @@ export function switchChatSetting(
   }
   const captured = captureChatSettingsTarget(host, targetSessionKey);
   if (selection.kind === "fastMode") {
-    const next: FastMode | undefined =
-      selection.value === ""
-        ? undefined
-        : selection.value === "auto" || selection.value === "ultrafast"
-          ? selection.value
-          : selection.value === "on";
+    const next = normalizeChatFastModeInput(selection.value);
     if (captured.settings.fastMode === next) {
       return Promise.resolve(true);
     }
@@ -271,19 +276,12 @@ export function switchChatSetting(
   if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
     return Promise.resolve(true);
   }
-  const synchronizeThinking = (receipt?: SessionPatchResult | null) => {
-    const row = captured.row(receipt);
-    if (row) {
-      host.chatThinkingLevel = row.thinkingLevel ?? null;
-    }
-  };
   return applyChatSetting(
     host,
     targetSessionKey,
     captured,
     { thinkingLevel: normalizedNext ?? null },
     "thinking level",
-    synchronizeThinking,
   );
 }
 
@@ -474,6 +472,7 @@ export async function switchChatModel(
   nextModel: string,
   targetSessionKey = host.sessionKey,
   agentRuntime?: string | null,
+  agentDefaultModel?: string,
 ): Promise<boolean> {
   if (!host.client || !host.connected) {
     return false;
@@ -485,8 +484,10 @@ export async function switchChatModel(
   // A newer intent retires even a confirmation for a previous selection.
   const selection = claimChatModelSelection(host, targetSessionKey);
   const { ownsSelection, agentScope } = selection;
-  const currentOverride = resolveChatModelOverrideValue({
+  const { currentOverride, defaultModel } = resolveChatModelSelectState({
     activeSession: activeRow,
+    agentDefaultModel,
+    modelSelectionPolicy: host.chatModelSelectionPolicy,
     chatModelCatalog: host.chatModelCatalog,
     modelOverrides: host.sessions.state.modelOverrides,
     sessionKey: targetSessionKey,
@@ -527,6 +528,46 @@ export async function switchChatModel(
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const switchPromise: Promise<boolean> = (async () => {
     try {
+      const nextValue = splitTrailingAuthProfile(nextModel).model || defaultModel;
+      const currentValue = splitTrailingAuthProfile(currentOverride).model || defaultModel;
+      const nextEntry = host.chatModelCatalog.find(
+        (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === nextValue,
+      );
+      const nextRuntime = resolveModelRuntimeEntry(
+        nextEntry,
+        runtimeSelection === undefined && isSessionRuntimePinned(activeRow?.agentRuntime)
+          ? activeRow?.agentRuntime?.id
+          : runtimeSelection,
+      );
+      const hasHistory = host.chatMessages?.some((message) => {
+        const role = asOptionalRecord(message)?.role;
+        return role === "user" || role === "assistant";
+      });
+      if (nextValue && nextValue !== currentValue && nextRuntime?.local !== true && hasHistory) {
+        const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
+        const displayLookup = buildCatalogDisplayLookup(host.chatModelCatalog);
+        const confirmed = await showConfirmDialog({
+          title: t("chat.modelControls.switchTitle", {
+            new: formatCatalogChatModelDisplayFromLookup(nextValue, displayLookup),
+          }),
+          message: t("chat.modelControls.switchWarning", {
+            current: formatCatalogChatModelDisplayFromLookup(currentValue, displayLookup),
+          }),
+          confirmLabel: t("chat.modelControls.switchConfirm"),
+          skipPreference: {
+            label: t("chat.modelControls.dontAskAgain"),
+            skipped: loadSettings().chatModelChangeConfirm === false,
+            remember: () => {
+              patchSettings({ chatModelChangeConfirm: false });
+            },
+          },
+          signal: selection.owner.signal,
+          canConfirm: canDispatch,
+        });
+        if (!confirmed || !canDispatch()) {
+          return false;
+        }
+      }
       const patched = await patchChatSessionSettings(host, targetSessionKey, patch, {
         ...agentScope,
         expectedSessionId: selection.expectedSessionId,

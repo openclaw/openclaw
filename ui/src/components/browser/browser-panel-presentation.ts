@@ -1,10 +1,11 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
-import { i18n } from "../../i18n/lib/translate.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import type { LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
 import { createDockLayout } from "../dock-layout.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
 import { notifyPanelHostedTabsChanged } from "../panel-hosted-tabs.ts";
+import { createPanelPresentationLifecycle } from "../panel-presentation-lifecycle.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
@@ -29,6 +30,8 @@ export type BrowserPanelInputs = {
   authToken: string | null;
   embedded: boolean;
   tabsInHeader: boolean;
+  mobilePresentation?: boolean;
+  fetchFavicon?: LinkFaviconFetcher;
   presented: boolean;
   refreshOnPresentation: boolean;
   sessionKey: string;
@@ -53,14 +56,10 @@ export function createBrowserPanelPresentation(
   element: HTMLElement & BrowserPanelInputs,
   scheduleAfterRender: (callback: () => void) => void,
 ) {
-  let connected = false;
   let activeSessionKey = "";
   let activeDashboardKey: string | undefined;
   let activeSessionTabsKey: string | undefined;
   let consumedPreferredRevision: string | undefined;
-  let completion: Promise<boolean> = Promise.resolve(true);
-  let complete: ((value: boolean) => void) | undefined;
-  const listeners = new Set<() => void>();
   let changes = new Set<keyof BrowserPanelInputs>([
     "client",
     "available",
@@ -68,29 +67,12 @@ export function createBrowserPanelPresentation(
     "presented",
     "suppressed",
   ]);
-  function publish() {
-    if (!connected) {
-      return;
-    }
-    const needsCommit = !complete;
-    if (needsCommit) {
-      completion = new Promise((resolve) => {
-        complete = resolve;
-      });
-    }
-    const pending = complete;
-    for (const listener of listeners) {
-      listener();
-    }
-    if (needsCommit) {
-      scheduleAfterRender(() => {
-        // Detach retires this receipt before a retained host starts another render.
-        if (complete === pending) {
-          rendered();
-        }
-      });
-    }
-  }
+  const lifecycle = createPanelPresentationLifecycle(scheduleAfterRender, () => {
+    const changed = changes;
+    changes = new Set();
+    updatePresentation(changed);
+  });
+  const publish = lifecycle.publish;
   const dockLayout = createDockLayout({
     notify: publish,
     isEmbedded: () => element.embedded,
@@ -127,13 +109,13 @@ export function createBrowserPanelPresentation(
       return element.authToken;
     },
     get isConnected() {
-      return connected && element.isConnected;
+      return lifecycle.active() && element.isConnected;
     },
     get renderRoot() {
       return element;
     },
     get updateComplete() {
-      return completion;
+      return lifecycle.updateComplete;
     },
     browserPanelIsOpen,
   };
@@ -330,17 +312,6 @@ export function createBrowserPanelPresentation(
     browser.suspendView();
     dockLayout.setOpen(false);
   }
-  function rendered(): void {
-    if (!connected) {
-      return;
-    }
-    const resolve = complete;
-    complete = undefined;
-    const changed = changes;
-    changes = new Set();
-    updatePresentation(changed);
-    resolve?.(true);
-  }
   return {
     inputs: element,
     browser,
@@ -349,9 +320,7 @@ export function createBrowserPanelPresentation(
     toggle,
     handleToggleRequest,
     closePanel,
-    selectHostedTab: (id: string) => {
-      void browser.selectTab(id);
-    },
+    selectHostedTab: (id: string) => void browser.selectTab(id),
     closeHostedTab: (id: string) => browser.closeTab(id),
     get hostedTabs() {
       return browserPanelHostedTabs(browser.tabs, element.ownerDocument);
@@ -360,14 +329,9 @@ export function createBrowserPanelPresentation(
       return browser.activeTargetId;
     },
     get updateComplete() {
-      return completion;
+      return lifecycle.updateComplete;
     },
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    subscribe: lifecycle.subscribe,
     inputsChanged(key: keyof BrowserPanelInputs) {
       changes.add(key);
       publish();
@@ -375,7 +339,7 @@ export function createBrowserPanelPresentation(
     attach() {
       // Native state must seed tabs before a restored dock can refresh them.
       const stopNative = browser.native.mount();
-      connected = true;
+      lifecycle.connect();
       dockLayout.connect();
       const stops = [
         listen(window, BROWSER_PANEL_TOGGLE_EVENT, (event) => {
@@ -383,7 +347,6 @@ export function createBrowserPanelPresentation(
             handleToggleRequest(event);
           }
         }),
-        i18n.subscribe(publish),
       ];
       // A takeover already owning the viewport suppresses the restored dock first.
       dockLayout.setSuppressed(element.suppressed);
@@ -393,15 +356,13 @@ export function createBrowserPanelPresentation(
       // A retained owner must resume the view suspended by its previous root.
       changes.add("presented");
       publish();
-      return () => {
-        connected = false;
-        browser.suspendView();
-        stops.forEach((stop) => stop());
-        dockLayout.dispose();
-        stopNative?.();
-        complete?.(false);
-        complete = undefined;
-      };
+      return () =>
+        lifecycle.dispose(() => {
+          browser.suspendView();
+          stops.forEach((stop) => stop());
+          dockLayout.dispose();
+          stopNative?.();
+        });
     },
   };
 }

@@ -4,6 +4,8 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -18,7 +20,6 @@ import {
   resolveDiscordReferencedReplyMessageId,
 } from "./message-forwarded.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
-import { createDiscordMessageRunQueue } from "./message-run-queue.js";
 import { resolveDiscordMessageText } from "./message-text.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
@@ -33,6 +34,10 @@ type DiscordMessageHandlerParams = Omit<
 
 const loadMessagePreflightRuntime = createLazyRuntimeModule(
   () => import("./message-handler.preflight.js"),
+);
+
+const loadMessageProcessRuntime = createLazyRuntimeModule(
+  () => import("./message-handler.process.js"),
 );
 
 type DiscordMessageDispatcher = (
@@ -67,11 +72,38 @@ export function createDiscordMessageDispatcher(
       resolvedAllowlist: { guildEntries: params.guildEntries, allowFrom: params.allowFrom },
     });
   const readConfig = createRuntimeConfigReader(params.cfg);
-  const messageRunQueue = createDiscordMessageRunQueue({
-    runtime: params.runtime,
+  const skippedCleanup = new Set<() => Promise<void>>();
+  const runQueue = createChannelRunQueue({
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
+    onError: (error) => {
+      params.runtime.error(danger(`discord message run failed: ${String(error)}`));
+    },
   });
+  let lifecycleActive = !params.abortSignal?.aborted;
+  const pendingTasks = new Set<Promise<void>>();
+  const onAbort = () => void cleanupSkippedQueuedMessages();
+
+  async function cleanupSkippedQueuedMessages() {
+    params.abortSignal?.removeEventListener("abort", onAbort);
+    // These callbacks represent jobs accepted into the queue but not started.
+    // Running jobs remove their callback before processDiscordMessage owns cleanup.
+    if (!lifecycleActive && skippedCleanup.size === 0) {
+      return;
+    }
+    lifecycleActive = false;
+    const cleanups = [...skippedCleanup];
+    skippedCleanup.clear();
+    for (const cleanup of cleanups) {
+      await cleanup();
+    }
+  }
+
+  if (params.abortSignal?.aborted) {
+    void cleanupSkippedQueuedMessages();
+  } else {
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  }
   const dispatcherShutdown = new AbortController();
   const avatarResolver = createDiscordAvatarResolver();
 
@@ -167,7 +199,69 @@ export function createDiscordMessageDispatcher(
               await ingress.settle();
               return;
             }
-            messageRunQueue.enqueue({ context: ctx, ingressSettlement: ingress });
+            const { promise: pending, resolve: resolvePending } = createDeferred();
+            pendingTasks.add(pending);
+            const settlePending = () => {
+              pendingTasks.delete(pending);
+              resolvePending();
+            };
+            const cleanupSkipped = async () => {
+              try {
+                // A skipped job never reached reply-lane adoption; reopen its durable claim.
+                await ingress.cancel();
+              } catch (error) {
+                // Durable release is best-effort during shutdown. One failed claim
+                // must not strand the remaining accepted jobs or their pending tasks.
+                try {
+                  params.runtime.error(
+                    danger(`discord queued message cleanup failed: ${String(error)}`),
+                  );
+                } catch {
+                  // Error reporting must not interrupt the remaining cleanup owners.
+                }
+              } finally {
+                settlePending();
+              }
+            };
+            if (!lifecycleActive) {
+              void cleanupSkipped();
+              return;
+            }
+            skippedCleanup.add(cleanupSkipped);
+            // Core reply admission owns session serialization. A transport event key
+            // lets later Discord messages reach active-run steering while this run continues.
+            runQueue.enqueue(ctx.message.id, async ({ lifecycleSignal }) => {
+              // Once the task starts, normal process/commit handling owns cleanup.
+              // Leaving it in skippedCleanup would double-release replay state.
+              skippedCleanup.delete(cleanupSkipped);
+              try {
+                const processAbortSignal =
+                  ctx.abortSignal && lifecycleSignal
+                    ? AbortSignal.any([ctx.abortSignal, lifecycleSignal])
+                    : (ctx.abortSignal ?? lifecycleSignal);
+                try {
+                  const { processDiscordMessage } = await loadMessageProcessRuntime();
+                  await processDiscordMessage({ ...ctx, abortSignal: processAbortSignal });
+                  if (processAbortSignal?.aborted) {
+                    // Retain prior retry facts when cancellation ends ownership before delivery.
+                    await ingress.cancel();
+                  } else {
+                    await ingress.settle();
+                  }
+                } catch (error) {
+                  if (processAbortSignal?.aborted) {
+                    await ingress.cancel();
+                  } else {
+                    await ingress.abandon(error);
+                  }
+                  throw error;
+                }
+              } finally {
+                settlePending();
+              }
+            });
+            // Adoption releases the input lane; completion retains dispatch ownership.
+            await pending;
           } catch (error) {
             if (abortSignal?.aborted) {
               await ingress.cancel();
@@ -269,8 +363,10 @@ export function createDiscordMessageDispatcher(
     }
     pendingDebounceEntries.clear();
     await Promise.allSettled(pendingCancellationSettlements);
+    runQueue.deactivate();
+    await cleanupSkippedQueuedMessages();
     await debouncer.drain();
-    await messageRunQueue.deactivate();
+    await Promise.allSettled(pendingTasks);
   };
 
   return handler;

@@ -1,10 +1,16 @@
 /** Non-blocking process-owned queue for audit metadata persistence. */
+import { randomUUID } from "node:crypto";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { AuditEventInput } from "./audit-event-types.js";
+import type {
+  AgentRunFinishedAuditEventInput,
+  AgentRunStartedAuditEventInput,
+  AuditEventInput,
+} from "./audit-event-types.js";
 import {
   formatAuditWriterError,
   formatAuditWriterRequestError,
@@ -16,10 +22,12 @@ import type { ExecutionDecisionWork } from "./execution-decision-work.types.js";
 import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admission.js";
 
 const MAX_PENDING_AUDIT_EVENTS = 4_096;
+const MAX_AUDIT_BATCH_SIZE = 32;
+const MAX_CONSECUTIVE_UNKNOWN_OUTCOMES = 3;
 const AUDIT_MAINTENANCE_INTERVAL_MS = 60 * 60_000;
-const AUDIT_LOCK_RETRY_DELAY_MS = 25;
-const AUDIT_LOCK_RETRY_MAX_DELAY_MS = 1_000;
-const AUDIT_LOCK_CONTENTION_REPORT_MS = 1_000;
+const AUDIT_RETRY_DELAY_MS = 25;
+const AUDIT_RETRY_MAX_DELAY_MS = 1_000;
+const AUDIT_RETRY_REPORT_MS = 1_000;
 const AUDIT_WRITER_SHUTDOWN_TIMEOUT_MS = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS + 5_000;
 
 type AuditMaintenanceAttempt = "settled" | "more" | "retry";
@@ -27,6 +35,10 @@ type AuditMaintenanceAttempt = "settled" | "more" | "retry";
 export type AuditEventWriter = {
   ready: Promise<void>;
   record: (input: AuditEventInput) => boolean;
+  recordRun: (
+    start: AgentRunStartedAuditEventInput,
+    finish: AgentRunFinishedAuditEventInput,
+  ) => boolean;
   /** Reports only queue acceptance; persistence succeeds or fails asynchronously. */
   recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
   /** For decision owners without a native durable record; approvals must not use this path. */
@@ -50,15 +62,17 @@ export function createAuditEventWriter(options: {
   };
   const maxPending = Math.max(1, Math.floor(options.maxPending ?? MAX_PENDING_AUDIT_EVENTS));
   const queue: AuditWriterRequest[] = [];
+  let pendingRows = 0;
   let stopped = false;
   let draining = false;
   let shutdownExpired = false;
   let maintenancePending = true;
   let scheduled: ReturnType<typeof setImmediate> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
-  let lockRetryAttempt = 0;
-  let lockContentionDelayMs = 0;
-  let lockContentionReported = false;
+  let retryAttempt = 0;
+  let retryDelayMs = 0;
+  let retryReported = false;
+  let unknownBatch: { size: number; attempts: number } | undefined;
   let resolveReady!: () => void;
   const ready = new Promise<void>((resolve) => {
     resolveReady = resolve;
@@ -97,10 +111,10 @@ export function createAuditEventWriter(options: {
       (scope) => (shutdownExpired ? Promise.resolve(undefined) : scope.execute(command)),
     );
   };
-  const resetLockContention = () => {
-    lockRetryAttempt = 0;
-    lockContentionDelayMs = 0;
-    lockContentionReported = false;
+  const resetRetry = () => {
+    retryAttempt = 0;
+    retryDelayMs = 0;
+    retryReported = false;
   };
   const reportMaintenance = async (): Promise<AuditMaintenanceAttempt> => {
     let more = false;
@@ -109,7 +123,7 @@ export function createAuditEventWriter(options: {
       const results = await execute({ type: "audit.writer.prune", input: undefined });
       for (const result of results ?? []) {
         if (result.status === "retry") {
-          lockRetryAttempt += 1;
+          retryAttempt += 1;
           return "retry";
         }
         if (result.error !== undefined) {
@@ -123,14 +137,29 @@ export function createAuditEventWriter(options: {
     }
     return more ? "more" : "settled";
   };
-  const processRequest = async (request: AuditWriterRequest): Promise<AuditWriterResult> => {
+  const processRequests = async (requests: AuditWriterRequest[]): Promise<AuditWriterResult[]> => {
     try {
-      return (
-        (await execute({ type: "audit.writer.process", input: request })) ?? { status: "settled" }
-      );
+      const results = await execute({ type: "audit.writer.process", input: requests });
+      unknownBatch = undefined;
+      return results ?? requests.map(() => ({ status: "settled" as const }));
     } catch (error) {
-      // Rejected transport/settlement can follow a commit; never replay that request.
-      return { status: "settled", error: formatAuditWriterRequestError(request, error) };
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        unknownBatch ??= { size: requests.length, attempts: 0 };
+        unknownBatch.attempts += 1;
+        fail(error);
+        if (unknownBatch.attempts < MAX_CONSECUTIVE_UNKNOWN_OUTCOMES) {
+          // Replay original IDs; committed items are no-ops.
+          return [{ status: "retry" }];
+        }
+        // Drop a repeatedly crashing batch so later queued work can proceed.
+        unknownBatch = undefined;
+        return requests.map(() => ({ status: "settled" }));
+      }
+      unknownBatch = undefined;
+      return requests.map((request) => ({
+        status: "settled",
+        error: formatAuditWriterRequestError(request, error),
+      }));
     }
   };
   const finishStop = () => {
@@ -167,13 +196,13 @@ export function createAuditEventWriter(options: {
   };
   const scheduleRetry = () => {
     const delayMs = Math.min(
-      AUDIT_LOCK_RETRY_MAX_DELAY_MS,
-      AUDIT_LOCK_RETRY_DELAY_MS * 2 ** Math.min(6, lockRetryAttempt - 1),
+      AUDIT_RETRY_MAX_DELAY_MS,
+      AUDIT_RETRY_DELAY_MS * 2 ** Math.min(6, retryAttempt - 1),
     );
-    lockContentionDelayMs += delayMs;
-    if (!lockContentionReported && lockContentionDelayMs >= AUDIT_LOCK_CONTENTION_REPORT_MS) {
-      lockContentionReported = true;
-      reportContention("audit event persistence delayed by SQLite lock contention");
+    retryDelayMs += delayMs;
+    if (!retryReported && retryDelayMs >= AUDIT_RETRY_REPORT_MS) {
+      retryReported = true;
+      reportContention("audit event persistence delayed by worker retries");
     }
     retryTimer = setTimeout(() => {
       retryTimer = undefined;
@@ -200,23 +229,29 @@ export function createAuditEventWriter(options: {
           retry = true;
           return;
         }
-        resetLockContention();
+        resetRetry();
       }
       if (shutdownExpired) {
         return;
       }
-      // Keep the in-flight head in the bounded queue until native settlement.
-      const request = queue[0];
-      if (request) {
-        const result = await processRequest(request);
-        if (result.status === "retry") {
-          lockRetryAttempt += 1;
-          retry = true;
-        } else {
-          // Release settled capacity before an error observer can enqueue or throw.
-          queue.shift();
-          resetLockContention();
-          if (result.error !== undefined) {
+      // Keep submitted items in the bounded queue until their native attempts settle.
+      const requests = queue.slice(0, unknownBatch?.size ?? MAX_AUDIT_BATCH_SIZE);
+      if (requests.length > 0) {
+        const results = await processRequests(requests);
+        retry = results.at(-1)?.status === "retry";
+        const settled = results.length - (retry ? 1 : 0);
+        // Release the whole settled prefix before an error observer can enqueue or throw.
+        for (const request of queue.splice(0, settled)) {
+          pendingRows -= request.type === "record-run" ? 2 : 1;
+        }
+        if (settled > 0) {
+          resetRetry();
+        }
+        if (retry) {
+          retryAttempt += 1;
+        }
+        for (const result of results) {
+          if (result.status === "settled" && result.error !== undefined) {
             fail(result.error);
           }
         }
@@ -246,7 +281,8 @@ export function createAuditEventWriter(options: {
   schedule();
 
   const enqueue = (message: AuditWriterRequest): boolean => {
-    if (stopped || queue.length >= maxPending) {
+    const rows = message.type === "record-run" ? 2 : 1;
+    if (stopped || pendingRows + rows > maxPending) {
       if (!stopped) {
         fail(`audit event queue is full (${maxPending}); dropping metadata`);
       }
@@ -259,10 +295,11 @@ export function createAuditEventWriter(options: {
           : message;
       // Preserve the former Worker boundary's clone and prototype-stripping contract.
       queue.push(structuredClone(boundedMessage));
+      pendingRows += rows;
       schedule();
       return true;
     } catch (error) {
-      if (message.type !== "record-event") {
+      if (message.type !== "record-event" && message.type !== "record-run") {
         fail(
           message.type === "record-execution-identity"
             ? "audit execution identity envelope could not be queued"
@@ -277,7 +314,9 @@ export function createAuditEventWriter(options: {
 
   return {
     ready,
-    record: (input) => enqueue({ type: "record-event", input }),
+    record: (input) => enqueue({ type: "record-event", eventId: randomUUID(), input }),
+    recordRun: (start, finish) =>
+      enqueue({ type: "record-run", start, finish, eventIds: [randomUUID(), randomUUID()] }),
     recordExecutionIdentity: (work) => enqueue({ type: "record-execution-identity", work }),
     recordExecutionDecision: (receipt) => enqueue({ type: "record-execution-decision", receipt }),
     recordExecutionDecisionWork: (work) =>
@@ -295,6 +334,7 @@ export function createAuditEventWriter(options: {
           shutdownExpired = true;
           maintenancePending = false;
           queue.length = 0;
+          pendingRows = 0;
           if (scheduled) {
             clearImmediate(scheduled);
             scheduled = undefined;

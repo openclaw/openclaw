@@ -51,7 +51,7 @@ describe("repair phase progress", () => {
     expect(progress).toHaveBeenCalledOnce();
   });
 
-  it("exposes only validated producer duration through fragmented UTF-8 diagnostics", () => {
+  it("projects only phase boundaries through fragmented UTF-8 diagnostics", () => {
     const progress = vi.fn();
     const observe = createQaRepairProgressObserver(progress);
     const completed = Buffer.from(
@@ -66,21 +66,6 @@ describe("repair phase progress", () => {
       observe(Buffer.from([byte]));
     }
     observe(completed);
-    expect(progress.mock.calls).toEqual([
-      [{ phase: "doctor", status: "completed", durationMs: 75 }],
-    ]);
-  });
-
-  it.each([
-    {},
-    { startedAtMs: "100", endedAtMs: 200 },
-    { startedAtMs: -1, endedAtMs: 200 },
-    { startedAtMs: 100, endedAtMs: 99 },
-    { startedAtMs: 100, endedAtMs: 100.5 },
-    { startedAtMs: 100, endedAtMs: Number.MAX_SAFE_INTEGER + 1 },
-  ])("keeps forward progress without propagating invalid timing %j", (fields) => {
-    const progress = vi.fn();
-    createQaRepairProgressObserver(progress)(event("doctor", "completed", fields));
     expect(progress.mock.calls).toEqual([[{ phase: "doctor", status: "completed" }]]);
   });
 });

@@ -7,9 +7,11 @@ import {
   setSecretsStoreEntry,
 } from "./index.ts";
 
-function clientWithResponses(responses: unknown[]) {
+function storeWithSnapshots(...snapshots: unknown[][]) {
+  const responses = snapshots.flatMap((entries) => [{ ok: true, reloaded: false }, { entries }]);
   const request = vi.fn(async (_method: string, _params?: unknown) => responses.shift());
-  return { client: { request } as unknown as GatewayBrowserClient, request };
+  const client = { request } as unknown as GatewayBrowserClient;
+  return { state: createInitialSecretsStoreState({ client, connected: true }), request };
 }
 
 describe("secrets store state", () => {
@@ -30,47 +32,19 @@ describe("secrets store state", () => {
   });
 
   it("reloads the canonical list after a set", async () => {
-    const snapshot = {
-      entries: [
-        {
-          name: "SERVICE_URL",
-          kind: "env",
-          value: "https://service.test",
-          scopeKind: "team",
-          scopeId: "",
-          createdAtMs: 1,
-          updatedAtMs: 2,
-          updatedBy: "Control UI",
-        },
-      ],
-    };
-    const { client, request } = clientWithResponses([{ ok: true, reloaded: false }, snapshot]);
-    const state = createInitialSecretsStoreState({ client, connected: true });
-
-    await setSecretsStoreEntry(state, {
-      name: "SERVICE_URL",
-      value: "https://service.test",
-      kind: "env",
-      allowedHosts: "",
-    });
-
+    const entry = { name: "SERVICE_URL", value: "https://service.test", kind: "env" as const };
+    const { state, request } = storeWithSnapshots([entry]);
+    await setSecretsStoreEntry(state, { ...entry, value: "draft", allowedHosts: "" });
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "secrets.store.set",
       "secrets.store.list",
     ]);
-    expect(state.entries).toEqual(snapshot.entries);
+    expect(state.entries).toEqual([entry]);
     expect(state.error).toBeNull();
   });
 
   it("reloads after every sequential bulk set", async () => {
-    const { client, request } = clientWithResponses([
-      { ok: true, reloaded: false },
-      { entries: [] },
-      { ok: true, reloaded: false },
-      { entries: [] },
-    ]);
-    const state = createInitialSecretsStoreState({ client, connected: true });
-
+    const { state, request } = storeWithSnapshots([], []);
     expect(
       await bulkSetSecretsStoreEntries(state, [
         { name: "ONE", value: "1", kind: "env" },
@@ -86,19 +60,13 @@ describe("secrets store state", () => {
   });
 
   it("sends parsed allowed hosts through the store RPC", async () => {
-    const { client, request } = clientWithResponses([
-      { ok: true, reloaded: false },
-      { entries: [] },
-    ]);
-    const state = createInitialSecretsStoreState({ client, connected: true });
-
+    const { state, request } = storeWithSnapshots([]);
     await setSecretsStoreEntry(state, {
       name: "SERVICE_API_KEY",
       value: "secret",
       kind: "secret",
       allowedHosts: "api.example.com, uploads.example.com\napi2.example.com",
     });
-
     expect(request).toHaveBeenNthCalledWith(1, "secrets.store.set", {
       name: "SERVICE_API_KEY",
       value: "secret",

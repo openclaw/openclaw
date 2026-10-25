@@ -14,6 +14,7 @@ import {
   fsSafeEnvInput,
   normalizeFsSafeNativeEnv,
 } from "../../infra/fs-safe-env.js";
+import { applyProcessEnvKeys } from "../../infra/process-env.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { formatCliCommand } from "../command-format.js";
@@ -102,19 +103,6 @@ function snapshotGatewayConfigSelectionEnvironment(
   env: NodeJS.ProcessEnv,
 ): Record<string, string | undefined> {
   return Object.fromEntries([...GATEWAY_CONFIG_SELECTION_ENV_KEYS].map((key) => [key, env[key]]));
-}
-
-function restoreGatewayConfigSelectionEnvironment(
-  snapshot: Record<string, string | undefined>,
-): void {
-  for (const key of GATEWAY_CONFIG_SELECTION_ENV_KEYS) {
-    const value = snapshot[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
 }
 
 function resolveInvocationDestructiveOverride(): string | undefined {
@@ -388,7 +376,7 @@ export async function recheckGatewayRunReset(params: GatewayRunGuardParams): Pro
   preparedGatewayRunReset = undefined;
   const rejectDrift = async () => {
     if (expected) {
-      restoreGatewayConfigSelectionEnvironment(expected.selectionEnvironment);
+      applyProcessEnvKeys(GATEWAY_CONFIG_SELECTION_ENV_KEYS, expected.selectionEnvironment);
       await pinGatewayRunRuntimePaths();
     }
     params.runtime.error(
@@ -535,7 +523,6 @@ async function createTrustedGatewayEnvLoader() {
     const loaded = loadGlobalRuntimeDotEnvFiles({
       ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
       overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-      quiet: true,
       stateEnvPath,
       ...(path.resolve(stateEnvPath) === path.resolve(configEnvPath)
         ? {}

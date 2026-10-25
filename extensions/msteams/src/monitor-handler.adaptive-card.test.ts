@@ -80,7 +80,6 @@ async function runAdaptiveCardInvoke(
       value,
     },
     sendActivity: vi.fn(async () => ({ id: "activity-id" })),
-    sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext);
 }
 
@@ -115,7 +114,6 @@ async function runMessageActivity(params: {
       value: params.value,
     },
     sendActivity: vi.fn(async () => ({ id: "activity-id" })),
-    sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext);
 }
 
@@ -130,6 +128,76 @@ function lastDispatchedCtxPayload(): Record<string, unknown> {
 }
 
 describe("msteams members added handler", () => {
+  it.each([
+    { promptStarters: ["Do X", "Do Y"], labels: ["Do X", "Do Y"] },
+    {
+      promptStarters: [],
+      labels: ["What can you do?", "Summarize my last meeting", "Help me draft an email"],
+    },
+  ])("sends welcome card starters $promptStarters", async ({ promptStarters, labels }) => {
+    const deps = createDeps();
+    deps.cfg = { channels: { msteams: { promptStarters } } };
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+    await createMSTeamsActivityHandler(deps)({
+      activity: {
+        type: "conversationUpdate",
+        membersAdded: [{ id: "bot-id" }],
+        recipient: { id: "bot-id" },
+        conversation: { id: "conversation-id", conversationType: "personal" },
+      },
+      sendActivity,
+      updateActivity: vi.fn(async () => undefined),
+    });
+    expect(sendActivity).toHaveBeenCalledWith({
+      type: "message",
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          content: {
+            type: "AdaptiveCard",
+            version: "1.5",
+            body: [
+              { type: "TextBlock", text: "Hi! I'm OpenClaw.", weight: "Bolder", size: "Medium" },
+              {
+                type: "TextBlock",
+                text: "I can help you with questions, tasks, and more. Here are some things to try:",
+                wrap: true,
+              },
+            ],
+            actions: labels.map((label) => ({
+              type: "Action.Submit",
+              title: label,
+              data: { msteams: { type: "imBack", value: label } },
+            })),
+          },
+        },
+      ],
+    });
+  });
+
+  it.each([
+    { botName: undefined, name: "OpenClaw" },
+    { botName: "", name: "OpenClaw" },
+    { botName: "Support", name: "Support" },
+  ])("sends the group welcome for $botName", async ({ botName, name }) => {
+    const deps = createDeps();
+    deps.cfg = { channels: { msteams: { groupWelcomeCard: true } } };
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+    await createMSTeamsActivityHandler(deps)({
+      activity: {
+        type: "conversationUpdate",
+        membersAdded: [{ id: "bot-id" }],
+        recipient: { id: "bot-id", name: botName },
+        conversation: { id: "conversation-id", conversationType: "groupChat" },
+      },
+      sendActivity,
+      updateActivity: vi.fn(async () => undefined),
+    });
+    expect(sendActivity).toHaveBeenCalledWith(
+      `Hi! I'm ${name}. Mention me with @${name} to get started.`,
+    );
+  });
+
   it("uses account-specific welcome card config", async () => {
     const deps = {
       ...createDeps(),
@@ -162,9 +230,7 @@ describe("msteams members added handler", () => {
         conversation: { id: "conversation-id", conversationType: "personal" },
       },
       sendActivity,
-      sendActivities: vi.fn(async () => []),
       updateActivity: vi.fn(async () => undefined),
-      deleteActivity: vi.fn(async () => undefined),
     });
 
     expect(sendActivity).not.toHaveBeenCalled();

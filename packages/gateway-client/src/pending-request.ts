@@ -4,13 +4,15 @@ import {
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "@openclaw/gateway-protocol/restart-unavailable";
+import { isRetryableGatewayStartupUnavailableError } from "@openclaw/gateway-protocol/startup-unavailable";
+import { toStringifiedError } from "@openclaw/normalization-core";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
   retainGatewayResponsePayload,
   type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
-import { resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import { resolveFiniteTimeoutDelayMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
 
 export type GatewayProtocolRequestTiming = {
   id: string;
@@ -20,10 +22,6 @@ export type GatewayProtocolRequestTiming = {
   startedAtMs: number;
   endedAtMs: number;
   errorCode?: string;
-};
-
-type GatewayRequestSender = {
-  send: (data: string) => void;
 };
 
 type GatewayPendingRequest = {
@@ -37,6 +35,8 @@ type GatewayPendingRequest = {
   method: string;
   startedAtMs: number;
   resend?: () => void;
+  retryStartup?: (retryAfterMs?: number) => void;
+  prepareRetry: () => boolean;
   waitingForResume?: boolean;
 };
 
@@ -135,16 +135,17 @@ export class GatewayPendingRequests {
   }
 
   request<T>(
-    sender: GatewayRequestSender,
+    sender: { send: (data: string) => void },
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
     let id: string;
     try {
-      id = this.allocateRequestId();
+      this.requestSequence += 1;
+      id = `${this.requestSequence}:${this.opts.createRequestId()}`;
     } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      return Promise.reject(toStringifiedError(error));
     }
     const requestedTimeoutMs =
       options?.timeoutMs === null ? undefined : (options?.timeoutMs ?? this.opts.requestTimeoutMs);
@@ -154,7 +155,9 @@ export class GatewayPendingRequests {
         : undefined;
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
+      let startupRetry: ReturnType<typeof setTimeout> | undefined;
       let requestSent = false;
+      let inFlight = false;
       const pending: GatewayPendingRequest = {
         resolve: (value) => resolve(value as T),
         reject,
@@ -164,8 +167,18 @@ export class GatewayPendingRequests {
         unbounded: timeoutMs === undefined,
         method,
         startedAtMs: this.opts.nowMs(),
+        prepareRetry: () => {
+          inFlight = false;
+          requestSent = false;
+          if (options?.signal?.aborted) {
+            onAbort();
+            return false;
+          }
+          return true;
+        },
       };
       const cleanup = () => {
+        clearTimeout(startupRetry);
         if (timeout !== undefined) {
           clearTimeout(timeout);
         }
@@ -185,6 +198,9 @@ export class GatewayPendingRequests {
         return true;
       };
       const onAbort = () => {
+        if (options?.retainSentResultOnAbort && inFlight) {
+          return;
+        }
         if (!retire("CLIENT_ABORTED")) {
           return;
         }
@@ -221,9 +237,7 @@ export class GatewayPendingRequests {
           if (
             this.pending.get(id) !== pending ||
             options?.signal?.aborted ||
-            (pending.waitingForResume &&
-              timeoutMs !== undefined &&
-              this.opts.nowMs() - pending.startedAtMs >= timeoutMs)
+            (timeoutMs !== undefined && this.opts.nowMs() - pending.startedAtMs >= timeoutMs)
           ) {
             return;
           }
@@ -238,19 +252,31 @@ export class GatewayPendingRequests {
             return;
           }
           try {
+            inFlight = true;
             sender.send(frame);
             if (this.pending.get(id) !== pending) {
               return;
             }
-            requestSent = true;
+            // A synchronous refusal can already have proved non-delivery.
+            requestSent = inFlight;
             this.invoke("sent", () => options?.onSent?.(id));
           } catch (error) {
             if (retire("CLIENT_SEND_ERROR")) {
-              reject(error instanceof Error ? error : new Error(String(error)));
+              reject(toStringifiedError(error));
             }
           }
         };
-        // Writes retain their synchronous authority/send boundary and are never replayed.
+        // A startup refusal proves the handler has not run, so later attempts can
+        // share pause/resume. Ordinary writes still send synchronously.
+        pending.retryStartup = (retryAfterMs) => {
+          pending.resend = send;
+          clearTimeout(startupRetry);
+          startupRetry = setTimeout(
+            send,
+            resolveFiniteTimeoutDelayMs(retryAfterMs, GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS),
+          );
+          startupRetry.unref?.();
+        };
         if (
           method === "agent.identity.get" ||
           method === "sessions.subscribe" ||
@@ -263,7 +289,7 @@ export class GatewayPendingRequests {
         send();
       } catch (error) {
         if (retire("CLIENT_SEND_ERROR")) {
-          reject(error instanceof Error ? error : new Error(String(error)));
+          reject(toStringifiedError(error));
         }
       }
     });
@@ -282,6 +308,27 @@ export class GatewayPendingRequests {
       }
       return;
     }
+    const startupDetails = frame.error?.details;
+    const startupRefusal =
+      !frame.ok &&
+      isRetryableGatewayStartupUnavailableError(frame.error) &&
+      startupDetails !== null &&
+      typeof startupDetails === "object" &&
+      "method" in startupDetails &&
+      startupDetails.method === pending.method;
+    if (startupRefusal && !pending.acceptedNotified) {
+      if (pending.prepareRetry()) {
+        pending.retryStartup?.(frame.error?.retryAfterMs);
+        if (
+          this.bootstrapPause?.probe?.pending === pending &&
+          this.bootstrapPause.probe.revision === this.bootstrapPause.revision
+        ) {
+          // Agent-local preparation no longer needs the Gateway-wide recovery fence.
+          this.resumeBootstrapRequests();
+        }
+      }
+      return;
+    }
     if (
       !frame.ok &&
       pending.resend &&
@@ -291,6 +338,9 @@ export class GatewayPendingRequests {
       (isGatewaySuspendUnavailableError(frame.error) ||
         isGatewayRestartUnavailableError(frame.error))
     ) {
+      if (!pending.prepareRetry()) {
+        return;
+      }
       // The admission fence refused execution. Keep the original deadline and cancellation.
       if (this.bootstrapPause?.probe?.pending === pending) {
         this.bootstrapPause.probe = undefined;
@@ -341,11 +391,6 @@ export class GatewayPendingRequests {
       this.finishTiming(id, pending, false, "CLIENT_CLOSED");
       pending.reject(error);
     }
-  }
-
-  private allocateRequestId(): string {
-    this.requestSequence += 1;
-    return `${this.requestSequence}:${this.opts.createRequestId()}`;
   }
 
   private finishTiming(

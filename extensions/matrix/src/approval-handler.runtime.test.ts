@@ -219,7 +219,7 @@ async function deliverPending(
     request: {} as never,
     approvalKind: view.approvalKind,
     plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
-    preparedTarget: { to: "room:!room:example.org", roomId: "!room:example.org" },
+    preparedTarget: { to: "room:!room:example.org" },
     view,
     pendingPayload,
   });
@@ -355,7 +355,6 @@ describe("matrixApprovalNativeRuntime", () => {
     const preparedTarget = expectRecordFields(prepared, {});
     expect(preparedTarget.target).toEqual({
       to: "room:!dm:example.org",
-      roomId: "!dm:example.org",
       threadId: undefined,
     });
   });

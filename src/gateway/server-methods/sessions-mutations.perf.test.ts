@@ -29,6 +29,7 @@ import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { createSessionMutationContext } from "./sessions-mutations.native-consent.test-support.js";
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -50,14 +51,7 @@ function mutationContext(
     "list" | "updateWithPrecondition" | "getDefaultAgentId"
   >,
 ): GatewayRequestContext {
-  return {
-    getRuntimeConfig: () => ({}),
-    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
-    broadcastToConnIds: vi.fn(),
-    getSessionEventSubscriberConnIds: () => new Set(),
-    dedupe: new Map(),
-    ...(cron ? { cron } : {}),
-  } as unknown as GatewayRequestContext;
+  return createSessionMutationContext({}, undefined, cron);
 }
 
 const archivedBy = { type: "human", id: "perf-reviewer", label: "Performance Reviewer" };

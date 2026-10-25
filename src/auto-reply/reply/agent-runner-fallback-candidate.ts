@@ -7,6 +7,11 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateAgentRuntime } from "../../agents/thinking-runtime.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
+import {
+  assertCronCandidateSandboxPlacement,
+  assertCronRuntimeAuthorityCandidate,
+  resolveCronSandboxPlacement,
+} from "../../cron/isolated-agent/run-admission.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
@@ -82,7 +87,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
   const runLane =
-    turn.isHeartbeat || turn.followupRun.run.internalEventExecution
+    turn.followupRun.run.scheduledAutomation || turn.followupRun.run.internalEventExecution
       ? CommandLane.CronNested
       : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
@@ -97,8 +102,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     offAnnounced: false,
     resetAnnounced: false,
   };
-  const bootstrapContextRunKind = turn.opts?.isHeartbeat
-    ? ("heartbeat" as const)
+  const bootstrapContextRunKind = turn.followupRun.run.scheduledAutomation
+    ? ("cron" as const)
     : ("default" as const);
 
   params.timing.logMilestoneIfSlow({
@@ -125,7 +130,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         provider,
         model,
         agentId: turn.followupRun.run.agentId,
-        authProfileId: selectedAuthProfile.authProfileId,
+        authProfileId:
+          params.scheduledInference?.runParams.authProfileId ?? selectedAuthProfile.authProfileId,
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(activeEntry),
       }),
@@ -263,6 +269,24 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           sessionEntry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
           agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
+        params.scheduledInference?.assertCandidate(provider, runtime.useCliExecution);
+        assertCronRuntimeAuthorityCandidate({
+          authority: candidateRun.scheduledAutomation?.job.runtimeAuthority,
+          candidateRuntime: candidateAgentRuntime,
+          cliExecution: runtime.useCliExecution,
+        });
+        if (candidateRun.scheduledAutomation) {
+          assertCronCandidateSandboxPlacement({
+            ...resolveCronSandboxPlacement({
+              cfg: params.runtimeConfig,
+              agentId: candidateRun.agentId,
+              sessionKey: candidateRun.sessionKey,
+              preparedSessionEntry: turn.getActiveSessionEntry() ?? null,
+            }),
+            cliExecution: runtime.useCliExecution,
+            executionProvider: runtime.cliExecutionProvider,
+          });
+        }
         const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
           cfg: params.runtimeConfig,
           provider,
@@ -301,10 +325,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         await readUserTurnPromptReactionSource(
           turn.followupRun.userTurnTranscriptRecorder,
         )?.prepare?.();
-        const messageActionTurnCapability = mintReplyMessageActionTurnCapability(
-          turn,
-          params.runId,
-        );
+        const messageActionTurnCapability = turn.followupRun.run.scheduledAutomation
+          ? params.scheduledMessageActionTurnCapability
+          : mintReplyMessageActionTurnCapability(turn, params.runId);
         try {
           const common = {
             ...runOptions,
@@ -331,6 +354,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             signalExecutionPhaseForTyping: signalExecutionPhaseForCandidate,
             prepareAgentRunStart: runStart.prepareAgentRunStart,
             notifyAgentRunStart: runStart.notifyAgentRunStart,
+            hasAgentRunStarted: runStart.hasAgentRunStarted,
             preserveProgressCallbackStartOrder,
             onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => {
               params.state.pendingLifecycleTerminal = { provider, model, backstop };
@@ -393,7 +417,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           return result;
         } finally {
           runStart.close();
-          revokeMessageActionTurnCapability(messageActionTurnCapability);
+          if (!params.scheduledMessageActionTurnCapability) {
+            revokeMessageActionTurnCapability(messageActionTurnCapability);
+          }
         }
       },
     }),

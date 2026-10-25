@@ -30,6 +30,7 @@ import { createActiveRun } from "./chat.abort.test-helpers.js";
 import {
   abortContext,
   expectAbortFailure,
+  expectCancelledSession,
   revocableAuthority,
   seedYieldedSession,
   stopSession,
@@ -104,6 +105,7 @@ it.each([
       expect(params).toMatchObject({ ...target, sessionId, lifecycleRevision });
       const result = await run(cancel);
       if (race === "retired owner") {
+        // Registry retirement cannot revoke cancellation that already settled.
         setActivePluginRegistry(createEmptyPluginRegistry());
       }
       return result;
@@ -140,15 +142,10 @@ it.each([
       settled.resolve();
       await stop;
       expect(cancel).toHaveBeenCalledOnce();
-      const failures = ["failed settlement", "partial settlement", "retired owner"];
+      const failures = ["failed settlement", "partial settlement"];
       expect(respond.mock.calls[0]?.[0]).toBe(!failures.includes(race));
       if (race === "cancelled" || race === "partial settlement" || race === "retired owner") {
-        expect(loadSessionEntry(target)).toMatchObject({
-          sessionId,
-          lastRunId: runId,
-          status: "killed",
-          abortedLastRun: true,
-        });
+        expectCancelledSession(loadSessionEntry(target), runId, { sessionId });
         expect(loadSessionEntry(target)?.lifecycleRunId).toBeUndefined();
       } else {
         expect(loadSessionEntry(target)).toEqual(expected);

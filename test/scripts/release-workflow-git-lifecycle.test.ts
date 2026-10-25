@@ -10,7 +10,6 @@ const releaseTag = "v2026.8.1";
 
 type ReleaseMode = "linux" | "macos" | "placeholder";
 type RunOptions = Partial<Parameters<typeof runCiGitStep>[0]>;
-type GitFault = NonNullable<RunOptions["gitFault"]>;
 
 const releases: Record<ReleaseMode, Pick<RunOptions, "workflow" | "env" | "revisions">> = {
   linux: {
@@ -128,51 +127,21 @@ const addFailure = (
   options: RunOptions,
   expected: Record<string, unknown> = {},
 ) => failures.push({ mode, options, expected });
-const fault = (operation: string, code: GitFault["code"], occurrence?: number) => ({
+const fault = (operation: string, code: number, occurrence?: number) => ({
   gitFault: { match: `^${operation} `, code, occurrence },
 });
 const ancestry = (revision: string, branch = "origin/main") =>
   `merge-base --is-ancestor ${revision} ${branch}`;
 const shaRejection =
   "NPM placeholder publication requires ref to equal the exact main workflow SHA.";
-const failureCodes = { cancel: 143, "cleanup-failure": 125, hang: 124 };
-const failureCode = (failure: GitFault["code"]) =>
-  typeof failure === "number" ? failure : failureCodes[failure];
-
+// Owner startup, cancellation and drain faults are covered by
+// ci-platform-checkout.test.ts; here retain each workflow's admission decisions.
 for (const mode of ["linux", "macos", "placeholder"] as const) {
-  for (const failure of [23, 125, "hang"] as const) {
-    addFailure(
-      mode,
-      { fetchResults: [failure] },
-      { code: failureCode(failure), operation: "fetch" },
-    );
-  }
-  for (const setupFailure of ["owner", "python", "git"] as const) {
-    addFailure(mode, { setupFailure });
-  }
+  addFailure(mode, { fetchResults: [23] }, { code: 23, operation: "fetch" });
 }
 for (const mode of ["linux", "macos"] as const) {
   for (const code of [23, 125]) {
     addFailure(mode, fault("rev-parse", code), { code, operation: "rev-parse" });
-  }
-}
-for (const [mode, operation, occurrence] of [
-  ["linux", "fetch"],
-  ["linux", "rev-parse"],
-  ["linux", "merge-base"],
-  ["macos", "rev-parse"],
-  ["macos", "fetch"],
-  ["placeholder", "rev-parse"],
-  ["placeholder", "fetch"],
-  ["placeholder", "merge-base", 1],
-  ["placeholder", "merge-base", 2],
-] as const) {
-  for (const failure of ["cleanup-failure", "cancel"] as const) {
-    addFailure(mode, fault(operation, failure, occurrence), {
-      code: failureCode(failure),
-      operation,
-      terminalMessage: false,
-    });
   }
 }
 for (const code of [23, 125]) {
@@ -183,19 +152,14 @@ for (const code of [23, 125]) {
     gitCount: 1,
   });
 }
-for (const failure of [128, "cleanup-failure", "cancel"] as const) {
-  addFailure(
-    "linux",
-    {
-      commandResults: { [ancestry(sha)]: { code: 1 } },
-      ...fault("fetch", failure, 2),
-    },
-    {
-      code: failureCode(failure),
-      operation: "fetch",
-    },
-  );
-}
+addFailure(
+  "linux",
+  {
+    commandResults: { [ancestry(sha)]: { code: 1 } },
+    ...fault("fetch", 128, 2),
+  },
+  { code: 128, operation: "fetch" },
+);
 for (const occurrence of [1, 2]) {
   addFailure("placeholder", fault("merge-base", 23, occurrence), {
     code: 1,

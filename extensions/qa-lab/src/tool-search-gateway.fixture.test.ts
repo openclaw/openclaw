@@ -4,12 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  countSessionLogMentions,
-  countSystemPromptChars,
-  outputText,
-  outputToolNames,
-} from "./fixture-utils.js";
+import { countSessionLogMentions, outputText } from "./fixture-utils.js";
 import {
   createQaGatewayChildLogAccess,
   createQaGatewayChildLogCollector,
@@ -294,7 +289,7 @@ describe("tool search gateway e2e lane result", () => {
   );
 });
 
-it("reads Responses API text, function call names, and prompt sizing", () => {
+it("reads Responses API text", () => {
   const payload = {
     output: [
       { type: "function_call", name: "fake_plugin_tool_17" },
@@ -302,18 +297,7 @@ it("reads Responses API text, function call names, and prompt sizing", () => {
     ],
   };
 
-  expect(outputToolNames(payload)).toEqual(["fake_plugin_tool_17"]);
   expect(outputText(payload)).toBe("alpha\nbeta");
-  expect(
-    countSystemPromptChars({
-      instructions: "abc",
-      input: [
-        { role: "system", content: [{ type: "input_text", text: "def" }] },
-        { role: "developer", content: "ghi" },
-        { role: "user", content: [{ type: "input_text", text: "ignored" }] },
-      ],
-    }),
-  ).toBe(9);
 });
 
 describe("tool search gateway e2e lane assertions", () => {

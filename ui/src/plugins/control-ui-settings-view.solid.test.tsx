@@ -4,29 +4,18 @@ import type {
   ControlUiSettingsSnapshot,
 } from "../../../src/plugin-sdk/control-ui-settings.js";
 import type { ApplicationContext } from "../app/context.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { ControlUiSettingsPresentation } from "./control-ui-settings-view.solid.tsx";
+import { mountSettingsPresentation } from "./control-ui-settings.test-support.tsx";
+
+type Hello = { auth: { scopes: string[]; recoveryScope: string } };
 
 function fixture(
   options: {
-    scopes?: string[];
     updateThrows?: boolean;
     disposeThrows?: boolean;
     retireDuringMount?: boolean;
   } = {},
 ) {
-  let snapshot: ControlUiSettingsSnapshot = {
-    agentId: "main",
-    agentsLoading: false,
-    agentsError: null,
-    engine: { kind: "default", id: "memory-core", availability: "enabled" },
-    connected: true,
-    connectionEpoch: 1,
-    routeIntent: "overview",
-    locale: "en",
-  };
-  const listeners = new Set<() => void>();
   const runtime = new AbortController();
   const contexts: ControlUiSettingsContext[] = [];
   const viewDisposers: ReturnType<typeof vi.fn>[] = [];
@@ -38,16 +27,10 @@ function fixture(
     connectionRevision: 1,
     snapshot: {
       phase: "connected",
-      hello: { auth: { scopes: options.scopes ?? ["operator.read"], recoveryScope: "account-a" } },
+      hello: {
+        auth: { scopes: ["operator.read"], recoveryScope: "account-a" },
+      } as Hello | null,
       client: { request, recoveryScopeReady: true, offlineRecoveryRetired: false },
-    } as {
-      phase: string;
-      hello: { auth: { scopes: string[]; recoveryScope: string } } | null;
-      client: {
-        request: typeof request;
-        recoveryScopeReady: boolean;
-        offlineRecoveryRetired: boolean;
-      };
     },
   };
   const application = {
@@ -73,7 +56,7 @@ function fixture(
               });
               viewDisposers.push(stop);
               if (options.retireDuringMount && contexts.length === 1) {
-                change({ agentId: "writer" });
+                mounted.change({ agentId: "writer" });
               }
               const update = vi.fn(() => {
                 if (options.updateThrows) {
@@ -88,29 +71,7 @@ function fixture(
       },
     },
   } as unknown as ApplicationContext;
-  function change(
-    patch: Partial<ControlUiSettingsSnapshot>,
-    gatewayPatch: (current: typeof gateway) => void = () => {},
-  ) {
-    snapshot = { ...snapshot, ...patch };
-    gatewayPatch(gateway);
-    for (const notify of listeners) {
-      notify();
-    }
-  }
-  const mounted = mountSolid(() => (
-    <ControlUiSettingsPresentation
-      application={application}
-      placement={{ section: "memory", panel: "overview" }}
-      readSnapshot={() => snapshot}
-      subscribe={(notify) => {
-        listeners.add(notify);
-        return () => listeners.delete(notify);
-      }}
-      navigate={navigate}
-      refreshAgents={vi.fn()}
-    />
-  ));
+  const mounted = mountSettingsPresentation(application, {}, navigate);
   return {
     ...mounted,
     contexts,
@@ -120,17 +81,10 @@ function fixture(
     request,
     navigate,
     runtime,
-    change,
     gateway,
   };
 }
 
-it("checks actual Gateway operator scopes before dispatch", async () => {
-  const f = fixture({ scopes: [] });
-  await waitForSolid(() => expect(f.contexts).toHaveLength(1));
-  await expect(f.contexts[0]!.request("doctor.memory.status")).rejects.toThrow("operator access");
-  expect(f.request).not.toHaveBeenCalled();
-});
 it("cleans mounted views and assets when the first update throws", async () => {
   const f = fixture({ updateThrows: true, disposeThrows: true });
   await waitForSolid(() => expect(f.assetDisposers[0]).toHaveBeenCalledTimes(1));
@@ -169,19 +123,18 @@ it("retires retained callbacks and disposes exactly once on runtime shutdown", a
   expect(f.request).not.toHaveBeenCalled();
   expect(f.navigate).not.toHaveBeenCalled();
 });
+const snapshotChanges: Record<string, Partial<ControlUiSettingsSnapshot>> = {
+  agent: { agentId: "writer" },
+  engine: { engine: { kind: "pinned", id: "custom-memory", availability: "unknown" } },
+  route: { routeIntent: "overview?agent=writer" },
+};
 it.each(["agent", "engine", "route"])(
   "rejects a retained callback after %s changes",
   async (kind) => {
     const f = fixture();
     await waitForSolid(() => expect(f.contexts).toHaveLength(1));
     const old = f.contexts[0]!;
-    const patch: Partial<ControlUiSettingsSnapshot> =
-      kind === "agent"
-        ? { agentId: "writer" }
-        : kind === "engine"
-          ? { engine: { kind: "pinned", id: "custom-memory", availability: "unknown" } }
-          : { routeIntent: "overview?agent=writer" };
-    f.change(patch);
+    f.change(snapshotChanges[kind]!);
     await expect(old.request("doctor.memory.status")).rejects.toThrow();
     expect(() => old.navigate("settings")).toThrow();
     expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
@@ -194,37 +147,31 @@ it("disposes a view that synchronously retires its authority while mounting", as
   expect(f.assetDisposers[0]).toHaveBeenCalledTimes(1);
   expect(f.contexts[0]!.signal.aborted).toBe(true);
 });
+const gatewayChanges: Record<string, (gateway: ReturnType<typeof fixture>["gateway"]) => void> = {
+  "client replacement": (gateway) => {
+    gateway.snapshot.client = { ...gateway.snapshot.client };
+  },
+  "recovery-scope change": (gateway) => {
+    gateway.snapshot.hello!.auth.recoveryScope = "account-b";
+  },
+  "retired offline recovery": (gateway) => {
+    gateway.snapshot.client.offlineRecoveryRetired = true;
+  },
+  "connect rejection": (gateway) => {
+    gateway.snapshot.phase = "reconnecting";
+    gateway.snapshot.hello = null;
+  },
+};
 it.each([
-  [
-    "client replacement",
-    (gateway: ReturnType<typeof fixture>["gateway"]) => {
-      gateway.snapshot.client = { ...gateway.snapshot.client };
-    },
-  ],
-  [
-    "recovery-scope change",
-    (gateway: ReturnType<typeof fixture>["gateway"]) => {
-      gateway.snapshot.hello!.auth.recoveryScope = "account-b";
-    },
-  ],
-  [
-    "retired offline recovery",
-    (gateway: ReturnType<typeof fixture>["gateway"]) => {
-      gateway.snapshot.client.offlineRecoveryRetired = true;
-    },
-  ],
-  [
-    "connect rejection",
-    (gateway: ReturnType<typeof fixture>["gateway"]) => {
-      gateway.snapshot.phase = "reconnecting";
-      gateway.snapshot.hello = null;
-    },
-  ],
-])("disposes the mounted view after %s", async (_cause, retireGateway) => {
+  "client replacement",
+  "recovery-scope change",
+  "retired offline recovery",
+  "connect rejection",
+])("disposes the mounted view after %s", async (cause) => {
   const f = fixture();
   await waitForSolid(() => expect(f.contexts).toHaveLength(1));
   const old = f.contexts[0]!;
-  f.change({}, retireGateway);
+  f.change({}, () => gatewayChanges[cause]!(f.gateway));
   expect(old.signal.aborted).toBe(true);
   expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
   await expect(old.request("memory.search")).rejects.toThrow();

@@ -1,7 +1,3 @@
-.dashboards-header {
-  align-items: center;
-}
-
 .dashboards-header__count {
   display: flex;
   align-items: baseline;

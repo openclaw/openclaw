@@ -1,6 +1,9 @@
 /** Builds and revalidates system.run approval plans for cwd and executable paths. */
 import fs from "node:fs";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeNullableString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import {
@@ -163,7 +166,8 @@ export function buildSystemRunApprovalPlan(
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
     };
   }
-  let cwd = normalizeNullableString(params.cwd) ?? undefined;
+  let cwd = readNonBlankString(params.cwd);
+  // Node-host cwd preserves whitespace; see resolveExecWorkdir.
   if (!bindApproval) {
     // Ordinary execution follows aliases once; approval binding keeps its stricter path checks.
     try {

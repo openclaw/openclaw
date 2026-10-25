@@ -1,16 +1,15 @@
-import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
+import type {
+  MemoryEntryProvenance,
+  MemoryExtraPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { applyMMRToHybridResults, type MMRConfig } from "./mmr.js";
 import {
   applyRetrievalRanking,
   hasValidProjectAnnotation,
   prepareActiveProjectKeys,
   projectScoreMultiplier,
 } from "./project-ranking.js";
-import {
-  applyTemporalDecayToHybridResults,
-  type TemporalDecayConfig,
-  DEFAULT_TEMPORAL_DECAY_CONFIG,
-} from "./temporal-decay.js";
+import { applyTemporalDecayToHybridResults, type TemporalDecayConfig } from "./temporal-decay.js";
 
 type HybridSource = string;
 type ExactPathSpecificity = 0 | 1 | 2 | 3;
@@ -89,13 +88,15 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   sessionSourceMtimes?: ReadonlyMap<string, number | undefined>;
   memorySourceMtimes?: ReadonlyMap<string, number | undefined>;
   /** MMR configuration for diversity-aware re-ranking */
-  mmr?: Partial<MMRConfig>;
+  mmr: MMRConfig;
   /** Temporal decay configuration for recency-aware scoring */
-  temporalDecay?: Partial<TemporalDecayConfig>;
+  temporalDecay: TemporalDecayConfig;
+  extraPaths?: MemoryExtraPath[];
   activeProjectKeys?: readonly string[];
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
 }): Promise<RankedHybridResult<TSource>[]> {
+  const { mmr: mmrConfig, temporalDecay: temporalDecayConfig } = params;
   const createCandidate = (r: HybridCandidate<TSource>) => ({
     ...r,
     vectorScore: 0,
@@ -141,7 +142,6 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     byId.set(r.id, existing);
   }
 
-  const temporalDecayConfig = { ...DEFAULT_TEMPORAL_DECAY_CONFIG, ...params.temporalDecay };
   // Chunks that never reach results must not set the keyword scale either.
   const candidates = Array.from(byId.values()).filter(hasValidProjectAnnotation);
   // Exact specificity already carries path precedence. Keep body scores as
@@ -215,6 +215,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     results: weighted,
     temporalDecay: temporalDecayConfig,
     workspaceDir: params.workspaceDir,
+    extraPaths: params.extraPaths,
     sessionSourceMtimes: params.sessionSourceMtimes,
     memorySourceMtimes: params.memorySourceMtimes,
     nowMs: params.nowMs,
@@ -244,7 +245,6 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     .toSorted((a, b) => b.score - a.score || compareRankingScores(a, b));
 
   // Apply MMR re-ranking if enabled
-  const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };
   const rerankExactGroup = (entries: typeof rankable) => {
     if (!mmrConfig.enabled) {
       return entries;

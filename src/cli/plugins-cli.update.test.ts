@@ -775,14 +775,6 @@ it("persists successful bulk updates before reporting errors", async () => {
         pluginId: "beta",
         status: "error",
         message: "Failed to update beta: registry timeout",
-        channelFallback: {
-          requestedSpec: "@openclaw/beta@beta",
-          usedSpec: "@openclaw/beta@latest",
-          requestedLabel: "beta",
-          usedLabel: "latest",
-          reason: "failed",
-          message: "Beta channel unavailable; tried latest.",
-        },
       },
     ],
     true,
@@ -799,7 +791,6 @@ it("persists successful bulk updates before reporting errors", async () => {
   });
   expect(runtimeErrors).toContain("Failed to update beta: registry timeout");
   expect(logs).toContain("Updated alpha -> 1.1.0");
-  expect(logs).toContain("Beta channel unavailable; tried latest.");
   expect(logs).not.toContain("Failed to update beta: registry timeout");
 });
 

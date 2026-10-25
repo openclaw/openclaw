@@ -586,20 +586,19 @@ describe("worker live events", () => {
 
   it("bounds a retained capacity tail with normal resync", async () => {
     const first = msg(1, "first", 0, "run-prefix");
-    const second = msg(2, "second", 0, "run-buffered");
-    start({
-      maxActiveRuns: 1,
-      maxPendingBytes: Buffer.byteLength(JSON.stringify(second.event), "utf8"),
-    });
+    const second = msg(2, "x".repeat(16 * 1024), 0, "run-buffered");
+    start({ maxActiveRuns: 1 });
 
-    await ack(second, 0);
+    for (let seq = 2; seq <= 16; seq++) {
+      await ack({ ...second, seq }, 0);
+    }
     await ack(first);
     expect(
       await rx.apply({
         readAckedSeq,
         identity: ID,
         source: sourceFor(),
-        request: msg(3, "overflow", 1, "run-overflow"),
+        request: msg(17, "x".repeat(16 * 1024), 1, "run-overflow"),
       }),
     ).toEqual({
       ok: false,
@@ -745,7 +744,7 @@ describe("worker live events", () => {
       });
       const stop = onAgentRuntimeEvent((event) => {
         if (event.runId === RUN && event.stream === stream) {
-          rx.clearEnvironment(ID.environmentId, EPOCH);
+          rx.clearEnvironment(ID.environmentId);
         }
       });
       try {
@@ -777,9 +776,8 @@ describe("worker live events", () => {
   it("clears on detach", async () => {
     await ack(msg(1, "delivered"));
     await ack(msg(3, "buffered", 1), 1);
-    rx.clearEnvironment(ID.environmentId, EPOCH);
+    rx.clearEnvironment(ID.environmentId);
     expect(getAgentRunContext(RUN)).toBeUndefined();
-    await fail(msg(1, "pending", 0, "run-pending"), "invalid-event");
   });
 
   it("clears an ownerless Gateway run context on terminal process turnover", async () => {

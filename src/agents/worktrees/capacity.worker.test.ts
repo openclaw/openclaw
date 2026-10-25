@@ -4,7 +4,10 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { withExistingOpenClawStateSchema as withSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import * as leaseWorker from "../../state/openclaw-state-lease-worker-operation.js";
 import * as stateLeases from "../../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -174,3 +177,45 @@ it("preserves typed capacity contention across the worker result boundary", asyn
   });
   expect(f.debts()).toEqual([]);
 });
+
+it.each([true, false])(
+  "reclaims an exited disk reservation only with its recorded namespace (namespace: %s)",
+  async (namespace) => {
+    const f = fixture();
+    await withWorktreeMutationLease({ env: f.env, id: "abandoned" }, async (guard) => {
+      await reserve(guard, f.root);
+      const [held] = f.debts();
+      expect(held).toBeDefined();
+      // Keep the production owner's recorded namespace; only its PID has exited.
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
+              .updateTable("state_leases")
+              .set((eb) => {
+                const exited = eb.fn<string>("json_set", [
+                  eb.ref("payload_json"),
+                  eb.val("$.owner.pid"),
+                  eb.val(2_147_483_647),
+                ]);
+                return {
+                  payload_json: namespace
+                    ? exited
+                    : eb.fn<string>("json_remove", [exited, eb.val("$.owner.processNamespace")]),
+                };
+              })
+              .where("scope", "=", WORKTREE_CAPACITY_RESERVATION_SCOPE)
+              .where("lease_key", "=", held!.lease_key),
+          );
+        },
+        { env: f.env },
+      );
+      await withWorktreeAllocationLease({ env: f.env }, async (replacement) => {
+        await reserve(replacement, f.root);
+        expect(f.debts().some((debt) => debt.lease_key === held!.lease_key)).toBe(!namespace);
+      });
+    });
+    expect(f.debts()).toEqual([]);
+  },
+);

@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { createContext, createEffect, onCleanup, useContext } from "solid-js";
+import { createContext, createEffect, onSettled, useContext } from "solid-js";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { ShellLayoutOwner, type ShellLayoutTraits } from "./shell-layout-owner.ts";
 
 /** The scope anchors page reporters to the shell content owner. */
@@ -9,12 +10,7 @@ export const ShellLayoutProvider = createContext<{ owner: ShellLayoutOwner; host
 
 export function createFooterControlRef() {
   const scope = useContext(ShellLayoutProvider);
-  let release: (() => void) | undefined;
-  onCleanup(() => release?.());
-  return (element: HTMLElement) => {
-    release?.();
-    release = scope?.owner.registerFooterControlSurface(element);
-  };
+  return elementRef((element: HTMLElement) => scope?.owner.registerFooterControlSurface(element));
 }
 
 export function ShellLayoutBoundary(props: { traits: ShellLayoutTraits; children: JSX.Element }) {
@@ -26,7 +22,7 @@ export function ShellLayoutBoundary(props: { traits: ShellLayoutTraits; children
       () => props.traits,
       (traits) => scope.owner.record(token, scope.host, traits),
     );
-    onCleanup(() => scope.owner.clear(token));
+    onSettled(() => () => scope.owner.clear(token));
   }
   return <>{props.children}</>;
 }

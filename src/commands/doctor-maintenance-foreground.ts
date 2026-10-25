@@ -74,13 +74,15 @@ export async function acquireDoctorGatewayMaintenanceOwner(
   env: NodeJS.ProcessEnv,
   params: {
     options: DoctorOptions;
+    waitForMaintenance?: boolean;
     runtime: RuntimeEnv;
     assertCurrent?: () => void;
     deadlineMs?: number;
     signal?: AbortSignal;
   },
 ) {
-  const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options));
+  const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options, env));
+  const waitForMaintenance = updateRepair || params.waitForMaintenance === true;
   const startedAt = performance.now();
   // Installation replacement is an unsupervised restart: detection, drain,
   // then server close and process exit each retain their owner's allowance.
@@ -122,7 +124,7 @@ export async function acquireDoctorGatewayMaintenanceOwner(
         error instanceof GatewayLockError &&
         error.cause instanceof GatewayStateOwnerContentionError
       ) {
-        if (updateRepair && isTransientHolder(error.cause)) {
+        if (waitForMaintenance && isTransientHolder(error.cause)) {
           transientDeadlineMs ??= await resolveDoctorMaintenanceWaitDeadlineMs(env);
         }
         throw error.cause;
@@ -134,7 +136,7 @@ export async function acquireDoctorGatewayMaintenanceOwner(
     const owner = await acquireWithWait({
       acquire,
       shouldRetry: (error) => {
-        if (!updateRepair || !(error instanceof GatewayStateOwnerContentionError)) {
+        if (!waitForMaintenance || !(error instanceof GatewayStateOwnerContentionError)) {
           return false;
         }
         params.signal?.throwIfAborted();

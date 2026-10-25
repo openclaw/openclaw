@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, Show, useContext } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -8,8 +8,8 @@ import { ChatComposerPlusMenu } from "../chat/components/chat-composer-plus-menu
 import type {
   ChatComposerPlusMenuProps,
   ChatComposerCapabilityMenuProps,
-  ChatComposerPlusMenuView,
 } from "../chat/components/chat-composer-plus-menu.types.ts";
+import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 
 registerNewSessionSetupEnglish();
@@ -21,10 +21,6 @@ type NewSessionComposerCapabilityOptions = {
   draftAvailable?: boolean;
   capabilityMenu?: ChatComposerCapabilityMenuProps;
   toolOverrides?: SessionToolOverrides | null;
-  composerTextarea: {
-    capabilityMenuOpen: boolean;
-    capabilityMenuView: ChatComposerPlusMenuView;
-  };
   onChange: () => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
 };
@@ -58,10 +54,10 @@ export function NewSessionPlusMenu(props: {
   attachments: ChatComposerPlusMenuProps["attachments"];
   inputHandle: ChatComposerPlusMenuProps["inputHandle"];
 }) {
+  const textarea = useContext(NewSessionComposerTextareaContext);
   const menu = createMemo((): ChatComposerPlusMenuProps => {
     const options = props.options;
     const disabled = options.submitting || options.messageLocked === true;
-    const textarea = options.composerTextarea;
     return {
       attachments: props.attachments,
       inputHandle: props.inputHandle,
@@ -100,6 +96,7 @@ export function NewSessionPlusMenu(props: {
 }
 
 export function NewSessionSelectionStatus(props: { options: NewSessionComposerCapabilityOptions }) {
+  const textarea = useContext(NewSessionComposerTextareaContext);
   const count = createMemo(() => countSessionToolOverrides(props.options.toolOverrides));
   return (
     <Show when={count() > 0}>
@@ -108,8 +105,8 @@ export function NewSessionSelectionStatus(props: { options: NewSessionComposerCa
         class="new-session-page__selection-status"
         disabled={props.options.submitting || props.options.messageLocked === true}
         onClick={() => {
-          props.options.composerTextarea.capabilityMenuView = "root";
-          props.options.composerTextarea.capabilityMenuOpen = true;
+          textarea.capabilityMenuView = "root";
+          textarea.capabilityMenuOpen = true;
           props.options.onChange();
         }}
       >
@@ -118,5 +115,53 @@ export function NewSessionSelectionStatus(props: { options: NewSessionComposerCa
         })}
       </button>
     </Show>
+  );
+}
+
+export function StartControl(props: {
+  options: {
+    submitting: boolean;
+    nativeTerminal?: boolean;
+    canSubmit: boolean;
+    submitDisabledReason?: string;
+    onBlockedSubmit?: () => void;
+    attachmentDraft: { reads: { pendingReads: number } };
+  };
+  onSubmit: () => void;
+}) {
+  const label = () =>
+    props.options.submitting
+      ? t("newSession.starting")
+      : t(props.options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
+  const busy = () =>
+    props.options.submitting || props.options.attachmentDraft.reads.pendingReads > 0;
+  return (
+    <openclaw-tooltip
+      content={props.options.submitDisabledReason ?? label()}
+      onPointerDown={(event) => {
+        if (event.button === 0 && !props.options.canSubmit) {
+          props.options.onBlockedSubmit?.();
+        }
+      }}
+    >
+      <button
+        type="button"
+        class={[
+          "chat-send-btn new-session-page__start-submit",
+          {
+            "new-session-page__start-submit--busy": busy(),
+          },
+        ]}
+        disabled={!props.options.canSubmit}
+        aria-disabled={props.options.canSubmit ? "false" : "true"}
+        aria-busy={busy() ? "true" : "false"}
+        aria-label={label()}
+        onClick={() => props.onSubmit()}
+      >
+        <Icon
+          name={busy() ? "loader" : props.options.nativeTerminal ? "squareTerminal" : "arrowUp"}
+        />
+      </button>
+    </openclaw-tooltip>
   );
 }

@@ -1,23 +1,43 @@
-import { describe, expect, it, vi } from "vitest";
-import type { WorkerSshIdentity, WorkerSshIdentityRequest } from "../../plugins/types.js";
+import { afterEach, expect, it, vi } from "vitest";
+import type { WorkerSshIdentityRequest } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveWorkerSshIdentity } from "./identity.js";
 import * as support from "./service.test-support.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import { fakeRunner, success } from "./tunnel.test-support.js";
 
-type ObservedIdentityRequest = WorkerSshIdentityRequest & { assertCurrent?: () => void };
+const IDENTITY = { kind: "path", path: "/keys/worker" } as const;
+support.setupWorkerEnvironmentServiceSuite();
+afterEach(() => vi.useRealTimers());
 
-describe("worker SSH identity invocation lifetime", () => {
-  support.setupWorkerEnvironmentServiceSuite();
-
-  async function fixture(
-    resolveIdentity: (request: ObservedIdentityRequest) => Promise<WorkerSshIdentity>,
-    timeoutMs?: number,
-  ) {
-    const provider = support.createProvider({ resolveSshIdentity: resolveIdentity });
-    const manager = createWorkerTunnelManager({ runner: fakeRunner(() => success()).runner });
-    const service = support.createService(provider, {
+async function fixture({ hold = false, cooperate = true, timeoutMs = 0 } = {}) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const settled = createDeferredCore();
+  const effect = vi.fn();
+  const resolveIdentity = vi.fn(
+    async (request: WorkerSshIdentityRequest & { assertCurrent?: () => void }) => {
+      entered.resolve();
+      try {
+        if (hold) {
+          await release.promise;
+        }
+        if (cooperate) {
+          request.assertCurrent?.();
+        }
+        effect();
+        return cooperate
+          ? IDENTITY
+          : { kind: "material" as const, contents: "synthetic-worker-key" };
+      } finally {
+        settled.resolve();
+      }
+    },
+  );
+  const manager = createWorkerTunnelManager({ runner: fakeRunner(() => success()).runner });
+  const service = support.createService(
+    support.createProvider({ resolveSshIdentity: resolveIdentity }),
+    {
       tunnelManager: manager,
       ...(timeoutMs ? { providerCallTimeoutMs: timeoutMs } : {}),
       resolveSshIdentity: (request) =>
@@ -25,126 +45,88 @@ describe("worker SSH identity invocation lifetime", () => {
           ...request,
           resolveGeneric: async () => ({ kind: "path", path: "/keys/generic" }),
         }),
-    });
-    const environment = await support.seedReady("worker-identity");
-    return { provider, manager, service, environment };
-  }
-
-  it("fences a cooperating legacy resolver when only its initializing tunnel stops", async () => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const effect = vi.fn();
-    const { manager, service, environment } = await fixture(async (request) => {
-      entered.resolve();
-      await release.promise;
-      request.assertCurrent?.();
-      effect();
-      return { kind: "path", path: "/keys/worker" };
-    });
-    const starting = service
-      .startTunnel({
-        environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
-      })
-      .catch((error: unknown) => error);
-    try {
-      await entered.promise;
-      const stopping = manager.stop(environment.environmentId, environment.ownerEpoch);
-      expect(service.get(environment.environmentId)?.ownerEpoch).toBe(environment.ownerEpoch);
+    },
+  );
+  const environment = await support.seedReady("worker-identity");
+  const operations: Promise<unknown>[] = [];
+  const track = (operation: Promise<unknown>) => {
+    const pending = operation.catch((error: unknown) => error);
+    operations.push(pending);
+    return pending;
+  };
+  return {
+    manager,
+    service,
+    environment,
+    entered,
+    release,
+    settled,
+    effect,
+    resolveIdentity,
+    lookup: () => track(service.resolveSshIdentity(environment.environmentId)),
+    start: () =>
+      track(
+        service.startTunnel({
+          environmentId: environment.environmentId,
+          ownerEpoch: environment.ownerEpoch,
+        }),
+      ),
+    [Symbol.asyncDispose]: async () => {
       release.resolve();
-      await stopping;
-      expect(await starting).toBeInstanceOf(Error);
-      expect(effect).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await starting;
-      await manager.stopAll();
-    }
-  });
-
-  it("closes a retained assertion after direct identity lookup and permits another legacy lookup", async () => {
-    let retained: (() => void) | undefined;
-    const resolveIdentity = vi.fn(async (request: ObservedIdentityRequest) => {
-      retained = request.assertCurrent;
-      request.assertCurrent?.();
-      return { kind: "path" as const, path: "/keys/worker" };
-    });
-    const { service, environment } = await fixture(resolveIdentity);
-    await expect(service.resolveSshIdentity(environment.environmentId)).resolves.toEqual({
-      kind: "path",
-      path: "/keys/worker",
-    });
-    expect(retained).toBeTypeOf("function");
-    expect(() => retained?.()).toThrow("identity invocation is closed");
-    await expect(service.resolveSshIdentity(environment.environmentId)).resolves.toEqual({
-      kind: "path",
-      path: "/keys/worker",
-    });
-    expect(resolveIdentity).toHaveBeenCalledTimes(2);
-  });
-
-  it("rejects a late identity and its queued lookup after the lease owner changes", async () => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const resolveIdentity = vi.fn(async () => {
-      entered.resolve();
-      await release.promise;
-      return { kind: "material" as const, contents: "synthetic-worker-key" };
-    });
-    const { service, environment } = await fixture(resolveIdentity);
-    const first = service
-      .resolveSshIdentity(environment.environmentId)
-      .catch((error: unknown) => error);
-    await entered.promise;
-    const second = service
-      .resolveSshIdentity(environment.environmentId)
-      .catch((error: unknown) => error);
-    try {
-      await service.attachSession({
-        environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
-        sessionId: "queued-new-owner",
-      });
-      release.resolve();
-      expect(await first).toBeInstanceOf(Error);
-      expect(await second).toBeInstanceOf(Error);
-      expect(resolveIdentity).toHaveBeenCalledOnce();
-    } finally {
-      release.resolve();
-      await Promise.all([first, second]);
-    }
-  });
-
-  it("closes timed-out identity work before a cooperating resolver's next effect", async () => {
-    vi.useFakeTimers();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const settled = createDeferredCore();
-    const effect = vi.fn();
-    const { service, environment } = await fixture(async (request) => {
-      entered.resolve();
-      try {
-        await release.promise;
-        request.assertCurrent?.();
-        effect();
-        return { kind: "path", path: "/keys/worker" };
-      } finally {
-        settled.resolve();
+      await Promise.all(operations);
+      if (resolveIdentity.mock.calls.length) {
+        await settled.promise;
       }
-    }, 25);
-    const lookup = service
-      .resolveSshIdentity(environment.environmentId)
-      .catch((error: unknown) => error);
-    try {
-      await entered.promise;
-      await vi.advanceTimersByTimeAsync(25);
-      expect(await lookup).toBeInstanceOf(Error);
-    } finally {
-      release.resolve();
-      await settled.promise;
-      await lookup;
-      vi.useRealTimers();
+      await manager.stopAll();
+    },
+  };
+}
+
+it.each(["tunnel stop", "timeout"] as const)(
+  "fences a cooperating SSH resolver after %s",
+  async (mode) => {
+    if (mode === "timeout") {
+      vi.useFakeTimers();
     }
-    expect(effect).not.toHaveBeenCalled();
+    await using f = await fixture({ hold: true, timeoutMs: mode === "timeout" ? 25 : 0 });
+    const pending = mode === "timeout" ? f.lookup() : f.start();
+    await f.entered.promise;
+    if (mode === "timeout") {
+      await vi.advanceTimersByTimeAsync(25);
+    } else {
+      const stopping = f.manager.stop(f.environment.environmentId, f.environment.ownerEpoch);
+      expect(f.service.get(f.environment.environmentId)?.ownerEpoch).toBe(f.environment.ownerEpoch);
+      f.release.resolve();
+      await stopping;
+    }
+    expect(await pending).toBeInstanceOf(Error);
+    f.release.resolve();
+    await f.settled.promise;
+    expect(f.effect).not.toHaveBeenCalled();
+  },
+);
+
+it("closes retained assertions but permits subsequent legacy lookups", async () => {
+  await using f = await fixture();
+  await expect(f.lookup()).resolves.toEqual(IDENTITY);
+  const retained = f.resolveIdentity.mock.calls[0]?.[0].assertCurrent;
+  expect(retained).toBeTypeOf("function");
+  expect(() => retained?.()).toThrow("identity invocation is closed");
+  await expect(f.lookup()).resolves.toEqual(IDENTITY);
+  expect(f.resolveIdentity).toHaveBeenCalledTimes(2);
+});
+
+it("rejects a late identity and its queued lookup after the lease owner changes", async () => {
+  await using f = await fixture({ hold: true, cooperate: false });
+  const first = f.lookup();
+  await f.entered.promise;
+  const second = f.lookup();
+  await f.service.attachSession({
+    environmentId: f.environment.environmentId,
+    ownerEpoch: f.environment.ownerEpoch,
+    sessionId: "queued-new-owner",
   });
+  f.release.resolve();
+  expect(await Promise.all([first, second])).toEqual([expect.any(Error), expect.any(Error)]);
+  expect(f.resolveIdentity).toHaveBeenCalledOnce();
 });

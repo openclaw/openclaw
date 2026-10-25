@@ -1,7 +1,8 @@
+import type { CronEvent } from "../cron/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { notifyListeners } from "../shared/listeners.js";
 
-export type HeartbeatIndicatorType = "ok" | "alert" | "error";
+type HeartbeatIndicatorType = "ok" | "alert" | "error";
 
 const TARGET_NONE_MESSAGE = "Heartbeat delivery is disabled by configuration (target: none).";
 const NO_ROUTE_MESSAGE =
@@ -26,34 +27,19 @@ export type HeartbeatEventPayload = {
   indicatorType?: HeartbeatIndicatorType;
 };
 
-export function resolveIndicatorType(
-  status: HeartbeatEventPayload["status"],
-): HeartbeatIndicatorType | undefined {
-  switch (status) {
-    case "ok-empty":
-    case "ok-token":
-      return "ok";
-    case "sent":
-      return "alert";
-    case "failed":
-      return "error";
-    case "skipped":
-      return undefined;
-  }
-  throw new Error("Unsupported heartbeat status");
-}
-
 type HeartbeatEventState = {
   lastHeartbeat: HeartbeatEventPayload | null;
-  listeners: Set<(evt: HeartbeatEventPayload) => void>;
+  notifications: { onEvent: (evt: HeartbeatEventPayload) => void };
 };
 
 const HEARTBEAT_EVENT_STATE_KEY = Symbol.for("openclaw.heartbeatEvents.state");
 
 const state = resolveGlobalSingleton<HeartbeatEventState>(HEARTBEAT_EVENT_STATE_KEY, () => ({
   lastHeartbeat: null,
-  listeners: new Set<(evt: HeartbeatEventPayload) => void>(),
+  notifications: { onEvent: () => {} },
 }));
+
+export const heartbeatNotifications = state.notifications;
 
 export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
   const enriched: HeartbeatEventPayload = {
@@ -66,11 +52,39 @@ export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
         : {}),
   };
   state.lastHeartbeat = enriched;
-  notifyListeners(state.listeners, enriched);
+  notifyListeners([state.notifications.onEvent], enriched);
 }
 
-export function onHeartbeatEvent(listener: (evt: HeartbeatEventPayload) => void): () => void {
-  return registerListener(state.listeners, listener);
+/** Called only for receipt-owned converted/default jobs after canonical settlement. */
+export function emitLegacyHeartbeatCronOutcome(evt: CronEvent): void {
+  if (evt.action !== "finished") {
+    return;
+  }
+  emitHeartbeatEvent({
+    status:
+      evt.status === "error" ||
+      evt.deliveryError ||
+      (evt.completionStatus === "failed" && evt.status !== "skipped")
+        ? "failed"
+        : evt.status === "skipped" || evt.completionStatus === "unknown"
+          ? "skipped"
+          : evt.delivered
+            ? "sent"
+            : "ok-empty",
+    preview: evt.summary?.slice(0, 2000),
+    reason:
+      evt.error ??
+      evt.deliveryError ??
+      evt.deliverySuppressionReason ??
+      (evt.completionStatus === "unknown"
+        ? "Automation completion is unknown; inspect its run history."
+        : undefined),
+    durationMs: evt.durationMs,
+    silent: !evt.delivered,
+    channel: evt.delivery?.resolved?.channel,
+    to: evt.delivery?.resolved?.to ?? undefined,
+    accountId: evt.delivery?.resolved?.accountId,
+  });
 }
 
 export function getLastHeartbeatEvent(): HeartbeatEventPayload | null {
@@ -79,5 +93,5 @@ export function getLastHeartbeatEvent(): HeartbeatEventPayload | null {
 
 export function resetHeartbeatEventsForTest(): void {
   state.lastHeartbeat = null;
-  state.listeners.clear();
+  state.notifications.onEvent = () => {};
 }

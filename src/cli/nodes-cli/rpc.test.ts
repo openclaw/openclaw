@@ -1,12 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 
-const gatewayMocks = vi.hoisted(() => ({
-  callGatewayFromCliWithTransport: vi.fn(),
-}));
+const callGateway = vi.hoisted(() => vi.fn());
 
+// mock-isolation: exercise node resolution without opening an actual Gateway connection.
 vi.mock("../gateway-rpc.js", () => ({
-  callGatewayFromCliWithTransport: gatewayMocks.callGatewayFromCliWithTransport,
+  callGatewayFromCliWithTransport: callGateway,
 }));
 
 import {
@@ -17,39 +16,34 @@ import {
   resolveNodeDiagnosticsId,
 } from "./rpc.js";
 
-function requestError(params: {
-  code?: string;
-  message?: string;
-  retryable?: boolean;
-  retryAfterMs?: number;
-}) {
+function requestError(params: ConstructorParameters<typeof GatewayClientRequestError>[0]) {
   return new GatewayClientRequestError({
     code: params.code ?? "INVALID_REQUEST",
     message: params.message ?? "unknown method: node.list",
     ...params,
   });
 }
+const calledMethods = () => callGateway.mock.calls.map(([method]) => method);
+const paired = (nodeId: string, displayName: string, platform?: string) => ({
+  pending: [],
+  paired: [{ nodeId, displayName, ...(platform ? { platform } : {}) }],
+});
 
 describe("node inventory resolution", () => {
   beforeEach(() => {
-    gatewayMocks.callGatewayFromCliWithTransport.mockReset();
+    callGateway.mockReset();
   });
 
   it("uses paired records when an older Gateway rejects the exact node.list method", async () => {
-    gatewayMocks.callGatewayFromCliWithTransport
+    callGateway
       .mockRejectedValueOnce(requestError({}))
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [{ nodeId: "legacy-node", displayName: "Legacy Node", platform: "ios" }],
-      });
+      .mockResolvedValueOnce(paired("legacy-node", "Legacy Node", "ios"));
 
     await expect(resolveCliNode({}, "Legacy Node")).resolves.toMatchObject({
       nodeId: "legacy-node",
       displayName: "Legacy Node",
     });
-    expect(
-      gatewayMocks.callGatewayFromCliWithTransport.mock.calls.map(([method]) => method),
-    ).toEqual(["node.list", "node.pair.list"]);
+    expect(calledMethods()).toEqual(["node.list", "node.pair.list"]);
   });
 
   it.each([
@@ -57,39 +51,27 @@ describe("node inventory resolution", () => {
       label: "an authorization rejection",
       error: requestError({ code: "UNAUTHORIZED", message: "operator authorization required" }),
     },
-    {
-      label: "malformed request retry metadata",
-      error: requestError({ retryAfterMs: -1 }),
-    },
+    { label: "malformed request retry metadata", error: requestError({ retryAfterMs: -1 }) },
   ])("preserves $label without consulting stale paired nodes", async ({ error }) => {
-    gatewayMocks.callGatewayFromCliWithTransport
+    callGateway
       .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [{ nodeId: "stale-node", displayName: "Stale Node" }],
-      });
+      .mockResolvedValueOnce(paired("stale-node", "Stale Node"));
 
     await expect(resolveCliNode({}, "Stale Node")).rejects.toBe(error);
-    expect(
-      gatewayMocks.callGatewayFromCliWithTransport.mock.calls.map(([method]) => method),
-    ).toEqual(["node.list"]);
+    expect(calledMethods()).toEqual(["node.list"]);
   });
 
-  it.each([requestError({ message: "unknown method: node.list.extra" })])(
-    "keeps diagnostics on the same exact missing-method contract",
-    async (error) => {
-      gatewayMocks.callGatewayFromCliWithTransport.mockRejectedValueOnce(error);
+  it("keeps diagnostics on the same exact missing-method contract", async () => {
+    const error = requestError({ message: "unknown method: node.list.extra" });
+    callGateway.mockRejectedValueOnce(error);
 
-      await expect(resolveNodeDiagnosticsId({}, "stale-node")).rejects.toBe(error);
-      expect(
-        gatewayMocks.callGatewayFromCliWithTransport.mock.calls.map(([method]) => method),
-      ).toEqual(["node.list"]);
-    },
-  );
+    await expect(resolveNodeDiagnosticsId({}, "stale-node")).rejects.toBe(error);
+    expect(calledMethods()).toEqual(["node.list"]);
+  });
 
-  it.each([""])("rejects explicit blank --timeout %j before transport", async (timeout) => {
-    await expect(resolveCliNode({ timeout }, "some-node")).rejects.toThrow(/Invalid --timeout/);
-    expect(gatewayMocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
+  it("rejects explicit blank --timeout before transport", async () => {
+    await expect(resolveCliNode({ timeout: "" }, "some-node")).rejects.toThrow(/Invalid --timeout/);
+    expect(callGateway).not.toHaveBeenCalled();
   });
 });
 
@@ -134,21 +116,21 @@ describe("node invoke envelope", () => {
 });
 
 describe("node numeric option parsing", () => {
-  it.each([""])("rejects explicit blank numeric values %j", (value) => {
-    expect(() => parseOptionalNodeInteger(value, "--positive")).toThrow(
+  it("rejects explicit blank numeric values", () => {
+    expect(() => parseOptionalNodeInteger("", "--positive")).toThrow(
       "--positive must be a positive integer",
     );
-    expect(() => parseOptionalNodeInteger(value, "--non-negative", "non-negative")).toThrow(
+    expect(() => parseOptionalNodeInteger("", "--non-negative", "non-negative")).toThrow(
       "--non-negative must be a non-negative integer",
     );
-    expect(() => parseOptionalNodeFiniteNumber(value, "--finite")).toThrow(
+    expect(() => parseOptionalNodeFiniteNumber("", "--finite")).toThrow(
       "--finite must be a finite number",
     );
   });
 
-  it.each([null])("preserves omitted numeric values %s", (value) => {
-    expect(parseOptionalNodeInteger(value, "--positive")).toBeUndefined();
-    expect(parseOptionalNodeInteger(value, "--non-negative", "non-negative")).toBeUndefined();
-    expect(parseOptionalNodeFiniteNumber(value, "--finite")).toBeUndefined();
+  it("preserves omitted numeric values", () => {
+    expect(parseOptionalNodeInteger(null, "--positive")).toBeUndefined();
+    expect(parseOptionalNodeInteger(null, "--non-negative", "non-negative")).toBeUndefined();
+    expect(parseOptionalNodeFiniteNumber(null, "--finite")).toBeUndefined();
   });
 });

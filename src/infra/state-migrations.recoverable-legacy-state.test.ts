@@ -7,10 +7,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { getAgentDir } from "../agents/config.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import {
-  coercePluginDoctorContractModule,
-  type PluginDoctorContractModule,
-} from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -32,30 +28,17 @@ import {
 } from "./state-migrations.messages.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import { runLegacyMigrationPlans } from "./state-migrations.plugin-state.js";
+import {
+  expectFile,
+  expectFiles,
+  expectMissing,
+  runPluginMigrations,
+  writeFiles,
+} from "./state-migrations.store.test-support.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const receiptName = ".legacy-agent-dir-migration.json";
 const agentConfig = { agents: { entries: { main: {} } }, plugins: { enabled: false } };
-
-const expectFile = (file: string, contents: string) =>
-  expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
-
-const expectMissing = (file: string) =>
-  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-
-async function writeFiles(root: string, files: Record<string, string>) {
-  for (const [relative, contents] of Object.entries(files)) {
-    const file = path.join(root, relative);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, contents);
-  }
-}
-
-async function expectFiles(root: string, files: Record<string, string>) {
-  for (const [file, contents] of Object.entries(files)) {
-    await expectFile(path.join(root, file), contents);
-  }
-}
 
 const withAgentState = (
   run: (state: OpenClawTestState) => Promise<void>,
@@ -158,11 +141,6 @@ it.each([false, true])(
         await fs.writeFile(retiredPath, "{}");
       }
       failUnlink(sourcePath, "synthetic cache cleanup permission denied");
-      const { stateMigrations } = coercePluginDoctorContractModule(
-        await vi.importActual<PluginDoctorContractModule>(
-          path.resolve("extensions/discord/doctor-contract-api.ts"),
-        ),
-      );
       const params = {
         config: {},
         env,
@@ -175,17 +153,10 @@ it.each([false, true])(
         }),
       };
 
-      const migrate = async () => {
-        const receipts = [];
-        for (const migration of stateMigrations) {
-          if (await migration.detectLegacyState(params)) {
-            receipts.push(
-              migrationReceipt(migration.id, await migration.migrateLegacyState(params)),
-            );
-          }
-        }
-        return receipts;
-      };
+      const migrate = async () =>
+        (await runPluginMigrations("discord", params)).map(({ id, result }) =>
+          migrationReceipt(id, result),
+        );
       const receipts = await migrate();
       const warnings = receipts.flatMap((receipt) => receipt.warnings).join("\n");
 

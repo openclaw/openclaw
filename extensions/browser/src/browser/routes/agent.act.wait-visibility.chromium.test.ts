@@ -5,8 +5,9 @@ import type { Browser, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as navigationGuard from "../navigation-guard.js";
 import { getPlaywrightCore } from "../playwright-core.runtime.js";
+import { atBarrier, runRoute } from "./agent-route.test-support.js";
 import { createExistingSessionAgentSharedModule } from "./existing-session.test-support.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
 const browserState = vi.hoisted(() => ({ page: undefined as Page | undefined }));
 vi.mock("../chrome-mcp.js", async (importOriginal) => ({
@@ -49,13 +50,9 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
       registerBrowserAgentActRoutes(app, {
         state: () => ({ resolved: { evaluateEnabled: true } }),
       } as never);
-      const handler = expectDefined(postHandlers.get("/act"), "Missing /act route");
-      const response = createBrowserRouteResponse();
-      await handler(
-        { params: {}, query: {}, body: { kind: "wait", selector, timeoutMs: 250, ...extra } },
-        response.res,
-      );
-      return response;
+      return runRoute(postHandlers.get("/act"), {
+        body: { kind: "wait", selector, timeoutMs: 250, ...extra },
+      });
     }
 
     it.each([
@@ -145,12 +142,11 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
         });
       const pending = waitForSelector("#target", { timeoutMs: 2_000, fn: markPredicate });
       try {
-        await Promise.race([
+        await atBarrier(
           readmissionStarted.promise,
-          pending.then(() => {
-            throw new Error("Wait completed before the changed URL was readmitted");
-          }),
-        ]);
+          pending,
+          "Wait completed before URL readmission",
+        );
         expect(await page.title()).toBe("");
         readmissionAllowed.resolve();
         expect((await pending).statusCode).toBe(200);

@@ -45,17 +45,13 @@ async function completeGatewaySession(params: Record<string, unknown>) {
   const afterCreate = params.afterCreate as
     | ((created: Record<string, unknown>) => Promise<void>)
     | undefined;
-  await afterCreate?.({
-    key: "agent:main:gateway-copy",
-    agentId: "main",
-    entry,
-  });
-  return {
-    ok: true as const,
+  const created = {
     key: "agent:main:gateway-copy",
     agentId: "main",
     entry,
   };
+  await afterCreate?.(created);
+  return { ok: true as const, ...created };
 }
 
 function provider(preferredModel = "openai/gpt-5.6-sol"): SessionCatalogProvider {
@@ -181,13 +177,11 @@ describe("copySessionCatalogToGateway", () => {
         expect(mocks.createGatewaySession.mock.calls[0]?.[0]).not.toHaveProperty("model");
       }
       const historyImport = mocks.importSessionCatalogHistory.mock.calls[0]?.[0];
-      expect(historyImport).toEqual(
-        expect.objectContaining({
-          catalogId: "beam",
-          threadId: "beam-1",
-          continuationNotice: expect.stringContaining(notice),
-        }),
-      );
+      expect(historyImport).toMatchObject({
+        catalogId: "beam",
+        threadId: "beam-1",
+        continuationNotice: expect.stringContaining(notice),
+      });
       expect(historyImport?.continuationNotice).toContain("untrusted reference material");
       const copiedPage = await historyImport?.read({ limit: 100 });
       expect(copiedPage?.items[0]?.text).toContain("EXTERNAL_UNTRUSTED_CONTENT");

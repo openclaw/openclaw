@@ -11,6 +11,7 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { prepareMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -107,6 +108,100 @@ function drawContent(content: RawContent["content"], media?: MarkdownMedia) {
 }
 
 describe("streaming Markdown DOM", () => {
+  it.each([
+    ["A reply", "A reply with **bold**", "strong", "bold"],
+    ["A reply", "A reply with `code`", "code", "code"],
+    ["A reply", "A reply with [link](https://example.com)", "a", "link"],
+    ["A **bold**", "A **bold** trailing text", "strong", "bold"],
+  ])("keeps inline syntax canonical while streaming %s", (initial, next, tag, text) => {
+    draw(initial);
+    draw(next);
+    expect(container.querySelector(tag)?.textContent).toBe(text);
+    expect(container.querySelector("p")?.textContent).not.toMatch(/\*|`|https:/u);
+  });
+
+  it("formats the first delta after an idle formatting window immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      draw("A growing reply");
+      await vi.advanceTimersByTimeAsync(50);
+      draw("A growing reply with **bold** text");
+      expect(container.querySelector("strong")?.textContent).toBe("bold");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces burst formatting into one bounded window and flushes an idle preview", async () => {
+    vi.useFakeTimers();
+    try {
+      draw("Visit www");
+      draw("Visit www.example");
+      await vi.advanceTimersByTimeAsync(25);
+      draw("Visit www.example.com here");
+      expect(container.textContent).toContain("www.example.com here");
+      expect(container.querySelector("a")).toBeNull();
+      await vi.advanceTimersByTimeAsync(24);
+      expect(container.querySelector("a")).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(container.querySelector("a")?.getAttribute("href")).toBe("http://www.example.com");
+
+      draw("Visit www.example.com here and www.openclaw.org here");
+      expect(container.textContent).toContain("www.openclaw.org here");
+      expect(container.querySelectorAll("a")).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.querySelectorAll("a")).toHaveLength(2);
+      expect(container.querySelectorAll("a")[1]?.getAttribute("href")).toBe(
+        "http://www.openclaw.org",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps visible plain text in place when deferred formatting catches up", async () => {
+    vi.useFakeTimers();
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    try {
+      draw("A growing reply");
+      draw("A growing reply with more text");
+      const text = container.querySelector("p")?.textContent;
+      observer.observe(container, { characterData: true, subtree: true });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.querySelector("p")?.textContent).toBe(text);
+      expect([...mutations, ...observer.takeRecords()]).toHaveLength(0);
+      observer.disconnect();
+      draw("A growing reply with more text and a pending suffix");
+      draw("A growing reply with more text");
+      expect(container.querySelector("p")?.textContent).toBe(text);
+    } finally {
+      observer.disconnect();
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows appended text before bounded formatting and flushes completion without a stale timer", async () => {
+    vi.useFakeTimers();
+    try {
+      draw("A growing reply");
+      const paragraph = container.querySelector("p");
+      draw("A growing reply with a plain tail");
+      expect(paragraph?.textContent).toBe("A growing reply with a plain tail");
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.querySelector("p")).toBe(paragraph);
+
+      draw("A growing reply with a plain tail and *final*");
+      draw("A growing reply with a plain tail and *final*", { streaming: false });
+      expect(container.querySelector("em")?.textContent).toBe("final");
+      draw("Replacement", { key: "replacement", streaming: false });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.textContent).toBe("Replacement\n");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { label: "paragraph", initial: "A growing reply", suffix: " with more text", selector: "p" },
     {
@@ -353,11 +448,7 @@ describe("streaming Markdown DOM", () => {
       } finally {
         vi.useRealTimers();
         fallback.mockRestore();
-        if (clipboard) {
-          Object.defineProperty(navigator, "clipboard", clipboard);
-        } else {
-          Reflect.deleteProperty(navigator, "clipboard");
-        }
+        restorePropertyDescriptor(navigator, "clipboard", clipboard);
       }
     },
   );

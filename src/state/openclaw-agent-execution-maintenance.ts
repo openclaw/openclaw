@@ -20,9 +20,8 @@ import {
   readActiveOpenClawAgentDatabaseLeasesReadOnly,
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "./openclaw-agent-db-lease.js";
-import { OPENCLAW_AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
+import { AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import type { WorkerOperations } from "./worker-operation-registry.js";
 
 type PreparationInput = Omit<
   Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
@@ -173,7 +172,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
         }
         return repairDoctorSqliteIndexCorruption(check.database, check.databaseLabel, {
           label: `agent ${context.databaseOptions.agentId}`,
-          ftsSchemas: OPENCLAW_AGENT_FTS_SCHEMAS,
+          ftsSchemas: AGENT_FTS_SCHEMAS,
           ftsOnly: true,
           assertCurrent,
           describeRepair(indexes) {
@@ -216,7 +215,3 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     },
   };
 }
-
-export type AgentDatabaseMaintenanceOperations = WorkerOperations<
-  ReturnType<typeof createAgentDatabaseMaintenanceOwner>["operations"]
->;

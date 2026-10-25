@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { createModelFixture } from "./model-fixture.test-support.js";
 import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 import { withCodexAppServerFastModeServiceTier } from "./run-attempt-lifecycle.js";
@@ -7,38 +8,34 @@ import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
 import { createClientHarness } from "./test-support.js";
 
 const supportedModel = {
+  ...createModelFixture("native-model"),
   id: "catalog-alias",
-  model: "native-model",
-  displayName: "Test model",
-  description: "Test model",
-  hidden: false,
-  isDefault: false,
-  supportedReasoningEfforts: [],
-  defaultReasoningEffort: "medium",
   serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
 };
 
 function fixture() {
   const { client } = createClientHarness();
   const request = vi.spyOn(client, "request").mockResolvedValue({ data: [supportedModel] });
-  const controller = new AbortController();
+  const params = {
+    enabled: true,
+    serviceTier: "priority",
+    model: "native-model",
+    modelProvider: "openai",
+    client,
+    timeoutMs: 2500,
+    signal: new AbortController().signal,
+    assertCurrent: vi.fn(),
+  };
   return {
     request,
-    controller,
-    params: {
-      enabled: true,
-      serviceTier: "priority",
-      model: "native-model",
-      modelProvider: "openai",
-      client,
-      timeoutMs: 2500,
-      signal: controller.signal,
-      assertCurrent: vi.fn(),
-    },
+    params,
+    resolve: (overrides: Partial<Parameters<typeof resolveCodexUltrafastServiceTier>[0]> = {}) =>
+      resolveCodexUltrafastServiceTier({ ...params, ...overrides }),
   };
 }
 
 describe("optional Codex Ultrafast", () => {
+  afterEach(() => vi.restoreAllMocks());
   it.each([
     { tier: "priority", expected: "priority" },
     { tier: undefined, expected: null },
@@ -56,49 +53,35 @@ describe("optional Codex Ultrafast", () => {
         baseline,
       );
       expect(restored.serviceTier).toBe(expected);
-      const { params, request } = fixture();
+      const { resolve, request } = fixture();
       request.mockResolvedValue({
         data: [{ ...supportedModel, serviceTiers: [] }],
       });
-      expect(
-        await resolveCodexUltrafastServiceTier({
-          ...params,
-          serviceTier: restored.serviceTier,
-        }),
-      ).toBe(expected);
+      expect(await resolve({ serviceTier: restored.serviceTier })).toBe(expected);
     },
   );
   it("bounds all catalog pages by one optional discovery budget", async () => {
-    const { params, request } = fixture();
+    const { resolve, request } = fixture();
     const now = vi.spyOn(performance, "now").mockReturnValue(1000);
     request.mockImplementation(async () => {
       now.mockReturnValue(4000);
       return { data: [], nextCursor: "next-page" };
     });
-    try {
-      expect(await resolveCodexUltrafastServiceTier(params)).toBe("priority");
-      expect(request).toHaveBeenCalledTimes(1);
-    } finally {
-      now.mockRestore();
-    }
+    expect(await resolve()).toBe("priority");
+    expect(request).toHaveBeenCalledTimes(1);
   });
   it("keeps the catalog deadline bounded when the wall clock rewinds", async () => {
-    // The deadline is seeded once and consumed per-page. A wall-clock-based
-    // budget would grow when Date.now() rewinds between pages; the monotonic
-    // budget must stay bounded by the configured discovery budget.
-    const { params, request } = fixture();
+    const { resolve, request } = fixture();
     const capturedTimeoutMs: number[] = [];
     let monotonicNow = 1000;
-    const perfNow = vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
     const dateNow = vi.spyOn(Date, "now").mockImplementation(() => 1000);
     request.mockImplementation(
       async (_method: string, _params: unknown, options?: { timeoutMs?: number }) => {
         if (options?.timeoutMs !== undefined) {
           capturedTimeoutMs.push(options.timeoutMs);
         }
-        // After the first page, rewind the wall clock by 120s while the
-        // monotonic clock advances only 500ms. A wall-clock-based remaining
-        // budget would grow to ~122s; the monotonic budget must shrink to ~2000ms.
+        // Rewinding wall time must not extend the monotonic discovery budget.
         if (capturedTimeoutMs.length === 1) {
           dateNow.mockReturnValue(-120_000);
           monotonicNow += 500;
@@ -108,79 +91,46 @@ describe("optional Codex Ultrafast", () => {
           : { data: [supportedModel] };
       },
     );
-    try {
-      await resolveCodexUltrafastServiceTier(params);
-      expect(capturedTimeoutMs.length).toBe(2);
-      for (const captured of capturedTimeoutMs) {
-        expect(captured).toBeLessThanOrEqual(2500);
-      }
-    } finally {
-      perfNow.mockRestore();
-      dateNow.mockRestore();
+    await resolve();
+    expect(capturedTimeoutMs.length).toBe(2);
+    for (const captured of capturedTimeoutMs) {
+      expect(captured).toBeLessThanOrEqual(2500);
     }
   });
   it.each([
-    { enabled: false, serviceTier: "flex", modelProvider: "openai" },
-    {
-      enabled: true,
-      serviceTier: "priority",
-      modelProvider: "custom-provider",
-    },
-  ])("keeps inactive or custom-provider selection $serviceTier", async (selection) => {
-    const { params, request } = fixture();
-    expect(await resolveCodexUltrafastServiceTier({ ...params, ...selection })).toBe(
-      selection.serviceTier,
-    );
-    expect(request).toHaveBeenCalledTimes(0);
+    [{ enabled: false, serviceTier: "flex" }, "flex", 0],
+    [{ modelProvider: "custom-provider" }, "priority", 0],
+    [{ modelProvider: CODEX_RESPONSES_OAUTH_PROVIDER, serviceTier: null }, "ultrafast", 1],
+    [{ model: "catalog-alias" }, "priority", 1],
+  ] as const)("resolves selection %j to %s", async (selection, expected, requests) => {
+    const { resolve, request } = fixture();
+    expect(await resolve(selection)).toBe(expected);
+    expect(request).toHaveBeenCalledTimes(requests);
   });
 
-  it("supports the managed ChatGPT subscription-sharing provider", async () => {
-    const { params } = fixture();
-    expect(
-      await resolveCodexUltrafastServiceTier({
-        ...params,
-        modelProvider: CODEX_RESPONSES_OAUTH_PROVIDER,
-        serviceTier: null,
-      }),
-    ).toBe("ultrafast");
-  });
-
-  it("does not match another model through its catalog alias", async () => {
-    const { params } = fixture();
-    expect(
-      await resolveCodexUltrafastServiceTier({
-        ...params,
-        model: "catalog-alias",
-      }),
-    ).toBe("priority");
-  });
-
-  it("propagates cancellation instead of falling back", async () => {
-    const { params, request, controller } = fixture();
-    const aborted = new Error("cancelled turn");
-    request.mockImplementation(async () => {
-      controller.abort(aborted);
-      throw aborted;
-    });
-    await expect(resolveCodexUltrafastServiceTier(params)).rejects.toBe(aborted);
-  });
-
-  it("propagates scoped authority rejection instead of falling back", async () => {
-    const { params, request } = fixture();
-    const rejected = new CodexAppServerScopedRequestRejectedError("retired owner");
-    request.mockRejectedValue(rejected);
-    await expect(resolveCodexUltrafastServiceTier(params)).rejects.toBe(rejected);
-  });
-
-  it("rechecks live authority after the catalog response", async () => {
-    const { params, request } = fixture();
-    const retired = new Error("retired owner");
-    request.mockImplementation(async () => {
-      params.assertCurrent.mockImplementation(() => {
-        throw retired;
+  it.each(["cancellation", "scoped rejection", "retired authority"])(
+    "propagates %s instead of falling back",
+    async (failure) => {
+      const { params, resolve, request } = fixture();
+      const controller = new AbortController();
+      const error =
+        failure === "scoped rejection"
+          ? new CodexAppServerScopedRequestRejectedError("retired owner")
+          : new Error(failure);
+      request.mockImplementation(async () => {
+        if (failure === "retired authority") {
+          params.assertCurrent.mockImplementation(() => {
+            throw error;
+          });
+        } else {
+          if (failure === "cancellation") {
+            controller.abort(error);
+          }
+          throw error;
+        }
+        return { data: [supportedModel] };
       });
-      return { data: [supportedModel] };
-    });
-    await expect(resolveCodexUltrafastServiceTier(params)).rejects.toBe(retired);
-  });
+      await expect(resolve({ signal: controller.signal })).rejects.toBe(error);
+    },
+  );
 });

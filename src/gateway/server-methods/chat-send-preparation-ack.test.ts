@@ -18,7 +18,6 @@ import {
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as transcriptPersistence from "../../sessions/user-turn-transcript.persistence.js";
 import * as skillSelection from "../../skills/library/selection.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -27,7 +26,6 @@ import { refusePendingInputCommit } from "../pending-input-commit.test-support.j
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
-import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import {
   setClientProfile,
@@ -244,52 +242,6 @@ it.each(["unchanged", "selected profile", "session access"] as const)(
     }
   },
 );
-
-it("recovers an older queued input into one idle transcript commit before ACK", async () => {
-  await using fixture = await createFixture({ preserveContent: true });
-  const runId = fixture.params.idempotencyKey;
-  const profile = ensureProfileForEmail("queued-input-upgrade@example.test");
-  setClientProfile(fixture.client, profile, "Queued input upgrade fixture");
-  await fixture.send();
-  await fixture.dispatchedRecorder;
-  const queued = (await listSessionPendingInputs(fixture.scope)).items[0];
-  expect(queued).toMatchObject({ state: "queued", runId });
-  expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-
-  // Recreate the durable state left by the former two-commit path after a restart.
-  rotateAgentEventLifecycleGeneration();
-  await fixture.finishDispatch();
-  fixture.context.dedupe.clear();
-  const registry = getTestPluginRegistry();
-  registry.typedHooks = registry.typedHooks.filter(
-    (hook) => hook.pluginId !== "approved-input-fixture",
-  );
-  await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
-  dispatchInboundMessageMock.mockClear();
-
-  let atAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
-  let claimAtAck: ReturnType<typeof loadSessionEntry>;
-  const response = await fixture.send(
-    vi.fn<RespondFn>((ok) => {
-      if (ok) {
-        atAck = loadTranscriptEventsSync(fixture.scope);
-        claimAtAck = loadSessionEntry(fixture.scope);
-      }
-    }),
-  );
-  expectStarted(fixture, response);
-  expect(claimAtAck).toMatchObject({
-    sessionId: fixture.scope.sessionId,
-    restartRecoveryDeliveryRunId: runId,
-    restartRecoveryDeliverySourceRunId: runId,
-  });
-  expectUserTurn(fixture, atAck);
-  expect(atAck?.at(-1)).toMatchObject({ id: queued?.id });
-  expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-  await fixture.finishDispatch();
-  expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-  expect(loadTranscriptEventsSync(fixture.scope)).toEqual(atAck);
-});
 
 it.for(["dispatch", "failure", "cancel"] as const)(
   "acknowledges durable input before skill session preparation (%s)",

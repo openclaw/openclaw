@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -45,42 +45,29 @@ async function withoutHostSql(run: () => Promise<void>) {
 
 beforeEach(() => testing.resetSessionBindingAdaptersForTests());
 
-describe("bound delivery router", () => {
-  it.each([
-    {
-      name: "resolves to a bound destination when a single active binding exists",
-      bindings: [createRuntimeBinding("thread-1", 1, { parentConversationId: "parent-1" })],
-      requesterConversationId: "parent-1",
-      expectedConversationId: "thread-1",
-    },
-    {
-      name: "falls back when no active binding exists",
-      targetSessionKey: "agent:main:subagent:missing",
-      requesterConversationId: "parent-1",
-      expectedConversationId: undefined,
-    },
-    {
-      name: "fails closed when requester signal is missing even with a single binding",
-      bindings: [createRuntimeBinding("thread-1")],
-      expectedConversationId: undefined,
-    },
-    {
-      name: "normalizes adapter binding conversations before requester matching",
-      bindings: [
-        createRuntimeBinding(" thread-1 ", 1, { channel: " richchat ", accountId: " runtime " }),
-        createRuntimeBinding(" thread-2 ", 2, { channel: " RICHCHAT ", accountId: " Runtime " }),
-      ],
-      requesterConversationId: "thread-2",
-      expectedConversationId: " thread-2 ",
-    },
-    {
-      name: "falls back for invalid requester conversation values",
-      bindings: [createRuntimeBinding("thread-1")],
-      requesterConversationId: " ",
-      expectedConversationId: undefined,
-    },
-  ])("$name", async ({ expectedConversationId, ...params }) => {
-    const { bindings, targetSessionKey = TARGET_SESSION_KEY, requesterConversationId } = params;
+it.each([
+  [
+    "single binding",
+    [createRuntimeBinding("thread-1", 1, { parentConversationId: "parent-1" })],
+    "parent-1",
+    "thread-1",
+  ],
+  ["no binding", undefined, "parent-1", undefined],
+  ["missing requester", [createRuntimeBinding("thread-1")], undefined, undefined],
+  [
+    "normalized requester matching",
+    [
+      createRuntimeBinding(" thread-1 ", 1, { channel: " richchat ", accountId: " runtime " }),
+      createRuntimeBinding(" thread-2 ", 2, { channel: " RICHCHAT ", accountId: " Runtime " }),
+    ],
+    "thread-2",
+    " thread-2 ",
+  ],
+  ["invalid requester", [createRuntimeBinding("thread-1")], " ", undefined],
+] satisfies [string, SessionBindingRecord[] | undefined, string | undefined, string | undefined][])(
+  "resolves %s",
+  async (_name, bindings, requesterConversationId, expectedConversationId) => {
+    const targetSessionKey = bindings ? TARGET_SESSION_KEY : "agent:main:subagent:missing";
     if (bindings) {
       registerSessionBindingAdapter({
         channel: "richchat",
@@ -106,8 +93,8 @@ describe("bound delivery router", () => {
     } else {
       expect(route).toBeNull();
     }
-  });
-});
+  },
+);
 
 it("lists account and generic destinations and prunes expiry without host SQL", async () => {
   await withOpenClawTestState({ label: "bound-destination-worker-list" }, async () => {

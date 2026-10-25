@@ -10,6 +10,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteSource } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
@@ -24,27 +25,22 @@ import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
-  buildProviderConfigModelCatalogForBrowse,
-  type ModelCatalogBrowseView,
-} from "./model-catalog-browse.js";
-import {
   projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
-  type ModelCatalogRoutePolicy,
   type ModelCatalogRouteProjection,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import type { ModelRef } from "./model-ref-shared.js";
+import { buildConfiguredModelCatalog as buildInventoryCatalog } from "./model-selection-shared.js";
 import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 } from "./model-visibility-policy.js";
-import {
-  createModelCatalogIdentityKeyResolver,
-  openAIModelCatalogRoutePolicy,
-} from "./openai-model-routes.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
+
+type ModelCatalogBrowseView = "default" | "configured" | "provider-config" | "all";
 
 /** Keep capability donors bound to one model and runtime without merging sibling metadata. */
 export function selectModelCatalogRuntimeEntry(params: {
@@ -83,24 +79,15 @@ export function createModelCatalogView(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
   routeVariants?: readonly ModelCatalogEntry[];
-  routePolicy?: ModelCatalogRoutePolicy;
   keyOf?: ReturnType<typeof createModelCatalogIdentityKeyResolver>;
 }) {
   const keyOf = params.keyOf ?? createModelCatalogIdentityKeyResolver();
-  const variantsByKey = new Map<string, ModelCatalogEntry[]>();
-  for (const entry of params.routeVariants ?? params.catalog) {
-    const key = keyOf(entry);
-    const variants = variantsByKey.get(key) ?? [];
-    variants.push(entry);
-    variantsByKey.set(key, variants);
-  }
+  const variantsByKey = groupRecords(params.routeVariants ?? params.catalog, keyOf);
   // Identity lookups use the same captured policy as this view's physical index.
   const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">, key = keyOf(entry)) =>
     variantsByKey.get(key);
-  const routePolicy = params.routePolicy ?? openAIModelCatalogRoutePolicy;
   const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
     cfg: params.cfg,
-    policy: routePolicy,
   });
   const projectRoute = (
     entry: ModelCatalogEntry,
@@ -164,9 +151,8 @@ export function createModelCatalogView(params: {
             ? {
                 kind: "selected",
                 route: evaluation.selectedRoute,
-                policy: routePolicy,
               }
-            : { kind: "unresolved", policy: routePolicy };
+            : { kind: "unresolved" };
       // Runtime selection can narrow donors without rebuilding the configured-row index.
       return projectRoute(
         entry,
@@ -440,10 +426,17 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       );
       const canonicalByKey = indexFirstByKey(canonicalEntries, keyOf);
       // Authored config owns membership; captured catalog rows own route metadata.
-      const authored = buildProviderConfigModelCatalogForBrowse({
+      const authored = buildInventoryCatalog({
         cfg: sourceConfig,
         workspaceDir: params.workspaceDir,
-      }).map((entry) => canonicalByKey.get(keyOf(entry)) ?? entry);
+      })
+        .toSorted(
+          (a, b) =>
+            a.provider.localeCompare(b.provider) ||
+            a.name.localeCompare(b.name) ||
+            a.id.localeCompare(b.id),
+        )
+        .map((entry) => canonicalByKey.get(keyOf(entry)) ?? entry);
       return dedupeByKey(
         [
           ...authored,

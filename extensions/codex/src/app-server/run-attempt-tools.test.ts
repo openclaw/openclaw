@@ -4,7 +4,8 @@ import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexDynamicToolSpecs, projectCodexDynamicTools } from "./dynamic-tool-catalog.js";
 import { resolveCodexDynamicToolsLoadingForRuntime } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
-import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec } from "./protocol.js";
+import { flattenSpecsWithNamespace } from "./dynamic-tools.test-support.js";
+import type { JsonObject } from "./protocol.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import { buildCodexThreadConfiguration } from "./thread-requests.js";
 
@@ -46,16 +47,6 @@ function createCodexToolBridgeForTest(
     signal: new AbortController().signal,
     directToolNames: resolveCodexDynamicToolDirectNames(params, registeredTools),
   });
-}
-
-function flattenSpecsWithNamespace(
-  specs: readonly CodexDynamicToolSpec[],
-): Array<CodexDynamicToolFunctionSpec & { namespace?: string }> {
-  return specs.flatMap((spec) =>
-    spec.type === "namespace"
-      ? spec.tools.map((tool) => ({ ...tool, namespace: spec.name }))
-      : [spec],
-  );
 }
 
 describe("Codex direct tool loading", () => {
@@ -121,37 +112,30 @@ describe("Codex direct tool loading", () => {
 
 it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", () => {
   const tools = [
-    createRuntimeDynamicTool("message"),
-    createRuntimeDynamicTool("web_search"),
-    createRuntimeDynamicTool("heartbeat_respond"),
-    createRuntimeDynamicTool("agents_list"),
-    createRuntimeDynamicTool("sessions_spawn"),
-    createRuntimeDynamicTool("sessions_yield"),
-  ];
+    "message",
+    "web_search",
+    "heartbeat_respond",
+    "agents_list",
+    "sessions_spawn",
+    "sessions_yield",
+  ].map(createRuntimeDynamicTool);
   const toolBridge = createCodexDynamicToolBridge({
     tools,
     signal: new AbortController().signal,
     directToolNames: ["message"],
   });
   const specs = flattenSpecsWithNamespace(toolBridge.specs);
-  const message = specs.find((tool) => tool.name === "message");
-  const webSearch = specs.find((tool) => tool.name === "web_search");
-  const heartbeat = specs.find((tool) => tool.name === "heartbeat_respond");
-  const agentsList = specs.find((tool) => tool.name === "agents_list");
-  const sessionsSpawn = specs.find((tool) => tool.name === "sessions_spawn");
-  const sessionsYield = specs.find((tool) => tool.name === "sessions_yield");
-  expect(message).not.toHaveProperty("namespace");
-  expect(message).not.toHaveProperty("deferLoading");
-  expect(webSearch?.namespace).toBe("openclaw");
-  expect(webSearch?.deferLoading).toBe(true);
-  expect(heartbeat?.namespace).toBe("openclaw");
-  expect(heartbeat?.deferLoading).toBe(true);
-  expect(agentsList).not.toHaveProperty("namespace");
-  expect(agentsList).not.toHaveProperty("deferLoading");
-  expect(sessionsSpawn).not.toHaveProperty("namespace");
-  expect(sessionsSpawn).not.toHaveProperty("deferLoading");
-  expect(sessionsYield).not.toHaveProperty("namespace");
-  expect(sessionsYield).not.toHaveProperty("deferLoading");
+  for (const name of ["message", "agents_list", "sessions_spawn", "sessions_yield"]) {
+    const spec = specs.find((tool) => tool.name === name);
+    expect(spec).not.toHaveProperty("namespace");
+    expect(spec).not.toHaveProperty("deferLoading");
+  }
+  for (const name of ["web_search", "heartbeat_respond"]) {
+    expect(specs.find((tool) => tool.name === name)).toMatchObject({
+      namespace: "openclaw",
+      deferLoading: true,
+    });
+  }
 });
 
 it("keeps session UI tools callable without native JavaScript discovery", async () => {
@@ -177,9 +161,9 @@ it("keeps session UI tools callable without native JavaScript discovery", async 
   const callable = bridge.specs.filter((spec) => spec.type === "function");
   expect(callable.map((spec) => spec.name)).toEqual(tools.map((tool) => tool.name));
   expect(callable.every((spec) => spec.deferLoading !== true)).toBe(true);
-  expect(thread.developerInstructions).not.toContain("ALL_TOOLS");
-  expect(thread.developerInstructions).not.toContain("`tool_search`");
-  expect(thread.developerInstructions).not.toContain("spawn_agent");
+  for (const forbidden of ["ALL_TOOLS", "`tool_search`", "spawn_agent"]) {
+    expect(thread.developerInstructions).not.toContain(forbidden);
+  }
   for (const spec of callable) {
     const result = await bridge.handleToolCall({
       threadId: "dashboard-thread",
@@ -216,3 +200,67 @@ it.each(["direct", "searchable"] as const)(
     expect(bridge.specs[0]?.type).toBe(loading === "direct" ? "function" : "namespace");
   },
 );
+
+it.each<{
+  name: string;
+  config?: JsonObject;
+  available: boolean;
+  restricted?: boolean;
+  expected: boolean | undefined;
+}>([
+  { name: "callable default", available: true, expected: false },
+  { name: "unavailable default", available: false, expected: undefined },
+  {
+    name: "explicit native blocking tool",
+    config: { "tools.experimental_request_user_input.enabled": true },
+    available: true,
+    expected: true,
+  },
+  {
+    name: "nested native blocking tool",
+    config: { tools: { experimental_request_user_input: { enabled: true } } },
+    available: true,
+    expected: undefined,
+  },
+  {
+    name: "explicit Default-mode native questions",
+    config: { "features.default_mode_request_user_input": true },
+    available: true,
+    expected: undefined,
+  },
+  {
+    name: "nested Default-mode native questions",
+    config: { features: { default_mode_request_user_input: true } },
+    available: true,
+    expected: undefined,
+  },
+  {
+    name: "explicit native denial without an executor",
+    config: { "tools.experimental_request_user_input.enabled": false },
+    available: false,
+    expected: false,
+  },
+  {
+    name: "restricted native opt-in",
+    config: { "tools.experimental_request_user_input.enabled": true },
+    available: true,
+    restricted: true,
+    expected: false,
+  },
+])("preserves question policy for $name", ({ config, available, restricted, expected }) => {
+  const thread = buildCodexThreadConfiguration(
+    createAttemptParams({ config: {}, pluginHarnessToolPolicyRestricted: restricted }),
+    {
+      appServer: resolveCodexAppServerRuntimeOptions({}),
+      developerInstructions: "Test instructions",
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: !restricted,
+      askUserAvailable: available,
+      config,
+    },
+  );
+  expect(thread.config["tools.experimental_request_user_input.enabled"]).toBe(expected);
+  if (config && !restricted) {
+    expect(thread.config).toMatchObject(config);
+  }
+});

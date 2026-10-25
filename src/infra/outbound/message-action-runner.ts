@@ -391,6 +391,7 @@ async function handleInternalSourceReplySendAction(
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       mediaAccess,
       workspaceMediaAccess: input.workspaceMediaAccess,
+      htmlPublication: "explicit",
       sandboxRoot: input.sandboxRoot,
       sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     })(sourceReplyPayload);

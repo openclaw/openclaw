@@ -323,6 +323,24 @@ describe("cron view editor", () => {
     expectInvalidField(webhook, "delivery-to", "deliveryTo", "Webhook URL is required.");
   });
 
+  it("announces field validation errors as alerts", () => {
+    const container = renderEditor(
+      { name: "", everyAmount: "0" },
+      {
+        fieldErrors: {
+          name: "cron.errors.nameRequired",
+          everyAmount: "cron.errors.everyAmountInvalid",
+        },
+        canSubmit: false,
+      },
+    );
+    const alerts = Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
+      alert.textContent?.trim(),
+    );
+    expect(alerts).toEqual(["Name is required.", "Interval must be greater than 0."]);
+    expectInvalidField(container, "name", "name", "Name is required.");
+  });
+
   it("waits for scheduler status before presenting trigger capability", () => {
     const pending = renderEditor({}, { status: null });
     expect(findToggleByLabel(pending, "Condition trigger")).toBeNull();
@@ -400,10 +418,9 @@ describe("cron view editor", () => {
     );
   });
 
-  it("renders system-owned jobs as view-and-run only", async () => {
-    const job = createJob("system-heartbeat", {
-      declarationKey: "heartbeat:test",
-      payload: { kind: "heartbeat" },
+  it("allows ordinary migrated jobs to be edited, paused, cloned, and removed", async () => {
+    const job = createJob("migrated-checklist", {
+      payload: { kind: "agentTurn", message: "Review the checklist" },
     });
     const onRun = vi.fn();
     const onToggle = vi.fn();
@@ -413,26 +430,31 @@ describe("cron view editor", () => {
     const list = renderView({ jobs: [job], ...actions });
     getElement(list, `[data-test-id="cron-row-run-${job.id}"]`, HTMLButtonElement).click();
     expect(onRun).toHaveBeenCalledWith(job, "force");
-    expect(list.querySelector(`[data-test-id="cron-row-toggle-${job.id}"]`)).toBeNull();
-    const listMenu = getElement(list, ".cron-job-menu", HTMLElement);
-    expect(listMenu.querySelector('[data-value="run-if-due"]')).not.toBeNull();
-    expectAbsent(listMenu, '[data-value="clone"]', '[data-value="remove"]');
+    const toggle = getElement(
+      list,
+      `[data-test-id="cron-row-toggle-${job.id}"] input`,
+      HTMLInputElement,
+    );
+    toggle.click();
+    expect(onToggle).toHaveBeenCalledWith(job, false);
+    await openCronMenu(list, ".cron-job-menu");
+    getElement(list, '[data-value="clone"]', HTMLButtonElement).click();
+    await waitForSolid(() => expect(onClone).toHaveBeenCalledWith(job));
     const detail = renderView({
       editingJob: job,
-      form: { ...DEFAULT_CRON_FORM, payloadKind: "heartbeat", payloadLocked: true },
+      form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText: "Review the checklist" },
       ...actions,
     });
-    expect(getElement(detail, ".cron-editor", HTMLFieldSetElement).disabled).toBe(true);
-    expectAbsent(detail, testId("cron-submit"), testId("cron-toggle-enabled"));
+    expect(getElement(detail, ".cron-editor", HTMLFieldSetElement).disabled).toBe(false);
+    expect(getElement(detail, testId("cron-submit"), HTMLButtonElement).disabled).toBe(false);
+    expect(detail.querySelector(testId("cron-toggle-enabled"))).not.toBeNull();
     getElement(detail, testId("cron-run-now"), HTMLButtonElement).click();
     expect(onRun).toHaveBeenLastCalledWith(job, "force");
-    const detailMenu = getElement(detail, ".cron-job-menu", HTMLElement);
     await openCronMenu(detail, ".cron-job-menu");
-    getElement(detailMenu, '[data-value="run-if-due"]', HTMLButtonElement).click();
+    getElement(detail, '[data-value="run-if-due"]', HTMLButtonElement).click();
     await waitForSolid(() => expect(onRun).toHaveBeenLastCalledWith(job, "due"));
-    expectAbsent(detailMenu, '[data-value="clone"]', '[data-value="remove"]');
-    for (const mutation of [onToggle, onClone, onRemove]) {
-      expect(mutation).not.toHaveBeenCalled();
-    }
+    await openCronMenu(detail, ".cron-job-menu");
+    getElement(detail, '[data-value="remove"]', HTMLButtonElement).click();
+    await waitForSolid(() => expect(onRemove).toHaveBeenCalledWith(job));
   });
 });

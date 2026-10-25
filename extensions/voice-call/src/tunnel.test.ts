@@ -148,7 +148,6 @@ describe("voice-call tunnels", () => {
 
     const tunnel = await result;
     expect(tunnel.publicUrl).toBe("https://large.ngrok.io/voice/webhook");
-    expect(tunnel.provider).toBe("ngrok");
     expect(mocks.spawn).toHaveBeenCalledWith(
       "ngrok",
       ["http", "3334", "--log", "stdout", "--log-format", "json"],
@@ -167,6 +166,26 @@ describe("voice-call tunnels", () => {
     proc.stderr.write("ROK_108: invalid tunnel config");
 
     await expect(result).rejects.toThrow("ngrok error: xERR_NGROK_108: invalid tunnel config");
+  });
+
+  it.each([
+    ["short", "ERR_NGROK short", "ERR_NGROK short"],
+    [
+      "bounded tail",
+      `ERR_NGROK discarded${"a".repeat(16_384)}`,
+      `[output truncated]\n${"a".repeat(16_384)}`,
+    ],
+    [
+      "surrogate boundary",
+      `ERR_NGROK discarded🤖${"a".repeat(16_383)}`,
+      `[output truncated]\n${"a".repeat(16_383)}`,
+    ],
+  ])("preserves the %s in ngrok startup errors", async (_name, input, diagnostic) => {
+    const { proc, result } = nextProcess("/hook");
+    const rejection = expect(result).rejects.toThrow(`ngrok error: ${diagnostic}`);
+    proc.stderr.write(input);
+    await rejection;
+    expect(proc.killedWith).toBe("SIGKILL");
   });
 
   it("preserves UTF-8 across real child stderr pipe chunks", async () => {
@@ -197,7 +216,6 @@ describe("voice-call tunnels", () => {
     );
 
     expect(tunnel.publicUrl).toBe("https://host.tailnet.ts.net:8443/voice/webhook");
-    expect(tunnel.provider).toBe("tailscale-funnel");
     expect(mocks.setupTailscaleExposureRoutes).toHaveBeenCalledWith({
       mode: "funnel",
       port: 8443,

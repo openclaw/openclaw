@@ -93,6 +93,15 @@ it("repairs credential fields while deferring an occupied JSON alias destination
         },
       });
       expect(repaired.warnings.join("\n")).toContain("Deferred stale auth profile alias");
+      expect(repaired).toMatchObject({
+        findings: expect.arrayContaining([
+          expect.objectContaining({
+            category: "fix-now",
+            fixHint: expect.stringContaining("preserve both"),
+            docsUrl: "https://docs.openclaw.ai/cli/doctor/running#auth-migration-recovery",
+          }),
+        ]),
+      });
     },
   );
 });
@@ -151,6 +160,15 @@ it("keeps an old selection unresolved when its source ID is recreated", async ()
     expect(result.state.candidate.auth).toEqual(cfg.auth);
     expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(replaced);
     expect(result.warningNotes.join("\n")).toContain("identity is unresolved");
+    expect(result.displayWarningNotes.join("\n")).not.toContain("identity is unresolved");
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "fix-now",
+          fixHint: expect.stringContaining("models status"),
+        }),
+      ]),
+    );
   });
 });
 
@@ -368,6 +386,7 @@ it("recovers independently verified imports of the same alias across two stores"
         env: fixture.env,
       });
     const first = await run();
+    expect(first.findings).toEqual([]);
     expect(first.state.candidate.auth).toEqual({
       profiles: { "anthropic:work": { provider: "anthropic", mode: "api_key" } },
       order: { anthropic: ["anthropic:work"] },
@@ -378,6 +397,7 @@ it("recovers independently verified imports of the same alias across two stores"
     });
     await migrateSharedAuthStore({ detected, stateDir: fixture.stateDir, env: fixture.env });
     const retry = await run();
+    expect(retry.findings).toEqual([]);
     expect(retry.state.candidate.auth).toEqual(first.state.candidate.auth);
     expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles["anthropic:work"]).toEqual({
       type: "api_key",

@@ -1,3 +1,5 @@
+@import "./composer-context-strip.css";
+
 .session-progress-card--composer,
 .session-progress-card__summary {
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
@@ -14,7 +16,6 @@
   box-sizing: border-box;
   width: 100%;
   max-width: none;
-  overflow: hidden;
   border: 1px solid var(--chat-composer-hairline);
   background: var(--composer-attached-surface, var(--chat-composer-surface));
   backdrop-filter: blur(8px);
@@ -79,15 +80,6 @@
   stroke-linejoin: round;
 }
 
-.agent-chat__goal-copy,
-.agent-chat__goal-label,
-.agent-chat__goal-objective {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .agent-chat__goal-copy {
   display: flex;
   align-items: baseline;
@@ -139,31 +131,8 @@
 }
 
 .agent-chat__goal-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: var(--chat-stack-trailing-control-size);
   height: var(--chat-stack-trailing-control-size);
-  padding: 0;
-  color: var(--muted);
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-}
-
-.agent-chat__goal-action:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.agent-chat__goal-action svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .agent-chat__goal-action-label {
@@ -484,18 +453,11 @@
 
 .session-progress-card__summary {
   position: relative;
-  display: grid;
   grid-template-columns: var(--session-progress-marker-size) minmax(0, 1fr) auto auto;
-  align-items: center;
   gap: 12px;
   width: 100%;
-  min-width: 0;
   border: 0;
   background: transparent;
-  color: var(--text);
-  cursor: var(--cursor-action);
-  list-style: none;
-  user-select: none;
   touch-action: pan-x pinch-zoom;
   font-variant-numeric: tabular-nums;
 }
@@ -520,10 +482,6 @@
   .session-progress-card__summary:focus-visible::before {
     opacity: 1;
   }
-}
-
-.session-progress-card__summary::-webkit-details-marker {
-  display: none;
 }
 
 .session-progress-card__summary:focus-visible {
@@ -622,10 +580,6 @@
   border-color: color-mix(in srgb, var(--muted) 24%, transparent);
   border-top-color: var(--muted);
   animation-duration: 1.8s;
-}
-
-.session-progress-card__current {
-  font-weight: 500;
 }
 
 .session-progress-card__summary-count {

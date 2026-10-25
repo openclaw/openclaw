@@ -1,6 +1,7 @@
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import type { IconName } from "../../components/solid/icon.tsx";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
@@ -9,7 +10,10 @@ import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { getSessionWorkspace } from "./components/chat-session-workspace-state.ts";
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
+import { sidebarMainPanel } from "./sidebar-layout-geometry.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
+
+registerChatSessionEnglish();
 
 registerFilePreviewEnglish();
 
@@ -62,7 +66,7 @@ export function sidebarPanelDefinitions(
         variant:
           textKey === "conversation" || textKey === "companion"
             ? "chat"
-            : textKey === "subagents" || textKey === "processes"
+            : textKey === "subagents" || textKey === "processes" || textKey === "context"
               ? "file-list"
               : textKey === "portal"
                 ? "browser"
@@ -95,9 +99,15 @@ export function sidebarPanelDefinitions(
     definePanel("conversation", "messageSquare", false),
     definePanel("subagents", "bot"),
     definePanel("processes", "terminal"),
+    definePanel("context", "layers"),
     definePanel("detail", "diff", Boolean(data?.detailContent)),
     definePanel("terminal", "terminal", Boolean(state?.terminalAvailable)),
-    definePanel("browser", "globe", Boolean(state?.browserPanelAvailable)),
+    {
+      ...definePanel("browser", "globe", Boolean(state?.browserPanelAvailable)),
+      unavailableReason: state?.browserPanelUnavailableReason
+        ? t(`chat.sidePanel.browserUnavailableReason.${state.browserPanelUnavailableReason}`)
+        : undefined,
+    },
     {
       slot: "link-reader",
       label: t("linkReader.title"),
@@ -110,9 +120,19 @@ export function sidebarPanelDefinitions(
     },
     definePanel("portal", "globe"),
     definePanel("workspace", "fileText"),
-    definePanel("companion", "messageSquarePlus", true, { headerActionView: params }),
+    definePanel("companion", "messageSquarePlus", true, {
+      // The main pane has no closable tab, so it keeps its native reset action.
+      headerActionView:
+        params?.presentation === "desktop" &&
+        state &&
+        sidebarMainPanel(state.sidebarLayout)?.slot !== "companion"
+          ? undefined
+          : params,
+    }),
     definePanel("desktop", "monitor", Boolean(params?.desktopAvailable), {
-      headerLink: panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
+      headerLink: params?.presentation
+        ? undefined
+        : panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
     }),
     definePanel("discussion", "messageSquare", Boolean(params?.discussion), {
       headerLink: panelExternalLink(

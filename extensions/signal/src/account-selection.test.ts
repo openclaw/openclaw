@@ -29,24 +29,22 @@ const external = (signalNumber: string, httpUrl: string) => ({
   httpUrl,
   signalTransport: "external-native" as const,
 });
+const openPolicy = { dmPolicy: "open", allowFrom: ["*"], replyToMode: "all" } satisfies Signal;
+const restrictedPolicy = {
+  enabled: false,
+  dmPolicy: "allowlist",
+  allowFrom: ["+12025550126"],
+  replyToMode: "off",
+} satisfies Signal;
 
 it.each([true, false])("Signal setup preserves default winner (restricted=%s)", (restricted) => {
   const cfg = signalConfig({
-    replyToMode: "all",
-    dmPolicy: "open",
-    allowFrom: ["*"],
+    ...openPolicy,
     transport: { kind: "external-native", url: "http://127.0.0.1:19961" },
     accounts: {
       "Default.": {
         account: "+12025550123",
-        ...(restricted
-          ? {
-              enabled: false,
-              dmPolicy: "allowlist" as const,
-              allowFrom: ["+12025550126"],
-              replyToMode: "off" as const,
-            }
-          : {}),
+        ...(restricted ? restrictedPolicy : {}),
       },
       "DEFAULT!": { account: "+12025550125", dmPolicy: "disabled" },
     },
@@ -66,6 +64,8 @@ it.each([true, false])("Signal setup preserves default winner (restricted=%s)", 
     },
   });
   expect(stored(next)["DEFAULT!"]).toEqual(stored(cfg)["DEFAULT!"]);
+  expect(next.channels?.signal).toMatchObject(openPolicy);
+  expect(stored(next).default).not.toHaveProperty("account");
   expect(resolve(next, "work").config).toMatchObject({ dmPolicy: "open", allowFrom: ["*"] });
 });
 

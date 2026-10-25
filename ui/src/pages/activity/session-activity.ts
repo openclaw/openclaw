@@ -188,7 +188,7 @@ export function sessionActivityOwner(
   const agentId = normalizeOptionalString(row.agentId);
   return {
     id: normalizeOptionalString(actor?.id) ?? agentId ?? "system",
-    name: normalizeOptionalString(actor?.label) ?? agentId,
+    name: actor ? normalizeOptionalString(actor.label) : agentId,
     avatarUrl: actor
       ? normalizeOptionalString(actor.avatarUrl)
       : (resolveAgentAvatarUrl(

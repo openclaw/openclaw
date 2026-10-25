@@ -6,7 +6,11 @@ import {
 } from "../../infra/sqlite-lifecycle-errors.js";
 import { retainSqliteWorkerErrorCode } from "../../infra/sqlite-worker-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { getCliHistoryWriter } from "./cli-history-boundary.js";
+import {
+  answerCliHistoryOwnerProbe,
+  cliHistoryWriterFacts,
+  getCliHistoryWriter,
+} from "./cli-history-boundary.js";
 import {
   assertSessionGoalOperationTime,
   prepareSessionTurnGoalMessage,
@@ -125,13 +129,8 @@ export async function appendSessionTurnInWorker(
           }
         : undefined,
     },
-    cliWriter: cliWriter
-      ? {
-          runId: cliWriter.runId,
-          authFingerprint: cliWriter.authFingerprint,
-          lifecycleRevision: cliWriter.lifecycleRevision,
-        }
-      : undefined,
+    // The worker asks the host to confirm the owner inside its commit transaction.
+    cliWriter: cliWriter && cliHistoryWriterFacts(cliWriter),
     ownerSources: ownerSource?.checks.map(({ predicate }) => predicate),
     custody: custody?.facts,
     relocation: custody?.relocation,
@@ -139,10 +138,9 @@ export async function appendSessionTurnInWorker(
   const actor = inputActor?.actor;
   let runtimeTarget: SqliteExpectedSessionTranscriptTurnResult["runtimeTarget"];
   let inputExpectedState = options.expectedSessionState;
-  const fixedVoiceTranscript =
+  const fixedMessages =
     !actor &&
     !memory &&
-    Boolean(options.voiceTranscript) &&
     !custody &&
     !cliWriter &&
     !options.sessionTurnMutation &&
@@ -158,6 +156,7 @@ export async function appendSessionTurnInWorker(
         !message.shouldAppendInTransaction &&
         !message.predicate,
     );
+  const fixedVoiceTranscript = fixedMessages && Boolean(options.voiceTranscript);
   // Observable append predicates and fixed voice commits retain eager restoration.
   const prepareColdTranscript =
     !memory &&
@@ -175,6 +174,10 @@ export async function appendSessionTurnInWorker(
   if (prepareColdTranscript) {
     plan.prepareColdTranscript = true;
   }
+  // Ordinary messages have no observable preparation. Let the locked append reject
+  // a cold transcript, then restore it through the existing owner and retry.
+  const restoreOnCold =
+    fixedMessages && !options.voiceTranscript && !prepareColdTranscript && messages.length > 0;
   let outcome = await (async () => {
     const restore = async () => {
       if (memory) {
@@ -190,7 +193,7 @@ export async function appendSessionTurnInWorker(
         plan.options.initialSessionEntry,
       );
     };
-    if (!prepareColdTranscript) {
+    if (!prepareColdTranscript && !restoreOnCold) {
       const rebound = await restore();
       if (rebound) {
         return rebound;
@@ -203,6 +206,9 @@ export async function appendSessionTurnInWorker(
       assertCurrent,
       candidateKind: "session-turn",
       onTransactionFacts(facts) {
+        if (answerCliHistoryOwnerProbe(facts, cliWriter)) {
+          return true;
+        }
         if (isRecord(facts) && facts.kind === "session-turn-owner") {
           if (!ownerSource) {
             throw new Error("Session turn omitted its owner source authority");
@@ -580,14 +586,27 @@ export async function appendSessionTurnInWorker(
       });
     };
     for (let restorations = 0; ; restorations++) {
-      const result = await run();
+      let result: TurnResult;
+      try {
+        result = await run();
+      } catch (error) {
+        if (
+          !restoreOnCold ||
+          !isRecord(error) ||
+          error.name !== "SessionTranscriptColdError" ||
+          error.code !== "TRANSCRIPT_COLD"
+        ) {
+          throw error;
+        }
+        result = { kind: "restore-cold-transcript" };
+      }
       if (!("kind" in result)) {
         return result;
       }
       if (restorations === 2) {
         throw new SessionTranscriptColdError(scope.sessionId);
       }
-      // The read-only refusal released FIFO; restoration uses its existing guarded writer.
+      // The refusal released FIFO; restoration uses its existing guarded writer.
       const rebound = await restore();
       if (rebound) {
         return rebound;

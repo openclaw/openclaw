@@ -24,7 +24,7 @@ import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "./node-registry-private.js";
 import { NodeRegistry } from "./node-registry.js";
 import { QuestionManager } from "./question-manager.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import { dispatchAuthorizationRequest } from "./server-methods.authorization.test-support.js";
 import { expectRejected } from "./server-methods.request-gate.test-support.js";
 import { handleNodeInvokeProgress } from "./server-methods/nodes.handlers.invoke-progress.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
@@ -98,30 +98,25 @@ function bindDispatch(
   client: GatewayWsClient,
   admission?: "continuation",
 ) {
-  return async (
-    method: string,
-    requestParams: Record<string, unknown>,
-    handler: GatewayRequestHandler,
-  ) => {
-    const respond = vi.fn();
-    await handleGatewayRequest({
-      req: { type: "req", id: `request-${method}`, method, params: requestParams },
-      respond,
-      client,
-      context,
-      admission,
-      isWebchatConnect: () => false,
-      methodRegistry: createGatewayMethodRegistry([
-        createPluginGatewayMethodDescriptor({
-          pluginId: "suspension-continuation-proof",
-          name: method,
-          handler,
-          scope: "operator.admin",
-        }),
-      ]),
-    });
-    return respond;
-  };
+  return (method: string, requestParams: Record<string, unknown>, handler: GatewayRequestHandler) =>
+    dispatchAuthorizationRequest(
+      method,
+      requestParams,
+      {
+        client,
+        context,
+        admission,
+        methodRegistry: createGatewayMethodRegistry([
+          createPluginGatewayMethodDescriptor({
+            pluginId: "suspension-continuation-proof",
+            name: method,
+            handler,
+            scope: "operator.admin",
+          }),
+        ]),
+      },
+      `request-${method}`,
+    );
 }
 
 async function createLifecycleInvoke() {

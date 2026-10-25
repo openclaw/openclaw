@@ -1,7 +1,9 @@
 import { createServer } from "node:http";
+import { buffer } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { injectQaBusInboundMessage, type QaBusOutboundMessageInput } from "../../qa-channel/api.js";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { closeQaHttpServer, dispatchQaHttpRequest, startQaBusServer } from "./bus-server.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { createScenarioChannel, dispatchScenarioFinal } from "./scenario-channel.test-support.js";
@@ -41,7 +43,7 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
   // Hold the real bus deletion/response gap independently from the final send.
   const proxy = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
-      let body = Buffer.concat(await Array.fromAsync(req)).toString();
+      let body = (await buffer(req)).toString();
       const finalSend = req.url === "/v1/outbound/message" && ++outboundRequests > 1;
       if (finalSend) {
         finalStarted.resolve();
@@ -72,14 +74,7 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
       res.end(text);
     });
   });
-  await new Promise<void>((resolve) => {
-    proxy.listen(0, "127.0.0.1", resolve);
-  });
-  const address = proxy.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback proxy address");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const baseUrl = `http://127.0.0.1:${await listenOnLoopback(proxy)}`;
   vi.mocked(runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).mockImplementation(
     async ({ ctx, dispatcherOptions, replyOptions }) => {
       if (ctx.CommandTurn?.kind === "native") {

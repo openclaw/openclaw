@@ -10,7 +10,7 @@ import {
 import { assertSessionStoreMigrationComplete as assertMigrated } from "../config/sessions/startup-migration.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { runSessionSnapshotsHealth } from "../flows/doctor-health-contribution-runners.state.js";
+import { initialDoctorHealthContribution } from "../flows/doctor-health-contributions-selection.test-support.js";
 import * as packageRoots from "../infra/openclaw-root.js";
 import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import * as bundledSkills from "../skills/loading/bundled-dir.js";
@@ -110,8 +110,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
 
   async function scanStore(store: Record<string, SessionEntry>) {
     await writeSessionStore(storePath, store);
-    const findings = await detectIssues({ cfg: { session: { store: storePath } } });
-    return findings.map(({ storePath: _storePath, ...finding }) => finding);
+    return detectIssues({ cfg: { session: { store: storePath } } });
   }
 
   it("flags cached bundled skill locations from inactive and temp-backed runtime roots", async () => {
@@ -122,27 +121,10 @@ describe("doctor session snapshot stale runtime metadata", () => {
     });
 
     expect(findings).toEqual([
-      expectedIssue("agent:main", stalePath, currentSkillPath),
-      expectedIssue("agent:temp", tempBackedPath, currentSkillPath),
+      { storePath, ...expectedIssue("agent:main", stalePath, currentSkillPath) },
+      { storePath, ...expectedIssue("agent:temp", tempBackedPath, currentSkillPath) },
     ]);
-  });
-
-  it("maps stale snapshot paths to advisory findings without repair guidance", async () => {
-    await writeSessionStore(storePath, { "agent:main": skillSession(stalePath) });
-
-    const [issue] = await detectIssues({ cfg: { session: { store: storePath } } });
-
-    if (!issue) {
-      throw new Error("expected session snapshot health issue");
-    }
-    expect(issue).toMatchObject({
-      storePath,
-      sessionKey: "agent:main",
-      field: "skillsSnapshot.prompt",
-      cachedPath: stalePath,
-      expectedPath: currentSkillPath,
-    });
-    expect(toHealthFinding(issue)).toMatchObject({
+    expect(toHealthFinding(findings[0]!)).toMatchObject({
       checkId: "core/doctor/session-snapshots",
       severity: "info",
       path: storePath,
@@ -196,7 +178,9 @@ describe("doctor session snapshot stale runtime metadata", () => {
       "agent:stale": skillSession(windowsStalePath),
     });
 
-    expect(findings).toEqual([expectedIssue("agent:stale", windowsStalePath, currentPath)]);
+    expect(findings).toEqual([
+      { storePath, ...expectedIssue("agent:stale", windowsStalePath, currentPath) },
+    ]);
   });
 
   it("scans resolvedSkills sourceInfo before normalization strips it", async () => {
@@ -283,7 +267,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
         const options = { repair: true, nonInteractive: true };
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-        await runSessionSnapshotsHealth({
+        await initialDoctorHealthContribution("doctor:session-snapshots").run({
           cfg,
           cfgForPersistence: cfg,
           configResult: { cfg },

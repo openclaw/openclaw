@@ -3,6 +3,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   isAutomaticMemoryEntryEligible,
   readMemorySearchManagerStatus,
+  resolveMemorySearchStaleness,
   type MemoryProviderStatus,
   type MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
@@ -19,6 +20,40 @@ import type {
 } from "./memory-provider-types.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
+
+function legacyCoverageWarning(status: MemoryProviderStatus): string | undefined {
+  const stale = resolveMemorySearchStaleness(status);
+  if (stale) {
+    return stale.warning;
+  }
+  const providerState = status.custom?.providerState;
+  if (providerState && typeof providerState === "object" && "mode" in providerState) {
+    // A lazy manager with embeddings explicitly disabled has nothing semantic to initialize.
+    if (providerState.mode === "pending" && status.requestedProvider !== "none") {
+      return "Memory embeddings are pending. Search results may be incomplete.";
+    }
+    if (
+      providerState.mode === "degraded" ||
+      (providerState.mode === "fts-only" &&
+        status.requestedProvider !== undefined &&
+        status.requestedProvider !== "none")
+    ) {
+      return "Memory embeddings are unavailable. Keyword search remains available; results may be incomplete.";
+    }
+  }
+  if (status.dirty) {
+    return "Memory indexing is pending. Search results may be incomplete.";
+  }
+  // A deliberately keyword-only provider does not promise semantic coverage.
+  if (
+    status.provider !== "none" &&
+    status.vector?.enabled &&
+    (status.vector.index?.state === "incomplete" || status.vector.index?.state === "unverified")
+  ) {
+    return "Memory vector indexing is incomplete. Search results may be incomplete.";
+  }
+  return undefined;
+}
 
 const refreshHandoffs = new WeakMap<
   MemoryProviderHandle,
@@ -254,6 +289,18 @@ export async function adaptLegacyMemoryProvider(
       },
     };
   };
+  const readCoverage = async (includeCounts?: boolean) => {
+    try {
+      const status = await readMemorySearchManagerStatus(manager, { includeCounts });
+      return { status, warning: legacyCoverageWarning(status) };
+    } catch {
+      assertCurrent();
+      // Diagnostics must not discard an otherwise successful, authorized search.
+      return {
+        warning: "Memory index coverage could not be verified. Search results may be incomplete.",
+      };
+    }
+  };
   // Automatic recall consumers keep their legacy manager paths, so the adapter enumerates no candidates.
   const provider: MemoryProviderHandle = {
     capabilities: {
@@ -276,7 +323,13 @@ export async function adaptLegacyMemoryProvider(
         sessionKey: session?.sessionKey,
         signal: context.signal,
       });
-      return { hits: (await authorize(hits)).map(convert), coverage: "complete" };
+      const authorized = (await authorize(hits)).map(convert);
+      const { warning } = await readCoverage(false);
+      return {
+        hits: authorized,
+        coverage: warning ? "partial" : "complete",
+        ...(warning ? { warning } : {}),
+      };
     },
     async get(request) {
       // readFile is the legacy provider's read authorization boundary, including
@@ -303,11 +356,11 @@ export async function adaptLegacyMemoryProvider(
       };
     },
     async health() {
-      const status = await readMemorySearchManagerStatus(manager);
+      const { status, warning } = await readCoverage();
       return {
-        status: status.lastSyncError ? "degraded" : "ready",
-        message: status.lastSyncError,
-        details: { legacy: redactLegacyHealthDetails(status) },
+        status: warning ? "degraded" : "ready",
+        message: warning,
+        ...(status ? { details: { legacy: redactLegacyHealthDetails(status) } } : {}),
       };
     },
     ...(manager.sync ? { refresh: () => manager.sync!({ reason: "provider-refresh" }) } : {}),

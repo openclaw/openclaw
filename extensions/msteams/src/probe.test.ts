@@ -3,16 +3,9 @@ import type { MSTeamsConfig } from "../runtime-api.js";
 
 const hostMockState = vi.hoisted(() => ({
   tokenError: null as Error | null,
+  token: "token",
   delegatedTokenAccountId: undefined as string | null | undefined,
-  delegatedTokens: undefined as
-    | {
-        accessToken: string;
-        refreshToken: string;
-        expiresAt: number;
-        scopes: string[];
-        userPrincipalName?: string;
-      }
-    | undefined,
+  delegatedTokens: undefined as ReturnType<typeof delegatedTokens> | undefined,
 }));
 
 vi.mock("@microsoft/teams.apps", () => ({
@@ -22,7 +15,7 @@ vi.mock("@microsoft/teams.apps", () => ({
         if (hostMockState.tokenError) {
           throw hostMockState.tokenError;
         }
-        return { toString: () => "token" };
+        return { toString: () => hostMockState.token };
       },
     };
   },
@@ -37,22 +30,35 @@ vi.mock("@microsoft/teams.api", () => ({
   }),
 }));
 
-vi.mock("./delegated-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./delegated-state.js")>();
-  return {
-    ...actual,
-    loadMSTeamsDelegatedTokens: async (accountId?: string | null) => {
-      hostMockState.delegatedTokenAccountId = accountId;
-      return hostMockState.delegatedTokens;
-    },
-  };
-});
+vi.mock("./delegated-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./delegated-state.js")>()),
+  loadMSTeamsDelegatedTokens: async (accountId?: string | null) => {
+    hostMockState.delegatedTokenAccountId = accountId;
+    return hostMockState.delegatedTokens;
+  },
+}));
 
 import { probeMSTeams } from "./probe.js";
+
+const config = (overrides: Partial<MSTeamsConfig> = {}): MSTeamsConfig => ({
+  enabled: true,
+  appId: "app",
+  appPassword: "pw",
+  tenantId: "tenant",
+  ...overrides,
+});
+const delegatedTokens = () => ({
+  accessToken: "delegated-token",
+  refreshToken: "refresh-token",
+  expiresAt: Date.parse("2030-01-01T00:00:00.000Z"),
+  scopes: ["ChatMessage.Send"],
+  userPrincipalName: "user@example.com",
+});
 
 describe("msteams probe", () => {
   beforeEach(() => {
     hostMockState.tokenError = null;
+    hostMockState.token = "token";
     hostMockState.delegatedTokenAccountId = undefined;
     hostMockState.delegatedTokens = undefined;
     vi.stubEnv("MSTEAMS_APP_ID", "");
@@ -65,8 +71,7 @@ describe("msteams probe", () => {
   });
 
   it("returns an error when credentials are missing", async () => {
-    const cfg = { enabled: true } satisfies MSTeamsConfig;
-    await expect(probeMSTeams(cfg)).resolves.toEqual({
+    await expect(probeMSTeams({ enabled: true })).resolves.toEqual({
       ok: false,
       error: "missing credentials (appId, appPassword, tenantId)",
     });
@@ -85,92 +90,56 @@ describe("msteams probe", () => {
   });
 
   it("validates credentials by acquiring a token", async () => {
-    const cfg = {
-      enabled: true,
-      appId: "app",
-      appPassword: "pw",
-      tenantId: "tenant",
-    } satisfies MSTeamsConfig;
-    await expect(probeMSTeams(cfg)).resolves.toEqual({
+    await expect(probeMSTeams(config())).resolves.toEqual({
       ok: true,
       appId: "app",
       graph: { ok: true, roles: undefined, scopes: undefined },
     });
   });
 
+  it("reports Graph permissions from an unpadded base64url token payload", async () => {
+    const payload = Buffer.from(
+      JSON.stringify({ roles: ["Chat.Read.All"], scp: "Chat.Read User.Read", name: "\uffff" }),
+    ).toString("base64url");
+    hostMockState.token = `header.${payload}.signature`;
+
+    await expect(probeMSTeams(config())).resolves.toMatchObject({
+      ok: true,
+      graph: { ok: true, roles: ["Chat.Read.All"], scopes: ["Chat.Read", "User.Read"] },
+    });
+  });
+
   it("returns a helpful error when token acquisition fails", async () => {
     hostMockState.tokenError = new Error("bad creds");
-    const cfg = {
-      enabled: true,
-      appId: "app",
-      appPassword: "pw",
-      tenantId: "tenant",
-    } satisfies MSTeamsConfig;
-    await expect(probeMSTeams(cfg)).resolves.toEqual({
+    await expect(probeMSTeams(config())).resolves.toEqual({
       ok: false,
       appId: "app",
       error: "bad creds",
     });
   });
 
-  it("reports delegated tokens expired when the process clock is invalid", async () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    hostMockState.delegatedTokens = {
-      accessToken: "delegated-token",
-      refreshToken: "refresh-token",
-      expiresAt: Date.parse("2030-01-01T00:00:00.000Z"),
-      scopes: ["ChatMessage.Send"],
-      userPrincipalName: "user@example.com",
-    };
-    const cfg = {
-      enabled: true,
-      appId: "app",
-      appPassword: "pw",
-      tenantId: "tenant",
-      delegatedAuth: { enabled: true },
-    } satisfies MSTeamsConfig;
-
+  it.each([true, false])("delegated tokens: invalidClock=%s", async (invalidClock) => {
+    const nowSpy = invalidClock ? vi.spyOn(Date, "now").mockReturnValue(Number.NaN) : undefined;
+    hostMockState.delegatedTokens = delegatedTokens();
     try {
-      await expect(probeMSTeams(cfg)).resolves.toEqual({
+      await expect(
+        probeMSTeams(config({ delegatedAuth: { enabled: true } }), {
+          accountId: invalidClock ? undefined : "support",
+        }),
+      ).resolves.toEqual({
         ok: true,
         appId: "app",
         graph: { ok: true, roles: undefined, scopes: undefined },
         delegatedAuth: {
-          ok: false,
+          ok: !invalidClock,
           scopes: ["ChatMessage.Send"],
           userPrincipalName: "user@example.com",
-          error: "token expired (will auto-refresh on next use)",
+          ...(invalidClock ? { error: "token expired (will auto-refresh on next use)" } : {}),
         },
       });
+      expect(hostMockState.delegatedTokenAccountId).toBe(invalidClock ? "default" : "support");
     } finally {
-      nowSpy.mockRestore();
+      nowSpy?.mockRestore();
     }
-  });
-
-  it("loads delegated tokens for the selected account", async () => {
-    hostMockState.delegatedTokens = {
-      accessToken: "delegated-token",
-      refreshToken: "refresh-token",
-      expiresAt: Date.parse("2030-01-01T00:00:00.000Z"),
-      scopes: ["ChatMessage.Send"],
-      userPrincipalName: "user@example.com",
-    };
-    const cfg = {
-      enabled: true,
-      appId: "app",
-      appPassword: "pw",
-      tenantId: "tenant",
-      delegatedAuth: { enabled: true },
-    } satisfies MSTeamsConfig;
-
-    await expect(probeMSTeams(cfg, { accountId: "support" })).resolves.toMatchObject({
-      ok: true,
-      delegatedAuth: {
-        ok: true,
-        scopes: ["ChatMessage.Send"],
-        userPrincipalName: "user@example.com",
-      },
-    });
-    expect(hostMockState.delegatedTokenAccountId).toBe("support");
   });
 });

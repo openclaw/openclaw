@@ -341,9 +341,6 @@ function buildFreshestSessionEntryIndex(
     }
   };
   for (const { sessionKey: key, entry } of entries) {
-    if (!entry) {
-      continue;
-    }
     const normalized = normalizeStoreSessionKey(key);
     indexEntry(normalized, entry);
     // Lowercase aliases are only indexed when case folding is not proof-sensitive; Matrix-style
@@ -359,7 +356,7 @@ function buildFreshestSessionEntryIndex(
 
 async function loadDeliverySessionEntry(
   lookup: DeliveryLookup,
-  readStore: (storePath: string, storeIndex: number) => Promise<DeliveryStoreRead>,
+  readStore: (storePath: string) => Promise<DeliveryStoreRead>,
 ) {
   let fallback:
     | {
@@ -367,8 +364,8 @@ async function loadDeliverySessionEntry(
         baseEntry: Awaited<ReturnType<typeof findSessionEntryInStore>>;
       }
     | undefined;
-  for (const [storeIndex, storePath] of lookup.storePaths.entries()) {
-    const store = await readStore(storePath, storeIndex);
+  for (const storePath of lookup.storePaths) {
+    const store = await readStore(storePath);
     const entry = await findSessionEntryInStore(store, lookup.sessionKeys);
     const baseEntry = await findSessionEntryInStore(store, lookup.baseKeys);
     if (!entry && !baseEntry) {

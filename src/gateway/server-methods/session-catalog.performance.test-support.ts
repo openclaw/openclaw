@@ -15,6 +15,7 @@ import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
@@ -204,6 +205,7 @@ export async function createComposedCatalogFixture(
         url: `ws://127.0.0.1:${address.port}`,
       },
       computerUse: { enabled: false },
+      supervision: { enabled: true },
     };
     const config: OpenClawConfig = {
       agents: { entries: { main: { agentDir, workspace: state.workspaceDir } } },
@@ -219,6 +221,7 @@ export async function createComposedCatalogFixture(
       databasePath: resolveOpenClawStateSqlitePath(),
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: state.configPath,
         stateDir: state.stateDir,
@@ -373,7 +376,7 @@ export async function createComposedCatalogFixture(
         // Warm responses can precede refresh publication; count that work in the same sample.
         return await work.runWhenIdle(() => {
           const current = result.catalogs.find((value) => value.id === "codex");
-          return current?.error?.code === "catalog_pending" ? (published ?? current) : current;
+          return current?.pending ? (published ?? current) : current;
         });
       } finally {
         listPublications.delete(progressId);

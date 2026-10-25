@@ -162,10 +162,20 @@ export function rectsOverlap(first: Rect, second: Rect) {
 }
 
 export async function mountMcpAppSurfaceFixture(page: Page, baseUrl: string) {
+  // Keep the server origin for module imports without booting the unrelated app shell.
+  await page.route(
+    baseUrl,
+    (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><html><head></head><body></body></html>",
+      }),
+    { times: 1 },
+  );
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await page.addScriptTag({
     type: "module",
-    url: new URL("src/components/mcp-app-view-registration.ts", baseUrl).href,
+    url: new URL("src/components/mcp-app-view.tsx", baseUrl).href,
   });
   const fixtureUrl = new URL("src/pages/chat/components/chat-sidebar.test-support.ts", baseUrl)
     .href;

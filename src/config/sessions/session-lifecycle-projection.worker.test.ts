@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -10,6 +11,7 @@ import {
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { SessionEntryLifecycleUpsert } from "./session-accessor.lifecycle-types.js";
@@ -17,6 +19,7 @@ import {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
 } from "./session-accessor.reset.js";
+import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
@@ -116,6 +119,53 @@ function fixture() {
     read: (sessionKey = scope.sessionKey) => readExactSessionEntryRow(database, sessionKey)?.entry,
   };
 }
+
+it("preserves snapshot authority during lifecycle metadata publication and revokes changed snapshots", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const identity = readOpenClawAgentDatabaseIdentity(
+      openOpenClawAgentDatabase({ agentId: "main", path: f.scope.storePath }),
+    ).identity;
+    const predicate = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${identity}`,
+      sessionKey: f.scope.sessionKey,
+      entry: f.read(),
+      projection: ["skillsSnapshot"],
+      matches: (before, after) => isDeepStrictEqual(before?.skillsSnapshot, after?.skillsSnapshot),
+    });
+    const pending: boolean[] = [];
+    delivery.afterCommit = (type) => {
+      if (type === "session.lifecycle.project") {
+        pending.push(predicate.isCurrent());
+      }
+    };
+    try {
+      await applySessionEntryLifecycleMutation({
+        ...f.scope,
+        upserts: [
+          { sessionKey: f.scope.sessionKey, entry: { ...f.read()!, displayName: "Renamed" } },
+        ],
+        skipMaintenance: true,
+      });
+      expect(pending).toEqual([true]);
+      expect(predicate.isCurrent()).toBe(true);
+      expect(predicate.readRetainedEntry()?.skillsSnapshot).toEqual(f.initial.skillsSnapshot);
+
+      await applySessionEntryLifecycleMutation({
+        ...f.scope,
+        upserts: [
+          { sessionKey: f.scope.sessionKey, entry: { ...f.read()!, skillsSnapshot: undefined } },
+        ],
+        skipMaintenance: true,
+      });
+      expect(pending).toEqual([true, false]);
+      expect(predicate.isCurrent()).toBe(false);
+      expect(predicate.canRefresh()).toBe(false);
+    } finally {
+      predicate.release();
+    }
+  });
+});
 
 function maintenanceFixture() {
   const f = fixture();

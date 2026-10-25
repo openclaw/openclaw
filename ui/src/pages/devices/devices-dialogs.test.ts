@@ -1,34 +1,57 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { showInputDialog } from "../../components/input-dialog.ts";
+import { showInputDialog } from "../../components/input-dialog.tsx";
 import { t } from "../../i18n/index.ts";
 import { createInitialDevicesState } from "../../lib/nodes/page-operations.ts";
 import { createDevicesDialogs, type DevicesDialogHost } from "./devices-dialogs.ts";
 
-vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));
+vi.mock("../../components/input-dialog.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/input-dialog.tsx")>()),
+  showInputDialog: vi.fn(),
+}));
 
-type InputDialogOptions = Parameters<typeof showInputDialog>[0];
-
-function createHost(overrides: Partial<DevicesDialogHost> = {}): DevicesDialogHost {
+function createHost(request = vi.fn(), canManagePairing = () => true): DevicesDialogHost {
   const state = createInitialDevicesState({
-    client: {} as GatewayBrowserClient,
+    client: { request } as unknown as GatewayBrowserClient,
     connected: true,
   });
   return {
-    canManagePairing: () => true,
+    canManagePairing,
     gatewayConnected: () => true,
     gatewayClient: () => null,
     gatewayUrl: () => "http://gateway.test",
     runPageTask: async (task) => task(state),
+    runInventoryTask: async (task) => {
+      await task(state);
+    },
+    rotateDevice: vi.fn(),
     setDevicesError: vi.fn(),
-    ...overrides,
   };
 }
 
+async function openAlias(
+  host = createHost(),
+  device: Parameters<ReturnType<typeof createDevicesDialogs>["editAlias"]>[0] = {
+    id: "device-1",
+    name: "Browser",
+  },
+) {
+  const controller = createDevicesDialogs(host);
+  const pending = controller.editAlias(device);
+  await vi.waitFor(() => expect(showInputDialog).toHaveBeenCalledOnce());
+  const call = vi.mocked(showInputDialog).mock.calls[0];
+  assert(call, "Expected alias dialog");
+  const [options] = call;
+  if (!options.submit) {
+    throw new Error("Expected alias dialog submit");
+  }
+  return { controller, pending, options, submit: options.submit };
+}
+
 beforeEach(() => {
-  vi.mocked(showInputDialog).mockReset();
+  vi.mocked(showInputDialog).mockReset().mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -44,40 +67,19 @@ describe("Devices dialogs editAlias", () => {
       }
       return { paired: [], pending: [] };
     });
-    const state = createInitialDevicesState({
-      client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-    });
-    let captured: InputDialogOptions | undefined;
-    vi.mocked(showInputDialog).mockImplementation(async (options) => {
-      captured = options;
-      return null;
-    });
-
-    const controller = createDevicesDialogs(
-      createHost({
-        runPageTask: async (task) => task(state),
-      }),
-    );
-    const pending = controller.editAlias({
+    const { pending, options, submit } = await openAlias(createHost(request), {
       id: "device-1",
       name: "Office node",
       operatorLabel: "Old alias",
     });
-    await vi.waitFor(() => expect(captured).toBeDefined());
-
-    expect(captured?.title).toBe(t("devices.inventory.renameTitle", { name: "Office node" }));
-    expect(captured?.label).toBe(t("devices.inventory.renamePrompt"));
-    expect(captured?.defaultValue).toBe("Old alias");
-    expect(captured?.requireValue).toBe(true);
-    expect(captured?.requireChange).toBe(true);
-
-    const submit = captured?.submit;
-    if (!submit) {
-      throw new Error("Expected alias dialog submit");
-    }
-    const outcome = await submit("New alias");
-    expect(outcome).toBeNull();
+    expect(options).toMatchObject({
+      title: t("devices.inventory.renameTitle", { name: "Office node" }),
+      label: t("devices.inventory.renamePrompt"),
+      defaultValue: "Old alias",
+      requireValue: true,
+      requireChange: true,
+    });
+    expect(await submit("New alias")).toBeNull();
     expect(request).toHaveBeenCalledWith("device.pair.rename", {
       deviceId: "device-1",
       label: "New alias",
@@ -87,56 +89,26 @@ describe("Devices dialogs editAlias", () => {
   });
 
   it("aborts an open alias dialog when its slot is cancelled", async () => {
-    let captured: InputDialogOptions | undefined;
     vi.mocked(showInputDialog).mockImplementation(async (options) => {
-      captured = options;
-      // Sit open the way a dialog waiting on the operator does.
       await new Promise<void>((resolve) => {
         options.signal?.addEventListener("abort", () => resolve(), { once: true });
       });
       return null;
     });
 
-    const controller = createDevicesDialogs(createHost());
-    const pending = controller.editAlias({ id: "device-1", name: "Browser" });
-    await vi.waitFor(() => expect(captured).toBeDefined());
-
+    const { controller, pending, options } = await openAlias();
     controller.cancel();
     await pending;
 
-    expect(captured?.signal?.aborted).toBe(true);
+    expect(options.signal?.aborted).toBe(true);
   });
 
   it("refuses a rename submitted after pairing access was lost", async () => {
     const request = vi.fn().mockResolvedValue({});
-    const state = createInitialDevicesState({
-      client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-    });
     let canManagePairing = true;
-    let captured: InputDialogOptions | undefined;
-    vi.mocked(showInputDialog).mockImplementation(async (options) => {
-      captured = options;
-      return null;
-    });
-
-    const controller = createDevicesDialogs(
-      createHost({
-        canManagePairing: () => canManagePairing,
-        runPageTask: async (task) => task(state),
-      }),
-    );
-    const pending = controller.editAlias({ id: "device-1", name: "Browser" });
-    await vi.waitFor(() => expect(captured).toBeDefined());
-
+    const { pending, submit } = await openAlias(createHost(request, () => canManagePairing));
     canManagePairing = false;
-
-    const submit = captured?.submit;
-    if (!submit) {
-      throw new Error("Expected alias dialog submit");
-    }
-    const outcome = await submit("New name");
-    expect(outcome).toContain("operator.pairing");
+    expect(await submit("New name")).toContain("operator.pairing");
     expect(request).not.toHaveBeenCalled();
     await pending;
   });

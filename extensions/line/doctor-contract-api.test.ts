@@ -1,4 +1,3 @@
-// Line tests cover the doctor state migration for pre-drain webhook spool rows.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,17 +13,13 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 
 const migration = stateMigrations[0]!;
+let stateDir: string;
 
-/** `mutable: false` stands in for the detection phase, which the host runs before it
- *  owns exclusive state: the access entry carries no mutable lane at all. */
-function contextFor(
-  stateDir: string,
-  options?: { mutable?: boolean },
-): PluginDoctorStateMigrationContext {
+function contextFor(): PluginDoctorStateMigrationContext {
   const open = <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(openOptions?: {
     accountId?: string;
   }) =>
@@ -35,13 +30,11 @@ function contextFor(
     });
   const access: PluginDoctorChannelIngressQueueAccess = {
     channelId: "line",
-    openChannelIngressQueueForInspection: (openOptions) => open(openOptions),
+    openChannelIngressQueueForInspection: open,
+    openChannelIngressQueue: open,
     listChannelIngressQueueAccountIds: async () =>
       listChannelIngressQueueAccountIdsForTests({ channelId: "line", stateDir }),
   };
-  if (options?.mutable !== false) {
-    access.openChannelIngressQueue = (openOptions) => open(openOptions);
-  }
   return {
     openPluginStateKeyedStore: () => {
       throw new Error("the LINE spool migration does not use plugin keyed state");
@@ -50,8 +43,8 @@ function contextFor(
   };
 }
 
-function legacyEvent(webhookEventId: string): webhook.Event {
-  const event: webhook.MessageEvent = {
+function legacyEvent(webhookEventId: string): webhook.MessageEvent {
+  return {
     type: "message",
     message: {
       id: `message-${webhookEventId}`,
@@ -66,32 +59,19 @@ function legacyEvent(webhookEventId: string): webhook.Event {
     webhookEventId,
     deliveryContext: { isRedelivery: false },
   };
-  return event;
 }
 
-async function withStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
-  const createdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-line-doctor-"));
-  const stateDir = await fs.realpath(createdDir);
-  try {
-    return await fn(stateDir);
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
-}
-
-function migrationParams(stateDir: string, config: OpenClawConfig) {
+function migrationParams(config: OpenClawConfig = {}) {
   return {
     config,
     env: process.env,
     stateDir,
     oauthDir: path.join(stateDir, "oauth"),
-    context: contextFor(stateDir),
+    context: contextFor(),
   };
 }
 
-async function seedLegacyRow(stateDir: string, accountId: string, webhookEventId: string) {
+async function seedLegacyRow(accountId: string, webhookEventId: string) {
   const legacySeed = createChannelIngressQueue<{
     version: number;
     destination: string;
@@ -104,95 +84,65 @@ async function seedLegacyRow(stateDir: string, accountId: string, webhookEventId
   );
 }
 
+async function expectMigration(config: OpenClawConfig, rows: Record<string, string>, note = "") {
+  const accounts = Object.keys(rows);
+  const params = migrationParams(config);
+  expect(await migration.detectLegacyState(params)).toEqual({
+    preview: accounts.map(
+      (id) => `- LINE pre-drain spool rows (account "${id}"): 1 row(s) -> current ingress format`,
+    ),
+  });
+  expect(await migration.migrateLegacyState(params)).toEqual({
+    changes: accounts.map(
+      (id) =>
+        `Migrated LINE pre-drain spool rows (account "${id}"): 1 queued under the current format, 0 dead-lettered at the identity fence${note}`,
+    ),
+    warnings: [],
+  });
+  for (const [accountId, eventId] of Object.entries(rows)) {
+    const queue = createChannelIngressQueue({ channelId: "line", accountId, stateDir });
+    expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
+      `message:message-${eventId}`,
+    ]);
+  }
+  expect(await migration.detectLegacyState(params)).toBeNull();
+}
+
 describe("LINE doctor state migration", () => {
-  afterEach(() => {
+  beforeEach(async () => {
+    stateDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-line-doctor-")));
+  });
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("detects nothing on a store without pre-drain rows", async () => {
-    await withStateDir(async (stateDir) => {
-      expect(await migration.detectLegacyState(migrationParams(stateDir, {}))).toBeNull();
-    });
+    expect(await migration.detectLegacyState(migrationParams())).toBeNull();
   });
 
   it("detects and migrates pre-drain rows for a configured account", async () => {
-    await withStateDir(async (stateDir) => {
-      await seedLegacyRow(stateDir, "work", "legacy-doctor-1");
-      const config: OpenClawConfig = {
-        channels: { line: { accounts: { work: {} } } },
-      };
-
-      const detected = await migration.detectLegacyState(migrationParams(stateDir, config));
-      expect(detected?.preview).toEqual([
-        '- LINE pre-drain spool rows (account "work"): 1 row(s) -> current ingress format',
-      ]);
-
-      const result = await migration.migrateLegacyState(migrationParams(stateDir, config));
-      expect(result.changes).toEqual([
-        'Migrated LINE pre-drain spool rows (account "work"): 1 queued under the current format, 0 dead-lettered at the identity fence',
-      ]);
-      expect(result.warnings).toEqual([]);
-
-      const queue = createChannelIngressQueue<{
-        version: number;
-        rawEvent: string;
-        destination: string;
-      }>({ channelId: "line", accountId: "work", stateDir });
-      const pending = await queue.listPending({ limit: "all" });
-      expect(pending.map((record) => record.id)).toEqual(["message:message-legacy-doctor-1"]);
-      expect(await migration.detectLegacyState(migrationParams(stateDir, config))).toBeNull();
-    });
+    await seedLegacyRow("work", "legacy-doctor-1");
+    const config = { channels: { line: { accounts: { work: {} } } } };
+    await expectMigration(config, { work: "legacy-doctor-1" });
   });
 
   it("detects and migrates pre-drain rows for a named account removed from config", async () => {
-    await withStateDir(async (stateDir) => {
-      // The "retired" account no longer exists in config; only queue-account
-      // discovery can find its rows, so they must still migrate.
-      await seedLegacyRow(stateDir, "retired", "legacy-doctor-retired");
-      await seedLegacyRow(stateDir, "default", "legacy-doctor-kept");
-
-      const detected = await migration.detectLegacyState(migrationParams(stateDir, {}));
-      expect(detected?.preview).toEqual([
-        '- LINE pre-drain spool rows (account "default"): 1 row(s) -> current ingress format',
-        '- LINE pre-drain spool rows (account "retired"): 1 row(s) -> current ingress format',
-      ]);
-
-      const result = await migration.migrateLegacyState(migrationParams(stateDir, {}));
-      expect(result.changes).toEqual([
-        'Migrated LINE pre-drain spool rows (account "default"): 1 queued under the current format, 0 dead-lettered at the identity fence (account not currently configured, so these stay queued until it is restored)',
-        'Migrated LINE pre-drain spool rows (account "retired"): 1 queued under the current format, 0 dead-lettered at the identity fence (account not currently configured, so these stay queued until it is restored)',
-      ]);
-      expect(result.warnings).toEqual([]);
-
-      const defaultQueue = createChannelIngressQueue({
-        channelId: "line",
-        accountId: "default",
-        stateDir,
-      });
-      expect((await defaultQueue.listPending({ limit: "all" })).map((record) => record.id)).toEqual(
-        ["message:message-legacy-doctor-kept"],
-      );
-      const retiredQueue = createChannelIngressQueue<{
-        version: number;
-        rawEvent: string;
-        destination: string;
-      }>({ channelId: "line", accountId: "retired", stateDir });
-      const pending = await retiredQueue.listPending({ limit: "all" });
-      expect(pending.map((record) => record.id)).toEqual(["message:message-legacy-doctor-retired"]);
-      expect(await migration.detectLegacyState(migrationParams(stateDir, {}))).toBeNull();
-    });
+    // Queue discovery must find rows even when their accounts no longer exist in config.
+    await seedLegacyRow("retired", "legacy-doctor-retired");
+    await seedLegacyRow("default", "legacy-doctor-kept");
+    await expectMigration(
+      {},
+      { default: "legacy-doctor-kept", retired: "legacy-doctor-retired" },
+      " (account not currently configured, so these stay queued until it is restored)",
+    );
   });
 
   it("fails visibly when the doctor host lacks channel ingress queue access", async () => {
-    await withStateDir(async (stateDir) => {
-      const context: PluginDoctorStateMigrationContext = {
-        openPluginStateKeyedStore: () => {
-          throw new Error("the LINE spool migration does not use plugin keyed state");
-        },
-      };
-      await expect(
-        migration.detectLegacyState({ ...migrationParams(stateDir, {}), context }),
-      ).rejects.toThrow(/channel ingress queue access/);
-    });
+    const { channelIngressQueues: _queues, ...context } = contextFor();
+    await expect(migration.detectLegacyState({ ...migrationParams(), context })).rejects.toThrow(
+      /channel ingress queue access/,
+    );
   });
 });

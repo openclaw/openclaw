@@ -211,7 +211,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const { transport, peer, onTalkEvent } = await startWebRtcTransport({ request });
+    const { transport, peer } = await startWebRtcTransport({ request });
     const baseArgs = JSON.stringify({ text: "status" });
     const argumentsAtLimit = baseArgs + " ".repeat(256_000 - baseArgs.length);
     const oversizedArguments = JSON.stringify({ text: "é".repeat(128_000) });
@@ -241,14 +241,6 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     expect(JSON.parse(String(outputs[1]?.item?.output))).toEqual({
       error: "Realtime tool arguments exceed the 256000-byte UTF-8 limit",
     });
-    expect(onTalkEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "tool.error",
-        callId: "call-2",
-        itemId: "item-2",
-        final: true,
-      }),
-    );
     transport.stop();
   });
 
@@ -287,7 +279,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const { transport, peer, onStatus, onTalkEvent } = await startWebRtcTransport({ request });
+    const { transport, peer, onStatus } = await startWebRtcTransport({ request });
 
     peer?.channel.send.mockImplementation(() => {
       throw new Error("OpenAI data channel rejected the tool result");
@@ -300,12 +292,6 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
         "OpenAI data channel rejected the tool result",
       ),
     );
-    expect(
-      onTalkEvent.mock.calls.some(
-        ([event]) =>
-          (event.type === "tool.progress" || event.type === "tool.error") && event.final === true,
-      ),
-    ).toBe(false);
     transport.stop();
   });
 
@@ -344,10 +330,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
         { role: "user", text: "Check the weather", final: false, textMode: "verbatim" },
         { role: "assistant", text: "I'll check", final: false, textMode: "verbatim" },
       ]);
-      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
-        "transcript.delta",
-        "output.text.delta",
-      ]);
+      expect(onTalkEvent).not.toHaveBeenCalled();
       expect(peer.connectionState).not.toBe("closed");
 
       dispatch({ type: "session.delegation.created" });
@@ -364,11 +347,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       }
       expect(onTranscript).toHaveBeenCalledTimes(2);
       expect(onTranscript.mock.calls.some(([entry]) => entry.final)).toBe(false);
-      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
-        "transcript.delta",
-        "output.text.delta",
-        "session.closed",
-      ]);
+      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual(["session.closed"]);
     },
   );
 

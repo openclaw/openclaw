@@ -44,6 +44,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return mockNodeBuiltinModule<{ spawn: Spawn }>(
     () => importOriginal<typeof import("node:child_process")>(),
     { spawn },
+    { mirrorToDefault: true },
   );
 });
 vi.mock("./process/child-process-bridge.js", () => ({ attachChildProcessBridge }));
@@ -130,7 +131,8 @@ describe("entry compile cache", () => {
   }
 
   function enableCache(env: NodeJS.ProcessEnv = {}) {
-    enableOpenClawCompileCache({ currentFile: entryFile, env, installRoot: root });
+    vi.stubEnv("NODE_COMPILE_CACHE", env.NODE_COMPILE_CACHE);
+    enableOpenClawCompileCache({ currentFile: entryFile, installRoot: root });
   }
 
   it("resolves install roots from source and dist entry paths", () => {
@@ -143,7 +145,6 @@ describe("entry compile cache", () => {
     argv = [process.execPath, entryFile, "gateway", "run"];
     enableCache();
     expect(enableCompileCache).toHaveBeenCalledTimes(1);
-    enableCache({ NODE_DISABLE_COMPILE_CACHE: "1" });
     vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
     enableOpenClawCompileCache({ currentFile: entryFile, installRoot: root });
     expect(enableCompileCache).toHaveBeenCalledTimes(1);

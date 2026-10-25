@@ -14,6 +14,13 @@ function canonical(
 ): ProjectionCase {
   return { raw, expected: { kind: "canonical", hasParentId, entry } };
 }
+function messageFacts(
+  message: unknown,
+  facts: { assistantResponseId?: string; assistantRunId?: string } = {},
+) {
+  return canonical({ ...base, type: "message", message }, { ...base, type: "message", ...facts });
+}
+const assistant = { role: "assistant", content: [] };
 
 it.each<ProjectionCase>([
   ...(
@@ -21,21 +28,18 @@ it.each<ProjectionCase>([
       { type: "message", message: { role: "user", content: "large body" } },
       { type: "compaction", summary: "summary", firstKeptEntryId: "parent", tokensBefore: 1 },
       { type: "custom", customType: "plugin.metadata", data: { large: "body" } },
-      {
-        type: "custom_message",
-        customType: "report",
-        content: "large report body",
-        display: true,
-        details: { privateToBody: true },
-      },
     ] as const
-  ).map((entry) =>
-    canonical(
-      { ...base, ...entry },
-      entry.type === "custom_message"
-        ? { ...base, type: entry.type, customType: "report" }
-        : { ...base, type: entry.type },
-    ),
+  ).map((entry) => canonical({ ...base, ...entry }, { ...base, type: entry.type })),
+  canonical(
+    {
+      ...base,
+      type: "custom_message",
+      customType: "report",
+      content: "body",
+      display: true,
+      details: { privateToBody: true },
+    },
+    { ...base, type: "custom_message", customType: "report" },
   ),
   ...["branch label", "", undefined].map((label) =>
     canonical(
@@ -51,31 +55,17 @@ it.each<ProjectionCase>([
       [42, "  ", {}],
     ] as const
   ).map(([responseId, runId, expected]) =>
-    canonical(
-      {
-        ...base,
-        type: "message",
-        message: { role: "assistant", content: [], responseId, __openclaw: { runId } },
-      },
-      { ...base, type: "message", ...expected },
-    ),
+    messageFacts({ ...assistant, responseId, __openclaw: { runId } }, expected),
   ),
-  canonical(
-    {
-      ...base,
-      type: "message",
-      message: {
-        role: "toolResult",
-        content: [],
-        toolCallId: "call",
-        toolName: "read",
-        isError: false,
-        responseId: "response",
-        __openclaw: { runId: "run" },
-      },
-    },
-    { ...base, type: "message" },
-  ),
+  messageFacts({
+    role: "toolResult",
+    content: [],
+    toolCallId: "call",
+    toolName: "read",
+    isError: false,
+    responseId: "response",
+    __openclaw: { runId: "run" },
+  }),
   ...[undefined, "side", { mode: "side" }].flatMap((appendMode): ProjectionCase[] => {
     const entry = {
       id: "hook",

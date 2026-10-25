@@ -9,7 +9,6 @@ vi.mock("./matrix/actions/verification.js", () => ({
 }));
 
 import { matrixSetupPlugin } from "./channel.setup.js";
-import { matrixConfigAdapter } from "./config-adapter.js";
 import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
@@ -32,19 +31,18 @@ describe("matrix setup post-write bootstrap", () => {
   } as const;
   const runtime: RuntimeEnv = { log, error, exit };
 
-  type Setup = { previousCfg: CoreConfig; accountId: string; input: Record<string, unknown> };
-  function applyAccountConfig(params: Setup) {
-    const { previousCfg, accountId, input } = params;
-    const nextCfg = matrixSetupAdapter.applyAccountConfig({
+  async function runBootstrap(
+    input: Record<string, unknown> = defaultPasswordInput,
+    previousCfg = encryptedDefaultCfg,
+    accountId = "default",
+  ) {
+    const cfg = matrixSetupAdapter.applyAccountConfig({
       cfg: previousCfg,
       accountId,
       input,
     }) as CoreConfig;
-    return { ...params, nextCfg };
-  }
-
-  function applyDefaultAccountConfig(input: Record<string, unknown> = defaultPasswordInput) {
-    return applyAccountConfig({ previousCfg: encryptedDefaultCfg, accountId: "default", input });
+    await runMatrixSetupBootstrapAfterConfigWrite({ previousCfg, cfg, accountId, runtime });
+    return cfg;
   }
 
   function mockBootstrapResult(params: {
@@ -60,11 +58,6 @@ describe("matrix setup post-write bootstrap", () => {
       pendingVerifications: 0,
       cryptoBootstrap: null,
     });
-  }
-
-  async function runAfterAccountConfigWritten(params: ReturnType<typeof applyAccountConfig>) {
-    const { previousCfg, nextCfg: cfg, accountId } = params;
-    await runMatrixSetupBootstrapAfterConfigWrite({ previousCfg, cfg, accountId, runtime });
   }
 
   beforeEach(() => {
@@ -110,9 +103,7 @@ describe("matrix setup post-write bootstrap", () => {
         userId: "@flurry:example.org",
         accessToken: "new-token",
       };
-      const setup = applyAccountConfig({ previousCfg, accountId: "flurry", input });
-
-      await runAfterAccountConfigWritten(setup);
+      await runBootstrap(input, previousCfg, "flurry");
 
       expect(verificationMocks.bootstrapMatrixVerification).not.toHaveBeenCalled();
       expect(log).not.toHaveBeenCalled();
@@ -121,10 +112,8 @@ describe("matrix setup post-write bootstrap", () => {
   );
 
   it("logs a warning when verification bootstrap fails", async () => {
-    const setup = applyDefaultAccountConfig();
     mockBootstrapResult({ success: false, error: "no room-key backup exists on the homeserver" });
-
-    await runAfterAccountConfigWritten(setup);
+    await runBootstrap();
 
     expect(error).toHaveBeenCalledWith(
       'Matrix verification bootstrap warning for "default": no room-key backup exists on the homeserver',
@@ -138,14 +127,12 @@ describe("matrix setup post-write bootstrap", () => {
         MATRIX_ACCESS_TOKEN: "env-token",
       },
       async () => {
-        const setup = applyDefaultAccountConfig({ useEnv: true });
         mockBootstrapResult({ success: true, backupVersion: "9" });
-
-        await runAfterAccountConfigWritten(setup);
+        const cfg = await runBootstrap({ useEnv: true });
 
         expect(verificationMocks.bootstrapMatrixVerification).toHaveBeenCalledWith({
           accountId: "default",
-          cfg: setup.nextCfg,
+          cfg,
         });
         expect(log).toHaveBeenCalledWith('Matrix verification bootstrap: complete for "default".');
       },
@@ -177,7 +164,7 @@ describe("matrix setup post-write bootstrap", () => {
   });
 
   it("clears allowPrivateNetwork and proxy when deleting the default Matrix account config", () => {
-    const updated = matrixConfigAdapter.deleteAccount?.({
+    const updated = matrixSetupPlugin.config.deleteAccount?.({
       cfg: config({
         homeserver: "http://localhost.localdomain:8008",
         network: { dangerouslyAllowPrivateNetwork: true },

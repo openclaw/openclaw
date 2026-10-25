@@ -89,6 +89,7 @@ import {
 } from "./doctor-session-sqlite-retained.js";
 import { settleDuplicateSessionSqliteArchives } from "./doctor-session-sqlite-retirement.js";
 import {
+  assertDoctorSessionSqliteTargetsNotAliased,
   createMigrationTargetInput,
   filterLegacySessionStoreTargets,
   prepareDoctorSessionSqliteTargets,
@@ -101,6 +102,7 @@ import {
   createDoctorSessionSqliteTargetReport,
   countBlockingSessionSqliteIssues,
   isRetainedSourceIssue,
+  isRetainedSourceSettlementIssue,
   isInformationalMissingSessionIndex,
   type DoctorSessionSqliteMode,
   type DoctorSessionSqliteOptions,
@@ -212,7 +214,7 @@ export async function runDoctorSessionSqlite(
                   pending: pendingPlugins,
                 }),
               });
-        report.issues.push(...settlementIssuesForStore(target.storePath));
+        settlementIssuesForStore(target.storePath).forEach((issue) => report.issues.push(issue));
         return report;
       },
     });
@@ -261,7 +263,7 @@ export async function runDoctorSessionSqlite(
     );
   }
   for (const report of reports) {
-    report.issues.push(...settlementIssuesForStore(report.storePath));
+    settlementIssuesForStore(report.storePath).forEach((issue) => report.issues.push(issue));
   }
   if (activeRun && coverage) {
     for (const owner of archiveTargets) {
@@ -585,7 +587,7 @@ export async function settleRetainedDoctorSessionSources(
     );
     verifyImports();
     await archiveImportedLegacySessionStores(
-      owners.filter((owner) => owner.report.issues.every(isRetainedSourceIssue)),
+      owners.filter((owner) => owner.report.issues.every(isRetainedSourceSettlementIssue)),
       activeRun,
       coverage,
       assertCurrent,
@@ -594,7 +596,7 @@ export async function settleRetainedDoctorSessionSources(
     verifyImports();
     const issue = owners
       .flatMap((owner) => owner.report.issues)
-      .find((candidate) => !isRetainedSourceIssue(candidate));
+      .find((candidate) => !isRetainedSourceSettlementIssue(candidate));
     if (issue || owners.some((owner) => fs.existsSync(owner.target.storePath))) {
       throw new Error(issue?.message ?? "Retained session sources could not be archived.");
     }
@@ -611,19 +613,16 @@ export async function settleRetainedDoctorSessionSources(
   } catch (error) {
     failure = error instanceof Error ? error : new Error(formatErrorMessage(error));
     const failedOwners = owners.filter((owner) =>
-      owner.report.issues.some((issue) => !isRetainedSourceIssue(issue)),
+      owner.report.issues.some((issue) => !isRetainedSourceSettlementIssue(issue)),
     );
     for (const [index, owner] of owners.entries()) {
-      owner.report.issues.push(
-        ...plan.owners[index]!.owner.report.issues.filter(
-          (issue) => issue.code === "plugin_migration_source_retained",
-        ),
-      );
+      const ownIssue = owner.report.issues.find((issue) => !isRetainedSourceSettlementIssue(issue));
+      for (const issue of plan.owners[index]!.owner.report.issues) {
+        if (issue.code === "plugin_migration_source_retained") {
+          owner.report.issues.push(issue);
+        }
+      }
       if (failedOwners.length === 0 || failedOwners.includes(owner)) {
-        const ownIssue = owner.report.issues.find(
-          (issue) =>
-            !isRetainedSourceIssue(issue) && issue.code !== "plugin_migration_source_retained",
-        );
         owner.report.issues.push({
           code: "retained_plugin_source_settlement_failed",
           message: ownIssue?.message ?? formatErrorMessage(error),
@@ -658,16 +657,12 @@ export async function reconcileDoctorSessionSqlitePublication(
 ): Promise<void> {
   const env = options.env ?? process.env;
   const cfg = resolveDoctorSessionSqliteConfig(options);
-  const { targets } = resolveDoctorSessionSqliteTargets({ ...options, cfg, env });
-  assertDoctorSqliteMaintenancePathsNotAliased(
-    `session SQLite ${options.mode}`,
-    resolveDoctorSessionSqliteMaintenancePaths(targets),
-    resolveDoctorSessionSqliteMaintenanceRoots(targets, env),
-  );
+  const resolved = resolveDoctorSessionSqliteTargets({ ...options, cfg, env });
+  assertDoctorSessionSqliteTargetsNotAliased({ ...options, ...resolved, env });
   await reconcileSessionSqliteMigrationPublications({
     env,
     sourcePath,
-    trustedTargets: targets.map(createMigrationTargetInput),
+    trustedTargets: resolved.targets.map(createMigrationTargetInput),
   });
 }
 

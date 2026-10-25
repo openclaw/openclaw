@@ -89,8 +89,10 @@ it("retains read failure classification when cleanup fails", () =>
     const failure = new SqliteWorkerError("source read closed", "closed");
     vi.spyOn(readers, "prepareAgentAuthProfileRowsRead").mockReturnValue({
       identity: undefined,
+      source: { kind: "shared-state", databasePath: "/fixture/shared.sqlite" },
       captureCredentialAuthority: () => undefined,
       read: () => Promise.reject(failure),
+      track: (operation) => operation,
       assertCurrent: () => {},
       dispose: () => Promise.reject(new Error("source cleanup failed")),
     });

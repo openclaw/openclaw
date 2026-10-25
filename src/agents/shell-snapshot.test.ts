@@ -11,11 +11,7 @@ import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { getBashShellConfig, getShellConfig } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
-const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
-
-function resolveShellSnapshotDirForTest(
-  env: Record<string, string | undefined> = process.env,
-): string {
+function resolveShellSnapshotDirForTest(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env as NodeJS.ProcessEnv), "cache", "shell-snapshots");
 }
 
@@ -75,18 +71,14 @@ describe("exec shell snapshots", () => {
     OPENCLAW_STATE_DIR: stateDir,
     ...overrides,
   });
-  const writeRc = (home: string, source: string | string[]) =>
+  const writeRc = (home: string, source: string | string[], name = ".bashrc") =>
     fs.writeFileSync(
-      path.join(home, ".bashrc"),
+      path.join(home, name),
       typeof source === "string" ? source : source.join("\n"),
     );
-  async function run(
-    shell: string,
-    cwd: string,
-    env: NodeJS.ProcessEnv,
-    command = 'printf "%s" "$PNPM_HOME"',
-  ) {
-    const shellArgs = getShellConfig(shell).args;
+  async function wrap(shell: string, cwd: string, env: NodeJS.ProcessEnv, command: string) {
+    setTestEnvValue("SHELL", shell);
+    const shellArgs = getShellConfig().args;
     const wrapped = await maybeWrapCommandWithShellSnapshot({
       command,
       shell,
@@ -94,6 +86,15 @@ describe("exec shell snapshots", () => {
       cwd,
       env,
     });
+    return { shellArgs, wrapped };
+  }
+  async function run(
+    shell: string,
+    cwd: string,
+    env: NodeJS.ProcessEnv,
+    command = 'printf "%s" "$PNPM_HOME"',
+  ) {
+    const { shellArgs, wrapped } = await wrap(shell, cwd, env, command);
     const result = spawnSync(shell, [...shellArgs, wrapped], {
       cwd,
       env,
@@ -118,6 +119,7 @@ describe("exec shell snapshots", () => {
       "OPENCLAW_EXEC_SHELL_SNAPSHOT",
       "PNPM_HOME",
       "ZDOTDIR",
+      "SHELL",
     ]);
   });
 
@@ -157,7 +159,7 @@ describe("exec shell snapshots", () => {
       env: {
         ...process.env,
         HOME: untrustedHome,
-        [EXEC_SHELL_SNAPSHOT_ENV]: "0",
+        OPENCLAW_EXEC_SHELL_SNAPSHOT: "0",
         OPENCLAW_STATE_DIR: untrustedStateDir,
         SSH_CLIENT: "127.0.0.1 1000 22",
         SSH_CONNECTION: "127.0.0.1 1000 127.0.0.1 22",
@@ -294,13 +296,7 @@ describe("exec shell snapshots", () => {
 
     const env = runtimeEnv(home, stateDir);
     const command = "echo fallback";
-    const wrapped = await maybeWrapCommandWithShellSnapshot({
-      command,
-      shell: bash,
-      shellArgs: getShellConfig(bash).args,
-      cwd,
-      env,
-    });
+    const { wrapped } = await wrap(bash, cwd, env, command);
 
     expect(wrapped).toBe(command);
     const snapshotDir = resolveShellSnapshotDirForTest(env);
@@ -317,39 +313,23 @@ describe("exec shell snapshots", () => {
     }
 
     const { home, stateDir, cwd } = setup();
-    setSnapshotStateForTest(stateDir, { home });
-    fs.writeFileSync(
-      path.join(home, ".zshrc"),
+    writeRc(
+      home,
       [
         "alias oc_snap_zsh_alias='printf zsh-alias-ok'",
         "oc_snap_zsh_fn() { printf zsh-fn-ok; }",
         "",
-      ].join("\n"),
+      ],
+      ".zshrc",
     );
-
-    const env = {
-      ...process.env,
-      HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const shellArgs = getShellConfig(zsh).args;
-    const wrapped = await maybeWrapCommandWithShellSnapshot({
-      command: "oc_snap_zsh_fn; printf ' '; oc_snap_zsh_alias",
-      shell: zsh,
-      shellArgs,
-      cwd,
-      env,
-    });
-
-    const result = spawnSync(zsh, [...shellArgs, wrapped], {
-      cwd,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("zsh-fn-ok zsh-alias-ok");
+    expect(
+      await run(
+        zsh,
+        cwd,
+        runtimeEnv(home, stateDir),
+        "oc_snap_zsh_fn; printf ' '; oc_snap_zsh_alias",
+      ),
+    ).toBe("zsh-fn-ok zsh-alias-ok");
   });
 
   it("captures zsh startup state from ZDOTDIR", async () => {
@@ -361,37 +341,14 @@ describe("exec shell snapshots", () => {
     const { home, stateDir, cwd } = setup();
     const zdotdir = makeDir();
     setSnapshotStateForTest(stateDir, { home, zdotdir });
-    fs.writeFileSync(path.join(home, ".zshrc"), "alias oc_snap_zdot_alias='printf wrong-home'\n");
-    fs.writeFileSync(
-      path.join(zdotdir, ".zshrc"),
-      ["[[ -o interactive ]] || return", "alias oc_snap_zdot_alias='printf zdotdir-ok'", ""].join(
-        "\n",
-      ),
+    writeRc(home, "alias oc_snap_zdot_alias='printf wrong-home'\n", ".zshrc");
+    writeRc(
+      zdotdir,
+      ["[[ -o interactive ]] || return", "alias oc_snap_zdot_alias='printf zdotdir-ok'", ""],
+      ".zshrc",
     );
-
-    const env = {
-      ...process.env,
-      HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-      ZDOTDIR: zdotdir,
-    };
-    const shellArgs = getShellConfig(zsh).args;
-    const wrapped = await maybeWrapCommandWithShellSnapshot({
-      command: "oc_snap_zdot_alias",
-      shell: zsh,
-      shellArgs,
-      cwd,
-      env,
-    });
-
-    const result = spawnSync(zsh, [...shellArgs, wrapped], {
-      cwd,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("zdotdir-ok");
+    expect(
+      await run(zsh, cwd, runtimeEnv(home, stateDir, { ZDOTDIR: zdotdir }), "oc_snap_zdot_alias"),
+    ).toBe("zdotdir-ok");
   });
 });

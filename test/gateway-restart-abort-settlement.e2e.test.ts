@@ -1,14 +1,11 @@
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
-import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { createWorkerEnvironmentStore } from "../src/gateway/worker-environments/store.js";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
 import {
@@ -16,12 +13,18 @@ import {
   openOpenClawStateDatabase,
 } from "../src/state/openclaw-state-db.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
-import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+  connectRestartClient,
+  restartEnv,
+  restartModelConfig,
+  restartToolNames,
+  writeRestartPlugin,
+  writeRestartTitle,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
+import { readRequestText } from "./helpers/gateway-integration-fixtures.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -61,40 +64,22 @@ function toolCall(
 ) {
   const tool = tools.includes(name) ? name : "dispatch_action";
   expect(tools).toContain(tool);
-  const item = {
-    type: "function_call",
-    id: `fc_settlement_${ordinal}`,
-    call_id: `call_settlement_${ordinal}`,
-    name: tool,
-    arguments: JSON.stringify(tool === "dispatch_action" ? { id: name, args } : args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_settlement_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+  writeRestartToolCall(
+    response,
+    "settlement",
+    tool,
+    tool === "dispatch_action" ? { id: name, args } : args,
+    ordinal,
+  );
 }
 
 it(
   "settles recovered provisioning and restart-aborted nested/subagent lifecycle turns with a Git child",
   { timeout: 180_000 },
   async ({ signal }) => {
+    const plainTurns = ["plain-1", "plain-2", "plain-3", "plain-4", "plain-5", "plain-6"];
     const ready = new Map(
-      ["spawn", "child", "send", "nested", "exec", "plain", "provision"].map((name) => [
+      ["spawn", "child", "send", "nested", "exec", ...plainTurns, "provision"].map((name) => [
         name,
         createDeferred(),
       ]),
@@ -117,11 +102,7 @@ it(
               ready.get("provision")!.resolve();
               return;
             }
-            const chunks: Buffer[] = [];
-            for await (const chunk of request) {
-              chunks.push(Buffer.from(chunk));
-            }
-            const body = asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+            const body = asRecord(JSON.parse(await readRequestText(request)));
             if (request.url === "/git-started") {
               expect(body.pid).toBeTypeOf("number");
               expect(body.gitPid).toBeTypeOf("number");
@@ -129,37 +110,10 @@ it(
               return;
             }
             expect(request.url).toBe("/v1/responses");
-            const tools = Array.isArray(body.tools)
-              ? body.tools.flatMap((tool) =>
-                  isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-                )
-              : [];
+            const tools = restartToolNames(body);
             if (!tools.length) {
               if (body.stream === false) {
-                response.writeHead(200, { "content-type": "application/json" });
-                response.end(
-                  JSON.stringify({
-                    id: "resp_title",
-                    object: "response",
-                    status: "completed",
-                    output: [
-                      {
-                        type: "message",
-                        id: "msg_title",
-                        role: "assistant",
-                        status: "completed",
-                        content: [
-                          {
-                            type: "output_text",
-                            text: "Synthetic restart settlement",
-                            annotations: [],
-                          },
-                        ],
-                      },
-                    ],
-                    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                  }),
-                );
+                writeRestartTitle(response, "Synthetic restart settlement");
                 return;
               }
               writeOpenAiResponsesText(response, {
@@ -174,7 +128,7 @@ it(
               ? input.includes(marker("wake-child"))
                 ? "wake-child"
                 : "child"
-              : ["spawn", "send", "nested", "exec", "plain", "wake"].find((candidate) =>
+              : ["spawn", "send", "nested", "exec", ...plainTurns, "wake"].find((candidate) =>
                   input.includes(marker(candidate)),
                 );
             if (!name) {
@@ -266,11 +220,7 @@ it(
       stopTimeoutMs: 10_000,
       gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
       env: {
-        OPENAI_API_KEY: undefined,
-        OPENAI_BASE_URL: undefined,
-        OPENAI_API_BASE: undefined,
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        ...restartEnv,
         OPENCLAW_NO_RESPAWN: "1",
       },
     });
@@ -282,18 +232,14 @@ it(
         try {
           const pluginId = "shutdown-provision";
           const pluginDir = instance.state.path("provision-plugin");
-          await mkdir(pluginDir, { recursive: true });
-          await writeFile(
-            path.join(pluginDir, "openclaw.plugin.json"),
-            JSON.stringify({
+          await writeRestartPlugin(
+            pluginDir,
+            {
               id: pluginId,
               activation: { onStartup: true },
               contracts: { workerProviders: [pluginId] },
               configSchema: { type: "object", additionalProperties: false, properties: {} },
-            }),
-          );
-          await writeFile(
-            path.join(pluginDir, "index.mjs"),
+            },
             `export default {
               id: ${JSON.stringify(pluginId)},
               register(api) {
@@ -327,32 +273,12 @@ it(
               slots: { memory: "none" },
             },
             cloudWorkers: { profiles: { shutdown: { provider: pluginId, settings: {} } } },
-            models: {
-              catalogRefresh: { enabled: false },
-              mode: "replace",
-              providers: {
-                [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-              },
-            },
-            agents: {
-              defaults: {
-                workspace: instance.state.workspaceDir,
-                model: { primary: model.modelRef },
-                modelPolicy: { allow: [model.modelRef] },
-                models: {
-                  [model.modelRef]: {
-                    agentRuntime: { id: "openclaw" },
-                    params: { transport: "sse", openaiWsWarmup: false },
-                  },
-                },
-                heartbeat: { every: "0m" },
-                maxConcurrent: 8,
-                timeoutSeconds: 120,
-                skipBootstrap: true,
-                skills: [],
-              },
-              entries: { main: {} },
-            },
+            ...restartModelConfig(
+              model,
+              instance.state.workspaceDir,
+              { maxConcurrent: 16 },
+              { catalogRefresh: { enabled: false } },
+            ),
             tools: {
               allow: ["exec", "process", "sessions_spawn", "sessions_yield", "sessions_send"],
               exec: { mode: "full", host: "gateway" },
@@ -388,25 +314,8 @@ it(
           }
           phase = "start";
           await instance.startGateway();
-          client = await acquireGatewayTestClient(
-            {
-              url: instance.url,
-              token: instance.gatewayToken,
-              clientName: "gateway-client",
-              mode: "test",
-              scopes: ["operator.admin", "operator.read", "operator.write"],
-              deviceIdentity: loadOrCreateDeviceIdentity({
-                path: instance.state.path("device.sqlite"),
-              }),
-            },
-            {
-              signal,
-              timeoutMs: 30_000,
-              timeoutMessage: "restart settlement client did not connect",
-              closeMessage: "restart settlement client closed",
-            },
-          );
-          for (const name of ["nested", "spawn", "send", "exec", "plain", "wake"]) {
+          client = await connectRestartClient(instance, { mode: "test" }, signal);
+          for (const name of ["nested", "spawn", "send", "exec", ...plainTurns, "wake"]) {
             await client.request("sessions.create", {
               key: key(name),
               agentId: "main",
@@ -415,7 +324,7 @@ it(
             });
           }
           phase = "admit";
-          for (const name of ["spawn", "send", "exec", "plain", "wake"]) {
+          for (const name of ["spawn", "send", "exec", ...plainTurns, "wake"]) {
             await client.request(
               "agent",
               {
@@ -477,7 +386,7 @@ it(
           const shutdownStartedAt = Date.now();
           expect(child.kill("SIGTERM")).toBe(true);
           expect(await gate(closed), instance.logs()).toEqual([0, null]);
-          expect(Date.now() - shutdownStartedAt, instance.logs()).toBeLessThan(10_000);
+          expect(Date.now() - shutdownStartedAt, instance.logs()).toBeLessThan(5_000);
           expect(instance.logs()).toMatch(
             /completed in \d+ms with warnings: restart-reply-drain\b/u,
           );

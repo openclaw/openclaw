@@ -28,6 +28,7 @@ function createTool(
   accountId = "account-a",
   senderId = "allowed",
 ) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   return createTranscriptsTool({
     agentId: "main",
     caller: {
@@ -39,7 +40,6 @@ function createTool(
       roleIds: [],
     },
     config,
-    stateDir,
   });
 }
 
@@ -123,6 +123,7 @@ describe("transcripts tool with the registered Discord provider", () => {
     setActivePluginRegistry(createEmptyPluginRegistry(), "discord-transcripts-tool-test-cleanup");
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     tempDirs.cleanup();
   });
 

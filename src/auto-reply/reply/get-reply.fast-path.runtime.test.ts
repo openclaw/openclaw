@@ -1,4 +1,3 @@
-// Tests runtime-loaded fast-path command behavior for get-reply.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -14,6 +13,7 @@ import {
   makeReplyConfig,
   resetReplyRuntimeMocks,
 } from "../reply.test-harness.js";
+import type { MsgContext } from "../templating.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
@@ -29,6 +29,24 @@ const agentMocks = createReplyRuntimeMocks();
 const { withTempHome } = createTempHomeHarness({ prefix: "openclaw-getreply-fast-" });
 
 installReplyRuntimeMocks(agentMocks);
+
+function reply(home: string, overrides: Partial<MsgContext> = {}, body = "hello") {
+  return getReplyFromConfig(
+    {
+      Body: body,
+      BodyForAgent: body,
+      RawBody: body,
+      CommandBody: body,
+      SessionKey: "agent:main:whatsapp:+2000",
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      ChatType: "direct",
+      ...overrides,
+    },
+    {},
+    makeReplyConfig(home) as OpenClawConfig,
+  );
+}
 
 function installRuntimeChannels() {
   setActivePluginRegistry(
@@ -50,29 +68,15 @@ describe("getReplyFromConfig fast-path runtime", () => {
     resetReplyRuntimeMocks(agentMocks);
     agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("warm runtime"));
     await withTempHome(async (home) => {
-      await getReplyFromConfig(
-        {
-          Body: "warm runtime",
-          BodyForAgent: "warm runtime",
-          RawBody: "warm runtime",
-          CommandBody: "warm runtime",
-          From: "+1001",
-          To: "+2000",
-          SessionKey: "agent:main:whatsapp:+2000",
-          Provider: "whatsapp",
-          Surface: "whatsapp",
-          ChatType: "direct",
-        },
-        {},
-        makeReplyConfig(home) as OpenClawConfig,
-      );
+      await reply(home, { From: "+1001", To: "+2000" }, "warm runtime");
     });
     vi.unstubAllEnvs();
   });
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetReplyRuntimeMocks(agentMocks);
+    agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
     installRuntimeChannels();
   });
 
@@ -84,104 +88,45 @@ describe("getReplyFromConfig fast-path runtime", () => {
 
   it("keeps old-style runtime tests fast with marked temp-home configs", async () => {
     await withTempHome(async (home) => {
-      let seenPrompt: string | undefined;
-      agentMocks.runEmbeddedAgent.mockImplementation(async (params) => {
-        seenPrompt = params.prompt;
-        return makeEmbeddedTextResult("ok");
+      const res = await reply(home, {
+        From: "+1001",
+        To: "+2000",
+        media: [
+          { path: "/tmp/a.png", url: "/tmp/a.png" },
+          { path: "/tmp/b.png", url: "/tmp/b.png" },
+        ],
       });
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "hello",
-          BodyForAgent: "hello",
-          RawBody: "hello",
-          CommandBody: "hello",
-          From: "+1001",
-          To: "+2000",
-          media: [
-            { path: "/tmp/a.png", url: "/tmp/a.png" },
-            { path: "/tmp/b.png", url: "/tmp/b.png" },
-          ],
-          SessionKey: "agent:main:whatsapp:+2000",
-          Provider: "whatsapp",
-          Surface: "whatsapp",
-          ChatType: "direct",
-        },
-        {},
-        makeReplyConfig(home) as OpenClawConfig,
-      );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("ok");
+      const seenPrompt = agentMocks.runEmbeddedAgent.mock.calls.at(-1)?.[0]?.prompt;
       expect(seenPrompt).toContain("[media attached: 2 files]");
       expect(seenPrompt).toContain("hello");
     });
   });
 
-  it("routes structured native command turns through the target session before legacy sync", async () => {
-    await withTempHome(async (home) => {
-      agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
-
-      await getReplyFromConfig(
-        {
-          Body: "hello",
-          BodyForAgent: "hello",
-          RawBody: "hello",
-          CommandBody: "hello",
-          CommandTurn: {
-            kind: "native",
-            source: "native",
-            authorized: true,
-          },
-          CommandTargetSessionKey: "agent:main:telegram:direct:target",
-          SessionKey: "telegram:slash:source",
+  it.each(["native", "normal"] as const)(
+    "routes structured %s turns before legacy sync",
+    async (kind) => {
+      await withTempHome(async (home) => {
+        const native = kind === "native";
+        const target = "agent:main:telegram:direct:target";
+        const source = native ? "telegram:slash:source" : "agent:main:telegram:direct:source";
+        await reply(home, {
+          ...(!native ? { CommandSource: "native" as const } : {}),
+          CommandTurn: native
+            ? { kind: "native", source: "native", authorized: true }
+            : { kind: "normal", source: "message", authorized: false },
+          CommandTargetSessionKey: target,
+          SessionKey: source,
           Provider: "telegram",
           Surface: "telegram",
-          ChatType: "direct",
-        },
-        {},
-        makeReplyConfig(home) as OpenClawConfig,
-      );
+        });
 
-      expect(agentMocks.runEmbeddedAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "agent:main:telegram:direct:target",
-        }),
-      );
-    });
-  });
-
-  it("ignores stale native legacy source for structured normal turns before routing", async () => {
-    await withTempHome(async (home) => {
-      agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
-
-      await getReplyFromConfig(
-        {
-          Body: "hello",
-          BodyForAgent: "hello",
-          RawBody: "hello",
-          CommandBody: "hello",
-          CommandSource: "native",
-          CommandTurn: {
-            kind: "normal",
-            source: "message",
-            authorized: false,
-          },
-          CommandTargetSessionKey: "agent:main:telegram:direct:stale-target",
-          SessionKey: "agent:main:telegram:direct:source",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "direct",
-        },
-        {},
-        makeReplyConfig(home) as OpenClawConfig,
-      );
-
-      expect(agentMocks.runEmbeddedAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "agent:main:telegram:direct:source",
-        }),
-      );
-    });
-  });
+        expect(agentMocks.runEmbeddedAgent).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionKey: native ? target : source }),
+        );
+      });
+    },
+  );
 });

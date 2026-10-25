@@ -15,7 +15,6 @@ import {
   createMaintenanceGate as gate,
 } from "./context-engine-maintenance.fixtures.test-support.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
-import { resetDeferredTurnMaintenanceStateForTest } from "./context-engine-maintenance.test-support.js";
 const enqueueMaintenance = commandQueue.enqueueCommandInLane;
 vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({}),
@@ -114,14 +113,12 @@ beforeEach(() => {
   vi.restoreAllMocks();
   sql = observeMainThreadSql();
   resetCommandQueueStateForTest();
-  resetDeferredTurnMaintenanceStateForTest();
 });
 afterEach(() => {
   try {
     sql.expectIdle();
   } finally {
     sql.restore();
-    resetDeferredTurnMaintenanceStateForTest();
     resetCommandQueueStateForTest();
   }
 });

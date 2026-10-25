@@ -207,23 +207,20 @@ describe("cold App request admission", () => {
     expect(mocks.releaseAccess).toHaveBeenCalledOnce();
     expect(mocks.releaseSource).toHaveBeenCalledOnce();
   });
-  it.each([{ agentHarnessId: "previous-harness" }])(
-    "keeps a retained App valid after ordinary turn observations %j",
-    async (observations) => {
-      const active = await prepareMcpAppExtensionRuntime(options());
-      // Use a fresh view borrow, independent of the completed setup lifetime.
-      accessController = new AbortController();
-      const view = active.retainViewAuthority([]);
-      entry = { ...entry, ...observations };
-      expect(active.assertCurrent).not.toThrow();
-      expect(view.assertCurrent).not.toThrow();
-      expect(mocks.native).toHaveBeenCalledOnce();
-      accessController.abort(new Error("view revoked"));
-      expect(view.assertCurrent).toThrow("view revoked");
-      view.release();
-      await active.dispose();
-    },
-  );
+  it("keeps a retained App valid after ordinary turn observations", async () => {
+    const active = await prepareMcpAppExtensionRuntime(options());
+    // Use a fresh view borrow, independent of the completed setup lifetime.
+    accessController = new AbortController();
+    const view = active.retainViewAuthority([]);
+    entry = { ...entry, agentHarnessId: "previous-harness" };
+    expect(active.assertCurrent).not.toThrow();
+    expect(view.assertCurrent).not.toThrow();
+    expect(mocks.native).toHaveBeenCalledOnce();
+    accessController.abort(new Error("view revoked"));
+    expect(view.assertCurrent).toThrow("view revoked");
+    view.release();
+    await active.dispose();
+  });
   it.each([{ authProfileOverride: "other-profile" }, { sandboxMode: "off" as const }])(
     "continues to revoke changed authority %j",
     async (change) => {

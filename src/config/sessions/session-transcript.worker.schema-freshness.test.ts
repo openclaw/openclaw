@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { channel } from "node:diagnostics_channel";
 import type { Transferable } from "node:worker_threads";
 import { constants as zlibConstants, inflateRawSync } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
+import { prepareChatHistoryResponsePage } from "../../gateway/chat-history-response-page.js";
 import type { SessionArtifactReadQuery } from "../../gateway/session-artifact-read.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
@@ -34,7 +35,15 @@ const worker = vi.hoisted(() => ({
   read: vi.fn<(input: SessionTranscriptWorkerRequest) => Promise<WorkerReply>>(),
   close: vi.fn<(key?: string) => void>(),
   transfers: vi.fn<(reply: WorkerReply) => Transferable[]>(),
+  heap: undefined as { used_heap_size: number; heap_size_limit: number } | undefined,
 }));
+vi.mock("node:v8", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:v8")>();
+  return {
+    ...actual,
+    getHeapStatistics: () => ({ ...actual.getHeapStatistics(), ...worker.heap }),
+  };
+});
 vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
   serveOwnedWorkerTasks(
@@ -76,6 +85,33 @@ function historyValue(reply: WorkerReply) {
   assert("kind" in reply.value && (reply.value.kind === "rpc" || reply.value.kind === "artifacts"));
   return reply.value;
 }
+
+it("sheds isolate-local caches at eighty percent of the actual worker heap limit", async () => {
+  await withWorker("heap-pressure", async ({ database: opened }) => {
+    const pressure = channel("openclaw.memory.critical");
+    const shed = vi.fn();
+    pressure.subscribe(shed);
+    const request = {
+      kind: "prewarm" as const,
+      database: { agentId: opened.agentId, path: opened.path },
+      env: {},
+    };
+    try {
+      worker.heap = { used_heap_size: 799, heap_size_limit: 1000 };
+      await expect(worker.read(request)).resolves.toMatchObject({ ok: true });
+      expect(shed).not.toHaveBeenCalled();
+      worker.heap.used_heap_size = 800;
+      await expect(worker.read(request)).resolves.toMatchObject({ ok: true });
+      expect(shed).toHaveBeenCalledTimes(process.versions.bun ? 0 : 1);
+      worker.heap.heap_size_limit = 2000;
+      await expect(worker.read(request)).resolves.toMatchObject({ ok: true });
+      expect(shed).toHaveBeenCalledTimes(process.versions.bun ? 0 : 1);
+    } finally {
+      worker.heap = undefined;
+      pressure.unsubscribe(shed);
+    }
+  });
+});
 
 it("borrows canonical writer proof without a native reader and still fences foreign changes", async () => {
   await withWorker("writer-proof", async ({ database: opened, scope }) => {
@@ -269,9 +305,7 @@ it.for([
       vi.useFakeTimers({ toFake: ["setImmediate"] });
       let pending: Promise<unknown> | undefined;
       try {
-        await expect(
-          worker.read({ kind: "prewarm", database, env: state.env, history: false }),
-        ).resolves.toEqual({
+        await expect(worker.read({ kind: "prewarm", database, env: state.env })).resolves.toEqual({
           ok: true,
           value: { kind: "prewarm" },
         });

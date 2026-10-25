@@ -24,6 +24,10 @@ export interface PopoverProps {
   label: string;
   anchor?: HTMLElement;
   trigger?: JSX.Element;
+  triggerId?: string;
+  triggerClass?: JSX.HTMLAttributes<HTMLButtonElement>["class"];
+  triggerTitle?: string;
+  triggerAriaLabel?: string | null;
   children?: JSX.Element;
   class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
   open?: boolean;
@@ -41,12 +45,12 @@ export function Popover(props: PopoverProps): JSX.Element {
   let trigger!: HTMLButtonElement;
   let surface!: HTMLDivElement;
   // Identity, lazy mounting, and root placement are fixed for this native overlay lifetime.
-  const initial = untrack(() => ({
+  const initialIdentity = untrack(() => ({
     id: props.id,
     lazy: props.lazy,
     sameRoot: props.sameRoot ?? false,
   }));
-  const overlay = createOverlay(initial.id, undefined, {
+  const overlay = createOverlay(initialIdentity.id, undefined, {
     get dismissOutsidePointer() {
       return props.dismissOutsidePointer;
     },
@@ -57,12 +61,12 @@ export function Popover(props: PopoverProps): JSX.Element {
     onRootChange: (root) =>
       root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
   });
-  const control = useOverlayControl(overlay, initial.lazy, props, () => props.children);
+  const control = useOverlayControl(overlay, initialIdentity.lazy, props, () => props.children);
   const anchor = createAnchoredOverlay(
     overlay,
     () => trigger,
     () => ({ anchor: props.anchor, placement: props.placement }),
-    { sameRoot: initial.sameRoot },
+    { sameRoot: initialIdentity.sameRoot },
   );
   onSettled(() => {
     overlay.bindSurface(surface);
@@ -87,10 +91,16 @@ export function Popover(props: PopoverProps): JSX.Element {
             trigger = node;
           }}
           type="button"
+          id={props.triggerId}
+          class={props.triggerClass}
+          title={props.triggerTitle}
           disabled={props.disabled}
-          aria-label={props.label}
+          aria-label={
+            props.triggerAriaLabel === null ? undefined : (props.triggerAriaLabel ?? props.label)
+          }
           aria-haspopup="dialog"
-          aria-controls={initial.id}
+          aria-controls={initialIdentity.id}
+          aria-expanded="false"
           onClick={() => overlay.request(!overlay.open)}
         >
           {props.trigger ?? props.label}
@@ -101,13 +111,13 @@ export function Popover(props: PopoverProps): JSX.Element {
           surface = node;
         }}
         class={["oc-overlay oc-popover", props.class]}
-        id={initial.id}
+        id={initialIdentity.id}
         popover="manual"
         role="dialog"
         aria-label={props.label}
         tabindex={-1}
       >
-        {initial.lazy ? undefined : props.children}
+        {initialIdentity.lazy ? undefined : props.children}
       </div>
     </>
   );

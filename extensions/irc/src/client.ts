@@ -53,12 +53,6 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
   return text.slice(0, findGraphemeChunkEnd(text, 0, end, preferredEnd));
 }
 
-type IrcPrivmsgEvent = {
-  senderNick: string;
-  connectedNick: string;
-  rawLine: string;
-};
-
 export type IrcClientOptions = {
   host: string;
   port: number;
@@ -72,11 +66,14 @@ export type IrcClientOptions = {
   connectTimeoutMs?: number;
   messageChunkMaxChars?: number;
   abortSignal?: AbortSignal;
-  onPrivmsg?: (event: IrcPrivmsgEvent) => void | Promise<void>;
+  onPrivmsg?: (event: {
+    senderNick: string;
+    connectedNick: string;
+    rawLine: string;
+  }) => void | Promise<void>;
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
   onDisconnect?: () => void;
-  onLine?: (line: string) => void;
 };
 
 type IrcNickServOptions = Omit<IrcNickServConfig, "passwordFile">;
@@ -339,8 +336,6 @@ export async function connectIrcClient(options: IrcClientOptions) {
       if (!rawLine) {
         continue;
       }
-      options.onLine?.(rawLine);
-
       const line = parseIrcLine(rawLine);
       if (!line) {
         continue;
@@ -505,7 +500,6 @@ export async function connectIrcClient(options: IrcClientOptions) {
       return currentNick;
     },
     isReady: () => ready && !closed,
-    sendRaw,
     join,
     sendPrivmsg,
     quit,

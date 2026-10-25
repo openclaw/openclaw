@@ -109,6 +109,10 @@ Source files must be valid UTF-8. Malformed input is rejected without replacing 
 
 Imported source pages carry provenance frontmatter (`sourceType: local-file`, `sourcePath`, `ingestedAt`). Ingest always recompiles the vault afterward.
 
+Concurrent `wiki ingest` and Gateway bridge imports targeting the same vault wait
+for each other's source writes and compilation to finish. Ingest waits up to five
+minutes for a busy vault before reporting a lock timeout.
+
 Flags: `--title <title>` overrides the source title (default: derived from the filename).
 
 ### `wiki okf import <path>`
@@ -208,6 +212,10 @@ Apply narrow mutations without freeform page surgery:
 - `apply metadata <lookup>`: update metadata on an existing page
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
+
+For `apply synthesis`, pass the summary with `--body <text>` or `--body-file <path>`.
+Body files must contain nonempty UTF-8 text. Blank files and invalid UTF-8 are
+rejected before changing the existing synthesis page.
 
 ### `wiki bridge import`
 

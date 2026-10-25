@@ -15,7 +15,7 @@ import {
 import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const orders = ["receipt-first", "event-first"] as const;
+const orders = ["history-first", "event-first"] as const;
 
 suite.define(() => {
   it.each(orders)("keeps image previews through the history handoff (%s)", async (order) => {
@@ -84,7 +84,6 @@ suite.define(() => {
         buffer: imageBytes,
       });
       await page.getByRole("img", { name: "stable-preview.png" }).waitFor();
-      await gateway.deferNext("chat.history", { limit: 1000 });
       await gateway.deferNext("chat.send");
       await page.getByRole("button", { name: "Send message" }).click();
       const request = await gateway.waitForRequest("chat.send");
@@ -203,14 +202,16 @@ suite.define(() => {
         },
         { runId },
       );
-      // The owning run's lifecycle update wakes its custody reconciliation.
+      // Refresh canonical history independently of the held message event.
+      const refreshes = (await gateway.getRequests("chat.history")).length;
+      await gateway.deferNext("chat.history");
       await gateway.emitGatewayEvent("sessions.changed", {
         ...sessionEvent,
         agentId: "main",
         runId,
-        reason: "agent.run.started",
+        reason: "send",
       });
-      await gateway.waitForRequest("chat.history", { match: { limit: 1000 } });
+      await gateway.waitForRequest("chat.history", { after: refreshes });
 
       const canonical = {
         ...pendingInput.message,
@@ -227,13 +228,9 @@ suite.define(() => {
         pendingInputs: { items: [], total: 0 },
       };
       await gateway.setMethodResponse("chat.history", canonicalHistory);
-      if (order === "receipt-first") {
-        const followups = (await gateway.getRequests("chat.history", { limit: 80 })).length;
+      if (order === "history-first") {
         await gateway.resolveDeferred("chat.history", canonicalHistory);
-        await gateway.waitForRequest("chat.history", {
-          match: { limit: 80 },
-          after: followups,
-        });
+        await page.locator('.chat-bubble[data-entry-id="accepted-image-input"]').waitFor();
       }
       await gateway.emitGatewayEvent("session.message", {
         sessionKey,

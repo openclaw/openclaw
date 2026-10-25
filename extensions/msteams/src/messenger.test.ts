@@ -7,6 +7,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { teamsMarkdownDeliveryCases } from "./format.test-fixtures.js";
 const graphUploadMockState = vi.hoisted(() => ({
@@ -28,7 +29,7 @@ import {
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
-import { createMockApp } from "./messenger.test-helpers.js";
+import { createMockApp, createStoredReference } from "./messenger.test-helpers.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const chunkMarkdownText = (text: string, limit: number) => {
@@ -118,6 +119,73 @@ describe("msteams messenger", () => {
   });
 
   describe("renderReplyPayloadsToMessages", () => {
+    it.each([
+      { name: "card-only", text: undefined },
+      {
+        name: "text plus card",
+        text: "Choose a deployment for @[Alex](11111111-2222-3333-4444-555555555555)",
+      },
+    ])("delivers $name through the Teams activity sender", async ({ text }) => {
+      const presentation: NonNullable<ReplyPayload["presentation"]> = {
+        title: "Deployment",
+        blocks: [
+          { type: "text", text: "Choose an environment" },
+          { type: "buttons", buttons: [{ label: "Deploy", value: "deploy" }] },
+        ],
+      };
+      let nextMessageId = 0;
+      const sendActivity = vi.fn(async (_activity: unknown) => ({
+        id: `reply-${++nextMessageId}`,
+      }));
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        app: createMockApp(),
+        conversationRef: { conversation: { id: "conversation-1" } },
+        context: { sendActivity },
+        messages: renderReplyPayloadsToMessages([{ text, presentation }], {
+          textChunkLimit: 4000,
+          tableMode: "code",
+        }),
+      });
+
+      expect(ids).toEqual(text ? ["reply-1", "reply-2"] : ["reply-1"]);
+      expect(sendActivity).toHaveBeenCalledTimes(text ? 2 : 1);
+      if (text) {
+        expect(sendActivity.mock.calls[0]?.[0]).toMatchObject({
+          text: "Choose a deployment for <at>Alex</at>",
+          entities: expect.arrayContaining([
+            {
+              type: "mention",
+              text: "<at>Alex</at>",
+              mentioned: { id: "11111111-2222-3333-4444-555555555555", name: "Alex" },
+            },
+          ]),
+        });
+      }
+      const activity = sendActivity.mock.calls.at(-1)?.[0];
+      expect(activity).not.toHaveProperty("text");
+      expect(activity).toMatchObject({
+        attachments: [
+          {
+            contentType: "application/vnd.microsoft.card.adaptive",
+            content: {
+              type: "AdaptiveCard",
+              actions: [
+                {
+                  type: "Action.Submit",
+                  title: "Deploy",
+                  data: { value: "deploy", label: "Deploy" },
+                },
+              ],
+            },
+          },
+        ],
+        entities: expect.arrayContaining([
+          expect.objectContaining({ additionalType: ["AIGeneratedContent"] }),
+        ]),
+      });
+    });
+
     it("splits media into separate messages by default", () => {
       const messages = renderReplyPayloadsToMessages(
         [{ text: "hi", mediaUrl: "https://example.com/a.png" }],
@@ -128,14 +196,7 @@ describe("msteams messenger", () => {
   });
 
   describe("sendMSTeamsMessages", () => {
-    const baseRef: StoredConversationReference = {
-      activityId: "activity123",
-      user: { id: "user123", name: "User" },
-      agent: { id: "bot123", name: "Bot" },
-      conversation: { id: "19:abc@thread.tacv2;messageid=deadbeef" },
-      channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
-    };
+    const baseRef = createStoredReference();
 
     async function sendAndCaptureThreadReference(params: {
       conversation: StoredConversationReference["conversation"];
@@ -144,15 +205,11 @@ describe("msteams messenger", () => {
     }) {
       const proactiveSent: string[] = [];
       let capturedConversationId: string | undefined;
-      const conversationRef: StoredConversationReference = {
+      const conversationRef = createStoredReference({
         activityId: params.activityId ?? "activity456",
-        user: { id: "user123", name: "User" },
-        agent: { id: "bot123", name: "Bot" },
         conversation: params.conversation,
-        channelId: "msteams",
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
         ...(params.threadId ? { threadId: params.threadId } : {}),
-      };
+      });
 
       await sendMSTeamsMessages({
         replyStyle: "thread",
@@ -329,9 +386,6 @@ describe("msteams messenger", () => {
           }
           return {
             itemId: "item123",
-            webUrl: "https://sharepoint.example.com/item123",
-            shareUrl: "https://sharepoint.example.com/share/item123",
-            name: "retry.txt",
           };
         });
         graphUploadMockState.getDriveItemProperties.mockResolvedValue({
@@ -432,18 +486,14 @@ describe("msteams messenger", () => {
       const sent: string[] = [];
       let capturedConversationId: string | undefined;
 
-      const channelRef: StoredConversationReference = {
+      const channelRef = createStoredReference({
         activityId: "current-msg",
-        user: { id: "user123", name: "User" },
-        agent: { id: "bot123", name: "Bot" },
         conversation: {
           id: "19:abc@thread.tacv2",
           conversationType: "channel",
         },
-        channelId: "msteams",
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
         threadId: "thread-root-msg-id",
-      };
+      });
 
       await sendMSTeamsMessages({
         replyStyle: "top-level",
@@ -508,14 +558,9 @@ describe("msteams messenger", () => {
   });
 
   describe("buildActivity AI metadata", () => {
-    const baseRef: StoredConversationReference = {
-      activityId: "activity123",
-      user: { id: "user123", name: "User" },
-      agent: { id: "bot123", name: "Bot" },
+    const baseRef = createStoredReference({
       conversation: { id: "conv123", conversationType: "personal" },
-      channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
-    };
+    });
 
     it("sends decoded attachment filenames over the Bot Framework HTTP transport", async () => {
       const receivedAttachments: Array<{ name: string; contentUrl: string }> = [];
@@ -571,10 +616,9 @@ describe("msteams messenger", () => {
   // when the Bot Framework connector does not see `tenantId` / `aadObjectId`
   // on the outbound conversation reference.
   describe("buildConversationReference tenant/aad forwarding (#58774)", () => {
-    const storedWithChannelDataTenant: StoredConversationReference = {
+    const storedWithChannelDataTenant = createStoredReference({
       activityId: "activity-1",
       user: { id: "user123", name: "User", aadObjectId: "aad-user-123" },
-      agent: { id: "bot123", name: "Bot" },
       conversation: {
         id: "19:abc@thread.tacv2",
         conversationType: "channel",
@@ -582,9 +626,7 @@ describe("msteams messenger", () => {
       // Canonical channelData source captured by message-handler inbound code.
       tenantId: "tenant-abc",
       aadObjectId: "aad-user-123",
-      channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
-    };
+    });
 
     it("accepts a legacy bot-only imported reference and resolves the agent from bot", () => {
       const botOnly: StoredConversationReference = {

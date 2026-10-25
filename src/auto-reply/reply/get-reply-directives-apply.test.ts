@@ -287,7 +287,7 @@ describe("applyInlineDirectiveOverrides", () => {
         await expect(pending).rejects.toMatchObject({
           name: "AgentSelectionRequiredError",
           code: "AGENT_SELECTION_REQUIRED",
-          surface: "session agent resolution",
+          message: expect.stringContaining("session agent resolution"),
           hint: 'The agent-scoped session key belongs to "main", not "target".',
         });
       } else {
@@ -378,6 +378,29 @@ describe("applyInlineDirectiveOverrides", () => {
 
     expectRejectedDirective(result, typing, { text: errorText, isError: true });
     expect(mocks.handleDirective).toHaveBeenCalledOnce();
+  });
+
+  const verboseAnswer = { text: "Current verbose level: full.\nOptions: on, full, off." };
+  const reasoningAnswer = { text: "Current reasoning level: stream.\nOptions: on, off, stream." };
+  it.each([
+    ["/verbose", { kind: "reply", reply: verboseAnswer, preRunRejection: undefined }],
+    ["please reply\n/verbose", { kind: "continue", directiveAck: verboseAnswer }],
+    ["/reasoning", { kind: "reply", reply: reasoningAnswer, preRunRejection: undefined }],
+    ["please reply\n/reasoning", { kind: "continue", directiveAck: reasoningAnswer }],
+  ])("answers %j with the agent entry default", async (body, expected) => {
+    const { handleDirectiveOnly } = await vi.importActual<
+      typeof import("./directive-handling.impl.js")
+    >("./directive-handling.impl.js");
+    mocks.handleDirective.mockImplementation(handleDirectiveOnly);
+
+    const result = await applyInlineDirectiveOverrides(
+      directiveParams(body, {
+        agentCfg: { verboseDefault: "on", reasoningDefault: "off" },
+        agentEntry: { id: "main", verboseDefault: "full", reasoningDefault: "stream" },
+      }),
+    );
+
+    expect(result).toEqual(expect.objectContaining(expected));
   });
 
   it("rejects unexpected native model arguments before model selection", async () => {

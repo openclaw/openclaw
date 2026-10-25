@@ -8,8 +8,10 @@ import type {
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { FastMode } from "../../api/types.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { showToast } from "../../lib/toast.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
@@ -20,6 +22,8 @@ import {
 } from "./attachment-payload-store.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
+
+registerChatSessionEnglish();
 
 const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
 const MAX_COMPANION_EXCHANGES = 24;
@@ -40,6 +44,8 @@ export type ChatSessionCompanionTurn = {
   | ({ status: "answered" } & SessionCompanionExchange)
   | {
       status: "failed";
+      /** Carried over from the pending turn; Object.assign keeps it on failure. */
+      startedAt: number;
       hint:
         | "busy"
         | "history-unavailable"
@@ -53,12 +59,22 @@ export type ChatSessionCompanionTurn = {
     }
 );
 
+/** Side chat's own model controls; empty fields use the Gateway's Side chat defaults. */
+export type ChatSessionCompanionModelSelection = {
+  model?: string;
+  thinkingLevel?: string;
+  fastMode?: FastMode;
+};
+
 export type ChatSessionCompanionThread = {
   turns: ChatSessionCompanionTurn[];
   loading: boolean;
   draft: string;
   attachments?: ChatAttachment[];
   attachmentReads?: ChatAttachmentReadLifecycle;
+  /** Model the Gateway answers with when no model is chosen; absent until hydrated. */
+  defaultModel?: string;
+  modelSelection?: ChatSessionCompanionModelSelection;
 };
 
 type MutableCompanionThread = ChatSessionCompanionThread & {
@@ -138,8 +154,12 @@ function reconcileTurns(thread: MutableCompanionThread, exchanges: SessionCompan
   );
 }
 
+function companionAgentKey(agentId?: string | null): string {
+  return agentId?.trim() ?? "";
+}
+
 function companionThreadKey(sessionKey: string, agentId?: string | null): string {
-  return `${agentId?.trim() ?? ""}\0${sessionKey.trim()}`;
+  return `${companionAgentKey(agentId)}\0${sessionKey.trim()}`;
 }
 
 /** Pane-owned ephemeral companion threads, keyed by the exact selected session. */
@@ -147,18 +167,21 @@ export class ChatSessionCompanionThreads {
   private readonly threads = new Map<string, MutableCompanionThread>();
   private readonly hydrationTokens = new Map<string, symbol>();
   private readonly submissionTokens = new Map<string, Deferred>();
+  // Model choices follow the agent across its sessions for this pane's lifetime,
+  // like the ephemeral threads themselves; a Gateway's catalog owns their validity.
+  private readonly modelSelections = new Map<string, ChatSessionCompanionModelSelection>();
 
-  private readonly listeners = new Set<() => void>();
+  private publish?: () => void;
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.publish = listener;
+    return () => {
+      this.publish = undefined;
+    };
   }
 
   private readonly notify = () => {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.publish?.();
   };
 
   view(sessionKey: string, agentId?: string | null): ChatSessionCompanionThread {
@@ -172,6 +195,29 @@ export class ChatSessionCompanionThreads {
     }
     thread.draft = draft;
     thread.draftRevision += 1;
+    this.notify();
+  }
+
+  setModelSelection(
+    agentId: string | null | undefined,
+    patch: ChatSessionCompanionModelSelection,
+  ): void {
+    const agentKey = companionAgentKey(agentId);
+    const merged: ChatSessionCompanionModelSelection = {
+      ...this.modelSelections.get(agentKey),
+      ...patch,
+    };
+    const next: ChatSessionCompanionModelSelection = {
+      ...(merged.model ? { model: merged.model } : {}),
+      ...(merged.thinkingLevel ? { thinkingLevel: merged.thinkingLevel } : {}),
+      ...(merged.fastMode !== undefined ? { fastMode: merged.fastMode } : {}),
+    };
+    this.modelSelections.set(agentKey, next);
+    for (const [key, thread] of this.threads) {
+      if (key.startsWith(`${agentKey}\0`)) {
+        thread.modelSelection = next;
+      }
+    }
     this.notify();
   }
 
@@ -228,6 +274,7 @@ export class ChatSessionCompanionThreads {
         return;
       }
       reconcileTurns(thread, result.exchanges);
+      thread.defaultModel = result.defaultModel;
       thread.revision += 1;
       this.notify();
     } catch {
@@ -424,6 +471,7 @@ export class ChatSessionCompanionThreads {
         draft: "",
         attachments: [],
         attachmentReads: new ChatAttachmentReadLifecycle(this.notify),
+        modelSelection: this.modelSelections.get(key.slice(0, key.indexOf("\0"))) ?? {},
         revision: 0,
         draftRevision: 0,
         pendingResets: new Set(),
@@ -451,6 +499,7 @@ export function requestSessionCompanionAnswer(
   agentId?: string | null,
   attachments?: ChatAttachment[],
   uploadConfig?: ApplicationConfigCapability,
+  selection?: ChatSessionCompanionModelSelection,
 ): Promise<SessionsCompanionAskResult> {
   const selectionContext = companionSelectionContext(attachments ?? []);
   const media = attachments?.filter((attachment) => !attachment.selectionAnnotation);
@@ -465,6 +514,9 @@ export function requestSessionCompanionAnswer(
       question,
       ...(selectionContext ? { selectionContext } : {}),
       ...(media?.length ? { attachments: buildChatApiAttachments(media) } : {}),
+      ...(selection?.model ? { model: selection.model } : {}),
+      ...(selection?.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
+      ...(selection?.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
     },
     { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
   );

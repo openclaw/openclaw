@@ -25,7 +25,7 @@ import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   consumePaneSessionHandoff,
-  focusChatComposerFromPrintableKeydown,
+  focusChatComposerFromKeydown,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import {
@@ -409,7 +409,7 @@ describe("chat pane retained presentation lifecycle", () => {
     const focus = vi.spyOn(textarea, "focus");
     const target = activePane.appendChild(document.createElement("main"));
     target.addEventListener("keydown", (event) =>
-      focusChatComposerFromPrintableKeydown(activePane, event, textarea),
+      focusChatComposerFromKeydown(activePane, event, textarea),
     );
     const retainedPane = app.appendChild(document.createElement("div"));
     retainedPane.setAttribute("inert", "");
@@ -539,11 +539,13 @@ describe("chat pane retained presentation lifecycle", () => {
       pane.chatState.attach(state);
       pane.active = true;
 
-      openSessionWorkspaceFile(state, { path: "README.md" });
-      expect(getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "README.md", {
-        agentId: "main",
-      });
+      const opening = openSessionWorkspaceFile(state, { path: "README.md" });
       expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
+      await vi.waitFor(() =>
+        expect(getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "README.md", {
+          agentId: "main",
+        }),
+      );
 
       if (retirement === "hidden") {
         pane.presented = false;
@@ -565,13 +567,41 @@ describe("chat pane retained presentation lifecycle", () => {
           content: "This retired preview must not return.",
         },
       });
-      await file.promise;
+      await opening;
 
       expect(state.sidebarContent).toBeNull();
       expect(state.sessionWorkspaceState?.previews).toEqual([]);
       expect(state.sessionWorkspaceState?.activePreviewId).toBeNull();
     },
   );
+
+  it("cancels an unadmitted new session when navigation hides its pane", async () => {
+    const issued = createDeferred<AbortSignal>();
+    const create = vi.fn((_params: unknown, options?: { signal?: AbortSignal }) => {
+      const signal = options?.signal;
+      if (!signal) {
+        throw new Error("creation needs its pane cancellation signal");
+      }
+      issued.resolve(signal);
+      return new Promise<null>((resolve) => {
+        signal.addEventListener("abort", () => resolve(null), { once: true });
+      });
+    });
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: createSessionCapabilityFixture({ create }),
+    });
+    advertiseSessionCreate(pane);
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+    const creation = pane.createSession();
+    const signal = await issued.promise;
+    pane.presented = false;
+    expect(signal.aborted).toBe(true);
+    await expect(creation).resolves.toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(state.chatError).toBeNull();
+  });
 
   it.each([false, true])(
     "stages a created-session draft only when its pane accepts navigation (%s)",

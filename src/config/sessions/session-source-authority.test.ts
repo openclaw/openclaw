@@ -4,28 +4,33 @@ import {
   composeSessionSourceAssertion,
   prepareSessionSourceAuthority,
   runWithSessionSourceScope,
+  type SessionSourceAssertion,
 } from "./session-source-authority.js";
+
+const sourceWith = (methods: Partial<SessionSourceAssertion>) => Object.assign(() => {}, methods);
+function revocable(message: string) {
+  const controller = new AbortController();
+  return {
+    revoke: () => controller.abort(new Error(message)),
+    assertCurrent: vi.fn(() => controller.signal.throwIfAborted()),
+  };
+}
 
 it.each(["plain", "scoped", "mixed"] as const)(
   "keeps %s source guards at their consumer boundary",
   async (kind) => {
-    let guardCurrent = true;
-    const guard = vi.fn(() => {
-      if (!guardCurrent) {
-        throw new Error("consumer guard revoked");
-      }
-    });
+    const { assertCurrent: guard, revoke } = revocable("consumer guard revoked");
     const release = vi.fn();
     const open = vi.fn(async () => ({ checks: [], assertCurrent() {}, release }));
     const assertion = composeSessionSourceAssertion([
       kind === "scoped" ? undefined : guard,
-      kind === "plain" ? undefined : Object.assign(() => {}, { prepareSessionSourceScope: open }),
+      kind === "plain" ? undefined : sourceWith({ prepareSessionSourceScope: open }),
     ]);
     await runWithSessionSourceScope(assertion, async () => {
       await Promise.resolve();
       assertion();
       if (kind !== "scoped") {
-        guardCurrent = false;
+        revoke();
         expect(assertion).toThrow("consumer guard revoked");
       }
     });
@@ -38,28 +43,18 @@ it.each(["plain", "scoped", "mixed"] as const)(
 it.each([false, true])(
   "revalidates prepared facts and releases them without rerunning a plain guard (mixed=%s)",
   async (mixed) => {
-    let current = true;
+    const prepared = revocable("prepared source revoked");
     const guard = vi.fn();
     const release = vi.fn();
     const assertion = composeSessionSourceAssertion([
       mixed ? guard : undefined,
-      Object.assign(() => {}, {
-        prepareSessionSourceScope: async () => ({
-          checks: [],
-          assertCurrent() {
-            if (!current) {
-              throw new Error("prepared source revoked");
-            }
-          },
-          release,
-        }),
-      }),
+      sourceWith({ prepareSessionSourceScope: async () => ({ checks: [], ...prepared, release }) }),
     ]);
     await expect(
       runWithSessionSourceScope(assertion, async () => {
         assertion();
         await Promise.resolve();
-        current = false;
+        prepared.revoke();
       }),
     ).rejects.toThrow("prepared source revoked");
     expect(guard).toHaveBeenCalledTimes(mixed ? 1 : 0);
@@ -72,11 +67,7 @@ it("preserves a scoped acquisition failure without invoking its plain sibling gu
   const failure = new Error("source acquisition failed");
   const assertion = composeSessionSourceAssertion([
     guard,
-    Object.assign(() => {}, {
-      prepareSessionSourceScope: async (): Promise<never> => {
-        throw failure;
-      },
-    }),
+    sourceWith({ prepareSessionSourceScope: () => Promise.reject(failure) }),
   ]);
   await expect(runWithSessionSourceScope(assertion, async () => {})).rejects.toBe(failure);
   expect(guard).not.toHaveBeenCalled();
@@ -126,8 +117,8 @@ it("retains every composed source until accepted work releases its hold", () => 
 it("releases earlier source holds when a later acquisition fails", () => {
   const release = vi.fn();
   const assertion = composeSessionSourceAssertion([
-    Object.assign(() => {}, { retain: () => release }),
-    Object.assign(() => {}, {
+    sourceWith({ retain: () => release }),
+    sourceWith({
       retain: () => {
         throw new Error("source released");
       },

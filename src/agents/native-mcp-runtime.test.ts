@@ -16,6 +16,7 @@ import {
   acquireNativeMcpServer,
   type NativeMcpClientContext,
   type NativeMcpServerEvent,
+  type NativeMcpServerView,
 } from "./native-mcp-runtime.js";
 import {
   context,
@@ -39,374 +40,293 @@ afterAll(async () => {
   await receipts.close();
 });
 
-async function fixture(era: "legacy" | "modern" = "legacy") {
+async function fixture(era: "legacy" | "modern" = "legacy", requestTimeoutMs?: number) {
   const directory = tempDirs.make("native-mcp-owner-");
   const file = path.join(directory, "server.mjs");
   await writeNativeMcpFixture(file, receipts.endpoint, era);
   const create = (requester: string) => {
-    const runtime = createFixtureRuntime(directory, file, requester);
+    const runtime = createFixtureRuntime(directory, file, requester, requestTimeoutMs);
     runtimes.push(runtime);
     return runtime;
   };
-  return { file, create, runtime: create("first") };
+  const runtime = create("first");
+  const acquire = (caller = context(), owner = runtime) =>
+    acquireNativeMcpServer(owner, "fixture", caller);
+  return { file, create, runtime, acquire };
 }
 
 const metadata = { fixture: "kept", nested: { value: 7 } };
+const withMetadata = <T extends object>(value: T) => ({ ...value, _meta: metadata });
+const sample = (owner: string) => ({
+  role: "assistant" as const,
+  content: { type: "text" as const, text: `${owner}-sample` },
+  model: "fixture",
+});
+const customResult = (owner: string, selected: string[]) => ({
+  action: "accept" as const,
+  content: { choice: `${owner}-custom`, nested: { selected } },
+  _meta: { acceptedBy: owner },
+});
+const callTool = (view: NativeMcpServerView, name: string, signal: AbortSignal) =>
+  view.callTool({ name }, options(signal));
+const toolPayload = async (view: NativeMcpServerView, name: string, signal: AbortSignal) =>
+  payload(await callTool(view, name, signal));
+const page = (key: string, entries: object[], nextCursor?: string) =>
+  withMetadata({ [key]: entries, ...(nextCursor ? { nextCursor } : {}) });
+const note = { uri: "fixture://note", mimeType: "text/plain" };
+const greeting = { name: "greeting", arguments: { name: "Ada" } };
+const completeText = (value: unknown) => ({
+  kind: "complete",
+  result: { content: [{ type: "text", text: JSON.stringify(value) }] },
+});
+const completed = <T extends object>(result: T) => ({
+  kind: "complete",
+  result: withMetadata(result),
+});
+const notificationMatching = (method: string) =>
+  expect.objectContaining({ notification: expect.objectContaining({ method }) });
+async function continuation(view: NativeMcpServerView, signal: AbortSignal) {
+  const response = await callTool(view, "probe", signal);
+  if (response.kind !== "input-required") {
+    throw new Error("Missing modern continuation");
+  }
+  return response;
+}
 
 describe("private MCP projection operations at the session owner", () => {
   it("keeps complete pages and utility results from a roots-sensitive legacy peer", async ({
     signal,
   }) => {
-    const { runtime } = await fixture();
+    const { acquire } = await fixture();
     const caller = context();
-    const view = await acquireNativeMcpServer(runtime, "fixture", caller);
-    try {
-      expect(view.getProtocolEra()).toBe("legacy");
-      expect(view.getProtocolVersion()).toBe("2025-11-25");
-      expect(view.getServerInfo()).toEqual({ name: "typed-fixture", version: "1.0.0" });
-      expect(view.getInstructions()).toBe("Keep the full envelope.");
-      const first = await view.listTools(undefined, options(signal));
-      expect(first).toEqual({
-        nextCursor: "page:2",
-        _meta: metadata,
-        tools: [
-          {
-            name: "probe",
-            title: "Probe title",
-            description: JSON.stringify({ roots: caller.roots, capabilities: caller.capabilities }),
-            inputSchema: { type: "object", properties: {} },
-            annotations: { readOnlyHint: true },
-            _meta: metadata,
-          },
-        ],
-      });
-      expect(await view.listTools({ cursor: first.nextCursor }, options(signal))).toEqual({
-        tools: [],
-        _meta: metadata,
-      });
-      expect(await view.listResources(undefined, options(signal))).toEqual({
-        resources: [
-          { uri: "fixture://note", name: "Note", mimeType: "text/plain", _meta: metadata },
-        ],
-        nextCursor: "page:2",
-        _meta: metadata,
-      });
-      expect(await view.listResourceTemplates(undefined, options(signal))).toEqual({
-        resourceTemplates: [{ uriTemplate: "fixture://{name}", name: "Template", _meta: metadata }],
-        nextCursor: "page:2",
-        _meta: metadata,
-      });
-      expect(await view.listPrompts(undefined, options(signal))).toEqual({
-        prompts: [
-          {
-            name: "greeting",
-            description: "Greeting prompt",
-            arguments: [{ name: "name", required: true }],
-            _meta: metadata,
-          },
-        ],
-        nextCursor: "page:2",
-        _meta: metadata,
-      });
-      expect(await view.listResources({ cursor: "page:2" }, options(signal))).toEqual({
-        resources: [],
-        _meta: metadata,
-      });
-      expect(await view.listResourceTemplates({ cursor: "page:2" }, options(signal))).toEqual({
-        resourceTemplates: [],
-        _meta: metadata,
-      });
-      expect(await view.listPrompts({ cursor: "page:2" }, options(signal))).toEqual({
-        prompts: [],
-        _meta: metadata,
-      });
-      expect(await view.readResource({ uri: "fixture://note" }, options(signal))).toEqual({
-        kind: "complete",
-        result: {
-          contents: [
-            {
-              uri: "fixture://note",
-              mimeType: "text/plain",
-              text: "full resource",
-              _meta: metadata,
-            },
-          ],
-          _meta: metadata,
-        },
-      });
-      expect(
-        await view.getPrompt({ name: "greeting", arguments: { name: "Ada" } }, options(signal)),
-      ).toEqual({
-        kind: "complete",
-        result: {
-          description: "Complete greeting",
-          messages: [
-            { role: "user", content: { type: "text", text: "Hello Ada", _meta: metadata } },
-          ],
-          _meta: metadata,
-        },
-      });
-      expect(
-        await view.complete(
-          { ref: { type: "ref/prompt", name: "greeting" }, argument: { name: "name", value: "A" } },
-          options(signal),
-        ),
-      ).toEqual({
-        completion: { values: ["Ada", "Alan"], total: 3, hasMore: true },
-        _meta: metadata,
-      });
-    } finally {
-      await view.release();
+    const view = await acquire(caller);
+    expect(view.getProtocolEra()).toBe("legacy");
+    expect(view.getProtocolVersion()).toBe("2025-11-25");
+    expect(view.getServerInfo()).toEqual({ name: "typed-fixture", version: "1.0.0" });
+    expect(view.getInstructions()).toBe("Keep the full envelope.");
+    const first = await view.listTools(undefined, options(signal));
+    const probe = withMetadata({
+      name: "probe",
+      title: "Probe title",
+      description: JSON.stringify({ roots: caller.roots, capabilities: caller.capabilities }),
+      inputSchema: { type: "object", properties: {} },
+      annotations: { readOnlyHint: true },
+    });
+    expect(first).toEqual(page("tools", [probe], "page:2"));
+    const prompt = withMetadata({
+      name: "greeting",
+      description: "Greeting prompt",
+      arguments: [{ name: "name", required: true }],
+    });
+    const pages = [
+      [view.listTools, "tools", null],
+      [view.listResources, "resources", withMetadata({ ...note, name: "Note" })],
+      [
+        view.listResourceTemplates,
+        "resourceTemplates",
+        withMetadata({ uriTemplate: "fixture://{name}", name: "Template" }),
+      ],
+      [view.listPrompts, "prompts", prompt],
+    ] as const;
+    for (const [list, key, entry] of pages) {
+      if (entry) {
+        expect(await list(undefined, options(signal))).toEqual(page(key, [entry], "page:2"));
+      }
+      expect(await list({ cursor: first.nextCursor }, options(signal))).toEqual(page(key, []));
     }
+    expect(await view.readResource({ uri: note.uri }, options(signal))).toEqual(
+      completed({
+        contents: [withMetadata({ ...note, text: "full resource" })],
+      }),
+    );
+    expect(await view.getPrompt(greeting, options(signal))).toEqual(
+      completed({
+        description: "Complete greeting",
+        messages: [{ role: "user", content: withMetadata({ type: "text", text: "Hello Ada" }) }],
+      }),
+    );
+    expect(
+      await view.complete(
+        { ref: { type: "ref/prompt", name: "greeting" }, argument: { name: "name", value: "A" } },
+        options(signal),
+      ),
+    ).toEqual(
+      withMetadata({
+        completion: { values: ["Ada", "Alan"], total: 3, hasMore: true },
+      }),
+    );
   });
 
   for (const reason of ["idle", "changed"]) {
     it(`answers capability-context roots while ${reason}`, async ({ signal }) => {
-      const { runtime, file } = await fixture();
+      const { runtime, file, acquire } = await fixture();
       const caller = context();
-      const view = await acquireNativeMcpServer(runtime, "fixture", caller);
-      try {
-        if (reason === "changed") {
-          await view.rootsChanged(options(signal));
-          await withinTest(receipts.waitFor(file, "recv notifications/roots/list_changed"), signal);
-        }
-        expect(runtime.activeLeases).toBe(0);
-        receipts.release(file, "request-roots-" + reason);
-        await withinTest(receipts.waitFor(file, "roots settled " + reason), signal);
-        const report = (await fs.readFile(file + ".log", "utf8"))
-          .split("\n")
-          .find((line) => line.startsWith("roots " + reason + " "));
-        expect(report).toBe("roots " + reason + " " + JSON.stringify({ result: caller.roots }));
-        expect(runtime.activeLeases).toBe(0);
-      } finally {
-        await view.release();
+      const view = await acquire(caller);
+      if (reason === "changed") {
+        await view.rootsChanged(options(signal));
+        await withinTest(receipts.waitFor(file, "recv notifications/roots/list_changed"), signal);
       }
+      expect(runtime.activeLeases).toBe(0);
+      receipts.release(file, "request-roots-" + reason);
+      await withinTest(receipts.waitFor(file, "roots settled " + reason), signal);
+      const report = (await fs.readFile(file + ".log", "utf8"))
+        .split("\n")
+        .find((line) => line.startsWith("roots " + reason + " "));
+      expect(report).toBe("roots " + reason + " " + JSON.stringify({ result: caller.roots }));
+      expect(runtime.activeLeases).toBe(0);
     });
   }
 
   it("reuses identical context while isolating roots and requesters and retiring run-scoped children", async ({
     signal,
   }) => {
-    const { runtime, create, file } = await fixture();
+    const { runtime, create, file, acquire } = await fixture();
     const sharedContext = {};
     const [first, same, sameRoots] = await Promise.all([
-      acquireNativeMcpServer(runtime, "fixture", context(undefined, sharedContext)),
-      acquireNativeMcpServer(runtime, "fixture", context(undefined, sharedContext)),
-      acquireNativeMcpServer(runtime, "fixture", context()),
+      acquire(context(undefined, sharedContext)),
+      acquire(context(undefined, sharedContext)),
+      acquire(),
     ]);
-    const other = await acquireNativeMcpServer(
-      runtime,
-      "fixture",
-      context("file:///workspace/b", sharedContext),
-    );
-    const noRoots = await acquireNativeMcpServer(runtime, "fixture", {
-      ...context(undefined, sharedContext),
-      capabilities: {},
+    const other = await acquire(context("file:///workspace/b", sharedContext));
+    const noRoots = await acquire({ ...context(undefined, sharedContext), capabilities: {} });
+    const secondRequester = await acquire(context(undefined, sharedContext), create("second"));
+    const inspect = async (view: typeof first) => toolPayload(view, "probe", signal);
+    const original = await inspect(first);
+    expect(await inspect(same)).toEqual(original);
+    expect(await inspect(sameRoots)).not.toEqual(original);
+    expect(await inspect(other)).toMatchObject({
+      roots: { roots: [{ uri: "file:///workspace/b", name: "Workspace" }] },
     });
-    const secondRequester = await acquireNativeMcpServer(
-      create("second"),
-      "fixture",
-      context(undefined, sharedContext),
-    );
+    const isolated = await inspect(other);
+    expect(isolated).not.toEqual(original);
+    const admittedAt = runtime.lastUsedAt + 10_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(admittedAt);
     try {
-      const inspect = async (view: typeof first) =>
-        payload(await view.callTool({ name: "probe" }, options(signal)));
-      const original = await inspect(first);
-      expect(await inspect(same)).toEqual(original);
-      expect(await inspect(sameRoots)).not.toEqual(original);
-      expect(await inspect(other)).toMatchObject({
-        roots: { roots: [{ uri: "file:///workspace/b", name: "Workspace" }] },
-      });
-      const isolated = await inspect(other);
-      expect(isolated).not.toEqual(original);
-      const admittedAt = runtime.lastUsedAt + 10_000;
-      const clock = vi.spyOn(Date, "now").mockReturnValue(admittedAt);
-      try {
-        expect(await inspect(noRoots)).toMatchObject({ capabilities: {}, roots: { roots: [] } });
-        expect(runtime.lastUsedAt).toBe(admittedAt);
-        expect(runtime.activeLeases).toBe(0);
-      } finally {
-        clock.mockRestore();
-      }
-      expect(await inspect(secondRequester)).not.toEqual(original);
+      expect(await inspect(noRoots)).toMatchObject({ capabilities: {}, roots: { roots: [] } });
+      expect(runtime.lastUsedAt).toBe(admittedAt);
       expect(runtime.activeLeases).toBe(0);
-      await other.release();
-      await withinTest(receipts.waitForExit(file + ":" + processId(isolated)), signal);
-      await expect(other.callTool({ name: "probe" }, options(signal))).rejects.toThrow("released");
-      const ordinaryCatalog = await runtime.getCatalog();
-      expect(ordinaryCatalog.tools[0]?.description).toBe(
-        JSON.stringify({ roots: { roots: [] }, capabilities: {} }),
-      );
-      const ordinaryResult = await runtime.callTool("fixture", "probe", {});
-      const ordinaryText = ordinaryResult.content[0];
-      if (ordinaryText?.type !== "text") {
-        throw new Error("Expected ordinary MCP tool text");
-      }
-      expect(JSON.parse(ordinaryText.text)).toMatchObject({
-        roots: { roots: [] },
-        capabilities: {},
-      });
-      expect((await fs.readFile(file + ".log", "utf8")).match(/^started /gm)).toHaveLength(6);
-      expect(await inspect(first)).toEqual(original);
-      await first.release();
-      expect(await inspect(same)).toEqual(original);
-      const closed = createDeferred();
-      let throwingListenerCalls = 0;
-      same.subscribe((event) => {
-        if (event.kind === "closed") {
-          throwingListenerCalls += 1;
-          throw new Error("fixture subscriber failed");
-        }
-      });
-      same.subscribe((event) => {
-        if (event.kind === "closed") {
-          closed.resolve();
-        }
-      });
-      await runtime.dispose();
-      await withinTest(closed.promise, signal);
-      expect(throwingListenerCalls).toBe(1);
     } finally {
-      await Promise.all([
-        first.release(),
-        same.release(),
-        sameRoots.release(),
-        other.release(),
-        noRoots.release(),
-        secondRequester.release(),
-      ]);
+      clock.mockRestore();
     }
+    expect(await inspect(secondRequester)).not.toEqual(original);
+    expect(runtime.activeLeases).toBe(0);
+    await other.release();
+    await withinTest(receipts.waitForExit(file + ":" + processId(isolated)), signal);
+    await expect(callTool(other, "probe", signal)).rejects.toThrow("released");
+    const ordinaryCatalog = await runtime.getCatalog();
+    expect(ordinaryCatalog.tools[0]?.description).toBe(
+      JSON.stringify({ roots: { roots: [] }, capabilities: {} }),
+    );
+    const ordinaryResult = await runtime.callTool("fixture", "probe", {});
+    const ordinaryText = ordinaryResult.content[0];
+    if (ordinaryText?.type !== "text") {
+      throw new Error("Expected ordinary MCP tool text");
+    }
+    expect(JSON.parse(ordinaryText.text)).toMatchObject({ roots: { roots: [] }, capabilities: {} });
+    expect((await fs.readFile(file + ".log", "utf8")).match(/^started /gm)).toHaveLength(6);
+    expect(await inspect(first)).toEqual(original);
+    await first.release();
+    expect(await inspect(same)).toEqual(original);
+    const closed = createDeferred();
+    let throwingListenerCalls = 0;
+    same.subscribe((event) => {
+      if (event.kind === "closed") {
+        throwingListenerCalls += 1;
+        throw new Error("fixture subscriber failed");
+      }
+    });
+    same.subscribe((event) => {
+      if (event.kind === "closed") {
+        closed.resolve();
+      }
+    });
+    await runtime.dispose();
+    await withinTest(closed.promise, signal);
+    expect(throwingListenerCalls).toBe(1);
   });
 
   it("binds callbacks and notifications to the caller and rejects revoked work after an await", async ({
     signal,
   }) => {
-    const { runtime, file } = await fixture();
+    const { runtime, file, acquire } = await fixture();
     const samplingRequested = createDeferred();
     const samplingReady = createDeferred();
     let revoked = false;
     let waiting = false;
-    const caller = context();
+    const base = context();
+    base.capabilities.elicitation = { form: {}, url: {} };
+    base.capabilities.sampling = {};
+    base.capabilities.extensions = {
+      "openai/elicitation": { form: {} },
+      "io.openclaw.test/sample-during-list": {},
+    };
+    const customRequests: Record<string, unknown>[] = [];
+    const callbackContext = (owner: string, selected: string[]): NativeMcpClientContext => ({
+      ...base,
+      createMessage: async () => sample(owner),
+      elicit: async () => ({ action: "accept", content: { choice: owner } }),
+      elicitCustom: async (params) => {
+        customRequests.push(params);
+        return customResult(owner, selected);
+      },
+    });
+    const caller = callbackContext("first", ["a", "b"]);
     caller.assertCurrent = () => {
       if (revoked) {
         throw new Error("caller revoked");
       }
     };
-    caller.capabilities.elicitation = { form: {}, url: {} };
-    caller.capabilities.sampling = {};
     caller.createMessage = async () => {
       if (waiting) {
         samplingRequested.resolve();
         await samplingReady.promise;
       }
-      return {
-        role: "assistant",
-        content: { type: "text", text: "first-sample" },
-        model: "fixture",
-      };
-    };
-    caller.capabilities.extensions = {
-      "openai/elicitation": { form: {} },
-      "io.openclaw.test/sample-during-list": {},
-    };
-    const customRequests: Record<string, unknown>[] = [];
-    caller.elicitCustom = async (params) => {
-      customRequests.push(params);
-      return {
-        action: "accept",
-        content: { choice: "first-custom", nested: { selected: ["a", "b"] } },
-        _meta: { acceptedBy: "first" },
-      };
+      return sample("first");
     };
     caller.elicit = async (params) =>
       params.mode === "url"
         ? { action: "accept" }
         : { action: "accept", content: { choice: "first" } };
-    const first = await acquireNativeMcpServer(runtime, "fixture", caller);
-    const secondContext: NativeMcpClientContext = {
-      ...caller,
-      assertCurrent() {},
-      elicit: async () => ({ action: "accept", content: { choice: "second" } }),
-      createMessage: async () => ({
-        role: "assistant",
-        content: { type: "text", text: "second-sample" },
-        model: "fixture",
-      }),
-      elicitCustom: async (params) => {
-        customRequests.push(params);
-        return {
-          action: "accept",
-          content: { choice: "second-custom", nested: { selected: ["b"] } },
-          _meta: { acceptedBy: "second" },
-        };
-      },
-    };
-    const second = await acquireNativeMcpServer(runtime, "fixture", secondContext);
+    const first = await acquire(caller);
+    const secondContext = callbackContext("second", ["b"]);
+    const second = await acquire(secondContext);
     const firstEvents: NativeMcpServerEvent[] = [];
     const secondEvents: NativeMcpServerEvent[] = [];
     const changed = createDeferred();
     const urlCompleted = createDeferred();
+    const notificationCompletions = new Map([
+      ["notifications/elicitation/complete", urlCompleted],
+      ["notifications/tools/list_changed", changed],
+    ]);
     first.subscribe((event) => {
       firstEvents.push(event);
-      if (
-        event.kind === "notification" &&
-        event.notification.method === "notifications/elicitation/complete"
-      ) {
-        urlCompleted.resolve();
-      }
-      if (
-        event.kind === "notification" &&
-        event.notification.method === "notifications/tools/list_changed"
-      ) {
-        changed.resolve();
+      if (event.kind === "notification") {
+        notificationCompletions.get(event.notification.method)?.resolve();
       }
     });
     second.subscribe((event) => secondEvents.push(event));
     try {
-      expect(payload(await first.callTool({ name: "elicit" }, options(signal)))).toEqual({
-        action: "accept",
-        content: { choice: "first" },
-      });
-      expect(payload(await second.callTool({ name: "elicit" }, options(signal)))).toEqual({
-        action: "accept",
-        content: { choice: "second" },
-      });
-      expect(payload(await first.callTool({ name: "elicitCustom" }, options(signal)))).toEqual({
-        action: "accept",
-        content: { choice: "first-custom", nested: { selected: ["a", "b"] } },
-        _meta: { acceptedBy: "first" },
-      });
-      expect(payload(await second.callTool({ name: "elicitCustom" }, options(signal)))).toEqual({
-        action: "accept",
-        content: { choice: "second-custom", nested: { selected: ["b"] } },
-        _meta: { acceptedBy: "second" },
-      });
-      expect(customRequests).toEqual([
-        {
-          message: "Rich form",
-          fields: [{ id: "choice", options: ["a", "b"] }],
-          _meta: { fixture: "custom" },
-        },
-        {
-          message: "Rich form",
-          fields: [{ id: "choice", options: ["a", "b"] }],
-          _meta: { fixture: "custom" },
-        },
-      ]);
-      expect(payload(await first.callTool({ name: "sample" }, options(signal)))).toEqual({
-        role: "assistant",
-        content: { type: "text", text: "first-sample" },
-        model: "fixture",
-      });
-      expect(payload(await second.callTool({ name: "sample" }, options(signal)))).toEqual({
-        role: "assistant",
-        content: { type: "text", text: "second-sample" },
-        model: "fixture",
-      });
-      expect(payload(await first.callTool({ name: "url" }, options(signal)))).toEqual({
-        action: "accept",
-      });
-      const completion = second.callTool({ name: "completeUrl" }, options(signal));
+      for (const [view, owner, selected] of [
+        [first, "first", ["a", "b"]],
+        [second, "second", ["b"]],
+      ] as const) {
+        expect(await toolPayload(view, "elicit", signal)).toEqual({
+          action: "accept",
+          content: { choice: owner },
+        });
+        expect(await toolPayload(view, "elicitCustom", signal)).toEqual(
+          customResult(owner, [...selected]),
+        );
+        expect(await toolPayload(view, "sample", signal)).toEqual(sample(owner));
+      }
+      const customRequest = {
+        message: "Rich form",
+        fields: [{ id: "choice", options: ["a", "b"] }],
+        _meta: { fixture: "custom" },
+      };
+      expect(customRequests).toEqual([customRequest, customRequest]);
+      expect(await toolPayload(first, "url", signal)).toEqual({ action: "accept" });
+      const completion = callTool(second, "completeUrl", signal);
       await withinTest(
         awaitGateBeforeSettlement(
           urlCompleted.promise,
@@ -417,11 +337,9 @@ describe("private MCP projection operations at the session owner", () => {
       );
       await completion;
       expect(secondEvents).not.toContainEqual(
-        expect.objectContaining({
-          notification: expect.objectContaining({ method: "notifications/elicitation/complete" }),
-        }),
+        notificationMatching("notifications/elicitation/complete"),
       );
-      await first.callTool({ name: "notify" }, options(signal));
+      await callTool(first, "notify", signal);
       await withinTest(changed.promise, signal);
       expect(firstEvents).toContainEqual({
         kind: "notification",
@@ -430,17 +348,13 @@ describe("private MCP projection operations at the session owner", () => {
           params: { level: "info", data: "request-local" },
         },
       });
-      expect(secondEvents).not.toContainEqual(
-        expect.objectContaining({
-          notification: expect.objectContaining({ method: "notifications/message" }),
-        }),
-      );
+      expect(secondEvents).not.toContainEqual(notificationMatching("notifications/message"));
       expect(secondEvents).toContainEqual({
         kind: "notification",
         notification: { method: "notifications/tools/list_changed" },
       });
       waiting = true;
-      const call = first.callTool({ name: "sample" }, options(signal));
+      const call = callTool(first, "sample", signal);
       const rejected = expect(call).rejects.toThrow("caller revoked");
       await withinTest(samplingRequested.promise, signal);
       revoked = true;
@@ -449,28 +363,16 @@ describe("private MCP projection operations at the session owner", () => {
       await withinTest(receipts.waitFor(file, "callback refused"), signal);
       expect(runtime.activeLeases).toBe(0);
       await first.release();
-      await second.callTool({ name: "notify" }, options(signal));
-      const refreshed = await acquireNativeMcpServer(runtime, "fixture", secondContext);
-      try {
-        expect(refreshed.runtime.peekCatalog()?.diagnostics ?? []).toEqual([]);
-        await withinTest(receipts.waitFor(file, "listed sample second-sample"), signal);
-        const previousPid = processId(
-          payload(await refreshed.callTool({ name: "probe" }, options(signal))),
-        );
-        await expect(refreshed.callTool({ name: "crash" }, options(signal))).rejects.toThrow();
-        await withinTest(receipts.waitForExit(file + ":" + previousPid), signal);
-        const reconnected = await acquireNativeMcpServer(runtime, "fixture", secondContext);
-        try {
-          expect(
-            processId(payload(await reconnected.callTool({ name: "probe" }, options(signal)))),
-          ).not.toBe(previousPid);
-          await withinTest(receipts.waitFor(file, "listed sample second-sample", 2), signal);
-        } finally {
-          await reconnected.release();
-        }
-      } finally {
-        await refreshed.release();
-      }
+      await callTool(second, "notify", signal);
+      const refreshed = await acquire(secondContext);
+      expect(refreshed.runtime.peekCatalog()?.diagnostics ?? []).toEqual([]);
+      await withinTest(receipts.waitFor(file, "listed sample second-sample"), signal);
+      const previousPid = processId(await toolPayload(refreshed, "probe", signal));
+      await expect(callTool(refreshed, "crash", signal)).rejects.toThrow();
+      await withinTest(receipts.waitForExit(file + ":" + previousPid), signal);
+      const reconnected = await acquire(secondContext);
+      expect(processId(await toolPayload(reconnected, "probe", signal))).not.toBe(previousPid);
+      await withinTest(receipts.waitFor(file, "listed sample second-sample", 2), signal);
     } finally {
       samplingReady.resolve();
       await Promise.all([first.release(), second.release()]);
@@ -480,12 +382,12 @@ describe("private MCP projection operations at the session owner", () => {
   it("forwards progress and retires cancelled legacy work without retaining a lease", async ({
     signal,
   }) => {
-    const { runtime, file } = await fixture();
+    const { runtime, file, acquire } = await fixture();
     const caller = context();
-    let view = await acquireNativeMcpServer(runtime, "fixture", caller);
+    let view = await acquire(caller);
     try {
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const pid = processId(payload(await view.callTool({ name: "probe" }, options(signal))));
+        const pid = processId(await toolPayload(view, "probe", signal));
         const abort = new AbortController();
         const progress = createDeferred();
         const releaseToken = `finish-${attempt}`;
@@ -506,13 +408,11 @@ describe("private MCP projection operations at the session owner", () => {
         await rejected;
         expect(runtime.activeLeases).toBe(0);
         expect(() => process.kill(pid, 0)).toThrow();
-        await expect(view.callTool({ name: "probe" }, options(signal))).rejects.toThrow(
-          "reacquire",
-        );
+        await expect(callTool(view, "probe", signal)).rejects.toThrow("reacquire");
         await view.release();
-        view = await acquireNativeMcpServer(runtime, "fixture", caller);
+        view = await acquire(caller);
       }
-      expect(payload(await view.callTool({ name: "probe" }, options(signal)))).toMatchObject({
+      expect(await toolPayload(view, "probe", signal)).toMatchObject({
         capabilities: { roots: { listChanged: true } },
       });
       const progress = createDeferred();
@@ -534,27 +434,23 @@ describe("private MCP projection operations at the session owner", () => {
   });
 
   it("isolates a refused capability context from healthy upstream startup", async ({ signal }) => {
-    const { runtime, file } = await fixture();
+    const { file, acquire } = await fixture();
     const refused = context();
     refused.capabilities.extensions = { "io.openclaw.test/refuse-startup": {} };
-    await expect(acquireNativeMcpServer(runtime, "fixture", refused)).rejects.toThrow();
+    await expect(acquire(refused)).rejects.toThrow();
     await withinTest(receipts.waitFor(file, "initialize refused capabilities"), signal);
-    const healthy = await acquireNativeMcpServer(runtime, "fixture", context());
-    try {
-      expect(payload(await healthy.callTool({ name: "probe" }, options(signal)))).toMatchObject({
-        roots: context().roots,
-        capabilities: { roots: { listChanged: true } },
-      });
-      expect((await fs.readFile(file + ".log", "utf8")).match(/^started /gm)).toHaveLength(2);
-    } finally {
-      await healthy.release();
-    }
+    const healthy = await acquire();
+    expect(await toolPayload(healthy, "probe", signal)).toMatchObject({
+      roots: context().roots,
+      capabilities: { roots: { listChanged: true } },
+    });
+    expect((await fs.readFile(file + ".log", "utf8")).match(/^started /gm)).toHaveLength(2);
   });
 
   it("preserves owner deadlines, human-input holds, and uncertain child cleanup", async ({
     signal,
   }) => {
-    const { runtime } = await fixture();
+    const { runtime, acquire } = await fixture("legacy", 5_000);
     const caller = context();
     const samplingEntered = createDeferred<AbortSignal>();
     const samplingRelease = createDeferred();
@@ -572,7 +468,7 @@ describe("private MCP projection operations at the session owner", () => {
       await withinTest(humanRelease.promise, callbackSignal);
       return { action: "accept", content: { choice: "held" } };
     };
-    let view = await acquireNativeMcpServer(runtime, "fixture", caller);
+    let view = await acquire(caller);
     const timeoutMs = view.runtime.getServerRequestTimeoutMs?.("fixture");
     if (timeoutMs === undefined) {
       throw new Error("Expected negotiated owner's request timeout");
@@ -580,7 +476,7 @@ describe("private MCP projection operations at the session owner", () => {
     const pending: Promise<unknown>[] = [];
     try {
       // This deadline retires a real process; its cleanup grace also needs the real clock.
-      const sampling = Promise.allSettled([view.callTool({ name: "sample" }, options(signal))]);
+      const sampling = Promise.allSettled([callTool(view, "sample", signal)]);
       pending.push(sampling);
       const samplingSignal = await withinTest(samplingEntered.promise, signal);
       expect(await sampling).toMatchObject([
@@ -588,11 +484,11 @@ describe("private MCP projection operations at the session owner", () => {
       ]);
       expect(samplingSignal.aborted).toBe(true);
       expect(runtime.activeLeases).toBe(0);
-      await expect(view.callTool({ name: "probe" }, options(signal))).rejects.toThrow("reacquire");
+      await expect(callTool(view, "probe", signal)).rejects.toThrow("reacquire");
       await view.release();
-      view = await acquireNativeMcpServer(runtime, "fixture", caller);
+      view = await acquire(caller);
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const human = Promise.allSettled([view.callTool({ name: "elicit" }, options(signal))]);
+      const human = Promise.allSettled([callTool(view, "elicit", signal)]);
       pending.push(human);
       const humanSignal = await withinTest(humanEntered.promise, signal);
       await vi.advanceTimersByTimeAsync(timeoutMs + 1);
@@ -601,17 +497,7 @@ describe("private MCP projection operations at the session owner", () => {
       expect(await human).toMatchObject([
         {
           status: "fulfilled",
-          value: {
-            kind: "complete",
-            result: {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({ action: "accept", content: { choice: "held" } }),
-                },
-              ],
-            },
-          },
+          value: completeText({ action: "accept", content: { choice: "held" } }),
         },
       ]);
       expect(runtime.activeLeases).toBe(0);
@@ -622,11 +508,7 @@ describe("private MCP projection operations at the session owner", () => {
       await Promise.all(pending);
       await view.release();
     }
-    const uncertain = await acquireNativeMcpServer(
-      runtime,
-      "fixture",
-      context("file:///workspace/uncertain"),
-    );
+    const uncertain = await acquire(context("file:///workspace/uncertain"));
     const join = uncertain.runtime.joinCleanup?.bind(uncertain.runtime);
     if (!join || !runtime.joinCleanup) {
       throw new Error("Expected lifecycle cleanup join");
@@ -650,7 +532,7 @@ describe("private MCP projection operations at the session owner", () => {
   it("records the modern era and keeps input-required continuations owned by their view", async ({
     signal,
   }) => {
-    const { runtime, file } = await fixture("modern");
+    const { runtime, file, acquire } = await fixture("modern");
     let current = true;
     const caller = context();
     caller.assertCurrent = () => {
@@ -658,49 +540,33 @@ describe("private MCP projection operations at the session owner", () => {
         throw new Error("modern caller revoked");
       }
     };
-    const first = await acquireNativeMcpServer(runtime, "fixture", caller);
-    const second = await acquireNativeMcpServer(runtime, "fixture", {
-      ...caller,
-      assertCurrent() {},
+    const first = await acquire(caller);
+    const second = await acquire({ ...caller, assertCurrent() {} });
+    expect(first.getProtocolEra()).toBe("modern");
+    expect(first.getProtocolVersion()).toBe("2026-07-28");
+    const pending = await continuation(first, signal);
+    expect(pending.kind).toBe("input-required");
+    expect(pending.result).toMatchObject({
+      resultType: "input_required",
+      requestState: "fixture-state",
+      inputRequests: { roots: { method: "roots/list" } },
+      _meta: metadata,
     });
-    try {
-      expect(first.getProtocolEra()).toBe("modern");
-      expect(first.getProtocolVersion()).toBe("2026-07-28");
-      const pending = await first.callTool({ name: "probe" }, options(signal));
-      expect(pending.kind).toBe("input-required");
-      if (pending.kind !== "input-required") {
-        throw new Error("Missing modern continuation");
-      }
-      expect(pending.result).toMatchObject({
-        resultType: "input_required",
-        requestState: "fixture-state",
-        inputRequests: { roots: { method: "roots/list" } },
-        _meta: metadata,
-      });
-      const resumed = await pending.resume({ roots: caller.roots }, options(signal));
-      expect(payload(resumed)).toMatchObject({ responses: { roots: caller.roots } });
-      expect(() => pending.resume({ roots: caller.roots }, options(signal))).toThrow(
-        "already resumed",
-      );
-      const revoked = await first.callTool({ name: "probe" }, options(signal));
-      if (revoked.kind !== "input-required") {
-        throw new Error("Missing second continuation");
-      }
-      current = false;
-      expect(() => revoked.resume({ roots: caller.roots }, options(signal))).toThrow(
-        "modern caller revoked",
-      );
-      const independent = await second.callTool({ name: "probe" }, options(signal));
-      if (independent.kind !== "input-required") {
-        throw new Error("Missing independent continuation");
-      }
-      expect(
-        payload(await independent.resume({ roots: context().roots }, options(signal))),
-      ).toMatchObject({ responses: { roots: context().roots } });
-      expect((await fs.readFile(file + ".log", "utf8")).match(/^resumed /gm)).toHaveLength(2);
-      expect(runtime.activeLeases).toBe(0);
-    } finally {
-      await Promise.all([first.release(), second.release()]);
-    }
+    const resumed = await pending.resume({ roots: caller.roots }, options(signal));
+    expect(payload(resumed)).toMatchObject({ responses: { roots: caller.roots } });
+    expect(() => pending.resume({ roots: caller.roots }, options(signal))).toThrow(
+      "already resumed",
+    );
+    const revoked = await continuation(first, signal);
+    current = false;
+    expect(() => revoked.resume({ roots: caller.roots }, options(signal))).toThrow(
+      "modern caller revoked",
+    );
+    const independent = await continuation(second, signal);
+    expect(
+      payload(await independent.resume({ roots: context().roots }, options(signal))),
+    ).toMatchObject({ responses: { roots: context().roots } });
+    expect((await fs.readFile(file + ".log", "utf8")).match(/^resumed /gm)).toHaveLength(2);
+    expect(runtime.activeLeases).toBe(0);
   });
 });

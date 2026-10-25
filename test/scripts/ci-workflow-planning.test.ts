@@ -85,6 +85,8 @@ function successfulNativeSetup() {
       "node-env",
       "macos-swift-tools",
       "macos-native-assets",
+      "swift-test-build",
+      "native-test-cli",
       "macos-node-assets",
       "macos-node-tooling",
       "ios-swift-tools",
@@ -113,12 +115,95 @@ describe("PostgreSQL conformance selection", () => {
         runAttempt: 1,
       }),
     ).toBe("ubuntu-24.04");
-    expect(
-      job.steps.find((step: WorkflowStep) => step.name === "Run PostgreSQL conformance").run,
-    ).toBe(
-      "node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres --shard ${{ matrix.shard }}",
+    const conformance = job.steps.find(
+      (step: WorkflowStep) => step.name === "Run PostgreSQL conformance",
     );
+    expect(conformance.uses).toBe("./.ci-harness/.github/actions/postgres-conformance");
+    expect(conformance.with).toEqual({
+      image:
+        "pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d",
+      shard: "${{ matrix.shard }}",
+    });
     expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
+  });
+
+  it("qualifies pg17 daily and pg16/pg18 weekly in three shards each on main", () => {
+    const workflow = parse(
+      readFileSync(".github/workflows/postgres-conformance-weekly.yml", "utf8"),
+    );
+    expect(Object.keys(workflow.on).toSorted()).toEqual(["schedule", "workflow_dispatch"]);
+    expect(workflow.on.schedule).toEqual([{ cron: "17 7 * * *" }, { cron: "43 6 * * 1" }]);
+    const versions = workflow.on.workflow_dispatch.inputs.versions;
+    expect(versions.default).toBe("all");
+    expect(versions.options).toEqual(["all", "pg16", "pg17", "pg18"]);
+    const job = workflow.jobs["postgres-conformance"];
+    expect(job.strategy["max-parallel"]).toBe(3);
+    expect(job.strategy["fail-fast"]).toBe(false);
+    for (const [eventName, schedule, input, expected] of [
+      ["schedule", "17 7 * * *", undefined, ["pg17"]],
+      ["schedule", "43 6 * * 1", undefined, ["pg16", "pg18"]],
+      ["workflow_dispatch", undefined, versions.default, ["pg16", "pg17", "pg18"]],
+      ...["pg16", "pg17", "pg18"].map(
+        (version) => ["workflow_dispatch", undefined, version, [version]] as const,
+      ),
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(job.strategy.matrix.version, {
+          eventName,
+          githubEvent: { schedule },
+          inputs: { versions: input },
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        }),
+      ).toEqual(expected);
+    }
+    expect(job.strategy.matrix.shard).toEqual(
+      readCiWorkflow().jobs["postgres-conformance"].strategy.matrix.shard,
+    );
+    expect(job["timeout-minutes"]).toBe(50);
+    expect(job.name).toBe("PostgreSQL conformance (${{ matrix.version }}, ${{ matrix.shard }})");
+    for (const [repository, ref, admitted] of [
+      ["openclaw/openclaw", "refs/heads/main", true],
+      ["openclaw/openclaw", "refs/heads/topic", false],
+      ["fork/openclaw", "refs/heads/main", false],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(job.if, {
+          eventName: "workflow_dispatch",
+          repository,
+          ref,
+          runAttempt: 1,
+        }),
+      ).toBe(admitted);
+    }
+    const conformance = job.steps.find(
+      (step: WorkflowStep) => step.name === "Run PostgreSQL conformance",
+    );
+    expect(conformance.uses).toBe("./.github/actions/postgres-conformance");
+    expect(conformance.with.shard).toBe("${{ matrix.shard }}");
+    const prConformance = readCiWorkflow().jobs["postgres-conformance"].steps.find(
+      (step: WorkflowStep) => step.name === "Run PostgreSQL conformance",
+    );
+    for (const [version, image] of [
+      [
+        "pg16",
+        "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
+      ],
+      ["pg17", prConformance.with.image],
+      [
+        "pg18",
+        "pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11",
+      ],
+    ]) {
+      expect(
+        evaluateWorkflowExpression(conformance.with.image, {
+          eventName: "workflow_dispatch",
+          matrix: { version },
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        }),
+      ).toBe(image);
+    }
   });
 
   it.each<[string[] | null, boolean, Partial<Parameters<typeof runCiManifestFixture>[0]>?]>([
@@ -138,6 +223,7 @@ describe("PostgreSQL conformance selection", () => {
     [["extensions/workboard/src/store.test.ts"], true],
     [["src/config/zod-schema.database.ts"], true],
     [["scripts/test-database-conformance.mjs"], true],
+    [[".github/actions/postgres-conformance/action.yml"], true],
     [["scripts/test-database-conformance-preload.mjs"], true],
     [["scripts/lib/weighted-test-shards.mts"], true],
     [["config/postgres-conformance-timings.json"], true],
@@ -973,6 +1059,24 @@ function runControlUiI18nSourceFixture(options: {
     rmSync(root, { force: true, recursive: true });
   }
 }
+describe("native runtime artifact CI selection", () => {
+  it.each([false, true])(
+    "selects the runtime producer for native policy tests (owner=%s)",
+    (owner) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "schedule",
+        runNode: false,
+        publishedDriverUpdateCapability: false,
+        targetFiles: owner ? ["apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift"] : [],
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_macos_swift).toBe("true");
+      expect(manifest.outputs.run_build_artifacts).toBe(String(owner));
+    },
+  );
+});
+
 describe("channel detail presentation CI selection", () => {
   it.each([
     ["extensions/telegram/control-ui.channel-detail.json", true],
@@ -2719,7 +2823,8 @@ describe("ci workflow guards", () => {
   );
 
   it.each([
-    ["macos-swift", false, "workflow_dispatch", false, ["release", "tests", "packages"]],
+    ["macos-swift", false, "workflow_dispatch", false, ["release", "tests"]],
+    ["macos-swift-packages", false, "workflow_dispatch", false, ["packages"]],
     ["ios-build", false, "workflow_dispatch", false, ["release", "tests"]],
     ["ios-build", true, "workflow_dispatch", false, ["tests"]],
     ["ios-build", false, "pull_request", false, ["smoke"]],
@@ -2756,56 +2861,57 @@ describe("ci workflow guards", () => {
       expect(job.strategy["fail-fast"]).toBe(false);
       expect(job.strategy["max-parallel"]).toBe(2);
       expect(job["continue-on-error"]).not.toBe(true);
-      expect(job.needs).toEqual(["preflight"]);
-      const workloads =
-        jobName === "macos-swift"
-          ? {
-              smoke: [],
-              release: [
-                "Native state schema version contract",
-                "Swift lint",
-                "Swift build (release)",
-              ],
-              tests: ["Swift test"],
-              packages: [
-                "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
-                "OpenClawKit tests",
-                "Swabble tests",
-              ],
-            }
-          : {
-              smoke: [
-                "Swift lint",
-                ...(historical ? [] : ["Configure iOS build and report simulator selection"]),
-                ...(historical ? [] : ["Prepare iOS simulator"]),
-                "Build iOS app",
-                ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
-                ...(historical ? [] : ["Run focused iOS lifecycle simulator tests"]),
-              ],
-              release: ["Build iOS app (Release)"],
-              tests: [
-                "Test Watch RTC engine",
-                "Swift lint",
-                "Configure iOS build and report simulator selection",
-                "Prepare iOS simulator",
-                "Build iOS app",
-                "Run focused iOS voice cleanup simulator tests",
-                "Run focused iOS lifecycle simulator tests",
-                "Run focused Apple Watch operation simulator tests",
-              ],
-            };
+      expect(job.needs).toEqual(
+        jobName === "macos-swift" ? ["preflight", "build-artifacts"] : ["preflight"],
+      );
+      const workloads = jobName.startsWith("macos-swift")
+        ? {
+            smoke: [],
+            release: [
+              "Native state schema version contract",
+              "Swift lint",
+              "Swift build (release)",
+            ],
+            tests: ["Build Swift tests", "Swift test"],
+            packages: [
+              "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
+              "OpenClawKit tests",
+              "Swabble tests",
+            ],
+          }
+        : {
+            smoke: [
+              ...(historical ? [] : ["Configure iOS build and report simulator selection"]),
+              ...(historical ? [] : ["Prepare iOS simulator"]),
+              "Build iOS app",
+              ...(historical ? ["Swift lint"] : []),
+              ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
+              ...(historical ? [] : ["Run focused iOS lifecycle simulator tests"]),
+            ],
+            release: ["Build iOS app (Release)"],
+            tests: [
+              "Test Watch RTC engine",
+              "Configure iOS build and report simulator selection",
+              "Prepare iOS simulator",
+              "Build iOS app",
+              "Run focused iOS voice cleanup simulator tests",
+              "Run focused iOS lifecycle simulator tests",
+              "Run focused Apple Watch operation simulator tests",
+            ],
+          };
       const names = [];
       for (const phase of phases) {
         const phaseContext = { ...context, matrix: { phase } };
         const expected =
           historical && phase === "tests"
-            ? ["Test Watch RTC engine", "Swift lint", "Build iOS app"]
+            ? ["Test Watch RTC engine", "Build iOS app", "Swift lint"]
             : workloads[phase];
         names.push(evaluateWorkflowExpression(job.name, phaseContext));
         const selected = job.steps
           .filter((step: WorkflowStep) =>
             Object.values(workloads)
               .flat()
+              .concat("Swift lint")
               .includes(step.name ?? ""),
           )
           .filter(
@@ -2853,7 +2959,9 @@ describe("ci workflow guards", () => {
     "retains macOS tests and one guard/cache owner for %j",
     ({ eventName, releaseGate, full, ...target }) => {
       const historical = "historical" in target && target.historical;
-      const job = readCiWorkflow().jobs["macos-swift"];
+      const workflow = readCiWorkflow();
+      const job = workflow.jobs["macos-swift"];
+      const packages = workflow.jobs["macos-swift-packages"];
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
         eventName,
@@ -2879,10 +2987,12 @@ describe("ci workflow guards", () => {
           "scripts/test-macos-app-host.sh": "present",
         },
       };
-      const phases: string[] = Array.isArray(job.strategy.matrix.phase)
+      const appPhases: string[] = Array.isArray(job.strategy.matrix.phase)
         ? job.strategy.matrix.phase
         : evaluateWorkflowExpression(job.strategy.matrix.phase, context);
-      expect(phases).toEqual(full ? ["release", "tests", "packages"] : ["tests", "packages"]);
+      expect(appPhases).toEqual(full ? ["release", "tests"] : ["tests"]);
+      expect(packages.strategy.matrix.phase).toEqual(["packages"]);
+      const phases = [...appPhases, ...packages.strategy.matrix.phase];
       expect(job.strategy["max-parallel"]).toBe(2);
       const env = Object.fromEntries(
         Object.entries(job.env).map(([key, value]) => [
@@ -2905,7 +3015,8 @@ describe("ci workflow guards", () => {
               matrix: { phase },
               steps: {
                 ...successfulNativeSetup(),
-                "swift-test": {
+                "swift-test": { outcome: "success", outputs: {} },
+                "swift-test-build": {
                   outcome: "success",
                   outputs: { "debug-tests-built": phase === "tests" ? "true" : "" },
                 },
@@ -2933,7 +3044,25 @@ describe("ci workflow guards", () => {
           eventName === "pull_request" && name === "OpenClawKit tests" ? [] : ["packages"],
         );
       }
+      expect(selectedPhases("Build Swift tests")).toEqual(["tests"]);
       expect(selectedPhases("Swift test")).toEqual(["tests"]);
+      expect(
+        selectedPhases("Swift test", {
+          steps: {
+            ...successfulNativeSetup(),
+            "swift-test-build": { outcome: "failure", outputs: {} },
+          },
+        }),
+      ).toEqual([]);
+      expect(
+        selectedPhases("Swift test", {
+          fileHashes: { "apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift": "present" },
+          steps: {
+            ...successfulNativeSetup(),
+            "native-test-cli": { outcome: "failure", outputs: {} },
+          },
+        }),
+      ).toEqual([]);
       expect(selectedPhases("Setup bundled recovery runtime build")).toEqual(
         full && !historical ? ["tests"] : [],
       );
@@ -2942,7 +3071,11 @@ describe("ci workflow guards", () => {
       );
       expect(
         selectedPhases("Setup bundled recovery runtime build", {
-          steps: { "swift-test": { outcome: "failure", outputs: { "debug-tests-built": "true" } } },
+          steps: {
+            ...successfulNativeSetup(),
+            "swift-test-build": { outcome: "success", outputs: { "debug-tests-built": "true" } },
+            "swift-test": { outcome: "failure", outputs: {} },
+          },
         }),
       ).toEqual([]);
       expect(
@@ -3003,7 +3136,10 @@ describe("ci workflow guards", () => {
         runnerBackend: "hybrid" as const,
         additionalNeeds: {
           "check-plan": { outputs },
-          "build-artifacts": { outputs: { published_driver_artifact_id: "fixture-package" } },
+          "build-artifacts": {
+            result: "success" as const,
+            outputs: { published_driver_artifact_id: "fixture-package" },
+          },
         },
         ...overrides,
         preflightOutputs: outputs,
@@ -4986,6 +5122,7 @@ describe("ci workflow guards", () => {
       }
       for (const [job, admitted] of [
         ["macos-swift", false],
+        ["macos-swift-packages", false],
         ["ios-build", false],
         ["android", nativeChecks.android],
       ] as const) {
@@ -8694,6 +8831,15 @@ describe("ci workflow guards", () => {
         selectedJobs: [],
       }),
     ),
+    ...["scripts/lib/ios-test-results.mjs", "scripts/lib/ios-test-results.d.mts"].map(
+      (changedPath) => ({
+        label: `Screenshot input ${changedPath}`,
+        changedPath,
+        eventName: "push" as const,
+        screenshots: true,
+        selectedJobs: ["ios-build"],
+      }),
+    ),
     {
       label: "iOS unit tests do not select screenshot capture",
       changedPath: "apps/ios/Tests/SettingsTests.swift",
@@ -8710,7 +8856,13 @@ describe("ci workflow guards", () => {
       screenshots: true,
       changedPath: ".github/actions/git-owner/owner.py",
       eventName: "workflow_dispatch",
-      selectedJobs: ["macos-node", "macos-swift", "checks-windows", "ios-build"],
+      selectedJobs: [
+        "macos-node",
+        "macos-swift",
+        "macos-swift-packages",
+        "checks-windows",
+        "ios-build",
+      ],
     },
     {
       label: "historical manual Mac source without native Node output",
@@ -8718,7 +8870,7 @@ describe("ci workflow guards", () => {
       eventName: "workflow_dispatch",
       releaseGate: false,
       legacyOutput: true,
-      selectedJobs: ["macos-node", "macos-swift", "checks-windows"],
+      selectedJobs: ["macos-node", "macos-swift", "macos-swift-packages", "checks-windows"],
     },
     {
       label: "historical manual config source without native Node output",
@@ -8726,7 +8878,7 @@ describe("ci workflow guards", () => {
       eventName: "workflow_dispatch",
       releaseGate: false,
       legacyOutput: true,
-      selectedJobs: ["macos-node", "macos-swift", "checks-windows"],
+      selectedJobs: ["macos-node", "macos-swift", "macos-swift-packages", "checks-windows"],
     },
   ])(
     "routes native CI jobs through scope output and manifest ($label)",
@@ -8788,6 +8940,7 @@ describe("ci workflow guards", () => {
       for (const jobName of [
         "macos-node",
         "macos-swift",
+        "macos-swift-packages",
         "checks-windows",
         "ios-build",
         "android",
@@ -8795,7 +8948,16 @@ describe("ci workflow guards", () => {
         const job = workflow.jobs[jobName];
         const expression = job.if.startsWith("${{") ? job.if : `\${{ ${job.if} }}`;
         expect(
-          evaluateWorkflowExpression(expression, { ...context, preflightOutputs }),
+          evaluateWorkflowExpression(expression, {
+            ...context,
+            preflightOutputs,
+            additionalNeeds: {
+              "build-artifacts": {
+                result: manifest.outputs.run_build_artifacts === "true" ? "success" : "skipped",
+                outputs: {},
+              },
+            },
+          }),
           jobName,
         ).toBe(selectedJobs.includes(jobName));
       }
@@ -10336,7 +10498,9 @@ describe("ci workflow guards", () => {
         },
       };
       expect(evaluateWorkflowCondition(suiteStep.if, context)).toBe(hasSuiteTargets);
-      expect(evaluateWorkflowCondition(desktopStep.if, context)).toBe(row.run_desktop);
+      expect(evaluateWorkflowCondition(desktopStep.if, context)).toBe(
+        row.run_desktop && !hasSuiteTargets,
+      );
       if (!hasSuiteTargets) {
         expect(row.run_desktop).toBe(true);
       }
@@ -10622,7 +10786,7 @@ describe("ci workflow guards", () => {
     expect(uiE2eSetup.uses).toBe("./.ci-harness/.github/actions/setup-node-env");
     const expectedSharedUiE2eSetup = {
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
-      "node-version": "24.x",
+      "node-version": "24.22.1",
       "install-bun": "false",
       "dependency-cache": expect.any(String),
     } as const;
@@ -10953,7 +11117,7 @@ describe("ci workflow guards", () => {
     );
     expect(desktopProof).toEqual({
       name: "Prove desktop resize over node and SSH",
-      if: "${{ !cancelled() && steps.real_gateway_build.outcome == 'success' && matrix.run_desktop }}",
+      if: "${{ !cancelled() && steps.real_gateway_build.outcome == 'success' && matrix.run_desktop && (needs.preflight.outputs.frozen_target == 'true' || !matrix.run_tests || steps.ui_chromium.outcome != 'success') }}",
       env: {
         FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
         DESKTOP_PROOF_CHECKOUT_SHA: "${{ needs.preflight.outputs.checkout_revision }}",
@@ -10965,6 +11129,25 @@ describe("ci workflow guards", () => {
     });
     expect(uiE2eRealGateway.steps.indexOf(desktopProof)).toBeGreaterThan(realGatewayBuildIndex);
     expect(uiE2eRealGateway.steps.indexOf(desktopProof)).toBeLessThan(realGatewayIndex);
+    for (const frozen of [false, true]) {
+      for (const chromiumReady of [false, true]) {
+        for (const runTests of [false, true]) {
+          expect(
+            evaluateWorkflowCondition(desktopProof.if, {
+              eventName: "push",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              preflightOutputs: { frozen_target: String(frozen) },
+              matrix: { run_desktop: true, run_tests: runTests },
+              steps: {
+                real_gateway_build: { outputs: {}, outcome: "success" },
+                ui_chromium: { outputs: {}, outcome: chromiumReady ? "success" : "failure" },
+              },
+            }),
+          ).toBe(frozen || !runTests || !chromiumReady);
+        }
+      }
+    }
     const desktopUpload = expectDefined(
       uiE2eRealGateway.steps.find(
         (step: WorkflowStep) => step.name === "Upload sanitized desktop resize proof",
@@ -10991,6 +11174,11 @@ describe("ci workflow guards", () => {
       OPENCLAW_UI_E2E_DIAGNOSTIC_DIR:
         ".artifacts/control-ui-e2e-timeouts/real-gateway-attempt-${{ github.run_attempt }}",
       OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "${{ matrix.test_groups_gzip_base64 }}",
+      OPENCLAW_UI_E2E_RUN_DESKTOP: "${{ matrix.run_desktop }}",
+      DESKTOP_PROOF_CHECKOUT_SHA: "${{ needs.preflight.outputs.checkout_revision }}",
+      DESKTOP_PROOF_PR_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+      DESKTOP_PROOF_PR_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+      DESKTOP_PROOF_WORKFLOW_SHA: "${{ github.workflow_sha }}",
     });
     expect(proofUploadIndex).toBeGreaterThan(realGatewayIndex);
     expect(proofUpload.with.name).toBe(
@@ -11237,7 +11425,7 @@ describe("ci workflow guards", () => {
       uses: SETUP_GO_V6,
       with: {
         cache: false,
-        "go-version": "1.27.1",
+        "go-version": "1.27.2",
       },
     });
     expect(setupGoStep.with).not.toHaveProperty("go-version-file");
@@ -11260,12 +11448,12 @@ describe("ci workflow guards", () => {
     });
     expect(verifyGoStep).toMatchObject({
       if: "matrix.requires_go == true",
-      run: 'test "$(go env GOVERSION)" = "go1.27.1"',
+      run: 'test "$(go env GOVERSION)" = "go1.27.2"',
     });
 
     const goMod = readTrackedText("scripts/docs-i18n/go.mod");
     expect(goMod).toMatch(/^go 1\.26\.0$/mu);
-    expect(goMod).toMatch(/^toolchain go1\.27\.1$/mu);
+    expect(goMod).toMatch(/^toolchain go1\.27\.2$/mu);
 
     const tooling = {
       configs: ["test/vitest/vitest.tooling.config.ts"],
@@ -12101,6 +12289,7 @@ describe("ci workflow guards", () => {
       "checks-windows",
       "macos-node",
       "macos-swift",
+      "macos-swift-packages",
       "ios-build",
       "ios-release-e2e",
       "ios-screenshot-capture",
@@ -12184,6 +12373,10 @@ describe("ci workflow guards", () => {
           "",
         )
         .replace(/needs\.build-artifacts\.outputs\.published_driver_artifact_id != ''\s*&&\s*/u, "")
+        .replace(
+          /\s*&&\s*\(needs\.build-artifacts\.result == 'success' \|\| needs\.build-artifacts\.result == 'skipped'\)$/u,
+          "",
+        )
         .replace(/!cancelled\(\)\s*&&\s*/gu, "")
         .replace(/\s*&&\s*!github.event.pull_request.draft$/u, "")
         .replace(/\s+/gu, " ")
@@ -12221,19 +12414,24 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("captures all iOS families in one native job and retains phase timings", () => {
+  it("captures all iOS families in one native job and retains phase and resource diagnostics", () => {
     const capture = readCiWorkflow().jobs["ios-screenshot-capture"];
     expect(capture.strategy).toBeUndefined();
     const step = capture.steps.find(
       (candidate: WorkflowStep) => candidate.id === "device_screenshots",
     );
-    expect(step.run).toBe("pnpm ios:screenshots");
+    expect(step.run.trim()).toBe(
+      'node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \\\n  pnpm ios:screenshots',
+    );
     expect(step.env).toEqual({ OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1" });
     const diagnostics = capture.steps.find(
       (candidate: WorkflowStep) => candidate.name === "Upload iOS screenshot timing diagnostics",
     );
     expect(diagnostics.if).toBe("always()");
-    expect(diagnostics.with.path).toBe("apps/ios/build/screenshot-diagnostics.json");
+    expect(diagnostics.with.path.trim().split("\n")).toEqual([
+      "apps/ios/build/screenshot-diagnostics.json",
+      "${{ runner.temp }}/ios-resource-timeline.jsonl",
+    ]);
   });
 
   it("reduces iOS screenshots only after the combined capture succeeded", () => {

@@ -19,7 +19,7 @@ import type {
   SessionSourcePredicate,
   SessionSourceValidation,
 } from "./session-source-authority.js";
-import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { createSessionSourceConversationMatches } from "./session-source-conversation-matches.js";
 
 export type ManualCompactInput = {
   scope: ResolvedTranscriptScope;
@@ -45,20 +45,7 @@ export function compactManualTranscript(
   input: ManualCompactInput,
   context: AgentWorkerOperationContext,
 ) {
-  const sourceMatches = input.sources.flatMap((source, index) =>
-    source.conversationAlternatives
-      ? [
-          {
-            index,
-            matches: new Int32Array(
-              new SharedArrayBuffer(
-                (source.conversationAlternatives.length + 1) * Int32Array.BYTES_PER_ELEMENT,
-              ),
-            ),
-          },
-        ]
-      : [],
-  );
+  const sourceMatches = createSessionSourceConversationMatches(input.sources);
   using source = prepareSessionColdSourceGuard(context.options, input.sources, sourceMatches);
   const database = context.open();
   const rows = readTranscriptEventRows(database, input.scope.sessionId);
@@ -88,21 +75,12 @@ export function compactManualTranscript(
         result: selected.result,
       };
       if (selected.result.compacted) {
-        const identity = applyManualCompactInTransaction(
-          current,
-          input.scope,
-          {
-            rows,
-            entries,
-            events,
-            nowMs: input.nowMs,
-          },
-          {
-            scheduleProjectionReconcile: false,
-          },
-        );
-        // Finish the retained projection before the next turn can use this generation.
-        reconcileSessionTranscriptIndexInTransaction(current.db, input.scope.sessionId);
+        const identity = applyManualCompactInTransaction(current, input.scope, {
+          rows,
+          entries,
+          events,
+          nowMs: input.nowMs,
+        });
         candidate.publication = prepareSessionEntryReplacementPublication(
           {
             ...identity,

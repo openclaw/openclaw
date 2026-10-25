@@ -5,9 +5,7 @@ import * as discordRest from "../internal/rest.js";
 import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 
-const cfg = {
-  channels: { discord: { token: "token", groupPolicy: "open" } },
-} as OpenClawConfig;
+const cfg = { channels: { discord: { token: "token", groupPolicy: "open" } } } as OpenClawConfig;
 
 const defaultScenario = {
   denyView: false,
@@ -123,33 +121,25 @@ describe("registered Discord channel-edit thread permissions", () => {
     expect(JSON.parse(patchRequests()[0]?.body ?? "{}")).toEqual({ archived: false });
   });
 
-  it("does not treat SendMessagesInThreads as reopen permission", async () => {
-    scenario.guildPermissions =
-      PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessagesInThreads;
-
-    await expectReopenDenied();
-  });
-
-  it("rejects a private-thread nonmember before the Discord PATCH", async () => {
-    scenario.type = ChannelType.GuildPrivateThread;
-    scenario.privateMember = false;
-
-    await expectReopenDenied();
-  });
-
-  it("rejects revoked target visibility before the Discord PATCH", async () => {
-    scenario.denyView = true;
-
-    await expectReopenDenied();
-  });
-
-  it("keeps ManageThreads required for an explicit parent clear during reopen", async () => {
-    await expectReopenDenied({ clearParent: true });
-  });
-
-  it("keeps ManageThreads required to reopen a locked thread", async () => {
-    scenario.locked = true;
-
-    await expectReopenDenied();
+  it.each([
+    [
+      "SendMessagesInThreads alone",
+      {
+        guildPermissions:
+          PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessagesInThreads,
+      },
+      {},
+    ],
+    [
+      "private-thread nonmember",
+      { type: ChannelType.GuildPrivateThread, privateMember: false },
+      {},
+    ],
+    ["revoked target visibility", { denyView: true }, {}],
+    ["explicit parent clear without ManageThreads", {}, { clearParent: true }],
+    ["locked thread without ManageThreads", { locked: true }, {}],
+  ] as const)("rejects %s before PATCH", async (_name, overrides, params) => {
+    Object.assign(scenario, overrides);
+    await expectReopenDenied(params);
   });
 });

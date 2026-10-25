@@ -1,4 +1,4 @@
-// @vitest-environment node
+// @vitest-environment jsdom
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { Value } from "typebox/value";
@@ -16,11 +16,16 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { projectChatErrors } from "./chat-error-projection.ts";
-import { createChatErrorState } from "./chat-error-state.ts";
-import { chatGoalOperations, chatGoalRecovery, mutateChatGoal } from "./chat-goals.ts";
+import {
+  chatGoalOperations,
+  chatGoalPresentation,
+  chatGoalRecovery,
+  mutateChatGoal,
+} from "./chat-goals.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { createTestPageState } from "./chat-page-state.test-support.ts";
+import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 const goal: SessionGoal = {
   schemaVersion: 1,
@@ -46,8 +51,7 @@ function loseAck(): never {
 }
 
 function goalHost(requestHandlers: Record<string, unknown> = { "sessions.goal.update": loseAck }) {
-  const host = Object.assign(
-    createChatErrorState(),
+  const host = createTestPageState(
     makeChatHost({
       sessionKey: "agent:main:main",
       currentSessionId: "session-a",
@@ -83,6 +87,48 @@ function goalHost(requestHandlers: Record<string, unknown> = { "sessions.goal.up
 }
 
 describe("Goal control requests", () => {
+  it("confirms execution only from the accepted receipt and retains Goal after the run ends", async () => {
+    const activeGoal: SessionGoal = { ...goal, status: "active", updatedAt: 3 };
+    const pending = createDeferred<{
+      status: "started";
+      goalId: string;
+      runId: string;
+      goal: SessionGoal;
+    }>();
+    const host = goalHost({ "sessions.goal.update": () => pending.promise });
+    // Input custody alone is not proof that the Goal is executing.
+    host.chatRunId = "accepted-input";
+    host.chatSending = true;
+    expect(chatGoalPresentation(host, activeGoal)).toMatchObject({
+      value: activeGoal,
+      executionConfirmed: false,
+    });
+    const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+    expect(chatGoalPresentation(host, activeGoal)?.executionConfirmed).toBe(false);
+    pending.resolve({ status: "started", goalId: goal.id, runId: "goal-run", goal: activeGoal });
+    expect(await submitted).toBe(true);
+    expect(chatGoalPresentation(host, activeGoal)).toMatchObject({
+      value: activeGoal,
+      executionConfirmed: true,
+      confirmedRunId: "goal-run",
+    });
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      runId: "goal-run",
+      clearLocalRun: true,
+      publishRunStatus: false,
+    });
+    expect(chatGoalPresentation(host, activeGoal)).toMatchObject({
+      value: activeGoal,
+      executionConfirmed: false,
+    });
+    for (const status of ["active", "paused", "complete", "blocked"] as const) {
+      const retained = { ...activeGoal, status };
+      expect(chatGoalPresentation(host, retained)?.value).toBe(retained);
+    }
+    expect(chatGoalPresentation(host, undefined)).toBeUndefined();
+  });
+
   it("publishes pending and uncertain recovery while preserving the saved operation", async () => {
     const pending = createDeferred<never>();
     const host = goalHost({ "sessions.goal.update": () => pending.promise });
@@ -298,6 +344,9 @@ describe("Goal control requests", () => {
       });
       expect(await submitted).toBe(true);
       expect(host.chatRunId).toBe(replacement === "none" ? runId : null);
+      expect(chatGoalPresentation(host, updatedGoal)?.executionConfirmed).toBe(
+        replacement === "none",
+      );
       expect(host.chatMessages).toEqual([]);
       expect(host.chatMessage).toBe("Unrelated draft");
     },
@@ -365,6 +414,9 @@ describe("Goal control requests", () => {
       expect(host.request).toHaveBeenCalledWith(method, firstRequest, { timeoutMs: 30_000 });
       expect(sessionStorage.length).toBe(0);
       expect(host.chatRunId).toBeNull();
+      expect(chatGoalPresentation(host, { ...goal, status: "active" })?.executionConfirmed).toBe(
+        false,
+      );
       expect(host.sessions.state.result?.sessions[0]?.goal?.status).toBe(
         action === "clear" ? undefined : "active",
       );
@@ -376,9 +428,8 @@ describe("Goal control requests", () => {
     const host = goalHost();
     let renderedError: string | null | undefined;
     const dispose = createRoot((stop) => {
-      const errors = projectChatErrors(host);
       createEffect(
-        () => errors.chatError,
+        () => host.chatError,
         (value) => {
           renderedError = value;
         },

@@ -76,6 +76,32 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
+it("records the causal creator while retaining the agent's separate spawn event", async () => {
+  await recordSessionCreated(
+    {},
+    {
+      sessionKey,
+      agentId: "ops",
+      entry: entry({
+        createdVia: "spawn",
+        createdActor: {
+          type: "agent",
+          id: "ops",
+          delegatedBy: { type: "human", source: "profile", id: "causal-human" },
+        },
+      }),
+      spawned: { runId: "causal-child-run", requesterSessionKey: mainSessionKey },
+    },
+  );
+  const events = (await listSessionStateEventsSince(sessionKey, "ops", 0)).events;
+  expect(events).toMatchObject([
+    { kind: "created", actorType: "human", actorId: "causal-human" },
+    { kind: "child_spawned", actorId: mainSessionKey, runId: "causal-child-run" },
+  ]);
+  expect(notice()).toContain('"id":"causal-human"');
+  expect(notice()).not.toContain("delegatedBy");
+});
+
 it("keeps creation and spawn signals together after a lost receipt without replay", async () => {
   let records = 0;
   probe.command(stateWorker, async (command, executeOptions, scope) => {

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   adoptUpdateCampaignMock,
@@ -15,10 +15,35 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it("refuses an app-owned Gateway update before delegation, history, or restart effects", async () => {
+async function installRoot() {
   const packageRoot = await import("../../infra/openclaw-root.js");
   const ocmUpdate = await import("../../infra/ocm-update-client.js");
-  const root = tempDirs.make("openclaw-app-update-");
+  const root = tempDirs.make("openclaw-host-owned-update-");
+  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+  return {
+    root,
+    resolveManager: vi.spyOn(ocmUpdate, "resolveOcmUpdateManager"),
+    createRun: vi.spyOn(
+      await import("../../infra/update-run-write.async.js"),
+      "createUpdateRunAsync",
+    ),
+  };
+}
+
+function expectNoUpdateEffects(...effects: MockInstance[]) {
+  for (const effect of [
+    ...effects,
+    adoptUpdateCampaignMock,
+    startManagedServiceUpdateHandoffMock,
+    scheduleGatewayRestartMock,
+  ]) {
+    expect(effect).not.toHaveBeenCalled();
+  }
+  expect(sentinelState.capturedPayload).toBeUndefined();
+}
+
+it("refuses an app-owned Gateway update before delegation, history, or restart effects", async () => {
+  const { root, resolveManager, createRun } = await installRoot();
   const installOwner = {
     schemaVersion: 1,
     owner: "macos-app",
@@ -26,12 +51,6 @@ it("refuses an app-owned Gateway update before delegation, history, or restart e
     updateHint: "Update OpenClaw.app to update this Gateway.",
   };
   await fs.writeFile(path.join(root, "openclaw-install-owner.json"), JSON.stringify(installOwner));
-  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
-  const resolveManager = vi.spyOn(ocmUpdate, "resolveOcmUpdateManager");
-  const createRun = vi.spyOn(
-    await import("../../infra/update-run-write.async.js"),
-    "createUpdateRunAsync",
-  );
   const respond = vi.fn();
 
   await invokeUpdateRun({}, respond);
@@ -42,31 +61,17 @@ it("refuses an app-owned Gateway update before delegation, history, or restart e
     details: { reason: "host-owned-install", installOwner },
     retryable: false,
   });
-  expect(resolveManager).not.toHaveBeenCalled();
-  expect(createRun).not.toHaveBeenCalled();
-  expect(resolveUpdateInstallSurfaceMock).not.toHaveBeenCalled();
-  expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
-  expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-  expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
-  expect(sentinelState.capturedPayload).toBeUndefined();
+  expectNoUpdateEffects(resolveManager, createRun, resolveUpdateInstallSurfaceMock);
 });
 
 it("refuses immutable activation before manager delegation, history, campaign, or handoff", async () => {
-  const packageRoot = await import("../../infra/openclaw-root.js");
   const immutableInstall = await import("../../infra/update-immutable-install.js");
-  const ocmUpdate = await import("../../infra/ocm-update-client.js");
-  const root = tempDirs.make("openclaw-immutable-update-rpc-");
-  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+  const { root, resolveManager, createRun } = await installRoot();
   vi.spyOn(immutableInstall, "inspectImmutableInstall").mockResolvedValue({
     root,
     currentPath: path.join(root, "releases", "a".repeat(40)),
     currentSha: "a".repeat(40),
   });
-  const resolveManager = vi.spyOn(ocmUpdate, "resolveOcmUpdateManager");
-  const createRun = vi.spyOn(
-    await import("../../infra/update-run-write.async.js"),
-    "createUpdateRunAsync",
-  );
   const respond = vi.fn();
 
   await invokeUpdateRun({}, respond);
@@ -82,12 +87,7 @@ it("refuses immutable activation before manager delegation, history, campaign, o
       ),
     }),
   );
-  expect(resolveManager).not.toHaveBeenCalled();
-  expect(createRun).not.toHaveBeenCalled();
-  expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
-  expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-  expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
-  expect(sentinelState.capturedPayload).toBeUndefined();
+  expectNoUpdateEffects(resolveManager, createRun);
 });
 
 it("refuses an immutable surface discovered after initial admission before campaign adoption", async () => {
@@ -107,8 +107,5 @@ it("refuses an immutable surface discovered after initial admission before campa
     result: { status: "skipped", reason: "immutable-native-updater-required" },
     restart: null,
   });
-  expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
-  expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-  expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
-  expect(sentinelState.capturedPayload).toBeUndefined();
+  expectNoUpdateEffects();
 });

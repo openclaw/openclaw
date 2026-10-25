@@ -38,10 +38,6 @@ vi.mock("../../plugins/capability-consent.js", async (importOriginal) => ({
   resolvePendingPluginCapabilityReview: resolvePendingPluginCapabilityReviewMock,
 }));
 
-vi.mock("../../cli/npm-resolution.js", () => ({
-  buildNpmInstallRecordFields: vi.fn(),
-}));
-
 vi.mock("../../cli/plugins-command-helpers.js", () => ({
   createPluginInstallLogger: vi.fn(() => ({})),
   resolveFileNpmSpecToLocalPath: vi.fn(() => null),

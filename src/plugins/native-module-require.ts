@@ -9,7 +9,7 @@ import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 
 /** Bun's native plugin resolver remains the owner even when Node hooks are available. */
 export function useNodeModuleHooks(): boolean {
-  return !process.versions.bun && typeof Module.registerHooks === "function";
+  return !process.versions.bun;
 }
 
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
@@ -38,33 +38,6 @@ export type ResolveFilename = (
 const moduleWithResolver = Module as typeof Module & {
   _resolveFilename?: ResolveFilename;
 };
-
-let nativeAliasHookSupport: boolean | undefined;
-
-/** Older Bun loses createRequire's parent when its private resolver is wrapped. */
-export function supportsNativeModuleAliasHooks(): boolean {
-  if (!process.versions.bun) {
-    return true;
-  }
-  if (nativeAliasHookSupport !== undefined) {
-    return nativeAliasHookSupport;
-  }
-  const previous = moduleWithResolver["_resolveFilename"];
-  if (!previous) {
-    return (nativeAliasHookSupport = false);
-  }
-  let retainsParent = false;
-  moduleWithResolver["_resolveFilename"] = (request, parent) => {
-    retainsParent = typeof parent?.filename === "string";
-    return request;
-  };
-  try {
-    createRequire(import.meta.url).resolve(fileURLToPath(import.meta.url));
-  } finally {
-    moduleWithResolver["_resolveFilename"] = previous;
-  }
-  return (nativeAliasHookSupport = retainsParent);
-}
 
 type CapturedModuleBinding = {
   resolve: (request: string, parent: string, resolve: () => string) => string | undefined;
@@ -241,8 +214,6 @@ export function registerCapturedPluginModuleResolver(binding: CapturedModuleBind
   const bun = (globalThis as typeof globalThis & { Bun?: BunPluginRuntime }).Bun;
   if (!capturedModuleResolvers.installed) {
     installCapturedPluginModuleResolver(bun);
-    // Older Bun drops createRequire's ESM parent when this private hook is replaced.
-    // Its public resolver above retains the importer without changing native resolution.
     capturedModuleResolvers.installed = true;
   }
   if (binding.load && bun && !capturedModuleResolvers.loaderInstalled) {
@@ -459,5 +430,30 @@ function withNativeRequireAliases<T>(
   } finally {
     moduleWithResolver["_resolveFilename"] = originalResolveFilename;
     esmHooks?.deregister();
+  }
+}
+
+/** Read the nearest package type for native ESM retention decisions. */
+export function isNativeEsmPackage(source: string): boolean {
+  let directory = path.dirname(source);
+  while (true) {
+    const manifest = path.join(directory, "package.json");
+    if (fs.existsSync(manifest)) {
+      try {
+        const parsed: unknown = JSON.parse(fs.readFileSync(manifest, "utf8"));
+        return (
+          typeof parsed === "object" &&
+          parsed !== null &&
+          Object.getOwnPropertyDescriptor(parsed, "type")?.value === "module"
+        );
+      } catch {
+        return false;
+      }
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      return false;
+    }
+    directory = parent;
   }
 }

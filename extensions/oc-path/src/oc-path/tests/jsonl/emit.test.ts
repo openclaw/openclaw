@@ -7,10 +7,10 @@ import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 
 describe("JSONL edit emission", () => {
   it("renders nested values compactly and preserves entry order", () => {
-    const { ast } = parseJsonl(
+    const ast = parseJsonl(
       '{ "2": 2, "1": 1, "2": 3, "values": [{}, [], {"scalars": [true, false, null, -1.5, "text"]}] }\n[ {}, [] ]\n',
     );
-    let appended = parseJsonl("").ast;
+    let appended = parseJsonl("");
     for (const line of ast.lines) {
       if (line.kind === "value") {
         appended = appendJsonlOcPath(appended, line.value);
@@ -22,23 +22,20 @@ describe("JSONL edit emission", () => {
   });
 
   it("preserves blank and malformed lines verbatim when appending", () => {
-    const { ast } = parseJsonl('{"a":1}\n\nbroken\n{"b":2}\n');
+    const ast = parseJsonl('{"a":1}\n\nbroken\n{"b":2}\n');
     const appended = appendJsonlOcPath(ast, { kind: "number", value: 3 });
     expect(appended.raw.split("\n")).toEqual(['{"a":1}', "", "broken", '{"b":2}', "3", ""]);
   });
 
   it("reports the line and nested path when a value-leaf is the sentinel", () => {
-    const { ast } = parseJsonl(`{"ok":true}\n{"outer":[{"token":"${REDACTED_SENTINEL}"}]}\n`);
+    const ast = parseJsonl(`{"ok":true}\n{"outer":[{"token":"${REDACTED_SENTINEL}"}]}\n`);
     const line = ast.lines[1];
     expect(line?.kind).toBe("value");
     if (line?.kind !== "value") {
       return;
     }
     expect(() => setJsonlOcPath(ast, parseOcPath("oc://events/L2"), line.value)).toThrow(
-      expect.objectContaining({
-        code: "OC_EMIT_SENTINEL",
-        path: "oc://events/L2/outer/0/token",
-      }),
+      `emit refused to write "${REDACTED_SENTINEL}" sentinel literal at oc://events/L2/outer/0/token`,
     );
   });
 
@@ -46,7 +43,7 @@ describe("JSONL edit emission", () => {
     // Regression: prior to this fix, render mode used exact-match
     // (`value.value === SENTINEL`), so `prefix__OPENCLAW_REDACTED__suffix`
     // slipped through. The contains-check is the right invariant.
-    const ast = parseJsonl('{"a":"ok"}\n').ast;
+    const ast = parseJsonl('{"a":"ok"}\n');
     const value = {
       kind: "object" as const,
       entries: [

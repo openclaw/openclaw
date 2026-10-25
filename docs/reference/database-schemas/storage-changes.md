@@ -70,6 +70,19 @@ writes and validates the exact serialized row before persisting it. Offline
 migration and repair retain explicit pending work and invalidate session-validation
 receipts; they never reuse readiness to admit unvalidated imports.
 
+Unknown persisted and imported session entries admit optional numeric metadata, including spawn
+depth, usage counters, timestamps, and costs, before typed consumers use it.
+Wrong types and non-finite values stop admission with a repair diagnostic rather
+than being coerced or discarded. Existing snooze normalization keeps its own
+deadline policy, and extensible plugin and nested payload contracts are unchanged.
+With the Gateway stopped, `openclaw doctor --fix` converts supported legacy
+numeric strings; spawn depth requires a nonnegative decimal integer. Unusable
+values remain available for offline repair or restoration. This uses the existing
+backed-up Doctor path and requires no schema-version change. Trusted internal
+projections and writes reuse admitted numeric fields without revalidating them.
+Doctor commits converted archive, activity, and run-timing query columns with the
+repaired JSON in the same transaction, preserving unrelated indexed facts.
+
 The pending table remains derived and stores no authority or copied payloads.
 Migration validates the prior schema, retires its validation triggers, queues all
 existing nodes, and clears the old session-validation receipt atomically with version
@@ -95,8 +108,8 @@ or result delivery fails; recovery reconciles through its original owner instead
 of repeating the write. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness).
 
-SQLite remains the supported default. The experimental PostgreSQL adapter
-supports remote persistence for one Gateway;
+SQLite remains the default. PostgreSQL supports remote persistence for one
+Gateway on the [qualified runtime](/gateway/postgresql#support-matrix);
 multiple active Gateways would require a separate ownership and coordination
 design. A shared database alone does not make process-local writer queues,
 session lifecycles, or host-owned leases safe across Gateway instances.
@@ -131,6 +144,22 @@ their state DDL. The generated `runtime.ts` module packages that same SQL with
 fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
+
+Explicit PostgreSQL index keys use native ordering for canonical NOT NULL and
+primary-key columns. Nullable columns and expression keys retain SQLite's
+`ASC NULLS FIRST` / `DESC NULLS LAST` placement. This lets default PostgreSQL
+`ORDER BY` use non-null indexes without changing observable nullable ordering.
+State schema 32, agent schema 34, Workboard schema 4, Logbook schema 2, and
+Team Reports schema 2 rebuild only changed explicit indexes through versioned
+schema admission under its existing advisory lock. Absent first-use fragments
+stay absent. SQLite advances version metadata without changing canonical DDL.
+Historical admission and backup descriptors retain the preceding index definitions;
+rollback restores the verified pre-upgrade backup. Update and Doctor retain their
+existing migration progress and recovery handling.
+
+The worker-only `openclaw/plugin-sdk/database-engine-worker-runtime` helpers
+`postgresIndexOrderingMigration` and `withLegacyPostgresIndexOrdering` let store
+owners share that cutover and exact predecessor reconstruction for generated DDL.
 
 The transcript navigation CHECK keeps its JSON validation for present metadata.
 Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
@@ -225,12 +254,15 @@ SQLite primitive owners listed in `SQLITE_PRIMITIVE_OWNERS` may grow engine-main
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 
-### Experimental PostgreSQL engine (workboard pilot)
+<a id="experimental-postgresql-engine-workboard-pilot" />
+
+### PostgreSQL engine
 
 `database.engine: "postgres"` selects PostgreSQL for every store with a registered
-PostgreSQL schema; workboard is currently the only supported store. Doctor
-reports each store's engine and warns about stores that remain on SQLite.
-See [Database engines (experimental)](/reference/database-engines) for SecretRef
+PostgreSQL schema: state, agent, Workboard, Logbook and Team Reports. Doctor
+reports configured and observed engines and warns about mismatches and missing
+capabilities. Local safety stores remain SQLite by design.
+See [Database engines](/reference/database-engines) for SecretRef
 configuration, isolation and durability, matched anchor/schema backups,
 limitations, and engine-boundary observation. Missing secrets, connection failures,
 and admission errors never fall back to SQLite. Existing SQLite workboard data
@@ -853,13 +885,6 @@ confirmed Stop, or lost database owner prevents a late write from replacing the
 current owner. Unknown writes are not replayed. Cleanup rechecks session ownership
 and retained cancellation claims before changing prepared resources. No separate
 Tasks record or managed flow participates in admission or settlement.
-
-Explicit promotion notice and claim annotations execute in the shared-state
-worker. The CLI awaits their best-effort completion before reporting results;
-storage failures still do not fail a promotion claim. Notice recording retains
-its read-only preflight and atomic sorted slug union, preserving the other feed
-fields. Empty notices leave absent databases absent, and already-recorded notices
-do not open a writer. Claim upserts, stored formats, and retention are unchanged.
 
 Update-check telemetry reads its cached response and retained session-creation
 count through the shared-state worker. Successful responses use the existing
@@ -3043,3 +3068,36 @@ without `preflight-agent` remain unsupported; installing a newer CLI elsewhere
 does not make those payloads compatible. Runtime/package identity and serving
 health are separate checks from database compatibility. A successful read-only
 preflight does not authorize checkpoint replay or replacement of live databases.
+
+## Files from before PR workspace adoption
+
+Adopting an ordinary unbound conversation into a managed PR workspace records one
+private `priorWorkspace` relation in the existing session `entry_json`. It binds
+the adopted worktree ID and session incarnation to the original admitted source,
+its file root, and the transcript generation/sequence boundary observed before
+binding. The existing session writer commits this relation with the new workspace.
+Canonical transcript rewrites carry the boundary forward using surviving event
+identities and their committed positions, in the same transaction or incognito
+actor mutation. Maintenance rewrites that re-append later messages under new IDs
+(tool-result truncation, thinking-replay repair, context-engine maintenance and
+endpoint compaction) give each copy the side of the message it supersedes.
+Removing the boundary event does not change a surviving message's
+file source. Deliberately removed messages remain unavailable; unresolved source
+provenance never falls back to the current workspace.
+No files, credentials, permissions, or transcript payloads are copied.
+
+Current session access and filesystem containment still authorize every read.
+Only a valid persisted message from before that boundary selects the original
+live files, through read-only preview, download, or relative-asset reads. Public
+and plugin session projections omit the relation. Same-incarnation updates retain
+it; detaching the workspace or rotating through the public session writer clears
+it. Session deletion removes only the relation and the session-owned workspace;
+the original source remains with its original owner. There is no snapshot or
+additional retention policy, database, table, or schema-version change.
+
+Newly adopted workspaces require the existing file source descriptor (worktree ID
+and lookup roots) as a compare-only precondition for edits, in addition to the
+unchanged content hash. Earlier
+editors cannot write to a different same-name file, even with identical bytes.
+Older runtimes do not implement message-qualified prior-file access or this new
+adoption behavior; original files remain in their source without migration.

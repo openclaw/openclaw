@@ -265,22 +265,6 @@ export const baseConfig = (): OpenClawConfig =>
 vi.mock("../internal/discord.js", async () => {
   const actual =
     await vi.importActual<typeof import("../internal/discord.js")>("../internal/discord.js");
-  class RateLimitError extends Error {
-    status = 429;
-    discordCode?: number;
-    retryAfter: number;
-    scope: string | null;
-    bucket: string | null;
-    constructor(
-      response: Response,
-      body: { message: string; retry_after: number; global: boolean },
-    ) {
-      super(body.message);
-      this.retryAfter = body.retry_after;
-      this.scope = body.global ? "global" : response.headers.get("X-RateLimit-Scope");
-      this.bucket = response.headers.get("X-RateLimit-Bucket");
-    }
-  }
   class Client {
     listeners: unknown[];
     plugins: NonNullable<ConstructorParameters<typeof actual.Client>[2]>;
@@ -321,7 +305,7 @@ vi.mock("../internal/discord.js", async () => {
       return clientGetPluginMock(name) ?? this.plugins.find((plugin) => plugin.id === name);
     }
   }
-  return { ...actual, Client, RateLimitError };
+  return { ...actual, Client };
 });
 
 vi.mock("../internal/gateway.js", () => ({

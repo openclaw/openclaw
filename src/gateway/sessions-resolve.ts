@@ -466,9 +466,7 @@ export function resolveSessionKeyFromResolveParams(params: {
       }
       if (ownerTaggedMatches.size > 1) {
         return invalidSessionRequest(
-          `Multiple sessions found for sessionId: ${sessionId} (${[...ownerTaggedMatches.values()]
-            .map((match) => `${match.agentId}:${match.key}`)
-            .join(", ")})`,
+          `Multiple sessions found for sessionId: ${sessionId} (${Array.from(ownerTaggedMatches.values(), (match) => `${match.agentId}:${match.key}`).join(", ")})`,
         );
       }
       const ownerTaggedMatch = ownerTaggedMatches.values().next().value;

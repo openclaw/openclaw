@@ -15,6 +15,7 @@ import {
   useNoBundledPlugins,
 } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
@@ -23,6 +24,7 @@ import { createPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope as withRegistry } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { bindPluginRuntimeLoadContextState } from "../plugins/runtime/load-context-state.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -174,6 +176,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         let acquired: Awaited<ReturnType<typeof acquireAgentRuntimePluginRegistry>> | undefined;
         let lease: Awaited<ReturnType<typeof createLease>> | undefined;
         let disposal: Promise<void> | undefined;
+        using warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
         try {
           await sdkHost.run(async () => {
             acquired = await acquireAgentRuntimePluginRegistry({
@@ -194,16 +197,17 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
               expect(donorCurrent?.()).toBe(false);
             }
             expect(connections.every((connection) => connection.database.isOpen)).toBe(true);
-            const warnings: string[] = [];
             const openLease = () =>
               createLease({
                 identity: { runId: "copied-source-run", sessionId: "copied-source-session" },
                 config,
                 workspaceDir: state.workspaceDir,
-                warn: (message) => warnings.push(message),
               });
             lease = await withRegistry(copied, openLease);
-            expect(lease.effectiveEngineId, warnings.join("\n")).toBe(id);
+            expect(
+              lease.effectiveEngineId,
+              warnings.mock.calls.map(([message]) => message).join("\n"),
+            ).toBe(id);
             expect(lease.degraded).toBe(false);
             expect(bridge.factoryCalls).toBe(1);
             expect(connections.length).toBe(2);
@@ -302,7 +306,6 @@ it("does not treat an uncovered view as a retired donor's owner after a failed d
       createLease({
         identity: { runId: "uncovered-run", sessionId: "uncovered-session" },
         config: { plugins: { slots: { contextEngine: record.id } } },
-        warn: () => {},
       }),
     );
     expect(lease.degraded).toBe(true);
@@ -378,3 +381,29 @@ it.each([
     }
   },
 );
+
+// A retained or full-only factory cannot bypass the target generation's selected owner.
+it.each(["adopt", "retain"] as const)("enforces prepared ownership during %s", (operation) => {
+  const root = registryWithPluginEngine();
+  for (const owner of ["plugin:new-owner", "plugin:ce-probe", null]) {
+    const target = createEmptyPluginRegistry();
+    target.plugins.push(...root.plugins);
+    bindPluginRuntimeLoadContextState(target, {
+      workspaceDir: undefined,
+      rawConfig: {},
+      activationInputFingerprint: "synthetic",
+      controlPlaneFingerprint: "synthetic",
+      registrationConfigKey: "synthetic",
+      declaredProviderOwners: new Map(),
+      selectedContextEngine: { engineId: "ce-probe", owner },
+    });
+    let result = target;
+    if (operation === "adopt") {
+      result = adoptRuntimeContextEngineRegistrations(target, root);
+    } else {
+      projectPluginContributions(root, root.plugins[0]!, target);
+    }
+    expect(result.contextEngines.has("ce-probe")).toBe(owner === "plugin:ce-probe");
+    expect(root.contextEngines.has("ce-probe")).toBe(true);
+  }
+});

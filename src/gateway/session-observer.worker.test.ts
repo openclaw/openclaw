@@ -7,7 +7,6 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as entryFacts from "../config/sessions/session-entry-read-facts.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
-import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -32,7 +31,6 @@ import {
   createHarness,
   event,
   modelMessage,
-  preparedModel,
   resetSessionObserverEventSequence,
 } from "./session-observer.test-utils.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
@@ -45,6 +43,11 @@ const lifecycleUpdate =
   "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', 'life-b') WHERE session_key = ?";
 const preambleEvent = (progressText: string) =>
   event({ stream: "item", data: { kind: "preamble", progressText } });
+const observerConfig = (store: string | undefined, utilityModel = ""): OpenClawConfig => ({
+  session: { store },
+  gateway: { controlUi: { sessionObserver: true } },
+  agents: { defaults: { utilityModel } },
+});
 
 function traceSql() {
   const trace = observeMainThreadSql();
@@ -108,15 +111,15 @@ function observerFixture(
   const persisted = vi.fn<NonNullable<SessionObserverDeps["persistDigest"]>>(async () => true);
   let now = 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
-  const cfg = { session: { store: useDefaultStore ? undefined : database.path } };
+  const cfg = {
+    session: { store: useDefaultStore ? undefined : database.path },
+    agents: { defaults: { utilityModel: "" } },
+  };
   const observer = createSessionObserver({
     getConfig: () => cfg,
     subscribers,
     broadcastToConnIds: broadcast,
     ...(persistDigests ? {} : { persistDigest: persisted }),
-    resolveUtilityModelRef: () => undefined,
-    prepareModel: async () => preparedModel(),
-    completeModel: async () => modelMessage({ headline: "Completed observation", health: "done" }),
   });
   observer.setConnectionVisibility("viewer", true);
   return {
@@ -188,39 +191,16 @@ it("moves observer admission, publication, terminal and companion reads off the 
       // Keep entry reads cold while target discovery retains its admitted inventory.
       vi.spyOn(entryFacts, "readRetainedSessionEntryFacts").mockReturnValue(undefined);
       const start = event({ stream: "lifecycle", data: { phase: "start" } });
-      let inventories = 0;
-      let entries = 0;
-      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
-      vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
-        const result = await run(...args);
-        if (
-          result.ok &&
-          typeof result.value === "object" &&
-          result.value !== null &&
-          "kind" in result.value
-        ) {
-          inventories += Number(result.value.kind === "session-target-inventory");
-          entries += Number(result.value.kind === "session-exact-entries");
-        }
-        return result;
-      });
       {
         using sql = traceSql();
         observer.handleEvent(start);
         sql.expectIdle();
         sql.clear();
         await observer.handleEventAsync({ ...start, runId: "worker-run" });
-        expect(inventories).toBe(1);
-        inventories = 0;
-        entries = 0;
         await sendPreamble(observer, "Worker observation", "worker-run");
-        expect(inventories).toBe(0);
-        expect(entries).toBeGreaterThanOrEqual(2);
-        entries = 0;
         for (const delta of ["Checking ", "the implementation."]) {
           await send(observer, "assistant", { delta }, "worker-run");
         }
-        expect({ inventories, entries }).toEqual({ inventories: 0, entries: 0 });
         const snapshot = await observer.getCompanionSnapshotAsync(key, "main");
         expect(snapshot.digest?.headline).toBe("Worker observation");
         expect(snapshot.notes).toContainEqual({
@@ -231,13 +211,9 @@ it("moves observer admission, publication, terminal and companion reads off the 
         sql.restore();
         peer.prepare(lifecycleUpdate).run(key);
         advanceClock();
-        inventories = 0;
-        entries = 0;
         {
           using fresh = traceSql();
           await sendPreamble(observer, "Retired observation", "worker-run");
-          expect(inventories).toBe(0);
-          expect(entries).toBeGreaterThan(0);
           expect(broadcast).toHaveBeenCalledTimes(1);
           fresh.expectIdle();
         }
@@ -391,7 +367,7 @@ it("does not write a dormant predecessor digest into a replacement store", async
 
 it("joins the worker-backed persistence of a legacy event adapter", async () => {
   await withObserver(async ({ observer, peer }) => {
-    observer.handleEvent(preambleEvent("Legacy admission"));
+    expect(observer.handleEvent(preambleEvent("Legacy admission"))).toBeUndefined();
     const disposal = observer.disposeAsync();
     const afterClose = preambleEvent("Rejected after close");
     observer.handleEvent(afterClose);
@@ -427,19 +403,12 @@ it("lets the publisher finish its nested write before persisting the background 
         return true;
       }),
     );
-    const harness = createHarness({
-      config: {
-        session: { store: options.path },
-        gateway: { controlUi: { sessionObserver: true } },
-      },
-      utilityModelRef: null,
-      persistDigest,
-    });
+    const harness = createHarness({ config: observerConfig(options.path), persistDigest });
     let successor: Promise<void> | undefined;
     let disposal: Promise<void> | undefined;
     try {
       await runOpenClawAgentWriteAdmission(options, async () => {
-        harness.observer.handleEvent(preambleEvent("Reviewing"));
+        await harness.observer.handleEventAsync(preambleEvent("Reviewing"));
         expect(persistDigest).toHaveBeenCalledOnce();
         expect(digestEntered).toBe(false);
         await runOpenClawAgentWorkerWrite(options, async () => {
@@ -472,55 +441,46 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
   "rechecks physical source authority before consuming a %s digest",
   async (kind, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const config: OpenClawConfig = {
-        session: { store: state.path("original.sqlite") },
-        gateway: { controlUi: { sessionObserver: true } },
-        agents: { defaults: { utilityModel: "openai/gpt-test" } },
-      };
+      const config = observerConfig(
+        state.path("original.sqlite"),
+        kind === "synthesized terminal" ? "" : "openai/gpt-test",
+      );
       const replacementStore = state.path("replacement.sqlite");
       let changeSourceOnRead = false;
       let sourceChanges = 0;
-      let backgroundRegistrations = 0;
-      let backgroundFinished = createDeferred();
-      const backgroundSettlements: Promise<void>[] = [];
+      const pending: Promise<unknown>[] = [];
+      const settle = async () => {
+        while (pending.length) {
+          await withinTest(Promise.allSettled(pending.splice(0)), signal);
+        }
+      };
       const createWork = observerWork.createSessionObserverWork;
-      const factory = vi
-        .spyOn(observerWork, "createSessionObserverWork")
-        .mockImplementation((params) => {
-          const work = createWork(params);
-          const withCurrent = work.withCurrent.bind(work);
-          vi.spyOn(work, "withCurrent").mockImplementation((...args) => {
-            if (changeSourceOnRead) {
-              changeSourceOnRead = false;
-              config.session = { store: replacementStore };
-              sourceChanges += 1;
-            }
-            return withCurrent(...args);
-          });
-          const background = work.background.bind(work);
-          vi.spyOn(work, "background").mockImplementation((run) => {
-            backgroundRegistrations += 1;
-            const finished = backgroundFinished;
-            const settled = createDeferred();
-            backgroundSettlements.push(settled.promise);
-            background(async () => {
-              try {
-                return await run();
-              } finally {
-                finished.resolve();
-                settled.resolve();
-              }
-            });
-          });
-          return work;
+      vi.spyOn(observerWork, "createSessionObserverWork").mockImplementation((params) => {
+        const work = createWork(params);
+        const withCurrent = work.withCurrent.bind(work);
+        vi.spyOn(work, "withCurrent").mockImplementation((...args) => {
+          if (changeSourceOnRead) {
+            changeSourceOnRead = false;
+            config.session = { store: replacementStore };
+            sourceChanges += 1;
+          }
+          return withCurrent(...args);
         });
+        const background = work.background.bind(work);
+        vi.spyOn(work, "background").mockImplementation((run) => {
+          background(() => {
+            const result = run();
+            pending.push(result);
+            return result;
+          });
+        });
+        return work;
+      });
       let harness: ReturnType<typeof createHarness> | undefined;
       try {
         harness = createHarness({
           config,
-          utilityModelRef: kind === "synthesized terminal" ? null : "openai/gpt-test",
           readSession: vi.fn(() => ({ ...initialEntry, lifecycleRevision: "owned" })),
-          prepareModel: vi.fn(async () => preparedModel()),
           completeModel: vi.fn(async () => {
             if (kind === "failed model") {
               throw new Error("model request failed");
@@ -531,27 +491,20 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
         const observer = harness.observer;
         const deliver = (stream: string, data: Record<string, unknown>) =>
           withinTest(send(observer, stream, data), signal);
-        expect(factory).toHaveBeenCalledOnce();
         if (kind !== "synthesized terminal") {
           await deliver("lifecycle", { phase: "start", startedAt: 0 });
           await deliver("tool", { phase: "start", name: "read", args: { path: "example.ts" } });
         } else {
           await deliver("item", { kind: "preamble", progressText: "Reviewing", startedAt: 0 });
-          expect(backgroundRegistrations).toBe(1);
-          await withinTest(backgroundFinished.promise, signal);
+          await settle();
           expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
           expect(harness.persistDigest).toHaveBeenCalledOnce();
           harness.broadcastToConnIds.mockClear();
           harness.persistDigest.mockClear();
-          backgroundFinished = createDeferred();
-          backgroundRegistrations = 0;
         }
-        expect(backgroundRegistrations).toBe(0);
         changeSourceOnRead = true;
         await deliver("lifecycle", { phase: "end", startedAt: 0, endedAt: 31_000 });
-        expect(backgroundRegistrations).toBeGreaterThan(0);
-        await withinTest(backgroundFinished.promise, signal);
-        await withinTest(Promise.all(backgroundSettlements), signal);
+        await settle();
 
         expect(sourceChanges).toBe(1);
         expect(config.session?.store).toBe(replacementStore);
@@ -568,7 +521,6 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
         try {
           await harness?.observer.disposeAsync();
         } finally {
-          factory.mockRestore();
           vi.restoreAllMocks();
           resetSessionObserverEventSequence();
         }

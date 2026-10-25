@@ -1,14 +1,19 @@
 import { EventEmitter, once } from "node:events";
 import net from "node:net";
-import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import { createMattermostConnectOnce } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 
 const createWebSocket = vi.hoisted(() => vi.fn());
+
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: async () => {},
+}));
 
 vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>();
@@ -66,6 +71,8 @@ function createConnection(
     runtime: testRuntime(),
     nextSeq: () => 1,
     onPosted: async () => {},
+    onReaction: async () => {},
+    getBotUpdateAt: async () => 0,
     ...options,
   });
 }
@@ -81,11 +88,7 @@ async function startStalledWebSocketHandshakeServer(): Promise<{
   const server = net.createServer((socket) => {
     accepted.push(socket);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const { port } = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   return {
     url: `ws://127.0.0.1:${port}`,
     close: async () => {
@@ -130,10 +133,12 @@ beforeEach(() => {
   vi.useRealTimers();
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 it("backs off across attempts when authentication never completes", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
   createWebSocket.mockImplementation(() => {
     const socket = new FakeWebSocket();
     queueMicrotask(() => {
@@ -151,9 +156,6 @@ it("backs off across attempts when authentication never completes", async () => 
   const reconnectDelays: number[] = [];
   const abort = new AbortController();
   await runWithReconnect(connectOnce, {
-    initialDelayMs: 10,
-    maxDelayMs: 1000,
-    jitterRatio: 0,
     abortSignal: abort.signal,
     onError: (err) => {
       expect(String(err)).toContain("bot token");
@@ -169,16 +171,14 @@ it("backs off across attempts when authentication never completes", async () => 
   expect(connectErrors).toEqual(
     Array.from({ length: 3 }, () => "WebSocketClosedBeforeAuthenticationError"),
   );
-  expect(reconnectDelays).toEqual([10, 20]);
+  expect(reconnectDelays).toEqual([2000, 4000]);
 });
 
 it("terminates the connection when the authentication reply never arrives", async () => {
   vi.useFakeTimers();
   const socket = new FakeWebSocket();
   const runtime = testRuntime();
-  const connectOnce = createConnection(socket, {
-    runtime,
-  });
+  const connectOnce = createConnection(socket, { runtime });
 
   const connected = connectOnce();
   socket.emit("open");
@@ -305,25 +305,18 @@ it("dispatches reaction events to the reaction handler", async () => {
     emoji_name: "thumbsup",
   });
   const payload = { event: "reaction_added", data: { reaction } };
-  const connected = connectOnce();
-  queueMicrotask(() => {
-    socket.emit("open");
-    socket.emit("message", authOkFrame(1));
-    socket.emit("message", encodeFrame(payload));
-    socket.emitClose(1000);
-  });
+  const connected = startAuthenticated(connectOnce, socket);
+  socket.emit("message", encodeFrame(payload));
+  socket.emitClose(1000);
   await connected;
-  expect(onReaction).toHaveBeenCalledTimes(1);
+  expect(onReaction).toHaveBeenCalledExactlyOnceWith(payload);
   expect(onPosted).not.toHaveBeenCalled();
-  expect(onReaction.mock.calls.at(0)?.[0]).toEqual(payload);
 });
 
 it("hands posted envelopes to ingress raw without duplicate decoding", async () => {
   const socket = new FakeWebSocket();
   const onPosted = vi.fn(async () => {});
-  const connectOnce = createConnection(socket, {
-    onPosted,
-  });
+  const connectOnce = createConnection(socket, { onPosted });
   const post = { id: "post-raw", channel_id: "channel-raw", unexpected_transport_field: true };
   const raw = postEnvelope(post);
   const frame = Buffer.from(raw);
@@ -336,9 +329,7 @@ it("hands posted envelopes to ingress raw without duplicate decoding", async () 
   });
   expect(onPosted).not.toHaveBeenCalled();
   socket.emit("message", frame);
-  await vi.waitFor(() => {
-    expect(onPosted).toHaveBeenCalledTimes(1);
-  });
+  await vi.waitFor(() => expect(onPosted).toHaveBeenCalledTimes(1));
   socket.emitClose(1000);
   await connected;
 
@@ -390,52 +381,39 @@ it("terminates silent websocket drops when Mattermost misses pong timeout", asyn
   await connected;
 });
 
-it("does not terminate when getBotUpdateAt throws", async () => {
-  const { socket, runtime, connected } = startTimedMonitor({
-    getBotUpdateAt: vi
-      .fn<() => Promise<number>>()
-      .mockResolvedValueOnce(1000)
-      .mockRejectedValue(new Error("network error")),
-  });
-  socket.ping = () => void socket.emit("pong", Buffer.alloc(0));
-
-  await vi.advanceTimersByTimeAsync(0);
-
-  await vi.advanceTimersByTimeAsync(30_000);
-  expect(socket.terminateCalls).toBe(0);
-  expect(runtime.error).toHaveBeenCalledWith(
-    "mattermost: health check error: Error: network error",
-  );
-
-  socket.emitClose(1000);
-  await connected;
-});
-
-it("keeps polling when the initial getBotUpdateAt call fails", async () => {
-  const { socket, runtime, connected } = startTimedMonitor({
-    getBotUpdateAt: vi
-      .fn<() => Promise<number>>()
+it.each([false, true])("keeps polling after health check failure (initial=%s)", async (initial) => {
+  const getBotUpdateAt = vi.fn<() => Promise<number>>();
+  if (initial) {
+    getBotUpdateAt
       .mockRejectedValueOnce(new Error("network error"))
       .mockResolvedValueOnce(1000)
-      .mockResolvedValue(2000),
-  });
+      .mockResolvedValue(2000);
+  } else {
+    getBotUpdateAt.mockResolvedValueOnce(1000).mockRejectedValue(new Error("network error"));
+  }
+  const { socket, runtime, connected } = startTimedMonitor({ getBotUpdateAt });
   socket.ping = () => void socket.emit("pong", Buffer.alloc(0));
 
   await vi.advanceTimersByTimeAsync(0);
-  expect(runtime.error).toHaveBeenCalledWith(
-    "mattermost: failed to get initial update_at: Error: network error",
-  );
-
+  if (initial) {
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost: failed to get initial update_at: Error: network error",
+    );
+  }
   await vi.advanceTimersByTimeAsync(30_000);
   expect(socket.terminateCalls).toBe(0);
-
-  await vi.advanceTimersByTimeAsync(30_000);
-  expect(socket.terminateCalls).toBe(1);
-  expect(runtime.log).toHaveBeenCalledWith(
-    "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
-  );
-
-  socket.emitClose(1006);
+  if (initial) {
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(socket.terminateCalls).toBe(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
+    );
+  } else {
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost: health check error: Error: network error",
+    );
+  }
+  socket.emitClose(initial ? 1006 : 1000);
   await connected;
 });
 
@@ -468,6 +446,7 @@ it("does not overlap health checks when a prior poll is still running", async ()
 });
 
 it("returns control to reconnect after a stalled handshake", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
   const stalledServer = await startStalledWebSocketHandshakeServer();
 
   const runtime = testRuntime();
@@ -489,9 +468,6 @@ it("returns control to reconnect after a stalled handshake", async () => {
   const abort = new AbortController();
   try {
     await runWithReconnect(connectOnce, {
-      initialDelayMs: 50,
-      maxDelayMs: 50,
-      jitterRatio: 0,
       abortSignal: abort.signal,
       onError: (err) => {
         connectErrors.push(err instanceof Error ? err.name : String(err));
@@ -508,7 +484,7 @@ it("returns control to reconnect after a stalled handshake", async () => {
       "WebSocketClosedBeforeOpenError",
       "WebSocketClosedBeforeOpenError",
     ]);
-    expect(reconnectDelays).toEqual([50]);
+    expect(reconnectDelays).toEqual([2000]);
   } finally {
     await stalledServer.close();
   }

@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   formatValidationErrors,
   missingScopeErrorShape,
   validatePluginsSessionActionParams,
@@ -16,6 +15,7 @@ import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { validateJsonSchemaValue, type JsonSchemaValue } from "../../plugins/schema-validator.js";
+import { hasMultipleResidentSessionSharingIdentities } from "../../state/user-profile-list.js";
 import {
   listControlUiPluginDescriptors,
   listControlUiLinkReaders,
@@ -23,9 +23,11 @@ import {
   listControlUiPluginWidgetKinds,
 } from "../control-ui-plugin-tabs.js";
 import { authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import { resolveOperatorRoleAgents } from "../operator-role-policy.js";
 import { WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -38,13 +40,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     ({ respond, client, context }) => {
       const methods = context.getGatewayMethodRegistry?.();
       if (!methods) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "Gateway plugin capabilities are unavailable in this runtime.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "Gateway plugin capabilities are unavailable in this runtime.",
         );
         return;
       }
@@ -69,7 +68,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     validatePluginsSessionActionParams,
     async ({ params, client, respond, context }) => {
       const reject = (message: string) =>
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, message);
       const pluginId = normalizeOptionalString(params.pluginId);
       const actionId = normalizeOptionalString(params.actionId);
       const rawSessionKey = normalizeOptionalString(params.sessionKey);
@@ -104,13 +103,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
       );
       if (!registration || !pluginLoaded) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `unknown plugin session action: ${pluginId}/${actionId}`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          `unknown plugin session action: ${pluginId}/${actionId}`,
         );
         return;
       }
@@ -134,15 +130,6 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           return;
         }
         if (registration.action.schema !== undefined) {
-          if (
-            typeof registration.action.schema !== "boolean" &&
-            !isRecord(registration.action.schema)
-          ) {
-            reject("plugin session action schema must be an object or boolean");
-            return;
-          }
-          // Schemas are plugin-provided data; validate their shape before passing
-          // them into the shared schema evaluator so malformed plugins fail cleanly.
           const validation = validateJsonSchemaValue({
             schema: registration.action.schema as JsonSchemaValue,
             cacheKey: `plugin-session-action:${pluginId}:${actionId}`,
@@ -164,6 +151,16 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           client: {
             ...(client?.connId ? { connId: client.connId } : {}),
             scopes: [...scopes],
+            // Live policy, not snapshots: role config and the profile roster can
+            // change while an awaited action runs, and handlers check right before effects.
+            allowsAgent: (agentId: string) => {
+              const roleAgents = resolveOperatorRoleAgents(
+                client ?? null,
+                context.getRuntimeConfig(),
+              );
+              return !roleAgents || roleAgents.includes(agentId);
+            },
+            isSharedGateway: () => hasMultipleResidentSessionSharingIdentities(),
           },
         });
         if (result !== undefined && !isRecord(result)) {
@@ -214,11 +211,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         log.warn(
           `plugin session action failed plugin=${pluginId} action=${actionId}: ${formatErrorMessage(error)}`,
         );
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "plugin session action failed"),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, "plugin session action failed");
       }
     },
   ),

@@ -84,15 +84,16 @@ function caller(
       client,
       isWebchatConnect: () => false,
     });
-  return {
-    gatewayContext,
-    invoke,
-    query: async (params = defaults) => {
-      const respond = vi.fn<RespondFn>();
-      await invoke(respond, params);
-      return respond;
-    },
+  const start = (params = defaults) => {
+    const respond = vi.fn<RespondFn>();
+    return { respond, run: invoke(respond, params) };
   };
+  const query = async (params = defaults) => {
+    const { respond, run } = start(params);
+    await run;
+    return respond;
+  };
+  return { gatewayContext, start, query };
 }
 
 function expectFailure(
@@ -196,23 +197,21 @@ describe("conversations.turn Gateway handler", () => {
   it("joins concurrent retries and replays the completed idempotent result", async () => {
     const pending = createDeferred<typeof result>();
     runConversationTurn.mockReturnValue(pending.promise);
-    const { invoke, query, gatewayContext } = caller();
-    const firstRespond = vi.fn<RespondFn>();
-    const secondRespond = vi.fn<RespondFn>();
-    const first = invoke(firstRespond);
+    const { start, query, gatewayContext } = caller();
+    const first = start();
     await vi.waitFor(() => expect(runConversationTurn).toHaveBeenCalledOnce());
     expect(runConversationTurn).toHaveBeenCalledWith(
       expect.objectContaining({ senderIsOwner: true }),
     );
     const timeoutMismatchRespond = await query({ ...request, timeoutMs: 5_000 });
     expectFailure(timeoutMismatchRespond);
-    const second = invoke(secondRespond);
+    const second = start();
     pending.resolve(result);
-    await Promise.all([first, second]);
+    await Promise.all([first.run, second.run]);
 
     expect(runConversationTurn).toHaveBeenCalledOnce();
-    expectReply(firstRespond);
-    expectReply(secondRespond, result, { channel: "reef", cached: true });
+    expectReply(first.respond);
+    expectReply(second.respond, result, { channel: "reef", cached: true });
 
     const cachedRespond = await query();
     expect(runConversationTurn).toHaveBeenCalledOnce();
@@ -234,23 +233,21 @@ describe("conversations.turn Gateway handler", () => {
     runConversationTurn.mockImplementation(async ({ agentId }) =>
       agentId === "main" ? await pending.promise : otherResult,
     );
-    const { invoke } = caller();
-    const firstRespond = vi.fn<RespondFn>();
-    const otherRespond = vi.fn<RespondFn>();
-    const first = invoke(firstRespond);
+    const { start } = caller();
+    const first = start();
     await vi.waitFor(() => expect(runConversationTurn).toHaveBeenCalledOnce());
 
-    const other = invoke(otherRespond, {
+    const other = start({
       ...request,
       agentId: "other-agent",
       sourceSessionKey: "agent:other-agent:telegram:direct:operator",
     });
     await vi.waitFor(() => expect(runConversationTurn).toHaveBeenCalledTimes(2));
     pending.resolve(result);
-    await Promise.all([first, other]);
+    await Promise.all([first.run, other.run]);
 
-    expectReply(firstRespond);
-    expectReply(otherRespond, otherResult);
+    expectReply(first.respond);
+    expectReply(other.respond, otherResult);
   });
 
   it.each([

@@ -33,13 +33,10 @@ export function formatDatabaseEngineSelection(
   stores?: readonly Pick<DatabaseStoreDiagnostic, "family" | "configured">[],
 ): string {
   const families = describeDatabaseEngineSelection(config, stores);
-  const choices = families
+  return families
     .map(
       (family) =>
         `${family.id}: default=${family.default}, override=${family.fixedLocal ? "fixed local" : (family.override ?? "inherit")}, effective=${family.effective}`,
     )
     .join("; ");
-  return families.some((family) => family.effective === "postgres")
-    ? `${choices}; PostgreSQL is experimental`
-    : choices;
 }

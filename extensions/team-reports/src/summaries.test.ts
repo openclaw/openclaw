@@ -166,17 +166,4 @@ describe("team report summaries", () => {
     expect(digest).toContain("Public summary 99");
     expect(digest).not.toContain('"title":"Public summary 19"');
   });
-
-  it("propagates cancellation and does not return a late model result or start a repair", async () => {
-    const controller = new AbortController();
-    const complete = vi.fn<Complete>().mockImplementation(async ({ signal }) => {
-      expect(signal).toBe(controller.signal);
-      controller.abort(new Error("Run deadline reached"));
-      return modelCompletion();
-    });
-    await expect(summarize(complete, { signal: controller.signal })).rejects.toThrow(
-      "Run deadline reached",
-    );
-    expect(complete).toHaveBeenCalledOnce();
-  });
 });

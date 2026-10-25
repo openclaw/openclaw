@@ -10,12 +10,14 @@ import {
 } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -80,7 +82,7 @@ it("coalesces background process changes without invalidating session rows and s
   } finally {
     vi.useRealTimers();
     await unsubs.agentUnsub();
-    unsubs.heartbeatUnsub();
+    heartbeatNotifications.onEvent = () => {};
     unsubs.transcriptUnsub();
     unsubs.lifecycleUnsub();
     resetProcessRegistryForTests();
@@ -106,6 +108,8 @@ it.for([
     const started = createDeferred();
     const finish = createDeferred();
     const released = vi.fn();
+    using auth = vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth");
+    auth.mockResolvedValue(true);
     const prepared = vi.spyOn(sessionObserverModel, "defaultPrepareModel").mockResolvedValue({
       config: {},
       authProfileId: undefined,
@@ -189,7 +193,7 @@ it.for([
     } finally {
       finish.resolve();
       await unsubs?.agentUnsub();
-      unsubs?.heartbeatUnsub();
+      heartbeatNotifications.onEvent = () => {};
       unsubs?.transcriptUnsub();
       unsubs?.lifecycleUnsub();
       unsubs = undefined;

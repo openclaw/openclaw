@@ -93,6 +93,16 @@ function run(
   });
 }
 
+async function expectCursorRowid(lastSeenRowid: number) {
+  const cursor = await getIMessageRuntime()
+    .state.openKeyedStoreV2<IMessageCatchupCursor>({
+      namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+      maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+    })
+    .lookup(resolveIMessageCatchupCursorKey("default"));
+  expect(cursor?.lastSeenRowid).toBe(lastSeenRowid);
+}
+
 function collectGuids(dispatched: string[]) {
   return async (msg: IMessagePayload) => {
     if (msg.guid) {
@@ -112,22 +122,6 @@ describe("runIMessageCatchup", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await closeOpenClawStateDatabaseAsync();
-  });
-
-  it("fetches chats then per-chat history and dispatches each row in rowid order", async () => {
-    const dispatched: string[] = [];
-    const { client, calls } = historyClient([chat(1), chat(2, "2026-05-08T11:50:00.000Z")], (id) =>
-      id === 1
-        ? [makeRow(102), makeRow(100, 1, "2026-05-08T11:50:00Z")]
-        : [makeRow(101, 2, "2026-05-08T11:51:00Z")],
-    );
-
-    const summary = await run(client, { dispatchPayload: collectGuids(dispatched) });
-
-    expect(summary).toMatchObject({ querySucceeded: true, fullyCaughtUp: true, replayed: 3 });
-    expect(dispatched).toEqual(["g-100", "g-101", "g-102"]);
-    expect(calls[0]?.method).toBe("chats.list");
-    expect(calls.filter((c) => c.method === "messages.history")).toHaveLength(2);
   });
 
   it("skips chats whose last_message_at is older than the catchup window", async () => {
@@ -208,7 +202,7 @@ describe("runIMessageCatchup", () => {
     expect(summary).toMatchObject({ fetchedCount: 5, fullyCaughtUp: false, replayed: 5 });
     expect(dispatched).toEqual(["g-100", "g-101", "g-102", "g-103", "g-200"]);
     // #79387: the raw watermark must not skip rows excluded by perRunLimit.
-    expect(summary.cursorAfter.lastSeenRowid).toBe(200);
+    await expectCursorRowid(200);
   });
 
   it("treats a dispatch throw as a failure and holds the cursor", async () => {
@@ -227,7 +221,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary).toMatchObject({ failed: 1, replayed: 0 });
-    expect(summary.cursorAfter.lastSeenRowid).toBe(499);
+    await expectCursorRowid(499);
   });
 
   it("emits a high-watermark even when every row fails payload validation", async () => {
@@ -247,7 +241,7 @@ describe("runIMessageCatchup", () => {
     const summary = await run(client);
 
     expect(summary).toMatchObject({ querySucceeded: true, replayed: 0, fetchedCount: 0 });
-    expect(summary.cursorAfter.lastSeenRowid).toBe(999);
+    await expectCursorRowid(999);
   });
 
   it("filters rows that fail payload validation", async () => {

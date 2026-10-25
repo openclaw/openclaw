@@ -1,4 +1,4 @@
-import { constants, accessSync, readFileSync, realpathSync } from "node:fs";
+import { constants, accessSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -59,7 +59,7 @@ function resolveIMessageExecutable(cliPath: string): string | undefined {
 
 function isMachOExecutable(filePath: string): boolean {
   try {
-    return MACH_O_MAGICS.has(readFileSync(realpathSync(filePath)).subarray(0, 4).toString("hex"));
+    return MACH_O_MAGICS.has(readFileSync(filePath).subarray(0, 4).toString("hex"));
   } catch {
     return false;
   }
@@ -79,7 +79,7 @@ function isProvenLocalIMessageCliPath(params: { cliPath: string; remoteHost?: st
   let local = executable ? isMachOExecutable(executable) : false;
   if (executable && !local) {
     try {
-      const wrapper = readFileSync(realpathSync(executable), "utf8");
+      const wrapper = readFileSync(executable, "utf8");
       const match = wrapper.match(
         /^#![^\r\n]+\r?\n\s*exec\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+"\$@"\s*$/u,
       );

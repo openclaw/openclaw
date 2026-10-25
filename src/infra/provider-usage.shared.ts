@@ -93,8 +93,6 @@ export const raceUsageTimeout = async <T>(
       work(controller.signal),
     ]);
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+    clearTimeout(timeout);
   }
 };

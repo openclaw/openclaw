@@ -2,8 +2,10 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import type { Static, TSchema } from "typebox";
 import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
-import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import { listEnabledFeishuAccounts } from "./accounts.js";
+import { createFeishuToolClient } from "./tool-account.js";
 import { toolExecutionErrorResult } from "./tool-result.js";
+import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig } from "./types.js";
 
 export function registerFeishuTool<TSchemaType extends TSchema>(
@@ -31,7 +33,11 @@ export function registerFeishuTool<TSchemaType extends TSchema>(
   api.registerTool(
     (ctx) => {
       const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
-      if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg)[tool.family]) {
+      if (
+        !listEnabledFeishuAccounts(cfg).some(
+          (account) => resolveToolsConfig(account.config.tools)[tool.family],
+        )
+      ) {
         return null;
       }
       const execute = tool.createExecute(ctx, cfg, (params, label) =>

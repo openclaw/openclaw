@@ -28,6 +28,7 @@ import {
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createReplyOperation as createControllerOperation,
+  getSessionControllerOperation,
   markReplyOperationExecutionStarted,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
@@ -37,10 +38,7 @@ import {
   submitSessionControllerTask,
 } from "../../sessions/session-controller.mailbox.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
-import {
-  isSessionRunActive,
-  resolveSessionRunProgressState,
-} from "../../sessions/session-controller.queries.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import type {
   RpcSourceAdapter,
   RpcSourceIdentity,
@@ -491,7 +489,6 @@ it("projects native lifecycle snapshots and admits the next backend after produc
       buildGatewaySessionSnapshot({
         sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 1, status: "done" },
         activeRunState: state(),
-        includeSession: true,
       }),
     ).toMatchObject({ status, hasActiveRun, session: { status, hasActiveRun } });
   const operation = run.reply();
@@ -529,7 +526,6 @@ it("preserves an independent running worker over a queued native snapshot", asyn
     buildGatewaySessionSnapshot({
       sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 1, status: "done" },
       activeRunState: resolveState(sessionKey, { sessionId }),
-      includeSession: true,
     });
   registerAgentRunContext("worker-overlap-run", {
     projectSessionActive: true,
@@ -843,6 +839,7 @@ it("preserves the completed foreground row while hidden embedded maintenance rem
     },
     isAborted: () => aborted,
   });
+  const operation = getSessionControllerOperation(sessionKey);
   const snapshot = () =>
     buildGatewaySessionSnapshot({
       sessionRow: {
@@ -855,7 +852,6 @@ it("preserves the completed foreground row while hidden embedded maintenance rem
         runtimeMs: 273_418,
       },
       activeRunState: state(),
-      includeSession: true,
     });
   let settled = false;
   const cleanup = waitForSessionRunEnd(sessionId, null).then((ended) => {
@@ -871,14 +867,16 @@ it("preserves the completed foreground row while hidden embedded maintenance rem
       session: { status: "done", hasActiveRun: false },
     });
     expect(isSessionRunActive(sessionId)).toBe(true);
-    expect(resolveSessionRunProgressState(sessionId)).toBe("running");
+    expect(operation?.phase).toBe("running");
+    expect(operation?.result).toBeNull();
     clearAgentRunContext(runId);
     expect.soft(state()).toEqual({ active: false, runIds: [] });
-    expect(resolveSessionRunProgressState(sessionId)).toBe("running");
+    expect(getSessionControllerOperation(sessionKey)).toBe(operation);
+    expect(operation?.result).toBeNull();
     expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
     expect(aborted).toBe(true);
     expect(isSessionRunActive(sessionId)).toBe(true);
-    expect(resolveSessionRunProgressState(sessionId)).toBeUndefined();
+    expect(operation?.result).toMatchObject({ kind: "aborted" });
     await Promise.resolve();
     expect(settled).toBe(false);
   } finally {
@@ -896,6 +894,8 @@ it.each(["reply", "remote"] as const)(
     const visibleRunId = `visible-${kind}`;
     run.register({ projectSessionActive: false });
     const handle = run.embed();
+    const nativeOperation = getSessionControllerOperation(sessionKey);
+    expect(nativeOperation?.result).toBeNull();
     let reply: ReturnType<typeof createReplyOperation> | undefined;
     if (kind === "reply") {
       expect(() => createReplyOperation({ sessionKey, sessionId, resetTriggered: false })).toThrow(
@@ -913,9 +913,7 @@ it.each(["reply", "remote"] as const)(
     reply?.complete();
     clearAgentRunContext(visibleRunId);
     expect(state()).toEqual({ active: false, runIds: [] });
-    expect(resolveSessionRunProgressState(sessionId)).toBe(
-      kind === "reply" ? undefined : "running",
-    );
+    expect(nativeOperation?.result).toEqual(kind === "reply" ? { kind: "completed" } : null);
   },
 );
 

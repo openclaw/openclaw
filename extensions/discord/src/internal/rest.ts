@@ -103,7 +103,6 @@ export class RequestClient {
   protected token: string;
   protected customFetch: DiscordEndpointRuntime["fetch"] | undefined;
   private readonly guardedEndpoint: boolean;
-  protected requestControllers = new Set<AbortController>();
   private scheduler: RestScheduler<RequestDispatchData>;
 
   constructor(token: string, options?: RequestClientOptions) {
@@ -199,12 +198,10 @@ export class RequestClient {
     }
     const body = serializeRequestBody(params.data, headers);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeout);
-    timeout.unref?.();
+    const timeout = setTimeout(() => controller.abort(), this.options.timeout).unref();
     const signal = this.options.signal
       ? AbortSignal.any([this.options.signal, controller.signal])
       : controller.signal;
-    this.requestControllers.add(controller);
     try {
       assertCurrent?.();
       const init = { method, headers, body, signal };
@@ -234,7 +231,7 @@ export class RequestClient {
         const rateLimitBody = isDiscordRateLimitBody(parsed) ? parsed : undefined;
         throw new RateLimitError(response, {
           message: readDiscordMessage(rateLimitBody, "Rate limited"),
-          retry_after: readRetryAfter(rateLimitBody, response, 1),
+          retry_after: readRetryAfter(rateLimitBody, response),
           code: readDiscordCode(rateLimitBody),
           global: Boolean(rateLimitBody?.global),
         });
@@ -245,24 +242,7 @@ export class RequestClient {
       return parsed;
     } finally {
       clearTimeout(timeout);
-      this.requestControllers.delete(controller);
     }
-  }
-
-  clearQueue(): void {
-    this.scheduler.clearQueue();
-  }
-
-  get queueSize(): number {
-    return this.scheduler.queueSize;
-  }
-
-  abortAllRequests(): void {
-    this.scheduler.abortPending();
-    for (const controller of this.requestControllers) {
-      controller.abort();
-    }
-    this.requestControllers.clear();
   }
 }
 

@@ -5,6 +5,7 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI theme selection defaults" });
@@ -22,7 +23,6 @@ suite.define(() => {
         const profileId = "theme-defaults-user";
         const config = {
           ui: {
-            seamColor: "#123456",
             prefs: { theme: "claw", accent: "#abcdef", locale: "en", chatShowThinking: false },
           },
         };
@@ -37,13 +37,7 @@ suite.define(() => {
           presenceUsers: [{ id: profileId, name: "Theme demo", self: true }],
           heldMethods: ["users.prefs.get"],
           methodResponses: {
-            "config.get": {
-              config,
-              raw: JSON.stringify(config),
-              hash: "theme-defaults",
-              valid: true,
-              issues: [],
-            },
+            "config.get": configSnapshot(config, "theme-defaults"),
             "users.prefs.set": { status: "ok" },
           },
         });
@@ -61,23 +55,25 @@ suite.define(() => {
           await gateway.waitForRequest("users.prefs.get", { after });
           await gateway.resolveDeferred("users.prefs.get", { status: "ok", entries });
         };
+        const fonts = (ui: string, chat = ui) => ({
+          ui: expect.stringContaining(ui),
+          chat: expect.stringContaining(chat),
+        });
+        const defaults = {
+          theme: "absolutely",
+          accent: "#d97757",
+          ...fonts("Space Grotesk", "Lora"),
+        };
+        const customized = { theme: "absolutely", accent: "#5b9cf6", ...fonts("Geist") };
         await page.goto(suite.server.baseUrl + "settings/appearance");
         await respondProfile(initialEntries);
         await waitForControlUiSettingsTakeover(page);
         // Boot and profile arrival retain existing customization.
-        await expect.poll(read).toMatchObject({
-          theme: "dash",
-          accent: "#5b9cf6",
-          ui: expect.stringContaining("JetBrains Mono"),
-          chat: expect.stringContaining("JetBrains Mono"),
-        });
+        await expect
+          .poll(read)
+          .toMatchObject({ theme: "dash", accent: "#5b9cf6", ...fonts("JetBrains Mono") });
         await page.locator(".settings-theme-card--absolutely").click();
-        await expect.poll(read).toMatchObject({
-          theme: "absolutely",
-          accent: "#d97757",
-          ui: expect.stringContaining("Space Grotesk"),
-          chat: expect.stringContaining("Lora"),
-        });
+        await expect.poll(read).toMatchObject(defaults);
         await expect
           .poll(async () => (await gateway.getRequests("themes.set")).map((r) => r.params))
           .toContainEqual({
@@ -115,31 +111,20 @@ suite.define(() => {
         await expect.poll(read).toMatchObject({ theme: "absolutely", accent: "#d97757" });
         await respondProfile(selected);
         await waitForControlUiSettingsTakeover(page);
-        await expect.poll(read).toMatchObject({
-          ui: expect.stringContaining("Space Grotesk"),
-          chat: expect.stringContaining("Lora"),
-          accent: "#d97757",
-        });
+        await expect.poll(read).toMatchObject(defaults);
         await page.getByRole("radio", { name: "Light", exact: true }).click();
         await expect.poll(read).toMatchObject({ theme: "absolutely-light", accent: "#a8452a" });
 
-        await selectPickerValue(
-          page.locator("openclaw-select-picker:has(#settings-font-ui)"),
-          "geist",
-        );
-        await selectPickerValue(
-          page.locator("openclaw-select-picker:has(#settings-font-chat)"),
-          "geist",
-        );
+        for (const field of ["ui", "chat"]) {
+          await selectPickerValue(
+            page.locator(`openclaw-select-picker:has(#settings-font-${field})`),
+            "geist",
+          );
+        }
         await page.locator('[data-accent-preset="blue"]').click();
         await page.locator(".settings-theme-card--absolutely").click();
         await page.getByRole("radio", { name: "Dark", exact: true }).click();
-        await expect.poll(read).toMatchObject({
-          theme: "absolutely",
-          ui: expect.stringContaining("Geist"),
-          chat: expect.stringContaining("Geist"),
-          accent: "#5b9cf6",
-        });
+        await expect.poll(read).toMatchObject(customized);
         const custom = {
           ...selected,
           "ui.fontUi": "geist",
@@ -152,21 +137,11 @@ suite.define(() => {
         reads = await gateway.deferNext("users.prefs.get");
         await gateway.closeLatest();
         await respondProfile(custom, reads);
-        await expect.poll(read).toMatchObject({
-          theme: "absolutely",
-          ui: expect.stringContaining("Geist"),
-          chat: expect.stringContaining("Geist"),
-          accent: "#5b9cf6",
-        });
+        await expect.poll(read).toMatchObject(customized);
         await page.reload();
         await respondProfile(custom);
         await waitForControlUiSettingsTakeover(page);
-        await expect.poll(read).toMatchObject({
-          theme: "absolutely",
-          ui: expect.stringContaining("Geist"),
-          chat: expect.stringContaining("Geist"),
-          accent: "#5b9cf6",
-        });
+        await expect.poll(read).toMatchObject(customized);
         await expect.poll(mirror).toMatchObject({ locale: "en", chatShowThinking: false });
       },
     );

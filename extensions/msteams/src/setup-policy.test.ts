@@ -4,10 +4,13 @@ import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 
 const resolveMSTeamsUserAllowlist = vi.hoisted(() => vi.fn());
+const resolveMSTeamsChannelAllowlist = vi.hoisted(() =>
+  vi.fn<typeof import("./resolve-allowlist.js").resolveMSTeamsChannelAllowlist>(),
+);
 
 vi.mock("./resolve-allowlist.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./resolve-allowlist.js")>()),
-  resolveMSTeamsChannelAllowlist: vi.fn(),
+  resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 }));
 
@@ -22,6 +25,56 @@ function policyKeys(prefix: string) {
 }
 
 describe("msteamsSetupWizard account-scoped policies", () => {
+  it("lists inherited and selected-account teams and channels in configured order", () => {
+    const cfg = teamsConfig({
+      teams: { inherited: {} },
+      accounts: {
+        "Support Bot": {
+          teams: { whole: {}, scoped: { channels: { first: {}, second: {} } } },
+        },
+        sibling: { teams: { unrelated: {} } },
+      },
+    });
+
+    expect(groups.currentEntries({ cfg, accountId: "support-bot" })).toEqual([
+      "inherited",
+      "whole",
+      "scoped/first",
+      "scoped/second",
+    ]);
+  });
+
+  it("keeps resolved channels, teams, and unresolved entries in setup order", async () => {
+    resolveMSTeamsChannelAllowlist.mockResolvedValueOnce([
+      { input: "unknown/general", resolved: false },
+      { input: "whole-team", resolved: true, teamId: "team-a" },
+      { input: "channel", resolved: true, teamId: "team-b", channelId: "channel-b" },
+      { input: "incomplete", resolved: true },
+    ]);
+    const note = vi.fn(async () => {});
+    const resolved = await groups.resolveAllowlist!({
+      cfg: teamsConfig({
+        appId: "synthetic-app",
+        appPassword: "synthetic-secret",
+        tenantId: "synthetic-tenant",
+      }),
+      accountId: "default",
+      credentialValues: {},
+      entries: ["unknown/general", "whole-team", "channel", "incomplete"],
+      prompter: { note },
+    });
+
+    expect(resolved).toEqual([
+      { teamKey: "team-b", channelKey: "channel-b" },
+      { teamKey: "team-a" },
+      { teamKey: "unknown", channelKey: "general" },
+    ]);
+    expect(note).toHaveBeenCalledWith(
+      "Resolved channels: channel-b\nResolved teams: team-a\nUnresolved (kept as typed): unknown/general",
+      "MS Teams channels",
+    );
+  });
+
   it("reads and edits root DM policy without consuming its SecretRef", () => {
     const secret = { source: "env" as const, provider: "default", id: "TEAMS_POLICY_SECRET" };
     const account = {

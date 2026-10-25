@@ -18,12 +18,23 @@ vi.mock("../app/lazy-custom-element.ts", async (importOriginal) => {
 let restoreDialog: () => void;
 
 beforeEach(() => {
+  // JSDOM lacks layout and media APIs; these cases exercise selection, not geometry.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  vi.stubGlobal("matchMedia", () => ({ matches: false }));
   restoreDialog = installDialogPolyfill();
 });
 
 afterEach(() => {
   document.body.replaceChildren();
   restoreDialog();
+  vi.unstubAllGlobals();
 });
 
 it("can reopen and submit after lazy dialog code fails to load", async () => {
@@ -43,6 +54,8 @@ it("can reopen and submit after lazy dialog code fails to load", async () => {
   const { modal } = await getRenderedModalDialog(document.body);
   try {
     const submit = modal.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(submit.disabled).toBe(true);
+    modal.querySelector<HTMLButtonElement>('[data-value="gateway"]')!.click();
     await waitForSolid(() => expect(submit.disabled).toBe(false));
     submit.click();
     await expect(result).resolves.toEqual({ kind: "gateway" });

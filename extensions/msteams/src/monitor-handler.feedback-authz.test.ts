@@ -7,16 +7,15 @@ import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-const feedbackReflectionMockState = vi.hoisted(() => ({
-  runFeedbackReflection: vi.fn(),
-}));
 const channelInboundMockState = vi.hoisted(() => ({
   recordChannelFeedbackEvent: vi.fn(async () => true),
+  runChannelFeedbackReflection: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
   recordChannelFeedbackEvent: channelInboundMockState.recordChannelFeedbackEvent,
+  runChannelFeedbackReflection: channelInboundMockState.runChannelFeedbackReflection,
 }));
 
 vi.mock("./monitor-handler/message-handler.js", () => ({
@@ -26,13 +25,6 @@ vi.mock("./monitor-handler/message-handler.js", () => ({
 vi.mock("./monitor-handler/reaction-handler.js", () => ({
   createMSTeamsReactionHandler: () => async () => {},
 }));
-
-vi.mock("./feedback-reflection.js", async () => {
-  const actual = await vi.importActual<typeof import("./feedback-reflection.js")>(
-    "./feedback-reflection.js",
-  );
-  return { ...actual, runFeedbackReflection: feedbackReflectionMockState.runFeedbackReflection };
-});
 
 function createDeps(cfg: OpenClawConfig): MSTeamsMessageHandlerDeps {
   setMSTeamsRuntime({
@@ -99,7 +91,6 @@ function createFeedbackInvokeContext(params: {
       },
     },
     sendActivity: vi.fn(async () => ({ id: "ignored" })),
-    sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext;
 }
 
@@ -109,12 +100,14 @@ function dmConfig(teams?: MSTeamsConfig["teams"]): OpenClawConfig {
 
 function expectFeedbackBlocked() {
   expect(channelInboundMockState.recordChannelFeedbackEvent).not.toHaveBeenCalled();
-  expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
+  expect(channelInboundMockState.runChannelFeedbackReflection).not.toHaveBeenCalled();
 }
 
 describe("msteams feedback invoke authz", () => {
   beforeEach(() => {
-    feedbackReflectionMockState.runFeedbackReflection.mockReset().mockResolvedValue(undefined);
+    channelInboundMockState.runChannelFeedbackReflection.mockReset().mockResolvedValue({
+      status: "empty",
+    });
     channelInboundMockState.recordChannelFeedbackEvent.mockClear();
   });
 
@@ -143,6 +136,26 @@ describe("msteams feedback invoke authz", () => {
         conversationId: "a:personal-chat",
       },
     });
+  });
+
+  it.each([
+    ["19:channel@thread.tacv2;messageid=root", "nested"],
+    ["19:channel@thread.tacv2", "root"],
+  ])("records channel feedback in its message thread: %s", async (conversationId, replyToId) => {
+    const context = createFeedbackInvokeContext({ conversationId, conversationType: "channel" });
+    context.activity.replyToId = replyToId;
+    await runMSTeamsFeedbackInvokeHandler(
+      context,
+      createDeps({ channels: { msteams: { groupPolicy: "open" } } }),
+    );
+    expect(channelInboundMockState.recordChannelFeedbackEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "msteams:channel:19:channel@thread.tacv2:thread:root",
+        event: expect.objectContaining({
+          sessionKey: "msteams:channel:19:channel@thread.tacv2:thread:root",
+        }),
+      }),
+    );
   });
 
   it.each([

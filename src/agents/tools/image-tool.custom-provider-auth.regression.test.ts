@@ -1,3 +1,4 @@
+import * as toolSchema from "@openclaw/ai/internal/tool-schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CapabilityModelProviderCandidate } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -6,15 +7,13 @@ import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { finalizeAgentTools } from "../agent-tools.finalize.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
 import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
 import { createImageTool } from "./image-tool.js";
-import {
-  ONE_PIXEL_PNG_B64,
-  resolveImageModelConfigForTool,
-  testing,
-} from "./image-tool.test-support.js";
+import { createRequiredImageTool, ONE_PIXEL_PNG_B64, testing } from "./image-tool.test-support.js";
 import { hasProviderAuthForTool } from "./model-config.helpers.js";
 
 const buildProviderRegistry = buildMediaUnderstandingRegistry;
@@ -143,6 +142,44 @@ describe("image custom provider auth regression", () => {
     testing.setProviderDepsForTest(undefined);
   });
 
+  it.each([false, true])(
+    "reuses published schemas for vision=%s across runs and sessions",
+    (modelHasVision) => {
+      clearPluginMetadataLifecycleCaches();
+      const config = createUserReportedConfig();
+      const construct = (sessionId: string) =>
+        finalizeAgentTools({
+          tools: [createRequiredImageTool({ config, agentDir, modelHasVision })],
+          config,
+          hookContext: { sessionId },
+          modelProvider: "openai",
+          modelApi: "openai-responses",
+          wrapBeforeToolCallHook: false,
+        })[0]!;
+      const cold = construct("image-schema-first");
+      if (modelHasVision) {
+        expect(cold.parameters).not.toHaveProperty("properties.model");
+      } else {
+        expect(cold.parameters).toHaveProperty("properties.model");
+      }
+      const bytes = JSON.stringify(cold.parameters);
+      const publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
+      try {
+        for (const sessionId of [
+          "image-schema-first",
+          "image-schema-second",
+          "image-schema-third",
+        ]) {
+          expect(JSON.stringify(construct(sessionId).parameters)).toBe(bytes);
+        }
+        expect(publish).not.toHaveBeenCalled();
+      } finally {
+        publish.mockRestore();
+        clearPluginMetadataLifecycleCaches();
+      }
+    },
+  );
+
   it("registers config-only AWS SDK Bedrock image models", async () => {
     vi.stubEnv("AWS_PROFILE", "");
     vi.stubEnv("AWS_ACCESS_KEY_ID", "");
@@ -151,8 +188,17 @@ describe("image custom provider auth regression", () => {
     const cfg = createBedrockSdkConfig();
 
     expect(hasProviderAuthForTool({ provider: BEDROCK_PROVIDER, cfg })).toBe(true);
-    expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-      primary: `${BEDROCK_PROVIDER}/${BEDROCK_VISION_MODEL}`,
+    const tool = createImageTool({
+      config: cfg,
+      agentDir,
+      authProfileStore: createAuthProfileStoreFixture({}),
+    });
+    const result = await tool!.execute("bedrock-sdk", {
+      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+    });
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: `seen:${BEDROCK_PROVIDER}/${BEDROCK_VISION_MODEL}`,
     });
     expect(
       resolveImageToolFactoryAvailable({
@@ -183,7 +229,6 @@ describe("image custom provider auth regression", () => {
     const tool = createImageTool({
       config: cfg,
       agentDir,
-      deferAutoModelResolution: true,
       modelHasVision: false,
       authProfileStore: createAuthProfileStoreFixture({}),
     });
@@ -206,12 +251,10 @@ describe("image custom provider auth regression", () => {
     const cfg = createUserReportedConfig({ includeApiKey: false });
     expect(hasUsableCustomProviderApiKey(cfg, USER_PROVIDER)).toBe(false);
     expect(hasProviderAuthForTool({ provider: USER_PROVIDER, cfg })).toBe(false);
-    expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
 
     const tool = createImageTool({
       config: cfg,
       agentDir,
-      deferAutoModelResolution: true,
       modelHasVision: false,
       authProfileStore: createAuthProfileStoreFixture({}),
     });

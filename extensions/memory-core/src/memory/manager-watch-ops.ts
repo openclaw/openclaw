@@ -1,6 +1,5 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { LocalMemoryFileWatcher } from "./local-file-watcher.js";
 import { MemoryManagerSyncBase } from "./manager-sync-base.js";
 
@@ -20,7 +19,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   }
 
   protected ensureWatcher() {
-    if (!this.sources.has("memory") || !this.settings.sync.watch || this.closed) {
+    if (!this.sources.has("memory") || this.closed) {
       return;
     }
     if (this.memoryFiles) {
@@ -77,7 +76,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       onDirty: () => this.markMemoryWatchDirty(),
       onChange: () => {
         this.markMemoryWatchDirty();
-        return this.sync({ reason: "watch" });
+        return this.syncBackground({ reason: "watch" });
       },
       onState: ({ health }) => {
         if (health.length && health.every((entry) => entry.state === "ready")) {
@@ -102,10 +101,6 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     if (this.sessionWatchTimer) {
       clearTimeout(this.sessionWatchTimer);
       this.sessionWatchTimer = null;
-    }
-    if (this.intervalTimer) {
-      clearInterval(this.intervalTimer);
-      this.intervalTimer = null;
     }
     this.memoryWatchSubscription?.abort();
     this.memoryWatchSubscription = undefined;
@@ -146,24 +141,10 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     };
     try {
       this.runInBackgroundContext(() => {
-        void this.runInBackgroundContext(() => this.sync(params)).catch(failed);
+        void this.runInBackgroundContext(() => this.syncBackground(params)).catch(failed);
       });
     } catch (err) {
       failed(err);
     }
-  }
-
-  protected ensureIntervalSync() {
-    const minutes = this.settings.sync.intervalMinutes;
-    if (!minutes || minutes <= 0 || this.intervalTimer) {
-      return;
-    }
-    const ms = resolveTimerTimeoutMs(minutes * 60 * 1000, 0, 0);
-    if (ms <= 0) {
-      return;
-    }
-    this.intervalTimer = setInterval(() => {
-      this.syncInBackground({ reason: "interval" });
-    }, ms);
   }
 }

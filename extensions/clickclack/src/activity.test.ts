@@ -45,10 +45,10 @@ describe("createClickClackActivityPublisher", () => {
 
   it("keeps complete commentary during a partial successor and accepts shorter completion", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createPublisher(client, { flushMs: 10 });
+    const publisher = createPublisher(client);
 
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First and second" });
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(700);
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First and second" });
     publisher.onItemEvent({
       itemId: "c1",
@@ -111,11 +111,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("updates a durable row when only the outcome changes to failed", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-    });
+    const publisher = createPublisher(client);
     const item = {
       itemId: "work",
       kind: "tool",
@@ -231,7 +227,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("normalizes reasoning-style progress lanes into durable commentary rows", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createPublisher(client, { flushMs: 10 });
+    const publisher = createPublisher(client);
 
     publisher.onItemEvent({ itemId: "empty1", kind: "thinking", progressText: " " });
     publisher.onItemEvent({
@@ -239,7 +235,7 @@ describe("createClickClackActivityPublisher", () => {
       kind: "thinking",
       progressText: "Checking the runtime",
     });
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(700);
     publisher.onItemEvent({
       itemId: "think1",
       kind: "thinking",

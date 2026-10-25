@@ -1,5 +1,17 @@
 import { vi, type Mock } from "vitest";
-import { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayBrowserClient, GatewayRequestError } from "../api/gateway.ts";
+
+export function missingReadScopeErrorFixture(): GatewayRequestError {
+  return new GatewayRequestError({
+    code: "FORBIDDEN",
+    message: "permission denied",
+    details: {
+      code: "MISSING_SCOPE",
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    },
+  });
+}
 
 export type GatewayRequestHandler = (
   ...args: Parameters<GatewayBrowserClient["request"]>

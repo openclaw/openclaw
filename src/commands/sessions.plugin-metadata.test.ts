@@ -1,8 +1,6 @@
-// Session listing prepares plugin metadata once and enriches only selected rows.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
-  mockSessionsConfig,
   resetMockSessionsConfig,
   runSessionsJson,
   setMockSessionsConfig,
@@ -16,8 +14,6 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   resolvePluginMetadataSnapshot: resolvePluginMetadataSnapshotMock,
 }));
 
-mockSessionsConfig();
-
 const sessionMeta = await import("../acp/runtime/session-meta-readonly.js");
 const runtimeMetadata = await import("../agents/agent-runtime-metadata.js");
 const { sessionsCommand } = await import("./sessions.js");
@@ -28,74 +24,51 @@ afterEach(() => {
   resolvePluginMetadataSnapshotMock.mockReset();
 });
 
-describe("sessions plugin metadata preparation", () => {
-  it("loads one plugin metadata snapshot and enriches only the selected sessions", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-          models: { "openai/gpt-5.5": {} },
-        },
-      },
-    };
-    setMockSessionsConfig(() => config);
-    resolvePluginMetadataSnapshotMock.mockReturnValue({
-      configFingerprint: "sessions-plugin-metadata-test",
-      index: {
-        plugins: [
-          {
-            pluginId: "fixture-plugin",
-            origin: "global",
-            enabled: true,
-          },
-        ],
-      },
-      plugins: [
-        {
-          id: "fixture-plugin",
-          origin: "global",
-          cliBackends: ["fixture-cli"],
-        },
-      ],
-    });
+it("loads one plugin metadata snapshot and enriches only the selected sessions", async () => {
+  const model = "openai/gpt-5.5";
+  const config = { agents: { defaults: { model: { primary: model }, models: { [model]: {} } } } };
+  setMockSessionsConfig(() => config);
+  resolvePluginMetadataSnapshotMock.mockReturnValue({
+    configFingerprint: "sessions-plugin-metadata-test",
+    index: {
+      plugins: [{ pluginId: "fixture-plugin", origin: "global", enabled: true }],
+    },
+    plugins: [{ id: "fixture-plugin", origin: "global", cliBackends: ["fixture-cli"] }],
+  });
 
-    const entries = Object.fromEntries(
-      Array.from({ length: 12 }, (_, index) => [
-        `agent:main:fixture-${index}`,
-        {
-          sessionId: `fixture-session-${index}`,
-          updatedAt: Date.now() - index * 1_000,
-          modelProvider: "fixture-cli",
-          model: "openai/gpt-5.5",
-        } satisfies SessionEntry,
-      ]),
-    );
-    const store = await writeStore(entries, "sessions-plugin-metadata");
-    const readAcpMetadata = vi.spyOn(sessionMeta, "readAcpSessionMetaForEntries");
-    const resolveRuntime = vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata");
+  const entries = Object.fromEntries(
+    Array.from({ length: 12 }, (_, index) => [
+      `agent:main:fixture-${index}`,
+      {
+        sessionId: `fixture-session-${index}`,
+        updatedAt: Date.now() - index * 1_000,
+        modelProvider: "fixture-cli",
+        model,
+      } satisfies SessionEntry,
+    ]),
+  );
+  const store = await writeStore(entries, "sessions-plugin-metadata");
+  const readAcpMetadata = vi.spyOn(sessionMeta, "readAcpSessionMetaForEntries");
+  const resolveRuntime = vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata");
 
-    const payload = await runSessionsJson<{
-      count: number;
-      totalCount: number;
-      sessions: Array<{ model: string; modelProvider: string }>;
-    }>(sessionsCommand, store, { limit: 1 });
+  const payload = await runSessionsJson<{ sessions: SessionEntry[] }>(sessionsCommand, store, {
+    limit: 1,
+  });
 
-    expect(payload).toMatchObject({
-      count: 1,
-      totalCount: 12,
-      sessions: [{ key: "agent:main:fixture-0", model: "gpt-5.5", modelProvider: "openai" }],
-    });
-    expect(readAcpMetadata).toHaveBeenCalledExactlyOnceWith({
-      cfg: config,
-      entries: [{ sessionKey: "agent:main:fixture-0", agentId: "main", entry: expect.any(Object) }],
-    });
-    expect(resolveRuntime).toHaveBeenCalledTimes(1);
-    expect(payload.sessions[0]).not.toHaveProperty("displayModelRef");
-    expect(resolvePluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(resolvePluginMetadataSnapshotMock).toHaveBeenCalledWith({
-      config,
-      env: process.env,
-      allowWorkspaceScopedCurrent: true,
-    });
+  expect(payload).toMatchObject({
+    count: 1,
+    totalCount: 12,
+    sessions: [{ key: "agent:main:fixture-0", model: "gpt-5.5", modelProvider: "openai" }],
+  });
+  expect(readAcpMetadata).toHaveBeenCalledExactlyOnceWith({
+    cfg: config,
+    entries: [{ sessionKey: "agent:main:fixture-0", agentId: "main", entry: expect.any(Object) }],
+  });
+  expect(resolveRuntime).toHaveBeenCalledTimes(1);
+  expect(payload.sessions[0]).not.toHaveProperty("displayModelRef");
+  expect(resolvePluginMetadataSnapshotMock).toHaveBeenCalledExactlyOnceWith({
+    config,
+    env: process.env,
+    allowWorkspaceScopedCurrent: true,
   });
 });

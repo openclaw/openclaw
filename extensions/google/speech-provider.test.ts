@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import { assertSupportedGoogleTtsModel, normalizeGoogleTtsModel } from "./speech-models.js";
 
 const transcode = vi.hoisted(() =>
@@ -350,8 +351,8 @@ describe("Google speech provider", () => {
       providerOverrides: {
         model: "google/gemini-3.1-pro-tts",
         voiceName: "Puck",
-        audioProfile: "Speak brightly.",
-        speakerName: "Override speaker",
+        audioProfile: "  Speak brightly.  ",
+        speakerName: "  Override speaker  ",
       },
     });
     expect(recorded()).toMatchObject({
@@ -383,16 +384,7 @@ describe("Google speech provider", () => {
       model: LEGACY,
       voiceName: "Leda",
     });
-    const policy = {
-      enabled: true,
-      allowText: true,
-      allowProvider: true,
-      allowVoice: true,
-      allowModelId: true,
-      allowVoiceSettings: true,
-      allowNormalization: true,
-      allowSeed: true,
-    };
+    const policy = createSpeechDirectivePolicy();
     expect(provider.parseDirectiveToken?.({ key: "google_voice", value: "Aoede", policy })).toEqual(
       { handled: true, overrides: { voiceName: "Aoede" } },
     );
@@ -412,6 +404,27 @@ describe("Google speech provider", () => {
     expect(post).toHaveBeenCalledOnce();
   });
 
+  it("redacts the active request credential from speech errors", async () => {
+    const credential = "fixture-google-speech-credential";
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
+      "openclaw/plugin-sdk/provider-http",
+    );
+    await assertOkOrThrowProviderErrorMock.withImplementation(
+      actual.assertOkOrThrowProviderError,
+      async () => {
+        post.mockResolvedValue(
+          responseResult(
+            Response.json({ error: { message: `Rejected ${credential}` } }, { status: 400 }),
+          ),
+        );
+        const failure = synthesize({ providerConfig: { apiKey: credential } });
+        await expect(failure).rejects.toMatchObject({ status: 400, statusCode: 400 });
+        await expect(failure).rejects.not.toThrow(credential);
+        expect(post).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
   it("sends Gemini 3.8 style as metadata and preserves the transcript verbatim", async () => {
     const text = "[whispers] Status.";
     const model = "gemini-3.8-flash-lite-tts";
@@ -426,9 +439,9 @@ describe("Google speech provider", () => {
       text,
       providerConfig: config({
         model,
-        audioProfile: "Calm.",
-        speakerName: "Alex",
-        personaPrompt: "Soft.",
+        audioProfile: "  Calm.  ",
+        speakerName: "  Alex  ",
+        personaPrompt: "  Soft.  ",
       }),
     });
     expectInteractions([speechContent(text, "Alex", "Calm.\n\nSoft.")], [{ voice: "Kore" }], {

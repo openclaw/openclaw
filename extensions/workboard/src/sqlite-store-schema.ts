@@ -3,9 +3,12 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   openEngineStore,
+  postgresIndexOrderingMigration,
   withEngineStoreAdmission,
+  withLegacyPostgresIndexOrdering,
   type EngineConnection,
   type DatabaseEngineInput,
+  type StoreSchema,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   configureSqliteConnectionPragmas,
@@ -23,6 +26,21 @@ import { WORKBOARD_POSTGRES_SCHEMA_SQL } from "./workboard-postgres-schema.js";
 import { SCHEMA_VERSION, WORKBOARD_SCHEMA_SQL } from "./workboard-schema.js";
 export type WorkboardSqlConnection = EngineConnection;
 
+export const workboardEngineSchema: StoreSchema = {
+  id: "workboard",
+  version: SCHEMA_VERSION,
+  sqlite: WORKBOARD_SCHEMA_SQL,
+  postgres: WORKBOARD_POSTGRES_SCHEMA_SQL,
+  postgresMigrations: [
+    {
+      version: 4,
+      fromSchema: { postgres: withLegacyPostgresIndexOrdering(WORKBOARD_POSTGRES_SCHEMA_SQL) },
+      schema: { postgres: WORKBOARD_POSTGRES_SCHEMA_SQL },
+      sql: postgresIndexOrderingMigration(WORKBOARD_POSTGRES_SCHEMA_SQL),
+    },
+  ],
+};
+
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -32,30 +50,22 @@ const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
   read: (value) => (value === true ? true : undefined),
 };
 
-function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
-  return new Set(
-    db
-      .prepare(`PRAGMA table_info(${tableName})`)
-      .all()
-      .flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
-  );
-}
-
-function ensureColumn(db: DatabaseSync, tableName: string, columnName: string, definition: string) {
-  if (tableColumns(db, tableName).has(columnName)) {
-    return;
-  }
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
-}
-
 function ensureWorkboardSchema(db: DatabaseSync): void {
   if (getSqliteDatabaseAdmission(db, schemaAdmission)) {
     return;
   }
   db.exec(WORKBOARD_SCHEMA_SQL);
-  ensureColumn(db, "workboard_boards", "automation_job_id", "automation_job_id TEXT");
-  ensureColumn(db, "workboard_boards", "kind", "kind TEXT");
-  ensureColumn(db, "workboard_boards", "sessions_spec", "sessions_spec TEXT");
+  const columns = new Set(
+    db
+      .prepare("PRAGMA table_info(workboard_boards)")
+      .all()
+      .flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
+  );
+  for (const column of ["automation_job_id", "kind", "sessions_spec"]) {
+    if (!columns.has(column)) {
+      db.exec(`ALTER TABLE workboard_boards ADD COLUMN ${column} TEXT`);
+    }
+  }
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
     .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")
@@ -130,12 +140,7 @@ export function createWorkboardDatabase(
     selected = withEngineStoreAdmission(() =>
       openEngineStore({
         anchor: db,
-        schema: {
-          id: "workboard",
-          version: SCHEMA_VERSION,
-          sqlite: WORKBOARD_SCHEMA_SQL,
-          postgres: WORKBOARD_POSTGRES_SCHEMA_SQL,
-        },
+        schema: workboardEngineSchema,
         input: postgresInput,
         inspectSqlite: () => {
           admitSqliteSchema(db);

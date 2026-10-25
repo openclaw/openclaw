@@ -271,9 +271,6 @@ export async function handleDiscordGuildAction(
   options?: DiscordMessagingActionOptions,
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
-  if (!cfg) {
-    throw new Error("Discord guild actions require a resolved runtime config.");
-  }
   const assertActionEnabled = () => {
     const guard = guildActionGuards[action];
     if (guard && !isActionEnabled(guard.gate, guard.defaultEnabled)) {

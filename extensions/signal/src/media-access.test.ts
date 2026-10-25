@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSignalApprovalReactionTargetsForTest } from "./approval-reactions.js";
 import { signalPlugin } from "./channel.js";
 import { registerSignalReplyContext } from "./reply-authors.js";
 import { sendMessageSignal } from "./send.js";
@@ -16,6 +15,7 @@ import {
   type SignalRpcEnvelope,
 } from "./signal-rpc.test-support.js";
 
+const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
 const SIGNAL_IMAGE = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
   "base64",
@@ -91,7 +91,7 @@ describe("Signal host-owned outbound media access", () => {
         await closeSignalServer(server);
       }
     } finally {
-      clearSignalApprovalReactionTargetsForTest();
+      reactionStores.clearSignalApprovalReactionStoresForTest();
       vi.restoreAllMocks();
       await state?.cleanup();
     }

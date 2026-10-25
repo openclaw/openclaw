@@ -5,7 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { acquireFileLockSync } from "../../infra/file-lock-manager.js";
-import { parseGatewayLockPayload } from "../../infra/gateway-lock-payload.js";
+import {
+  parseGatewayLockPayload,
+  readGatewayLockProcessNamespace,
+} from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
@@ -194,6 +197,7 @@ it("reports repairable orphans and Doctor next action for foreign-gateway admiss
     retry: { retries: 0 },
     payload: () => ({
       pid: process.pid,
+      processNamespace: readGatewayLockProcessNamespace(),
       ownerId: randomUUID(),
       createdAt: new Date().toISOString(),
       configPath: path.join(f.root, "openclaw.json"),

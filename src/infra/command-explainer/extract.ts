@@ -39,7 +39,6 @@ type MutableExplanation = {
 };
 
 type CommandArgument = {
-  index: number;
   text: string;
   value: string;
   span: SourceSpan;
@@ -83,7 +82,6 @@ type OperatorSource = {
   context: CommandContext;
   parentCommandId?: string;
   source: string;
-  spanBase: SpanBase;
 };
 
 function hasDirectChildType(node: TreeSitterNode, type: string): boolean {
@@ -128,19 +126,6 @@ function advancePosition(
     column += 1;
   }
   return { row, column };
-}
-
-function positionAtSourceIndex(source: string, index: number): SourceSpan["startPosition"] {
-  return advancePosition({ row: 0, column: 0 }, source.slice(0, index));
-}
-
-function spanFromSourceRange(source: string, startIndex: number, endIndex: number): SourceSpan {
-  return {
-    startIndex,
-    endIndex,
-    startPosition: positionAtSourceIndex(source, startIndex),
-    endPosition: positionAtSourceIndex(source, endIndex),
-  };
 }
 
 function valuePrefixLength(node: TreeSitterNode): number {
@@ -407,7 +392,6 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
 function appendCommandArgument(node: TreeSitterNode, parsed: CommandArgv, state: WalkState): void {
   const value = shellWordValue(node);
   const argument: CommandArgument = {
-    index: parsed.argv.length,
     text: node.text,
     value: value.value,
     span: spanFromNode(node, state.spanBase),
@@ -607,7 +591,6 @@ function payloadBaseFromArguments(
 
 function recordCommandRisks(
   parsed: CommandArgv,
-  text: string,
   span: SourceSpan,
   output: MutableExplanation,
 ): { command: string; spanBase: SpanBase } | null {
@@ -621,7 +604,6 @@ function recordCommandRisks(
     output.risks.push({
       kind: "dynamic-argument",
       command: normalizedExecutable,
-      argumentIndex: argument.index,
       text: argument.text,
       span: argument.span,
     });
@@ -632,7 +614,6 @@ function recordCommandRisks(
       kind: "inline-eval",
       command: inlineEval.normalizedExecutable,
       flag: inlineEval.flag,
-      text,
       span,
     });
   }
@@ -659,14 +640,11 @@ function recordCommandRisks(
         executable: shellExecutable,
         flag: commandFlag?.flag ?? "-c",
         payload: shellWrapperPayload,
-        text,
         span,
       });
     } else {
       output.risks.push({
         kind: "shell-wrapper-through-carrier",
-        command: normalizedExecutable,
-        text,
         span,
       });
     }
@@ -677,18 +655,17 @@ function recordCommandRisks(
       kind: "command-carrier",
       command: carrier.command,
       flag: carrier.flag,
-      text,
       span,
     });
   }
   if (normalizedExecutable === "eval") {
-    output.risks.push({ kind: "eval", text, span });
+    output.risks.push({ kind: "eval", span });
   }
   if (SOURCE_EXECUTABLES.has(normalizedExecutable)) {
-    output.risks.push({ kind: "source", command: normalizedExecutable, text, span });
+    output.risks.push({ kind: "source", command: normalizedExecutable, span });
   }
   if (normalizedExecutable === "alias") {
-    output.risks.push({ kind: "alias", text, span });
+    output.risks.push({ kind: "alias", span });
   }
   const carrierShellWrapper = !shellWrapper.isWrapper
     ? detectShellWrapperThroughCarrierArgv(argv, shellCommandFlag)
@@ -696,20 +673,17 @@ function recordCommandRisks(
   if (carrierShellWrapper) {
     output.risks.push({
       kind: "shell-wrapper-through-carrier",
-      command: carrierShellWrapper,
-      text,
       span,
     });
   }
 
   const carriedShellBuiltin = detectCarriedShellBuiltinArgv(argv);
   if (carriedShellBuiltin?.kind === "eval") {
-    output.risks.push({ kind: "eval", text, span });
+    output.risks.push({ kind: "eval", span });
   } else if (carriedShellBuiltin?.kind === "source") {
     output.risks.push({
       kind: "source",
       command: carriedShellBuiltin.command,
-      text,
       span,
     });
   }
@@ -727,9 +701,9 @@ async function visitNode(
   const span = spanFromNode(node, state.spanBase);
   let childContext = context;
   if (node.type === "program" && hasEscapedLineContinuation(node.text)) {
-    output.risks.push({ kind: "line-continuation", text: node.text, span });
+    output.risks.push({ kind: "line-continuation", span });
   } else if (node.type === "word" && hasLineBreakEscapedWordBoundary(node.text)) {
-    output.risks.push({ kind: "line-continuation", text: node.text, span });
+    output.risks.push({ kind: "line-continuation", span });
   }
 
   if (node.type === "function_definition") {
@@ -737,24 +711,23 @@ async function visitNode(
     output.risks.push({
       kind: "function-definition",
       name: nameNode?.text ?? "",
-      text: node.text,
       span,
     });
     childContext = "function-definition";
   } else if (node.type === "command_substitution") {
-    output.risks.push({ kind: "command-substitution", text: node.text, span });
+    output.risks.push({ kind: "command-substitution", span });
     childContext = "command-substitution";
   } else if (node.type === "process_substitution") {
-    output.risks.push({ kind: "process-substitution", text: node.text, span });
+    output.risks.push({ kind: "process-substitution", span });
     childContext = "process-substitution";
   } else if (node.type === "heredoc_redirect") {
-    output.risks.push({ kind: "heredoc", text: node.text, span });
+    output.risks.push({ kind: "heredoc", span });
   } else if (node.type === "herestring_redirect") {
-    output.risks.push({ kind: "here-string", text: node.text, span });
+    output.risks.push({ kind: "here-string", span });
   } else if (node.type === "file_redirect") {
-    output.risks.push({ kind: "redirect", text: node.text, span });
+    output.risks.push({ kind: "redirect", span });
   } else if (node.type === "ERROR") {
-    output.risks.push({ kind: "syntax-error", text: node.text, span });
+    output.risks.push({ kind: "syntax-error", span });
   }
 
   if (isCommandLikeNode(node)) {
@@ -763,7 +736,6 @@ async function visitNode(
     if (node.type === "command" && nameNode && !parsed) {
       output.risks.push({
         kind: "dynamic-executable",
-        text: nameNode.text,
         span: spanFromNode(nameNode, state.spanBase),
       });
     } else if (parsed) {
@@ -791,7 +763,7 @@ async function visitNode(
       }
       if (step.executable) {
         output.commands.push(step);
-        const wrapperPayload = recordCommandRisks(parsed, node.text, span, output);
+        const wrapperPayload = recordCommandRisks(parsed, span, output);
         if (wrapperPayload && state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
           const wrapperTree = await parseBashForCommandExplanation(wrapperPayload.command);
           const wrapperSpanBase = wrapperPayload.spanBase;
@@ -800,13 +772,11 @@ async function visitNode(
               context: "wrapper-payload",
               parentCommandId: commandId,
               source: wrapperPayload.command,
-              spanBase: wrapperSpanBase,
             });
             if (wrapperTree.rootNode.hasError) {
               output.hasParseError = true;
               output.risks.push({
                 kind: "syntax-error",
-                text: wrapperPayload.command,
                 span: spanFromNode(wrapperTree.rootNode, wrapperSpanBase),
               });
             }
@@ -893,9 +863,7 @@ function commandSourceRanges(
   return ranges;
 }
 
-function topologyOperatorFromSeparator(
-  separator: string,
-): { kind: CommandOperatorKind; text: string; offset: number } | null {
+function topologyOperatorFromSeparator(separator: string): CommandOperatorKind | null {
   const candidates: Array<{ kind: CommandOperatorKind; text: string }> = [
     { kind: "and", text: "&&" },
     { kind: "or", text: "||" },
@@ -907,17 +875,17 @@ function topologyOperatorFromSeparator(
     { kind: "newline-sequence", text: "\n" },
     { kind: "newline-sequence", text: "\r" },
   ];
-  let best: { kind: CommandOperatorKind; text: string; offset: number } | null = null;
+  let best: { kind: CommandOperatorKind; offset: number } | null = null;
   for (const candidate of candidates) {
     const offset = separator.indexOf(candidate.text);
     if (offset < 0) {
       continue;
     }
     if (!best || offset < best.offset) {
-      best = { ...candidate, offset };
+      best = { kind: candidate.kind, offset };
     }
   }
-  return best;
+  return best?.kind ?? null;
 }
 
 function resolveOperators(
@@ -944,14 +912,12 @@ function resolveOperators(
       let separatorSource = source;
       let separatorStart = fromCommand.span.endIndex;
       let separatorEnd = toCommand.span.startIndex;
-      let separatorBase: SpanBase | null = null;
       const fromRange = bucketRanges?.get(fromCommand.id);
       const toRange = bucketRanges?.get(toCommand.id);
       if (bucketOperatorSource && fromRange && toRange) {
         separatorSource = bucketOperatorSource.source;
         separatorStart = fromRange.endIndex;
         separatorEnd = toRange.startIndex;
-        separatorBase = bucketOperatorSource.spanBase;
       }
       if (separatorEnd < separatorStart) {
         continue;
@@ -961,20 +927,9 @@ function resolveOperators(
       if (!operator) {
         continue;
       }
-      const startIndex = separatorStart + operator.offset;
-      const span = separatorBase
-        ? translateSpan(
-            spanFromSourceRange(separatorSource, startIndex, startIndex + operator.text.length),
-            separatorBase,
-          )
-        : spanFromSourceRange(source, startIndex, startIndex + operator.text.length);
       const topologyOperator: CommandOperator = {
-        id: `operator-${operators.length}`,
-        kind: operator.kind,
-        text: operator.text,
-        span,
+        kind: operator,
         fromCommandId: fromCommand.id,
-        toCommandId: toCommand.id,
       };
       if (parentCommandId) {
         topologyOperator.parentCommandId = parentCommandId;
@@ -1005,7 +960,6 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
     const operators = resolveOperators(source, output.commands, output.operatorSources);
     return {
       ok: !output.hasParseError,
-      source,
       shapes: [...output.shapes],
       topLevelCommands,
       nestedCommands: output.commands.filter((command) => command.context !== "top-level"),

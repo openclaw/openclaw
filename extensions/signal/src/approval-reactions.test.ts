@@ -6,7 +6,6 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSignalApprovalReactionHintToStructuredPayload,
-  clearSignalApprovalReactionTargetsForTest,
   maybeResolveSignalApprovalReaction,
   registerSignalApprovalReactionTargetForDeliveredPayload,
   registerSignalApprovalReactionTarget,
@@ -14,6 +13,7 @@ import {
 } from "./approval-reactions.js";
 import * as signalRuntime from "./runtime.js";
 
+const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
 const resolverMocks = vi.hoisted(() => ({
   resolveSignalApproval: vi.fn(),
 }));
@@ -139,7 +139,7 @@ function execPayload(approvalId: string) {
 
 describe("Signal approval reactions", () => {
   beforeEach(() => {
-    clearSignalApprovalReactionTargetsForTest();
+    reactionStores.clearSignalApprovalReactionStoresForTest();
     resolverMocks.resolveSignalApproval.mockReset().mockResolvedValue({
       applied: true,
       approval: { status: "allowed", decision: "allow-once" },
@@ -153,6 +153,7 @@ describe("Signal approval reactions", () => {
   });
 
   it("rejects persisted targets containing an invalid approval decision", async () => {
+    await registerTarget("corrupt-message");
     const runtime = vi.spyOn(signalRuntime, "getOptionalSignalRuntime").mockReturnValue({
       state: {
         openKeyedStoreV2: () => ({
@@ -172,10 +173,10 @@ describe("Signal approval reactions", () => {
       },
     } as never);
     try {
-      clearSignalApprovalReactionTargetsForTest();
+      reactionStores.clearSignalApprovalReactionStoresForTest();
       await expect(lookup("corrupt-message")).resolves.toBeNull();
     } finally {
-      clearSignalApprovalReactionTargetsForTest();
+      reactionStores.clearSignalApprovalReactionStoresForTest();
       runtime.mockRestore();
     }
   });

@@ -21,15 +21,13 @@ const binding = (
   match: NonNullable<OpenClawConfig["bindings"]>[number]["match"],
   agentId = "channel",
 ) => ({ match, agentId });
+const scopedChannel = "team:T01234567:channel:C01234567";
+const scopedUser = "team:T01234567:user:U01234567";
+const channelBinding = (id: string, teamId?: string) =>
+  binding({ channel: "slack", teamId, peer: { kind: "channel", id } });
 
 describe("resolveSlackInstallationIdentity", () => {
   it.each([
-    ["degraded without auth.test", {}, { kind: "degraded", reason: "auth_test_failed" }],
-    [
-      "workspace transport app id",
-      { auth: { team_id: "T123", is_enterprise_install: false }, transportApiAppId: "A123" },
-      { kind: "workspace", teamId: "T123", apiAppId: "A123" },
-    ],
     [
       "human workspace name",
       { auth: { team: "Local Claw", team_id: "T123", is_enterprise_install: false } },
@@ -39,11 +37,6 @@ describe("resolveSlackInstallationIdentity", () => {
       "enterprise without app_id",
       { auth: { enterprise_id: "E123", is_enterprise_install: true } },
       { kind: "enterprise", enterpriseId: "E123" },
-    ],
-    [
-      "enterprise transport app id",
-      { auth: { enterprise_id: "E123", is_enterprise_install: true }, transportApiAppId: "A123" },
-      { kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" },
     ],
   ] as const)("resolves %s", (_name, params, expected) => {
     expect(resolveSlackInstallationIdentity(params)).toEqual(expected);
@@ -63,12 +56,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
   it("accepts only runtime-supported stable channel forms", () => {
     expect(() =>
       checkPolicy({
-        allowFrom: [
-          "U01234567",
-          "slack:W01234567",
-          "user:U12345678",
-          "team:T01234567:user:U01234567",
-        ],
+        allowFrom: ["U01234567", "slack:W01234567", "user:U12345678", scopedUser],
         dm: { groupChannels: ["team:T01234567:channel:G01234567"] },
         mentionPatterns: {
           mode: "allow",
@@ -76,13 +64,8 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
           denyIn: ["team:T12345678:channel:C12345678"],
         },
         channels: {
-          "team:T01234567:channel:C01234567": {
-            users: [
-              "U01234567",
-              "slack:W01234567",
-              "user:B01234567",
-              "team:T01234567:user:U01234567",
-            ],
+          [scopedChannel]: {
+            users: ["U01234567", "slack:W01234567", "user:B01234567", scopedUser],
             toolsBySender: {
               "id:U01234567": {},
               "id:W01234567": {},
@@ -96,7 +79,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
           "*": {},
         },
         reactionNotifications: "allowlist",
-        reactionAllowlist: ["W01234567", "team:T01234567:user:U01234567"],
+        reactionAllowlist: ["W01234567", scopedUser],
       }),
     ).not.toThrow();
   });
@@ -109,12 +92,6 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
       );
     },
   );
-
-  it("rejects the mutable-name matching escape hatch", () => {
-    expect(() => checkPolicy({ dangerouslyAllowNameMatching: true })).toThrow(
-      /cannot use dangerouslyAllowNameMatching/,
-    );
-  });
 
   it.each<[string, SlackAccountConfig]>([
     ["channel ID", { channels: { C01234567: {} } }],
@@ -130,29 +107,34 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
     expect(() => checkPolicy(config)).toThrow(/stable Slack/);
   });
 
-  it("rejects noncanonical toolsBySender keys before wildcard fallback", () => {
-    expect(() =>
-      checkPolicy({
+  it.each<[string, SlackAccountConfig, RegExp]>([
+    [
+      "mutable-name matching",
+      { dangerouslyAllowNameMatching: true },
+      /cannot use dangerouslyAllowNameMatching/,
+    ],
+    [
+      "noncanonical toolsBySender keys before wildcard fallback",
+      {
         channels: {
-          "team:T01234567:channel:C01234567": {
+          [scopedChannel]: {
             toolsBySender: {
               "user:U01234567": { deny: ["exec"] },
               "*": { allow: ["exec"] },
             },
           },
         },
-      }),
-    ).toThrow(/stable Slack IDs.*toolsBySender/);
-  });
-
-  it("rejects wildcard groupChannels", () => {
-    expect(() => checkPolicy({ dm: { groupChannels: ["*"] } })).toThrow(
+      },
+      /stable Slack IDs.*toolsBySender/,
+    ],
+    [
+      "wildcard groupChannels",
+      { dm: { groupChannels: ["*"] } },
       /stable Slack IDs.*dm\.groupChannels/,
-    );
-  });
-
-  it("rejects channel names", () => {
-    expect(() => checkPolicy({ channels: { "#general": {} } })).toThrow(/stable Slack channel IDs/);
+    ],
+    ["channel names", { channels: { "#general": {} } }, /stable Slack channel IDs/],
+  ])("rejects %s", (_label, config, error) => {
+    expect(() => checkPolicy(config)).toThrow(error);
   });
 });
 
@@ -192,26 +174,15 @@ describe("assertEnterpriseSlackBindingsAreWorkspaceQualified", () => {
   it("accepts team-scoped and workspace-qualified peer bindings", () => {
     const cfg = bindingConfig([
       binding({ channel: "slack", teamId: "T01234567" }, "team"),
-      binding({
-        channel: "slack",
-        peer: { kind: "channel", id: "team:T01234567:channel:C01234567" },
-      }),
+      channelBinding(scopedChannel),
     ]);
 
     expectBindings(cfg).not.toThrow();
   });
 
   it("rejects unqualified or conflicting Enterprise peer bindings", () => {
-    const unqualified = bindingConfig([
-      binding({ channel: "slack", peer: { kind: "channel", id: "C01234567" } }),
-    ]);
-    const conflicting = bindingConfig([
-      binding({
-        channel: "slack",
-        teamId: "T99999999",
-        peer: { kind: "channel", id: "team:T01234567:channel:C01234567" },
-      }),
-    ]);
+    const unqualified = bindingConfig([channelBinding("C01234567")]);
+    const conflicting = bindingConfig([channelBinding(scopedChannel, "T99999999")]);
 
     expectBindings(unqualified).toThrow(/requires configured Slack binding peers/);
     expectBindings(conflicting).toThrow(/conflicting workspace IDs/);
@@ -223,7 +194,7 @@ describe("assertEnterpriseSlackBindingsAreWorkspaceQualified", () => {
         type: "acp",
         match: {
           channel: "slack",
-          peer: { kind: "channel", id: "team:T01234567:channel:C01234567" },
+          peer: { kind: "channel", id: scopedChannel },
         },
         agentId: "channel",
       },

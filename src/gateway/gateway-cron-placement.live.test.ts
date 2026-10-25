@@ -111,7 +111,6 @@ describeLive("cron placement identity through production Gateway routing", () =>
                 model: { primary: MODEL_KEY },
                 models: { [MODEL_KEY]: { agentRuntime: { id: "openclaw" } } },
                 thinkingDefault: "low",
-                heartbeat: { every: "0m" },
                 sandbox: { mode: "off" },
                 timeoutSeconds: RUN_TIMEOUT_MS / 1000,
               },
@@ -151,7 +150,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write"],
             deviceIdentity: loadOrCreateDeviceIdentity({
-              path: instance.state.path("placement-client.sqlite"),
+              path: instance.state.path("placement-client", "client", "credentials.sqlite"),
             }),
             onEvent: (event) => {
               const payload = event.payload;

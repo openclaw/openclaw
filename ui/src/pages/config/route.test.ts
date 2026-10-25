@@ -16,7 +16,7 @@ type RouteModule = Awaited<ReturnType<(typeof pages)[number]["component"]>>;
 type Page = PageDefinition<RouteId, ApplicationContext, RouteModule>;
 
 const page = (id: RouteId) => pages.find((candidate) => candidate.id === id) as Page;
-const component = async () => ({ header: true, renderSolid: () => null });
+const component = async () => ({ renderSolid: () => null });
 const routerFor = (...routes: Page[]) =>
   createRouter<RouteId, ApplicationContext, RouteModule>({ routes });
 const runtimeConfig = () => ({

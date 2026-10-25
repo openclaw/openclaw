@@ -6,74 +6,130 @@ import type {
   ClawConfiguredAccess,
   ClawLifecyclePlanResult,
   ClawPluginReview,
-  ClawSkillReview,
   ClawScheduledJobs,
 } from "../../packages/gateway-protocol/src/schema/claws.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
 import { digestClawValue } from "./digest.js";
-import { clawActionNeedsEffect, projectClawAddActionEffect } from "./gateway-action-effects.js";
 import { projectClawAddScheduledJobs, projectClawConfiguredAccess } from "./gateway-disclosure.js";
 import { projectClawManifestDisclosure } from "./gateway-manifest-disclosure.js";
-import type {
-  ClawAddPlan,
-  ClawDiagnostic,
-  ClawLocalPrerequisite,
-  ClawReadResult,
-} from "./types.js";
+import { digestClawMcpServer } from "./mcp.js";
+import { isSafeClawRelativePath } from "./schema-portability.js";
+import { mcpServerSchema } from "./schema.js";
+import { collectClawSkillWarningReviews } from "./skill-warning-review.js";
+import type { ClawAddPlan, ClawAddPlanAction, ClawReadResult } from "./types.js";
 
-function safeBlocker(diagnostic: Pick<ClawDiagnostic, "code" | "path">) {
-  return {
-    code: diagnostic.code,
-    path: diagnostic.path,
-    message:
-      diagnostic.code === "plugin_disabled"
-        ? "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed."
-        : "Resolve this OpenClaw state conflict before continuing.",
+type SkillArtifact = NonNullable<Extract<ClawActionEffect, { type: "skill-package" }>["desired"]>;
+
+function skillArtifact(details: Record<string, unknown> | undefined): SkillArtifact {
+  const source = details?.source;
+  const ref = details?.ref;
+  const version = details?.version;
+  const rawIntegrity = details?.integrity;
+  const integrity =
+    typeof rawIntegrity === "string" ? normalizeClawHubSha256Integrity(rawIntegrity) : null;
+  if (
+    source !== "clawhub" ||
+    typeof ref !== "string" ||
+    !ref ||
+    typeof version !== "string" ||
+    !version ||
+    !integrity
+  ) {
+    throw new Error("Claw skill artifact cannot be disclosed.");
+  }
+  return { source, ref, version, integrity };
+}
+
+function assertSkillActionTarget(action: { id: string; target: string }, artifact: SkillArtifact) {
+  if (
+    action.id !== `skill:${artifact.ref}` ||
+    action.target !== `${artifact.source}:${artifact.ref}@${artifact.version}`
+  ) {
+    throw new Error("Claw skill action does not match its artifact.");
+  }
+}
+
+function workspaceDestination(id: string): string {
+  if (!isSafeClawRelativePath(id)) {
+    throw new Error("Claw workspace destination cannot be disclosed.");
+  }
+  return `workspace/${id.replaceAll("\\", "/")}`;
+}
+
+function sourceLabel(action: ClawAddPlanAction, sourceRoot: string): string {
+  if (action.sourceKind === "clawMarkdownBody") {
+    return "CLAW.md body";
+  }
+  if (!action.source) {
+    throw new Error("Claw workspace source cannot be disclosed.");
+  }
+  const relative = path.relative(path.resolve(sourceRoot), path.resolve(action.source));
+  if (!isSafeClawRelativePath(relative)) {
+    throw new Error("Claw workspace source cannot be disclosed.");
+  }
+  return `package/${relative.split(path.sep).join("/")}`;
+}
+
+function mcpDeclaration(details: Record<string, unknown>) {
+  const fields = [
+    "command",
+    "transport",
+    "args",
+    "env",
+    "url",
+    "auth",
+    "toolFilter",
+    "timeout",
+    "connectTimeout",
+  ] as const;
+  const candidate = Object.fromEntries(
+    fields.filter((field) => details[field] !== undefined).map((field) => [field, details[field]]),
+  );
+  const parsed = mcpServerSchema.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error("Claw MCP declaration cannot be disclosed.");
+  }
+  const server = parsed.data;
+  const common = {
+    authentication:
+      "auth" in server && server.auth === "oauth" ? ("oauth" as const) : ("none" as const),
+    ...(server.toolFilter ? { toolFilter: server.toolFilter } : {}),
+    ...(server.timeout !== undefined ? { timeout: server.timeout } : {}),
+    ...(server.connectTimeout !== undefined ? { connectTimeout: server.connectTimeout } : {}),
   };
-}
-
-function safeAction(action: { kind: string; id: string; action: string; blocked: boolean }) {
+  if ("command" in server) {
+    return {
+      declaration: {
+        transport: "stdio" as const,
+        command: server.command,
+        arguments: server.args ?? [],
+        environment: Object.entries(server.env ?? {})
+          .map(([name, value]) => ({ name, sourceName: value.slice(2, -1) }))
+          .toSorted((left, right) => left.name.localeCompare(right.name)),
+        ...common,
+      },
+      digest: digestClawMcpServer(server),
+    };
+  }
+  const safeUrl = new URL(server.url);
+  const queryParameterNames = [...new Set(safeUrl.searchParams.keys())].toSorted();
+  safeUrl.username = "";
+  safeUrl.password = "";
+  safeUrl.search = "";
+  safeUrl.hash = "";
   return {
-    kind: action.kind,
-    id: action.id,
-    action: action.action,
-    blocked: action.blocked,
-    ...(action.blocked ? { reason: "Current OpenClaw state blocks this action." } : {}),
+    declaration: {
+      transport: server.transport,
+      url: safeUrl.toString(),
+      urlDigest: digestClawValue(server.url),
+      ...(queryParameterNames.length ? { queryParameterNames } : {}),
+      ...common,
+    },
+    digest: digestClawMcpServer(server),
   };
-}
-
-function projectActionsWithEffects<
-  T extends { kind: string; id: string; action: string; blocked: boolean },
->(actions: readonly T[], projectEffect: (action: T) => ClawActionEffect | undefined) {
-  const blockers: Array<{ code: string; path: string; message: string }> = [];
-  const projected = actions.map((action) => {
-    const safe = safeAction(action);
-    if (!clawActionNeedsEffect(action)) {
-      return safe;
-    }
-    try {
-      const effect = projectEffect(action);
-      if (!effect) {
-        throw new Error("Missing Claw action effect.");
-      }
-      return { ...safe, effect };
-    } catch {
-      if (!action.blocked) {
-        blockers.push({
-          code: "effect_disclosure_unavailable",
-          path: `$.actions.${action.kind}.${action.id}`,
-          message: "This Claw effect cannot be reviewed safely. Refresh or repair the plan.",
-        });
-      }
-      return safe;
-    }
-  });
-  return { actions: projected, blockers };
-}
-
-function safeCapability(change: { kind: string; id: string; action: string; reason: string }) {
-  return { kind: change.kind, id: change.id, action: change.action, reason: change.reason };
 }
 
 function requestedPolicyBlockers(
@@ -96,43 +152,6 @@ function requestedPolicyBlockers(
   return blockers;
 }
 
-function projectClawSkillWarningReviews(plan: ClawAddPlan): ClawSkillReview[] {
-  return plan.actions.flatMap((action) => {
-    const details = action.details;
-    if (
-      action.kind !== "package" ||
-      action.blocked ||
-      details?.kind !== "skill" ||
-      details.ownerAction !== "install" ||
-      typeof details.riskWarning !== "string" ||
-      !details.riskWarning
-    ) {
-      return [];
-    }
-    if (
-      typeof details.ref !== "string" ||
-      typeof details.version !== "string" ||
-      typeof details.integrity !== "string"
-    ) {
-      throw new Error("The Claw skill trust review is incomplete.");
-    }
-    const review = {
-      actionId: action.id,
-      ref: details.ref,
-      version: details.version,
-      integrity: details.integrity,
-      riskWarning: details.riskWarning,
-    };
-    return [{ ...review, reviewToken: digestClawValue(review) }];
-  });
-}
-
-function projectReadinessRequirement(requirement: ClawLocalPrerequisite) {
-  return requirement.kind === "plugin-setup"
-    ? { kind: requirement.kind, owner: `${requirement.plugin}/${requirement.provider}` }
-    : { kind: requirement.kind, owner: requirement.mcpServer };
-}
-
 function sealClawLifecyclePlan(
   plan: Omit<ClawLifecyclePlanResult, "schemaVersion" | "planIntegrity">,
   canonicalPlanIntegrity: string,
@@ -143,8 +162,8 @@ function sealClawLifecyclePlan(
 
 function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown {
   const root = path.resolve(sourceRoot);
-  const visit = (current: unknown): unknown => {
-    if (typeof current === "string" && path.isAbsolute(current)) {
+  return mapNestedStrings(value, (current) => {
+    if (path.isAbsolute(current)) {
       const relative = path.relative(root, path.resolve(current));
       if (relative === "") {
         return "$CLAW_SOURCE";
@@ -158,15 +177,8 @@ function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown
       }
       return current;
     }
-    if (Array.isArray(current)) {
-      return current.map(visit);
-    }
-    if (current && typeof current === "object") {
-      return Object.fromEntries(Object.entries(current).map(([key, entry]) => [key, visit(entry)]));
-    }
     return current;
-  };
-  return visit(value);
+  });
 }
 
 function sourceStablePlanIntegrity(plan: { planIntegrity: string }, sourceRoot: string): string {
@@ -195,9 +207,76 @@ export function projectClawAddPlan(
   config: OpenClawConfig,
   source?: Extract<ClawReadResult, { ok: true }>,
 ): ClawLifecyclePlanResult {
-  const effects = projectActionsWithEffects(plan.actions, (action) =>
-    projectClawAddActionEffect(action, sourceRoot),
-  );
+  const effectBlockers: Array<{ code: string; path: string; message: string }> = [];
+  const projectedActions = plan.actions.map((action) => {
+    const safe = Object.assign(
+      {
+        kind: action.kind,
+        id: action.id,
+        action: action.action,
+        blocked: action.blocked,
+      },
+      action.blocked ? { reason: "Current OpenClaw state blocks this action." } : {},
+      !action.blocked &&
+        action.kind === "cronJob" &&
+        action.id.startsWith("$portable-heartbeat") &&
+        action.reason
+        ? { reason: action.reason }
+        : {},
+    );
+    if (
+      action.kind !== "workspaceFile" &&
+      action.kind !== "bootstrap" &&
+      action.kind !== "mcpServer" &&
+      !(action.kind === "package" && action.id.startsWith("skill:"))
+    ) {
+      return safe;
+    }
+    try {
+      let effect: ClawActionEffect | undefined;
+      if (action.kind === "workspaceFile" || action.kind === "bootstrap") {
+        const label = sourceLabel(action, sourceRoot);
+        if (!action.digest) {
+          throw new Error("Claw workspace file digest cannot be disclosed.");
+        }
+        effect = {
+          type: "workspace-file",
+          destination: workspaceDestination(action.id),
+          source: label,
+          desiredDigest: action.digest,
+        };
+      } else if (action.kind === "mcpServer") {
+        const { declaration, digest } = mcpDeclaration(action.details ?? {});
+        effect = { type: "mcp-server", desiredDigest: digest, proposed: declaration };
+      } else if (action.kind === "package" && action.id.startsWith("skill:")) {
+        if (action.details?.kind !== "skill") {
+          throw new Error("Claw skill package kind cannot be disclosed.");
+        }
+        const desired = skillArtifact(action.details);
+        assertSkillActionTarget(action, desired);
+        if (
+          !action.digest ||
+          normalizeClawHubSha256Integrity(action.digest) !== desired.integrity
+        ) {
+          throw new Error("Claw skill package integrity does not match its preflight.");
+        }
+        effect = { type: "skill-package", desired };
+      }
+      if (!effect) {
+        throw new Error("Missing Claw action effect.");
+      }
+      return { ...safe, effect };
+    } catch {
+      if (!action.blocked) {
+        effectBlockers.push({
+          code: "effect_disclosure_unavailable",
+          path: `$.actions.${action.kind}.${action.id}`,
+          message: "This Claw effect cannot be reviewed safely. Refresh or repair the plan.",
+        });
+      }
+      return safe;
+    }
+  });
   let scheduledJobs: ClawScheduledJobs | undefined;
   try {
     scheduledJobs = projectClawAddScheduledJobs(plan);
@@ -232,13 +311,27 @@ export function projectClawAddPlan(
         name: plan.claw.name,
         targetVersion: plan.claw.version,
       },
-      actions: effects.actions,
-      capabilities: plan.capabilityChanges.map(safeCapability),
+      actions: projectedActions,
+      capabilities: plan.capabilityChanges.map((change) => ({
+        kind: change.kind,
+        id: change.id,
+        action: change.action,
+        reason: change.reason,
+      })),
       pluginReviews,
-      skillReviews: projectClawSkillWarningReviews(plan),
+      skillReviews: collectClawSkillWarningReviews(plan).map((review) =>
+        Object.assign(review, { reviewToken: digestClawValue(review) }),
+      ),
       blockers: [
-        ...plan.blockers.map(safeBlocker),
-        ...effects.blockers,
+        ...plan.blockers.map((diagnostic) => ({
+          code: diagnostic.code,
+          path: diagnostic.path,
+          message:
+            diagnostic.code === "plugin_disabled"
+              ? "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed."
+              : "Resolve this OpenClaw state conflict before continuing.",
+        })),
+        ...effectBlockers,
         ...requestedPolicyBlockers(plan.agent.config, configuredAccess),
         ...(agentIdCollision
           ? [
@@ -265,7 +358,11 @@ export function projectClawAddPlan(
       ...(scheduledJobs ? { scheduledJobs } : {}),
       readiness: {
         ready: plan.readiness.ready,
-        requirements: plan.readiness.requirements.map(projectReadinessRequirement),
+        requirements: plan.readiness.requirements.map((requirement) =>
+          requirement.kind === "plugin-setup"
+            ? { kind: requirement.kind, owner: `${requirement.plugin}/${requirement.provider}` }
+            : { kind: requirement.kind, owner: requirement.mcpServer },
+        ),
       },
     },
     sourceStablePlanIntegrity(plan, sourceRoot),

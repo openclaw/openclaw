@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.ts";
 import { resolveBuildInfo } from "../write-build-info.ts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
@@ -168,7 +169,16 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ] satisfies NonNullable<Parameters<typeof build>[0]>["plugins"];
   };
   const commonPlugins = createInputPlugins("");
-  const maintenanceModuleBoundaries = new Map([
+  const sourceHostWorkerEntries = new Set(
+    [
+      runtimeProcessEntrypoints.doctorDatabaseEngineInspection,
+      runtimeProcessEntrypoints.databaseBackup,
+      runtimeProcessEntrypoints.databasePortCommand,
+    ].map((workerEntry) =>
+      path.normalize(fs.realpathSync(path.join(root, workerEntry.sourceModulePath))),
+    ),
+  );
+  const fixtureModuleBoundaries = new Map([
     [path.join(root, "src/daemon/service.ts"), "triage-maintenance/service.js"],
     [
       path.join(root, "src/daemon/service-process-membership.ts"),
@@ -178,6 +188,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     [
       path.join(root, "src/cli/update-cli/update-command-service-drain.ts"),
       "cli/update-cli/update-command-service-drain.js",
+    ],
+    // Doctor fixtures disable passive observation without replacing discovery or repair.
+    [
+      path.join(root, "src/infra/owned-directory-observation.ts"),
+      "infra/owned-directory-observation.js",
     ],
   ]);
   const config: NonNullable<Parameters<typeof build>[0]> = {
@@ -201,6 +216,22 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     },
     logLevel: "warn",
     plugins: [
+      {
+        name: "openclaw:source-host-worker-loader",
+        banner(chunk) {
+          if (
+            !chunk.facadeModuleId ||
+            !sourceHostWorkerEntries.has(path.normalize(chunk.facadeModuleId))
+          ) {
+            return "";
+          }
+          // These private workers inspect source-host plugins. Their native SDK
+          // imports need the same TypeScript loader as the source worker entry.
+          const loader = require.resolve("tsx/esm");
+          recordInput(loader);
+          return `import ${JSON.stringify(pathToFileURL(loader).href)};`;
+        },
+      },
       {
         name: "openclaw:message-command-boundary",
         resolveId: {
@@ -233,7 +264,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         },
       },
       {
-        name: "openclaw:maintenance-service-boundary",
+        name: "openclaw:fixture-module-boundary",
         resolveId: {
           // Keep normalization aliases: the target component can come from either operand.
           filter: [
@@ -245,13 +276,13 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
                   {
                     kind: "id",
                     pattern:
-                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance|owned-directory-observation)\.[jt]s/,
                     params: { cleanUrl: false },
                   },
                   {
                     kind: "importerId",
                     pattern:
-                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance|owned-directory-observation)\.[jt]s/,
                     params: { cleanUrl: false },
                   },
                 ],
@@ -263,7 +294,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               return null;
             }
             const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
-            const boundary = maintenanceModuleBoundaries.get(source);
+            const boundary = fixtureModuleBoundaries.get(source);
             return boundary
               ? {
                   id: pathToFileURL(path.join(outDir, boundary)).href,
@@ -285,6 +316,18 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             return null;
           }
           // Native snapshot fixtures patch this same package instance before loading the worker.
+          const dependency = createRequire(importer).resolve(id);
+          recordInput(dependency);
+          return { id: pathToFileURL(dependency).href, external: "absolute" };
+        },
+      },
+      {
+        name: "openclaw:lancedb-package-boundary",
+        resolveId(id, importer) {
+          if (id !== "@lancedb/lancedb" || !importer) {
+            return null;
+          }
+          // Keep native package loading in the plugin's installed dependency scope.
           const dependency = createRequire(importer).resolve(id);
           recordInput(dependency);
           return { id: pathToFileURL(dependency).href, external: "absolute" };

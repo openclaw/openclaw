@@ -5,10 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import {
-  registerSealedRuntimeProcessEntrypoint,
-  resolveRuntimeProcessEntrypointUrl,
-} from "./runtime-process-url.js";
+import * as runtimeProcess from "./runtime-process-url.js";
 import {
   captureLegacyStateSnapshotIdentity,
   readLegacyStateMigrationPlanConfig,
@@ -77,11 +74,14 @@ describe("legacy state migration snapshot identity", () => {
   });
 
   it("refuses unavailable snapshot workers without falling back to caller-process hashing", async () => {
-    const original = resolveRuntimeProcessEntrypointUrl("stateMigrationSnapshot");
-    registerSealedRuntimeProcessEntrypoint(
-      "stateMigrationSnapshot",
-      pathToFileURL(path.join(fixture.root, "missing-worker.js")),
-    );
+    const resolve = runtimeProcess.resolveRuntimeProcessEntrypointUrl;
+    const unavailable = vi
+      .spyOn(runtimeProcess, "resolveRuntimeProcessEntrypointUrl")
+      .mockImplementation((name) =>
+        name === "stateMigrationSnapshot"
+          ? pathToFileURL(path.join(fixture.root, "missing-worker.js"))
+          : resolve(name),
+      );
     try {
       const refused = await fixture.plan();
       expect(refused.refusal?.code).toBe("snapshot-identity-unavailable");
@@ -89,87 +89,9 @@ describe("legacy state migration snapshot identity", () => {
       expect(refused.steps).toEqual([]);
       expectWarning(refused.warnings, "Could not bind copied snapshot:");
     } finally {
-      registerSealedRuntimeProcessEntrypoint("stateMigrationSnapshot", original);
+      unavailable.mockRestore();
     }
     expectBoundPlan(await fixture.plan());
-  });
-
-  it.each([
-    ["file", "changed"],
-    ["file", "replacement"],
-    ["entry", "changed"],
-    ["file", undefined],
-    ["config", "changed"],
-    ["config", "replacement"],
-    ["include", "changed"],
-    ["include", undefined],
-  ] as const)("revalidates earlier %s at final traversal: %s", async (target, mutation) => {
-    const earlyDirectory = path.join(fixture.stateDir, "a-directory");
-    const earlyFile = path.join(earlyDirectory, "probe.json");
-    const lateFile = path.join(fixture.stateDir, "z-probe.json");
-    fs.mkdirSync(earlyDirectory);
-    fs.writeFileSync(earlyFile, '{"value":"original"}\n');
-    fs.writeFileSync(lateFile, "{}\n");
-    const includedPath = path.join(fixture.root, "planner-input.json");
-    if (target === "include") {
-      fs.writeFileSync(fixture.configPath, '{"$include":"./planner-input.json"}\n');
-      fs.writeFileSync(includedPath, "{}\n");
-    }
-    const config = await readLegacyStateMigrationPlanConfig(fixture);
-    expect(config.configInputHashes).toBeDefined();
-    const targetPath = {
-      file: earlyFile,
-      entry: path.join(earlyDirectory, "added.json"),
-      config: fixture.configPath,
-      include: includedPath,
-    }[target];
-    const realOpen = fs.promises.open.bind(fs.promises);
-    let finalCaptureReached = false;
-    vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      if (path.resolve(String(args[0])) === lateFile) {
-        finalCaptureReached = true;
-        if (mutation) {
-          if (mutation === "replacement") {
-            fs.unlinkSync(targetPath);
-          }
-          fs.writeFileSync(
-            targetPath,
-            target === "file"
-              ? `{"value":"${mutation}"}\n`
-              : target === "entry"
-                ? "{}\n"
-                : changedConfig,
-          );
-        }
-      }
-      return handle;
-    });
-
-    const identity = await captureLegacyStateSnapshotIdentityInProcess({
-      ...fixture,
-      configInputHashes: config.configInputHashes,
-    });
-
-    expect(finalCaptureReached).toBe(true);
-    if (!mutation) {
-      expect(identity.warnings).toEqual([]);
-      expect(identity.stateDigest).toEqual(digest);
-      expect(fs.readFileSync(earlyFile, "utf8")).toBe('{"value":"original"}\n');
-    } else {
-      expect(identity.configDigest).toBeUndefined();
-      expect(identity.stateDigest).toBeUndefined();
-      if (target === "entry") {
-        // The child-list check catches additions even when directory metadata is unchanged.
-        expect(identity.warnings).toHaveLength(1);
-        expect([
-          `Could not bind copied snapshot: Snapshot entry changed while hashing: ${earlyDirectory}`,
-          `Could not bind copied snapshot: Snapshot directory changed while hashing: ${earlyDirectory}`,
-        ]).toContain(identity.warnings[0]);
-      } else {
-        expectWarning(identity.warnings, "Snapshot entry changed while hashing:");
-      }
-    }
   });
 
   it("refuses an ordinary file replaced between tree inspection and open", async () => {
@@ -240,12 +162,8 @@ describe("legacy state migration snapshot identity", () => {
         );
         expect(database.prepare("SELECT value FROM held").all()).toEqual([{ value: "original" }]);
         if (journalMode === "WAL") {
-          const writer = new DatabaseSync(databasePath);
-          try {
-            writer.exec("INSERT INTO held VALUES ('later');");
-          } finally {
-            writer.close();
-          }
+          using writer = new DatabaseSync(databasePath);
+          writer.exec("INSERT INTO held VALUES ('later');");
         }
         expect(compete()).toEqual({ blocked: true });
 

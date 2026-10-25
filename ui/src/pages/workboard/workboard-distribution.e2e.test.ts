@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expect, it, vi } from "vitest";
 import {
   pluginControlUiRevision,
@@ -9,7 +8,6 @@ import {
 import { loadPluginManifest } from "../../../../src/plugins/manifest.ts";
 import { normalizeControlUiBuildInfo } from "../../build-info-normalizers.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installControlUiE2ePageDiagnosticRing } from "../../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -57,20 +55,8 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const errors: string[] = [];
       const requests: string[] = [];
-      const pageEvents = installControlUiE2ePageDiagnosticRing(page);
-      const failedResources: Array<{ kind: string; status: number }> = [];
       page.on("pageerror", (error) => errors.push(error.message));
       page.on("request", (request) => requests.push(request.url()));
-      page.on("response", (response) => {
-        const kind = response.request().resourceType();
-        if (
-          (kind === "script" || kind === "stylesheet") &&
-          !response.ok() &&
-          failedResources.length < 12
-        ) {
-          failedResources.push({ kind, status: response.status() });
-        }
-      });
       const gateway = await installMockGateway(page, {
         serverBuildId: buildInfo.buildId,
         serverVersion: buildInfo.version ?? undefined,
@@ -105,80 +91,30 @@ suite.define(() => {
       const url = new URL("workboard/ops", suite.server.baseUrl);
       url.hostname = "ui.example";
       url.hash = new URLSearchParams({ gatewayUrl }).toString();
-      try {
-        const response = await page.goto(url.href);
-        expect(response?.status()).toBe(200);
-        expect(errors).toEqual([]);
-        const confirmation = await waitForConfirmModal(page);
-        await confirmation
-          .getByRole("button", { name: "Switch to gateway.example", exact: true })
-          .click();
-        await page.locator(".workboard-page-title").filter({ hasText: "Operations" }).waitFor();
-      } catch (error) {
-        const boot = await withTimeout(
-          page.evaluate(() => {
-            const ready = window.openclawControlUi?.snapshot();
-            return {
-              documentReadyState: document.readyState,
-              hasApp: Boolean(document.querySelector("openclaw-app")),
-              hasShell: Boolean(document.querySelector(".shell")),
-              modalCount: document.querySelectorAll("openclaw-modal-dialog").length,
-              openDialogCount: document.querySelectorAll("dialog[open]").length,
-              booted: ready?.booted ?? false,
-              routeStatus: ready?.route?.status ?? null,
-              routeReady: ready?.routeReady ?? null,
-              gatewayPhase: ready?.gatewayPhase ?? null,
-              scripts: [...document.scripts].slice(0, 12).map((script) => ({
-                module: script.type === "module",
-                external: Boolean(script.src),
-                completed: Boolean(script.src && performance.getEntriesByName(script.src).length),
-              })),
-              completedScriptCount: performance
-                .getEntriesByType("resource")
-                .filter(
-                  (entry) =>
-                    entry instanceof PerformanceResourceTiming && entry.initiatorType === "script",
-                ).length,
-            };
-          }),
-          2_000,
-          "Workboard boot diagnostics",
-        ).catch(() => null);
-        const failures = pageEvents
-          .filter((event) => event.source === "pageerror" || event.source === "requestfailed")
-          .slice(-12)
-          .map((event) => ({
-            source: event.source,
-            error:
-              ["SyntaxError", "ReferenceError", "TypeError"].find(
-                (name) => name === event.details.name,
-              ) ?? null,
-            resource:
-              ["script", "stylesheet"].find((kind) => kind === event.details.resourceType) ?? null,
-          }));
-        // Keep raw errors, URLs and page content out of public CI output.
-        console.error("[workboard-boot]", JSON.stringify({ failures, failedResources, boot }));
-        throw error;
-      }
+      const response = await page.goto(url.href);
+      expect(response?.status()).toBe(200);
+      expect(errors).toEqual([]);
+      const confirmation = await waitForConfirmModal(
+        page,
+        page.locator("openclaw-modal-dialog").filter({ has: page.locator(".gateway-switch") }),
+      );
+      await confirmation
+        .getByRole("button", { name: "Switch to gateway.example", exact: true })
+        .click();
+      await page.locator(".workboard-page-title").filter({ hasText: "Operations" }).waitFor();
       expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
       expect((await gateway.getSocketUrls()).at(-1)).toBe(gatewayUrl);
       expect((await gateway.waitForRequest("plugins.controlUi.report")).params).toMatchObject({
-        pluginId: "workboard",
-        revision,
-        status: "activated",
+        reports: [{ pluginId: "workboard", revision, status: "activated" }],
       });
       // Deep links retain the shipped relative base; the Gateway resolves any /assets/ segment.
       const prefix = `/assets/plugins/workboard/${revision}/`;
       const assets = requests
         .map((request) => new URL(request))
         .filter((asset) => asset.pathname.includes(prefix));
-      expect(assets.length).toBeGreaterThan(0);
       expect(assets.every((asset) => asset.origin === url.origin)).toBe(true);
-      expect(assets.some((asset) => asset.pathname.endsWith(`${prefix}${build.entryName}`))).toBe(
-        true,
-      );
-      for (const style of build.styles) {
-        expect(assets.some((asset) => asset.pathname.endsWith(`${prefix}${style}`))).toBe(true);
+      for (const filename of [build.entryName, ...build.styles]) {
+        expect(assets.some((asset) => asset.pathname.endsWith(`${prefix}${filename}`))).toBe(true);
       }
       expect(
         assets.some(

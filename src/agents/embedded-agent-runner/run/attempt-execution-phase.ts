@@ -15,6 +15,7 @@ import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
+import { replayToolResultPromptProjections } from "../tool-result-projection-replay.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
@@ -70,7 +71,13 @@ export async function runEmbeddedAttemptExecutionPhase(
       onRejectedProviderReplayRepaired: () => {
         repairedRejectedProviderReplay = true;
       },
-      onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
+      onIdleTimeout: (error) => {
+        // Compaction owns request failures and fallback; the stream watchdog
+        // already aborted that request. Keep its enclosing turn live.
+        if (!activeSession.isCompacting) {
+          idleTimeoutTriggerRef.current?.(error);
+        }
+      },
       diagnosticOwner,
     });
   input.setup.prepStages.mark("stream-setup");
@@ -145,6 +152,16 @@ export async function runEmbeddedAttemptExecutionPhase(
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
     agentSession: sessionRuntime.agentSession,
+    projectSessionForkMessages: (messages) =>
+      replayToolResultPromptProjections(messages, sessionRuntime.toolResultPromptProjectionState),
+    readSessionForkBoundary: () => ({
+      timezone: sessionRuntime.boundary.boundaryTimezone,
+      includeTimestamp: sessionRuntime.boundary.includeBoundaryTimestamp,
+      projectPersistedSenderContext: sessionRuntime.boundary.includeBoundaryTimestamp,
+      userTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts?.(),
+      appendOnlyRuntimeContext: sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext,
+      inHistorySystemUpdates: sessionRuntime.transcriptPolicy.inHistorySystemUpdates,
+    }),
     onModelUsage,
     applyPermissionMode: input.lifecycle.applyPermissionMode,
     runAbortController: input.runAbortController,
@@ -153,7 +170,10 @@ export async function runEmbeddedAttemptExecutionPhase(
     recoverStalledModelCall: () =>
       isModelCallActive() &&
       interruptIdleRequest(
-        new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+        Object.assign(
+          new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+          { code: "OPENCLAW_SESSION_WATCHDOG" },
+        ),
       ),
     getRunState: () => {
       const terminal = projectAgentRunAttemptTerminal(state.terminal);

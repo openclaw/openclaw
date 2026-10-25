@@ -28,20 +28,27 @@ export function githubPreviewView(
   preview: ControlUiGitHubPreview,
   host = "github.com",
 ): ControlUiLinkReaderPreview {
-  const badge: ControlUiLinkReaderPreview["badge"] = preview.mergedAt
-    ? { label: "Merged", tone: "accent" }
-    : preview.draft && preview.state === "open"
-      ? { label: "Draft", tone: "neutral" }
-      : preview.state === "open"
-        ? { label: "Open", tone: "positive" }
-        : preview.kind === "issue" && preview.stateReason !== "not_planned"
-          ? { label: "Closed", tone: "accent" }
-          : { label: "Closed", tone: "negative" };
+  const badge: ControlUiLinkReaderPreview["badge"] =
+    preview.kind === "commit"
+      ? { label: "Commit", tone: "neutral" }
+      : preview.mergedAt
+        ? { label: "Merged", tone: "accent" }
+        : preview.draft && preview.state === "open"
+          ? { label: "Draft", tone: "neutral" }
+          : preview.state === "open"
+            ? { label: "Open", tone: "positive" }
+            : preview.kind === "issue" && preview.stateReason !== "not_planned"
+              ? { label: "Closed", tone: "accent" }
+              : { label: "Closed", tone: "negative" };
   return {
     ...(preview.stale ? { stale: true } : {}),
     url: githubTargetUrl(preview, host),
     title: preview.title,
-    subtitle: preview.owner + "/" + preview.repo + " #" + preview.number,
+    subtitle:
+      preview.owner +
+      "/" +
+      preview.repo +
+      (preview.kind === "commit" ? " · " + preview.sha.slice(0, 12) : " #" + preview.number),
     badge: {
       ...badge,
       timestamp: preview.mergedAt ?? (preview.state === "closed" ? preview.closedAt : undefined),
@@ -57,7 +64,7 @@ export function githubPreviewView(
     updatedAt: preview.updatedAt,
     imageUrl: preview.avatarDataUrl,
     metadata:
-      preview.kind === "pull"
+      preview.kind !== "issue"
         ? githubChangeMetadata(preview.additions, preview.deletions).map(({ value, tone }) => ({
             label: "",
             value,

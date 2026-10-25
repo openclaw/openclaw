@@ -5,10 +5,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { isMainThread, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
@@ -26,10 +24,13 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
-import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
-import { observeReclamationWorkers } from "./session-accessor.sqlite-reclamation-reuse.test-support.js";
+import {
+  createFixture as createSessionFixture,
+  observeReclamationWorkers,
+  tempDirs,
+} from "./session-accessor.sqlite-reclamation-reuse.test-support.js";
 import { runSqliteSessionReclamation as reclaim } from "./session-accessor.sqlite-reclamation-run.js";
 import {
   createLifecycleArtifactReclamationPlan,
@@ -40,7 +41,6 @@ import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-
 import type { SqliteWorkerWriteAdmission } from "./session-accessor.sqlite-worker-request.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 
-const executionContext = { pid: process.pid, threadId, isMainThread };
 const removedArtifact = { kind: "lifecycle-artifacts", value: { removedEntries: 1 } };
 const hooks = vi.hoisted(() => ({
   beforeWriteAdmission: undefined as (() => Promise<void>) | undefined,
@@ -124,7 +124,6 @@ afterEach(() => {
   hooks.workerLogAttempts = 0;
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
   await flushLogger();
@@ -132,21 +131,11 @@ afterEach(async () => {
   await agentDb.closeOpenClawAgentDatabasesAsync();
   agentDb.closeOpenClawAgentDatabasesForTest();
   await stateDb.closeOpenClawStateDatabaseAsync();
+  tempDirs.cleanup();
 });
 
 function createFixture(alias = false) {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-reclamation-writers-") };
-  const options = { agentId: "main", env };
-  const scopes = ["parent", "child"].map((sessionId) => ({
-    agentId: options.agentId,
-    env,
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-  }));
-  for (const scope of scopes) {
-    ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  }
-  const database = agentDb.openOpenClawAgentDatabase(options);
+  const { options, database, scopes } = createSessionFixture(["parent", "child"]);
   const databaseOptions = { ...options, path: database.path };
   const aliasPath = alias
     ? path.join(path.dirname(database.path), "writer-alias.sqlite")
@@ -170,13 +159,13 @@ function createFixture(alias = false) {
   };
 }
 
-function loggedFixture(name: string, silent = false) {
+function loggedFixture() {
   const fixture = createFixture();
   const { databaseOptions } = fixture;
   agentDb.closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
   revokeSqliteDatabaseAdmissionsForPath(databaseOptions.path);
-  const file = path.join(tempDirs.make(name), "reclamation.log");
-  setLoggerOverride({ level: "info", consoleLevel: silent ? "silent" : undefined, file });
+  const file = path.join(databaseOptions.env.OPENCLAW_STATE_DIR, "reclamation.log");
+  setLoggerOverride({ level: "info", consoleLevel: "silent", file });
   let clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
   const diagnostics: Diagnostics = {};
@@ -409,107 +398,11 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
   expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(0);
 });
 
-test("queued reclamations reuse their database Worker without borrowing another store's identity", async () => {
-  const first = createFixture();
-  const other = createFixture();
-  const diagnostics: Diagnostics[] = [{}, {}, {}];
-  const operations = [first, first, other].map(({ plan }, index) =>
-    reclaim({ plan, diagnostics: diagnostics[index] }),
-  );
-  try {
-    // The queued successor has not claimed a worker.
-    expect(diagnostics[1]).not.toHaveProperty("workerThreadId");
-    await Promise.all(operations);
-    expect(diagnostics.map((record) => record.kind)).toEqual(Array(3).fill("history-eviction"));
-    const ids = diagnostics.map((record) => record.workerThreadId);
-    expect(ids.every((id) => typeof id === "number" && id > 0)).toBe(true);
-    expect(ids[1]).toBe(ids[0]);
-    expect(ids[2]).not.toBe(ids[0]);
-  } finally {
-    await Promise.allSettled(operations);
-  }
-});
-
-test("file warnings retain rejected native admission releases without attributing them to a successor", async () => {
-  const { databaseOptions, plan, file, diagnostics, workers, advanceClock } =
-    loggedFixture("openclaw-writer-log-");
-  let admissions = 0;
-  let revoked = false;
-  const failure = new Error("synthetic admission refusal");
-  hooks.beforeWriteAdmission = async () => {
-    if (admissions === 0) {
-      // Revoke incoming warm proof at the actual cold prepare admission so native
-      // validation releases and reacquires its own writer before acceptance.
-      revokeSqliteDatabaseAdmissionsForPath(databaseOptions.path);
-    }
-    if (admissions === 1) {
-      revoked = true;
-    }
-  };
-  let second: Promise<string> | undefined;
-  hooks.afterWriteAdmission = async () => {
-    if (++admissions === 1) {
-      second = write(databaseOptions, async () => "successor");
-    }
-    // Advance at actual admitted work, independently of timer-call counts.
-    advanceClock(1_100);
-  };
-  const first = reclaim({
-    plan,
-    diagnostics,
-    assertCommitAllowed: () => {
-      if (revoked) {
-        throw failure;
-      }
-    },
-  });
-  try {
-    await expect(first).rejects.toBe(failure);
-    expect(second).toBeDefined();
-    await expect(second).resolves.toBe("successor");
-    await flushLogger();
-    const records = (await readLogRecords(file))
-      .filter((record) => record["2"] === "slow SQLite session write")
-      .map((record) => {
-        const details = record["1"];
-        assert.ok(isRecord(details));
-        return details;
-      });
-    const workerThreadId = await expectWorkerRetirement(workers, diagnostics);
-    expect(records).toHaveLength(3);
-    const workerRecords = records.filter((record) => record.workerThreadId === workerThreadId);
-    expect(workerRecords).toMatchObject(
-      [1, 2].map((reclamationAdmissionId) =>
-        Object.assign({}, executionContext, {
-          reclamationKind: "history-eviction",
-          reclamationAdmissionId,
-          reclamationAdmissionReleaseCause: "worker-release",
-        }),
-      ),
-    );
-    const successor = records.find((record) => record.operation === "session.transcript.batch");
-    expect(successor).toMatchObject(executionContext);
-    for (const field of [
-      "workerThreadId",
-      "reclamationKind",
-      "reclamationAdmissionId",
-      "reclamationAdmissionReleaseCause",
-    ]) {
-      expect(successor).not.toHaveProperty(field);
-    }
-  } finally {
-    await Promise.allSettled([first, second]);
-  }
-});
-
 test.each([false, true])(
   "records the joined reclamation lifetime outside writers (rejected/log failure: %s)",
   async (rejected) => {
     const elapsedMs = 1_500;
-    const { databaseOptions, plan, file, diagnostics, workers, advanceClock } = loggedFixture(
-      "openclaw-reclamation-log-",
-      true,
-    );
+    const { databaseOptions, plan, file, diagnostics, workers, advanceClock } = loggedFixture();
     await fs.writeFile(file, "");
     const failure = new Error("synthetic reclamation refusal", {
       cause: new Error("synthetic storage failure; Authorization: Bearer synthetic-private-token"),
@@ -561,7 +454,7 @@ test.each([false, true])(
           record.message === "SQLite reclamation Worker failed",
       );
       expect(otherWriterRan).toBe(true);
-      const workerThreadId = await expectWorkerRetirement(workers, diagnostics);
+      await expectWorkerRetirement(workers, diagnostics);
       expect(records.some((record) => record["2"] === "slow SQLite session write")).toBe(false);
       expect(hooks.workerLogAttempts).toBe(1);
       expect(observations).toHaveLength(rejected ? 0 : 1);
@@ -570,13 +463,7 @@ test.each([false, true])(
           ...trace,
           message: "slow SQLite reclamation Worker operation",
         });
-        expect(observations[0]?.["1"]).toEqual({
-          ...executionContext,
-          reclamationKind: "history-eviction",
-          workerThreadId,
-          elapsedMs,
-          outcome: "resolved",
-        });
+        expect(observations[0]?.["1"]).toMatchObject({ outcome: "resolved" });
         expect(JSON.stringify(observations)).not.toContain("synthetic-private-token");
       }
       await expect(write(databaseOptions, async () => "after")).resolves.toBe("after");

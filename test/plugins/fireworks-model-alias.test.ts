@@ -31,11 +31,20 @@ import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-me
 import { resolveOwningPluginIdsForProviderRef } from "../../src/plugins/providers.js";
 import { resolveBundledPluginPublicModulePath } from "../../src/test-utils/bundled-plugin-public-surface.js";
 
-async function resolveCatalogModel(
+async function resolveAlias(
   provider: string,
-  catalogModel: NonNullable<ReturnType<typeof resolveBundledStaticCatalogModel>>,
+  modelId: string,
+  catalogProvider = provider,
   cfg?: OpenClawConfig,
 ) {
+  const catalogModel = resolveBundledStaticCatalogModel({
+    provider: catalogProvider,
+    modelId,
+    includeRuntimeDiscovery: true,
+  });
+  if (!catalogModel) {
+    throw new Error(`Missing ${catalogProvider} catalog model`);
+  }
   const stores = createEmptyAgentDiscoveryStores();
   vi.spyOn(stores.modelRegistry, "find").mockImplementation((candidateProvider, candidateId) =>
     candidateProvider === catalogModel.provider && candidateId === catalogModel.id
@@ -74,23 +83,6 @@ function loadManifest(pluginId: string) {
   manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
 }
 
-function resolveAlias(
-  provider: string,
-  modelId: string,
-  catalogProvider: string,
-  cfg?: OpenClawConfig,
-) {
-  const catalog = resolveBundledStaticCatalogModel({
-    provider: catalogProvider,
-    modelId,
-    includeRuntimeDiscovery: true,
-  });
-  if (!catalog) {
-    throw new Error(`Missing ${catalogProvider} catalog model`);
-  }
-  return resolveCatalogModel(provider, catalog, cfg);
-}
-
 async function expectAlias(
   pluginId: string,
   provider: string,
@@ -100,74 +92,13 @@ async function expectAlias(
 ) {
   loadManifest(pluginId);
   expect(resolveOwningPluginIdsForProviderRef({ provider: alias })).toEqual([pluginId]);
-  const catalog = resolveBundledStaticCatalogModel({
-    provider,
-    modelId,
-    includeRuntimeDiscovery: true,
-  });
   const expected = { provider, id: modelId, api: "openai-completions", baseUrl };
-  expect(catalog).toMatchObject(expected);
-  if (!catalog) {
-    throw new Error(`Missing ${provider} catalog model`);
-  }
-  const canonical = await resolveCatalogModel(provider, catalog);
+  expect(
+    resolveBundledStaticCatalogModel({ provider, modelId, includeRuntimeDiscovery: true }),
+  ).toMatchObject(expected);
+  const canonical = await resolveAlias(provider, modelId);
   expect(canonical).toMatchObject(expected);
-  expect(await resolveCatalogModel(alias, catalog)).toEqual(canonical);
-}
-
-type ProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
-type ModelApi = ProviderConfig["api"];
-async function expectConfiguredAlias(
-  provider: string,
-  catalogProvider: string,
-  modelId: string,
-  header: string,
-  providerApi: ModelApi,
-  modelApi: ModelApi,
-  modelBaseUrl: string | undefined,
-  expectedApi: ModelApi,
-) {
-  loadManifest(catalogProvider);
-  const baseUrl = `https://${catalogProvider}-proxy.example/v1`;
-  const settings = {
-    reasoning: false,
-    input: ["text", "image"],
-    contextWindow: 4096,
-    maxTokens: 512,
-  } satisfies Partial<ProviderConfig["models"][number]>;
-  const headers = { [header]: "custom" };
-  const cfg: OpenClawConfig = {
-    models: {
-      providers: {
-        [provider]: {
-          baseUrl,
-          api: providerApi,
-          headers,
-          models: [
-            {
-              id: modelId,
-              name: "Configured model",
-              api: modelApi,
-              baseUrl: modelBaseUrl,
-              ...settings,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          ],
-        },
-      },
-    },
-  };
-  expect(await resolveAlias(provider, modelId, catalogProvider, cfg)).toMatchObject({
-    provider,
-    id: modelId,
-    api: expectedApi,
-    baseUrl: modelBaseUrl ?? baseUrl,
-    headers,
-    reasoning: false,
-    input: ["text", "image"],
-    contextWindow: 4096,
-    maxTokens: 512,
-  });
+  expect(await resolveAlias(alias, modelId, provider)).toEqual(canonical);
 }
 
 it.each([
@@ -205,15 +136,43 @@ describe.each([
       "anthropic-messages",
     ],
   ] as const)("preserves %s", async (_name, providerApi, modelApi, modelBaseUrl, expectedApi) => {
-    await expectConfiguredAlias(
+    loadManifest(catalogProvider);
+    const baseUrl = `https://${catalogProvider}-proxy.example/v1`;
+    const headers = { [header]: "custom" };
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl,
+            api: providerApi,
+            headers,
+            models: [
+              {
+                id: modelId,
+                name: "Configured model",
+                api: modelApi,
+                baseUrl: modelBaseUrl,
+                reasoning: false,
+                input: ["text", "image"],
+                contextWindow: 4096,
+                maxTokens: 512,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    };
+    expect(await resolveAlias(provider, modelId, catalogProvider, cfg)).toMatchObject({
       provider,
-      catalogProvider,
-      modelId,
-      header,
-      providerApi,
-      modelApi,
-      modelBaseUrl,
-      expectedApi,
-    );
+      id: modelId,
+      api: expectedApi,
+      baseUrl: modelBaseUrl ?? baseUrl,
+      headers,
+      reasoning: false,
+      input: ["text", "image"],
+      contextWindow: 4096,
+      maxTokens: 512,
+    });
   });
 });

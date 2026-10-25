@@ -33,6 +33,7 @@ import {
 import { DefaultResourceLoader } from "../../sessions/resource-loader.js";
 import { createAgentSession } from "../../sessions/sdk.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { isOutOfTurnHistoryEntry } from "../../sessions/session-manager-codec.js";
 import { sessionManagerOpenTranscriptCohort } from "../../sessions/session-manager-core.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
@@ -46,6 +47,7 @@ import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
@@ -292,8 +294,6 @@ type SessionBoundaryAttempt = Pick<
   | "userTurnTranscriptRecorder"
 >;
 
-type LlmBoundaryOptions = NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]>;
-
 type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>;
 
 export async function prepareEmbeddedAttemptSessionBoundary(input: {
@@ -371,6 +371,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         const orphanProvenance = normalizeInputProvenance(
           candidate?.messageEntry.message.provenance,
         );
+        // Talk speech is mirrored before its distinct hidden consult input is persisted.
+        // Keep the speech durable; the merged prompt already carries it for this attempt.
+        if (candidate && isOutOfTurnHistoryEntry(candidate.messageEntry)) {
+          candidate.removeLeaf = false;
+        }
         // Keep unanswered user input in history through failed internal continuations.
         const preserveUnansweredUser =
           shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance) &&

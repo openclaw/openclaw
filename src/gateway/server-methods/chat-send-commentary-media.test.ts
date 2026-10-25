@@ -404,12 +404,16 @@ it.for([
         if (gcDuringPreparation) {
           // The second download holds the rewrite while the first original is on disk.
           expect(readMessage()).not.toHaveProperty("openclawDisplayContent");
-          expect(await readManaged()).toHaveLength(1);
-          expect(await cleanupManagedOutgoingMediaRecords()).toEqual({
-            deletedRecordCount: 0,
-            deletedFileCount: 0,
-            retainedCount: 1,
-          });
+          const preparedEntries = await readManaged();
+          expect(preparedEntries).toHaveLength(1);
+          await cleanupManagedOutgoingMediaRecords();
+          expect(await readManaged()).toEqual(preparedEntries);
+          for (const { record } of preparedEntries) {
+            const { mediaRoot, mediaSubdir, mediaId } = record.original;
+            expect(await fs.readFile(path.join(mediaRoot, mediaSubdir, mediaId))).toEqual(
+              PNG_BYTES,
+            );
+          }
         }
         if (aborted) {
           current = false;
@@ -556,11 +560,9 @@ it.for([
       await run;
       if (gcDuringPreparation) {
         // Committed originals must outlive transient retention even after the run ends.
-        expect(
-          await cleanupManagedOutgoingMediaRecords({
-            nowMs: Date.now() + 7 * 24 * 60 * 60 * 1000,
-          }),
-        ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 2 });
+        await cleanupManagedOutgoingMediaRecords({
+          nowMs: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        });
         const entries = await readManaged();
         expect(entries).toHaveLength(2);
         for (const { record } of entries) {

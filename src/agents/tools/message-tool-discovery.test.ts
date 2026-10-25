@@ -36,6 +36,7 @@ import {
 import {
   buildMessageToolDescription,
   buildMessageToolSchema,
+  hasMessageToolSourceConversation,
   resolveMessageToolActionSchemaActions,
   resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolDiscoveryAsync,
@@ -49,6 +50,33 @@ const options = {
   agentSessionKey: `agent:main:googlechat:group:${foldedSpace}`,
 };
 const request = { config: {}, action: "send" as const, params: {} };
+
+it.each([
+  { context: undefined, expected: false },
+  { context: { currentChannelProvider: "telegram" }, expected: false },
+  { context: { currentChannelId: "123" }, expected: false },
+  {
+    context: { currentChannelProvider: "telegram", currentChannelId: "heartbeat" },
+    expected: false,
+  },
+  {
+    context: { currentChannelProvider: "telegram", currentChannelId: "channel:agent:main:main" },
+    expected: false,
+  },
+  {
+    context: { currentChannelProvider: "telegram", currentMessagingTarget: "123" },
+    expected: true,
+  },
+  {
+    context: {
+      currentChannelProvider: "webchat",
+      agentSessionKey: "agent:main:telegram:direct:123",
+    },
+    expected: true,
+  },
+])("reports source routing for $context", ({ context, expected }) => {
+  expect(hasMessageToolSourceConversation(context)).toBe(expected);
+});
 
 describe("session-derived message destinations", () => {
   beforeEach(() => {
@@ -208,7 +236,12 @@ describe("message tool discovery cache stability", () => {
             actions: ["send", "react"],
             schema: {
               visibility: "all-configured",
-              properties: { primaryLabel: Type.Optional(Type.String()) },
+              properties: {
+                primaryLabel: Type.Optional(Type.String()),
+                pollDurationSeconds: Type.Optional(Type.Number()),
+                pollAnonymous: Type.Optional(Type.Boolean()),
+                pollPublic: Type.Optional(Type.Boolean()),
+              },
             },
           }),
         },
@@ -275,6 +308,19 @@ describe("message tool discovery cache stability", () => {
         pollOption: ["Yes", "No"],
       }),
     ).toBe(true);
+    expect(
+      Value.Check(multi.schema, {
+        action: "poll",
+        pollQuestion: "Ready?",
+        pollOption: ["Yes", "No"],
+        pollDurationSeconds: 60,
+        pollAnonymous: true,
+        pollPublic: false,
+      }),
+    ).toBe(true);
+    expect(Value.Check(multi.schema, { action: "poll", pollDurationSeconds: "invalid" })).toBe(
+      false,
+    );
     expect(JSON.stringify(await discover(bindings.toReversed(), channels.toReversed()))).toBe(
       JSON.stringify(multi),
     );

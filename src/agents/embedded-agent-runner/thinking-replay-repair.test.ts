@@ -15,6 +15,17 @@ function asAppendMessage(message: unknown): AppendMessage {
   return message as AppendMessage;
 }
 
+function rejectedThinkingAssistant(text?: string): AppendMessage {
+  return asAppendMessage({
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "private", thinkingSignature: "sig_bad" },
+      ...(text === undefined ? [] : [{ type: "text", text }]),
+    ],
+    timestamp: 2,
+  });
+}
+
 function branchMessages(sessionManager: SessionManager): AgentMessage[] {
   return sessionManager
     .getBranch()
@@ -34,23 +45,14 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
   it("strips thinking blocks from active-branch assistant messages and preserves visible content", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private", thinkingSignature: "sig_bad" },
-          { type: "text", text: "visible answer" },
-        ],
-        timestamp: 2,
-      }),
-    );
+    sessionManager.appendMessage(rejectedThinkingAssistant("visible answer"));
     sessionManager.appendMessage(
       asAppendMessage({ role: "user", content: "second", timestamp: 3 }),
     );
 
     const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
-    expect(result).toMatchObject({ repaired: true, repairedCount: 1 });
+    expect(result).toMatchObject({ repaired: true });
     expect(branchMessages(sessionManager).map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -64,17 +66,11 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
   it("keeps thinking-only assistant turns as omitted-reasoning placeholders", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "private", thinkingSignature: "sig_bad" }],
-        timestamp: 2,
-      }),
-    );
+    sessionManager.appendMessage(rejectedThinkingAssistant());
 
     const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
-    expect(result).toMatchObject({ repaired: true, repairedCount: 1 });
+    expect(result).toMatchObject({ repaired: true });
     expect(branchAssistantContents(sessionManager)).toEqual([
       [{ type: "text", text: "[assistant reasoning omitted]" }],
     ]);
@@ -83,16 +79,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
   it("preserves downstream branch suffix entries after rewriting the first repaired assistant", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private", thinkingSignature: "sig_bad" },
-          { type: "text", text: "first answer" },
-        ],
-        timestamp: 2,
-      }),
-    );
+    sessionManager.appendMessage(rejectedThinkingAssistant("first answer"));
     sessionManager.appendMessage(
       asAppendMessage({ role: "user", content: "follow-up", timestamp: 3 }),
     );
@@ -100,7 +87,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 
     const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
-    expect(result).toMatchObject({ repaired: true, repairedCount: 1 });
+    expect(result).toMatchObject({ repaired: true });
     expect(branchMessages(sessionManager).map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -123,7 +110,6 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 
     expect(result).toMatchObject({
       repaired: false,
-      repairedCount: 0,
       reason: "no thinking blocks on active branch",
     });
     expect(sessionManager.getLeafId()).toBe(beforeLeafId);
@@ -165,7 +151,7 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
         sessionManager,
         checkpoint: { data: "rejected-ciphertext", id: "cmp_rejected" },
       }),
-    ).toMatchObject({ repaired: true, repairedCount: 1 });
+    ).toMatchObject({ repaired: true });
     expect(
       branchMessages(sessionManager)
         .filter((message) => message.role === "assistant")

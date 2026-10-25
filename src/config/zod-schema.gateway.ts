@@ -229,7 +229,7 @@ export const GatewayConfigSchema = z
             color: z.enum(CONTROL_UI_ENVIRONMENT_COLORS),
           })
           .optional(),
-        /** Show the compact Community entry in this Gateway's Control UI (default true). */
+        /** Show the dismissible Community card in this Gateway's Control UI (default true). */
         communityInvite: z.boolean().optional(),
         /** Seed fresh drafts from configured model/reasoning instead of remembered choices. */
         newSessionModelDefaults: z.enum(["last-used", "configured"]).optional(),
@@ -257,7 +257,7 @@ export const GatewayConfigSchema = z
           .optional(),
         /**
          * DANGEROUS: Allow hosted embeds to load absolute external http(s) URLs.
-         * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
+         * Default off; prefer hosted /__openclaw__/canvas content.
          */
         allowExternalEmbedUrls: z.boolean().optional(),
         /** Fetch public-site favicons through the Gateway for Control UI links (default true). */

@@ -10,7 +10,7 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "./chat-pane.tsx";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
@@ -30,6 +30,7 @@ import {
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { ChatHistoryBoundary } from "./components/chat-history-boundary.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
@@ -137,7 +138,7 @@ it("updates the earlier-history control directly from pane loading state", () =>
 
   pane.history.loadingOlder = true;
   flush();
-  expect(button.disabled).toBe(true);
+  expect(button.getAttribute("aria-disabled")).toBe("true");
   expect(button.getAttribute("aria-busy")).toBe("true");
 
   pane.history.loadingOlder = false;
@@ -192,7 +193,8 @@ it.each(["pending", "resolved"] as const)(
             pane.render();
             return pane.chatProps!;
           });
-          return createComponent(ChatComposer, merge(current));
+          const questions = createComposerQuestions(pane.presentationId, current);
+          return createComponent(ChatComposer, merge(current, { questions }));
         },
         { container, wrapper: createSolidApplicationContextProvider(context).wrapper },
       );
@@ -215,8 +217,7 @@ it.each(["pending", "resolved"] as const)(
         container.querySelector('[role="option"] .slash-menu-name')?.textContent;
       if (replyState === "resolved") {
         response.resolve(people);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(selectedName()).toBe("Bob");
+        await waitForSolid(() => expect(selectedName()).toBe("Bob"));
       }
 
       state.sessionsResult = sessionsResult(
@@ -233,8 +234,7 @@ it.each(["pending", "resolved"] as const)(
         1,
       );
       response.resolve(people);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(selectedName()).toBe("Bob");
+      await waitForSolid(() => expect(selectedName()).toBe("Bob"));
       expect(container.querySelector("textarea")).toBe(textarea);
       textarea.dispatchEvent(
         new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),

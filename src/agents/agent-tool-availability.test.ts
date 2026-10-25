@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   bindAgentToolAvailability,
   finalizeAgentToolAvailability as finalize,
@@ -10,7 +10,7 @@ import {
   rewrapToolWithBeforeToolCallHook as rewrapHook,
   wrapToolWithBeforeToolCallHook as wrapHook,
 } from "./agent-tools.before-tool-call.js";
-import { normalizeToolParameters } from "./agent-tools.schema.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { SWARM_CODE_MODE_IDEMPOTENCY_KEY } from "./subagents/swarm/swarm-code-mode.js";
 import {
   applyToolSearchCatalog as applyCatalog,
@@ -208,7 +208,13 @@ describe("collector tool availability", () => {
     const source = spawnTool();
     const wait = reader();
     finalize([source, wait]);
-    const normalized = normalizeToolParameters(source, { modelProvider: "google" });
+    const [normalized] = finalizeAgentTools({
+      tools: [source, wait],
+      modelProvider: "google",
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(normalized);
 
     finalize([normalized, wait]);
     expectNormalizedCollector(normalized);

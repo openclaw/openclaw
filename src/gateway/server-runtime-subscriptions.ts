@@ -29,7 +29,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
-import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import {
   onGatewaySuspendAdmissionChange,
   retainGatewayRootWorkAdmissionContinuation,
@@ -501,10 +501,9 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
       : undefined;
     const dispatch = dispatchEventHandler<AgentEventRuntimePayload>({
       // An extra async hop lets empty queued finalization overtake reply buffer capture.
-      loadHandler: () =>
-        terminalPreparation
-          ? terminalPreparation.then(agentEventHandlerLoader.load)
-          : agentEventHandlerLoader.load(),
+      loadHandler: terminalPreparation
+        ? () => terminalPreparation.then(agentEventHandlerLoader.load)
+        : agentEventHandlerLoader.load,
       isDeliveryCurrent,
       event: evt,
       log: params.log,
@@ -580,12 +579,11 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     await auditRecorder.stop();
   };
 
-  const heartbeatUnsub = onHeartbeatEvent((evt) => {
+  heartbeatNotifications.onEvent = (evt) => {
     params.broadcast("heartbeat", evt, { dropIfSlow: true });
-  });
+  };
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
-    sessionActivitySummaries.handleTranscript(evt);
     // The committing root is a real completion obligation, separate from the
     // bounded presentation job. Capture it before leaving the producer context.
     const releaseRoot = retainGatewayRootWorkAdmissionContinuation();
@@ -701,7 +699,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     sessionCompanion,
     sessionObserver,
     agentUnsub,
-    heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub() {
       unsubscribeProcesses();

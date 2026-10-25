@@ -15,10 +15,7 @@ import {
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { storageProcessTestEntrypoints } from "../../infra/storage-process-runtime.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -57,14 +54,10 @@ async function seedControl(sessionId = controlEntry.sessionId, skipMaintenance =
   return scope;
 }
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-});
+afterEach(() => vi.restoreAllMocks());
 
-it("rechecks same-binding metadata updates and clear through fresh joins without host data SQL", async () => {
-  await withOpenClawTestState({ label: "acp-control-fresh" }, async () => {
+it("rechecks same-binding metadata updates and clear through fresh joins without host data SQL", () =>
+  withOpenClawTestState({ label: "acp-control-fresh" }, async () => {
     const scope = await seedControl("session", true);
     const { cfg } = scope;
     const observe = observeHostDataSql();
@@ -90,13 +83,12 @@ it("rechecks same-binding metadata updates and clear through fresh joins without
       prepared?.release();
       observe.restore();
     }
-  });
-});
+  }));
 
 it.each(["owner", "lifecycle", "shared-source"] as const)(
   "refuses retained control after same-ID %s replacement",
-  async (replacement) => {
-    await withOpenClawTestState({ label: "acp-control-replacement" }, async (state) => {
+  (replacement) =>
+    withOpenClawTestState({ label: "acp-control-replacement" }, async (state) => {
       const scope = await seedControl();
       const { cfg } = scope;
       const prepared = await prepareAcpSessionControlRead(scope);
@@ -122,12 +114,11 @@ it.each(["owner", "lifecycle", "shared-source"] as const)(
       } finally {
         prepared.release();
       }
-    });
-  },
+    }),
 );
 
-it("keeps the physical shared-store owner and validates canonical ACP aliases in the worker kernel", async () => {
-  await withOpenClawTestState({ label: "acp-control-shared-owner" }, async (state) => {
+it("keeps the physical shared-store owner and validates canonical ACP aliases in the worker kernel", () =>
+  withOpenClawTestState({ label: "acp-control-shared-owner" }, async (state) => {
     const storePath = state.statePath("shared.sqlite");
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
@@ -188,8 +179,7 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
     } finally {
       prepared.release();
     }
-  });
-});
+  }));
 
 const originalLifecycle = "original-lifecycle";
 it.each([
@@ -207,8 +197,8 @@ it.each([
   ],
 ] as const)(
   "rechecks global metadata at controlled commit after an independent %s write",
-  async (change, expected) => {
-    await withOpenClawTestState({ label: `acp-control-commit-${change}` }, async (state) => {
+  (change, expected) =>
+    withOpenClawTestState({ label: `acp-control-commit-${change}` }, async (state) => {
       const storePath = state.statePath("shared-agent.sqlite");
       const cfg: OpenClawConfig = {
         agents: {
@@ -332,6 +322,5 @@ it.each([
       } else {
         expect(canonical).toBeUndefined();
       }
-    });
-  },
+    }),
 );

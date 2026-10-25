@@ -12,6 +12,7 @@ import {
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { resolvePluginWebContentExtractors } from "./web-content-extractors.runtime.js";
 import {
   resolvePluginWebFetchProviders,
@@ -48,7 +49,6 @@ function environment(marker: string) {
   const pluginDir = path.join(bundledDir, PLUGIN_ID);
   const workspaceDir = path.join(root, "workspace");
   const evaluationsPath = path.join(root, "evaluations.log");
-  fs.mkdirSync(pluginDir, { recursive: true });
   fs.mkdirSync(workspaceDir);
   fs.writeFileSync(evaluationsPath, "");
   const manifest = {
@@ -62,15 +62,12 @@ function environment(marker: string) {
       webContentExtractors: [PLUGIN_ID],
     },
   };
-  fs.writeFileSync(path.join(pluginDir, "openclaw.plugin.json"), JSON.stringify(manifest));
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({ type: "commonjs", openclaw: { extensions: ["./index.js"] } }),
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "index.js"),
-    "throw new Error('Public artifact resolution must not activate the runtime entry');\n",
-  );
+  writeArtifacts(pluginDir, {
+    "openclaw.plugin.json": manifest,
+    "package.json": { type: "commonjs", openclaw: { extensions: ["./index.js"] } },
+    "index.js":
+      "throw new Error('Public artifact resolution must not activate the runtime entry');\n",
+  });
   for (const [basename, suffix] of artifacts) {
     fs.writeFileSync(
       path.join(pluginDir, basename),
@@ -97,7 +94,7 @@ module.exports.createFixture${suffix} = () => ({
   };
 }
 
-function useProcessEnvironment(fixture: ReturnType<typeof environment>) {
+function useProcessEnvironment(fixture: Pick<Resolution, "env">) {
   for (const [key, value] of Object.entries(fixture.env)) {
     vi.stubEnv(key, value);
   }
@@ -167,12 +164,18 @@ describe("public artifact environment ownership", () => {
     {
       name: "document extractors",
       artifact: "document-extractor.js",
-      resolve: resolvePluginDocumentExtractors,
+      resolve: (params: Resolution) => {
+        useProcessEnvironment(params);
+        return resolvePluginDocumentExtractors({ config: params.config });
+      },
     },
     {
       name: "web content extractors",
       artifact: "web-content-extractor.js",
-      resolve: resolvePluginWebContentExtractors,
+      resolve: (params: Resolution) => {
+        useProcessEnvironment(params);
+        return resolvePluginWebContentExtractors({ config: params.config });
+      },
     },
   ])("loads and reuses each caller's artifact for $name", async ({ resolve, artifact }) => {
     const ambient = environment("ambient");

@@ -10,6 +10,8 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createSystemAgentTool } from "../../agents/tools/system-agent-tool.js";
 import { runConfigSet as runConfigSetCommand } from "../../cli/config-cli.js";
+import * as configModule from "../../config/config.js";
+import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -138,23 +140,25 @@ describe("Full Access delegated chat", () => {
     );
     vi.mocked(runConfigSetCommand).mockReset().mockResolvedValue(undefined);
     let proposed = false;
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockResolvedValue(
+      createConfigFileSnapshot({
+        exists: true,
+        valid: true,
+        path: "/tmp/openclaw.json",
+        hash: "verified-config",
+        raw: null,
+        parsed: verifiedConfig,
+        runtimeConfig: verifiedConfig,
+        sourceConfig: verifiedConfig,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      }),
+    );
     const engine = new SystemAgentChatEngine({
       operatorApprovalOnly: true,
       surface: "gateway",
       verifiedInference: fixture.binding,
-      deps: {
-        readConfigFileSnapshot: async () =>
-          ({
-            exists: true,
-            valid: true,
-            path: "/tmp/openclaw.json",
-            hash: "verified-config",
-            config: verifiedConfig,
-            runtimeConfig: verifiedConfig,
-            sourceConfig: verifiedConfig,
-            issues: [],
-          }) as never,
-      },
       runAgentTurn: async (params) => {
         if (source === "typed" || (proposed && source !== "repair")) {
           return { text: "Config verified." };

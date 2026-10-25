@@ -1,10 +1,7 @@
 import { ensureRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
 import { isRecord } from "./legacy-config-record-shared.js";
-import {
-  migrateLegacyXSearchConfig,
-  resolveLegacyXSearchModelTarget,
-} from "./legacy-web-tools-migrate.js";
+import { migrateLegacyXSearchConfig } from "./legacy-web-tools-migrate.js";
 
 const LEGACY_OPENAI_CODEX_PLUGIN_ID = "openai-codex";
 const OPENAI_PLUGIN_ID = "openai";
@@ -218,13 +215,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS: LegacyConfigMigrationSp
         path: ["tools", "web", "x_search", "apiKey"],
         message:
           'tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead. Run "openclaw doctor --fix".',
-      },
-      {
-        path: ["tools", "web", "x_search", "model"],
-        message:
-          'tools.web.x_search.model uses a retired xAI model; run "openclaw doctor --fix" to repair it.',
-        requireSourceLiteral: true,
-        match: (value) => resolveLegacyXSearchModelTarget(value) !== undefined,
       },
     ],
     apply: (raw, changes) => {

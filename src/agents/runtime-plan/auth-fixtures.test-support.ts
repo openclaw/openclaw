@@ -1,5 +1,6 @@
 import { expect } from "vitest";
 import type { Model } from "../../llm/types.js";
+import { createNativeOpenAIResponsesModel } from "../../plugin-sdk/test-helpers/agents/schema-normalization-runtime-contract.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import {
   createApiKeyCredential,
@@ -25,14 +26,10 @@ export const subscriptionRoute = {
   authRequirement: "subscription",
 } as const;
 export const platformModel: Model = {
+  ...createNativeOpenAIResponsesModel(),
   id: "gpt-5.5",
   name: "gpt-5.5",
-  provider: "openai",
-  api: platformRoute.api,
-  baseUrl: platformRoute.baseUrl,
   input: ["text"],
-  reasoning: true,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 8_000,
 };
@@ -63,6 +60,31 @@ export const apiKey = (key = "platform-key") => createApiKeyCredential("openai",
 export const oauth = createOAuthRefreshCredential;
 export const openAIConfig = providerConfig.bind(null, "openai");
 export const apiRoute = { api: "openai-responses", authRequirement: "api-key" } as const;
+
+export function profilePlan(
+  profileId: string,
+  overrides: Partial<AgentRuntimeAuthPlan> = {},
+): AgentRuntimeAuthPlan {
+  return {
+    ...authProvider,
+    forwardedAuthProfileId: profileId,
+    forwardedAuthProfileSource: "auto",
+    forwardedAuthProfileCandidateIds: [profileId],
+    ...overrides,
+  };
+}
+
+export function subscriptionPlan(
+  overrides: Partial<AgentRuntimeAuthPlan> = {},
+): AgentRuntimeAuthPlan {
+  return {
+    ...authProvider,
+    forwardedAuthProfileId: "openai:subscription",
+    selectedAuthMode: "token",
+    modelRoute: { ...subscriptionRoute },
+    ...overrides,
+  };
+}
 
 export function authStore(
   profiles: AuthProfileStore["profiles"],

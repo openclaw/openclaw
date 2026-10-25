@@ -96,7 +96,7 @@ describe("formatExecDeniedUserMessage", () => {
     ],
     [
       "Exec denied (gateway id=req-1, user-denied): uname -a",
-      "Command did not run: approval was denied.",
+      "Command did not run: an operator declined this execution approval.",
     ],
     [
       "Exec denied (gateway id=req-1, allowlist-miss): uname -a",

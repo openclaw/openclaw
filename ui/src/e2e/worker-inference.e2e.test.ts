@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import type { GatewayAgentRow } from "../api/types.ts";
 import {
-  captureUiProof,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -54,7 +53,6 @@ suite.define(() => {
             "chat.send",
             "environments.list",
             "sessions.create",
-            "sessions.send",
             "sessions.describe",
             "sessions.reclaim",
             ...(required ? [] : ["sessions.dispatch"]),
@@ -97,7 +95,7 @@ suite.define(() => {
               environments: [],
               profiles: [profile],
             },
-            "sessions.create": { key: sessionKey },
+            "sessions.create": { key: sessionKey, entry: { sessionId: "worker-session" } },
             "sessions.list": {
               count: 1,
               ts: 1,
@@ -116,9 +114,11 @@ suite.define(() => {
                 },
               ],
             },
-            "sessions.describe": { session: { key: sessionKey, placement } },
-            "sessions.dispatch": { placement },
-            "sessions.send": { runId: "worker-initial", status: "started" },
+            "sessions.describe": {
+              session: { key: sessionKey, sessionId: "worker-session", placement },
+            },
+            "sessions.dispatch": { sessionId: "worker-session", placement },
+            "chat.send": { runId: "worker-initial", status: "started" },
           },
         });
         const where = page.locator("#new-session-where-trigger");
@@ -138,15 +138,6 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill("Inspect the worker workspace");
         const start = page.getByRole("button", { name: "Start session", exact: true });
         await expect.poll(() => start.isEnabled()).toBe(true);
-        // Policy-off is the comparison baseline, not a capture from an older binary.
-        // The suite owns a fresh per-test artifact directory; withPage exposes no artifact owner.
-        await captureUiProof(
-          suite,
-          page,
-          required
-            ? "after-required-readonly-before-submit.png"
-            : "before-policy-off-selected-profile.png",
-        );
         await start.click();
         const create = await gateway.waitForRequest("sessions.create");
         expect(create.params).toMatchObject({
@@ -168,10 +159,12 @@ suite.define(() => {
             profileId: "studio-device",
           });
         }
-        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await gateway.resolveDeferred(required ? "sessions.describe" : "sessions.dispatch");
-        expect((await gateway.waitForRequest("sessions.send")).params).toMatchObject({
-          key: sessionKey,
+        expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+          sessionKey,
+          sessionId: "worker-session",
+          expectedLeafEntryId: null,
           message: "Inspect the worker workspace",
         });
         await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
@@ -190,7 +183,7 @@ suite.define(() => {
           .locator(".agent-chat__composer-combobox textarea")
           .fill("Now check the examples");
         await page.getByRole("button", { name: "Send message", exact: true }).click();
-        const followUp = await gateway.waitForRequest("chat.send");
+        const followUp = await gateway.waitForRequest("chat.send", { after: 1 });
         expect(followUp.params).toMatchObject({
           sessionKey,
           message: "Now check the examples",
@@ -199,12 +192,12 @@ suite.define(() => {
         const methods = (await gateway.getRequests()).map(({ method }) => method);
         expect(
           methods.filter((method) =>
-            ["sessions.create", "sessions.dispatch", "sessions.send", "chat.send"].includes(method),
+            ["sessions.create", "sessions.dispatch", "chat.send"].includes(method),
           ),
         ).toEqual([
           "sessions.create",
           ...(required ? [] : ["sessions.dispatch"]),
-          "sessions.send",
+          "chat.send",
           "chat.send",
         ]);
       }),

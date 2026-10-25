@@ -5,14 +5,11 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts"
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { createGatewayHarness } from "../../lib/sessions/session-capability.test-support.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
-import "./chat-page.ts";
-
-export { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
+import "./chat-page.tsx";
 
 export function createChatPageNavigationContext() {
   const router = createRouter({ routes: [] });
@@ -75,23 +72,20 @@ export function setViewerPresenceContext(page: HTMLElementTagNameMap["openclaw-c
   };
   const snapshotListeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   (navigation.context as unknown as { gateway: ApplicationContext["gateway"] }).gateway = {
-    snapshot: {
+    snapshot: createApplicationGatewaySnapshot({
       client,
       phase: "connected",
-      offlineStable: false,
       hello,
-      canvasPluginSurfaceUrl: null,
       assistantAgentId: "main",
       sessionKey: "agent:main:main",
-      lastError: null,
-      lastErrorCode: null,
-    },
+    }),
     connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
     loadSelfProfile: async () => null,
     connect: vi.fn(),
+    defer: () => false,
     setSessionKey: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),
@@ -156,29 +150,6 @@ export function stubMatchMedia(matches: boolean) {
       dispatchEvent: vi.fn(),
     })),
   );
-}
-
-export function createChatPageStateContext() {
-  const { gateway, publish } = createGatewayHarness(createTestGatewayClient(vi.fn()));
-  publish(false, null);
-  return {
-    agents: {
-      state: { agentsList: null },
-      ensureList: vi.fn(async () => null),
-    },
-    agentSelection: { state: { selectedId: "main" } },
-    basePath: "",
-    config: {
-      current: {
-        allowExternalEmbedUrls: false,
-        assistantIdentity: { name: "Assistant" },
-        embedSandboxMode: "scripts",
-      },
-    },
-    gateway: { ...gateway, connection: { gatewayUrl: "ws://gateway.example.test" } },
-    chatSubmissions: createChatSubmissions(),
-    sessions: createChatPageSessions(gateway),
-  } as unknown as ApplicationContext;
 }
 
 /** Settles the bridge and the page-owned Solid projection without a browser timer. */

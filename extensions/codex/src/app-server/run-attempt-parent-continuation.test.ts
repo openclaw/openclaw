@@ -1,6 +1,8 @@
 import path from "node:path";
 import { invokeNativeHookRelay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
@@ -8,6 +10,7 @@ import {
   isCodexAppServerLiveThreadProtected,
   protectCodexAppServerLiveThread,
 } from "./client-runtime.js";
+import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   childTurnCompletedNotification,
@@ -96,6 +99,51 @@ function createParentHarness() {
 }
 
 describe("Codex parent continuation with native child custody", () => {
+  it("observes the active parent through its canonical store rather than the legacy selector", async () => {
+    const params = createParams(
+      path.join(tempDir, "roster.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    await seedRunSessionOwnerForTest(params.sessionId, params.sessionKey!);
+    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    params.sessionTarget = {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey!,
+      storePath,
+    };
+    let current: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsync>> | undefined;
+    const parent = createParentHarness();
+    const attempt = runCodexAppServerAttempt(params);
+    try {
+      await attempt.waitForTurnAccepted();
+      current = await captureSessionEntryCurrentCheckAsync({
+        agentId: "main",
+        sessionKey: params.sessionKey!,
+        storePath,
+      });
+      expect(current.entryCurrent).toBeDefined();
+      expect(current.entryCurrent!.source.path).not.toBe(storePath);
+      const registration = vi.mocked(codexNativeSubagentMonitorRuntime.register).mock.calls[0]![0];
+      const snapshot = codexNativeSubagentMonitorRuntime.readNativeSubagents({
+        client: parent.harness.client,
+        agentId: "main",
+        sessionKey: params.sessionKey!,
+        sessionId: params.sessionId,
+        lifecycleRevision: current.entry?.lifecycleRevision,
+        storePath: current.entryCurrent!.source.path,
+        parentThreadId: "thread-1",
+        historyOwner: registration.historyOwner!,
+        assertCurrent: () => {},
+      });
+      expect(snapshot).toEqual({ coverage: "live", children: [], truncated: false });
+    } finally {
+      await parent.harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await attempt;
+      current?.release();
+    }
+  });
+
   it.each([false, true])(
     "continues an interrupted parent and delivers its child's result (warm: %s)",
     async (warm) => {
@@ -284,14 +332,11 @@ describe("Codex parent continuation with native child custody", () => {
         const response = await harness.handleServerRequest({
           id: "yield-parent",
           method: "item/tool/call",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            callId: "yield-parent",
-            namespace: null,
-            tool: "sessions_yield",
-            arguments: { message: "Waiting for native child" },
-          },
+          params: createDynamicToolCall(
+            "sessions_yield",
+            { message: "Waiting for native child" },
+            "yield-parent",
+          ),
         });
         expect(response, JSON.stringify(response)).toMatchObject({ success: true });
         const outcome = await Promise.allSettled([run]);

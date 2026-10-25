@@ -10,6 +10,7 @@ import type {
   ExecApprovalsSnapshot,
 } from "./exec-approvals-core.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
+import { readExecApprovalsSocket } from "./exec-approvals-socket.js";
 import {
   ensureExecApprovalsSnapshot,
   loadExecApprovalsReadOnlyAsync,
@@ -94,7 +95,7 @@ export async function resolveExecApprovalsLocked(
     if (
       (resolved.agent.security === "full" || resolved.agent.security === "deny") &&
       resolved.agent.ask === "off" &&
-      !file.socket?.token?.trim()
+      !(await readExecApprovalsSocket())?.socket_token?.trim()
     ) {
       return resolved;
     }

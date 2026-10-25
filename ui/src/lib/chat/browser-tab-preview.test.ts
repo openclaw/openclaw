@@ -128,7 +128,7 @@ describe("browser tab previews", () => {
     params.request.mockReturnValueOnce(deferred.promise);
     const first = loadBrowserTabThumbnail({ ...params, revision: "one" });
     expect(loadBrowserTabThumbnail({ ...params, revision: "one" })).toBe(first);
-    await Promise.resolve();
+    await vi.waitFor(() => expect(params.request).toHaveBeenCalledTimes(1));
     const second = loadBrowserTabThumbnail({ ...params, revision: "two" });
     expect(params.request).toHaveBeenCalledTimes(1);
     deferred.resolve({ path: "/tmp/first.png" });

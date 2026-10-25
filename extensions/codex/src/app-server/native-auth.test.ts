@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexPluginConfig } from "./config-contracts.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
 
 const run = vi.hoisted(() => vi.fn());
@@ -9,41 +10,37 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
   runUtf8CommandWithTimeout: run,
 }));
 
-const config: OpenClawConfig = {
-  plugins: {
-    entries: {
-      codex: { config: { appServer: { command: "native-codex-fixture", homeScope: "user" } } },
-    },
-  },
-};
+const appServer = { command: "native-codex-fixture", homeScope: "user" as const };
+const configFor = (options: CodexPluginConfig["appServer"]): OpenClawConfig => ({
+  plugins: { entries: { codex: { config: { appServer: options } } } },
+});
+const config = configFor(appServer);
+const loginResult = (stderr = "Logged in using ChatGPT", code = 0) => ({
+  termination: "exit",
+  code,
+  stdout: "",
+  stderr,
+});
+const probe = (options: CodexPluginConfig["appServer"], env: NodeJS.ProcessEnv = {}) =>
+  probeCodexNativeAuth({ pluginConfig: { appServer: options }, env });
 
 describe("Codex native login discovery", () => {
-  beforeEach(() => {
-    run.mockReset().mockResolvedValue({
-      termination: "exit",
-      code: 0,
-      stdout: "",
-      stderr: "Logged in using ChatGPT",
+  beforeEach(() => void run.mockReset().mockResolvedValue(loginResult()));
+
+  it("projects API key login as a native-only fact", async () => {
+    run.mockResolvedValue(loginResult("Logged in using an API key - sk-synthetic***11111"));
+    expect(await probeCodexNativeAuth({ config, env: {} })).toMatchObject({
+      source: "Codex native login",
+      mode: "api-key",
+      nativeAuth: { runtime: "codex", mode: "api-key" },
     });
   });
-
-  it.each([["Logged in using an API key - sk-synthetic***11111", "api-key"]])(
-    "projects %s as a native-only fact",
-    async (line, mode) => {
-      run.mockResolvedValue({ termination: "exit", code: 0, stdout: "", stderr: line });
-      expect(await probeCodexNativeAuth({ config, env: {} })).toMatchObject({
-        source: "Codex native login",
-        mode,
-        nativeAuth: { runtime: "codex", mode },
-      });
-    },
-  );
 
   it.each([
     [0, "Logged in using Amazon Bedrock"],
     [1, "Not logged in"],
   ])("does not authorize OpenAI from exit %s and %s", async (code, stderr) => {
-    run.mockResolvedValue({ termination: "exit", code, stdout: "", stderr });
+    run.mockResolvedValue(loginResult(stderr, code));
     expect(await probeCodexNativeAuth({ config })).toBeUndefined();
     expect(run).toHaveBeenCalledOnce();
   });
@@ -56,17 +53,7 @@ describe("Codex native login discovery", () => {
         "-c 'cli_auth_credentials_store=\"keyring\"' app-server --listen stdio:// --config='log_dir=\"app-server\"' --enable fixture_feature",
     };
     expect(
-      await probeCodexNativeAuth({
-        pluginConfig: {
-          appServer: {
-            command: "native-codex-fixture",
-            homeScope: "user",
-            mode: "yolo",
-            clearEnv: ["CODEX_API_KEY"],
-          },
-        },
-        env,
-      }),
+      await probe({ ...appServer, mode: "yolo", clearEnv: ["CODEX_API_KEY"] }, env),
     ).toMatchObject({ mode: "oauth" });
     expect(run).toHaveBeenCalledWith(
       [
@@ -87,57 +74,28 @@ describe("Codex native login discovery", () => {
     expect(env.CODEX_API_KEY).toBe("must-be-cleared");
   });
 
-  it.each(["agent"] as const)(
-    "does not borrow the user login for homeScope=%s",
-    async (homeScope) => {
-      expect(
-        await probeCodexNativeAuth({
-          config: {
-            plugins: { entries: { codex: { config: { appServer: { homeScope } } } } },
-          },
-        }),
-      ).toBeUndefined();
-      expect(run).not.toHaveBeenCalled();
-    },
-  );
+  it("does not borrow the user login for homeScope=agent", async () => {
+    expect(
+      await probeCodexNativeAuth({ config: configFor({ homeScope: "agent" }) }),
+    ).toBeUndefined();
+    expect(run).not.toHaveBeenCalled();
+  });
 
   it("preserves the official Node launcher and native config when probing login", async () => {
     const launcher = createRequire(new URL("../../package.json", import.meta.url)).resolve(
       "@openai/codex/bin/codex.js",
     );
+    const authArgs = ["-c", 'cli_auth_credentials_store="file"'];
+    const logArgs = ["--config", 'log_dir="app-server"'];
     expect(
-      await probeCodexNativeAuth({
-        pluginConfig: {
-          appServer: {
-            command: process.execPath,
-            homeScope: "user",
-            args: [
-              launcher,
-              "-c",
-              'cli_auth_credentials_store="file"',
-              "app-server",
-              "--config",
-              'log_dir="app-server"',
-              "--listen",
-              "stdio://",
-              "--",
-            ],
-          },
-        },
-        env: {},
+      await probe({
+        command: process.execPath,
+        homeScope: "user",
+        args: [launcher, ...authArgs, "app-server", ...logArgs, "--listen", "stdio://", "--"],
       }),
     ).toMatchObject({ mode: "oauth" });
     expect(run).toHaveBeenCalledWith(
-      [
-        process.execPath,
-        launcher,
-        "-c",
-        'cli_auth_credentials_store="file"',
-        "--config",
-        'log_dir="app-server"',
-        "login",
-        "status",
-      ],
+      [process.execPath, launcher, ...authArgs, ...logArgs, "login", "status"],
       expect.any(Object),
     );
   });
@@ -156,7 +114,7 @@ describe("Codex native login discovery", () => {
     const owner = new AbortController();
     run.mockImplementation(async () => {
       owner.abort(new Error("capture replaced"));
-      return { termination: "exit", code: 0, stdout: "", stderr: "Logged in using ChatGPT" };
+      return loginResult();
     });
     await expect(probeCodexNativeAuth({ config, signal: owner.signal })).rejects.toThrow(
       "capture replaced",

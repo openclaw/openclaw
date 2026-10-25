@@ -1,5 +1,9 @@
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
+import {
+  mergeAcceptedSessionSpawnsForRun,
+  retireAcceptedSessionSpawnCompletionForRun,
+  type AcceptedSessionSpawn,
+} from "../accepted-session-spawn.js";
 import { prepareSystemAgentRunAdmission as prepareAdmission } from "../admitted-run-context.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -12,12 +16,15 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
 
 const assertCurrent = vi.fn();
 const requester = { sessionKey: "agent:main:main", agentId: "main", runId: "parent" };
-const acceptedSessionSpawns = [
+const acceptedSessionSpawns: [AcceptedSessionSpawn] = [
   { runId: "child", childSessionKey: "agent:main:subagent:child", expectsCompletionMessage: true },
 ];
 
-function makeResult(meta: Partial<EmbeddedAgentRunResult["meta"]>): EmbeddedAgentRunResult {
-  return { acceptedSessionSpawns, meta: { durationMs: 1, ...meta } };
+function makeResult(
+  meta: Partial<EmbeddedAgentRunResult["meta"]>,
+  spawns: AcceptedSessionSpawn[] = acceptedSessionSpawns,
+): EmbeddedAgentRunResult {
+  return { acceptedSessionSpawns: spawns, meta: { durationMs: 1, ...meta } };
 }
 const settlement = {
   requesterSessionKey: requester.sessionKey,
@@ -26,6 +33,14 @@ const settlement = {
   acceptedSessionSpawns,
   assertCurrent: expect.any(Function),
 };
+function expectSettled(
+  requesterYielded: boolean,
+  spawns: AcceptedSessionSpawn[] = settlement.acceptedSessionSpawns,
+) {
+  expect(registry.settle.mock.calls).toEqual([
+    [{ ...settlement, acceptedSessionSpawns: spawns, requesterYielded }],
+  ]);
+}
 function createAdmission(assertSourceCurrent?: () => void) {
   const admission = prepareAdmission({}, requester.runId, "main", "test", assertSourceCurrent);
   onTestFinished(() => admission.close());
@@ -82,16 +97,56 @@ it.each([
 
 it("transfers producer-owned completion after a partial harness receipt", async () => {
   const params = await admit();
-  const result: EmbeddedAgentRunResult = {
-    acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
-    meta: { durationMs: 1, yielded: true },
-  };
-
+  const result = makeResult({ yielded: true }, [
+    { runId: "child", childSessionKey: "agent:main:subagent:child" },
+  ]);
   await settleRequesterRun(params, result, assertCurrent);
-
-  expect(registry.settle.mock.calls).toEqual([[{ ...settlement, requesterYielded: true }]]);
+  expectSettled(true);
   expect(result.requesterContinuationSettled).toBe(true);
 });
+
+it("keeps confirmed cancellations retired when a stale harness receipt is settled", async () => {
+  const params = await admit();
+  const cancelled = acceptedSessionSpawns[0];
+  const replacement = {
+    runId: "replacement",
+    childSessionKey: "agent:main:subagent:replacement",
+    expectsCompletionMessage: true,
+  };
+  retireAcceptedSessionSpawnCompletionForRun(
+    params.preparedRunAdmission.operationalRunInstance,
+    cancelled,
+  );
+  const result = makeResult({ yielded: true }, [cancelled, replacement]);
+  await settleRequesterRun(params, result, assertCurrent);
+  expectSettled(true, [{ ...cancelled, expectsCompletionMessage: false }, replacement]);
+  expect(result.requesterContinuationSettled).toBe(true);
+  expect(cancelled.expectsCompletionMessage).toBe(true);
+});
+
+it.each(["another run instance", "another child session", "unknown run"] as const)(
+  "preserves the required completion when cancellation names %s",
+  async (target) => {
+    const params = await admit();
+    const other = createAdmission();
+    retireAcceptedSessionSpawnCompletionForRun(
+      target === "another run instance"
+        ? other.operationalRunInstance
+        : params.preparedRunAdmission.operationalRunInstance,
+      {
+        ...acceptedSessionSpawns[0],
+        ...(target === "another child session"
+          ? { childSessionKey: "agent:main:subagent:other" }
+          : {}),
+        ...(target === "unknown run" ? { runId: "unknown" } : {}),
+      },
+    );
+
+    await settleRequesterRun(params, makeResult({ yielded: true }), assertCurrent);
+
+    expectSettled(true);
+  },
+);
 
 it.each(["active", "closed", "replaced", "source-revoked", "cancelled"] as const)(
   "releases failed requester receipts only for the current operational owner (%s)",
@@ -122,7 +177,7 @@ it.each(["active", "closed", "replaced", "source-revoked", "cancelled"] as const
       new Error("provider failed"),
     );
     if (owner === "active") {
-      expect(registry.settle.mock.calls).toEqual([[{ ...settlement, requesterYielded: false }]]);
+      expectSettled(false);
     } else {
       expect(registry.settle).not.toHaveBeenCalled();
     }

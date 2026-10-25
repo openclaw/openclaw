@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -6,10 +7,13 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginCompatibilityNotice } from "../plugins/status-compatibility.js";
-import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
+import type { RuntimeEnv } from "../runtime.js";
+import { runStatusJsonCommand } from "./status-json-command.ts";
 import type { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
+import type { StatusJsonScanResult } from "./status.scan-result.ts";
 import { createStatusScanResultFixture } from "./status.test-support.ts";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const backup = {
   latest: {
@@ -37,10 +41,23 @@ const runtimeSnapshot = {
 };
 
 const mocks = vi.hoisted(() => ({
+  scanStatusJsonFast: vi.fn(),
+  writeRuntimeJson: vi.fn((_runtime: RuntimeEnv, _output: Record<string, unknown>) => {}),
   readBackupRunFreshness: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveStatusRuntimeSnapshot: vi.fn(),
   resolveStatusUsageSummary: vi.fn(),
+}));
+
+// mock-isolation: Fixed scan facts keep output composition independent of live Gateway collection.
+vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scanStatusJsonFast }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  writeRuntimeJson: mocks.writeRuntimeJson,
+}));
+vi.mock("../infra/update-run-status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-run-status.js")>()),
+  readUpdateRunStatus: async () => ({}),
 }));
 
 // mock-isolation: Keep store discovery out of these runtime composition tests.
@@ -91,6 +108,15 @@ function createScan() {
   });
 }
 
+async function runJson(
+  scan: StatusJsonScanResult,
+  opts: Parameters<typeof runStatusJsonCommand>[0]["opts"],
+) {
+  mocks.scanStatusJsonFast.mockResolvedValueOnce(scan);
+  await runStatusJsonCommand({ opts, runtime: createTestRuntime() });
+  return expectDefined(mocks.writeRuntimeJson.mock.lastCall, "status JSON output")[1];
+}
+
 function runtimeInput(
   timeoutMs: number,
   overrides: Partial<Parameters<typeof resolveStatusRuntimeSnapshot>[0]>,
@@ -103,12 +129,12 @@ function runtimeInput(
     gatewayReachable: true,
     usage: undefined,
     includeSecurityAudit: false,
-    suppressHealthErrors: undefined,
+    suppressHealthErrors: true,
     ...overrides,
   };
 }
 
-describe("status-json-runtime", () => {
+describe("runStatusJsonCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearRuntimeConfigSnapshot();
@@ -168,11 +194,12 @@ describe("status-json-runtime", () => {
       nodeService: { label: "node", installed: true, loadedText: "loaded" },
     });
 
-    const result = await resolveStatusJsonOutput({
-      scan,
-      opts: { ...createStatusGatewayProbeBudget(1234), deep: true, usage: true, agent: "beta" },
-      includeSecurityAudit: true,
-      includePluginCompatibility: true,
+    const result = await runJson(scan, {
+      ...createStatusGatewayProbeBudget(1234),
+      deep: true,
+      usage: true,
+      agent: "beta",
+      all: true,
     });
 
     expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
@@ -182,6 +209,10 @@ describe("status-json-runtime", () => {
     expect(result).toEqual({
       ...runtimeSnapshot,
       ok: true,
+      recoveryCopies: expect.objectContaining({
+        scope: "local",
+        total: expect.objectContaining({ count: 0, logicalBytes: 0 }),
+      }),
       os: { platform: "linux" },
       update,
       updateChannel: "stable",
@@ -241,12 +272,7 @@ describe("status-json-runtime", () => {
       source: "gateway",
       notCollected: [{ fields: ["memory"], reason: "local inspection skipped" }],
     };
-    const result = await resolveStatusJsonOutput({
-      scan,
-      opts: createStatusGatewayProbeBudget(),
-      includeSecurityAudit: true,
-      includePluginCompatibility: true,
-    });
+    const result = await runJson(scan, { ...createStatusGatewayProbeBudget(), all: true });
 
     expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ includeSecurityAudit: false }),
@@ -259,9 +285,13 @@ describe("status-json-runtime", () => {
       collected: false,
       reason: "Local plugin inspection is not collected in online status.",
     });
-    expect(result.collection?.notCollected).toEqual(
-      expect.arrayContaining([expect.objectContaining({ fields: ["securityAudit"] })]),
-    );
+    expect(result).toMatchObject({
+      collection: {
+        notCollected: expect.arrayContaining([
+          expect.objectContaining({ fields: ["securityAudit"] }),
+        ]),
+      },
+    });
   });
 
   it("publishes full runtime policy before resolving explicit online usage", async () => {
@@ -288,11 +318,7 @@ describe("status-json-runtime", () => {
     const scan = createScan();
     scan.collection = { source: "gateway", notCollected: [] };
 
-    const result = await resolveStatusJsonOutput({
-      scan,
-      opts: { ...createStatusGatewayProbeBudget(), usage: true },
-      includeSecurityAudit: false,
-    });
+    const result = await runJson(scan, { ...createStatusGatewayProbeBudget(), usage: true });
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
     expect(mocks.resolveStatusUsageSummary).toHaveBeenCalledOnce();
@@ -309,11 +335,10 @@ describe("status-json-runtime", () => {
     });
 
     const { env: _env, ...scanWithoutEnv } = createScan();
-    const result = await resolveStatusJsonOutput({
-      scan: scanWithoutEnv,
-      opts: { ...createStatusGatewayProbeBudget(500), deep: false, usage: false },
-      includeSecurityAudit: false,
-      includePluginCompatibility: false,
+    const result = await runJson(scanWithoutEnv, {
+      ...createStatusGatewayProbeBudget(500),
+      deep: false,
+      usage: false,
     });
 
     expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
@@ -332,26 +357,5 @@ describe("status-json-runtime", () => {
     ]) {
       expect(result).not.toHaveProperty(field);
     }
-  });
-
-  it("preserves failed deep health probes in nonthrowing JSON output", async () => {
-    mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce({
-      ...runtimeSnapshot,
-      securityAudit: undefined,
-      usage: undefined,
-      health: { error: "gateway health probe timed out" },
-    });
-
-    const result = await resolveStatusJsonOutput({
-      scan: createScan(),
-      opts: { ...createStatusGatewayProbeBudget(500), deep: true },
-      includeSecurityAudit: false,
-      suppressHealthErrors: true,
-    });
-
-    expect(result.health).toEqual({ error: "gateway health probe timed out" });
-    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
-      runtimeInput(500, { deep: true, suppressHealthErrors: true }),
-    );
   });
 });

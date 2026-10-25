@@ -12,6 +12,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { board } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
@@ -590,12 +591,7 @@ suite.define(() => {
       sessionKey,
       featureMethods: ["board.get", "chat.history", "chat.metadata", "chat.startup"],
       methodResponses: {
-        "board.get": {
-          sessionKey,
-          revision: 1,
-          tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-          widgets: [],
-        },
+        "board.get": board(sessionKey),
       },
       historyMessages: [
         ...transcriptPrefix,

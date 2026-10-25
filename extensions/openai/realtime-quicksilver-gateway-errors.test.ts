@@ -1,57 +1,24 @@
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { openAIRealtimeHost } from "./realtime-host.js";
-import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
-import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
+import { createGatewayHarness } from "./realtime-quicksilver-gateway.test-support.js";
 import { emitSideband, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
 
 const OPAQUE_MODEL = "gpt-live-test-canary";
 const SENSITIVE_DETAILS = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
+const rejection = `provider rejected ${OPAQUE_MODEL} ${SENSITIVE_DETAILS.join(" ")}`;
+const relayError = { message: "OpenAI GPT-Live gateway relay failed", name: "Error" };
 
 function createDirectBridge(params?: {
   socketFactory?: () => FakeSocket;
   resolveAuth?: () => Promise<{ type: "api-key"; token: string }>;
 }) {
-  let socket: FakeSocket | undefined;
-  const logger = { debug: vi.fn(), warn: vi.fn() };
-  const onClose = vi.fn();
-  const onError = vi.fn();
-  const bridge = new OpenAIQuicksilverGatewayBridge(
-    {
-      providerConfig: {},
-      model: OPAQUE_MODEL,
-      voice: "marin",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onClose,
-      onError,
-      runAgentConsult: vi.fn(async () => ({ text: "done" })),
-      logger,
-      resolveAuth:
-        params?.resolveAuth ??
-        vi.fn(async () => ({
-          type: "api-key" as const,
-          token: "platform-key",
-        })),
-      mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
-        socket = params?.socketFactory?.() ?? new FakeSocket();
-        return socket;
-      }),
-    },
-    openAIRealtimeHost,
-  );
-  return {
-    bridge,
-    logger,
-    onClose,
-    onError,
-    readSocket: () => {
-      if (!socket) {
-        throw new Error("expected direct socket");
-      }
-      return socket;
-    },
-  };
+  return createGatewayHarness({
+    model: OPAQUE_MODEL,
+    voice: "marin",
+    audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+    socketFactory: params?.socketFactory,
+    resolveAuth: params?.resolveAuth ?? (async () => ({ type: "api-key", token: "platform-key" })),
+  });
 }
 
 function expectNoPrivateDetail(harness: ReturnType<typeof createDirectBridge>): void {
@@ -92,9 +59,7 @@ describe("GPT-Live gateway relay error projection", () => {
       socketFactory: () => {
         const socket = new FakeSocket("manual");
         queueMicrotask(() => {
-          const error = new Error(
-            `provider rejected ${OPAQUE_MODEL} ${SENSITIVE_DETAILS.join(" ")}`,
-          );
+          const error = new Error(rejection);
           error.name = `Provider${OPAQUE_MODEL}`;
           socket.readyState = 1;
           socket.emit("open");
@@ -107,10 +72,7 @@ describe("GPT-Live gateway relay error projection", () => {
     const error = await harness.bridge.connect().catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(Error);
-    expect(error).toMatchObject({
-      message: "OpenAI GPT-Live gateway relay failed",
-      name: "Error",
-    });
+    expect(error).toMatchObject(relayError);
     expect(harness.onError).not.toHaveBeenCalled();
     expectNoPrivateDetail(harness);
   });
@@ -120,39 +82,22 @@ describe("GPT-Live gateway relay error projection", () => {
     async (terminalEvent) => {
       const harness = createDirectBridge();
       const connection = harness.bridge.connect();
-      await vi.waitFor(() => expect(harness.readSocket().readyState).toBe(1));
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      emitSideband(harness.readSocket(), {
+      await vi.waitFor(() => expect(harness.getSocket().readyState).toBe(1));
+      await nextEventLoopTurn();
+      emitSideband(harness.getSocket(), {
         type: "session.started",
         session: { expires_at: Math.floor(Date.now() / 1000) + 60 },
       });
       await connection;
 
       if (terminalEvent === "error") {
-        harness
-          .readSocket()
-          .emit(
-            "error",
-            new Error(`provider rejected ${OPAQUE_MODEL} ${SENSITIVE_DETAILS.join(" ")}`),
-          );
+        harness.getSocket().emit("error", new Error(rejection));
       } else {
-        harness
-          .readSocket()
-          .emit(
-            "close",
-            1011,
-            Buffer.from(`provider rejected ${OPAQUE_MODEL} ${SENSITIVE_DETAILS.join(" ")}`),
-          );
+        harness.getSocket().emit("close", 1011, Buffer.from(rejection));
       }
 
       expect(harness.onError).toHaveBeenCalledOnce();
-      const reported = harness.onError.mock.calls[0]?.[0];
-      expect(reported).toMatchObject({
-        message: "OpenAI GPT-Live gateway relay failed",
-        name: "Error",
-      });
+      expect(harness.onError.mock.calls[0]?.[0]).toMatchObject(relayError);
       expect(harness.onClose).toHaveBeenCalledWith("error");
       expectNoPrivateDetail(harness);
     },

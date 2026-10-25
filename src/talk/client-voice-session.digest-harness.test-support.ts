@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -118,13 +118,6 @@ export function useClientVoiceDigestHarness() {
       }),
     recoverStale: (params: Partial<Parameters<typeof closeStaleClientVoiceSessions>[0]> = {}) =>
       closeStaleClientVoiceSessions({ agentId: "main", config: {}, ...params }),
-    expectRetained(this: void, pending?: 0) {
-      expect(clientVoiceSessionTesting.digestDeliverySnapshot()).toMatchObject({
-        active: 0,
-        retained: 1,
-        ...(pending === undefined ? {} : { pending }),
-      });
-    },
     recordEffect(this: void, runId: string, toolCallId: string) {
       emitTrustedDiagnosticEvent({
         type: "tool.execution.started",

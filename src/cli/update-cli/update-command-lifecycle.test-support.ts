@@ -3,6 +3,7 @@ import path from "node:path";
 import { aroundEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../../test/helpers/managed-handoff-isolation.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as handoffDatabase from "../../infra/update-managed-service-handoff-database.js";
@@ -16,36 +17,15 @@ import {
   withUpdateCommandExecutor,
   captureUpdateCommandExecutorAuthority,
 } from "./update-command-executor.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
-export const validConfigSnapshot = {
-  path: "/tmp/openclaw.json",
-  exists: true,
-  raw: "{}",
-  valid: true,
-  parsed: {},
-  config: {},
-  runtimeConfig: {},
-  sourceConfig: {},
-  resolved: {},
-  warnings: [],
-  issues: [],
-  legacyIssues: [],
-};
+export const validConfigSnapshot = createTestConfigSnapshot({}, {});
 
-export const successfulPluginUpdate = {
-  status: "ok" as const,
+export const successfulPluginUpdate = createPostCorePluginUpdateResult({
+  status: "ok",
   changed: true,
-  sync: {
-    changed: false,
-    switchedToBundled: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
-  },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
   warnings: [],
-};
+});
 
 export function expectLifecycleBoundary(events: readonly string[], preLeaseEvent: string): void {
   const preLeaseIndex = events.indexOf(`${preLeaseEvent}:false`);
@@ -55,9 +35,9 @@ export function expectLifecycleBoundary(events: readonly string[], preLeaseEvent
     (event, index) => index > preLeaseIndex && event === "read-config:true",
   );
   expect(authoritativeReadIndex).toBeGreaterThan(preLeaseIndex);
-  for (const event of ["prepare-config:true", "installed-records:true", "plugin-update:true"]) {
-    expect(events).toContain(event);
-  }
+  expect(events).toEqual(
+    expect.arrayContaining(["prepare-config:true", "installed-records:true", "plugin-update:true"]),
+  );
   expect(events.indexOf("plugin-update:true")).toBeGreaterThan(authoritativeReadIndex);
 }
 
@@ -84,6 +64,12 @@ export async function prepareFinalizationPackage(root: string): Promise<void> {
 export function registerPrivateHandoffBindingTests() {
   const dirs = createTempDirTracker();
   let binding: ReturnType<typeof createManagedHandoffTestBinding>;
+  const bindPath =
+    <Args extends [string, ...unknown[]], Result>(open: (...args: Args) => Result) =>
+    (...args: Args): Result => {
+      binding.assertPath(args[0]);
+      return open(...args);
+    };
   aroundEach(async (runTest) => {
     binding = createManagedHandoffTestBinding(dirs.make("update-lifecycle-control-"));
     const resolveTemp = vi
@@ -92,20 +78,14 @@ export function registerPrivateHandoffBindingTests() {
         binding.assertPath();
         return binding.directory;
       });
-    const createDatabase = handoffDatabase.createManagedHandoffLeaseDatabase;
+    const createDatabase = bindPath(handoffDatabase.createManagedHandoffLeaseDatabase);
     const database = vi
       .spyOn(handoffDatabase, "createManagedHandoffLeaseDatabase")
-      .mockImplementation((...args) => {
-        binding.assertPath(args[0]);
-        return createDatabase(...args);
-      });
-    const prepareDatabase = handoffDatabase.prepareManagedHandoffLeaseDatabase;
+      .mockImplementation(createDatabase);
+    const prepareDatabase = bindPath(handoffDatabase.prepareManagedHandoffLeaseDatabase);
     const preparedDatabase = vi
       .spyOn(handoffDatabase, "prepareManagedHandoffLeaseDatabase")
-      .mockImplementation((...args) => {
-        binding.assertPath(args[0]);
-        return prepareDatabase(...args);
-      });
+      .mockImplementation(prepareDatabase);
     try {
       expect(resolveManagedUpdateLeaseDatabasePath()).toBe(binding.databasePath);
       await runTest();

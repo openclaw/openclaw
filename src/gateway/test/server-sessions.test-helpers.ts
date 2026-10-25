@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { registerAcpSessionResetControls } from "../../acp/control-plane/manager.reset-controls.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
@@ -122,7 +123,7 @@ const sessionCleanupMocks = vi.hoisted(() => ({
           .filter((key) => key.length > 0),
       ),
     );
-    return { followupCleared: 0, keys: clearedKeys };
+    return clearedKeys;
   }),
   stopSessionResetSubagents: vi.fn(
     async (params: { beforeKill?: () => boolean | Promise<boolean> }) => {
@@ -608,8 +609,10 @@ export async function directSessionReq<TPayload = unknown>(
     throw new Error(`missing sessions handler for ${method}`);
   }
   const contextKey = opts?.context ?? defaultDirectContext;
-  const existingContext = directContexts.get(contextKey);
+  const context = directContexts.get(contextKey) ?? createDirectChatContext();
   const contextFields: GatewayRequestContext = createDirectChatContext({
+    // Later requests must not orphan active reply buffers and their release callbacks.
+    chatRunState: context.chatRunState,
     broadcastToConnIds: vi.fn(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
@@ -620,7 +623,6 @@ export async function directSessionReq<TPayload = unknown>(
     getRuntimeConfig,
     ...opts?.context,
   });
-  const context = existingContext ?? createDirectChatContext();
   Object.assign(context, contextFields);
   directContexts.set(contextKey, context);
   if (
@@ -702,3 +704,22 @@ export {
   browserSessionTabMocks,
   bundleMcpRuntimeMocks,
 };
+
+export function createRepositoryDeviceHarness(failureMessage: string): AgentHarness {
+  return {
+    id: "repository-device",
+    label: "Repository device",
+    autoSelection: { providerIds: ["repository-provider"] },
+    supports: () => ({ supported: true }),
+    cloudPlacement: {
+      mode: "remote-exec",
+      devicePlacement: {
+        requiredNodeCommands: ["runtime.repository.v1"],
+        consumesWorkerSlot: false,
+      },
+    },
+    runAttempt: async () => {
+      throw new Error(failureMessage);
+    },
+  };
+}

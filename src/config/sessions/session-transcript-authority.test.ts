@@ -14,13 +14,21 @@ import { emitUserProfilesChanged } from "../../state/user-profile-events.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { readTranscriptContextVersionInTransaction as readVersion } from "./session-accessor.sqlite-transcript-state.js";
+import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
+import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  readTranscriptContextVersionInTransaction as readVersion,
+  touchTranscriptMutationInTransaction,
+} from "./session-accessor.sqlite-transcript-state.js";
+import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
   readPreparedSessionTranscriptChange,
+  readFinalSessionTranscriptProjection,
   publishUnchangedSessionTranscriptAuthority,
 } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 import { withTranscriptDatabase } from "./session-transcript-fixture.test-support.js";
+import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
 
 const rollbackFault = useSqliteWorkerFault([
   {
@@ -133,6 +141,17 @@ it.each(["native", "worker"] as const)(
               persist: manager.persistAsync.bind(manager),
             };
       const values = observe(scope.sessionKey);
+      const ready: SessionTranscriptAuthority[] = [];
+      listen(
+        scope.sessionKey,
+        (change) => {
+          const projection = readFinalSessionTranscriptProjection(change);
+          if (projection) {
+            ready.push(projection);
+          }
+        },
+        true,
+      );
       const invoke = async (write: () => unknown, lastMessagePreview?: string | null) => {
         const count = values.length;
         const result = write();
@@ -148,6 +167,7 @@ it.each(["native", "worker"] as const)(
         expect(values.at(-1)?.lastMessagePreview).toBe(lastMessagePreview);
       };
       await invoke(() => writer.appendMessage(message("seed", 1)), "seed");
+      expect(ready.at(-1)).toMatchObject({ sessionId: scope.sessionId, projectionReady: true });
       const seed = manager.getLeafId()!;
       await invoke(() => writer.appendMessageWithTranscriptAnchor(message("second", 2)), "second");
       await invoke(() => writer.appendCustomEntry("authority", { synthetic: true }));
@@ -444,3 +464,49 @@ it("keeps captured context current after a granted worker append rolls back at C
       }),
     ).resolves.toBe("still-current");
   }));
+
+it.each(["ready", "dirty", "rollback"] as const)(
+  "publishes only final committed projection readiness: %s",
+  (outcome) =>
+    withNativeSeeded(`projection-${outcome}`, async ({ database, scope, state }) => {
+      const ready: SessionTranscriptAuthority[] = [];
+      listen(
+        scope.sessionKey,
+        (change) => {
+          const projection = readFinalSessionTranscriptProjection(change);
+          if (projection) {
+            ready.push(projection);
+          }
+        },
+        true,
+      );
+      const events = loadTranscriptEventsFromDatabase(database, scope.sessionId);
+      const write = () =>
+        writeTransaction(
+          (current) => {
+            replaceSqliteTranscriptEventsInTransaction(
+              current,
+              resolveSqliteTranscriptScope(scope),
+              events,
+            );
+            if (outcome === "dirty") {
+              markSessionTranscriptIndexDirtyInTransaction(current.db, scope.sessionId);
+              touchTranscriptMutationInTransaction(current, scope.sessionId);
+            }
+            if (outcome === "rollback") {
+              throw new Error("Synthetic projection rollback");
+            }
+            expect(ready).toEqual([]);
+          },
+          { agentId: scope.agentId, path: database.path, env: state.env },
+        );
+      if (outcome === "rollback") {
+        expect(write).toThrow("Synthetic projection rollback");
+      } else {
+        write();
+      }
+      expect(ready).toMatchObject(
+        outcome === "ready" ? [{ sessionId: scope.sessionId, projectionReady: true }] : [],
+      );
+    }),
+);

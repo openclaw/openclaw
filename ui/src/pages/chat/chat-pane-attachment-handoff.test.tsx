@@ -6,10 +6,12 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
@@ -40,12 +42,9 @@ import { createChatAttachmentInputHandle } from "./components/chat-attachment-in
 import { ChatAttachmentInputs } from "./components/chat-attachment-inputs.tsx";
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
-import {
-  ChatComposerPersistence,
-  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
-  loadChatComposerState,
-  storedChatOutboxScopeKey,
-} from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
+import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence-feedback.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import {
   activeQueuedMessageEdit,
   beginQueuedMessageEdit,
@@ -225,7 +224,7 @@ describe("cross-region Home composer ownership", () => {
 
   it.each(["complete", "remove"] as const)(
     "retains pending file custody through handoffs and source disposal (%s)",
-    (outcome) => {
+    async (outcome) => {
       const fixture = home();
       const { context, owner, page } = fixture;
       page.edit("Keep this draft and file");
@@ -266,7 +265,9 @@ describe("cross-region Home composer ownership", () => {
         controls: dock.controller.attachmentInputProps(dock.current),
         showInputs: false,
       });
-      expect(container.querySelector('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull();
+      await waitForSolid(() =>
+        expect(container.querySelector('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull(),
+      );
 
       dock.view.presented = false;
       page.view.presented = true;

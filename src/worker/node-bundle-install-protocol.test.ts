@@ -38,6 +38,14 @@ describe("node worker bundle install protocol", () => {
     ).toThrow("INVALID_REQUEST");
   });
 
+  it("accepts only the negotiated prefetch mode", () => {
+    const prefetch = { ...input, prefetch: 1 };
+    expect(parseNodeWorkerBundleInstallInput(JSON.stringify(prefetch))).toEqual(prefetch);
+    expect(() =>
+      parseNodeWorkerBundleInstallInput(JSON.stringify({ ...input, prefetch: 2 })),
+    ).toThrow("INVALID_REQUEST");
+  });
+
   it.each([
     { ...input, extra: true },
     { ...input, gatewayNamespace: "../escape" },

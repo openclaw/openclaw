@@ -29,6 +29,7 @@ function inspectionConfig(plugins: { id: string; file: string }[], contextEngine
 export function createInspectionFixture(options?: {
   registration?: "throw" | "async-resolve" | "async-reject" | "thenable" | "tracked";
   pauseDisposal?: boolean;
+  resourceProvider?: boolean;
   disposalFailure?: boolean;
   contextEngine?: boolean;
   capturedDisposal?: "async-context" | "work-tracker";
@@ -134,6 +135,15 @@ module.exports = {
         : () => track(dispose);
     }
     api.registerRuntimeLifecycle(lifecycle);
+    if (${options?.resourceProvider === true}) {
+      api.registerProvider({
+        id: "inspection-resource", label: "Inspection resource", auth: [],
+        normalizeModelId() {
+          state.captured.read = database.prepare("SELECT 42 AS value").get();
+          return String(state.captured.read.value);
+        },
+      });
+    }
     if (${options?.contextEngine === true}) {
       api.registerContextEngine(${JSON.stringify(id)}, () => {
         state.factoryCalls++;

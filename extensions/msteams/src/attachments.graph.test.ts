@@ -7,8 +7,15 @@ const installAttachmentTestTransport = useAttachmentTestTransport();
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
-import { buildMSTeamsGraphMessageUrl, resolveMSTeamsAdvertisedMedia } from "./attachments.js";
-import { downloadMSTeamsGraphMedia as downloadGraphMedia } from "./attachments/graph.js";
+import {
+  buildMSTeamsGraphMessageUrl,
+  downloadMSTeamsGraphMedia as downloadGraphMedia,
+} from "./attachments/graph.js";
+import {
+  extractMSTeamsHtmlAttachmentIds,
+  resolveMSTeamsAdvertisedMedia,
+  summarizeMSTeamsHtmlAttachments,
+} from "./attachments/html.js";
 import { encodeGraphShareId } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
@@ -171,25 +178,17 @@ describe("msteams graph attachments", () => {
     const tokenProvider = createTokenProvider("top-secret-token");
     const escapedUrl = "https://example.com/collect";
     const seen: Array<{ url: string; auth: string }> = [];
-    const referenceAttachment = createReferenceAttachment();
+    const graphFetch = createGraphFetchMock(
+      buildDefaultShareReferenceGraphFetchOptions({
+        onShareRequest: () => createRedirectResponse(escapedUrl),
+        onUnhandled: (url) => (url === escapedUrl ? createPdfResponse() : undefined),
+      }),
+    );
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = resolveRequestUrl(input);
       const auth = new Headers(init?.headers).get("Authorization") ?? "";
       seen.push({ url, auth });
-
-      if (url === DEFAULT_MESSAGE_URL) {
-        return createJsonResponse({ attachments: [referenceAttachment] });
-      }
-      if (url === `${DEFAULT_MESSAGE_URL}/hostedContents`) {
-        return createGraphCollectionResponse([]);
-      }
-      if (url.startsWith(GRAPH_SHARES_URL_PREFIX)) {
-        return createRedirectResponse(escapedUrl);
-      }
-      if (url === escapedUrl) {
-        return createPdfResponse();
-      }
-      return createNotFoundResponse();
+      return graphFetch(input);
     });
 
     const media = await downloadMSTeamsGraphMedia({
@@ -317,6 +316,30 @@ const GRAPH_MESSAGE_URL_CASES = [
 ];
 
 describe("msteams attachment helpers", () => {
+  it("keeps the complete recovery ID list separate from the capped diagnostic summary", () => {
+    const attachments = [
+      createHtmlAttachment('<attachment id=" one "><attachment id="two"><attachment id="three">'),
+      createHtmlAttachment(
+        '<attachment id="two"><attachment id="four"><attachment id="five"><attachment id="six"><attachment id=" ">',
+      ),
+    ];
+    expect(summarizeMSTeamsHtmlAttachments(attachments)?.attachmentIds).toEqual([
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+    ]);
+    expect(extractMSTeamsHtmlAttachmentIds(attachments)).toEqual([
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+      "six",
+    ]);
+  });
+
   describe("resolveMSTeamsAdvertisedMedia", () => {
     it.each(ADVERTISED_MEDIA_CASES)("$label", ({ attachments, expected }) => {
       expect(resolveMSTeamsAdvertisedMedia(attachments)).toEqual(expected);

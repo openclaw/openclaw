@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
@@ -42,7 +42,6 @@ import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js
 import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import {
-  HOOK_FAN_OUT_RESPONSE_DEADLINE_MS,
   HookWakeUnavailableError,
   sendAgentResult,
   sendFanOutResult,
@@ -57,8 +56,6 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 // no idempotency key; item identity lives in the dispatch-scope fingerprint.
 const HOOK_FAN_OUT_DERIVED_IDEMPOTENCY = "hook-fanout-item";
 const HOOK_CONFIG_CHANGED_ERROR = "hook configuration changed; retry request";
-
-const hashReplay = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
@@ -99,12 +96,9 @@ export function createHooksRequestHandler(
     port: number;
     logHooks: ReturnType<typeof createSubsystemLogger>;
     getClientIpConfig?: () => HookClientIpConfig;
-    fanoutResponseDeadlineMs?: number;
   } & HookDispatchers,
 ): HooksRequestHandler {
   const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
-  const fanoutResponseDeadlineMs =
-    opts.fanoutResponseDeadlineMs ?? HOOK_FAN_OUT_RESPONSE_DEADLINE_MS;
   const hookReplayCache = new Map<string, HookReplayEntry>();
   const hookAuthLimiter = createGatewayAuthRateLimiter(
     {
@@ -154,7 +148,7 @@ export function createHooksRequestHandler(
       pathKey: params.pathKey,
       dispatchScope: params.dispatchScope,
     });
-    return `${hashReplay(params.token ?? "")}:${hashReplay(scope)}:${hashReplay(idem)}`;
+    return `${sha256Hex(params.token ?? "")}:${sha256Hex(scope)}:${sha256Hex(idem)}`;
   };
 
   const resolveHookReplay = (key: string | undefined) => {
@@ -699,7 +693,6 @@ export function createHooksRequestHandler(
           }
           const settled = await settleFanOutDispatches(
             dispatches.map((dispatch) => Promise.resolve(dispatch())),
-            fanoutResponseDeadlineMs,
           );
           sendFanOutResult(res, settled, wakeResult);
           return true;

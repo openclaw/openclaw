@@ -6,9 +6,9 @@ import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
 import {
   checkExportScan,
-  parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
+import { readUpdateCompatibilityInventory } from "../../scripts/lib/update-compat-chunks.mts";
 import { vitestWorkerBuildEntries } from "../../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 
@@ -33,6 +33,15 @@ describe("check-deadcode-exports", () => {
       "config/knip.config.ts!",
       "config/knip.all-exports.config.ts!",
       "config/knip.scripts-exports.config.ts!",
+      "scripts/generate-runtime-script-assets.mjs!",
+      "scripts/generate-static-validators.mts!",
+      "scripts/perf/cron-delivery-gateway-entry.ts!",
+      "scripts/perf/plugin-policy-read-measure.mjs!",
+      "scripts/perf/prompt-cache-observation-measure.ts!",
+      "scripts/perf/reconnect-read-wave-measure.ts!",
+      "scripts/perf/session-actor-retention-measure.ts!",
+      "scripts/perf/session-row-churn-probe.ts!",
+      "tsdown.config.ts!",
     ]);
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
     expectEntries(fullRootWorkspace.entry, [
@@ -41,7 +50,11 @@ describe("check-deadcode-exports", () => {
       "scripts/crabbox-wrapper.mts!",
       "scripts/check-openclaw-package-tarball.mjs!",
       "scripts/check-openclaw-package-tarball.mts!",
+      "test/scripts/service-relay-artifact.test-support.mjs!",
     ]);
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "test/scripts/service-relay-artifact.test-support.mjs!",
+    );
     for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
       for (const directory of ["src", "scripts", "test"]) {
         expect(isEntry(fullRootWorkspace.entry, `${directory}/x.test.${extension}`)).toBe(true);
@@ -96,6 +109,20 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
       "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
     );
+    expect(scriptRootWorkspace.vitest).toEqual({
+      config: [
+        "scripts/control-ui-parity/vitest.config.ts",
+        "scripts/control-ui-retention/vitest.config.ts",
+      ],
+    });
+    expect(knipConfig.workspaces["."].vitest).toEqual({
+      config: [
+        "vitest.config.{js,mjs,ts,cjs,mts,cts}",
+        "vitest.{workspace,projects}.{js,mjs,ts,cjs,mts,cts,json}",
+        "scripts/control-ui-parity/vitest.config.ts",
+        "scripts/control-ui-retention/vitest.config.ts",
+      ],
+    });
   });
 
   it.each([
@@ -124,6 +151,21 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
+  it("models named Solid lazy consumers without retaining a deleted loader", () => {
+    const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  export: "ShellSettingsSidebar",
+});`;
+    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
+    );
+    read.mockReturnValue("const SettingsSidebar = null;");
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "ShellSettingsSidebar",
+    );
+  });
+
   it("models only Vite runner members consumed by the build", () => {
     const source = `const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
   path.join(here, "src/app-route-paths.ts"), options);
@@ -140,7 +182,161 @@ const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
     expect(compile(source, "config/unrelated.mjs")).toBe(source);
   });
 
-  it("parses all compact export sections and expands symbol lists", () => {
+  it("models the locale catalogue members consumed through Vite's runner", () => {
+    const source = `const { module, dependencies } = await runnerImport<
+  typeof import("../../scripts/lib/control-ui-i18n-catalog.ts")
+>(sourceCatalogPath, options);
+const startup = module.loadControlUiStartupCatalog();
+const catalog = module.loadControlUiSourceCatalog();`;
+    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    expect(scriptRootWorkspace.entry).toContain("config/knip.config.ts!");
+    expect(scriptRootWorkspace.entry).toContain("config/knip-vite-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { loadControlUiStartupCatalog as __vite0_0, loadControlUiSourceCatalog as __vite0_1 } from "../scripts/lib/control-ui-i18n-catalog.ts";',
+    );
+    const withoutStartup = source.replace(
+      "const startup = module.loadControlUiStartupCatalog();",
+      "",
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue(withoutStartup);
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "loadControlUiStartupCatalog",
+    );
+  });
+
+  it("models ordinary UI Vite imports into the script workspace", () => {
+    const source = `import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";`;
+    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";',
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue("const config = {};");
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "isControlUiOptionalAsset",
+    );
+  });
+
+  it("models exact generated and module-hook named consumers", () => {
+    expect(knipConfig.workspaces["."].project).toContain("config/knip-dynamic-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(compiled).toContain(
+      'import { runtimeProcessDeployManifest as __dynamic0_0, runtimeProcessHelperManifest as __dynamic0_1, runtimeProcessWorkerDependencies as __dynamic0_2 } from "../src/infra/runtime-process-manifest.ts";',
+    );
+    expect(compiled).toContain(
+      'import { gatewayBenchTaskOperation as __dynamic1_0 } from "../scripts/lib/gateway-bench-worker-messages.ts";',
+    );
+    expect(compiled).toContain(
+      'import { fetchWithSsrFGuard as __dynamic2_0 } from "../extensions/team-reports/src/report-run.benchmark-fixtures.test-support.ts";',
+    );
+    expect(compiled).toContain(
+      'import { addDoctorLegacyIssues as __dynamic3_0 } from "../src/commands/doctor/shared/legacy-config-issues.js";',
+    );
+
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const source = readFileSync(file, options);
+      if (path.resolve(String(file)) === path.resolve("tsdown.config.ts")) {
+        return String(source).replace(
+          `import {
+  runtimeProcessDeployManifest,
+  runtimeProcessHelperManifest,
+  runtimeProcessWorkerDependencies,
+} from "./src/infra/runtime-process-manifest.ts";`,
+          "",
+        );
+      }
+      if (
+        path.resolve(String(file)) === path.resolve("scripts/lib/gateway-bench-worker-messages.ts")
+      ) {
+        return String(source).replace(
+          "import { gatewayBenchTaskOperation as benchmarkTaskOperation } from ${JSON.stringify(import.meta.url)};",
+          "",
+        );
+      }
+      if (
+        path.resolve(String(file)) === path.resolve("extensions/team-reports/src/sources/http.ts")
+      ) {
+        return String(source).replace(
+          'import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
+          "",
+        );
+      }
+      if (
+        path.resolve(String(file)) === path.resolve("src/commands/config-preflight-snapshot.ts")
+      ) {
+        return String(source).replaceAll(").addDoctorLegacyIssues", ").consumeLegacyIssues");
+      }
+      return source;
+    });
+    const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(withoutConsumers).not.toContain("runtimeProcessDeployManifest");
+    expect(withoutConsumers).not.toContain("runtimeProcessHelperManifest");
+    expect(withoutConsumers).not.toContain("runtimeProcessWorkerDependencies");
+    expect(withoutConsumers).not.toContain("gatewayBenchTaskOperation");
+    expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
+    expect(withoutConsumers).not.toContain("addDoctorLegacyIssues");
+  });
+
+  it("models retained updater named exports without fabricating private imports", () => {
+    const manifest = fs.readFileSync("package.json", "utf8");
+    const compile = knipConfig.compilers.json;
+    const compiled = compile(manifest, "package.json");
+    expect(compiled).toMatch(
+      /import \{ isPackageManagerUpdateMode as __updateCompatibilityConsumer\d+ \} from "\.\/src\/cli\/update-cli\/update-command-service-recovery\.ts";/u,
+    );
+    for (const [module, symbol] of [
+      ["src/cli/update-cli/update-command-package.ts", "readPackageUpdateIdentity"],
+      [
+        "src/infra/update-managed-service-handoff.ts",
+        "isCurrentManagedServiceUpdateHandoffProcess",
+      ],
+      ["src/infra/update-runner-git-target.ts", "readGitTargetSchemaVersions"],
+    ]) {
+      expect(
+        compiled
+          .split("\n")
+          .some(
+            (line) =>
+              line.startsWith(`import { ${symbol} as `) && line.endsWith(` from "./${module}";`),
+          ),
+      ).toBe(false);
+      expect(compiled).toContain(`from "./${module}";`);
+    }
+    const finishAliases = [
+      ...compiled.matchAll(
+        /import \{ finishUpdateRun as (__updateCompatibilityConsumer\d+) \} from "\.\/src\/infra\/update-run-(?:ledger|write)\.ts";/gu,
+      ),
+    ].map((match) => match[1]);
+    expect(finishAliases).toHaveLength(2);
+    expect(new Set(finishAliases).size).toBe(2);
+  });
+
+  it("rejects retained updater bindings that are neither exports nor real imports", () => {
+    const manifest = fs.readFileSync("package.json", "utf8");
+    const inventoryPath = path.resolve("scripts/lib/update-compat-inventory.json");
+    const inventory = structuredClone(readUpdateCompatibilityInventory(inventoryPath));
+    inventory.releases[0]!.chunks[0]!.exports.push({
+      exported: "missingUpdaterConsumer",
+      origin: {
+        module: "src/cli/update-cli/update-command-service-recovery.ts",
+        symbol: "missingUpdaterConsumer",
+      },
+    });
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      return path.resolve(String(file)) === inventoryPath
+        ? JSON.stringify(inventory)
+        : readFileSync(file, options);
+    });
+    expect(() => knipConfig.compilers.json(manifest, "package.json")).toThrow(
+      "Recorded updater binding src/cli/update-cli/update-command-service-recovery.ts:missingUpdaterConsumer is neither a named export nor an imported named binding",
+    );
+  });
+
+  it("rejects findings from every compact export section and expands symbol lists", () => {
     const output = [
       "Unused exports (2)\nsrc/b.ts: beta, alpha\n/tmp/outside.ts: noise\nC:\\tmp\\outside.ts: noise\nC:outside.ts: noise\n\\\\server\\share\\outside.ts: noise",
       "Unused exported types (1)\nextensions/example/src/types.ts: ExampleType",
@@ -150,7 +346,7 @@ const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
       "Unused exported namespace members (1)\nsrc/protocol.ts: Result (v2)",
       "Unused files (1)\nsrc/noise.ts: src/noise.ts",
     ].join("\n\n");
-    expect(parseKnipCompactUnusedExports(`\n${output}\n`)).toEqual([
+    const entries = [
       "extensions/example/src/types.ts: ExampleType",
       "packages/example/src/state.ts: Ready",
       "src/b.ts: alpha",
@@ -158,7 +354,12 @@ const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
       "src/namespace.ts: runtimeHelper",
       "src/namespace.ts: RuntimeType",
       "src/protocol.ts: Result (v2)",
-    ]);
+    ];
+    expect(checkExportScan("finding scan", `\n${output}\n`)).toEqual({
+      entries,
+      message: `finding scan:\nUnused exports are not allowed:\n${entries.map((entry) => `  ${entry}`).join("\n")}\nDelete the exports or model their real production consumers in Knip.`,
+      ok: false,
+    });
   });
 
   it.each([
@@ -192,18 +393,5 @@ Install workspace dependencies in-tree (pnpm install) — on delegated boxes the
 
   it("accepts clean export scan output unchanged", () => {
     expect(checkExportScan("clean scan", "")).toEqual({ entries: [], message: "", ok: true });
-  });
-
-  it("reports genuine export findings unchanged", () => {
-    expect(
-      checkExportScan("finding scan", "Unused exports (1)\nsrc/config/types.ts: TelegramConfig\n"),
-    ).toEqual({
-      entries: ["src/config/types.ts: TelegramConfig"],
-      message: `finding scan:
-Unused exports are not allowed:
-  src/config/types.ts: TelegramConfig
-Delete the exports or model their real production consumers in Knip.`,
-      ok: false,
-    });
   });
 });

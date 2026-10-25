@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   createPublicSessionRepresentationCache,
   type PublicSessionRepresentation,
+  type PublicSessionRepresentationKind,
 } from "./control-ui-public-session-cache.js";
 
 const PUBLIC_SESSION_RATE_WINDOW_MS = 60_000;
@@ -18,8 +20,8 @@ type RateWindow = {
   timestamps: number[];
 };
 
-type PublicSessionAdmissionResult =
-  | { kind: "ok"; value: PublicSessionRepresentation | null }
+type PublicSessionAdmissionResult<T> =
+  | { kind: "ok"; value: T }
   | { kind: "rate-limited"; retryAfterSeconds: number }
   | { kind: "unavailable" };
 
@@ -28,13 +30,16 @@ export type ControlUiPublicSessionRequestGate = {
   admitClient(
     clientKey: string,
   ): { kind: "ok" } | { kind: "rate-limited"; retryAfterSeconds: number };
-  run(params: {
+  run<T>(params: {
+    kind: PublicSessionRepresentationKind;
     publicationKey: string;
     sessionKey: string;
     requestKey: string;
     config: OpenClawConfig;
     work: () => Promise<string | Buffer | null>;
-  }): Promise<PublicSessionAdmissionResult>;
+    /** Return false only when the representation changed before the synchronous response frame. */
+    consume: (value: PublicSessionRepresentation | null) => T | false | Promise<T | false>;
+  }): Promise<PublicSessionAdmissionResult<T>>;
 };
 
 function admitRateWindow(
@@ -77,7 +82,10 @@ export function createControlUiPublicSessionRequestGate(): ControlUiPublicSessio
   const clientWindows = new Map<string, RateWindow>();
   const publicationWindows = new Map<string, RateWindow>();
   const activeByPublication = new Map<string, number>();
-  const inFlight = new Map<string, Promise<PublicSessionRepresentation | null | undefined>>();
+  const inFlight = new Map<
+    string,
+    { promise: Promise<PublicSessionRepresentation | null | undefined>; signal?: AbortSignal }
+  >();
   const cache = createPublicSessionRepresentationCache();
   let active = true;
   const configIds = new WeakMap<object, number>();
@@ -185,46 +193,79 @@ export function createControlUiPublicSessionRequestGate(): ControlUiPublicSessio
         };
       }
 
-      const inFlightKey = `${configId(params.config)}:${params.requestKey}`;
-      const cached = cache.get(inFlightKey);
-      if (cached) {
-        return { kind: "ok", value: cached };
-      }
-      const existing = inFlight.get(inFlightKey);
-      if (existing) {
-        const value = await existing;
-        return value === undefined ? { kind: "unavailable" } : { kind: "ok", value };
-      }
-      const build = cache.begin(inFlightKey, params.sessionKey);
-      const pending = (async () => {
-        const release = await acquire(params.publicationKey);
-        if (!release) {
-          build.cancel();
-          return undefined;
+      const inFlightKey = `${configId(params.config)}:${params.kind}:${params.requestKey}`;
+      const signal = getAsyncWorkSignal();
+      const prepare = async (): Promise<PublicSessionRepresentation | null | undefined> => {
+        const cached = cache.get(inFlightKey);
+        if (cached) {
+          return cached;
         }
-        try {
-          if (!build.isCurrent()) {
+        const existing = inFlight.get(inFlightKey);
+        if (existing) {
+          try {
+            return await existing.promise;
+          } catch (error) {
+            if (!existing.signal?.aborted || signal?.aborted) {
+              throw error;
+            }
+            // A disconnected initiator does not cancel the remaining readers.
+            return prepare();
+          }
+        }
+        const pending = (async () => {
+          const release = await acquire(params.publicationKey);
+          if (!release) {
             return undefined;
           }
-          const body = await params.work();
-          if (body === null) {
-            build.cancel();
-            return null;
+          try {
+            // Keep the admitted slot while committed changes supersede a render.
+            for (;;) {
+              if (!active) {
+                return undefined;
+              }
+              signal?.throwIfAborted();
+              const build = cache.begin(inFlightKey, params.sessionKey, params.kind);
+              try {
+                const body = await params.work();
+                if (body === null) {
+                  build.cancel();
+                  return null;
+                }
+                const representation = build.complete(body);
+                if (representation) {
+                  // Oversized results cannot enter this cache; rebuilding cannot make them fit.
+                  return representation.isCurrent() ? representation : undefined;
+                }
+              } catch (error) {
+                build.cancel();
+                throw error;
+              }
+            }
+          } finally {
+            release();
           }
-          return build.complete(body);
-        } catch (error) {
-          build.cancel();
-          throw error;
+        })();
+        inFlight.set(inFlightKey, { promise: pending, signal });
+        try {
+          return await pending;
         } finally {
-          release();
+          inFlight.delete(inFlightKey);
         }
-      })();
-      inFlight.set(inFlightKey, pending);
-      try {
-        const value = await pending;
-        return value === undefined ? { kind: "unavailable" } : { kind: "ok", value };
-      } finally {
-        inFlight.delete(inFlightKey);
+      };
+      for (;;) {
+        if (!active) {
+          return { kind: "unavailable" };
+        }
+        signal?.throwIfAborted();
+        const representation = await prepare();
+        if (!active || representation === undefined) {
+          return { kind: "unavailable" };
+        }
+        signal?.throwIfAborted();
+        const value = await params.consume(representation);
+        if (value !== false) {
+          return { kind: "ok", value };
+        }
       }
     },
   };

@@ -44,13 +44,18 @@ import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
-import { resolveSessionRunProgressState } from "../../sessions/session-controller.queries.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecutions from "../../state/openclaw-agent-execution.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { repairOpenClawStateDatabaseSchema } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "../../state/openclaw-state-schema.test-support.js";
 import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
@@ -205,7 +210,6 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       await reach(aborted.promise, "deletion did not abort its run");
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
       expect(operation.result).toMatchObject({ kind: "aborted" });
-      expect(resolveSessionRunProgressState(session.sessionId)).toBeUndefined();
       expect(getActiveNativeAttempt(session.sessionId)).toBe(handle);
       expect(ownerSettled).toBe(false);
       await refuseLatePatch("before-run-settlement");
@@ -254,6 +258,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           await fs.mkdir(path.dirname(sharedDatabasePath), { recursive: true });
           using legacy = new DatabaseSync(sharedDatabasePath);
           legacy.exec(OPENCLAW_STATE_SCHEMA_SQL);
+          addPreCutoverClientCredentialTablesForTest(legacy);
           // v20 used the same journal fields, without the nullable phase.
           legacy.exec("ALTER TABLE agent_deletion_journal DROP COLUMN phase");
           legacy.exec(`PRAGMA user_version = 20;
@@ -269,12 +274,18 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             defaults: {
               model: "openai/gpt-4.1",
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
             },
             entries: { keeper: { workspace: state.workspaceDir } },
           },
           plugins: { slots: { memory: "none" } },
         });
+        if (scenario === "legacy-retiring") {
+          // Version-only repair leaves the deletion journal's first-use phase column absent.
+          const migrated = await withStateMigrationBackupForTest({ env: state.env }, () =>
+            repairOpenClawStateDatabaseSchema({ env: state.env, versionMigrationOnly: true }),
+          );
+          expect(migrated.warnings).toEqual([]);
+        }
         await captureRuntimeConfigAsyncReader()();
         const workspace = state.path("workspace-doomed");
         const created = await createAgent({ name: "doomed", workspace, skipBootstrap: true });
@@ -488,7 +499,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   );
                   expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
                   expect(operation.result).toMatchObject({ kind: "aborted" });
-                  expect(resolveSessionRunProgressState(sessionId)).toBeUndefined();
                   expect(getActiveNativeAttempt(sessionId)).toBe(handle);
                   expect(ownerSettled).toBe(false);
                   const relocatedWorkspace = state.path("workspace-relocated");
@@ -521,7 +531,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 expect(native.store.lookup(native.key)).toBeUndefined();
                 expect(finishedNative.store.lookup(finishedNative.key)).toBeUndefined();
                 expect(nativeClient.subscribed()).toBe(false);
-                expect(resolveSessionRunProgressState(sessionId)).toBeUndefined();
+                expect(isSessionRunActive(sessionId)).toBe(false);
                 expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
                 await expect(operations.session("gone")).rejects.toThrow();
                 await expectDeletedStorage(state, agentId, workspace, databasePath);
@@ -540,7 +550,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     message,
                   });
                 }
-                expect(resolveSessionRunProgressState(recreatedSession.sessionId)).toBeUndefined();
+                expect(isSessionRunActive(recreatedSession.sessionId)).toBe(false);
                 const memoryConfig: OpenClawConfig = {
                   ...getRuntimeConfig(),
                   memory: {

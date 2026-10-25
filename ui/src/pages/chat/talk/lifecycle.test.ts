@@ -685,7 +685,7 @@ describe("RealtimeTalkSession lifecycle", () => {
     }
   });
 
-  it("drops a previous transport's delayed transcript and tool events after stop and restart", async () => {
+  it("drops a previous transport's delayed transcript and close event after stop and restart", async () => {
     let createCount = 0;
     const request = voiceRequest(() => createVoiceSession(`voice-${++createCount}`));
     const onTranscript = vi.fn();
@@ -706,16 +706,7 @@ describe("RealtimeTalkSession lifecycle", () => {
       final: true,
     });
     previousContext.callbacks.onTalkEvent?.({
-      id: "old-control-result",
-      type: "tool.progress",
-      sessionId: "voice-1",
-      seq: 1,
-      timestamp: new Date().toISOString(),
-      mode: "realtime",
-      transport: "webrtc",
-      brain: "agent-consult",
-      final: true,
-      payload: { name: "openclaw_agent_control", result: { mode: "status" } },
+      type: "session.closed",
     });
     await Promise.resolve();
 

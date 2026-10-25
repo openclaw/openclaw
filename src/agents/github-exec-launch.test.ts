@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
 import { getShellConfig } from "./shell-utils.js";
@@ -13,14 +14,23 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
-const literalArgs = ["a b", "'quoted'", "$HOME", "$(false)", "line\nbreak", "--literal"];
+const literalArgs = [
+  "a b",
+  "'quoted'",
+  "‘quoted’",
+  "‚quoted‛",
+  "$HOME",
+  "$(false)",
+  "line\nbreak",
+  "--literal",
+];
 async function tempRoot(parent = os.tmpdir()) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(parent, "github-launch-")));
   roots.push(root);
   return root;
 }
 async function profileAt(root: string, host: string, token?: string) {
-  const profile = path.join(root, "profile 'with spaces'");
+  const profile = path.join(root, "profile 'with ‘spaces’'");
   await fs.mkdir(profile, { mode: 0o700 });
   if (token) {
     await fs.writeFile(path.join(profile, "hosts.yml"), `${host}:\n  oauth_token: ${token}\n`, {
@@ -81,7 +91,7 @@ describe.skipIf(!hasPowerShell)("GitHub launch PowerShell boundary", () => {
         host,
         credentialState === "available" ? "synthetic-powershell-token" : undefined,
       );
-      const target = path.join(root, "target 'with spaces'.cjs");
+      const target = path.join(root, "target 'with ‘spaces’'.cjs");
       await fs.writeFile(
         target,
         `
@@ -94,10 +104,9 @@ describe.skipIf(!hasPowerShell)("GitHub launch PowerShell boundary", () => {
         process.exitCode = 7;
       `,
       );
-      const quotePowerShell = (value: string) => `'${value.replaceAll("'", "''")}'`;
       const args = literalArgs;
       const targetArgv = [process.execPath, target, ...args];
-      const command = `& ${targetArgv.map(quotePowerShell).join(" ")}; exit $LASTEXITCODE`;
+      const command = `& ${targetArgv.map(quotePowerShellArg).join(" ")}; exit $LASTEXITCODE`;
       const argv = externalCommand ? targetArgv : [powershell, ...psArgs, command];
       const shell = { shell: powershell, args: psArgs };
       const options = {

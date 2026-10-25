@@ -17,10 +17,12 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
 import { captureEnv, setTestEnvValue, withEnvAsync } from "../../../test-utils/env.js";
 import {
   cleanupSessionStateForTest,
@@ -33,7 +35,7 @@ import {
   runSubagentAnnounceFlow,
 } from "../announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
@@ -65,6 +67,7 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
   let stateDir = "";
   let caseState: "idle" | "active" | "failed" = "idle";
   let settleRootWork: ReturnType<typeof observeRootWork>;
+  let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
   const settle = (keepObserving = true) =>
     settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
   const worker = vi.mocked(stateWorker.runOpenClawStateWorkerOperation);
@@ -79,6 +82,7 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
     if (options.reuseStateDir && caseState !== "idle") {
       throw new Error("Previous subagent control fixture cleanup is incomplete");
     }
+    schedulerWork = observeSwarmSchedulerWork();
     caseState = "active";
     if (!options.reuseStateDir || !stateDir) {
       stateDir = await realpath(
@@ -113,6 +117,13 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
       return;
     }
     const failures: unknown[] = [];
+    let schedulerClosed = false;
+    try {
+      await schedulerWork.close();
+      schedulerClosed = true;
+    } catch (error) {
+      failures.push(error);
+    }
     try {
       await settle(false);
     } catch (error) {
@@ -121,14 +132,13 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
       vi.restoreAllMocks();
     }
     // Preserve stores and their environment if detached writers have not settled.
-    if (getActiveGatewayRootWorkCount() === 0) {
+    if (schedulerClosed && getActiveGatewayRootWorkCount() === 0) {
       try {
         // Shared fixtures clear durable rows through the registry owner before reusing workers.
         if (options.reuseStateDir) {
           worker.mockReset().mockImplementation(runSubagentStateWorkerOperation);
         }
         await resetSubagentRegistryForTests({ persist: options.reuseStateDir === true });
-        schedulerTesting.reset();
         if (options.reuseStateDir) {
           await drainSessionStateForTest({ stateDir });
           const target = {
@@ -178,12 +188,7 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
     if (caseState === "active") {
       caseState = "failed";
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Subagent control fixture cleanup failed");
-    }
+    throwCollectedErrors(failures, "Subagent control fixture cleanup failed");
   });
 
   afterAll(async () => {
@@ -212,6 +217,33 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
       return stateDir;
     },
     worker,
+    interceptWorkerCommand(
+      intercept: (command: Parameters<DomainScope["execute"]>[0]) => void | Promise<void>,
+      phase: "before" | "after" = "before",
+    ) {
+      worker.mockImplementation((context, operation, operationOptions) =>
+        runSubagentStateWorkerOperation(
+          context,
+          (scope) =>
+            operation({
+              ...scope,
+              execute: async (command, executeOptions) => {
+                const before = phase === "before" ? intercept(command) : undefined;
+                if (before) {
+                  await before;
+                }
+                const result = await scope.execute(command, executeOptions);
+                const after = phase === "after" ? intercept(command) : undefined;
+                if (after) {
+                  await after;
+                }
+                return result;
+              },
+            }),
+          operationOptions,
+        ),
+      );
+    },
     rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, message: string) {
       worker.mockImplementation((context, operation, operationOptions) =>
         runSubagentStateWorkerOperation(

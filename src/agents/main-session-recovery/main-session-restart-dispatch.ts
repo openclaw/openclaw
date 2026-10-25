@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
@@ -10,6 +11,7 @@ import type { SessionEntryCurrentFacts } from "../../config/sessions/session-ent
 import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { preparePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
+import { bindInProcessSessionRun } from "../../gateway/in-process-session-run.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -44,6 +46,7 @@ import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
   rollbackRestartRecoveryReservation,
   settleAcceptedRestartRecovery,
+  settleRejectedRestartRecovery,
 } from "./main-session-restart-dispatch-settlement.js";
 import {
   dispatchRestartRecoveryUntilStarted,
@@ -66,9 +69,17 @@ import {
 
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
   `${RESTART_RECOVERY_INTERRUPTION_NOTE} The restart did not cancel the user's task. ` +
-    "Continue from the existing transcript: check the current state, recover interrupted work, " +
-    "and finish the task without asking the user to repeat the request. " +
-    `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`,
+    "Continue from the existing transcript: check the current state and continue permitted work. " +
+    "Before promising or attempting further action, check this turn's available tools and " +
+    "recorded approval outcomes. Do not ask the user to repeat the request solely because a " +
+    "restart occurred. If further action requires a fresh user request, explain that requirement " +
+    "instead of promising or attempting a retry, replacement, or fallback. " +
+    `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} Treat a tool result ` +
+    "marked interrupted or missing as having an unknown outcome; verify the operation's recorded " +
+    "state before repeating an action or reporting whether it happened. Recovery permission facts " +
+    "do not establish execution outcomes. Missing fallback artifacts or unavailable tools do not " +
+    "prove that an earlier action did not run. If the available tools cannot establish its outcome, " +
+    `report it as unknown. ${TOOL_FAILURE_INSTRUCTION}`,
 );
 
 const RESTART_SAFE_TOOLS_NOTICE =
@@ -134,9 +145,8 @@ export async function resumeMainSession(
       },
     );
   }
-  const isCurrent = () => {
-    return source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
-  };
+  const isCurrent = () =>
+    source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
   if (!isCurrent()) {
     return "skipped";
   }
@@ -245,6 +255,7 @@ async function resumeMainSessionWithinAdmission(
     expectedRecoveryRunId: recoveryRunId,
     expectedRecoverySourceRunId: sourceRunId,
     expectedSessionId: params.entry.sessionId,
+    pendingFinalDelivery: params.entry.pendingFinalDelivery,
     lifecycleGeneration,
     sessionKeys: Array.from(new Set([dispatchSessionKey, params.sessionKey])),
     shouldContinue: params.shouldContinue,
@@ -481,7 +492,13 @@ async function resumeMainSessionWithinAdmission(
       ? { ...target, sessionId: params.entry.sessionId, sourceRunId, recoveryRunId }
       : undefined;
     const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
-      agentParams,
+      // Preserve own-session admission without granting broader operator scopes.
+      agentParams: bindInProcessSessionRun(agentParams, {
+        sessionKey: dispatchSessionKey,
+        sessionId: params.entry.sessionId,
+        lifecycleRevision: params.entry.lifecycleRevision ?? null,
+        runId: recoveryRunId,
+      }),
       controllerInput,
       gatewayRuntime: params.gatewayRuntime,
       restartRecoveryRequesterTarget: params.entry.restartRecoveryRequesterSource
@@ -684,8 +701,18 @@ async function resumeMainSessionWithinAdmission(
       log.info(`stopped interrupted main session resend before execution: ${params.sessionKey}`);
       return "settled";
     }
+    const rejected = await settleRejectedRestartRecovery({
+      ...params,
+      ...target,
+      error,
+      dispatchAccepted,
+      rollback,
+    });
+    if (rejected) {
+      return rejected;
+    }
     log.warn(
-      `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+      `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? formatErrorStackWithMessage(error) : String(error)}`,
     );
     return "failed";
   } finally {

@@ -7,17 +7,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   getWideAreaZonePath,
   normalizeWideAreaDomain,
+  replaceWideAreaZoneFile,
   renderWideAreaGatewayZoneText as renderZone,
   resolveWideAreaDiscoveryDomain,
   type WideAreaGatewayZoneOpts,
   writeWideAreaGatewayZone as writeZone,
 } from "./widearea-dns.js";
 
-const replaceFileAtomicSyncMock = vi.hoisted(() => vi.fn());
+const replaceFileAtomicMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
-  replaceFileAtomicSync: replaceFileAtomicSyncMock,
+  replaceFileAtomic: replaceFileAtomicMock,
 }));
 
 const baseZoneOpts: WideAreaGatewayZoneOpts = {
@@ -25,8 +26,6 @@ const baseZoneOpts: WideAreaGatewayZoneOpts = {
   gatewayPort: 18789,
   displayName: "Mac Studio (OpenClaw)",
   tailnetIPv4: "100.123.224.76",
-  hostLabel: "studio-london",
-  instanceLabel: "studio-london",
 };
 const zonePath = getWideAreaZonePath(baseZoneOpts.domain);
 
@@ -40,7 +39,8 @@ async function expectZoneWrite(changed: boolean, overrides: Partial<WideAreaGate
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  replaceFileAtomicSyncMock.mockReset();
+  vi.unstubAllEnvs();
+  replaceFileAtomicMock.mockReset();
 });
 
 it("normalizes domains with a terminal dot", () => {
@@ -48,17 +48,15 @@ it("normalizes domains with a terminal dot", () => {
 });
 
 it("returns null for invalid env domains", () => {
-  expect(
-    resolveWideAreaDiscoveryDomain({ env: { OPENCLAW_WIDE_AREA_DOMAIN: "foo/bar" } }),
-  ).toBeNull();
+  vi.stubEnv("OPENCLAW_WIDE_AREA_DOMAIN", "foo/bar");
+  expect(resolveWideAreaDiscoveryDomain()).toBeNull();
 });
 
 it("renders gateway DNS-SD records", () => {
+  vi.spyOn(os, "hostname").mockReturnValue("Studio London");
   const txt = renderZoneText({
     domain: "openclaw.internal",
     displayName: "  Mac Studio (OpenClaw)  ",
-    hostLabel: " Studio London ",
-    instanceLabel: " Studio London ",
     tailnetIPv6: "fd7a:115c:a1e0::8801:e04c",
     sshPort: 22,
     cliPath: " /opt/homebrew/bin/openclaw ",
@@ -71,13 +69,13 @@ it("renders gateway DNS-SD records", () => {
     `$ORIGIN openclaw.internal.`,
     `studio-london IN A 100.123.224.76`,
     `studio-london IN AAAA fd7a:115c:a1e0::8801:e04c`,
-    `_openclaw-gw._tcp IN PTR studio-london._openclaw-gw._tcp`,
-    `studio-london._openclaw-gw._tcp IN SRV 0 0 18789 studio-london`,
+    `_openclaw-gw._tcp IN PTR studio-london-gateway._openclaw-gw._tcp`,
+    `studio-london-gateway._openclaw-gw._tcp IN SRV 0 0 18789 studio-london`,
     `displayName=Mac Studio (OpenClaw)`,
     `gatewayPort=18789`,
     `sshPort=22`,
     `cliPath=/opt/homebrew/bin/openclaw`,
-    `studio-london._openclaw-gw._tcp IN TXT`,
+    `studio-london-gateway._openclaw-gw._tcp IN TXT`,
     `gatewayTls=1`,
     `gatewayTlsSha256=abc123`,
     `gatewayDirectReachable=1`,
@@ -93,7 +91,7 @@ it.each(["EACCES", "EIO"])("preserves the zone on %s", async (code) => {
     throw error;
   });
   await expect(writeZone(baseZoneOpts)).rejects.toBe(error);
-  expect(replaceFileAtomicSyncMock).not.toHaveBeenCalled();
+  expect(replaceFileAtomicMock).not.toHaveBeenCalled();
 });
 
 it("creates the zone when no previous file exists", async () => {
@@ -101,7 +99,7 @@ it("creates the zone when no previous file exists", async () => {
     throw Object.assign(new Error("missing zone"), { code: "ENOENT" });
   });
   await expectZoneWrite(true);
-  expect(replaceFileAtomicSyncMock).toHaveBeenCalledOnce();
+  expect(replaceFileAtomicMock).toHaveBeenCalledOnce();
 });
 
 it.each([
@@ -109,14 +107,14 @@ it.each([
   ["../../x", "wide-area discovery domain must be a valid DNS name"],
 ])("rejects domain %j before writing", async (domain, message) => {
   await expect(writeZone({ ...baseZoneOpts, domain })).rejects.toThrow(message);
-  expect(replaceFileAtomicSyncMock).not.toHaveBeenCalled();
+  expect(replaceFileAtomicMock).not.toHaveBeenCalled();
 });
 
 it("skips rewriting unchanged content", async () => {
   const existing = renderZone({ ...baseZoneOpts, serial: 2026031301 });
   vi.spyOn(fs, "readFileSync").mockReturnValue(existing);
   await expectZoneWrite(false);
-  expect(replaceFileAtomicSyncMock).not.toHaveBeenCalled();
+  expect(replaceFileAtomicMock).not.toHaveBeenCalled();
 });
 
 it("increments same-day serials when content changes", async () => {
@@ -125,7 +123,7 @@ it("increments same-day serials when content changes", async () => {
   vi.spyOn(fs, "readFileSync").mockReturnValue(renderZone({ ...baseZoneOpts, serial: 2026031304 }));
   const opts = { gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" };
   await expectZoneWrite(true, opts);
-  expect(replaceFileAtomicSyncMock).toHaveBeenCalledWith({
+  expect(replaceFileAtomicMock).toHaveBeenCalledWith({
     filePath: zonePath,
     content: renderZone({ ...baseZoneOpts, ...opts, serial: 2026031305 }),
     dirMode: 0o700,
@@ -135,6 +133,29 @@ it("increments same-day serials when content changes", async () => {
     syncParentDir: true,
     tempPrefix: ".openclaw-dns-zone",
   });
+});
+
+it("publishes a complete zone without synchronously flushing the main thread", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-widearea-dns-async-"));
+  const target = path.join(directory, "zone.db");
+  const next = "; replacement zone\n$ORIGIN openclaw.internal.\n";
+  fs.writeFileSync(target, "; previous zone\n", { mode: 0o640 });
+  const atomic = await vi.importActual<typeof import("@openclaw/fs-safe/atomic")>(
+    "@openclaw/fs-safe/atomic",
+  );
+  replaceFileAtomicMock.mockImplementationOnce(atomic.replaceFileAtomic);
+  using sync = vi.spyOn(fs, "fsyncSync");
+  try {
+    await replaceWideAreaZoneFile(target, next);
+    expect(fs.readFileSync(target, "utf8")).toBe(next);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(target).mode & 0o777).toBe(0o640);
+    }
+    expect(fs.readdirSync(directory)).toEqual(["zone.db"]);
+    expect(sync).not.toHaveBeenCalled();
+  } finally {
+    fs.rmSync(directory, { force: true, recursive: true });
+  }
 });
 
 it.runIf(process.platform !== "win32")("preserves the zone after an OS file-size failure", () => {

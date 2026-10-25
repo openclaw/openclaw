@@ -1,6 +1,12 @@
 import type { Request, Response } from "express";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  channelBlockedPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
 import {
@@ -23,12 +29,6 @@ import { normalizeMSTeamsConversationId } from "./inbound.js";
 import { isMSTeamsInvokeAuthorized, createMSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { createMSTeamsHandlerConfigReader } from "./monitor-handler/config.js";
-import {
-  publishMSTeamsBlocked,
-  publishMSTeamsReady,
-  publishMSTeamsStopped,
-  type MSTeamsStatusSink,
-} from "./monitor-status.js";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
 import { createMSTeamsPollStoreState, extractMSTeamsPollVote } from "./polls.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
@@ -64,7 +64,7 @@ type MonitorMSTeamsOpts = {
   msteamsCfg?: MSTeamsConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  statusSink?: MSTeamsStatusSink;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
 export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<void> {
@@ -77,13 +77,17 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
   let msteamsCfg = account.config;
   if (opts.cfg.channels?.msteams?.enabled !== true || msteamsCfg.enabled === false) {
     log.debug?.("msteams provider disabled");
-    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams provider is disabled");
+    opts.statusSink?.(
+      channelBlockedPatch("Microsoft Teams provider is disabled", { running: true }),
+    );
     return;
   }
 
   if (!creds) {
     log.error("msteams credentials not configured");
-    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
+    opts.statusSink?.(
+      channelBlockedPatch("Microsoft Teams credentials are not configured", { running: true }),
+    );
     return;
   }
   const collisionIssue = resolveMSTeamsWebhookCollisionIssue(accountPolicyCfg);
@@ -582,24 +586,17 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
     throw error;
   }
   log.info(`msteams provider started on Gateway route ${configuredPath}`);
-  publishMSTeamsReady(opts.statusSink);
+  opts.statusSink?.(channelReadyPatch());
 
-  let shutdownTask: Promise<void> | undefined;
-  const shutdown = () => {
-    shutdownTask ??= (async () => {
-      await webhook.close();
-      for (const unregister of unregisterRoutes.splice(0)) {
-        unregister();
-      }
-      await ingress.stop();
-      publishMSTeamsStopped(opts.statusSink);
-    })();
-    return shutdownTask;
-  };
   try {
-    await waitUntilAbort(opts.abortSignal, shutdown);
+    await waitUntilAbort(opts.abortSignal);
   } finally {
-    await shutdown();
+    await webhook.close();
+    for (const unregister of unregisterRoutes) {
+      unregister();
+    }
+    await ingress.stop();
+    opts.statusSink?.(channelStoppedPatch());
   }
 }
 
@@ -658,19 +655,9 @@ function adaptSdkContext(ctx: unknown, app: MSTeamsApp): MSTeamsTurnContext {
     isThreadable ? sdkCtx.reply!(activity) : sdkCtx.send!(activity);
   return Object.assign(Object.create(Object.getPrototypeOf(ctx)), ctx, {
     sendActivity,
-    sendActivities: async (activities: unknown[]) => {
-      const results: unknown[] = [];
-      for (const a of activities) {
-        results.push(await sendActivity(a));
-      }
-      return results;
-    },
     updateActivity: async (activity: { id?: string; [key: string]: unknown }) => {
       const activityId = activity.id ?? "";
       return activityApi.conversations.activities(conversationId).update(activityId, activity);
-    },
-    deleteActivity: async (activityId: string) => {
-      return activityApi.conversations.activities(conversationId).delete(activityId);
     },
     getTeamDetails,
     stream: sdkCtx.stream,

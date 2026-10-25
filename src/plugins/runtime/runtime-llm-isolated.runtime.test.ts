@@ -1,5 +1,9 @@
 // Isolated runtime.llm.complete tests cover zero-tool dispatch and policy enforcement.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  PreparedModelRuntimeInitialRunAdmissionError,
+  PreparedModelRuntimeOwnerNotPublishedError,
+} from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../../config/types.plugins.js";
 import {
@@ -481,40 +485,6 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });
   });
 
-  it("settles at the deadline when the isolated runtime ignores cancellation", async () => {
-    hoisted.runIsolatedCompletion.mockReturnValueOnce(new Promise(() => {}));
-    const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
-
-    await expect(
-      llm.complete({
-        messages: [{ role: "user", content: "Return JSON" }],
-        execution: { mode: "isolated-agent-runtime", timeoutMs: 5 },
-      }),
-    ).rejects.toMatchObject({ code: "LLM_COMPLETION_TIMEOUT" });
-  });
-
-  it("settles on caller abort when the isolated runtime ignores cancellation", async () => {
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    hoisted.runIsolatedCompletion.mockImplementationOnce(() => {
-      markStarted?.();
-      return new Promise(() => {});
-    });
-    const controller = new AbortController();
-    const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
-    const completion = llm.complete({
-      messages: [{ role: "user", content: "Return JSON" }],
-      signal: controller.signal,
-      execution: { mode: "isolated-agent-runtime" },
-    });
-
-    await started;
-    controller.abort();
-    await expect(completion).rejects.toMatchObject({ code: "LLM_COMPLETION_ABORTED" });
-  });
-
   it.each([null])("maps an empty adapter rejection (%s) to a stable error", async (error) => {
     hoisted.runIsolatedCompletion.mockRejectedValueOnce(error);
     const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
@@ -554,5 +524,26 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     ).rejects.toMatchObject({ code: publicCode });
     stop();
     expect(usageEvents).toEqual([]);
+  });
+
+  it("codes isolated reload admission refusals as lifecycle failures", async () => {
+    const refusal = new PreparedModelRuntimeInitialRunAdmissionError(
+      new PreparedModelRuntimeOwnerNotPublishedError("Model runtime replacement is in progress", {
+        admissionBlocked: true,
+      }),
+    );
+    hoisted.runIsolatedCompletion.mockRejectedValueOnce(refusal);
+    const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
+
+    await expect(
+      llm.complete({
+        messages: [{ role: "user", content: "Return JSON" }],
+        execution: { mode: "isolated-agent-runtime" },
+      }),
+    ).rejects.toMatchObject({
+      code: "LLM_RUNTIME_LIFECYCLE",
+      message: refusal.message,
+      cause: refusal,
+    });
   });
 });

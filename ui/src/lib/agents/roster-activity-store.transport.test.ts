@@ -51,7 +51,7 @@ function fixture() {
         : request.method === "sessions.list"
           ? snapshot("", false, [])
           : request.method === "sessions.groups.list"
-            ? { names: [], sectionOrder: [] }
+            ? { groups: [], sectionOrder: [] }
             : undefined;
     if (payload === undefined) {
       throw new Error(`Unexpected RPC: ${request.method}`);
@@ -140,7 +140,7 @@ it.each(["client", "account", "recovery scope"])(
       expect(f.store.snapshot.cards).toEqual([]);
     } else {
       expect(f.store.snapshot.cards).toMatchObject([
-        { id: "main", preview: undefined, activeNow: false, unreadCount: 0, lastActiveAt: 0 },
+        { id: "main", preview: undefined, activeNow: false, lastActiveAt: 0 },
       ]);
     }
   },

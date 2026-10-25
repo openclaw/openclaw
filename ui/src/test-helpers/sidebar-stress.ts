@@ -196,9 +196,6 @@ export async function settled(sidebar: Awaited<ReturnType<typeof mountSidebar>>[
   await vi.dynamicImportSettled();
   await sidebar.updateComplete;
   await Promise.all(
-    [...sidebar.querySelectorAll("openclaw-session-owner-chip")].map((x) => x.updateComplete),
-  );
-  await Promise.all(
     [...sidebar.querySelectorAll("openclaw-viewer-avatar")].map((x) => x.updateComplete),
   );
   await new Promise<void>((resolve) => {

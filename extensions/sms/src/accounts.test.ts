@@ -1,7 +1,14 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  applyResolvedAssignments,
+  createResolverContext,
+  resolveSecretRefValues,
+} from "openclaw/plugin-sdk/secret-ref-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectSmsAccount, listSmsAccountIds, resolveSmsAccount } from "./accounts.js";
 import { SmsChannelConfigSchema } from "./config-schema.js";
+import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 import type { SmsChannelConfig } from "./types.js";
 
 function parseSmsConfig(value: unknown): SmsChannelConfig {
@@ -16,6 +23,38 @@ function parseSmsConfig(value: unknown): SmsChannelConfig {
 
 function config(sms: SmsChannelConfig) {
   return { channels: { sms } };
+}
+
+const tokenRef = (id: string) => ({ source: "env", provider: "default", id }) as const;
+const sender = { enabled: true, accountSid: "AC123", fromNumber: "+15557654321" };
+const accounts = {
+  support: {
+    ...sender,
+    accountSid: "AC456",
+    authToken: tokenRef("SUPPORT"),
+    fromNumber: "+15558675309",
+  },
+};
+
+async function resolveSecrets(sms: SmsChannelConfig, env: NodeJS.ProcessEnv) {
+  const sourceConfig: OpenClawConfig = config(sms);
+  const resolved = structuredClone(sourceConfig);
+  const context = createResolverContext({ sourceConfig, env });
+  collectRuntimeConfigAssignments({
+    config: resolved,
+    defaults: sourceConfig.secrets?.defaults,
+    context,
+  });
+  const values = await resolveSecretRefValues(
+    context.assignments.map(({ ref }) => ref),
+    {
+      config: sourceConfig,
+      env: context.env,
+      cache: context.cache,
+    },
+  );
+  applyResolvedAssignments({ assignments: context.assignments, resolved: values });
+  return { sms: resolved.channels?.sms, warnings: context.warnings };
 }
 
 afterEach(() => vi.unstubAllEnvs());
@@ -42,11 +81,7 @@ describe("SMS account config", () => {
 
   it("inspects unavailable account credentials without using environment fallbacks or hiding healthy siblings", () => {
     vi.stubEnv("TWILIO_AUTH_TOKEN", "lower-precedence-token");
-    const unresolvedToken = {
-      source: "env",
-      provider: "default",
-      id: "OPENCLAW_TEST_UNAVAILABLE_SMS_TOKEN",
-    } as const;
+    const unresolvedToken = tokenRef("OPENCLAW_TEST_UNAVAILABLE_SMS_TOKEN");
     const cfg = config({
       accountSid: "AC-parent",
       authToken: unresolvedToken,
@@ -65,21 +100,20 @@ describe("SMS account config", () => {
     const inspected = ["default", "support", "inherited", "healthy", "missing"].map((accountId) =>
       inspectSmsAccount(cfg, accountId),
     );
-    expect(inspected).toMatchObject([
-      { accountId: "default", name: "+15550000000" },
-      { accountId: "support", name: "MG-support" },
-      { accountId: "inherited" },
-      { accountId: "healthy", name: "+15551112222" },
-      { accountId: "missing" },
-    ]);
     expect(
-      inspected.map(({ enabled, configured, tokenStatus }) => [enabled, configured, tokenStatus]),
+      inspected.map(({ accountId, name, enabled, configured, tokenStatus }) => [
+        accountId,
+        name,
+        enabled,
+        configured,
+        tokenStatus,
+      ]),
     ).toEqual([
-      [true, true, "configured_unavailable"],
-      [true, true, "configured_unavailable"],
-      [false, true, "configured_unavailable"],
-      [true, true, "available"],
-      [true, false, "missing"],
+      ["default", "+15550000000", true, true, "configured_unavailable"],
+      ["support", "MG-support", true, true, "configured_unavailable"],
+      ["inherited", expect.any(String), false, true, "configured_unavailable"],
+      ["healthy", "+15551112222", true, true, "available"],
+      ["missing", expect.any(String), true, false, "missing"],
     ]);
     for (const account of inspected) {
       expect(account).not.toHaveProperty("authToken");
@@ -88,12 +122,7 @@ describe("SMS account config", () => {
   });
 
   it("treats top-level enabled false as a channel kill switch", () => {
-    const cfg = config({
-      enabled: false,
-      accounts: {
-        support: { enabled: true },
-      },
-    });
+    const cfg = config({ enabled: false, accounts: { support: { enabled: true } } });
 
     expect(resolveSmsAccount(cfg, "support")).toMatchObject({
       accountId: "support",
@@ -155,5 +184,45 @@ describe("SMS account config", () => {
     });
 
     expect(resolveSmsAccount(config(parsed))).toMatchObject({ allowFrom: ["+15551234567"] });
+  });
+
+  it.each([
+    ["standalone", sender, {}, false],
+    ["implicit default with named accounts", { ...sender, accounts }, {}, true],
+    [
+      "env-backed default with named accounts",
+      { enabled: true, accounts },
+      { TWILIO_ACCOUNT_SID: "AC-env", TWILIO_PHONE_NUMBER: "+15550001111" },
+      true,
+    ],
+  ] satisfies [string, SmsChannelConfig, NodeJS.ProcessEnv, boolean][])(
+    "resolves the %s sender token",
+    async (_name, sms, env, named) => {
+      const result = await resolveSecrets(
+        { ...sms, authToken: tokenRef("DEFAULT") },
+        {
+          DEFAULT: "resolved-default-token",
+          ...(named ? { SUPPORT: "resolved-support-token" } : {}),
+          ...env,
+        },
+      );
+      expect(result.sms?.authToken).toBe("resolved-default-token");
+      if (named) {
+        expect(result.sms?.accounts?.support?.authToken).toBe("resolved-support-token");
+      }
+      expect(result.warnings).toStrictEqual([]);
+    },
+  );
+
+  it("treats top-level authToken refs as inactive when all enabled accounts override them", async () => {
+    const result = await resolveSecrets(
+      { authToken: tokenRef("UNUSED"), accounts },
+      {
+        SUPPORT: "resolved-support-token",
+      },
+    );
+    expect(result.sms?.authToken).toEqual(tokenRef("UNUSED"));
+    expect(result.sms?.accounts?.support?.authToken).toBe("resolved-support-token");
+    expect(result.warnings.map(({ path }) => path)).toContain("channels.sms.authToken");
   });
 });

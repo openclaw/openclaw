@@ -30,33 +30,44 @@ import { parseUpdateRecoveryBackupManifest } from "./backup-verify-manifest.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { inspectDoctorMigrationPreservation } from "./doctor-migration-preservation.js";
+import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+function capturedPayload(
+  manifest: ReturnType<typeof parseUpdateRecoveryBackupManifest>,
+  source: string,
+) {
+  const payload = manifest.entries.find((entry) => entry.sourcePath === source);
+  expect(payload?.kind).toBe("file");
+  if (payload?.kind !== "file") {
+    throw new Error(`Missing payload: ${source}`);
+  }
+  return payload;
+}
 
 it("rejects registry traversal through directories absent from the sealed inventory", () => {
   const root = path.resolve("/capture");
   const directory = path.join(root, "recorded");
   const locator = `${directory}${path.sep}..${path.sep}agent.sqlite`;
+  const resolve = (value: string, directories: string[] = []) =>
+    resolveCapturedRegistryPath(value, new Map(), new Set(directories));
   for (const traversal of [
     locator,
     `${root}${path.sep}agent.sqlite${path.sep}.`,
     `${root}${path.sep}agent.sqlite${path.sep}`,
   ]) {
-    expect(() => resolveCapturedRegistryPath(traversal, new Map(), new Set([root]))).toThrow(
-      /requires a recorded directory/,
-    );
+    expect(() => resolve(traversal, [root])).toThrow(/requires a recorded directory/);
   }
   for (const equivalent of [
     `${root}${path.sep}.${path.sep}agent.sqlite`,
     `${root}${path.sep}custom${path.sep}${path.sep}agent.sqlite`,
   ]) {
-    expect(resolveCapturedRegistryPath(equivalent, new Map(), new Set())).toBe(
-      path.normalize(equivalent),
-    );
+    expect(resolve(equivalent)).toBe(path.normalize(equivalent));
   }
-  expect(resolveCapturedRegistryPath(locator, new Map(), new Set([root, directory]))).toBe(
-    path.join(root, "agent.sqlite"),
-  );
+  expect(resolve(locator, [root, directory])).toBe(path.join(root, "agent.sqlite"));
 });
 
 it("preserves plugin rowids, views, and triggers as well as declared values", () => {
@@ -74,6 +85,8 @@ it("preserves plugin rowids, views, and triggers as well as declared values", ()
     INSERT INTO "" VALUES ('empty identifiers');
   `);
   const original = captureOpenClawMigrationWitness(database);
+  const check = () =>
+    assertOpenClawMigrationWitnessPreserved(original, captureOpenClawMigrationWitness(database));
   for (const mutation of [
     "UPDATE payload SET rowid = 8",
     "DROP VIEW payload_view",
@@ -81,16 +94,11 @@ it("preserves plugin rowids, views, and triggers as well as declared values", ()
     "PRAGMA application_id = 42",
     "PRAGMA user_version = -2",
   ]) {
-    database.exec("SAVEPOINT changed_plugin");
-    database.exec(mutation);
-    expect(() =>
-      assertOpenClawMigrationWitnessPreserved(original, captureOpenClawMigrationWitness(database)),
-    ).toThrow(/changed or lost|owner or version transition/);
+    database.exec(`SAVEPOINT changed_plugin; ${mutation}`);
+    expect(check).toThrow(/changed or lost|owner or version transition/);
     database.exec("ROLLBACK TO changed_plugin; RELEASE changed_plugin");
   }
-  expect(
-    assertOpenClawMigrationWitnessPreserved(original, captureOpenClawMigrationWitness(database)),
-  ).toEqual({ warnings: [] });
+  expect(check()).toEqual({ warnings: [] });
 });
 
 it("excludes only the agent media repair completion row from retained metadata", () => {
@@ -102,46 +110,32 @@ it("excludes only the agent media repair completion row from retained metadata",
   const owner = { role: "agent", agentId: "main" } as const;
   const original = captureOpenClawMigrationWitness(database, owner);
   const opaqueOriginal = captureOpenClawMigrationWitness(database);
+  const check = (before = original, after = captureOpenClawMigrationWitness(database, owner)) =>
+    assertOpenClawMigrationWitnessPreserved(before, after);
   database
     .prepare(`INSERT INTO schema_meta
     (meta_key, role, schema_version, agent_id, created_at, updated_at)
     VALUES (?, 'agent', 1, 'main', 2, 2)`)
     .run(MEDIA_ROWS_MIGRATION_META_KEY);
-  expect(() =>
-    assertOpenClawMigrationWitnessPreserved(
-      original,
-      captureOpenClawMigrationWitness(database, owner),
-    ),
-  ).not.toThrow();
-  expect(() =>
-    assertOpenClawMigrationWitnessPreserved(
-      opaqueOriginal,
-      captureOpenClawMigrationWitness(database),
-    ),
-  ).toThrow(/retained database content: schema_meta/);
+  expect(() => check()).not.toThrow();
+  expect(() => check(opaqueOriginal, captureOpenClawMigrationWitness(database))).toThrow(
+    /retained database content: schema_meta/,
+  );
   for (const mutation of [
     "UPDATE schema_meta SET created_at = 3 WHERE meta_key = 'primary'",
     "UPDATE schema_meta SET meta_key = 'unclassified-repair' WHERE schema_version = 1",
   ]) {
-    database.exec("SAVEPOINT changed_metadata");
-    database.exec(mutation);
-    expect(() =>
-      assertOpenClawMigrationWitnessPreserved(
-        original,
-        captureOpenClawMigrationWitness(database, owner),
-      ),
-    ).toThrow(/retained database content: schema_meta/);
+    database.exec(`SAVEPOINT changed_metadata; ${mutation}`);
+    expect(() => check()).toThrow(/retained database content: schema_meta/);
     database.exec("ROLLBACK TO changed_metadata; RELEASE changed_metadata");
   }
 });
 
-it("binds semantic preservation to original backups across a partial migration and retry", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("binds semantic preservation to original backups across a partial migration and retry", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     withDaemonRuntimePinStore(state.env, true, (db) => {
-      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(
-        "daemon-runtime-pin:fixture",
-        "malformed intent",
-        1,
+      db.exec(
+        "INSERT INTO daemon_runtime_pins VALUES ('daemon-runtime-pin:fixture', 'malformed intent', 1)",
       );
     });
     const external = state.path("external.sqlite");
@@ -149,9 +143,8 @@ it("binds semantic preservation to original backups across a partial migration a
     const plugin = state.path("plugin.sqlite");
     const pluginDirectory = state.path("plugin-data");
     await fs.mkdir(pluginDirectory);
-    const asset = path.join(pluginDirectory, "original.bin");
     const missing = state.path("preexisting-missing.bin");
-    await fs.writeFile(asset, Buffer.from([0, 255, 42]));
+    await fs.writeFile(path.join(pluginDirectory, "original.bin"), Buffer.from([0, 255, 42]));
     using externalDatabase = new DatabaseSync(external);
     externalDatabase.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
     externalDatabase.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
@@ -176,17 +169,12 @@ it("binds semantic preservation to original backups across a partial migration a
         "CREATE TABLE payload (id INTEGER PRIMARY KEY, value BLOB); INSERT INTO payload VALUES (1, x'00ff2a'); CREATE TABLE indexed(value TEXT); INSERT INTO indexed VALUES ('index-original'); CREATE INDEX payload_lookup ON indexed(value)",
       );
     }
-    const shared = openOpenClawStateDatabase();
-    shared.db
-      .prepare(
-        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 24, 1)",
-      )
-      .run("external", externalAlias);
-    shared.db
-      .prepare(
-        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 24, 1)",
-      )
-      .run("external", external);
+    const register = openOpenClawStateDatabase().db.prepare(
+      "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 24, 1)",
+    );
+    for (const target of [externalAlias, external]) {
+      register.run("external", target);
+    }
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     vi.spyOn(pluginResources, "preparePluginDoctorMigrationBackupResources").mockImplementation(
@@ -204,13 +192,7 @@ it("binds semantic preservation to original backups across a partial migration a
     const maintenance = await beginDoctorMaintenance({
       root: process.cwd(),
       options: { repair: true, nonInteractive: true },
-      runtime: {
-        log() {},
-        error() {},
-        exit() {
-          throw new Error("Unexpected Doctor exit");
-        },
-      },
+      runtime: createThrowingTestRuntime(),
     });
     expect(maintenance).toBeDefined();
     try {
@@ -219,7 +201,7 @@ it("binds semantic preservation to original backups across a partial migration a
         const capture = async (runId: string) => {
           // Registry assertions reopen this handle; drain its WAL maintenance before raw capture.
           await closeOpenClawStateDatabaseAsync();
-          return captureUpdateRecoveryBaseline({
+          const captured = await captureUpdateRecoveryBaseline({
             runId,
             installRoot: process.cwd(),
             env: state.env,
@@ -227,12 +209,15 @@ it("binds semantic preservation to original backups across a partial migration a
             assertCurrent: scope.assertAdmission,
             acquisition: { mode: "maintenance-owner" },
           });
+          return captured.ref;
         };
-        await backupDoctorMigrationDatabases({
-          env: state.env,
-          pendingDatabasePaths: [external],
-          databasePaths: [external],
-        });
+        const backup = () =>
+          backupDoctorMigrationDatabases({
+            env: state.env,
+            pendingDatabasePaths: [external],
+            databasePaths: [external],
+          });
+        await backup();
         const backupPaths = (await fs.readdir(path.dirname(external))).filter(
           (name) =>
             name.startsWith("external.sqlite.pre-startup-migration-") && name.endsWith(".bak"),
@@ -240,7 +225,12 @@ it("binds semantic preservation to original backups across a partial migration a
         expect(backupPaths).toHaveLength(1);
         const backupPath = path.join(path.dirname(external), backupPaths[0]!);
         const backupBytes = await fs.readFile(backupPath);
-        const original = (await capture("witness-original")).ref;
+        const original = await capture("witness-original");
+        const inspect = (candidate: typeof original, before = original) =>
+          inspectDoctorMigrationPreservation({ original: before, candidate });
+        const expectRejectedCapture = async (runId: string, error: RegExp) => {
+          await expect(inspect(await capture(runId))).rejects.toThrow(error);
+        };
         const originalBytes = await fs.readFile(original.manifestPath);
         const migrate = () =>
           migrateLegacyMediaPersistence({
@@ -266,19 +256,10 @@ it("binds semantic preservation to original backups across a partial migration a
             .all()
             .map((row) => row.schema_version);
         expect(registryVersions()).toEqual([24, 24]);
-        const partial = (await capture("witness-partial")).ref;
-        expect(
-          (await inspectDoctorMigrationPreservation({ original: partial, candidate: partial }))
-            .status,
-        ).toBe("preserved-with-warnings");
-        await expect(
-          inspectDoctorMigrationPreservation({ original, candidate: partial }),
-        ).rejects.toThrow(/Registry schema version/);
-        await backupDoctorMigrationDatabases({
-          env: state.env,
-          pendingDatabasePaths: [external],
-          databasePaths: [external],
-        });
+        const partial = await capture("witness-partial");
+        expect((await inspect(partial, partial)).status).toBe("preserved-with-warnings");
+        await expect(inspect(partial)).rejects.toThrow(/Registry schema version/);
+        await backup();
         const retry = await migrate();
         expect(retry.warnings).toEqual([]);
         expect(externalDatabase.prepare("PRAGMA user_version").get()?.user_version).toBe(
@@ -287,11 +268,9 @@ it("binds semantic preservation to original backups across a partial migration a
         expect(registryVersions()).toEqual([24, OPENCLAW_AGENT_SCHEMA_VERSION]);
         expect(await fs.readFile(backupPath)).toEqual(backupBytes);
         expect(await fs.readFile(original.manifestPath)).toEqual(originalBytes);
-        const candidate = (await capture("witness-migrated")).ref;
-        const result = await inspectDoctorMigrationPreservation({ original, candidate });
-        expect(
-          (await inspectDoctorMigrationPreservation({ original: partial, candidate })).status,
-        ).toBe("preserved-with-warnings");
+        const candidate = await capture("witness-migrated");
+        const result = await inspect(candidate);
+        expect((await inspect(candidate, partial)).status).toBe("preserved-with-warnings");
         expect(result).toMatchObject({
           status: "preserved-with-warnings",
           activationAuthorized: false,
@@ -301,89 +280,49 @@ it("binds semantic preservation to original backups across a partial migration a
         withDaemonRuntimePinStore(state.env, true, (db) => {
           db.prepare("UPDATE daemon_runtime_pins SET value_json = ?").run("changed intent");
         });
-        const changedIntent = (await capture("witness-changed-intent")).ref;
-        await expect(
-          inspectDoctorMigrationPreservation({ original, candidate: changedIntent }),
-        ).rejects.toThrow(/retained database content/);
+        await expectRejectedCapture("witness-changed-intent", /retained database content/);
         withDaemonRuntimePinStore(state.env, true, (db) => {
           db.prepare("UPDATE daemon_runtime_pins SET value_json = ?").run("malformed intent");
         });
         await fs.writeFile(missing, "unclassified new content");
-        const filledResource = (await capture("witness-filled-resource")).ref;
-        await expect(
-          inspectDoctorMigrationPreservation({ original, candidate: filledResource }),
-        ).rejects.toThrow(/previously missing resource/);
+        await expectRejectedCapture("witness-filled-resource", /previously missing resource/);
         await fs.unlink(missing);
         const addedFile = path.join(pluginDirectory, "new-policy.txt");
         await fs.writeFile(addedFile, "new policy");
-        const addedResource = (await capture("witness-added-resource")).ref;
-        await expect(
-          inspectDoctorMigrationPreservation({ original, candidate: addedResource }),
-        ).rejects.toThrow(/added an unclassified resource/);
+        await expectRejectedCapture("witness-added-resource", /added an unclassified resource/);
         await fs.unlink(addedFile);
         await fs.chmod(plugin, 0o600);
-        const changedMode = (await capture("witness-changed-mode")).ref;
-        await expect(
-          inspectDoctorMigrationPreservation({ original, candidate: changedMode }),
-        ).rejects.toThrow(/file kind or mode/);
+        await expectRejectedCapture("witness-changed-mode", /file kind or mode/);
         await fs.chmod(plugin, 0o644);
         await expect(
-          inspectDoctorMigrationPreservation({
-            original: { ...original, manifestSha256: candidate.manifestSha256 },
-            candidate,
-          }),
+          inspect(candidate, { ...original, manifestSha256: candidate.manifestSha256 }),
         ).rejects.toThrow(/manifest changed/);
         // Loss in a newly sealed candidate must still fail against the first originals.
         {
           using db = new DatabaseSync(plugin);
           db.exec("DELETE FROM payload");
         }
-        const lost = (await capture("witness-lost-plugin")).ref;
-        await expect(
-          inspectDoctorMigrationPreservation({ original, candidate: lost }),
-        ).rejects.toThrow(/changed or lost/);
+        await expectRejectedCapture("witness-lost-plugin", /changed or lost/);
         const candidateManifest = parseUpdateRecoveryBackupManifest(
           await fs.readFile(candidate.manifestPath, "utf8"),
         );
-        const indexedPayload = candidateManifest.entries.find(
-          (entry) => entry.sourcePath === plugin,
-        );
-        if (indexedPayload?.kind !== "file") {
-          throw new Error("Missing plugin payload");
-        }
+        const indexedPayload = capturedPayload(candidateManifest, plugin);
         const indexedPath = path.join(candidate.directory, indexedPayload.archivePath);
         corruptSqliteIndexKey(indexedPath, "payload_lookup", "index-original", "index-damaged!");
-        indexedPayload.sha256 = createHash("sha256")
-          .update(await fs.readFile(indexedPath))
-          .digest("hex");
+        indexedPayload.sha256 = sha256(await fs.readFile(indexedPath));
         const corruptManifest = JSON.stringify(candidateManifest);
         await fs.writeFile(candidate.manifestPath, corruptManifest);
         await expect(
-          inspectDoctorMigrationPreservation({
-            original,
-            candidate: {
-              ...candidate,
-              manifestSha256: createHash("sha256").update(corruptManifest).digest("hex"),
-            },
-          }),
+          inspect({ ...candidate, manifestSha256: sha256(corruptManifest) }),
         ).rejects.toThrow(/integrity_check/);
         // An unreadable or substituted original payload cannot become a fresh baseline.
         const manifest = parseUpdateRecoveryBackupManifest(originalBytes.toString("utf8"));
-        const payload = manifest.entries.find((entry) => entry.sourcePath === external);
-        expect(payload?.kind).toBe("file");
-        if (payload?.kind !== "file") {
-          throw new Error("Missing external payload");
-        }
+        const payload = capturedPayload(manifest, external);
         await fs.writeFile(path.join(original.directory, payload.archivePath), "corrupt");
-        await expect(inspectDoctorMigrationPreservation({ original, candidate })).rejects.toThrow(
-          /payload does not match/,
-        );
-        expect(createHash("sha256").update(originalBytes).digest("hex")).toBe(
-          original.manifestSha256,
-        );
+        await expect(inspect(candidate)).rejects.toThrow(/payload does not match/);
+        expect(sha256(originalBytes)).toBe(original.manifestSha256);
       });
     } finally {
       await maintenance?.release();
     }
-  });
-});
+  }));

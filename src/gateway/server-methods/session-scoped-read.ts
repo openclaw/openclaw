@@ -1,3 +1,4 @@
+import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import {
@@ -23,6 +24,7 @@ export async function retainSessionScopedRead(
     requireMaterialized?: boolean;
     allowMetadataChanges?: boolean;
     retain?: boolean;
+    projection?: SessionEntryReadScope["projection"];
     entryMatches?: NonNullable<Parameters<typeof retainGatewaySessionEntryReadOnly>[2]>;
   } = {},
 ) {
@@ -52,6 +54,7 @@ export async function retainSessionScopedRead(
         ? (previous, current) => !hasSessionReadAccessChanged(previous, current)
         : undefined),
     cfg,
+    { projection: readOptions.projection },
   );
   const assertCurrent = () => {
     authority.assertCurrent();

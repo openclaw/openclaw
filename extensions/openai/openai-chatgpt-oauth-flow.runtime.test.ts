@@ -5,8 +5,11 @@ import { Agent, createServer, get, type IncomingHttpHeaders, type Server } from 
 import { connect, type Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { isRecoverableOAuthRefreshFailure } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 
 const ssrfMocks = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn() }));
 
@@ -78,7 +81,14 @@ function expectTokenFailure(
   summary: string,
   extra = {},
 ) {
-  expect(result).toEqual({ type: "failed", operation, summary, ...extra });
+  if (result.type === "failed" && operation === "refresh") {
+    const { oauthRefreshOutcome, ...presentation } = result;
+    expect(presentation).toEqual({ type: "failed", operation, summary, ...extra });
+    expect(oauthRefreshOutcome).toMatchObject({ version: 1 });
+    expect(isRecoverableOAuthRefreshFailure(result)).toBe(false);
+  } else {
+    expect(result).toEqual({ type: "failed", operation, summary, ...extra });
+  }
 }
 
 function expectTokenSuccess(
@@ -259,6 +269,7 @@ describe("OpenAI Codex OAuth flow", () => {
     const loginPromise = loginOpenAICodex({
       onAuth,
       onPrompt: vi.fn(async () => "unused-code"),
+      onManualCodeInput: () => createDeferred<string>().promise,
       signal: controller.signal,
     });
 
@@ -283,12 +294,14 @@ describe("OpenAI Codex OAuth flow", () => {
           loginOpenAICodex({
             onAuth,
             onPrompt,
-            ...(entry === "manual input" ? { onManualCodeInput: async () => "manual-code" } : {}),
+            onManualCodeInput: async () => (entry === "manual input" ? "manual-code" : ""),
           }),
         ).resolves.toMatchObject({ accountId: "manual-account" });
         expect(onAuth).toHaveBeenCalledOnce();
         if (entry === "manual input") {
           expect(onPrompt).not.toHaveBeenCalled();
+        } else {
+          expect(onPrompt).toHaveBeenCalledOnce();
         }
         expect(ssrfMocks.fetchWithSsrFGuard.mock.calls[0]?.[0].init.body.get("code")).toBe(
           "manual-code",
@@ -296,6 +309,25 @@ describe("OpenAI Codex OAuth flow", () => {
       } finally {
         await closeServer(server);
       }
+    },
+  );
+
+  it.each(["wrong state", "manual rejection"] as const)(
+    "rejects %s without exchanging a token",
+    async (failure) => {
+      const onPrompt = vi.fn(async () => "unused-code");
+      await expect(
+        loginOpenAICodex({
+          onAuth: () => undefined,
+          onPrompt,
+          onManualCodeInput: () =>
+            failure === "wrong state"
+              ? Promise.resolve("manual-code#wrong-state")
+              : Promise.reject(new Error("manual entry failed")),
+        }),
+      ).rejects.toThrow(failure === "wrong state" ? "State mismatch" : "manual entry failed");
+      expect(onPrompt).not.toHaveBeenCalled();
+      expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
     },
   );
 
@@ -370,6 +402,7 @@ describe("OpenAI Codex OAuth flow", () => {
         await release.promise;
       },
       onPrompt: vi.fn(async () => "unused-code"),
+      onManualCodeInput: () => createDeferred<string>().promise,
       signal: controller.signal,
     }).catch(rejected);
     let socket: Socket | undefined;
@@ -428,14 +461,18 @@ describe("OpenAI Codex OAuth flow", () => {
     const onPrompt = vi.fn(async () => {
       throw new Error("Browser login must not fall back to manual input");
     });
-    const first = loginOpenAICodex({ onAuth, onPrompt, signal: firstController.signal }).catch(
-      () => undefined,
-    );
+    const onManualCodeInput = () => createDeferred<string>().promise;
+    const first = loginOpenAICodex({
+      onAuth,
+      onPrompt,
+      onManualCodeInput,
+      signal: firstController.signal,
+    }).catch(() => undefined);
     try {
       await releasing.promise;
       firstController.abort();
       await expect(
-        loginOpenAICodex({ onAuth, onPrompt, signal: nextController.signal }),
+        loginOpenAICodex({ onAuth, onPrompt, onManualCodeInput, signal: nextController.signal }),
       ).resolves.toMatchObject({ accountId: "new-account" });
       expect(onPrompt).not.toHaveBeenCalled();
       expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
@@ -544,6 +581,98 @@ describe("OpenAI Codex OAuth flow", () => {
       agent.destroy();
     }
   });
+
+  it("stops local progress before prompting after the callback grace period", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 302 })),
+    );
+    mockTokenResponse(tokenPayload("manual-account"));
+    const events: string[] = [];
+    const ready = createDeferred<void>();
+    const controller = new AbortController();
+    const onPrompt = vi.fn(async () => {
+      events.push("prompt");
+      return "manual-code";
+    });
+    const prompter = createTestWizardPrompter({
+      progress: () => ({ update: () => {}, stop: () => events.push("stop") }),
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const login = loginOpenAICodexOAuth({
+      prompter,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      oauth: {
+        createVpsAwareHandlers: () => ({ onAuth: async () => ready.resolve(), onPrompt }),
+      },
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+      signal: controller.signal,
+    });
+    try {
+      await ready.promise;
+      await vi.advanceTimersByTimeAsync(15_999);
+      expect(onPrompt).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(login).resolves.toMatchObject({ accountId: "manual-account" });
+      expect(events).toEqual(["stop", "prompt"]);
+    } finally {
+      controller.abort();
+      vi.useRealTimers();
+      await login.catch(() => undefined);
+    }
+  });
+
+  it.each([
+    ["/opt/homebrew/Cellar/node/26.12.1/bin/node", " /ignored-prefix ", "/opt/homebrew"],
+    ["/usr/local/bin/node", " /custom-prefix ", "/custom-prefix"],
+  ])(
+    "shows the certificate repair path for %s before starting OAuth",
+    async (execPath, envPrefix, prefix) => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "execPath");
+      vi.stubEnv("HOMEBREW_PREFIX", envPrefix);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw new TypeError("fetch failed", {
+            cause: {
+              code: "ERR_TLS_CERT_ALTNAME_INVALID",
+              message: "certificate hostname mismatch",
+            },
+          });
+        }),
+      );
+      const prompter = createTestWizardPrompter();
+      const createVpsAwareHandlers = vi.fn(() => {
+        throw new Error("OAuth must not start after failed prerequisites");
+      });
+      const openUrl = vi.fn(async () => undefined);
+      Object.defineProperty(process, "execPath", { configurable: true, value: execPath });
+      try {
+        await expect(
+          loginOpenAICodexOAuth({
+            prompter,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            oauth: { createVpsAwareHandlers },
+            isRemote: false,
+            openUrl,
+          }),
+        ).rejects.toThrow("prerequisites failed");
+        expect(prompter.note).toHaveBeenCalledWith(
+          expect.stringContaining(`Verify cert bundle exists: ${prefix}/etc/openssl@3/cert.pem`),
+          "OAuth prerequisites",
+        );
+        expect(createVpsAwareHandlers).not.toHaveBeenCalled();
+        expect(openUrl).not.toHaveBeenCalled();
+        expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+      } finally {
+        if (descriptor) {
+          Object.defineProperty(process, "execPath", descriptor);
+        }
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it.each(["exchange", "refresh"] as const)("times out token %s requests", async (operation) => {
     ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(
@@ -655,21 +784,6 @@ describe("OpenAI model-account credential ownership", () => {
   });
 });
 
-async function listenLoopbackServer(server: Server): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
-
 async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => {
     server.close(() => resolve());
@@ -684,7 +798,7 @@ async function withLoopbackTokenResponse(
     res.writeHead(200, { "content-type": "application/json" });
     res.end(body);
   });
-  const port = await listenLoopbackServer(server);
+  const port = await listenOnLoopback(server);
   const release = vi.fn(async () => undefined);
   try {
     ssrfMocks.fetchWithSsrFGuard.mockImplementationOnce(async ({ init, signal }) => ({

@@ -62,23 +62,20 @@ export function registerAgentQueuedRestartRecoveryTests() {
         expect(store[sessionKey]?.mainRestartRecovery?.reservation).toBeUndefined();
         expect(mocks.agentCommand).not.toHaveBeenCalled();
 
+        const cancelOptions = { context, client: null, isWebchatConnect: () => false };
         if (cause === "rpc") {
           cancellation = handleChatAbortRequest({
+            ...cancelOptions,
             params: { sessionKey, runId },
             respond: vi.fn(),
-            context,
             req: { type: "req", id: `${runId}-abort`, method: "chat.abort" },
-            client: null,
-            isWebchatConnect: () => false,
           });
         } else if (cause === "stop") {
           cancellation = handleDirectExternalChatSend({
+            ...cancelOptions,
             params: { sessionKey, message: "/stop", idempotencyKey: `${runId}-stop` },
             respond: stopRespond,
-            context,
             req: { type: "req", id: `${runId}-stop`, method: "chat.send" },
-            client: null,
-            isWebchatConnect: () => false,
           });
         } else if (cause === "timeout") {
           cancellation = vi.advanceTimersByTimeAsync(1_000);
@@ -94,10 +91,7 @@ export function registerAgentQueuedRestartRecoveryTests() {
         }
         void cancellation.catch(() => {});
         await waitForAssertion(() => {
-          expect(
-            stopRespond.mock.lastCall?.[0],
-            JSON.stringify(stopRespond.mock.lastCall),
-          ).not.toBe(false);
+          expect(stopRespond.mock.lastCall?.[0]).not.toBe(false);
           expect(active.input.abortSignal.aborted).toBe(true);
         });
         dispatchGate.resolve();
@@ -107,21 +101,21 @@ export function registerAgentQueuedRestartRecoveryTests() {
         expect(mocks.agentCommand).not.toHaveBeenCalled();
         expect(rpcSourceTesting.has(runId)).toBe(false);
         const retryable = cause === "restart" || cause === "timeout";
-        expect(store[sessionKey]).toMatchObject({
+        const entry = store[sessionKey];
+        expectRecordFields(entry, {
           sessionId,
           status: retryable ? "interrupted" : "killed",
           abortedLastRun: retryable,
+          restartRecoveryDeliveryRunId: undefined,
+          mainRestartRecovery: retryable
+            ? expect.objectContaining({ chargedAttempts: 1 })
+            : undefined,
+          ...(retryable
+            ? { restartRecoveryDeliverySourceRunId: "interrupted-source-run" }
+            : { restartRecoveryRuns: undefined }),
         });
-        expect(store[sessionKey]?.restartRecoveryDeliveryRunId).toBeUndefined();
         if (retryable) {
-          expect(store[sessionKey]?.mainRestartRecovery).toMatchObject({ chargedAttempts: 1 });
-          expect(store[sessionKey]?.mainRestartRecovery?.reservation).toBeUndefined();
-          expect(store[sessionKey]?.restartRecoveryDeliverySourceRunId).toBe(
-            "interrupted-source-run",
-          );
-        } else {
-          expect(store[sessionKey]?.mainRestartRecovery).toBeUndefined();
-          expect(store[sessionKey]?.restartRecoveryRuns).toBeUndefined();
+          expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
         }
       } finally {
         dispatchGate.resolve();

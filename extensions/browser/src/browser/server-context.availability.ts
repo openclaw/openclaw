@@ -37,7 +37,6 @@ import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
   CDP_READY_AFTER_LAUNCH_POLL_MS,
-  CDP_READY_AFTER_LAUNCH_WINDOW_MS,
 } from "./server-context.constants.js";
 import {
   assertProfileLifecycleContext,
@@ -211,10 +210,10 @@ export function createProfileAvailability({
       return ready.ready && state().extensionRelays?.get(profile.name) === relay;
     }
     if (capabilities.usesChromeMcp) {
-      // countChromeMcpTabs creates the session if needed — no separate availability call required.
+      // Listing creates the session if needed and checks its command channel.
       assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
-      const { countChromeMcpTabs } = await getChromeMcpModule();
-      await countChromeMcpTabs(profile.name, profile, {
+      const { listChromeMcpTabs } = await getChromeMcpModule();
+      await listChromeMcpTabs(profile.name, profile, {
         ...(timeoutMs != null ? { timeoutMs } : {}),
         ...(options?.signal ? { signal: options.signal } : {}),
       });
@@ -357,8 +356,7 @@ export function createProfileAvailability({
   ): Promise<void> => {
     // launchOpenClawChrome() can return before Chrome is fully ready to serve /json/version + CDP WS.
     // If a follow-up call races ahead, we can hit PortInUseError trying to launch again on the same port.
-    const deadlineMs =
-      Date.now() + (state().resolved.localCdpReadyTimeoutMs ?? CDP_READY_AFTER_LAUNCH_WINDOW_MS);
+    const deadlineMs = Date.now() + state().resolved.localCdpReadyTimeoutMs;
     while (Date.now() < deadlineMs) {
       const remainingMs = Math.max(0, deadlineMs - Date.now());
       const attemptTimeoutMs = Math.max(

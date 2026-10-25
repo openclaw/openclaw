@@ -4,8 +4,8 @@ import {
   type ChatFollowUpMode,
 } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
-import "../../../components/tooltip.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
+import "../../../components/tooltip.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import {
   canSubmitBeforeChatHistory,
@@ -16,10 +16,18 @@ import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { chatGoalCreationObjective } from "../chat-goals.ts";
+import {
+  hasTerminalRunStatus,
+  isChatRunWorking,
+  isCurrentSessionSubmittedProgress,
+} from "../chat-run-working.ts";
 import { insertComposerDictation, type ComposerDictationOwner } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
-import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
-import type { ChatRunControlsProps, MicrophonePickerProps } from "./chat-composer-controls.tsx";
+import type {
+  ComposerMicrophoneOwner,
+  MicrophonePickerProps,
+} from "../composer-microphone-picker.ts";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
@@ -29,20 +37,17 @@ import {
 } from "./chat-composer-dom.ts";
 import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
-import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import type { ComposerPrediction } from "./chat-composer-prediction.ts";
-import { isSkillMenuVisible, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
-import type { SlashMenuHost } from "./chat-composer-slash-menu.tsx";
+import { isSkillMenuVisible, type SkillMenuHost } from "./chat-composer-skill-menu-state.ts";
+import type { SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
 import {
   clearPendingClearedSubmittedDraft,
   commitComposerDraft,
   composerDraftKey,
   consumeComposerInputIntent,
   getChatComposerState,
-  hasTerminalRunStatus,
-  isChatRunWorking,
-  isCurrentSessionSubmittedProgress,
   markComposerInputIntent,
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
@@ -65,11 +70,12 @@ export function createChatComposerContext(
   voice: { dictation: ComposerDictationOwner; picker: ComposerMicrophoneOwner },
   prediction: ComposerPrediction | undefined,
   questionPanelProps: QuestionPanelProps | null,
+  streaming: boolean,
 ) {
   const state = getChatComposerState(props.paneId);
   state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canCompose ?? props.canSend;
-  const isBusy = props.sending || props.stream !== null;
+  const isBusy = props.sending || streaming;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
   const submittedProgress = props.queue.find((item) =>
@@ -137,7 +143,7 @@ export function createChatComposerContext(
     ? t("chat.waitingForApproval")
     : submittedProgress?.sendState === "waiting-model"
       ? t("chat.composer.preparingModel")
-      : props.stream !== null
+      : streaming
         ? t("chat.composer.responding", { name: assistantName })
         : sendingForCurrentSession || submittedProgress
           ? t("chat.composer.sendingMessage")
@@ -219,8 +225,9 @@ export function createChatComposerContext(
         : "steer"
       : undefined;
   const showComposer =
-    !state.presentation.activeQuestionKey?.startsWith("gateway:") ||
-    state.presentation.questionCollapsed;
+    !questionPanelProps ||
+    questionPanelProps.model.nonBlocking === true ||
+    questionPanelProps.model.collapsed;
 
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.
@@ -528,7 +535,12 @@ export function createChatComposerContext(
       }
     }
   };
-  const runControlsProps: ChatRunControlsProps = {
+  const replacingRunningGoal =
+    isBusy &&
+    props.selectedSession?.goal?.status === "active" &&
+    (goalComposer.mode?.action === "start" ||
+      chatGoalCreationObjective(visibleDraft) !== undefined);
+  const runControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(visibleDraft),
     submitDisabledReason: props.submitDisabledReason,
@@ -542,8 +554,8 @@ export function createChatComposerContext(
     followUpMode: props.followUpMode,
     alternateFollowUpMode,
     suggestionComposer: props.suggestionComposer,
-    submissionLabel: goalComposer.submissionLabel,
-    sending: props.sending,
+    submissionLabel: replacingRunningGoal ? t("chat.goals.replace") : goalComposer.submissionLabel,
+    sending: props.sending && !replacingRunningGoal,
     voiceActive: props.realtimeTalkActive,
     voiceStatus: props.realtimeTalkStatus,
     voiceDetail: props.realtimeTalkDetail,
@@ -552,14 +564,14 @@ export function createChatComposerContext(
     voiceVideoEnabled: Boolean(props.realtimeTalkVideoStream),
     voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
-    onSend: (event) => submitDraft(state.composerTextarea?.value ?? props.draft, event),
+    onSend: (event?: Event) => submitDraft(state.composerTextarea?.value ?? props.draft, event),
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
     readDictation: dictation ? () => dictation : undefined,
     onDictationPointerDown: handleDictationStart,
     onDirectDictationStart: handleDictationStart,
-    onPrimaryActionPointerDown: (event) => {
+    onPrimaryActionPointerDown: (event: PointerEvent) => {
       if (state.composerTextarea?.matches(":focus")) {
         event.preventDefault();
       }
@@ -592,7 +604,7 @@ export function createChatComposerContext(
     clearSkillMenu,
     props,
     state,
-    attachmentReadRevision: props.attachmentReads?.revision,
+    attachmentReadRevision: props.attachmentReadRevision ?? props.attachmentReads?.revision,
     canCompose,
     showAbortableUi,
     visibleDraft,

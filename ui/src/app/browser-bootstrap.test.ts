@@ -25,7 +25,7 @@ function rejectConnect(
   code: string = ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
   willRetry = false,
 ) {
-  store.current().opts.onClose?.({
+  store.current().testOptions.onClose?.({
     code: 4008,
     reason: "connect failed",
     error: { code: "INVALID_REQUEST", message: "auth failed", details: { code } },
@@ -78,7 +78,7 @@ describe("same-origin browser bootstrap recovery", () => {
         signal: expect.any(AbortSignal),
       }),
     );
-    expect(store.current().opts).toMatchObject(OWNER_BOOTSTRAP);
+    expect(store.current().testOptions).toMatchObject(OWNER_BOOTSTRAP);
     expect(store.gateway.connection.token).toBe("");
     expect(globalThis.location.href).toBe(PAGE_URL);
   });

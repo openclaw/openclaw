@@ -1,7 +1,6 @@
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
-import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
@@ -35,7 +34,6 @@ export type ToolCallSummary = {
   commandBearing: boolean;
   instanceReplaySafe: boolean;
   replaySafe: boolean;
-  mutatingAction: boolean;
   ownerKey?: string;
 };
 
@@ -68,7 +66,7 @@ export type StreamingReplyResolver = (params: {
 
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
 export type StreamBlockState = {
-  thinking: boolean;
+  reasoningDepth: number;
   final: boolean;
   inlineCode?: InlineCodeState;
   fence?: FenceScanState;
@@ -204,7 +202,6 @@ export class EmbeddedAgentSubscribeState {
   currentSourceMessagingToolSentTextsNormalized: string[] = [];
   currentSourceMessagingToolHeldPartial?: string = undefined;
   messagingToolSentTargets: MessagingToolSend[] = [];
-  heartbeatToolResponse?: HeartbeatToolResponse = undefined;
   messagingToolSentMediaUrls: string[] = [];
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
   messageToolOnlySourceReplyDelivered = false;

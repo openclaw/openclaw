@@ -1,5 +1,10 @@
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  placementAuthorityOwnerFor,
+  reserveLocalPlacementAdmission,
+} from "./placement-authority-owner.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { preparePlacementAuthorityRead } from "./placement-turn-authority.js";
@@ -51,6 +56,8 @@ export function createPlacementWorkspaceReservationOps(
   read: (sessionId: string) => Promise<WorkerSessionPlacementProjection>,
 ) {
   const signal = getGatewayRestartDrainSignal();
+  const context = captureOpenClawStateWorkerContext({ path: runtime.path });
+  const owner = placementAuthorityOwnerFor(context.admission.identity);
   const withReservation = async <T>(
     scope: string,
     sessionId: string,
@@ -77,29 +84,34 @@ export function createPlacementWorkspaceReservationOps(
     workspace: "local" | "repository",
     run: (assertCurrent: () => void) => Promise<T>,
   ): Promise<T> => {
-    return await withWorkspaceExclusion(
-      identity.sessionId,
-      async (assertPublisherExclusion) =>
-        await withReservation(PERSONAL_SCOPE, identity.sessionId, async (assertOwned) => {
-          const prepared = await preparePlacementAuthorityRead(
-            runtime.path,
-            identity.sessionId,
-            () => read(identity.sessionId),
-          );
-          try {
-            assertReconciled(prepared.value, identity, workspace);
-            const assertCurrent = () => {
-              assertPublisherExclusion();
-              assertOwned();
-              prepared.assertCurrent();
-            };
-            // Exclusion blocks new claims; committed placement changes revoke the prepared facts.
-            return await run(assertCurrent);
-          } finally {
-            prepared.release();
-          }
-        }),
-    );
+    const release = reserveLocalPlacementAdmission(owner, identity.sessionId);
+    try {
+      return await withWorkspaceExclusion(
+        identity.sessionId,
+        async (assertPublisherExclusion) =>
+          await withReservation(PERSONAL_SCOPE, identity.sessionId, async (assertOwned) => {
+            const prepared = await preparePlacementAuthorityRead(
+              runtime.path,
+              identity.sessionId,
+              () => read(identity.sessionId),
+            );
+            try {
+              assertReconciled(prepared.value, identity, workspace);
+              const assertCurrent = () => {
+                assertPublisherExclusion();
+                assertOwned();
+                prepared.assertCurrent();
+              };
+              // Exclusion blocks new claims; committed placement changes revoke the prepared facts.
+              return await run(assertCurrent);
+            } finally {
+              prepared.release();
+            }
+          }),
+      );
+    } finally {
+      release();
+    }
   };
   return {
     withWorkspaceExclusion,

@@ -17,7 +17,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { GATEWAY_SERVICE_KIND, isGatewayServiceEnv } from "./constants.js";
+import { GATEWAY_SERVICE_KIND, isGatewayServiceEnv, NODE_SERVICE_KIND } from "./constants.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -25,7 +25,10 @@ import {
   runServiceInspectionGuard,
   withServiceInspectionBudget,
 } from "./service-inspection-budget.js";
-import { findServiceOwnershipRefusal, ServiceInspectionError } from "./service-inspection-error.js";
+import {
+  findServiceOwnershipRefusal,
+  SystemdInspectionTimeout,
+} from "./service-inspection-error.js";
 import { resolveServiceEntrypointIndex, summarizeGatewayServiceLayout } from "./service-layout.js";
 import type {
   GatewayServiceCommandConfig,
@@ -46,6 +49,7 @@ import {
   DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS,
   resolveSystemdUnitLoadPaths,
 } from "./systemd-unit-load-paths.js";
+import { parseSystemdInlineEnvironment } from "./systemd-unit.js";
 
 type SystemdDiscoveryOptions = Pick<
   GatewayServiceReadOptions,
@@ -382,7 +386,7 @@ async function systemdUnitsShareInstallation(
   const assertCurrent = () => {
     runServiceInspectionGuard(assertInspectionCurrent);
     if (deadline !== undefined && now() >= deadline) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      throw new SystemdInspectionTimeout("user/system installation comparison");
     }
   };
   assertCurrent();
@@ -393,7 +397,9 @@ async function systemdUnitsShareInstallation(
     assertCurrent();
     const remaining = deadline === undefined ? undefined : deadline - now();
     if (remaining !== undefined && remaining <= 0) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      throw new SystemdInspectionTimeout(
+        `installation comparison for ${target.scope} ${target.unitName}`,
+      );
     }
     // Duplicate proof cannot transfer one manager's LoadUnit grant to its peer.
     const command = await readSystemdGatewayCommand(env, target, {
@@ -473,7 +479,9 @@ async function findMarkerOwnedSystemSystemdUnit(
   for (const target of custom.values()) {
     const remaining = deadline === undefined ? undefined : deadline - now();
     if (remaining !== undefined && remaining <= 0) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      throw new SystemdInspectionTimeout(
+        `custom unit discovery for ${target.scope} ${target.unitName}`,
+      );
     }
     const command = await readSystemdGatewayCommand(env, target, {
       ...options,
@@ -519,6 +527,16 @@ async function findSystemdGatewayScope(
         if (!hasErrnoCode(error, "ENOENT")) {
           throw error;
         }
+        continue;
+      }
+      // A legacy Gateway for profile node-<x> shares its name with profile <x>'s node.
+      if (
+        !env.OPENCLAW_SYSTEMD_UNIT?.trim() &&
+        name.startsWith("openclaw-node-") &&
+        parseSystemdInlineEnvironment(
+          await fs.readFile(unitPath, "utf8"),
+        ).OPENCLAW_SERVICE_KIND?.trim() === NODE_SERVICE_KIND
+      ) {
         continue;
       }
       return {

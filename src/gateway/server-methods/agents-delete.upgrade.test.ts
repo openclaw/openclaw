@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgent } from "../../agents/agent-create.js";
+import { prepareDoctorContext } from "../../commands/doctor-config-flow.test-support.js";
 import { runDoctorConfigPreflight } from "../../commands/doctor-config-preflight.js";
 import { prepareDoctorDatabasePreflight } from "../../commands/doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "../../commands/doctor-maintenance.js";
@@ -17,6 +18,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
+import { runInitialConfigWriteHealth } from "../../flows/doctor-health-contribution-runners.config.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
@@ -218,6 +220,11 @@ it.for([true, false])(
                     (receipt) => receipt.outcome === "refused",
                   ),
                 ).toBe(false);
+                await using configDoctor = await prepareDoctorContext(state.configPath);
+                await runInitialConfigWriteHealth(configDoctor);
+                expect(configDoctor.configWriteRefusal).toBeUndefined();
+                const migratedConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+                expect(migratedConfig.agents.defaults).not.toHaveProperty("heartbeat");
               });
             } finally {
               await maintenance.release();

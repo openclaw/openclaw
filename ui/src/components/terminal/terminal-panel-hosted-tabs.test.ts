@@ -7,6 +7,7 @@ import { createInitializationContext } from "../../pages/chat/chat-pane.test-sup
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import * as confirmation from "../confirm-dialog.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, readPanelHostedTabs } from "../panel-hosted-tabs.ts";
 import {
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
@@ -16,6 +17,7 @@ import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.tsx";
 import {
   createTerminalController,
+  createTerminalGatewayClient,
   createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
@@ -31,19 +33,15 @@ async function mount(embedded = true, tabsInHeader = true) {
   let nextOpen:
     | ReturnType<typeof createDeferred<ReturnType<typeof terminalOpenResult>>>
     | undefined;
-  const client: TerminalGatewayClient = {
-    forceReconnect: () => {},
-    request: async <T>(method: string) => {
-      if (method === "terminal.open") {
-        const reply = nextOpen;
-        nextOpen = undefined;
-        const immediate = terminalOpenResult(`session-${++sequence}`);
-        return (reply ? await reply.promise : immediate) as T;
-      }
-      return (method === "terminal.list" ? { sessions: [] } : { ok: true }) as T;
-    },
-    addEventListener: () => () => {},
-  };
+  const client: TerminalGatewayClient = createTerminalGatewayClient(async <T>(method: string) => {
+    if (method === "terminal.open") {
+      const reply = nextOpen;
+      nextOpen = undefined;
+      const immediate = terminalOpenResult(`session-${++sequence}`);
+      return (reply ? await reply.promise : immediate) as T;
+    }
+    return (method === "terminal.list" ? { sessions: [] } : { ok: true }) as T;
+  });
   const panel = createTestTerminalPanel(tagName);
   panel.available = true;
   panel.embedded = embedded;
@@ -58,6 +56,7 @@ async function mount(embedded = true, tabsInHeader = true) {
   await panel.updateComplete;
   return {
     panel,
+    client,
     deferNextOpen: () => {
       nextOpen = createDeferred<ReturnType<typeof terminalOpenResult>>();
       return nextOpen;
@@ -115,9 +114,8 @@ describe("Terminal panel hosted tabs", () => {
       const oldController = createTerminalController();
       createGhosttyTerminalMock.mockResolvedValueOnce(oldController);
       const session = terminalOpenResult("retained-session");
-      const client: TerminalGatewayClient = {
-        forceReconnect: () => {},
-        request: async <T>(method: string) => {
+      const client: TerminalGatewayClient = createTerminalGatewayClient(
+        async <T>(method: string) => {
           // SAFETY: Each fixture reply matches the terminal method requested by the owner.
           return (
             method === "terminal.open" || method === "terminal.attach"
@@ -127,8 +125,7 @@ describe("Terminal panel hosted tabs", () => {
                 : { ok: true }
           ) as T;
         },
-        addEventListener: () => () => {},
-      };
+      );
       const first = createInitializationContext();
       const provider = createApplicationContextProvider(first);
       const panel = createTestTerminalPanel(tagName);
@@ -307,32 +304,22 @@ describe("Terminal panel hosted tabs", () => {
     }
   });
 
-  it("opens another shell for an explicit new-session toggle", async () => {
+  it("keeps mobile docking hosted and routes upload through the embedded composer", async () => {
     const { panel } = await mount();
-    panel.handleToggleRequest(
-      new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
-        detail: { open: true, newSession: true },
-      }),
-    );
-    await waitForFast(() => expect(panel.hostedTabs).toHaveLength(2));
-    await waitForFast(() =>
-      expect(panel.hostedTabs.every((tab) => tab.className === "is-live")).toBe(true),
-    );
+    panel.mobile = true;
     await panel.updateComplete;
-  });
-
-  it("offers three light-DOM actions with upload availability", async () => {
-    const { panel } = await mount();
     const actions = mountActions(panel);
     expect(
       [...actions.querySelectorAll("button")].map((control) => control.getAttribute("aria-label")),
-    ).toEqual(["Terminal sessions", "Add files to terminal", "Dock to bottom"]);
-    expect(actions.querySelectorAll("openclaw-tooltip > .rail-header__action")).toHaveLength(3);
+    ).toEqual(["Dock to bottom"]);
+    expect(actions.querySelectorAll("openclaw-tooltip > .rail-header__action")).toHaveLength(1);
     expect(actions.querySelector('[class*="tp-"]')).toBeNull();
+    panel.selectHostedTab(panel.activeHostedTabId!);
+    await panel.updateComplete;
     const inputClick = vi.spyOn(panel.querySelector<HTMLInputElement>(".tp-file-input")!, "click");
-    button(actions, "Add files to terminal").click();
+    button(panel, "Add files to terminal").click();
     expect(inputClick).toHaveBeenCalledOnce();
-    expect(button(actions, "Add files to terminal").disabled).toBe(false);
+    expect(button(panel, "Add files to terminal").disabled).toBe(false);
     const read = createDeferred<ArrayBuffer>();
     const file = new File(["synthetic"], "pending.txt");
     Object.defineProperty(file, "arrayBuffer", { value: () => read.promise });
@@ -340,12 +327,12 @@ describe("Terminal panel hosted tabs", () => {
     Object.defineProperty(input, "files", { value: [file] });
     input.dispatchEvent(new Event("change"));
     await panel.updateComplete;
-    expect(button(actions, "Add files to terminal").disabled).toBe(true);
+    expect(button(panel, "Add files to terminal").disabled).toBe(true);
     panel.querySelector<HTMLButtonElement>(".tp-upload-cancel")!.click();
     read.resolve(new ArrayBuffer(0));
     await read.promise;
     await panel.updateComplete;
-    expect(button(actions, "Add files to terminal").disabled).toBe(false);
+    expect(button(panel, "Add files to terminal").disabled).toBe(false);
     const dock = vi.fn();
     window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
     try {
@@ -354,7 +341,7 @@ describe("Terminal panel hosted tabs", () => {
       expect(dock.mock.calls[0]?.[0].detail).toMatchObject({ dock: "bottom", open: true });
       await panel.updateComplete;
       expect(panel.hostedTabs).toHaveLength(0);
-      expect(button(actions, "Add files to terminal").disabled).toBe(true);
+      expect(panel.querySelector(".tp-composer")).toBeNull();
       panel.closeTerminalPanel();
       panel.remove();
       await Promise.resolve();
@@ -365,33 +352,59 @@ describe("Terminal panel hosted tabs", () => {
     }
   });
 
-  it("opens its panel menu from the hosted header and restores focus on Escape", async () => {
+  it("keeps mobile Sessions internal and returns focus on Escape", async () => {
     const { panel } = await mount();
-    const actions = mountActions(panel);
-    const trigger = button(actions, "Terminal sessions");
-    expect(trigger.hasAttribute("aria-controls")).toBe(false);
-    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
-    trigger.click();
+    panel.mobile = true;
+    await panel.updateComplete;
+    button(panel, "Terminal sessions").click();
     await waitForFast(() =>
       expect(document.activeElement).toBe(panel.querySelector(".tp-session-refresh")),
     );
-    expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    const menu = panel.querySelector(".tp-session-menu.tp-session-menu--hosted")!;
-    expect(menu).not.toBeNull();
-    expect(actions.querySelector(".tp-session-menu")).toBeNull();
-    menu.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
-    trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
-    await panel.updateComplete;
-    expect(panel.querySelector(".tp-session-menu")).toBe(menu);
-    menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await panel.updateComplete;
-    expect(panel.querySelector(".tp-session-menu")).toBeNull();
-    expect(document.activeElement).toBe(trigger);
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    trigger.click();
-    await panel.updateComplete;
+    const menu = panel.querySelector(".tp-session-menu--inline")!;
+    expect(menu.getAttribute("role")).toBe("region");
     document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
     await panel.updateComplete;
+    expect(panel.querySelector(".tp-session-menu--inline")).toBe(menu);
+    menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await panel.updateComplete;
+    await waitForFast(() =>
+      expect(document.activeElement).toBe(button(panel, "Terminal sessions")),
+    );
     expect(panel.querySelector(".tp-session-menu")).toBeNull();
+    expect(panel.hostedTabs).toHaveLength(1);
+  });
+
+  it("cancels closing a live personal terminal without ending its session", async () => {
+    const { panel, client } = await mount();
+    panel.mobile = true;
+    await panel.updateComplete;
+    const request = vi.spyOn(client, "request");
+    const id = panel.activeHostedTabId!;
+    const closing = panel.closeHostedTab(id);
+    await waitForFast(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(
+      (control) => control.textContent?.trim() === "Cancel",
+    );
+    expect(cancel).toBeDefined();
+    cancel!.click();
+    await closing;
+    expect(panel.activeHostedTabId).toBe(id);
+    expect(panel.hostedTabs).toHaveLength(1);
+    expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
+  });
+
+  it("keeps a mobile terminal open and shows a rejected close confirmation", async () => {
+    const { panel, client } = await mount();
+    panel.mobile = true;
+    await panel.updateComplete;
+    const request = vi.spyOn(client, "request");
+    const failure = new Error("Close confirmation unavailable. Try again.");
+    vi.spyOn(confirmation, "showConfirmDialog").mockRejectedValueOnce(failure);
+    const id = panel.activeHostedTabId!;
+    await panel.closeHostedTab(id);
+    await waitForFast(() => expect(panel.textContent).toContain(failure.message));
+    expect(panel.activeHostedTabId).toBe(id);
+    expect(panel.hostedTabs).toHaveLength(1);
+    expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
   });
 });

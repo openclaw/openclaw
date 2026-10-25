@@ -1,5 +1,6 @@
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { resolveExecConfigState } from "../exec-defaults.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import type { RunCliAgentParams } from "./types.js";
@@ -7,7 +8,9 @@ import type { RunCliAgentParams } from "./types.js";
 /**
  * Translate the caller's runtime tool cap into the CLI run's exact tool availability.
  * Native CLI tools cannot enforce workspace, channel, or inherited completion caps, so those
- * runs expose their whole surface through the mediated MCP policy projection.
+ * runs expose their whole surface through the mediated MCP policy projection. Bundled
+ * local Claude agent turns use that same mediated surface even without a cap, so a
+ * completion does not replace the native tool prefix of a running session.
  */
 export async function resolveCliRuntimeToolPolicy(input: {
   params: RunCliAgentParams;
@@ -91,8 +94,27 @@ export async function resolveCliRuntimeToolPolicy(input: {
     params.controlOperation === undefined &&
     !(input.isSideQuestion && input.sideQuestionToolMode === "disabled") &&
     resolveEffectiveToolFsWorkspaceOnly({ cfg: params.config, agentId: input.policyAgentId });
+  const ordinaryClaudeMediation =
+    input.backendId === "claude-cli" &&
+    input.bundleMcp &&
+    input.canEnforceExactToolAvailability &&
+    !input.isSideQuestion &&
+    !input.skipsTurnPreparation &&
+    params.sessionEntry?.execHost !== "node" &&
+    params.cliToolAvailability === undefined &&
+    resolveExecConfigState({
+      cfg: params.config,
+      sessionEntry: params.sessionEntry,
+      execOverrides: params.execOverrides,
+      agentId: input.policyAgentId,
+      sessionKey: input.policySessionKey,
+    }).host !== "node";
   if (
-    (params.trustedInternalHandoff || senderRestricted || delegatedExecution || workspaceOnly) &&
+    (params.trustedInternalHandoff ||
+      senderRestricted ||
+      delegatedExecution ||
+      workspaceOnly ||
+      ordinaryClaudeMediation) &&
     params.disableTools !== true
   ) {
     if (

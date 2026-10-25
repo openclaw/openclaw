@@ -30,8 +30,6 @@ async function createScenario() {
   const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
   const deps = {
     ...createGatewayMaintenanceStateForTest(),
-    runWorktreeGc: async () => undefined,
-    runManagedOutgoingMediaGc: async () => undefined,
   };
   let timers: ReturnType<typeof startGatewayMaintenanceTimers> | undefined;
   return {

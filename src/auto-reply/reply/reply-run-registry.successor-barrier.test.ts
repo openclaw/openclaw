@@ -21,6 +21,40 @@ async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+function barrier(
+  operation: ReturnType<typeof createTestReplyOperation>,
+  sessionKeys = [operation.key],
+) {
+  const release = createDeferred();
+  registerReplyOperationSuccessorBarrier({
+    operation,
+    sessionId: operation.sessionId,
+    sessionKeys,
+    start: () => release.promise,
+  });
+  return release;
+}
+
+function settledSource(operation: ReturnType<typeof createTestReplyOperation>, sessionId: string) {
+  return {
+    settled: true,
+    sources: [
+      {
+        sessionId,
+        sessionIds: operation.captureOwnedSessionIds(),
+        operation,
+        databaseIdentity: undefined,
+      },
+    ],
+  };
+}
+
+function expectBlocked(sessionKey: string) {
+  expect(() => createTestReplyOperation({ sessionKey })).toThrow(
+    ReplyRunSuccessorAdmissionBlockedError,
+  );
+}
+
 describe("reply run successor barriers", () => {
   afterEach(() => {
     testing.resetSessionControllerForTest();
@@ -38,27 +72,13 @@ describe("reply run successor barriers", () => {
         sessionKey: requestKey,
         sessionId: "alias-session",
       });
-      const { promise: firstBarrier, resolve: releaseFirstBarrier } = createDeferred();
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: "alias-session",
-        sessionKeys: [requestKey, canonicalKey],
-        start: () => firstBarrier,
-      });
-      const { promise: secondBarrier, resolve: releaseSecondBarrier } = createDeferred();
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: "alias-session",
-        sessionKeys: [adoptedKey],
-        start: () => secondBarrier,
-      });
+      const firstBarrier = barrier(operation, [requestKey, canonicalKey]);
+      const secondBarrier = barrier(operation, [adoptedKey]);
 
       operation.updateSessionId("rotated-alias-session");
       operation.complete();
       for (const sessionKey of [requestKey, canonicalKey, adoptedKey]) {
-        expect(() => createTestReplyOperation({ sessionKey })).toThrow(
-          ReplyRunSuccessorAdmissionBlockedError,
-        );
+        expectBlocked(sessionKey);
       }
       const timedWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
       await vi.advanceTimersByTimeAsync(100);
@@ -66,35 +86,15 @@ describe("reply run successor barriers", () => {
 
       const requestWait = waitForReplyRunSuccessorAdmission(requestKey, 100);
       const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
-      releaseFirstBarrier();
+      firstBarrier.resolve();
       for (const wait of [requestWait, canonicalWait]) {
-        await expect(wait).resolves.toEqual({
-          settled: true,
-          sources: [
-            {
-              sessionId: "rotated-alias-session",
-              sessionIds: operation.captureOwnedSessionIds(),
-              operation,
-              databaseIdentity: undefined,
-            },
-          ],
-        });
+        await expect(wait).resolves.toEqual(settledSource(operation, "rotated-alias-session"));
       }
-      expect(() => createTestReplyOperation({ sessionKey: adoptedKey })).toThrow(
-        ReplyRunSuccessorAdmissionBlockedError,
+      expectBlocked(adoptedKey);
+      secondBarrier.resolve();
+      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual(
+        settledSource(operation, "rotated-alias-session"),
       );
-      releaseSecondBarrier();
-      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual({
-        settled: true,
-        sources: [
-          {
-            sessionId: "rotated-alias-session",
-            sessionIds: operation.captureOwnedSessionIds(),
-            operation,
-            databaseIdentity: undefined,
-          },
-        ],
-      });
       const successor = createTestReplyOperation({ sessionKey: canonicalKey });
       successor.complete();
     });
@@ -127,17 +127,13 @@ describe("reply run successor barriers", () => {
           release.reject(new Error("Synthetic late release failure"));
           await Promise.allSettled([release.promise]);
         }
-        expect(() => createTestReplyOperation({ sessionKey: operation.key })).toThrow(
-          ReplyRunSuccessorAdmissionBlockedError,
-        );
+        expectBlocked(operation.key);
         wait = waitForReplyRunSuccessorAdmission(operation.key, null, {
           signal: controller.signal,
         });
         controller.abort();
         await expect(wait).resolves.toEqual({ settled: false });
-        expect(() => createTestReplyOperation({ sessionKey: operation.key })).toThrow(
-          ReplyRunSuccessorAdmissionBlockedError,
-        );
+        expectBlocked(operation.key);
         if (releaseState === "pending") {
           release.resolve();
           await expect(
@@ -157,6 +153,24 @@ describe("reply run successor barriers", () => {
       }
     },
   );
+
+  it("cancels a bounded wait without releasing the successor fence", async () => {
+    const operation = createTestReplyOperation();
+    const release = barrier(operation);
+    operation.complete();
+    const controller = new AbortController();
+    try {
+      const wait = waitForReplyRunSuccessorAdmission(operation.key, 100, {
+        signal: controller.signal,
+      });
+      controller.abort();
+      await expect(wait).resolves.toEqual({ settled: false });
+      expectBlocked(operation.key);
+    } finally {
+      release.resolve();
+      await waitForReplyRunSuccessorAdmission(operation.key, null);
+    }
+  });
 
   it("waits for the captured physical owner when logical keys are ambiguous", async () => {
     const sessionKey = "global";
@@ -178,20 +192,8 @@ describe("reply run successor barriers", () => {
       sessionId: "second-session",
       target: secondTarget,
     });
-    const firstRelease = createDeferred();
-    const secondRelease = createDeferred();
-    registerReplyOperationSuccessorBarrier({
-      operation: first,
-      sessionId: first.sessionId,
-      sessionKeys: [sessionKey],
-      start: () => firstRelease.promise,
-    });
-    registerReplyOperationSuccessorBarrier({
-      operation: second,
-      sessionId: second.sessionId,
-      sessionKeys: [sessionKey],
-      start: () => secondRelease.promise,
-    });
+    const firstRelease = barrier(first);
+    const secondRelease = barrier(second);
     first.complete();
     second.complete();
 

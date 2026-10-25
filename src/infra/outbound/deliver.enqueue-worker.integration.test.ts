@@ -7,7 +7,7 @@ import type {
   ChannelMessageSendMediaContext,
   ChannelMessageSendTextContext,
 } from "../../channels/message/types.js";
-import { onOutboundDeliveryEnqueued } from "../delivery-queue-cache.js";
+import { outboundDeliveryNotifications } from "../delivery-queue-cache.js";
 import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import * as queueAdmission from "./deliver-queue-admission.js";
@@ -19,11 +19,11 @@ import {
   useOutboundFixture,
 } from "./deliver.custody.test-support.js";
 import { drainMatrixReconnect } from "./deliver.queue-integration.test-support.js";
-import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { StableDeliveryPreparationLostError } from "./delivery-queue-preparation.js";
 import { drainPendingDeliveriesCore, recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import * as queueStorage from "./delivery-queue-storage.js";
+import { holdEnqueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import {
   createRecoveryLog,
   loadPendingDeliveries,
@@ -183,7 +183,10 @@ describe("enqueue publication custody through the real sender", () => {
     const mediaUrl = await source();
     const send = installSender();
     const enqueued = vi.fn();
-    unsubscribe.push(onOutboundDeliveryEnqueued(enqueued));
+    outboundDeliveryNotifications.onEnqueued = enqueued;
+    unsubscribe.push(() => {
+      outboundDeliveryNotifications.onEnqueued = () => {};
+    });
     const terminals = audit(true);
     const reply = heldReply();
     const delivery = deliverStructured({
@@ -220,7 +223,10 @@ describe("enqueue publication custody through the real sender", () => {
   it("releases media staging after native rollback and permits best-effort live sending", async () => {
     const mediaUrl = await source();
     const enqueued = vi.fn();
-    unsubscribe.push(onOutboundDeliveryEnqueued(enqueued));
+    outboundDeliveryNotifications.onEnqueued = enqueued;
+    unsubscribe.push(() => {
+      outboundDeliveryNotifications.onEnqueued = () => {};
+    });
     rollback.enable();
     const send = installSender();
     const queued = vi.fn();

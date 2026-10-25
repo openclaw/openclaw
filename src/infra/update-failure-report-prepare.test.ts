@@ -110,9 +110,9 @@ const diagnostics: Diagnostic[] = [
         : { affectedKey: "gateway.port", message: "Invalid configuration field" }),
     },
     includes: [
-      "gateway.*",
+      "gateway.port",
       "Invalid configuration field",
-      ...(candidate ? ["models.providers.*"] : []),
+      ...(candidate ? ["models.providers.<id>.apiKey"] : []),
     ],
     excludes: /\[redacted-diagnostic\]|private-tenant|private rejected value/u,
   })),
@@ -147,6 +147,8 @@ const diagnostics: Diagnostic[] = [
       ["code", "private-host.example:8123"],
       ["pluginId", "10.20.30.40"],
       ["affectedKey", "mcp.servers.private-host.example"],
+      ["affectedKey", "engines.private-host.example"],
+      ["affectedKey", "engines.node.private-host.example"],
       ["errorName", "PrivateTenantError"],
     ] as const
   ).map(([field, host]) => ({
@@ -223,6 +225,32 @@ it.each(diagnostics)("publishes only bounded diagnostic facts: $name", async (en
   if (entry.title) {
     expect(prepared.title).toContain(entry.title);
   }
+});
+
+it("keeps allowlisted stderr causes alongside a classified startup fact", async () => {
+  const prepared = await report({
+    steps: [
+      step("candidate-gateway-startup", {
+        failureFacts: [
+          {
+            check: "startupz",
+            code: "candidate-startup-failed",
+            message: "plugin load failed",
+            pluginId: "discord",
+          },
+        ],
+        stderrTail:
+          "EACCES: permission denied at /private/customer/plugin on private-host.example token=synthetic-secret",
+      }),
+    ],
+  });
+  expectText(
+    prepared.body,
+    [
+      "Failed phase candidate-gateway-startup: exit 1 (EACCES; Permission denied; plugin load failed: discord)",
+    ],
+    /\/private\/customer|private-host|synthetic-secret/u,
+  );
 });
 
 it("preserves classified destination ownership and recovery without exposing usernames", async () => {

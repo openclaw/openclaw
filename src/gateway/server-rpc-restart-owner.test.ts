@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
   awaitGateBeforeSettlement,
@@ -52,7 +53,7 @@ it(
     const tasks = new Set<Promise<void>>();
     const providerServer = createServer((request, response) => {
       const task = (async () => {
-        const body = await providerFixture.readProviderBody(request);
+        const body = await readRequestText(request);
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           response.writeHead(404).end();
           return;
@@ -179,8 +180,14 @@ it(
         idempotencyKey,
         queueMode: "followup",
       });
-    await send("SYNTHETIC_FIRST_REPLY", "rpc-first");
-    await vi.waitFor(() => expect(firstReceived).toBe(true), { timeout: 60_000 });
+    await vi.waitFor(
+      async () => {
+        // Startup may still be recovering inputs; retries retain the same receipt.
+        await send("SYNTHETIC_FIRST_REPLY", "rpc-first");
+        expect(firstReceived).toBe(true);
+      },
+      { timeout: 60_000 },
+    );
     await send("SYNTHETIC_QUEUED_REPLY", "rpc-queued");
     // Registration precedes queue publication. Followup enqueue settles this
     // source's ordering receipt only after publishing its accepted custody.

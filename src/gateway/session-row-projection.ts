@@ -42,6 +42,7 @@ import {
 } from "./session-row-projection-topology.js";
 import { createSessionRowProjectionTranscriptUpdates } from "./session-row-projection-transcript.js";
 import * as rowScope from "./session-row-scope.js";
+import { replaceSessionRowFacts } from "./session-utils-row.js";
 
 /** Committed publications own invalidation; each admitted physical store is hydrated once. */
 export async function createSessionRowProjection(params: records.ProjectionOptions) {
@@ -203,6 +204,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }
     return records.acquireSessionRowEntry({
       row,
+      rows,
       storedEntry,
       cfg,
       context: metadata.current,
@@ -347,7 +349,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         }
         const id = records.identity(row);
         // Runtime summary state does not change the entry-derived materialization.
-        if (presentationOnly && records.ready(row) && !dirty.has(id) && row.facts) {
+        if (presentationOnly && row.facts) {
           row.facts.refreshActivitySummary();
         } else {
           dirty.add(id);
@@ -396,15 +398,15 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     const databaseFacts =
       preparedDatabaseFacts ??
       (records.isPreparedSessionRowDatabaseFacts(retained) ? retained : undefined);
-    if (!row.entry || (!databaseFacts && !isIncognitoSessionKey(row.key))) {
+    if (!records.hasEntry(row) || (!databaseFacts && !isIncognitoSessionKey(row.key))) {
       return false;
     }
     const links = readChildLinks(row, databaseFacts !== undefined);
-    if (!isIncognitoSessionKey(row.key)) {
-      row.membership = new Set(membership.membership(row.storeTarget.storePath, row.key) ?? []);
-    }
     const prepared = readRow({
-      row: { ...row, entry: row.entry },
+      row,
+      membership: isIncognitoSessionKey(row.key)
+        ? undefined
+        : (membership.membership(row.storeTarget.storePath, row.key) ?? []),
       cfg,
       modelCatalog: catalog.current,
       configuredAgentIds,
@@ -420,15 +422,14 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     if (!isIncognitoSessionKey(row.key)) {
       placementFacts.register(row.entry.sessionId);
     }
-    const previousBoard = row.hasBoard;
-    Object.assign(row, prepared, {
+    revisions.materialized(row, {
+      ...prepared,
       materializedSequence: ++materializedCount,
       ...metadata.materializedRevisions,
     });
     if (!isIncognitoSessionKey(row.key) && records.ready(row)) {
       backfill.prepare(row, databaseFacts);
     }
-    revisions.materialized(row, previousBoard);
     return true;
   }
   const {
@@ -537,7 +538,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     materializePrivate: (row, repository) =>
       materialize(row, undefined, undefined, undefined, repository),
     preparePresentation(row) {
-      row.materialized.source.cfg = cfg;
+      if (row.materialized.source.cfg !== cfg) {
+        row.materialized = replaceSessionRowFacts(row.materialized, undefined, { cfg });
+      }
       metadata.preparePresentation(row, readChildLinks);
     },
   });
@@ -628,6 +631,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }),
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
+    readTaskPublicationRevision: revisions.taskPublication,
     get physicalPaths() {
       return scope.physicalPaths;
     },

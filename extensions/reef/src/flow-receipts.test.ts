@@ -5,26 +5,17 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
-  composeOutbound,
+  bodyHash,
+  prepareOutboundProposal,
+  seal,
   generateIdentity,
   sha256Hex,
   signReceipt,
 } from "../protocol/index.js";
-import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
-import { ReefMessageFlow } from "./flow.js";
-import {
-  allow,
-  config,
-  guard,
-  peerTrust,
-  reefKeys,
-  resetFlowStoresForTests,
-  transport,
-  workerFlowStores,
-} from "./flow.test-helpers.js";
+import type { ReefMessageFlow } from "./flow.js";
+import { allow, createFlow, peerTrust, resetFlowStoresForTests } from "./flow.test-helpers.js";
 import { reefPeerIdentity } from "./friend-types.js";
 import { processReefInboxEntriesInOrder, ReefReceiptNotifier } from "./owner-notice.js";
-import type { ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";
 
 const schedulers: ReturnType<typeof createTestPluginServiceScheduler>[] = [];
@@ -60,27 +51,6 @@ function receiptEntry(receipt: ReturnType<typeof signReceipt>, seq = 1, ts = 1):
   return { seq, peer: "alice", id: receipt.id, kind: "receipt", receipt, ts };
 }
 
-async function createFlow(onOwnerNotice: FlowOptions["onOwnerNotice"] = async () => {}) {
-  const alice = generateIdentity();
-  const bob = reefKeys();
-  const { trusted, audit, ...stores } = await workerFlowStores(config(), {
-    alice: peerTrust(alice),
-  });
-  const flow = new ReefMessageFlow({
-    config: config(),
-    trust: trusted,
-    keys: bob,
-    transport: transport() as unknown as ReefTransportClient,
-    guard: guard(allow),
-    audit,
-    replay: new MemoryReplayStore(),
-    ...stores,
-    onIngress: async () => {},
-    onOwnerNotice,
-  });
-  return { flow, trusted, audit, alice, bob };
-}
-
 async function eventCount(audit: FlowOptions["audit"], type: string) {
   return (await audit.entries()).filter((entry) => entry.event.type === type).length;
 }
@@ -105,21 +75,38 @@ function createReceiptNotifier(notify: ConstructorParameters<typeof ReefReceiptN
 
 describe("ReefMessageFlow delivery receipts", () => {
   it("quarantines historical rejected receipts without reconstructing delivery or cooldown state", async () => {
-    const { flow, trusted, audit, alice, bob } = await createFlow();
+    const { flow, trusted, audit, peerKeys: alice, keys: bob } = await createFlow();
     const originalPeer = await trusted.get("alice");
     const id = "01JZ0000000000000000000127";
     const text = "queued before delivery bindings";
-    await composeOutbound({
+    const proposal = {
       id,
       from: "bob#1",
       to: "alice#1",
       body: { text },
       senderSigningSecretKey: bob.signing.secretKey,
       recipientEncryptionPublicKey: alice.encryption.publicKey,
-      guard: guard(allow),
-      audit,
       policyVersion: "v1",
+    };
+    const { approvalDigest } = prepareOutboundProposal(proposal, 32);
+    await audit.appendEvent("proposal", {
+      id,
+      from: proposal.from,
+      to: proposal.to,
+      body: proposal.body,
+      bodyHash: bodyHash(proposal.body),
+      approvalDigest,
     });
+    await audit.appendEvent("guard_verdict", {
+      id,
+      from: proposal.from,
+      to: proposal.to,
+      direction: "outbound",
+      bodyHash: bodyHash(proposal.body),
+      approvalDigest,
+      ...allow,
+    });
+    await audit.appendEvent("envelope", { id, approvalDigest, envelope: seal(proposal) });
     const historicalEntries = structuredClone(await audit.entries());
     const auditEntries = vi.spyOn(audit, "entries");
     const notify = vi.fn(async () => {});
@@ -150,7 +137,7 @@ describe("ReefMessageFlow delivery receipts", () => {
 
   it("surfaces one resend notice even when a later batch receipt is invalid", async () => {
     const notify = vi.fn(async () => {});
-    const { flow, trusted, audit, alice, bob } = await createFlow();
+    const { flow, trusted, audit, peerKeys: alice, keys: bob } = await createFlow();
     const notifier = createReceiptNotifier(notify);
     const id = await flow.send("alice", "ordinary coordination");
     const receipt = signedReceipt(alice, id, "ordinary coordination");
@@ -199,7 +186,7 @@ describe("ReefMessageFlow delivery receipts", () => {
 
   it("binds receipts and automatic resends to the send-time recipient identity", async () => {
     const rotatedAlice = generateIdentity();
-    const { flow, trusted, audit, alice } = await createFlow();
+    const { flow, trusted, audit, peerKeys: alice } = await createFlow();
     const originalRecipient = reefPeerIdentity(peerTrust(alice));
     const id = await flow.send("alice", "expected body");
     await trusted.set("alice", peerTrust(rotatedAlice, { keyEpoch: 2 }));
@@ -223,7 +210,7 @@ describe("ReefMessageFlow delivery receipts", () => {
   });
 
   it("quarantines peer-signed receipt conflicts without consuming outbound state", async () => {
-    const { flow, trusted, audit, alice } = await createFlow();
+    const { flow, trusted, audit, peerKeys: alice } = await createFlow();
     const id = await flow.send("alice", "expected body");
     const delivery = () => trusted.readOutboundDelivery("alice", id);
     const receipt = signedReceipt(alice, id, "expected body", {
@@ -264,7 +251,7 @@ describe("ReefMessageFlow delivery receipts", () => {
   });
   it("notifies the owner when an accepted receipt closes an overdue notice", async () => {
     const onOwnerNotice = vi.fn(async (_text: string) => {});
-    const { flow, trusted, alice } = await createFlow(onOwnerNotice);
+    const { flow, trusted, peerKeys: alice } = await createFlow({ onOwnerNotice });
     const id = await flow.send("alice", "are you there?");
     const record = (await trusted.readOutboundDelivery("alice", id))!.delivery;
     await trusted.markOutboundDeliveryOverdueNotified("alice", id);

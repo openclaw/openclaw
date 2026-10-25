@@ -4,7 +4,9 @@ import {
   expectUnused,
   deferredScope,
   relayConfig,
+  loadConfiguredBackground,
   relayFrames,
+  relayReply,
   runtime,
   waitCalled,
 } from "./background.lifecycle-test-helpers.js";
@@ -31,10 +33,10 @@ afterEach(async () => {
 });
 
 async function fixture() {
-  const h = await loadBackground({
-    storedConfig: relayConfig("all"),
-    initialTabs: [7, 8, 9].map((id) => ({ id, url: `https://example.com/${id}`, groupId: -1 })),
-  });
+  const h = await loadConfiguredBackground(
+    "all",
+    [7, 8, 9].map((id) => ({ id, url: `https://example.com/${id}` })),
+  );
   // Chrome's tab lookup and its extension client registry have different lifetimes.
   const tabs = new Map<number, string>();
   const clients = new Set<string>();
@@ -69,15 +71,8 @@ async function fixture() {
   const socket = h.relaySockets[0]!;
   await h.authenticate(socket);
   let seq = 0;
-  const command = async (type: string, tabId: number, s = socket) => {
-    const id = ++seq;
-    s.receive({ type, tabId, seq: id });
-    return await vi.waitFor(() => {
-      const result = relayFrames(s).find((f) => f.seq === id);
-      expect(result).toBeDefined();
-      return result;
-    });
-  };
+  const command = (type: string, tabId: number, s = socket) =>
+    relayReply(s, { type, tabId, seq: ++seq });
   const attach = async (tabId: number, s = socket) => {
     const response = await command("attach", tabId, s);
     expect(response).toMatchObject({ type: "result", result: { targetId: tabs.get(tabId) } });

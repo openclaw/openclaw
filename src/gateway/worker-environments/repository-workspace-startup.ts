@@ -88,10 +88,7 @@ export async function syncSessionRepositoryWorkspace(params: {
   };
   params.markPhase?.("repositorySync");
   const synced = repository.checkpointRef
-    ? await withSessionRepositoryCheckpoint(
-        { workspaceId: repository.workspaceId, includePublication: true },
-        sync,
-      )
+    ? await withSessionRepositoryCheckpoint({ workspaceId: repository.workspaceId }, sync)
     : await sync();
   params.assertCurrent();
   if (synced.mode !== "repository") {

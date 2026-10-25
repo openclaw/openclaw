@@ -26,8 +26,8 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import { settleReplyMedia } from "./run-attempt-reply-media.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { beginCodexAttemptSettlement } from "./run-attempt-settlement.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   canClearCodexBindingForRecovery,
   clearCodexBindingAfterInvalidImagePayload,
@@ -52,7 +52,7 @@ import {
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function finalizeCodexAttempt(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,
@@ -124,6 +124,9 @@ export async function finalizeCodexAttempt(
       }
     } finally {
       if (!state.projectionClosed) {
+        activeProjector.prepareTerminalToolResultCheckpoint(toolBridge.telemetry, {
+          readRetainedNativeCommands,
+        });
         await resources.runCleanupStep("codex-transcript-checkpoint", closeProjection);
       }
     }
@@ -660,6 +663,12 @@ export async function finalizeCodexAttempt(
     });
     if (settledTurnFinalizationEligible) {
       await params.onSettledTurn?.(finalizedResult, async () => {
+        // A same-run continuation retains the original prompt's transcript identity.
+        const continuedPrompt = params.suppressNextUserMessagePersistence
+          ? params.userTurnTranscriptRecorder?.getPersistedMessage?.()
+          : undefined;
+        const continuedPromptIdentity = continuedPrompt && readMirrorIdentity(continuedPrompt);
+        const evidencePrefix = continuedPrompt && continuedPromptIdentity ? [continuedPrompt] : [];
         // Supervised auth has no stock tool-free summary operation. Preserve eligibility
         // for the host fallback without substituting another credential owner.
         const finalizationContext =
@@ -669,9 +678,15 @@ export async function finalizeCodexAttempt(
                 model: resourceState.thread.model,
                 modelProvider: resourceState.thread.modelProvider,
                 authProfileId: startupAuthProfileId,
-                mirroredMessages: mirrorOutcome.mirroredMessages,
-                settledMessages: result.messagesSnapshot,
+                mirroredMessages: [...evidencePrefix, ...mirrorOutcome.mirroredMessages],
+                settledMessages: [...evidencePrefix, ...result.messagesSnapshot],
+                ...(continuedPromptIdentity ? { promptIdentity: continuedPromptIdentity } : {}),
                 turnId: activeTurnId,
+                // A stranded-reply retry suppresses its system prompt and carries no
+                // recorder, so no prompt row exists for this turn anywhere.
+                promptSuppressed:
+                  params.suppressNextUserMessagePersistence === true &&
+                  !params.userTurnTranscriptRecorder,
                 signal: params.abortSignal,
                 assertActive: connection.assertCurrent,
                 withCurrent: connection.withCurrent,

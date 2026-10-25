@@ -13,10 +13,15 @@ import {
 } from "../../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import {
@@ -431,6 +436,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
             executor,
             runId,
             originalRecoveryCapture: params.opts.run?.originalRecoveryCapture,
+            busyTimeoutMs: params.opts.run?.busyTimeoutMs,
             root: params.root,
             requester: authority.requester?.requester,
             opts: {
@@ -445,10 +451,12 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
           const result = await runUtf8CommandWithTimeout(
             [
               nodeRunner,
-              path.join(
-                params.root,
-                "dist",
-                runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+              ...resolveRuntimeWorkerArgv(
+                resolveRuntimeWorkerUrl({
+                  ...runtimeProcessEntrypoints.updateMigratedFinalize,
+                  root: params.root,
+                }),
+                nodeRunner,
               ),
               "--post-core",
             ],
@@ -481,12 +489,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       const result = await readPostCoreUpdateResultFile(resultPath);
       authority.assertCurrent();
       if (!result) {
-        const pending = await fs.lstat(`${resultPath}.pending`).catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return undefined;
-          }
-          throw error;
-        });
+        const pending = await fs.lstat(`${resultPath}.pending`).catch(ignoreMissingPath);
         if (pending) {
           throw new CommandProcessCleanupError();
         }

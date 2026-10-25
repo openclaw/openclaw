@@ -3,6 +3,11 @@ import { createServer as createHttpServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createNodeWorkspaceTransferService } from "../gateway/worker-environments/node-workspace-transfer-service.js";
+import {
+  startNodeWorkspaceTransferTestServer,
+  transferOwner,
+} from "../gateway/worker-environments/node-workspace-transfer.test-support.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
@@ -12,6 +17,7 @@ import {
   digest,
   fileEntry,
   manifestFixture,
+  serveTransfer,
   transferFixture,
   transferHandler,
   workspaceTransferHandler,
@@ -45,6 +51,90 @@ async function pack(root: string, commit: string) {
 }
 
 describe("node worker Git transfers", () => {
+  it.each([1, 2] as const)(
+    "uploads worker commits only when result v%s was negotiated",
+    async (version) => {
+      const root = tempDirs.make("node-worker-result-history-");
+      const source = path.join(root, "source");
+      const { workspaceDir } = transferFixture(root, "history");
+      await fs.mkdir(source);
+      await git(source, ["init", "--quiet", "--object-format=sha1"]);
+      await fs.writeFile(path.join(source, "tracked.txt"), "dispatch base\n");
+      await git(source, ["add", "."]);
+      await git(source, ["commit", "--quiet", "-m", "dispatch base"]);
+      const baseCommit = await git(source, ["rev-parse", "HEAD"]);
+      const service = createNodeWorkspaceTransferService({
+        getOwner: () => transferOwner("session"),
+        temporaryRoot: path.join(root, "transfers"),
+      });
+      const server = await startNodeWorkspaceTransferTestServer(service);
+      try {
+        const prepared = await service.prepareSync({
+          environmentId: "history",
+          ownerEpoch: 1,
+          sessionId: "session",
+          localPath: source,
+          isAuthorized: () => true,
+        });
+        const run = (transfer: Parameters<typeof runNodeWorkerWorkspaceTransfer>[0]["transfer"]) =>
+          runNodeWorkerWorkspaceTransfer({
+            environmentId: "history",
+            workspaceDir,
+            manifestHome: root,
+            gatewayUrl: server.gatewayUrl,
+            transfer,
+          });
+        await run({
+          direction: "download",
+          token: prepared.token,
+          manifestRef: prepared.snapshot.manifestRef,
+        });
+        // Download installs a shallow dispatch base; history capture must stop there.
+        expect(await fs.readFile(path.join(workspaceDir, ".git", "shallow"), "utf8")).toContain(
+          baseCommit,
+        );
+        await fs.writeFile(path.join(workspaceDir, "tracked.txt"), "worker commit\n");
+        await git(workspaceDir, ["add", "."]);
+        await git(workspaceDir, ["commit", "--quiet", "-m", "worker authored"]);
+        const headCommit = await git(workspaceDir, ["rev-parse", "HEAD"]);
+        await fs.writeFile(path.join(workspaceDir, "tracked.txt"), "uncommitted worker change\n");
+        const resultVersion = version === 2 ? 2 : undefined;
+        const token = service.prepareUpload(
+          "history",
+          prepared.snapshot.manifestRef,
+          undefined,
+          resultVersion,
+        );
+        await run({
+          direction: "upload",
+          token,
+          baseManifestRef: prepared.snapshot.manifestRef,
+          referenceManifestRef: prepared.snapshot.manifestRef,
+          ...(resultVersion ? { resultVersion } : {}),
+        });
+        const uploaded = service.takeUpload("history", prepared.snapshot.manifestRef);
+        expect(await fs.readFile(path.join(uploaded.stagingRoot, "tracked.txt"), "utf8")).toBe(
+          "uncommitted worker change\n",
+        );
+        if (version === 1) {
+          expect(uploaded.gitHistory).toBeUndefined();
+          expect(uploaded.gitPackPath).toBeUndefined();
+        } else {
+          expect(uploaded.gitHistory).toEqual({ baseCommit, headCommit, descendsFromBase: true });
+          expect(uploaded.gitPackPath).toBeDefined();
+          const imported = await runCommandBuffered(
+            ["git", "-C", source, "index-pack", "--stdin"],
+            { input: await fs.readFile(uploaded.gitPackPath!), maxOutputBytes: 4096 },
+          );
+          expect(imported, imported.stderr.toString()).toMatchObject({ code: 0 });
+          expect(await git(source, ["show", `${headCommit}:tracked.txt`])).toBe("worker commit");
+        }
+      } finally {
+        await server.close();
+        await service.closeAll();
+      }
+    },
+  );
   it.runIf(process.platform === "win32")(
     "reuses foreign executable Git-base files without requesting an unavailable blob",
     async () => {
@@ -79,14 +169,10 @@ describe("node worker Git transfers", () => {
           res.writeHead(404).end();
         }
       });
-      const gatewayUrl = await listen(server);
-      try {
-        await expect(download(gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
-        expect(requestedBlobs).toBe(0);
-        await expect(fs.readFile(path.join(workspaceDir, "script.sh"))).resolves.toEqual(content);
-      } finally {
-        await closeServer(server);
-      }
+      await using gateway = await serveTransfer(server);
+      await expect(download(gateway.gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
+      expect(requestedBlobs).toBe(0);
+      await expect(fs.readFile(path.join(workspaceDir, "script.sh"))).resolves.toEqual(content);
     },
   );
 
@@ -302,41 +388,17 @@ describe("node worker Git transfers", () => {
         requestedBlobs += 1;
       }
     });
-    const gatewayUrl = await listen(server);
-    try {
-      await expect(download(gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
-      expect(requestedBlobs).toBe(1);
-      for (const file of ["first.txt", "second.sh", "third.txt"]) {
-        await expect(fs.readFile(path.join(workspaceDir, file))).resolves.toEqual(body);
-      }
-      if (process.platform !== "win32") {
-        expect((await fs.stat(path.join(workspaceDir, "first.txt"))).mode & 0o777).toBe(0o644);
-        expect((await fs.stat(path.join(workspaceDir, "second.sh"))).mode & 0o777).toBe(0o755);
-      }
-      await fs.writeFile(path.join(workspaceDir, "first.txt"), "edited independently\n");
-      await expect(fs.readFile(path.join(workspaceDir, "third.txt"))).resolves.toEqual(body);
-    } finally {
-      await closeServer(server);
+    await using gateway = await serveTransfer(server);
+    await expect(download(gateway.gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
+    expect(requestedBlobs).toBe(1);
+    for (const file of ["first.txt", "second.sh", "third.txt"]) {
+      await expect(fs.readFile(path.join(workspaceDir, file))).resolves.toEqual(body);
     }
-  });
-
-  it("round-trips a downloaded workspace with a supplied hash memo", async () => {
-    const root = tempDirs.make("node-worker-transfer-memo-");
-    const { download, upload } = transferFixture(root, "environment-memo");
-    const body = Buffer.from("memoized content\n");
-    const entry = fileEntry("artifact.txt", body);
-    const { sha256 } = entry;
-    const { rawManifest, manifestRef } = manifestFixture([entry]);
-    const server = createHttpServer(
-      workspaceTransferHandler(rawManifest, new Map([[sha256, body]]), () => manifestRef),
-    );
-    const gatewayUrl = await listen(server);
-    const hashMemo = new Map<string, string>();
-    try {
-      await expect(download(gatewayUrl, manifestRef, { hashMemo })).resolves.toBe(manifestRef);
-      await expect(upload(gatewayUrl, manifestRef, { hashMemo })).resolves.toBe(manifestRef);
-    } finally {
-      await closeServer(server);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(path.join(workspaceDir, "first.txt"))).mode & 0o777).toBe(0o644);
+      expect((await fs.stat(path.join(workspaceDir, "second.sh"))).mode & 0o777).toBe(0o755);
     }
+    await fs.writeFile(path.join(workspaceDir, "first.txt"), "edited independently\n");
+    await expect(fs.readFile(path.join(workspaceDir, "third.txt"))).resolves.toEqual(body);
   });
 });

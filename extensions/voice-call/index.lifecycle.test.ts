@@ -94,6 +94,7 @@ it("captures each replacement service context independently of the requesting ca
   expect(contextA).toBeDefined();
   expect(readContext(contextA)).toBe("service-a");
 
+  await serviceA.service.stop?.(serviceContext);
   const serviceB = registerVoiceCall({ config: { reports: { enabled: true } } });
   void actor.run("service-b", () => serviceB.service.start(serviceContext));
   await actor.run("requesting-caller", () => executeCall(serviceB.tool()));
@@ -142,7 +143,7 @@ it("keeps the service runtime after a tool-discovery consult registration fails 
   expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
 });
 
-it("retires a pending generation and stops its late runtime once", async () => {
+it("waits for pending startup and stops its late runtime", async () => {
   const runtimeReady = createDeferred<VoiceCallRuntime>();
   const fixture = createRuntime("call-a", "+15550000001");
   const logger = createLogger();
@@ -151,14 +152,13 @@ it("retires a pending generation and stops its late runtime once", async () => {
 
   expect(generationA.service.start(serviceContext)).toBeUndefined();
   const firstStop = generationA.service.stop?.(serviceContext);
-  const secondStop = generationA.service.stop?.(serviceContext);
   runtimeReady.resolve(fixture.runtime);
-  await Promise.all([firstStop, secondStop]);
+  await firstStop;
 
   expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
   expect(fixture.stop).toHaveBeenCalledTimes(1);
   expect(logger.error).not.toHaveBeenCalled();
-  expectLifecycleError(await executeCall(generationA.tool()), "retired");
+  expectLifecycleError(await executeCall(generationA.tool()), "not running");
   expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
 });
 
@@ -170,7 +170,9 @@ it("restarts tools and gateway commands on the same service registration", async
   expect(registration.service.start(serviceContext)).toBeUndefined();
   await executeCall(retainedTool);
   await registration.service.stop?.(serviceContext);
-  expect(registration.service.start(serviceContext)).toBeUndefined();
+  expect(
+    registration.service.start(createVoiceCallServiceContext({ serviceHealth })),
+  ).toBeUndefined();
 
   await executeCall(retainedTool);
   const respond = await executeGatewayCall(registration);
@@ -181,7 +183,7 @@ it("restarts tools and gateway commands on the same service registration", async
   expect(runtimeB.initiateCall).toHaveBeenCalledTimes(2);
 });
 
-it("waits for A stopping before creating B with B config", async () => {
+it("stops A before the host starts B with B config", async () => {
   const aStopEntered = createDeferred<void>();
   const releaseAStop = createDeferred<void>();
   const { runtimeA, runtimeB } = mockRuntimePair(() => {
@@ -194,14 +196,14 @@ it("waits for A stopping before creating B with B config", async () => {
   const generationB = registerVoiceCall({ config: { toNumber: "+15550000002" } });
 
   const stoppingA = generationA.service.stop?.(serviceContext);
-  expect(generationB.service.start(serviceContext)).toBeUndefined();
-  const callB = executeCall(generationB.tool());
   await aStopEntered.promise;
   expect(runtimeA.stop).toHaveBeenCalledTimes(1);
   expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
 
   releaseAStop.resolve();
-  await Promise.all([stoppingA, callB]);
+  await stoppingA;
+  expect(generationB.service.start(serviceContext)).toBeUndefined();
+  await executeCall(generationB.tool());
 
   expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
   expect(vi.mocked(createVoiceCallRuntime).mock.calls[1]?.[0].config.toNumber).toBe("+15550000002");
@@ -223,14 +225,15 @@ it("routes retained concrete and cold-registry tools to the current service", as
   expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
   expect(runtimeA.initiateCall).toHaveBeenCalledTimes(3);
 
+  await generationA.service.stop?.(serviceContext);
   expect(generationB.service.start(serviceContext)).toBeUndefined();
   await executeCall(concreteToolA);
   await executeCall(coldToolA);
   await generationA.service.stop?.(serviceContext);
   await executeCall(generationB.tool());
   await generationB.service.stop?.(serviceContext);
-  expectLifecycleError(await executeCall(concreteToolA), "retired");
-  expectLifecycleError(await executeCall(coldToolA), "retired");
+  expectLifecycleError(await executeCall(concreteToolA), "not running");
+  expectLifecycleError(await executeCall(coldToolA), "not running");
 
   expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
   expect(runtimeA.stop).toHaveBeenCalledTimes(1);

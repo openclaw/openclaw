@@ -77,7 +77,6 @@ function registerActiveCapture() {
 
 function tool(channel = false) {
   return createTranscriptsTool({
-    stateDir,
     agentId: "reader-agent",
     caller: channel
       ? { kind: "channel", channel: "discord", senderId: "reader", groupSpace: "team", roleIds: [] }

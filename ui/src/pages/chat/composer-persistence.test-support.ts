@@ -6,20 +6,19 @@ import {
   readChatOutboxRecovery,
   restoreChatOutboxRecovery,
 } from "../../lib/chat/outbox-recovery.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
   storageTargetForComposer,
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { loadChatComposerState, persistChatComposerState } from "./composer-draft-storage.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import {
-  ChatComposerPersistence,
-  admitStoredChatComposerQueueItem,
-  loadChatComposerState,
-  listStoredChatOutboxes,
-  persistChatComposerState,
-  removeStoredChatComposerQueueItem,
-} from "./composer-persistence.ts";
+  admitStoredChatComposerQueueItemResult,
+  updateStoredChatComposerQueueItems,
+} from "./composer-queue-persistence.ts";
 
 type ComposerState = Parameters<typeof persistChatComposerState>[0] & {
   selectedChatSessionIncognito: boolean;
@@ -69,10 +68,12 @@ export function admitItem(
   item: ChatQueueItem,
   sessionKey = state.sessionKey,
 ) {
-  return admitStoredChatComposerQueueItem(
-    state,
-    captureChatOutboxAdmission(state, sessionKey, item.agentId),
-    item,
+  return (
+    admitStoredChatComposerQueueItemResult(
+      state,
+      captureChatOutboxAdmission(state, sessionKey, item.agentId),
+      item,
+    ) === "admitted"
   );
 }
 
@@ -102,7 +103,9 @@ export function fillOutboxes(prefix: string, count = 20) {
 }
 
 export function releaseOutbox({ state, item }: ReturnType<typeof fillOutboxes>[number]) {
-  expect(removeStoredChatComposerQueueItem(state, state.sessionKey, item.id, item)).toBe(true);
+  expect(
+    updateStoredChatComposerQueueItems(state, state.sessionKey, [{ expected: item, next: null }]),
+  ).toBe(true);
 }
 
 export function startPersistence(state: ComposerState) {

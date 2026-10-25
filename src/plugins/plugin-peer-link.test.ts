@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
+  auditDeclaredOpenClawHostDependency,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   auditOpenClawPeerDependencyLinkSync,
   linkOpenClawPeerDependencies,
@@ -301,6 +302,46 @@ describe("plugin peer links", () => {
     expect(fs.existsSync(linkPath)).toBe(false);
   });
 
+  it.each(["managed", "registered"] as const)(
+    "ignores packages without a host declaration during %s audit and repair",
+    async (entry) => {
+      const { root, packageDir, linkPath } = peerFixture("missing-modules", entry === "registered");
+      const unrelatedDir = path.join(path.dirname(packageDir), "aaa-unrelated-plugin");
+      const manifest = { name: "aaa-unrelated-plugin", dependencies: { other: "*" } };
+      writePackage(unrelatedDir, manifest);
+      const onPackageReadError = vi.fn();
+      expect(await auditDeclaredOpenClawHostDependency({ packageDir: unrelatedDir })).toBeNull();
+      const options = registeredRepair(packageDir, unrelatedDir);
+      const audit =
+        entry === "registered"
+          ? await reconcileRegisteredOpenClawHostLinks({
+              ...options,
+              mode: "audit",
+              onPackageReadError,
+            })
+          : await auditOpenClawPeerDependenciesInManagedNpmRoot({
+              npmRoot: root,
+              onPackageReadError,
+            });
+      expect(audit.issues.map((issue) => issue.packageName)).toEqual(["peer-plugin"]);
+      const repaired =
+        entry === "registered"
+          ? await reconcileRegisteredOpenClawHostLinks({ ...options, onPackageReadError })
+          : await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+              npmRoot: root,
+              logger: {},
+              onPackageReadError,
+            });
+      expect(repaired.repaired).toBe(1);
+      expectHostLink(linkPath);
+      expect(fs.existsSync(path.join(unrelatedDir, "node_modules"))).toBe(false);
+      expect(fs.readFileSync(path.join(unrelatedDir, "package.json"), "utf8")).toBe(
+        JSON.stringify(manifest),
+      );
+      expect(onPackageReadError).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["dependencies", "optionalDependencies"] as const)(
     "relinks openclaw %s in the managed npm root",
     async (declaration) => {
@@ -310,7 +351,7 @@ describe("plugin peer links", () => {
       const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} });
 
       const linkPath = path.join(packageDir, "node_modules", "openclaw");
-      expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
+      expect(result).toEqual({ repaired: 1 });
       expectHostLink(linkPath);
     },
   );
@@ -326,12 +367,12 @@ describe("plugin peer links", () => {
       if (mode === "repair") {
         expect(
           await relinkOpenClawPeerDependenciesInManagedNpmRoot({ ...options, logger: {} }),
-        ).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 1 });
+        ).toEqual({ repaired: 1 });
         expect(failures[0]?.error).toBeInstanceOf(SyntaxError);
         expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
       } else {
         const result = await auditOpenClawPeerDependenciesInManagedNpmRoot(options);
-        expect(result).toMatchObject({ checked: 1, broken: 1 });
+        expect(result.issues).toHaveLength(1);
         expect(result.issues[0]?.packageName).toBe("peer-plugin");
         expect(fs.existsSync(linkPath)).toBe(false);
       }
@@ -395,7 +436,7 @@ describe("plugin peer links", () => {
           ? { onPackageReadError }
           : { logger: { warn: (message: string) => warnings.push(message) } }),
       });
-      expect(result).toMatchObject({ repaired: 0, skipped: 1 });
+      expect(result.repaired).toBe(0);
       if (boundary === "manifest") {
         expect(onPackageReadError.mock.calls[0]?.[1]).toBe(packageDir);
         expect(fs.lstatSync(linkPath).isDirectory()).toBe(true);

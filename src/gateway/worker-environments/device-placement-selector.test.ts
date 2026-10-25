@@ -1,18 +1,12 @@
 import { describe, expect, it } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
-  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-} from "../../infra/node-runner-inventory.js";
+import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { selectDevicePlacementCandidates } from "./device-placement-selector.js";
 import { bindDeviceWorkerAvailability, type DeviceWorkerAvailability } from "./device-provider.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 
 const WORKER_REQUIREMENT: DevicePlacementRequirement = {
   requiredNodeCommands: [],
@@ -55,22 +49,18 @@ function expectError(result: unknown, message: string) {
 
 function nodeProof(environment: EnvironmentSummary): NodeWorkerSupervisorNodeProof {
   const deviceId = environment.id.slice("node:".length);
-  return {
+  return createNodeWorkerBundleTestNode({
     nodeId: deviceId,
     connId: `connection-${deviceId}`,
     pairingIdentity: `identity-${deviceId}`,
     pairingGeneration: `generation-${deviceId}`,
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: GATEWAY_CLIENT_MODES.NODE,
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
-      enabled: true,
       capturedExecPolicy: true,
       promptContext: 1,
       capacity: environment.workerSlots ?? { total: 1, available: 0 },
     },
     commands: ["runtime.exec"],
-  };
+  });
 }
 
 async function selectNodes(

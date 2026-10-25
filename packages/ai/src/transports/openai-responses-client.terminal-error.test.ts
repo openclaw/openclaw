@@ -1,34 +1,24 @@
 import type { AssistantMessageEventStreamLike, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { recoverAfterTransportDrop } from "../../../../src/agents/embedded-agent-runner/run/attempt-recovery.test-support.js";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
-
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
+import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sseState = vi.hoisted(() => ({
   outcomes: [] as SdkResponse[],
   signal: undefined as AbortSignal | undefined,
 }));
 
-vi.mock("openai", () => {
-  class MockOpenAI {
-    responses = {
-      create: (_params: unknown, options?: { signal?: AbortSignal }) => {
-        sseState.signal = options?.signal;
-        return {
-          withResponse: async () => {
-            const outcome = sseState.outcomes.shift();
-            if (!outcome) {
-              throw new Error("Unexpected SSE request");
-            }
-            return outcome;
-          },
-        };
-      },
-    };
-  }
-  return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
+vi.mock("openai", async () => {
+  const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
+  return createResponsesSdkMock(sseState, {
+    dequeueOnResponse: true,
+    onCreate: (_provider, signal) => {
+      sseState.signal = signal;
+    },
+  });
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({
@@ -42,6 +32,7 @@ import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   argumentDelta,
+  completedResponse,
   collectEventTypes,
   outputItem,
   wireCall,
@@ -97,6 +88,15 @@ function terminalEvent(
 function probe(id: string, args = "", status = "in_progress") {
   return { ...wireCall(id, "probe", args), status };
 }
+
+function expectWarning(detail: string) {
+  expect(logWarn).toHaveBeenCalledWith(
+    "openai-transport",
+    expect.stringContaining(detail),
+    undefined,
+  );
+}
+
 beforeEach(() => {
   for (const log of [logWarn, logDebug, logInfo]) {
     log.mockClear();
@@ -109,14 +109,81 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   sseState.signal = undefined;
   configureAiTransportHost(initialHost);
+});
+
+it("aborts whitespace argument churn and recovers through the same-model retry owner", async () => {
+  let emittedDeltas = 0;
+  let closed = false;
+  const call = wireCall("churn", "exec", "");
+  queueStream(async function* () {
+    try {
+      yield outputItem("added", call);
+      yield argumentDelta(call.id, '{"code":"return 1;');
+      for (let index = 0; index < 40; index++) {
+        emittedDeltas += 1;
+        yield argumentDelta(call.id, " \r\r\n".repeat(256));
+      }
+      yield completedResponse("resp_churn", [{ ...call, arguments: '{"code":"return 1;"}' }]);
+    } finally {
+      closed = true;
+    }
+  });
+
+  const { events, result } = await collect(await run());
+  expect(result).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
+  expect(emittedDeltas).toBe(4);
+  expect(closed).toBe(true);
+  expect(sseState.signal).toMatchObject({
+    aborted: true,
+    reason: { code: "degenerate_output" },
+  });
+  expect(events).not.toContain("toolcall_end");
+  expectWarning("abortReason=degenerate_output");
+  expect(JSON.stringify(logWarn.mock.calls)).not.toContain("return 1;");
+
+  vi.useFakeTimers();
+  const recovering = recoverAfterTransportDrop({
+    assistant: result,
+    noTools: true,
+    replaySafe: true,
+  });
+  await vi.advanceTimersByTimeAsync(10_000);
+  const recovered = await recovering;
+  expect(recovered.recovery).toMatchObject({
+    action: "retry",
+    lastRetryFailoverReason: "server_error",
+  });
+});
+
+it("accepts 200 KiB of arguments with whitespace runs interrupted by code", async () => {
+  const call = wireCall("large", "exec", "");
+  const codeChunk = `${" ".repeat(1023)};`;
+  const code = codeChunk.repeat(200);
+  const args = JSON.stringify({ code });
+  queueStream(async function* () {
+    yield outputItem("added", call);
+    yield argumentDelta(call.id, '{"code":"');
+    for (let index = 0; index < 200; index++) {
+      yield argumentDelta(call.id, codeChunk);
+    }
+    yield argumentDelta(call.id, '"}');
+    yield completedResponse("resp_large", [{ ...call, arguments: args }]);
+  });
+  const { result } = await collect(await run());
+  expect(result).toMatchObject({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", arguments: { code } }],
+  });
+  expect(sseState.signal?.aborted).toBe(false);
 });
 
 it("logs the actual output budget, served tier, and usage after a long incomplete stream", async () => {
   vi.stubEnv("OPENCLAW_DEBUG_SSE", "peek");
   let now = 1_000;
-  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(Date, "now").mockImplementation(() => now);
   queueStream(async function* () {
     yield { type: "response.created", response: { id: "resp_long", service_tier: "default" } };
     yield {
@@ -139,24 +206,20 @@ it("logs the actual output budget, served tier, and usage after a long incomplet
       },
     });
   });
-  try {
-    const stream = await run({ maxTokens: 4096, serviceTier: "priority" });
-    expect((await stream.result()).stopReason).toBe("length");
-    const messages = [
-      ...logDebug.mock.calls.map(([, build]) => build()?.message),
-      ...logInfo.mock.calls.map(([, message]) => message),
-    ];
-    const done = messages.find((message) => message?.startsWith("[responses] stream_done "));
-    expect(done).toContain("requestedTier=priority max_output_tokens=4096");
-    expect(done).toContain("responseId=resp_long servedTier=default");
-    expect(done).toContain("outputTokens=4096 reasoningTokens=4000");
-    expect(done).toContain("streamDurationMs=1095000 elapsedMs=1095000");
-    expect(done).toContain("terminal=response.incomplete incompleteReason=max_output_tokens");
-    expect(done).not.toContain("test-key");
-    expect(messages.join(" ")).not.toContain("private-response-content");
-  } finally {
-    clock.mockRestore();
-  }
+  const stream = await run({ maxTokens: 4096, serviceTier: "priority" });
+  expect((await stream.result()).stopReason).toBe("length");
+  const messages = [
+    ...logDebug.mock.calls.map(([, build]) => build()?.message),
+    ...logInfo.mock.calls.map(([, message]) => message),
+  ];
+  const done = messages.find((message) => message?.startsWith("[responses] stream_done "));
+  expect(done).toContain("requestedTier=priority max_output_tokens=4096");
+  expect(done).toContain("responseId=resp_long servedTier=default");
+  expect(done).toContain("outputTokens=4096 reasoningTokens=4000");
+  expect(done).toContain("streamDurationMs=1095000 elapsedMs=1095000");
+  expect(done).toContain("terminal=response.incomplete incompleteReason=max_output_tokens");
+  expect(done).not.toContain("test-key");
+  expect(messages.join(" ")).not.toContain("private-response-content");
 });
 
 it.each(["filtered", "failed", "eof", "aborted"])(
@@ -167,12 +230,10 @@ it.each(["filtered", "failed", "eof", "aborted"])(
       Object.assign(probe(`parallel_${index}`, args, "completed"), { async: true }),
     );
     queueStream(async function* () {
-      for (const [output_index, item] of calls.entries()) {
-        yield outputItem("added", { ...item, arguments: "", status: "in_progress" }, output_index);
-      }
-      for (const [output_index, item] of calls.entries()) {
-        yield outputItem("done", item, output_index);
-      }
+      yield* calls.map((item, index) =>
+        outputItem("added", { ...item, arguments: "", status: "in_progress" }, index),
+      );
+      yield* calls.map((item, index) => outputItem("done", item, index));
       if (ending === "aborted") {
         controller.abort(
           Object.assign(new Error("superseded"), {
@@ -260,11 +321,7 @@ it("logs the idle-timeout reason at warning level when the stream throws a gener
   const result = stream.result();
   await vi.advanceTimersByTimeAsync(50);
   expect((await result).stopReason).toBe("aborted");
-  expect(logWarn).toHaveBeenCalledWith(
-    "openai-transport",
-    expect.stringContaining("abortReason=idle_timeout"),
-    undefined,
-  );
+  expectWarning("abortReason=idle_timeout");
   const line = logWarn.mock.calls.find(([, message]) =>
     message.startsWith("[responses] error "),
   )?.[1];
@@ -375,11 +432,7 @@ it.each([
     );
     expect(JSON.stringify(result.diagnostics)).not.toContain("provider-private-reason");
     if (result.stopReason === "error") {
-      expect(logWarn).toHaveBeenCalledWith(
-        "openai-transport",
-        expect.stringContaining(`incompleteReason=${incompleteReason}`),
-        undefined,
-      );
+      expectWarning(`incompleteReason=${incompleteReason}`);
       expect(JSON.stringify(logWarn.mock.calls)).not.toContain("provider-private-reason");
     }
   },

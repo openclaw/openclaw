@@ -24,14 +24,16 @@ import {
   type parseCheckpointAvailability,
 } from "./crabbox-worker-warm-image-checkpoint.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
+import {
+  crabboxWarmImageRecoveryHint,
+  withoutCrabboxWarmImageOperation,
+} from "./crabbox-worker-warm-image-records.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import {
   clearCrabboxWarmImageCapture,
   crabboxCaptureUnsupportedSentence,
-  crabboxWarmImageRecoveryHint,
   isCrabboxCaptureRefusalRetained,
   sameCrabboxWarmImageGeneration,
-  withoutCrabboxWarmImageOperation,
   type openCrabboxWarmImageStore,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
@@ -338,10 +340,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
         if (!sourceRunning && created.state === "pending") {
           // Without a capture-point attestation, keep enrollment credentials out of
           // the source until this exact checkpoint is available, as for a waited create.
-          const deadline = Date.now() + WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS;
+          const deadline = performance.now() + WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS;
           while (created.state === "pending") {
             assertCurrent(context);
-            const remainingMs = deadline - Date.now();
+            const remainingMs = deadline - performance.now();
             if (remainingMs <= 0) {
               throw new Error("Crabbox waited checkpoint is not available");
             }
@@ -352,7 +354,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
             } else if (!nonBlocking) {
               throw new Error("Crabbox waited checkpoint is not available");
             } else {
-              await sleepWithAbort(Math.min(5_000, deadline - Date.now()), context.signal);
+              await sleepWithAbort(Math.min(5_000, deadline - performance.now()), context.signal);
             }
           }
         }

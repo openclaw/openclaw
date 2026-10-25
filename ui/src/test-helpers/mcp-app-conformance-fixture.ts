@@ -10,10 +10,10 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 
 const require = createRequire(import.meta.url);
+const httpRequests = channel("http.server.request.start");
 
 export function observeMcpAppHttpResponses(gatewayPort: number) {
   const responses: ServerResponse[] = [];
-  const requests = channel("http.server.request.start");
   const onRequest = (message: unknown) => {
     // SAFETY: Node publishes these exact objects before the real HTTP request handler runs.
     const { request, response } = message as {
@@ -28,8 +28,8 @@ export function observeMcpAppHttpResponses(gatewayPort: number) {
       responses.push(response);
     }
   };
-  requests.subscribe(onRequest);
-  return { responses, stop: () => requests.unsubscribe(onRequest) };
+  httpRequests.subscribe(onRequest);
+  return { responses, stop: () => httpRequests.unsubscribe(onRequest) };
 }
 
 export function observeMcpAppRequests(page: Page) {
@@ -180,7 +180,7 @@ export async function mountControlUiHost(
 import { createApplicationGateway } from "/src/app/gateway-store.ts";
 import { waitForGatewayClient } from "/src/app/gateway-readiness.ts";
 import { loadSettings } from "/src/app/settings.ts";
-import "/src/components/mcp-app-view-registration.ts";
+import "/src/components/mcp-app-view.tsx";
 import { applicationContext } from "/src/app/context.ts";
 window.mcpConformanceApplicationContext = applicationContext;
 import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
@@ -190,7 +190,6 @@ window.mcpConformanceConnect = async ({ gatewayUrl, authValue, sessionKey }) => 
     { ...loadSettings(), gatewayUrl, token: authValue, sessionKey },
     "",
     "",
-    undefined,
     { persistDefaultConnectionSettings: false, ownsWarmBoot: false },
   );
   gateway.start();
@@ -293,6 +292,10 @@ export async function waitForTextContaining(
   } else {
     await assertion.not.toContain(expected);
   }
+}
+
+export function readMcpAppModule(): Promise<string> {
+  return fs.readFile(require.resolve("@modelcontextprotocol/ext-apps/app-with-deps"), "utf8");
 }
 
 export function appHtml(appModuleUrl: string): string {

@@ -1,6 +1,7 @@
-import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
+import { asNullableRecord, expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { expect, it as baseIt, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import { resolvePublishedModelCatalogOwner } from "../../agents/prepared-model-catalog-owner.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -38,6 +39,7 @@ import {
   registerGatewayModelCatalogPrivateAccess,
   type PreparedGatewayModelCatalogSnapshot,
 } from "../server-model-catalog-auth.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
@@ -94,19 +96,8 @@ function fixture(state: OpenClawTestState) {
   };
   const client: NonNullable<GatewayRequestHandlerOptions["client"]> & { connId: string } = {
     connId: "catalog-reader-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: person.id,
-      displayName: person.displayName,
-      hasAvatar: false,
-      updatedAt: person.updatedAt,
-    },
+    connect: gatewayConnect(["operator.read"]),
+    authenticatedUserProfile: gatewayProfile(person.id, person.displayName, person.updatedAt),
   };
   const clients = new Set([client]);
   const readPrepared = vi.fn(async () => snapshot);
@@ -294,7 +285,7 @@ it("shares selection revisions with events, ignoring activity", async (f) => {
       preparedRepositoryWorkspace: null,
       activeModel: null,
     });
-    expect(buildGatewaySessionSnapshot({ sessionRow: row, includeSession: true })).toMatchObject({
+    expect(buildGatewaySessionSnapshot({ sessionRow: row })).toMatchObject({
       session: { sessionModelRevision: revision },
     });
   }
@@ -500,15 +491,16 @@ it("retains session pins independently of viewer defaults", async (f) => {
   expect(f.snapshot.authStore.profiles).toEqual({});
 });
 
-it("does not borrow host auth for native sessions", async (f) => {
+it("shares native selection revisions with rows without borrowing host auth", async (f) => {
   await f.state.writeConfig(f.config);
   clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
   const sessionKey = "agent:main:harness:catalog-native:saved";
-  await f.saveSession(sessionKey, {
+  const scope = await f.saveSession(sessionKey, {
     sessionId: "catalog-native-session",
     agentHarnessId: "catalog-native",
     modelSelectionLocked: true,
   });
+  let ownership: AgentHarnessSessionRuntimeOwnership = { model: "native", auth: "native" };
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
     pluginId: "catalog-native",
@@ -523,24 +515,64 @@ it("does not borrow host auth for native sessions", async (f) => {
       resolveSessionRuntimeOwnership: (params) => {
         params.assertCurrent();
         return params.sessionKey === sessionKey && params.sessionId === "catalog-native-session"
-          ? { model: "native", auth: "native" }
+          ? ownership
           : undefined;
       },
     },
   });
   setActivePluginRegistry(registry);
   try {
-    const direct = await f.request({ sessionKey, view: "configured" });
-    expect(direct.mock.calls[0]?.[1]).toMatchObject({
-      models: [{ id: "gpt-5.6-luna", provider: "openai" }],
-      sessionModelRevision: undefined,
-    });
-    const payload = direct.mock.calls[0]?.[1];
+    const read = async () => {
+      const direct = await f.request({ sessionKey, view: "configured" });
+      expectReply(direct, {
+        models: [expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" })],
+        sessionModelRevision: expect.any(String),
+      });
+      const payload = direct.mock.calls[0]?.[1];
+      const revision = asNullableRecord(payload)?.sessionModelRevision;
+      const entry = expectDefined(loadSessionEntry(scope), "saved native entry");
+      const row = buildGatewaySessionRow({
+        cfg: f.config,
+        agentId: scope.agentId,
+        key: scope.sessionKey,
+        entry,
+        store: { [scope.sessionKey]: entry },
+        storePath: openOpenClawAgentDatabase(scope).path,
+        preparedAcpMeta: null,
+        preparedRepositoryWorkspace: null,
+        preparedRuntimeOwnership: ownership,
+        activeModel: null,
+      });
+      expect(row.sessionModelRevision).toBe(revision);
+      return { revision, payload };
+    };
+    const initial = await read();
+    const { payload } = initial;
     expect(payload).not.toEqual(
       expect.objectContaining({
         models: [expect.objectContaining({ available: expect.anything() })],
       }),
     );
+    await writeSessionFixture(scope, {
+      label: "Renamed native session",
+      updatedAt: 2,
+      lastReadAt: 2,
+    });
+    expect((await read()).revision).toBe(initial.revision);
+    const saved = loadSessionEntry(scope);
+    let revision = initial.revision;
+    for (const next of [
+      { model: "native", auth: "host" },
+      { model: "native", auth: "native", modelRef: { provider: "openai", model: "gpt-5.6-luna" } },
+      { model: "native", auth: "native", modelRef: { provider: "openai", model: "gpt-5.6-sol" } },
+    ] satisfies AgentHarnessSessionRuntimeOwnership[]) {
+      ownership = next;
+      const current = await read();
+      expect(current.revision).not.toBe(revision);
+      expect((await read()).revision).toBe(current.revision);
+      expect(loadSessionEntry(scope)).toEqual(saved);
+      revision = current.revision;
+    }
     const neutral = await f.request({ agentId: "main", view: "configured" });
     expectModels(neutral, false);
     expect(f.snapshot.entries[0]).not.toHaveProperty("available");
@@ -588,12 +620,11 @@ it.each(["foreign admin", "anonymous", "synthetic", "forged locator"] as const)(
     if (caller === "foreign admin") {
       const other = ensureProfileForEmail("other-reader@example.test");
       f.client.connect.scopes = ["operator.admin"];
-      f.client.authenticatedUserProfile = {
-        profileId: other.id,
-        displayName: other.displayName,
-        hasAvatar: false,
-        updatedAt: other.updatedAt,
-      };
+      f.client.authenticatedUserProfile = gatewayProfile(
+        other.id,
+        other.displayName,
+        other.updatedAt,
+      );
     } else if (caller === "synthetic") {
       f.client.internal = { syntheticClient: true };
     } else if (caller === "forged locator") {

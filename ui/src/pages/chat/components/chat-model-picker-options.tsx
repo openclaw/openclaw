@@ -1,7 +1,6 @@
-import { createMemo, Show } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon.ts";
+import { createMemo, Show, useContext } from "solid-js";
+import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Kbd } from "../../../components/solid/kbd.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import "../../../components/tooltip.ts";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
@@ -10,18 +9,27 @@ import {
   formatModelContextMeta,
   formatModelLabel,
   isModelPickerOptionSelected,
+  modelPickerOptionKey,
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
 } from "./chat-model-picker-options.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
+import {
+  ChatModelSearchContext,
+  handleModelOptionMouseEnter,
+  type ChatModelSearchRow,
+} from "./chat-model-picker-search.ts";
 
-function ModelShortcut() {
+function ModelShortcut(props: { rowKey: string }) {
+  const search = useContext(ChatModelSearchContext);
+  const number = createMemo(() => search?.row(props.rowKey)?.shortcut);
   return (
-    <Kbd
-      keys=""
-      ariaHidden
-      hidden
-      ref={(element) => element.setAttribute("data-chat-model-shortcut", "true")}
+    <kbd
+      class="shortcut-kbd"
+      aria-hidden="true"
+      hidden={number() === undefined}
+      data-chat-model-shortcut="true"
+      data-shortcut={number()}
+      data-chat-model-shortcut-number={number()}
     />
   );
 }
@@ -30,50 +38,71 @@ export function ChatModelProviderIcon(props: { provider: string }) {
   return <ProviderBrandIcon provider={props.provider} class="chat-controls__provider-icon" />;
 }
 
+type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
+
+function optionPresentation(options: ModelPresentationProps) {
+  const selected = isModelPickerOptionSelected(
+    options.entry,
+    options.selectedModelValue,
+    options.selectedAgentRuntime,
+  );
+  const modelLabel = formatModelLabel(options.entry);
+  const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId);
+  const runtimeLabel = runtime?.label ?? "";
+  const routeDetail = runtime?.detail ?? "";
+  const chatOnlyHelp =
+    options.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
+  const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
+  // Resetting a recorded pin remains possible even when its default model is unavailable.
+  const resetsPin = options.entry.isDefault && options.sessionModelPinned;
+  const needsAuth =
+    options.entry.disabled &&
+    (options.entry.unavailableReason === "missing-auth" ||
+      options.entry.unavailableReason === "auth-failed");
+  const onModelSetup = needsAuth ? options.onModelSetup : undefined;
+  const modelMeta = needsAuth
+    ? runtime?.detail !== undefined
+      ? runtimeLabel
+      : ""
+    : [formatModelContextMeta(options.entry), runtimeLabel].filter(Boolean).join(" · ");
+  const accessibleStatus = needsAuth
+    ? t("modelSetup.candidates.signInNeeded")
+    : options.entry.unavailableReason === "unsupported-runtime"
+      ? t("chat.modelControls.runtimeUnavailable")
+      : "";
+  return {
+    selected,
+    modelLabel,
+    runtimeLabel,
+    chatOnlyHelp,
+    detail,
+    resetsPin,
+    needsAuth,
+    onModelSetup,
+    modelMeta,
+    accessibleStatus,
+  };
+}
+
 function createOptionPresentation(props: ChatModelPickerOptionProps) {
-  return createMemo(() => {
-    const selected = isModelPickerOptionSelected(
-      props.entry,
-      props.selectedModelValue,
-      props.selectedAgentRuntime,
-    );
-    const modelLabel = formatModelLabel(props.entry);
-    const runtime = formatModelRuntimeLabel(props.entry.provider, props.entry.agentRuntimeId);
-    const runtimeLabel = runtime?.label ?? "";
-    const routeDetail = runtime?.detail ?? "";
-    const chatOnlyHelp =
-      props.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
-    const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
-    // Resetting a recorded pin remains possible even when its default model is unavailable.
-    const resetsPin = props.entry.isDefault && props.sessionModelPinned;
-    const needsAuth =
-      props.entry.disabled &&
-      (props.entry.unavailableReason === "missing-auth" ||
-        props.entry.unavailableReason === "auth-failed");
-    const onModelSetup = needsAuth ? props.onModelSetup : undefined;
-    const modelMeta = needsAuth
-      ? runtime?.detail !== undefined
-        ? runtimeLabel
-        : ""
-      : [formatModelContextMeta(props.entry), runtimeLabel].filter(Boolean).join(" · ");
-    const accessibleStatus = needsAuth
-      ? t("modelSetup.candidates.signInNeeded")
-      : props.entry.unavailableReason === "unsupported-runtime"
-        ? t("chat.modelControls.runtimeUnavailable")
-        : "";
-    return {
-      selected,
-      modelLabel,
-      runtimeLabel,
-      chatOnlyHelp,
-      detail,
-      resetsPin,
-      needsAuth,
-      onModelSetup,
-      modelMeta,
-      accessibleStatus,
-    };
-  });
+  return createMemo(() => optionPresentation(props));
+}
+
+export function modelOptionSearchRow(options: ModelPresentationProps): ChatModelSearchRow {
+  const view = optionPresentation(options);
+  return {
+    key: modelPickerOptionKey(options.entry),
+    name: view.modelLabel.toLocaleLowerCase(),
+    keywords: [options.entry.isDefault ? t("chat.modelControls.default") : "", view.runtimeLabel]
+      .join(" ")
+      .toLocaleLowerCase(),
+    providerLabel: providerDisplayLabel(options.entry.provider).toLocaleLowerCase(),
+    reference: options.entry.value,
+    selected: view.selected,
+    hasShortcut: !view.selected,
+    disabled:
+      options.disabled || Boolean(options.entry.disabled && !view.onModelSetup && !view.resetsPin),
+  };
 }
 
 type OptionPresentation = ReturnType<ReturnType<typeof createOptionPresentation>>;
@@ -81,8 +110,16 @@ type OptionPresentation = ReturnType<ReturnType<typeof createOptionPresentation>
 function ModelOptionButton(
   props: ChatModelPickerOptionProps & { presentation: OptionPresentation },
 ) {
+  const search = useContext(ChatModelSearchContext);
+  const key = createMemo(() => modelPickerOptionKey(props.entry));
+  // Query changes should reach only rows whose displayed search facts changed.
+  const rank = createMemo(() => search?.row(key())?.rank);
+  const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
+  const highlighted = createMemo(() => search?.highlighted() === key());
   return (
     <button
+      ref={search?.rowRef(key)}
+      id={search?.optionId(key())}
       class={[
         "chat-controls__inline-select-option chat-controls__model-option",
         {
@@ -90,6 +127,10 @@ function ModelOptionButton(
         },
       ]}
       data-chat-model-option={props.entry.value}
+      data-chat-model-key={key()}
+      data-chat-model-rank={rank()}
+      data-chat-model-highlighted={highlighted() ? "" : undefined}
+      style={{ "--chat-model-rank": rank() }}
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
       data-chat-model-index={props.index}
@@ -105,7 +146,9 @@ function ModelOptionButton(
         props.entry.provider,
       ).toLocaleLowerCase()}
       role="option"
-      hidden
+      aria-posinset={search?.row(key())?.position}
+      aria-setsize={search?.row(key())?.size}
+      hidden={hidden()}
       aria-selected={props.presentation.selected ? "true" : "false"}
       title={props.presentation.accessibleStatus || undefined}
       aria-label={[
@@ -163,7 +206,7 @@ function ModelOptionButton(
         </span>
       </span>
       <span class="chat-controls__model-option-action">
-        <Show when={props.presentation.selected} fallback={<ModelShortcut />}>
+        <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
           <span class="chat-controls__inline-select-check" aria-hidden="true">
             <Icon name="check" />
           </span>
@@ -188,8 +231,20 @@ export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
 }
 
 export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
+  const search = useContext(ChatModelSearchContext);
+  const key = createMemo(() => `target:${props.groupId}:${props.entry.value}`);
+  const rank = createMemo(() => search?.row(key())?.rank);
+  const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
+  const highlighted = createMemo(() => search?.highlighted() === key());
   return (
     <button
+      ref={search?.rowRef(key)}
+      id={search?.optionId(key())}
+      hidden={hidden()}
+      data-chat-model-key={key()}
+      data-chat-model-rank={rank()}
+      data-chat-model-highlighted={highlighted() ? "" : undefined}
+      style={{ "--chat-model-rank": rank() }}
       class="chat-controls__inline-select-option chat-controls__model-option"
       data-chat-model-option={`target:${props.groupId}:${props.entry.value}`}
       data-chat-model-target={props.entry.value}
@@ -197,6 +252,8 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
       data-chat-model-name={props.entry.label.toLocaleLowerCase()}
       data-chat-model-provider-label={props.groupLabel.toLocaleLowerCase()}
       role="option"
+      aria-posinset={search?.row(key())?.position}
+      aria-setsize={search?.row(key())?.size}
       aria-selected="false"
       type="button"
       disabled={props.disabled}
@@ -215,7 +272,7 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
         </span>
       </span>
       <span class="chat-controls__model-option-action">
-        <ModelShortcut />
+        <ModelShortcut rowKey={key()} />
       </span>
     </button>
   );

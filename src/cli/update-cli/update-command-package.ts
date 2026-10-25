@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import {
   UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
@@ -15,6 +14,10 @@ import type {
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import { deferPackageStateVerification } from "../../infra/package-update-verification-step.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
   getUpdateDoctorConfigFailureReason,
@@ -123,16 +126,18 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   // transaction protects this migration and the later restart verification.
   const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
     targetVersion: candidateHostVersion,
-    allowGatewayServiceRepair: false,
   });
   let doctorArgv: string[];
   if (context) {
+    const workerRuntime = params.nodeRunner ?? resolveNodeRunner();
     doctorArgv = [
-      params.nodeRunner ?? resolveNodeRunner(),
-      path.join(
-        params.root,
-        "dist",
-        runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+      workerRuntime,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl({
+          ...runtimeProcessEntrypoints.updateMigratedFinalize,
+          root: params.root,
+        }),
+        workerRuntime,
       ),
       "--doctor",
     ];
@@ -183,9 +188,11 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   }
   await params.progress?.onStepStart?.(doctorProgressInfo);
   assertCurrent();
+  const completedSteps: UpdateStepResult[] = [];
   const completeDoctorStep = createPackageUpdateDoctorCompletion({
     root: params.root,
     progress: params.progress,
+    results: completedSteps,
     onConfigSnapshot: params.onConfigSnapshot,
     context,
     configSnapshot,
@@ -193,7 +200,6 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     assertCurrent,
     doctorProgressInfo,
   });
-  const completedSteps: UpdateStepResult[] = [];
   let processSettlement: UpdateStepResult | undefined;
   const runDoctor = (runCommand?: Parameters<typeof runUpdateStep>[0]["runCommand"]) =>
     runUpdateStep({
@@ -512,7 +518,7 @@ export async function runPackageInstallUpdate(
     });
 
   const before = pkgRoot ? await readPackageUpdateIdentity(pkgRoot) : { version: null };
-  const doctorSettlements: UpdateStepResult[] = [];
+  const doctorReceipts: UpdateStepResult[] = [];
 
   const packageUpdate = await runGlobalPackageUpdateSteps({
     localOverrides: {
@@ -552,8 +558,12 @@ export async function runPackageInstallUpdate(
       try {
         return await runPackageUpdateDoctor({ ...resolveDoctorOptions(), root, results });
       } finally {
-        doctorSettlements.push(
-          ...(results?.filter((result) => result.name === "doctor process settlement") ?? []),
+        doctorReceipts.push(
+          ...(results?.filter(
+            (result) =>
+              result.name === "doctor process settlement" ||
+              result.name === "database migration writes",
+          ) ?? []),
         );
       }
     },
@@ -582,7 +592,7 @@ export async function runPackageInstallUpdate(
       version: packageUpdate.afterVersion,
       ...(afterBuildId ? { buildId: afterBuildId } : {}),
     },
-    steps: [...packageUpdate.steps, ...doctorSettlements],
+    steps: [...packageUpdate.steps, ...doctorReceipts],
     failedStep: packageUpdate.failedStep ?? undefined,
     recovery: packageUpdate.recovery,
     localOverrides: packageUpdate.localOverrides,

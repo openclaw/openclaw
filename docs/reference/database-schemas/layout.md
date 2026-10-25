@@ -9,10 +9,19 @@ title: "Database layout"
 
 ## Database layout
 
-| Scope                | Default path                                               | Contents                                                                                              |
-| -------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
-| Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
+| Scope                    | Default path                                               | Contents                                                                                                        |
+| ------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Global control plane     | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state                       |
+| Per-agent data plane     | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state           |
+| Local client credentials | `<resolved-client-root>/client/credentials.sqlite`         | Client private identities, device and Gateway-scoped token caches, native socket secrets, and migration receipt |
+
+The client root is local even when the Gateway uses PostgreSQL or runs remotely.
+CLI clients normally use the selected state directory. The macOS app preserves
+its existing identity root in `~/Library/Application Support/OpenClaw` and its
+existing exec-host state root; configured roots remain explicit. iOS and extension
+clients retain their existing application-container roots. Each exact root has
+one credential owner; no timestamp reconciliation joins different roots.
+See [client migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
 
 ### Local daemon service intent
 
@@ -86,7 +95,9 @@ reads use batches of eight and skip stored JSON or compressed values above 64 Ki
 compressed messages are not decoded. Cold snapshot values and older transcript
 payloads are not scanned.
 Each bounded query finishes before yielding, so pacing holds no SQLite read transaction.
-Warming yields between chunks, targets 16 MiB/s, and stops at a 2 GiB pass budget
+Warming reports progress in roughly 1 MiB chunks instead of once per session or
+message batch, keeping small reads and their allocation in the worker. It still
+checks the byte budget after every bounded read. Warming targets 16 MiB/s and stops at a 2 GiB pass budget
 or three minutes per database. A final chunk can exceed the byte budget slightly.
 Shutdown cancels and joins the worker; no page map or read snapshot survives a pass.
 

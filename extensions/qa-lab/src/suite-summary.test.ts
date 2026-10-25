@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import {
   readQaSuiteFailedOrSkippedScenarioCountFromFile,
   readQaSuiteFailedScenarioCountFromFile,
 } from "./suite-summary.js";
+import { makeQaSuiteTestLaunch } from "./suite-test-helpers.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
+
+const { makeTempDir, cleanup } = createTempDirHarness();
+afterEach(cleanup);
 
 const readers = [
   readQaSuiteFailedScenarioCountFromFile,
@@ -31,18 +35,14 @@ async function readSummary<T>(
   reader: (summaryPath: string) => Promise<T>,
   completed = true,
 ): Promise<T> {
-  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-summary-inline-"));
+  const outputDir = await makeTempDir("qa-suite-summary-inline-");
   const summaryPath = path.join(outputDir, "qa-suite-summary.json");
   const payload =
     summary && typeof summary === "object" && !Array.isArray(summary)
       ? { ...(completed ? { run: { status: "completed" } } : {}), ...summary }
       : summary;
   await fs.writeFile(summaryPath, JSON.stringify(payload), "utf8");
-  try {
-    return await reader(summaryPath);
-  } finally {
-    await fs.rm(outputDir, { recursive: true, force: true });
-  }
+  return reader(summaryPath);
 }
 
 async function expectBoth(summary: unknown, error?: string | RegExp | { code: string }) {
@@ -71,14 +71,7 @@ describe("qa suite summary helpers", () => {
     const invocation = createQaEvidenceInvocation({
       scenarios: [{ id: "retry-fixture", execution: { kind: "script" } }],
       channel: null,
-      launch: {
-        source: { ref: null, integrity: null },
-        runtime: { id: null, version: null },
-        package: null,
-        protocol: null,
-        accountRef: null,
-        proofClass: null,
-      },
+      launch: makeQaSuiteTestLaunch(),
     });
     const first = invocation.begin(0);
     const complete = (id: string, status: "pass" | "fail", title: string) =>
@@ -129,44 +122,26 @@ describe("qa suite summary helpers", () => {
   });
 
   it.each([
-    {
-      name: "unaccounted total",
-      summary: {
-        ...passed,
-        counts: { ...passed.counts, total: 2 },
-      },
-    },
-    {
-      name: "positive counts without their claimed scenario rows",
-      summary: {
-        ...passed,
-        scenarios: [],
-      },
-    },
-    {
-      name: "claimed pass over observed skips",
-      summary: { ...passed, scenarios: [{ name: "never executed", status: "skip" }] },
-    },
-  ])("rejects complete suite accounting with $name", async ({ summary }) => {
-    await expectBoth(summary, { code: "summary_counts_invalid" });
-  });
-
-  it("rejects null counts containers even when a scenario claims to pass", async () => {
-    await expectBoth({ ...passed, counts: null }, "counts must be a non-array object");
-  });
-
-  it("rejects unsafe passed instead of normalizing an invalid execution count", async () => {
-    await expectBoth(
+    ["unaccounted total", { ...passed, counts: { ...passed.counts, total: 2 } }, undefined],
+    ["positive counts without rows", { ...passed, scenarios: [] }, undefined],
+    [
+      "claimed pass over skips",
+      { ...passed, scenarios: [{ name: "never executed", status: "skip" }] },
+      undefined,
+    ],
+    [
+      "unsupported timeout evidence",
+      { ...passed, entries: [{ result: { status: "timeout" } }] },
+      undefined,
+    ],
+    ["null counts", { ...passed, counts: null }, "counts must be a non-array object"],
+    [
+      "unsafe passed count",
       { ...passed, counts: { ...passed.counts, passed: Number.MAX_SAFE_INTEGER + 1 } },
       "must be a non-negative safe integer",
-    );
-  });
-
-  it("counts failed and skipped scenarios from scenario statuses", async () => {
-    await expectCount(
-      { scenarios: ["pass", "skip", "skipped", "fail"].map((status) => ({ status })) },
-      3,
-    );
+    ],
+  ] as const)("rejects invalid accounting: %s", async (_name, summary, error) => {
+    await expectBoth(summary, error ?? { code: "summary_counts_invalid" });
   });
 
   it("counts missing scenario statuses as failures in both gates", async () => {
@@ -202,34 +177,17 @@ describe("qa suite summary helpers", () => {
     ).rejects.toThrow("did not include any executed scenarios");
   });
 
-  it("keeps evidence-only skip results blocking for strict package gates", async () => {
-    await expectCount({ entries: [{ result: { status: "skip" } }] }, 1);
-  });
-
-  it("uses scenario outcomes instead of counting lower-level producer checks", async () => {
-    const summary = {
-      ...passed,
-      evidence: {
-        entries: [{ result: { status: "blocked" } }, { result: { status: "pass" } }],
-      },
-    };
-
-    await expectBoth(summary);
-  });
-
-  it("rejects unsupported timeout evidence alongside complete counts", async () => {
-    await expectBoth(
-      { ...passed, entries: [{ result: { status: "timeout" } }] },
-      { code: "summary_counts_invalid" },
-    );
-  });
-
-  it("retains positive legacy execution counts in the failure and skip gate", async () => {
-    await expectCount({ counts: passed.counts }, 0);
-  });
-
-  it("keeps a report-only skip non-blocking when a real scenario also ran", async () => {
-    await expectCount(
+  it.each([
+    [
+      "scenario statuses",
+      { scenarios: ["pass", "skip", "skipped", "fail"].map((status) => ({ status })) },
+      3,
+      undefined,
+    ],
+    ["evidence-only skips", { entries: [{ result: { status: "skip" } }] }, 1, undefined],
+    ["positive legacy counts", { counts: passed.counts }, 0, undefined],
+    [
+      "report-only skips alongside execution",
       {
         counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
         scenarios: [
@@ -239,7 +197,16 @@ describe("qa suite summary helpers", () => {
       },
       0,
       readWithOptional,
-    );
+    ],
+  ] as const)("counts %s", async (_name, summary, count, reader) => {
+    await expectCount(summary, count, reader);
+  });
+
+  it("uses scenario outcomes instead of counting lower-level producer checks", async () => {
+    await expectBoth({
+      ...passed,
+      evidence: { entries: [{ result: { status: "blocked" } }, { result: { status: "pass" } }] },
+    });
   });
 
   it("uses the larger failure signal when counts and scenarios disagree", async () => {

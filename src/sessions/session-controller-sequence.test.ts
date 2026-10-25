@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   getActiveNativeAttempt,
   type EmbeddedAgentQueueHandle,
@@ -49,6 +49,10 @@ type Event =
   | { type: "mutation" }
   | { type: "mutation-settled" }
   | { type: "tick" };
+
+function steps(id: number, ...types: Extract<Event, { id: number }>["type"][]): Event[] {
+  return types.map((type) => ({ type, id }));
+}
 
 type Mail = {
   id: number;
@@ -213,9 +217,7 @@ function advance(model: Model, event: Event): boolean | undefined {
 const prefix: readonly Event[] = [
   { type: "reserve", id: -1 },
   { type: "native", id: 0 },
-  { type: "ready", id: -1 },
-  { type: "finish", id: -1 },
-  { type: "owner-settled", id: -1 },
+  ...steps(-1, "ready", "finish", "owner-settled"),
   { type: "tick" },
   // A wait-policy mutation must also join a selected source whose native owner
   // has finished but whose onSettled callback still owns cleanup/persistence.
@@ -224,26 +226,19 @@ const prefix: readonly Event[] = [
   { type: "mutation-settled" },
   { type: "reserve", id: 1 },
   { type: "native", id: 2 },
-  { type: "reserve", id: 3 },
-  { type: "ready", id: 3 },
+  ...steps(3, "reserve", "ready"),
   { type: "reserve", id: 4, interrupt: true },
   { type: "ready", id: 4 },
   { type: "reserve", id: 5, interrupt: true },
   { type: "hold", id: 1 },
-  { type: "reserve", id: 6 },
-  { type: "ready", id: 6 },
-  { type: "cancel", id: 1 },
-  { type: "withdraw", id: 1 },
-  { type: "stop", id: 0 },
-  { type: "finish", id: 0 },
+  ...steps(6, "reserve", "ready"),
+  ...steps(1, "cancel", "withdraw"),
+  ...steps(0, "stop", "finish"),
   { type: "tick" },
   { type: "owner-settled", id: 0 },
   { type: "source-settled", id: 1 },
-  { type: "ready", id: 5 },
-  { type: "retry", id: 5 },
-  { type: "late-detach", id: 5 },
-  { type: "withdraw", id: 1 },
-  { type: "cancel", id: 1 },
+  ...steps(5, "ready", "retry", "late-detach"),
+  ...steps(1, "withdraw", "cancel"),
   { type: "mutation" },
   { type: "finish", id: 5 },
   { type: "tick" },
@@ -252,11 +247,8 @@ const prefix: readonly Event[] = [
   { type: "source-settled", id: 5 },
   { type: "mutation-settled" },
   { type: "late-detach", id: 5 },
-  { type: "finish", id: 2 },
-  { type: "owner-settled", id: 2 },
-  { type: "finish", id: 3 },
-  { type: "source-settled", id: 3 },
-  { type: "owner-settled", id: 3 },
+  ...steps(2, "finish", "owner-settled"),
+  ...steps(3, "finish", "source-settled", "owner-settled"),
 ];
 function sequence(seed: number): Event[] {
   const model = initialModel();
@@ -359,16 +351,23 @@ function required<T>(value: T | undefined): T {
   }
   return value;
 }
-type Fixture = {
+class Fixture {
   input?: SessionControllerInput;
   hold?: ReturnType<typeof holdSessionControllerSourceWithdrawal>;
   operation?: ReplyOperation;
-  handles: Native[];
-  cancel: AbortController;
-  finish: Deferred;
-  owner: Deferred;
-  source: Deferred;
-};
+  handles: Native[] = [];
+  cancel = new AbortController();
+  finish = createDeferredCore();
+  owner = createDeferredCore();
+  source = createDeferredCore();
+  release() {
+    this.hold?.release();
+    this.cancel.abort();
+    this.finish.resolve();
+    this.owner.resolve();
+    this.source.resolve();
+  }
+}
 
 async function replay(seed: number, events = sequence(seed)) {
   const key = "agent:main:controller-sequence-" + seed;
@@ -439,13 +438,7 @@ async function replay(seed: number, events = sequence(seed)) {
       const expected = advance(model, event);
       let actual: boolean | undefined;
       if (event.type === "reserve" || event.type === "native") {
-        const fixture: Fixture = {
-          handles: [],
-          cancel: new AbortController(),
-          finish: createDeferredCore(),
-          owner: createDeferredCore(),
-          source: createDeferredCore(),
-        };
+        const fixture = new Fixture();
         fixtures.set(event.id, fixture);
         if (event.type === "reserve") {
           fixture.input = reserveSessionControllerSource(key, {
@@ -489,83 +482,48 @@ async function replay(seed: number, events = sequence(seed)) {
         required(mutationGates.at(-1)).resolve();
       } else if (event.type !== "tick") {
         const fixture = required(fixtures.get(event.id));
-        switch (event.type) {
-          case "ready":
-            launch(event.id);
-            break;
-          case "hold":
-            fixture.hold = holdSessionControllerSourceWithdrawal(required(fixture.input));
-            break;
-          case "release-hold":
-            required(fixture.hold).release();
-            break;
-          case "withdraw":
-            actual = required(fixture.hold).commit();
-            break;
-          case "cancel":
-            actual = abortSessionControllerInput(required(fixture.input));
-            break;
-          case "finish":
-            fixture.finish.resolve();
-            break;
-          case "owner-settled":
-            fixture.owner.resolve();
-            break;
-          case "source-settled":
-            fixture.source.resolve();
-            break;
-          case "retry":
-            attach(event.id);
-            break;
-          case "late-detach":
-            detachActiveEmbeddedRun(sessionId, required(fixture.handles[0]));
-            break;
-          case "stop":
-            actual = required(fixture.operation).abortByUser();
-            break;
+        if (event.type === "withdraw") {
+          actual = required(fixture.hold).commit();
+        } else if (event.type === "cancel") {
+          actual = abortSessionControllerInput(required(fixture.input));
+        } else if (event.type === "stop") {
+          actual = required(fixture.operation).abortByUser();
+        } else {
+          const actions = {
+            ready: () => launch(event.id),
+            hold: () => {
+              fixture.hold = holdSessionControllerSourceWithdrawal(required(fixture.input));
+            },
+            "release-hold": () => required(fixture.hold).release(),
+            finish: () => fixture.finish.resolve(),
+            "owner-settled": () => fixture.owner.resolve(),
+            "source-settled": () => fixture.source.resolve(),
+            retry: () => attach(event.id),
+            "late-detach": () => detachActiveEmbeddedRun(sessionId, required(fixture.handles[0])),
+          };
+          actions[event.type]();
         }
       }
       // Flush actual async continuations with a fake clock, never sleeps/polling.
       // Advancing the clock cannot resolve either raw cleanup receipt.
       await vi.advanceTimersByTimeAsync(event.type === "tick" ? 6 : 0);
-      const context =
-        "seed=" +
-        seed +
-        " prefix=" +
-        JSON.stringify(observedPrefix) +
-        " errors=" +
-        errors.map(String).join(";");
-      expect(actual, context).toBe(expected);
-      expect(starts, context).toEqual(model.starts);
-      expect(cancelled, context).toEqual(model.cancelled);
-      expect(backendStops, context).toEqual(model.backendStops);
-      expect(mutationStarted, context).toBe(model.mutationsStarted);
-      expect(
-        [...ownersSettled].toSorted((a, b) => a - b),
-        context,
-      ).toEqual(
-        model.mail
-          .filter((entry) => entry.selected && entry.finished && entry.ownerSettled)
-          .map((entry) => entry.id),
-      );
-      expect(
-        [...cleanupStarted].toSorted((a, b) => a - b),
-        context,
-      ).toEqual(
-        model.mail.filter((entry) => !entry.native && entry.retiring).map((entry) => entry.id),
-      );
-      expect(
-        [...settled].toSorted((a, b) => a - b),
-        context,
-      ).toEqual(model.mail.filter((entry) => !entry.native && entry.done).map((entry) => entry.id));
-      expect(
-        [...rejected].toSorted((a, b) => a - b),
-        context,
-      ).toEqual(
-        model.mail
-          .filter((entry) => !entry.selected && entry.ready && entry.retiring)
-          .map((entry) => entry.id),
-      );
+      const context = `seed=${seed} prefix=${JSON.stringify(observedPrefix)} errors=${errors.map(String).join(";")}`;
+      expect({ actual, starts, cancelled, backendStops, mutationStarted }, context).toEqual({
+        actual: expected,
+        starts: model.starts,
+        cancelled: model.cancelled,
+        backendStops: model.backendStops,
+        mutationStarted: model.mutationsStarted,
+      });
+      const expectIds = (ids: number[], matches: (entry: Mail) => boolean) =>
+        expect(
+          ids.toSorted((a, b) => a - b),
+          context,
+        ).toEqual(model.mail.filter(matches).map((entry) => entry.id));
+      expectIds(ownersSettled, (entry) => entry.selected && entry.finished && entry.ownerSettled);
+      expectIds(cleanupStarted, (entry) => !entry.native && entry.retiring);
+      expectIds(settled, (entry) => !entry.native && entry.done);
+      expectIds(rejected, (entry) => !entry.selected && entry.ready && entry.retiring);
       const active = model.active === undefined ? undefined : mail(model, model.active);
       const owner =
         active && !(active.finished && active.ownerSettled)
@@ -589,11 +547,7 @@ async function replay(seed: number, events = sequence(seed)) {
       gate.resolve();
     }
     for (const fixture of fixtures.values()) {
-      fixture.hold?.release();
-      fixture.cancel.abort();
-      fixture.finish.resolve();
-      fixture.owner.resolve();
-      fixture.source.resolve();
+      fixture.release();
     }
     await vi.advanceTimersByTimeAsync(0);
     await Promise.allSettled(jobs);
@@ -605,135 +559,122 @@ async function replay(seed: number, events = sequence(seed)) {
   }
 }
 
-describe("real controller selector sequences", () => {
-  it("waits for sources withdrawn after a mutation captured its cleanup receipts", async () => {
-    vi.useFakeTimers();
-    try {
-      await replay(3, [
-        ...prefix,
-        { type: "hold", id: 6 },
-        { type: "owner-settled", id: 6 },
-        { type: "owner-settled", id: 4 },
-        { type: "mutation" },
-        { type: "finish", id: 4 },
-        { type: "withdraw", id: 6 },
-        { type: "source-settled", id: 4 },
-        { type: "reserve", id: 8, interrupt: false },
-        { type: "native", id: 9 },
-        { type: "hold", id: 8 },
-        { type: "withdraw", id: 8 },
-        { type: "source-settled", id: 6 },
-        { type: "source-settled", id: 8 },
-        { type: "mutation-settled" },
-        { type: "finish", id: 9 },
-        { type: "owner-settled", id: 9 },
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
 
-  it("matches bounded mixed-producer sequences through raw owner, source and mutation fences", async () => {
-    vi.useFakeTimers();
-    try {
-      for (let seed = 1; seed <= 16; seed++) {
-        await replay(seed);
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+it("waits for sources withdrawn after a mutation captured its cleanup receipts", async () => {
+  await replay(3, [
+    ...prefix,
+    { type: "hold", id: 6 },
+    { type: "owner-settled", id: 6 },
+    { type: "owner-settled", id: 4 },
+    { type: "mutation" },
+    { type: "finish", id: 4 },
+    { type: "withdraw", id: 6 },
+    { type: "source-settled", id: 4 },
+    { type: "reserve", id: 8, interrupt: false },
+    { type: "native", id: 9 },
+    ...steps(8, "hold", "withdraw"),
+    { type: "source-settled", id: 6 },
+    { type: "source-settled", id: 8 },
+    { type: "mutation-settled" },
+    ...steps(9, "finish", "owner-settled"),
+  ]);
+});
 
-  it("borrows the admitted native turn inside a mutation without admitting its queued competitor", async () => {
-    vi.useFakeTimers();
-    const key = "agent:main:sequence-borrow";
-    const sessionId = "sequence-borrow";
-    const target = captureSessionTarget({
-      storeScope: "sequence.sqlite",
-      sessionKey: key,
-      incarnation: sessionId,
-    });
-    const entered = createDeferredCore();
-    const mutate = createDeferredCore();
-    const borrowed = createDeferredCore();
-    const leaveMutation = createDeferredCore();
-    const finish = createDeferredCore();
-    const abort = new AbortController();
-    const order: string[] = [];
-    let competitor: Promise<void> | undefined;
-    let owner: ReplyOperation | undefined;
-    let claim: SessionControllerMailboxClaim | undefined;
-    const handles: Native[] = [];
-    const first = withSessionTurn({ sessionKey: key, sessionId, target }, async (operation) => {
-      owner = required(operation);
-      claim = getCurrentSessionControllerClaim();
-      entered.resolve();
-      await mutate.promise;
-      await runSessionMutation({
-        target,
-        policy: "wait",
-        run: async () => {
-          order.push("mutation");
-          await withSessionTurn({ sessionKey: key, sessionId, target }, async (nested) => {
-            expect(nested).toBe(operation);
-            const old = nativeHandle(() => {
-              order.push("old-cancel");
-            });
-            const replacement = nativeHandle(() => {
-              order.push("replacement-cancel");
-            });
-            handles.push(old, replacement);
-            attachActiveEmbeddedRun(sessionId, old, key, undefined, "main", nested);
-            attachActiveEmbeddedRun(sessionId, replacement, key, undefined, "main", nested);
-            detachActiveEmbeddedRun(sessionId, old);
-            expect(getActiveNativeAttempt(sessionId)).toBe(replacement);
-            detachActiveEmbeddedRun(sessionId, replacement);
-            order.push("borrowed");
+it("matches bounded mixed-producer sequences through raw owner, source and mutation fences", async () => {
+  for (let seed = 1; seed <= 16; seed++) {
+    await replay(seed);
+  }
+});
+
+it("borrows the admitted native turn inside a mutation without admitting its queued competitor", async () => {
+  const key = "agent:main:sequence-borrow";
+  const sessionId = "sequence-borrow";
+  const target = captureSessionTarget({
+    storeScope: "sequence.sqlite",
+    sessionKey: key,
+    incarnation: sessionId,
+  });
+  const entered = createDeferredCore();
+  const mutate = createDeferredCore();
+  const borrowed = createDeferredCore();
+  const leaveMutation = createDeferredCore();
+  const finish = createDeferredCore();
+  const abort = new AbortController();
+  const order: string[] = [];
+  let competitor: Promise<void> | undefined;
+  let owner: ReplyOperation | undefined;
+  let claim: SessionControllerMailboxClaim | undefined;
+  const handles: Native[] = [];
+  const first = withSessionTurn({ sessionKey: key, sessionId, target }, async (operation) => {
+    owner = required(operation);
+    claim = getCurrentSessionControllerClaim();
+    entered.resolve();
+    await mutate.promise;
+    await runSessionMutation({
+      target,
+      policy: "wait",
+      run: async () => {
+        order.push("mutation");
+        await withSessionTurn({ sessionKey: key, sessionId, target }, async (nested) => {
+          expect(nested).toBe(operation);
+          const old = nativeHandle(() => {
+            order.push("old-cancel");
           });
-          borrowed.resolve();
-          await leaveMutation.promise;
-        },
-      });
-      order.push("mutation-released");
-      await finish.promise;
+          const replacement = nativeHandle(() => {
+            order.push("replacement-cancel");
+          });
+          handles.push(old, replacement);
+          attachActiveEmbeddedRun(sessionId, old, key, undefined, "main", nested);
+          attachActiveEmbeddedRun(sessionId, replacement, key, undefined, "main", nested);
+          detachActiveEmbeddedRun(sessionId, old);
+          expect(getActiveNativeAttempt(sessionId)).toBe(replacement);
+          detachActiveEmbeddedRun(sessionId, replacement);
+          order.push("borrowed");
+        });
+        borrowed.resolve();
+        await leaveMutation.promise;
+      },
     });
-    void first.catch(() => {});
-    try {
-      await entered.promise;
-      // Request outside the owner's async context: matching IDs cannot borrow it.
-      competitor = withSessionTurn(
-        { sessionKey: key, sessionId, target, abortSignal: abort.signal },
-        async () => {
-          order.push("competitor");
-        },
-      );
-      void competitor.catch(() => {});
-      mutate.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(order).toEqual(["mutation", "borrowed"]);
-      await borrowed.promise;
-      leaveMutation.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(order).toEqual(["mutation", "borrowed", "mutation-released"]);
-      finish.resolve();
-      await Promise.all([first, competitor]);
-      expect(order).toEqual(["mutation", "borrowed", "mutation-released", "competitor"]);
-    } finally {
-      abort.abort();
-      mutate.resolve();
-      leaveMutation.resolve();
-      finish.resolve();
-      // Unwind a self-wait regression too, preserving the assertion failure.
-      owner?.complete();
-      if (claim) {
-        releaseSessionControllerClaim(claim);
-      }
-      for (const handle of handles) {
-        detachActiveEmbeddedRun(sessionId, handle);
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      await Promise.allSettled([first, ...(competitor ? [competitor] : [])]);
-      vi.useRealTimers();
-    }
+    order.push("mutation-released");
+    await finish.promise;
   });
+  void first.catch(() => {});
+  try {
+    await entered.promise;
+    // Request outside the owner's async context: matching IDs cannot borrow it.
+    competitor = withSessionTurn(
+      { sessionKey: key, sessionId, target, abortSignal: abort.signal },
+      async () => {
+        order.push("competitor");
+      },
+    );
+    void competitor.catch(() => {});
+    mutate.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual(["mutation", "borrowed"]);
+    await borrowed.promise;
+    leaveMutation.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual(["mutation", "borrowed", "mutation-released"]);
+    finish.resolve();
+    await Promise.all([first, competitor]);
+    expect(order).toEqual(["mutation", "borrowed", "mutation-released", "competitor"]);
+  } finally {
+    abort.abort();
+    mutate.resolve();
+    leaveMutation.resolve();
+    finish.resolve();
+    // Unwind a self-wait regression too, preserving the assertion failure.
+    owner?.complete();
+    if (claim) {
+      releaseSessionControllerClaim(claim);
+    }
+    for (const handle of handles) {
+      detachActiveEmbeddedRun(sessionId, handle);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.allSettled([first, ...(competitor ? [competitor] : [])]);
+  }
 });

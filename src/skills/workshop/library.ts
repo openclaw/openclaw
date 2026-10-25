@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -77,13 +78,6 @@ const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
 const skillLocks = new KeyedAsyncQueue();
 const log = createSubsystemLogger("skills/workshop");
-
-function emptyForMissingDirectory(error: unknown): never[] {
-  if (hasErrnoCode(error, "ENOENT")) {
-    return [];
-  }
-  throw error;
-}
 
 function resolveSkillPaths(config: OpenClawConfig, agentId: string, name: string): SkillPaths {
   if (!EXISTING_SKILL_NAME_PATTERN.test(name)) {
@@ -385,7 +379,7 @@ export async function listWorkshopSkills(
   const skillsRoot = resolveWorkshopSkillsDir(config, agentId);
   const entries = await fs
     .readdir(skillsRoot, { withFileTypes: true })
-    .catch(emptyForMissingDirectory);
+    .catch((error: unknown) => ignoreMissingPath(error) ?? []);
   const skills: WorkshopSkillSummary[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !EXISTING_SKILL_NAME_PATTERN.test(entry.name)) {
@@ -414,7 +408,7 @@ export async function listWorkshopArchive(
   const skillsRoot = resolveWorkshopSkillsDir(config, agentId);
   const names: string[] = await fs
     .readdir(path.join(skillsRoot, ARCHIVE_DIR))
-    .catch(emptyForMissingDirectory);
+    .catch((error: unknown) => ignoreMissingPath(error) ?? []);
   const archived: WorkshopArchivedSkill[] = [];
   for (const name of names.toSorted()) {
     if (!EXISTING_SKILL_NAME_PATTERN.test(name)) {

@@ -3,14 +3,11 @@ import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
   AgentToolResultMiddlewareScope,
 } from "./agent-tool-result-middleware-types.js";
-import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
-import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-activation-shared.js";
 import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
@@ -77,7 +74,6 @@ type PluginInteractiveHandlerRegistration =
 type OpenClawGatewayDiscoveryService = import("./types.js").OpenClawGatewayDiscoveryService;
 type OpenClawPluginHttpRouteHandler = import("./types.js").OpenClawPluginHttpRouteHandler;
 type OpenClawPluginHttpRouteMatch = import("./types.js").OpenClawPluginHttpRouteMatch;
-type OpenClawPluginHostedMediaResolver = import("./types.js").OpenClawPluginHostedMediaResolver;
 type OpenClawPluginReloadRegistration = import("./types.js").OpenClawPluginReloadRegistration;
 type OpenClawPluginSecurityAuditCollector =
   import("./types.js").OpenClawPluginSecurityAuditCollector;
@@ -89,7 +85,6 @@ type PluginConversationBindingResolvedEvent =
 type TypedPluginHookRegistration = import("./types.js").PluginHookRegistration;
 type PluginLogger = import("./types.js").PluginLogger;
 type PluginOrigin = import("./types.js").PluginOrigin;
-type PluginTextTransformRegistration = import("./types.js").PluginTextTransformRegistration;
 type MigrationProviderPlugin = import("./types.js").MigrationProviderPlugin;
 type RealtimeTranscriptionProviderPlugin = import("./types.js").RealtimeTranscriptionProviderPlugin;
 type RealtimeVoiceProviderPlugin = import("./types.js").RealtimeVoiceProviderPlugin;
@@ -189,29 +184,15 @@ export type PluginDashboardActionVerbRegistration = PluginManifestDashboardActio
   handler: GatewayRequestHandlers[string];
 };
 
-export type PluginBoardWidgetContentKindRegistration = {
-  pluginId: string;
-  pluginKind: string;
-  definition: PluginBoardWidgetContentKind;
-};
-
 type PluginCliBackendRegistration = PluginRegistrationOwner & {
   builtWithOpenClawVersion?: string;
   backend: CliBackendPlugin;
-};
-
-export type PluginTextTransformsRegistration = PluginRegistrationOwner & {
-  transforms: PluginTextTransformRegistration;
 };
 
 export type PluginOwnedProviderRegistration<T> = PluginRegistrationOwner & {
   provider: T;
 };
 
-type PluginCodexAppServerExtensionFactoryRegistration = PluginRegistrationOwner & {
-  rawFactory: CodexAppServerExtensionFactory;
-  factory: CodexAppServerExtensionFactory;
-};
 export type PluginAgentToolResultMiddlewareRegistration = PluginRegistrationOwner & {
   rawHandler: AgentToolResultMiddleware;
   handler: AgentToolResultMiddleware;
@@ -349,6 +330,7 @@ export type PluginRecord = {
   webSearchProviderIds: string[];
   migrationProviderIds: string[];
   contextEngineIds?: string[];
+  declaredContextEngineIds?: readonly string[];
   agentHarnessIds: string[];
   cliCommands: string[];
   services: string[];
@@ -386,7 +368,6 @@ export type PluginRegistry = {
   modelCatalogProviders: PluginOwnedProviderRegistration<UnifiedModelCatalogProviderPlugin>[];
   sessionCatalogs: PluginOwnedProviderRegistration<SessionCatalogProvider>[];
   cliBackends: PluginCliBackendRegistration[];
-  textTransforms: PluginTextTransformsRegistration[];
   embeddingProviders: PluginOwnedProviderRegistration<EmbeddingProviderAdapter>[];
   speechProviders: PluginOwnedProviderRegistration<SpeechProviderPlugin>[];
   realtimeTranscriptionProviders: PluginOwnedProviderRegistration<RealtimeTranscriptionProviderPlugin>[];
@@ -401,14 +382,9 @@ export type PluginRegistry = {
   workerProviders: Map<string, PluginOwnedProviderRegistration<WorkerProvider>>;
   storageProviders: Map<string, PluginOwnedProviderRegistration<StorageProvider>>;
   migrationProviders: PluginOwnedProviderRegistration<MigrationProviderPlugin>[];
-  codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
-  agentExecutorControllers: Map<
-    string,
-    PluginRegistrationOwner & { controller: AgentExecutorController }
-  >;
   pluginRuntimeArtifacts: Map<string, ResolvedPluginRuntimeArtifact>;
   compactionProviders: RegisteredCompactionProvider[];
   decisionProviders: Array<{
@@ -426,12 +402,8 @@ export type PluginRegistry = {
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
   dashboardDataBindings: Map<string, PluginDashboardDataBindingRegistration>;
   dashboardActionVerbs: Map<string, PluginDashboardActionVerbRegistration>;
-  boardWidgetContentKinds: Map<string, PluginBoardWidgetContentKindRegistration>;
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
-  hostedMediaResolvers: Array<
-    PluginRegistrationOwner & { resolver: OpenClawPluginHostedMediaResolver }
-  >;
   widgetPresenters: PluginWidgetPresenterRegistration[];
   mcpServerConnectionResolvers: PluginMcpServerConnectionResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
@@ -445,13 +417,18 @@ export type PluginRegistry = {
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
+  subagentProfiles: import("./subagent-profile.types.js").RegisteredSubagentProfile[];
   interactiveHandlers: PluginInteractiveHandlerRegistryRegistration[];
   sessionExtensions: Array<
     PluginRegistrationOwner & { extension: PluginSessionExtensionRegistration }
   >;
   trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
   toolMetadata: Array<PluginRegistrationOwner & { metadata: PluginToolMetadataRegistration }>;
-  controlUiDescriptors: Array<PluginRegistrationOwner & { descriptor: PluginControlUiDescriptor }>;
+  controlUiDescriptors: Array<
+    PluginRegistrationOwner & {
+      descriptor: PluginControlUiDescriptor;
+    }
+  >;
   runtimeLifecycles: Array<
     PluginRegistrationOwner & { lifecycle: PluginRuntimeLifecycleRegistration }
   >;

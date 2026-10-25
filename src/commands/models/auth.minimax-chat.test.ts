@@ -1,6 +1,6 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
-import { loadAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../../agents/auth-profiles/store-runtime.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { handleCommands } from "../../auto-reply/reply/commands-core.js";
 import { buildCommandTestParams } from "../../auto-reply/reply/commands.test-harness.js";
@@ -189,9 +189,14 @@ it.each(["after presentation", "during pending response", "during browser failur
         const result = await login;
         expect(result.shouldContinue).toBe(false);
         expect(fetchMock.mock.calls[0]?.[0]).toBe("https://account.minimax.io/oauth2/device/code");
-        const profiles = Object.values(loadAuthProfileStore().profiles).filter(
-          (credential) => credential.provider === "minimax-portal",
-        );
+        const profiles = Object.values(
+          (
+            await loadAuthProfileStoreForRuntimeAsync(undefined, {
+              readOnly: true,
+              allowKeychainPrompt: false,
+            })
+          ).profiles,
+        ).filter((credential) => credential.provider === "minimax-portal");
         expect({ browserFailures, tokenRequests, tokensIssued, revoked, profiles }).toEqual({
           browserFailures: browserFailure || allowed ? 1 : 0,
           tokenRequests: browserFailure ? [] : [false],

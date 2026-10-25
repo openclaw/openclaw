@@ -3,22 +3,19 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import * as authProfileRuntime from "../auth-profiles/store-runtime.js";
 import * as modelResolution from "../embedded-agent-runner/model.js";
 import * as modelAuth from "../model-auth.js";
-import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import * as preparedRuntime from "../prepared-model-runtime.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { createContainerWorkspaceSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
-import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { createMediaModelPolicyFixture } from "./media-model-policy.test-support.js";
 import * as pdfNative from "./pdf-native-providers.js";
 import { createPdfTool } from "./pdf-tool.js";
 import * as pdfModelConfig from "./pdf-tool.model-config.js";
@@ -236,6 +233,7 @@ it("selects later pages and reports partial extraction to both models", async ()
   const { pdf, extract } = await extraction("openai-responses", {
     agents: { defaults: { pdfModel: { primary: OPENAI }, pdfMaxPages: 2 } },
   });
+  completeMock.mockResolvedValue({ ...summary("  fallback summary  "), stopReason: "toolUse" });
   const result = await pdf.execute("pdf", {
     pdf: "/tmp/doc.pdf",
     pages: "21-23",
@@ -250,6 +248,36 @@ it("selects later pages and reports partial extraction to both models", async ()
   expect(contextText()).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
   expect(result.content).toEqual(textContent(`${notice}\nfallback summary`));
   expect(result.details).toMatchObject({ native: false, model: OPENAI });
+});
+
+it.each([
+  { stopReason: "stop", errorMessage: "  bad request  ", expected: ": bad request" },
+  { stopReason: "error", errorMessage: undefined, expected: "" },
+  { stopReason: "aborted", errorMessage: undefined, expected: "" },
+] as const)(
+  "reports failed PDF output before its text ($stopReason)",
+  async ({ stopReason, errorMessage, expected }) => {
+    const { pdf } = await extraction();
+    completeMock.mockResolvedValue({
+      ...summary("must not hide the failure"),
+      stopReason,
+      errorMessage,
+    });
+    await expect(pdf.execute("pdf", { pdf: "/tmp/doc.pdf" })).rejects.toThrow(
+      `PDF model failed (${OPENAI})${expected}`,
+    );
+  },
+);
+
+it("rejects extracted PDF responses without visible text", async () => {
+  const { pdf } = await extraction();
+  completeMock.mockResolvedValue({
+    ...summary(),
+    content: [{ type: "thinking", thinking: "private" }],
+  });
+  await expect(pdf.execute("pdf", { pdf: "/tmp/doc.pdf" })).rejects.toThrow(
+    `PDF model returned no text (${OPENAI}).`,
+  );
 });
 
 it.each([true, false])(
@@ -349,7 +377,31 @@ it.each(["bedrock-converse-stream", "openai-completions"])(
 );
 
 it("reports omitted images for a text-only model and supplies Codex instructions", async () => {
+  // Codex is the subscription route: a ChatGPT catalog row with only an API key is
+  // stale and resolves to the Platform contract, so the fixture holds the OAuth login.
+  const codexLogin = {
+    version: 1,
+    profiles: {
+      "openai:default": {
+        provider: "openai",
+        type: "oauth" as const,
+        access: "test-access",
+        refresh: "test-refresh",
+        expires: 4_102_444_800_000,
+      },
+    },
+  };
+  vi.mocked(authProfileRuntime.ensureAuthProfileStoreAsync).mockResolvedValue(codexLogin);
+  vi.mocked(
+    authProfileRuntime.ensureAuthProfileStoreWithoutExternalProfilesAsync,
+  ).mockResolvedValue(codexLogin);
   const { pdf, extract } = await extraction("openai-chatgpt-responses", pdfConfig(FALLBACK));
+  vi.mocked(modelAuth.getApiKeyForModelCore).mockResolvedValue({
+    apiKey: "test-access",
+    mode: "oauth",
+    profileId: "openai:default",
+    source: "profile:openai:default",
+  });
   extract.mockResolvedValue({
     text: "Extracted content",
     images: [{ type: "image", data: "base64img", mimeType: "image/png" }],
@@ -450,55 +502,21 @@ it.each([
       api: "openai-completions",
       input: ["text"],
     });
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      agents: {
-        entries: { main: {} },
-        defaults: {
-          model: "test-provider/allowed",
-          models: { "test-provider/blocked": { alias: "blocked-alias" } },
-          pdfModel: { primary: "test-provider/blocked", fallbacks: ["test-provider/allowed"] },
-        },
-      },
-    };
-    let active = true;
     let sourceHolds = 0;
-    const authority = createAdmittedRunOperatorAuthority({
-      profileId: "pdf-reader",
-      scopes: ["operator.write"],
-      retain: () => {
-        sourceHolds += 1;
-        return () => {
-          sourceHolds -= 1;
-        };
+    const { cfg, setActive, runWithRequester } = createMediaModelPolicyFixture(
+      "pdf",
+      "pdf-reader",
+      source,
+      (delta) => {
+        sourceHolds += delta;
       },
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("requester retired");
-        }
-      },
-      modelPolicy: prepareOperatorModelPolicy({
-        cfg,
-        policy: { sourceAgent: "main" },
-        manifestPlugins: [],
-      }),
-    });
+    );
     vi.spyOn(pdfExtract, "extractPdfContent").mockImplementation(async () => {
-      active = scenario !== "retired after extraction";
+      setActive(scenario !== "retired after extraction");
       return { text: "Synthetic document text", images: [] };
     });
     completeMock.mockResolvedValue(summary("Allowed PDF answer."));
     const pdfTool = tool({ config: cfg });
-    const runWithRequester = <T>(run: () => Promise<T>) =>
-      source === "direct"
-        ? withOperatorToolGatewayAuthority(
-            { scopes: ["operator.write"], operatorRunAuthority: authority },
-            run,
-          )
-        : withGatewayToolCallerIdentity(
-            { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority: authority },
-            run,
-          );
     const args = {
       pdfs: ["/tmp/synthetic.pdf"],
       prompt: "Answer using this PDF.",

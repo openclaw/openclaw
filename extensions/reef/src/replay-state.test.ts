@@ -27,6 +27,8 @@ import {
   type ReefReplayRecord,
 } from "./replay-store.js";
 
+vi.mock("@noble/hashes/utils.js", { spy: true });
+
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const id = "01JZ0000000000000000000000";
 const hash = "a".repeat(64);
@@ -62,14 +64,12 @@ function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
   };
   const identity = generateIdentity();
   const replayKey = new Uint8Array(32).fill(2);
-  const open = () => new ReefSqliteReplayStore(runtime, replayKey, randomBytes, maxEntries);
-  const openWithRng = (rng: (length: number) => Uint8Array) =>
-    new ReefSqliteReplayStore(runtime, replayKey, rng, maxEntries);
+  const open = () => new ReefSqliteReplayStore(runtime, replayKey);
   const receipt = signReceipt(
     { id, bodyHash: "b".repeat(64), auditHead: "c".repeat(64), status: "accepted" },
     identity.signing.secretKey,
   );
-  return { store, raw, runtime, open, openWithRng, receipt, env };
+  return { store, raw, runtime, open, receipt, env };
 }
 
 describe("Reef replay worker ownership", () => {
@@ -78,6 +78,7 @@ describe("Reef replay worker ownership", () => {
   });
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.mocked(randomBytes).mockReset();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
   });
@@ -205,10 +206,13 @@ describe("Reef replay worker ownership", () => {
   it("preserves the current claim when nonce preparation fails", async () => {
     const f = fixture();
     const failure = new Error("synthetic nonce preparation failure");
-    const rng = vi.fn<(length: number) => Uint8Array>(() => {
-      throw failure;
-    });
-    const replay = f.openWithRng(rng);
+    const rng = vi
+      .mocked(randomBytes)
+      .mockClear()
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
+    const replay = f.open();
     await replay.claim("alice", id, hash);
     await expect(replay.complete("alice", id, f.receipt, { text: "body" })).rejects.toBe(failure);
     expect(rng.mock.calls).toEqual([[12]]);
@@ -233,8 +237,8 @@ describe("Reef replay worker ownership", () => {
       }
       return compare(entryKey, comparison, intent);
     };
-    const rng = vi.fn(randomBytes);
-    const replay = f.openWithRng(rng);
+    const rng = vi.mocked(randomBytes).mockClear();
+    const replay = f.open();
     await replay.claim("alice", id, hash);
     const receipt = structuredClone(f.receipt);
     const body = { text: "original" };
@@ -267,8 +271,8 @@ describe("Reef replay worker ownership", () => {
 
   it("validates completion only after matching the live claim", async () => {
     const f = fixture();
-    const rng = vi.fn(randomBytes);
-    const replay = f.openWithRng(rng);
+    const rng = vi.mocked(randomBytes).mockClear();
+    const replay = f.open();
     await expect(
       replay.complete("alice", id, { ...f.receipt, id: "wrong" }, { text: "body" }),
     ).rejects.toThrow("receipt id does not match");

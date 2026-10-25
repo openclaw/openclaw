@@ -168,7 +168,10 @@ Block chunking is implemented by `EmbeddedBlockChunker`:
 - **Tables:** a Markdown table that fits in `maxChars` is kept in one chunk,
   even if that means breaking before it below `minChars`, so channels that
   render tables see the header and rows together. Larger tables split at row
-  boundaries.
+  boundaries, repeating headers when the table can render independently of its
+  surrounding list or other container. If a header or an
+  individual row cannot fit within the limit, ordinary hard splitting still
+  applies.
 
 `maxChars` is clamped to the channel `textChunkLimit`, so you cannot exceed
 per-channel caps.
@@ -346,8 +349,9 @@ Slack-only:
   `streaming.progress.toolProgress: true` adds the rolling tool log with its icons.
   Telegram retains its current-operation and delegated-task status presentation.
 - `progress` mode deletes the status draft once the final answer is delivered,
-  so busy channels keep no orphaned tool log above the reply. Error finals keep
-  the draft as the record of the failed turn.
+  so busy channels keep no orphaned tool log above the reply. Transient deletion
+  failures are retried with backoff. Error finals keep the draft as the record
+  of the failed turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 

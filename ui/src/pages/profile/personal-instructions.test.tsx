@@ -261,7 +261,10 @@ it("retains the unsettled draft but ignores an old save completion after reconne
   const request = replies({}, saving.promise);
   const { element, emit } = await loaded(request);
   await input(element, "Old draft");
-  button(element, "Save").click();
+  const submit = button(element, "Save");
+  submit.click();
+  submit.click();
+  expect(request).toHaveBeenCalledTimes(2);
   await waitForSolid(() => {
     expect(request).toHaveBeenCalledWith("users.personalFile.set", {
       agentId: "main",
@@ -269,6 +272,7 @@ it("retains the unsettled draft but ignores an old save completion after reconne
       expectedHash: file.hash,
     });
     expect(element.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(button(element, "Saving…")).toMatchObject({ disabled: true });
   });
   expect(
     element.querySelector<HTMLButtonElement>(".personal-instructions__actions button")?.disabled,
@@ -296,7 +300,11 @@ it("preserves newer draft edits after returning to an agent with a pending save"
   await waitForSolid(() => expect(element.querySelector("textarea")?.value).toBe(file.content));
   await input(element, "First edit");
   button(element, "Save").click();
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(element.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(button(element, "Saving…")).toMatchObject({ disabled: true });
+  });
   selection.set("other");
   await waitForSolid(() =>
     expect(element.querySelector("textarea")?.value).toBe("Other instructions"),
@@ -323,12 +331,68 @@ it("preserves newer draft edits after returning to an agent with a pending save"
   await waitForSolid(() => expect(element.textContent).toContain("Saved"));
 });
 
+it("shows a pending save failure after returning to its agent without losing newer edits", async () => {
+  const saving = createDeferred<typeof file>();
+  const request = replies(
+    {},
+    saving.promise,
+    { agentId: "other", content: "Other instructions" },
+    { content: "Second edit", hash: "hash-2" },
+  );
+  const { element, selection } = await loaded(request);
+  await input(element, "First edit");
+  button(element, "Save").click();
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(element.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(button(element, "Saving…")).toMatchObject({ disabled: true });
+  });
+  selection.set("other");
+  await waitForSolid(() =>
+    expect(element.querySelector("textarea")?.value).toBe("Other instructions"),
+  );
+  selection.set("main");
+  await waitForSolid(() => expect(element.querySelector("textarea")?.value).toBe("First edit"));
+  await input(element, "Second edit");
+
+  saving.reject(new Error("Save rejected after returning"));
+  await waitForSolid(() =>
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain("Save rejected"),
+  );
+  expect(element.querySelector("textarea")?.value).toBe("Second edit");
+  expect(element.textContent).toContain("Unsaved changes");
+  button(element, "Save").click();
+  expect(request).toHaveBeenLastCalledWith("users.personalFile.set", {
+    agentId: "main",
+    content: "Second edit",
+    expectedHash: file.hash,
+  });
+  await waitForSolid(() => expect(element.textContent).toContain("Saved"));
+});
+
 it("rejects a response for a different profile rather than enabling a save", async () => {
   const request = vi.fn().mockResolvedValue({ ...file, profileId: "someone-else" });
   const { element } = await loaded(request);
   expect(element.querySelector("textarea")).toBeNull();
   expect(button(element, "Save").disabled).toBe(true);
   expect(element.querySelector('[role="alert"]')?.textContent).toContain("does not match");
+});
+
+it("clears a prior profile read error while the replacement read is pending", async () => {
+  const { element, emit } = await loaded(replies(new Error("Previous profile read failed")));
+  expect(element.querySelector('[role="alert"]')?.textContent).toContain("Previous profile");
+  const replacement = createDeferred<PersonalFile>();
+  emit({
+    selfUser: { id: "profile-2" },
+    client: createTestGatewayClient(vi.fn().mockReturnValue(replacement.promise)),
+  });
+  await waitForSolid(() => {
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+    expect(element.querySelector('[aria-busy="true"]')).not.toBeNull();
+  });
+  replacement.resolve({ ...file, profileId: "profile-2", content: "Current profile instructions" });
+  await idle(element);
+  expect(element.querySelector("textarea")?.value).toBe("Current profile instructions");
 });
 
 it("retires a pending read after read access is revoked", async () => {

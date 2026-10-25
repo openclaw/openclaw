@@ -88,9 +88,10 @@ import {
   resolveOpenPathCommand,
   sanitizePathForLog,
 } from "./open-path.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 const configWriteRecovery = new WeakMap<
   GatewayConfigRevisionProjector,
@@ -313,14 +314,11 @@ function rejectDestructiveArrayPatchWithoutIntent(params: {
   if (unconfirmedPaths.length === 0) {
     return false;
   }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `config.patch would remove entries from array path(s): ${unconfirmedPaths.join(", ")}. ` +
-        `Pass replacePaths with the exact path(s) when this is intentional, or use config.apply for full-config replacement.`,
-    ),
+  respondError(
+    params.respond,
+    ErrorCodes.INVALID_REQUEST,
+    `config.patch would remove entries from array path(s): ${unconfirmedPaths.join(", ")}. ` +
+      `Pass replacePaths with the exact path(s) when this is intentional, or use config.apply for full-config replacement.`,
   );
   return true;
 }
@@ -392,16 +390,16 @@ async function prepareConfigReplacementOrRespond(
   const { snapshot, writeOptions } = writeSnapshot;
   const parsedRes = parseConfigJson5(params.raw);
   if (!parsedRes.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
+    respondError(respond, ErrorCodes.INVALID_REQUEST, parsedRes.error);
     return null;
   }
   const uiHints = loadGatewayConfigRedactionHints();
   const restored = restoreRedactedValues(parsedRes.parsed, snapshot.config, uiHints);
   if (!restored.ok) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, restored.humanReadableMessage ?? "invalid config"),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      restored.humanReadableMessage ?? "invalid config",
     );
     return null;
   }
@@ -455,14 +453,11 @@ function rejectDroppedAgentRosterEntries(params: {
   if (droppedIds.length === 0) {
     return false;
   }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `config.set would remove existing agent entries: ${droppedIds.join(", ")}. ` +
-        "Use the agents.delete RPC or `openclaw agents delete <id>` for intentional deletion.",
-    ),
+  respondError(
+    params.respond,
+    ErrorCodes.INVALID_REQUEST,
+    `config.set would remove existing agent entries: ${droppedIds.join(", ")}. ` +
+      "Use the agents.delete RPC or `openclaw agents delete <id>` for intentional deletion.",
   );
   return true;
 }
@@ -714,25 +709,20 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, loadGatewayRuntimeConfigSchema(), undefined);
   },
-  "config.schema.lookup": ({ params, respond }) => {
-    if (
-      !assertValidParams(params, validateConfigSchemaLookupParams, "config.schema.lookup", respond)
-    ) {
-      return;
-    }
-    const { path } = params;
-    const schema = loadGatewayRuntimeConfigSchema();
-    const result = lookupConfigSchema(schema, path, resolveConfigReloadMetadata);
-    if (!result) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "config schema path not found"),
-      );
-      return;
-    }
-    respond(true, result, undefined);
-  },
+  "config.schema.lookup": defineValidatedGatewayHandler(
+    "config.schema.lookup",
+    validateConfigSchemaLookupParams,
+    ({ params, respond }) => {
+      const { path } = params;
+      const schema = loadGatewayRuntimeConfigSchema();
+      const result = lookupConfigSchema(schema, path, resolveConfigReloadMetadata);
+      if (!result) {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "config schema path not found");
+        return;
+      }
+      respond(true, result, undefined);
+    },
+  ),
   "config.set": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
@@ -822,15 +812,11 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const parsedRes = parseConfigJson5(params.raw);
     if (!parsedRes.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, parsedRes.error);
       return;
     }
     if (!isRecord(parsedRes.parsed)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "config.patch raw must be an object"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "config.patch raw must be an object");
       return;
     }
     const normalizedPatch = normalizeSubmittedConfigModelRefs(
@@ -838,13 +824,10 @@ export const configHandlers: GatewayRequestHandlers = {
       modelIdNormalizationPolicies,
     );
     if (hashlessPatch && !hasHashlessPatchLwwStructure(normalizedPatch)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "config base hash required; re-run config.get and retry",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "config base hash required; re-run config.get and retry",
       );
       return;
     }
@@ -873,13 +856,10 @@ export const configHandlers: GatewayRequestHandlers = {
     const uiHints = loadGatewayConfigRedactionHints();
     const restoredMerge = restoreRedactedValues(mergedSource, snapshot.config, uiHints);
     if (!restoredMerge.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          restoredMerge.humanReadableMessage ?? "invalid config",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        restoredMerge.humanReadableMessage ?? "invalid config",
       );
       return;
     }
@@ -901,13 +881,10 @@ export const configHandlers: GatewayRequestHandlers = {
     const restoredChangedPaths = diffConfigLeafPaths(sourceConfig, restoredMerge.result);
     if (hashlessPatch && !restoredChangedPaths.every(isHashlessPatchLwwPath)) {
       const guardedPaths = restoredChangedPaths.filter((path) => !isHashlessPatchLwwPath(path));
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `config base hash required for ${guardedPaths.join(", ")}; re-run config.get and retry with baseHash`,
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `config base hash required for ${guardedPaths.join(", ")}; re-run config.get and retry with baseHash`,
       );
       return;
     }
@@ -948,6 +925,17 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
+    // Only explicit keyed nulls populate the writer's roster-removal grant.
+    const allowedAgentRosterRemovals: string[] = [];
+    const sourceEntries = sourceConfig.agents?.entries;
+    const patchEntries = normalizedPatch.agents?.entries;
+    if (!hashlessPatch && sourceEntries && patchEntries) {
+      for (const [id, entry] of Object.entries(patchEntries)) {
+        if (entry === null && Object.hasOwn(sourceEntries, id)) {
+          allowedAgentRosterRemovals.push(id);
+        }
+      }
+    }
     await commitConfigRestartWrite({
       requestParams: params,
       mode: "config.patch",
@@ -955,6 +943,7 @@ export const configHandlers: GatewayRequestHandlers = {
         ...writeSnapshot,
         writeOptions: {
           ...writeOptions,
+          allowedAgentRosterRemovals,
           // The committed policy may revoke this requester before canonical reread.
           // Admit publication synchronously; retain the writer's own guards through completion.
           assertBeforePublish: () => {

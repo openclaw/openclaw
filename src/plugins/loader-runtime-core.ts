@@ -39,8 +39,13 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
+import {
+  readPluginStateMigrationReadiness,
+  readPluginStateMigrationReadinessAsync,
+} from "./plugin-state-migration-readiness.js";
 import { projectPluginContributions } from "./registry-contributions.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
@@ -58,7 +63,10 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
-import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
+import {
+  getPluginRuntimeLoadContextState,
+  type PluginRuntimeLoadContextState,
+} from "./runtime/load-context-state.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { hasKind } from "./slots.js";
@@ -128,6 +136,9 @@ export type InternalPluginLoadOverrides = {
 
 function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
   const subagent: PluginRuntime["subagent"] = {
+    get native() {
+      return runtime.subagent.native;
+    },
     complete: (...args) => runtime.subagent.complete(...args),
     forkSession: (...args) => runtime.subagent.forkSession(...args),
     run: (...args) => runtime.subagent.run(...args),
@@ -166,6 +177,7 @@ function bindRuntimeLoadContext(
   context: PluginLoadCacheContext,
   manifestRegistry: PluginManifestRegistry,
   logger: NonNullable<PluginLoadOptions["logger"]>,
+  selectedContextEngine?: PluginRuntimeLoadContextState["selectedContextEngine"],
 ): void {
   setPluginRuntimeLoadContext(
     registry,
@@ -178,6 +190,7 @@ function bindRuntimeLoadContext(
       env: context.env,
       logger,
       manifestRegistry,
+      selectedContextEngine,
       metadataSnapshot:
         context.metadataSnapshot?.manifestRegistry === manifestRegistry
           ? context.metadataSnapshot
@@ -210,7 +223,7 @@ export function* loadOpenClawPluginsSteps(
   trackActivationCleanup?: (completion: Promise<void>) => void,
 ): Generator<(() => Promise<void>) | undefined, PluginRegistry> {
   if (getPluginCache().retirement) {
-    throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+    throw new PluginInventoryRetiredError();
   }
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
@@ -271,6 +284,14 @@ export function* loadOpenClawPluginsSteps(
   context.cacheState.beginLoad(context.cacheKey);
   let registryBuilder: ReturnType<typeof createPluginRegistry> | undefined;
   try {
+    let pending: Awaited<ReturnType<typeof readPluginStateMigrationReadinessAsync>> | undefined;
+    yield async () => {
+      pending = await readPluginStateMigrationReadinessAsync({ env: context.env });
+    };
+    pending ??= readPluginStateMigrationReadiness({ env: context.env });
+    const pendingStateMigrations = new Map(
+      pending.map((entry) => [normalizePluginPolicyId(entry.pluginId), entry]),
+    );
     // Module and runtime loading stay lazy for discovery-only or disabled-plugin paths.
     const loadPluginModule = createPluginModuleLoader({
       devSourceRoot: context.devSourceRoot,
@@ -292,6 +313,7 @@ export function* loadOpenClawPluginsSteps(
             // SAFETY: bundled-capability-runtime uses this base only for uncached, non-activating registration.
             (overrides.runtime as PluginRuntime)
           : createLazyPluginRuntime({
+              inspectionResources,
               devSourceRoot: context.devSourceRoot,
               pluginSdkResolution: options.pluginSdkResolution,
               runtimeOptions: {
@@ -352,6 +374,7 @@ export function* loadOpenClawPluginsSteps(
         installRecords:
           Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
       });
+    const selectedContextEngine = context.selectContextEngineOwner(manifestRegistry.plugins);
     registry.diagnostics.push(...manifestRegistry.diagnostics);
     warnWhenAllowlistIsOpen({
       emitWarning: context.shouldActivate,
@@ -387,7 +410,15 @@ export function* loadOpenClawPluginsSteps(
       requestKey: context.cacheKey,
       resolvedKey: context.resolveManifestCacheKey(manifestRegistry),
     });
-    bindRuntimeLoadContext(registry, options, context, manifestRegistry, logger);
+    // Undeclared plugins can register engines too; the selected owner travels with the registry.
+    bindRuntimeLoadContext(
+      registry,
+      options,
+      context,
+      manifestRegistry,
+      logger,
+      selectedContextEngine,
+    );
     const replacedIds = new Set([
       ...(options.replacePluginIds ?? []),
       ...(options.moduleRecoveries?.keys() ?? []),
@@ -439,6 +470,9 @@ export function* loadOpenClawPluginsSteps(
         [installOwner, installOwner ? context.installRecords[installOwner] : undefined],
         { ...runtimeManifest, controlUi: controlUi !== undefined },
         activation,
+        // Undeclared plugins can register engines too; selection changes invalidate all closures.
+        selectedContextEngine,
+        pendingStateMigrations.get(normalizePluginPolicyId(manifest.id)),
         entryPolicy,
         degradedPlugin && degradedPluginMatchesRoot(degradedPlugin, candidate.rootDir)
           ? degradedPlugin
@@ -591,6 +625,9 @@ export function* loadOpenClawPluginsSteps(
         logger,
         state,
         preparedConfig: input?.source === candidate.source ? input.config : { input: undefined },
+        pendingStateMigration: pendingStateMigrations.get(
+          normalizePluginPolicyId(manifestRecord.id),
+        ),
       });
       const runCandidate = <T>(run: () => T): T =>
         options.previousRegistry ? withPluginRegistryPreparationScope(registry, run) : run();
@@ -609,7 +646,7 @@ export function* loadOpenClawPluginsSteps(
       if (state.pluginLoadAttemptCount !== attemptedBefore) {
         yield;
         if (getPluginCache().retirement) {
-          throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+          throw new PluginInventoryRetiredError();
         }
       }
     }
@@ -679,7 +716,12 @@ export function* loadOpenClawPluginsSteps(
     }
     // Publish only complete registries: failed activation restores the prior runtime selection,
     // then the catch below can discard this builder without poisoning a reusable cache value.
-    if (cacheEnabled) {
+    // Admitted instances can be reused without another ledger read. A deferred replacement
+    // must retry admission instead, including when Doctor completes in this same inventory.
+    if (
+      cacheEnabled &&
+      !registry.diagnostics.some((diagnostic) => diagnostic.code === "plugin-state-migration")
+    ) {
       context.cacheState.set(context.cacheKey, registry);
       if (loaderCacheIdentity.resolvedKey !== context.cacheKey) {
         context.cacheState.set(loaderCacheIdentity.resolvedKey, registry);

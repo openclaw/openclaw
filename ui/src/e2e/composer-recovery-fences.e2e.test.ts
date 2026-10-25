@@ -157,26 +157,39 @@ suite.define(() => {
           };
         });
         await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.tsx")');
-        await page.evaluate(() => {
-          const component = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
-            host: {
-              settings: { gatewayUrl: "ws://recovery-error.test" },
-              connected: true,
-              client: { recoveryScopeReady: true, recoveryScope: "owner" },
-              sessionKey: "agent:main:main",
-              chatMessage: "",
-              chatAttachments: [],
-              chatQueue: [],
-            },
-            identity: "storage-error",
-            id: "storage-error-recovery",
-          });
-          const stage = document.createElement("main");
-          stage.style.cssText = "position:fixed;inset:0;z-index:100;background:var(--bg)";
-          stage.append(component);
-          document.body.append(stage);
-        });
+        const recoveryModule = await page.evaluateHandle<
+          typeof import("../pages/chat/chat-outbox-recovery.tsx")
+        >('import("/src/pages/chat/chat-outbox-recovery.tsx")');
+        const solidModule = await page.evaluateHandle<
+          typeof import("../test-helpers/solid-render.tsx")
+        >('import("/src/test-helpers/solid-render.tsx")');
+        await page.evaluate(
+          ({ recovery, solid }) => {
+            const stage = document.createElement("main");
+            stage.id = "storage-error-recovery";
+            stage.style.cssText = "position:fixed;inset:0;z-index:100;background:var(--bg)";
+            document.body.append(stage);
+            solid.mountSolid(
+              recovery.PaneOutboxRecovery,
+              {
+                state: {
+                  settings: { gatewayUrl: "ws://recovery-error.test" },
+                  connected: true,
+                  client: { recoveryScopeReady: true, recoveryScope: "owner" },
+                  sessionKey: "agent:main:main",
+                  chatMessage: "",
+                  chatAttachments: [],
+                  chatQueue: [],
+                  chatMessages: [],
+                },
+                identity: "storage-error",
+                onRestored: () => {},
+              },
+              stage,
+            );
+          },
+          { recovery: recoveryModule, solid: solidModule },
+        );
         const notice = page.locator("#storage-error-recovery .chat-outbox-recovery");
         await notice.getByRole("alert").waitFor();
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
@@ -352,7 +365,12 @@ suite.define(() => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.tsx")');
+        const recoveryModule = await page.evaluateHandle<
+          typeof import("../pages/chat/chat-outbox-recovery.tsx")
+        >('import("/src/pages/chat/chat-outbox-recovery.tsx")');
+        const solidModule = await page.evaluateHandle<
+          typeof import("../test-helpers/solid-render.tsx")
+        >('import("/src/test-helpers/solid-render.tsx")');
         const legacyKey = `openclaw.control.chatComposer.v2:${encodeURIComponent("ws://recovery-fence.test")}`;
         const legacyValue = JSON.stringify({
           version: 2,
@@ -365,8 +383,8 @@ suite.define(() => {
             },
           },
         });
-        const hostHandle = await page.evaluateHandle(
-          ({ initialIncognito, key, value }) => {
+        const fixture = await page.evaluateHandle(
+          ({ initialIncognito, key, value, recovery, solid }) => {
             const replyState: { chatReplyTarget: ChatReplyTarget | null } = {
               chatReplyTarget: null,
             };
@@ -384,28 +402,37 @@ suite.define(() => {
               chatGoalDraftMode: undefined,
               chatAttachments: [],
               chatQueue: [],
-            };
+              chatMessages: [],
+            } satisfies Parameters<typeof recovery.PaneOutboxRecovery>[0]["state"];
             sessionStorage.setItem(key, value);
-            const component = Object.assign(
-              document.createElement("openclaw-chat-outbox-recovery"),
-              { host, identity: "unchanged-route-and-owner", id: "recovery-fence-fixture" },
-            );
+            const component = document.createElement("div");
+            component.id = "recovery-fence-fixture";
             component.style.cssText =
               "position: fixed; inset: 24px; z-index: 100; background: white; color: black";
             document.body.append(component);
-            return host;
+            const view = solid.mountSolid(
+              recovery.PaneOutboxRecovery,
+              {
+                state: host,
+                identity: "unchanged-route-and-owner",
+                onRestored: () => {},
+              },
+              component,
+            );
+            return { host, view };
           },
-          { initialIncognito: change === "incognito", key: legacyKey, value: legacyValue },
+          {
+            initialIncognito: change === "incognito",
+            key: legacyKey,
+            value: legacyValue,
+            recovery: recoveryModule,
+            solid: solidModule,
+          },
         );
+        const hostHandle = await fixture.evaluateHandle(({ host }) => host);
         const notice = page.locator("#recovery-fence-fixture");
         const restore = notice.getByRole("button", { name: "Restore", exact: true });
         if (change === "incognito") {
-          await notice.evaluate(async (element) => {
-            // SAFETY: This locator selects the registered recovery element created above.
-            const component = element as HTMLElementTagNameMap["openclaw-chat-outbox-recovery"];
-            await component.updateComplete;
-            await component.updateComplete;
-          });
           expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(0);
           expect(await restore.count()).toBe(0);
           expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
@@ -413,13 +440,13 @@ suite.define(() => {
             legacyValue,
           );
           // Leaving Incognito reveals the retained source, never an adopted destination.
-          await hostHandle.evaluate((host) => {
+          await fixture.evaluate(({ host, view }) => {
             host.selectedChatSessionIncognito = false;
-            // SAFETY: The fixture above creates this registered recovery element with this ID.
-            const component = document.querySelector(
-              "#recovery-fence-fixture",
-            ) as HTMLElementTagNameMap["openclaw-chat-outbox-recovery"];
-            component.identity = "non-incognito-review-owner";
+            view.update({
+              state: host,
+              identity: "non-incognito-review-owner",
+              onRestored: () => {},
+            });
           });
         }
         await notice.locator(".chat-outbox-recovery-row").first().waitFor();

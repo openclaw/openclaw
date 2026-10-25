@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { hasAvailableAuthForProvider, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
+import { createProviderHttpError } from "../agents/provider-http-errors.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createWhisperExecutable } from "./local-audio.test-support.js";
+import { runMediaFixture } from "./runner-case.test-support.js";
+import { formatDecisionSummary } from "./runner.entries.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture, withMediaFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
@@ -56,24 +59,11 @@ function withLocalTools(run: (binDir: string) => Promise<void>) {
   );
 }
 type RunParams = Parameters<typeof runCapability>[0];
-async function runAudio(
+function runAudio(
   params: Pick<RunParams, "cfg" | "providerRegistry"> &
     Partial<Pick<RunParams, "activeModel" | "request">>,
 ) {
-  let result: Awaited<ReturnType<typeof runCapability>> | undefined;
-  await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
-    result = await runCapability({
-      capability: "audio",
-      ctx,
-      media,
-      attachments: cache,
-      ...params,
-    });
-  });
-  if (!result) {
-    throw new Error("Expected audio result");
-  }
-  return result;
+  return runMediaFixture("audio", "openclaw-auto-audio", params);
 }
 
 describe("runCapability audio", () => {
@@ -98,19 +88,35 @@ describe("runCapability audio", () => {
         }),
       }),
     });
-    expect(result.decision.outcome).toBe("success");
-    expect(result.outputs[0]).toMatchObject({
-      text: "subscription transcript",
-      model: "transcription-default",
+    expect(result).toMatchObject({
+      decision: { outcome: "success" },
+      outputs: [{ text: "subscription transcript", model: "transcription-default" }],
     });
     expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
+    expect(formatDecisionSummary(result.decision)).toBe(
+      "audio: success (1/1) via openai/transcription-default",
+    );
   });
 
-  it.each([false, true])(
-    "retries failed uploads only with an explicit fallback list: %s",
-    async (explicit) => {
+  it.each([
+    { explicit: false, withBody: true },
+    { explicit: true, withBody: true },
+    { explicit: false, withBody: false },
+  ])(
+    "retries failed uploads only with an explicit fallback list: $explicit, body: $withBody",
+    async ({ explicit, withBody }) => {
       hasAuth.mockClear();
-      const rejected = new Error("Audio transcription failed (HTTP 403)");
+      const rejected = await createProviderHttpError(
+        new Response(
+          withBody ? JSON.stringify({ detail: "Synthetic provider response body" }) : null,
+          {
+            status: 403,
+            headers: { "request-id": "synthetic-request-id" },
+          },
+        ),
+        "Audio transcription failed",
+        { statusPrefix: "HTTP " },
+      );
       const transcribeAudio = vi.fn(async () => ({ text: "authored fallback transcript" }));
       const result = await runAudio({
         cfg: explicit
@@ -141,6 +147,9 @@ describe("runCapability audio", () => {
       if (!explicit) {
         expect(result.outputs).toEqual([]);
         expect(hasAuth).not.toHaveBeenCalled();
+        expect(formatDecisionSummary(result.decision)).toBe(
+          "audio: failed (0/1) reason=Audio transcription failed (HTTP 403)",
+        );
       }
     },
   );
@@ -151,8 +160,10 @@ describe("runCapability audio", () => {
     );
     const transcribeAudioWithContext = vi.fn(
       async (context: { baseUrl?: string; prompt?: string }) => {
-        expect(context.baseUrl).toBe("https://custom.example/v1");
-        expect(context.prompt).toBe("Preserve names.");
+        expect(context).toMatchObject({
+          baseUrl: "https://custom.example/v1",
+          prompt: "Preserve names.",
+        });
         return { ok: false as const, error: rejected };
       },
     );
@@ -173,8 +184,10 @@ describe("runCapability audio", () => {
             openai: audioProvider("openai", { transcribeAudioWithContext }),
           }),
         });
-        expect(result.decision.outcome).toBe("success");
-        expect(result.outputs[0]?.text).toBe("mocked-local-whisper");
+        expect(result).toMatchObject({
+          decision: { outcome: "success" },
+          outputs: [{ text: "mocked-local-whisper" }],
+        });
         expect(result.decision.attachments[0]?.attempts).toContainEqual(
           expect.objectContaining({
             provider: "openai",

@@ -20,7 +20,7 @@ const contextConfig = (model: Record<string, unknown>) =>
     },
     { model },
   );
-type AgentList = NonNullable<AgentsProps["agentsList"]>;
+type AgentList = NonNullable<ReturnType<AgentsProps["readData"]>["agentsList"]>;
 const roster = (beta: AgentList["agents"][number]): AgentList => ({
   defaultId: "alpha",
   mainKey: "main",
@@ -89,13 +89,16 @@ it.each(["overview", "channels", "cron"] as const)(
   "shows authoritative agent workspace and effective model on the %s panel",
   (activePanel) => {
     const container = renderAgents({
-      activePanel,
-      agentsList: roster({
-        id: "beta",
-        workspace: resolvedAgentWorkspace,
-        model: { primary: inheritedAgentModel },
-      }),
       configForm: contextConfig({ fallbacks: ["google/gemini-3-pro"] }),
+      readData: () => ({
+        ...createProps().readData(),
+        agentsPanel: activePanel,
+        agentsList: roster({
+          id: "beta",
+          workspace: resolvedAgentWorkspace,
+          model: { primary: inheritedAgentModel },
+        }),
+      }),
     });
     expect(contextValue(container, "Workspace")).toBe(resolvedAgentWorkspace);
     expect(contextValue(container, "Primary Model")).toBe(`${inheritedAgentModel} (+1 fallback)`);
@@ -110,7 +113,8 @@ it.each([
   ({ canUpdateIdentity, identitySaving }) => {
     const container = renderAgents({
       access: { canUpdateIdentity },
-      overview: { identitySaving },
+      overview: {},
+      readData: () => ({ ...createProps().readData(), identitySaving }),
     });
 
     expect(
@@ -194,7 +198,10 @@ it("excludes a profile-qualified primary alias while retaining case-distinct mod
   const target = "custom/model-a";
   const caseDistinct = "custom/Model-A";
   const { field } = renderFallbacks({
-    agentsList: roster({ id: "beta", model: { primary: caseDistinct } }),
+    readData: () => ({
+      ...createProps().readData(),
+      agentsList: roster({ id: "beta", model: { primary: caseDistinct } }),
+    }),
     configForm: agentConfig({
       model: { primary: "fast@work" },
       models: { [target]: { alias: "fast" } },

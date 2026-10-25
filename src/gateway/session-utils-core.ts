@@ -4,7 +4,11 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { resolveSubagentChildAuthority } from "../agents/subagents/registry/subagent-child-owner-match.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
+  isSubagentRunLive,
+  isSubagentRunQueued,
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagents/registry/subagent-run-liveness.js";
@@ -163,6 +167,32 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
 }
 
 const emptyChildOwners: readonly string[] = Object.freeze([]);
+
+/** Only the current executor/reservation can confer control; display snapshots cannot. */
+export function resolveSessionChildController(
+  key: string,
+  entry: SessionEntry,
+  parentSessionKey?: string,
+): string | undefined {
+  const agentId = parseAgentSessionKey(key)?.agentId;
+  if (
+    !agentId ||
+    (parentSessionKey && ![entry.parentSessionKey, entry.spawnedBy].includes(parentSessionKey))
+  ) {
+    return undefined;
+  }
+  const run = getLatestLiveSubagentRunByChildSessionKey(
+    key,
+    (candidate) =>
+      (isSubagentRunLive(candidate) || isSubagentRunQueued(candidate)) &&
+      resolveSubagentChildAuthority(candidate, entry).status !== "mismatch",
+    agentId,
+  );
+  return (
+    normalizeOptionalString(run?.controllerSessionKey) ??
+    normalizeOptionalString(run?.requesterSessionKey)
+  );
+}
 const sessionChildOwners = new WeakMap<
   SessionEntry,
   {
@@ -192,22 +222,25 @@ export function resolveSessionChildOwners(params: {
           now,
         })
       : shouldKeepStoreOnlyChildLink(entry, now));
-  // Runtime control replaces spawnedBy, but only retained runs own controller links.
-  const controller = keep
-    ? latest
-      ? normalizeOptionalString(latest.controllerSessionKey) ||
-        normalizeOptionalString(latest.requesterSessionKey)
-      : normalizeOptionalString(entry.spawnedBy)
-    : undefined;
-  // Persistent dashboard navigation outlives the individual run, including forks.
-  const parent =
-    keep ||
-    (params.parsedKey === undefined
-      ? parseAgentSessionKey(key)
-      : params.parsedKey
-    )?.rest.startsWith("dashboard:")
+  const parsed = params.parsedKey === undefined ? parseAgentSessionKey(key) : params.parsedKey;
+  const native =
+    !entry.acp &&
+    !parsed?.rest.startsWith("acp:") &&
+    (parsed?.rest.startsWith("subagent:") ||
+      (Boolean(entry.spawnedBy) && (entry.spawnDepth ?? 0) > 0));
+  const controller = resolveSessionChildController(key, entry);
+  // Native lineage is a durable relationship, not a retained-run lease. Saved
+  // dashboard navigation keeps its existing lifetime. Other store-only rows
+  // retain the bounded fallback rather than acquiring permanent authority.
+  const explicitParent =
+    native || keep || parsed?.rest.startsWith("dashboard:")
       ? normalizeOptionalString(entry.parentSessionKey)
       : undefined;
+  const spawner = native || keep ? normalizeOptionalString(entry.spawnedBy) : undefined;
+  // Modern explicit lineage remains readable during foreign control. Legacy
+  // spawnedBy-only facts yield to a verified active controller. Neither grants
+  // permission to take over that execution (delivery checks the current owner).
+  const parent = explicitParent ?? (!controller || controller === spawner ? spawner : undefined);
   const cached = sessionChildOwners.get(entry);
   if (cached?.key === key && cached.controller === controller && cached.parent === parent) {
     return cached.owners;

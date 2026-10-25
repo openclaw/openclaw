@@ -38,22 +38,14 @@ export function applyRetrievalRanking<T extends ProjectRankable>(
   results: readonly T[],
   activeProjectKeys?: ReadonlySet<string>,
 ): T[] {
-  const weighted = results.map((entry) => {
+  return results.filter(hasValidProjectAnnotation).map((entry) => {
     const importance = entry.importance;
     const multiplier =
       importance === null || importance === undefined
         ? 1
         : 0.75 + Math.max(1, Math.min(10, Math.floor(importance))) * 0.05;
-    return { ...entry, score: entry.score * multiplier };
+    return Object.assign({}, entry, {
+      score: entry.score * multiplier * projectScoreMultiplier(entry.projectKey, activeProjectKeys),
+    });
   });
-  const eligible = weighted.filter(hasValidProjectAnnotation);
-  if (!activeProjectKeys || activeProjectKeys.size === 0) {
-    return eligible;
-  }
-  // Retrieval owners sort after score adjustment, preserving their exact-match tiers.
-  return eligible.map((entry) =>
-    Object.assign({}, entry, {
-      score: entry.score * projectScoreMultiplier(entry.projectKey, activeProjectKeys),
-    }),
-  );
 }

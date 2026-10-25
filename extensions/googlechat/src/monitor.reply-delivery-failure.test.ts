@@ -1,9 +1,10 @@
 // Google Chat reply delivery failure propagation covered against a real HTTP stub.
 //
-// These tests drive the production stack end to end: deliverGoogleChatReply ->
+// These tests drive the production monitor's registered processor and delivery ->
 // sendGoogleChatMessage -> withGoogleChatResponse -> fetchWithSsrFGuard ->
-// google-auth-library token exchange, with only global fetch stubbed to reroute
-// oauth2.googleapis.com and chat.googleapis.com to a loopback impersonator.
+// google-auth-library token exchange. Global fetch reroutes oauth2.googleapis.com
+// and chat.googleapis.com to a loopback impersonator. The channel harness isolates
+// unrelated ingress admission, routing, envelope construction, and reply dispatch.
 // The service account key is a throwaway RSA key generated in-process; no real
 // credentials or network access are involved.
 import { generateKeyPairSync } from "node:crypto";
@@ -12,8 +13,12 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
-import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
+import type {
+  GoogleChatCoreRuntime,
+  GoogleChatRuntimeEnv,
+  WebhookTarget,
+} from "./monitor-types.js";
+import { createGoogleChatReplyDeliveryHarness } from "./monitor.reply-delivery.test-support.js";
 
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 
@@ -42,8 +47,11 @@ const CHUNKS = [
   "Third chunk of the assistant reply.",
 ] as const;
 
+const harness = createGoogleChatReplyDeliveryHarness();
 const core = {
+  ...harness.core,
   channel: {
+    ...harness.core.channel,
     text: {
       resolveChunkMode: () => "markdown",
       // Deterministic 3-chunk split standing in for the core chunker; the
@@ -78,6 +86,14 @@ function createStubHandler(params: { failCreateIndexes: Set<number>; patchStatus
       const messagesMatch = url.pathname.match(/^\/v1\/(spaces\/[^/]+)\/messages$/);
       if (req.method === "POST" && messagesMatch) {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { text?: string };
+        // Ingress preparation is not one of the reply attempts under test.
+        if (body.text === "_OpenClaw is typing..._") {
+          json(200, {
+            name: `${messagesMatch[1]}/messages/typing`,
+            thread: { name: `${messagesMatch[1]}/threads/root` },
+          });
+          return;
+        }
         const index = createAttempts.length + 1;
         const status = params.failCreateIndexes.has(index) ? 500 : 200;
         createAttempts.push({ text: body.text, status });
@@ -136,12 +152,16 @@ type DeliveryOutcome = {
   deliverError?: unknown;
   onErrorCalls: Array<{ err: unknown; kind: string }>;
   errorLines: string[];
+  deliveryFetchStart: number;
 };
 
-async function runDelivery(params: {
-  withTypingMessage?: boolean;
-  statusSink?: Parameters<typeof deliverGoogleChatReply>[0]["statusSink"];
-}): Promise<DeliveryOutcome> {
+async function runDelivery(
+  params: {
+    withTypingMessage?: boolean;
+    statusSink?: WebhookTarget["statusSink"];
+  },
+  fetchControl: ReturnType<typeof stubGoogleHostsFetch>,
+): Promise<DeliveryOutcome> {
   const errorLines: string[] = [];
   const runtime: GoogleChatRuntimeEnv = {
     error: (line: string) => {
@@ -149,33 +169,40 @@ async function runDelivery(params: {
     },
   };
   const onErrorCalls: Array<{ err: unknown; kind: string }> = [];
-  // Mirror of monitor.ts: the channel deliver callback awaits
-  // deliverGoogleChatReply, and the core reply dispatcher only treats a throw
-  // as a failed delivery (src/auto-reply/reply/reply-dispatcher.ts).
+  let deliveryFetchStart = 0;
   try {
-    await deliverGoogleChatReply({
-      payload: { text: CHUNKS.join("\n\n"), replyToId: "spaces/AAA/threads/root" },
-      account,
-      spaceId: "spaces/AAA",
-      runtime,
-      core,
-      config,
-      ...(params.statusSink ? { statusSink: params.statusSink } : {}),
-      ...(params.withTypingMessage
-        ? {
-            typingMessage: {
-              placement: "thread",
-              name: "spaces/AAA/messages/typing",
-              requestedThreadName: "spaces/AAA/threads/root",
-              deliveredThreadName: "spaces/AAA/threads/root",
-            },
-          }
-        : {}),
-    });
-    return { outcome: "delivered", onErrorCalls, errorLines };
+    await harness.process(
+      {
+        account: {
+          ...account,
+          config: {
+            replyToMode: "all",
+            typingIndicator: params.withTypingMessage ? "message" : "none",
+          },
+        },
+        runtime,
+        core,
+        config,
+        statusSink: params.statusSink,
+      },
+      async (delivery) => {
+        deliveryFetchStart = fetchControl.fetchMock.mock.calls.length;
+        await delivery.deliver(
+          { text: CHUNKS.join("\n\n"), replyToId: "spaces/AAA/threads/root" },
+          { kind: "final" },
+        );
+      },
+    );
+    return { outcome: "delivered", onErrorCalls, errorLines, deliveryFetchStart };
   } catch (err) {
     onErrorCalls.push({ err, kind: "text" });
-    return { outcome: "failed-deliver", deliverError: err, onErrorCalls, errorLines };
+    return {
+      outcome: "failed-deliver",
+      deliverError: err,
+      onErrorCalls,
+      errorLines,
+      deliveryFetchStart,
+    };
   }
 }
 
@@ -205,7 +232,7 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
     const stub = createStubHandler({ failCreateIndexes: new Set([2]) });
     await withServer(stub.handler, async (baseUrl) => {
       fetchControl.pointAtStub(baseUrl);
-      const result = await runDelivery({});
+      const result = await runDelivery({}, fetchControl);
 
       expect(result.outcome).toBe("failed-deliver");
       expect(result.deliverError).toBeInstanceOf(Error);
@@ -229,7 +256,9 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
         true,
       );
       expect(
-        requestedUrls.filter((url) => url.startsWith("https://chat.googleapis.com/")),
+        requestedUrls
+          .slice(result.deliveryFetchStart)
+          .filter((url) => url.startsWith("https://chat.googleapis.com/")),
       ).toHaveLength(2);
     });
   });
@@ -238,7 +267,7 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
     const stub = createStubHandler({ failCreateIndexes: new Set([1]) });
     await withServer(stub.handler, async (baseUrl) => {
       fetchControl.pointAtStub(baseUrl);
-      const result = await runDelivery({ withTypingMessage: true });
+      const result = await runDelivery({ withTypingMessage: true }, fetchControl);
 
       expect(result.outcome).toBe("failed-deliver");
       expectPartialDelivery(result.deliverError, {
@@ -255,7 +284,7 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
     const stub = createStubHandler({ failCreateIndexes: new Set([1]), patchStatus: 404 });
     await withServer(stub.handler, async (baseUrl) => {
       fetchControl.pointAtStub(baseUrl);
-      const result = await runDelivery({ withTypingMessage: true });
+      const result = await runDelivery({ withTypingMessage: true }, fetchControl);
 
       expect(result.outcome).toBe("failed-deliver");
       expect(isChannelPartialDeliveryError(result.deliverError)).toBe(false);
@@ -273,7 +302,7 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
     const stub = createStubHandler({ failCreateIndexes: new Set(), patchStatus: 404 });
     await withServer(stub.handler, async (baseUrl) => {
       fetchControl.pointAtStub(baseUrl);
-      const result = await runDelivery({ withTypingMessage: true });
+      const result = await runDelivery({ withTypingMessage: true }, fetchControl);
 
       expect(result.outcome).toBe("delivered");
       expect(result.onErrorCalls).toHaveLength(0);
@@ -291,7 +320,7 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
     });
     await withServer(stub.handler, async (baseUrl) => {
       fetchControl.pointAtStub(baseUrl);
-      const result = await runDelivery({ withTypingMessage: true, statusSink });
+      const result = await runDelivery({ withTypingMessage: true, statusSink }, fetchControl);
 
       expect(result.outcome).toBe("delivered");
       expect(result.onErrorCalls).toHaveLength(0);

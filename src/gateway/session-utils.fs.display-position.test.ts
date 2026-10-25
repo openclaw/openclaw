@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
+import { createArchiveSourceSnapshotFixture } from "./session-transcript-archive.test-support.js";
 import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 
 function activity(id: string, afterEntryId: string | null, startOrder: number) {
@@ -119,15 +120,7 @@ describe("archive transcript display positions", () => {
     ]);
     const reader = new ArchivedTranscriptReader({ sessionId, storePath });
     const full = await collectSessionTranscriptMessages(
-      (_scope, options) =>
-        reader.readSourcePage(options, {
-          indexedSeq: -1,
-          activeEventCount: 0,
-          totalMessages: 0,
-          generation: undefined,
-          tailEventSeq: undefined,
-          resetSeq: null,
-        }),
+      (_scope, options) => reader.readSourcePage(options, createArchiveSourceSnapshotFixture()),
       { sessionId },
       { mode: "full", reason: "archive placement" },
     );

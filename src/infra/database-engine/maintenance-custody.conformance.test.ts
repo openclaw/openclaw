@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -42,6 +43,13 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
   const client = new Client({ connectionString: connection });
   let env: NodeJS.ProcessEnv;
   let namespace: string;
+  const alterLeases = (clause: string) =>
+    client.query(`ALTER TABLE "${namespace}".state_leases ${clause}`);
+  async function expectRefusal(target: NodeJS.ProcessEnv, message: string) {
+    const refusal: unknown = await maintenanceLock(target).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(Error);
+    expect(formatGatewayLockFailure(refusal)).toContain(message);
+  }
 
   beforeAll(async () => {
     await client.connect();
@@ -81,14 +89,7 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
     const statements: string[] = [];
     const observation = channel("openclaw.database.statement");
     const observe = (event: unknown) => {
-      if (
-        event &&
-        typeof event === "object" &&
-        "engine" in event &&
-        event.engine === "postgres" &&
-        "sql" in event &&
-        typeof event.sql === "string"
-      ) {
+      if (isRecord(event) && event.engine === "postgres" && typeof event.sql === "string") {
         statements.push(event.sql);
       }
     };
@@ -182,24 +183,13 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
             `UPDATE "${namespace}".openclaw_schema_meta SET version = version + 1 WHERE store = 'state'`,
           );
           advanced = true;
-          await client.query(
-            `ALTER TABLE "${namespace}".state_leases ADD COLUMN future_payload text`,
-          );
+          await alterLeases("ADD COLUMN future_payload text");
         }
-        let refusal: unknown;
-        try {
-          await maintenanceLock(otherEnv);
-        } catch (error) {
-          refusal = error;
-        }
-        expect(refusal).toBeInstanceOf(Error);
-        expect(formatGatewayLockFailure(refusal)).toContain("Gateway owner lease is still active");
+        await expectRefusal(otherEnv, "Gateway owner lease is still active");
       }
     } finally {
       if (advanced) {
-        await client.query(
-          `ALTER TABLE "${namespace}".state_leases DROP COLUMN IF EXISTS future_payload`,
-        );
+        await alterLeases("DROP COLUMN IF EXISTS future_payload");
         await client.query(
           `UPDATE "${namespace}".openclaw_schema_meta SET version = version - 1 WHERE store = 'state'`,
         );
@@ -210,19 +200,11 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
 
   it("refuses maintenance when the stable PostgreSQL lease contract is missing", async () => {
     closeOpenClawStateDatabaseForTest();
-    await client.query(
-      `ALTER TABLE "${namespace}".state_leases RENAME COLUMN payload_json TO future_payload`,
-    );
+    await alterLeases("RENAME COLUMN payload_json TO future_payload");
     try {
-      const refusal: unknown = await maintenanceLock(env).catch((error: unknown) => error);
-      expect(refusal).toBeInstanceOf(Error);
-      expect(formatGatewayLockFailure(refusal)).toContain(
-        "PostgreSQL Gateway owner lease table is missing or incompatible",
-      );
+      await expectRefusal(env, "PostgreSQL Gateway owner lease table is missing or incompatible");
     } finally {
-      await client.query(
-        `ALTER TABLE "${namespace}".state_leases RENAME COLUMN future_payload TO payload_json`,
-      );
+      await alterLeases("RENAME COLUMN future_payload TO payload_json");
     }
     const owner = await maintenanceLock(env);
     expect(owner).not.toBeNull();

@@ -4,8 +4,8 @@ import { createIrcReconnectBackoff } from "./reconnect-backoff.js";
 
 function createClock(start = 1_000_000) {
   let current = start;
+  vi.spyOn(Date, "now").mockImplementation(() => current);
   return {
-    now: () => current,
     advance: (ms: number) => {
       current += ms;
     },
@@ -20,7 +20,7 @@ describe("irc reconnect backoff", () => {
   it("resets after a connection stayed up for a minute", () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     const clock = createClock();
-    const backoff = createIrcReconnectBackoff(clock.now);
+    const backoff = createIrcReconnectBackoff();
     backoff.nextDelayMs();
     backoff.nextDelayMs();
     expect(backoff.nextDelayMs()).toBe(4_000);
@@ -32,7 +32,7 @@ describe("irc reconnect backoff", () => {
   it("does not reset just before the stable threshold", () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     const clock = createClock();
-    const backoff = createIrcReconnectBackoff(clock.now);
+    const backoff = createIrcReconnectBackoff();
     backoff.nextDelayMs();
     backoff.markConnected();
     clock.advance(59_999);
@@ -42,7 +42,7 @@ describe("irc reconnect backoff", () => {
   it("does not let a failed connect attempt inherit an earlier connection's uptime", () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     const clock = createClock();
-    const backoff = createIrcReconnectBackoff(clock.now);
+    const backoff = createIrcReconnectBackoff();
     backoff.nextDelayMs();
     backoff.markConnected();
     clock.advance(10_000);

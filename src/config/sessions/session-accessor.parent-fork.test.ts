@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { afterAll, afterEach, expect, it } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import {
@@ -16,8 +16,13 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
+import { withoutHostSql } from "./session-accessor.observation.test-support.js";
+import { forkSessionEntryFromParentTargetWithPatch as forkWithPatch } from "./session-accessor.sqlite-parent-session.js";
 import { resolveSqliteStoreScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { withTranscriptWriteSequence } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import * as storeTargetRuntime from "./session-store-target-runtime.js";
+import { messageEvent as createMessageEvent } from "./transcript-message.test-support.js";
 
 const forkableClaudeCliBackend = {
   id: "claude-cli",
@@ -88,30 +93,20 @@ const childEvents = async (storePath: string, sessionId: string) =>
     storePath,
   })) as Record<string, unknown>[];
 
-async function seedParentTranscript(params: {
-  storePath: string;
-  parentSessionId: string;
-  events: Record<string, unknown>[];
-}): Promise<void> {
+async function seedParentTranscript(
+  storePath: string,
+  parentSessionId: string,
+  events: Record<string, unknown>[],
+): Promise<void> {
   await withTranscriptWriteSequence(
     {
       agentId: "main",
-      sessionId: params.parentSessionId,
+      sessionId: parentSessionId,
       sessionKey: "agent:main:main",
-      storePath: params.storePath,
+      storePath,
     },
-    (transcript) => transcript.replaceEvents(params.events),
+    (transcript) => transcript.replaceEvents(events),
   );
-}
-
-async function createParent(parentSessionId: string, events: Record<string, unknown>[]) {
-  const { root, storePath } = await createStore();
-  await seedParentTranscript({
-    storePath,
-    parentSessionId,
-    events: [header(parentSessionId, root), ...events],
-  });
-  return { storePath };
 }
 
 async function forkChildTranscript(
@@ -150,18 +145,24 @@ async function openForkedChildSession(
   });
 }
 
+async function forkFixture(parentId: string, events: Record<string, unknown>[]) {
+  const { root, storePath } = await createStore();
+  await seedParentTranscript(storePath, parentId, [header(parentId, root), ...events]);
+  const fork = await forkChildTranscript(storePath, parentId);
+  return {
+    records: () => childEvents(storePath, fork.sessionId),
+    open: () => openForkedChildSession(storePath, fork),
+  };
+}
+
 it("checks authority inside same- and cross-database transcript commits", async () => {
   const root = sessionDirs.make();
   const storePath = path.join(root, "sessions.json");
   const parentSessionId = "parent-guarded";
-  await seedParentTranscript({
-    storePath,
-    parentSessionId,
-    events: [
-      header(parentSessionId, root, "2026-08-18T00:00:00.000Z"),
-      messageEvent("private-message", null, "user", "private context"),
-    ],
-  });
+  await seedParentTranscript(storePath, parentSessionId, [
+    header(parentSessionId, root, "2026-08-18T00:00:00.000Z"),
+    messageEvent("private-message", null, "user", "private context"),
+  ]);
 
   for (const agentId of ["main", "work"]) {
     const target = {
@@ -196,71 +197,52 @@ it("checks authority inside same- and cross-database transcript commits", async 
   }
 });
 
-it("forks the active branch across stores without caller-thread SQL", async () => {
-  const { root, storePath } = await createStore();
-  const targetStorePath = path.join(root, "target-sessions.json");
-  const cwd = path.join(root, "workspace");
-  await fs.mkdir(cwd);
-  const parentSessionId = "parent-session";
-  const lines: Record<string, unknown>[] = [
-    {
-      type: "session",
-      version: 3,
-      id: parentSessionId,
-      timestamp: "2026-05-01T00:00:00.000Z",
-      cwd,
-    },
-    messageEvent("user-1", null, "user", "hello"),
-    messageEvent("assistant-1", "user-1", "assistant", [{ type: "text", text: "hi" }]),
-    labelEvent("label-1", "assistant-1", "user-1", "start"),
-    messageEvent("delivery-side-branch", "label-1", "assistant", "side delivery"),
-    leafEvent("active-leaf", "delivery-side-branch", "label-1"),
-  ];
-  await seedParentTranscript({ storePath, parentSessionId, events: lines });
+it.each([undefined, "missing-ancestor"])(
+  "forks the active branch across stores (ancestor=%s)",
+  async (ancestor) => {
+    const { root, storePath } = await createStore();
+    const targetStorePath = path.join(root, "target-sessions.json");
+    const cwd = path.join(root, "workspace");
+    await fs.mkdir(cwd);
+    const parentSessionId = "parent-session";
+    const lines: Record<string, unknown>[] = [
+      header(parentSessionId, cwd, "2026-05-01T00:00:00.000Z"),
+      messageEvent("user-1", ancestor, "user", "hello"),
+      messageEvent("assistant-1", undefined, "assistant", [{ type: "text", text: "hi" }]),
+      labelEvent("label-1", "assistant-1", "user-1", "start"),
+      messageEvent("delivery-side-branch", "label-1", "assistant", "side delivery"),
+      leafEvent("active-leaf", "delivery-side-branch", "label-1"),
+    ];
+    await seedParentTranscript(storePath, parentSessionId, lines);
 
-  const sql = observeHostDataSql();
-  let fork;
-  try {
-    fork = await forkChildTranscript(storePath, parentSessionId, targetStorePath);
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-  expect(fork.sessionFile).toBe("agent:main:child");
-  expect(fork.sessionId).not.toBe(parentSessionId);
-  const forkedEntries = await childEvents(targetStorePath, fork.sessionId);
-  const forkedHeader = forkedEntries[0];
-  expect(forkedHeader).toMatchObject({ type: "session", version: 3, id: fork.sessionId, cwd });
-  expect(
-    parseSqliteSessionFileMarker(
-      typeof forkedHeader?.parentSession === "string" ? forkedHeader.parentSession : undefined,
-    ),
-  ).toMatchObject({
-    agentId: "main",
-    sessionId: parentSessionId,
-  });
-  expect(forkedEntries.map((entry) => entry.type)).toEqual([
-    "session",
-    "message",
-    "message",
-    "label",
-    "leaf",
-  ]);
-  const forkedLabel = forkedEntries.find((entry) => entry.type === "label");
-  expect(forkedLabel).toMatchObject({ type: "label", targetId: "user-1", label: "start" });
-  expect(forkedEntries.at(-1)).toMatchObject({
-    type: "leaf",
-    targetId: "label-1",
-    appendParentId: "label-1",
-  });
-  expect(JSON.stringify(forkedEntries)).not.toContain("side delivery");
-});
+    const fork = await withoutHostSql(() =>
+      forkChildTranscript(storePath, parentSessionId, targetStorePath),
+    );
+    expect(fork.sessionFile).toBe("agent:main:child");
+    expect(fork.sessionId).not.toBe(parentSessionId);
+    const forkedEntries = await childEvents(targetStorePath, fork.sessionId);
+    const forkedHeader = forkedEntries[0];
+    expect(
+      parseSqliteSessionFileMarker(
+        typeof forkedHeader?.parentSession === "string" ? forkedHeader.parentSession : undefined,
+      ),
+    ).toMatchObject({
+      agentId: "main",
+      sessionId: parentSessionId,
+    });
+    expect(forkedEntries).toMatchObject([
+      { type: "session", version: 3, id: fork.sessionId, cwd },
+      { type: "message", id: "user-1", parentId: null },
+      { type: "message", id: "assistant-1", parentId: "user-1" },
+      { type: "label", targetId: "user-1", label: "start" },
+      { type: "leaf", targetId: "label-1", appendParentId: "label-1" },
+    ]);
+    expect(JSON.stringify(forkedEntries)).not.toContain("side delivery");
+  },
+);
 
 it("keeps opaque append-parent metadata on the active fork branch", async () => {
-  const { root, storePath } = await createStore();
-  const parentSessionId = "parent-opaque";
-  const entries: Record<string, unknown>[] = [
-    header(parentSessionId, root),
+  const { records, open } = await forkFixture("parent-opaque", [
     messageEvent("active-root", null, "assistant", [{ type: "text", text: "active root" }]),
     labelEvent("active-label", "active-root", "active-root", "selected"),
     messageEvent("side-delivery", "active-root", "assistant", "side delivery"),
@@ -269,15 +251,9 @@ it("keeps opaque append-parent metadata on the active fork branch", async () => 
       appendParentId: "plugin-metadata",
       appendMode: "side",
     }),
-  ];
-  await seedParentTranscript({ storePath, parentSessionId, events: entries });
-
-  const fork = await forkChildTranscript(storePath, parentSessionId);
-  const forkedRecords = await childEvents(storePath, fork.sessionId);
-  const serialized = JSON.stringify(forkedRecords);
-  expect(serialized).toContain('"id":"active-root"');
-  expect(serialized).toContain('"id":"plugin-metadata"');
-  expect(serialized).not.toContain("side delivery");
+  ]);
+  const forkedRecords = await records();
+  expect(JSON.stringify(forkedRecords)).not.toContain("side delivery");
   expect(forkedRecords.find((entry) => entry.id === "plugin-metadata")).toMatchObject({
     parentId: "active-root",
   });
@@ -291,11 +267,11 @@ it("keeps opaque append-parent metadata on the active fork branch", async () => 
     appendParentId: "plugin-metadata",
     appendMode: "side",
   });
-  const reopened = await openForkedChildSession(storePath, fork);
+  const reopened = await open();
   await appendUser(reopened);
-  const records = await childEvents(storePath, fork.sessionId);
-  expect(records.at(-1)).toMatchObject({ type: "message", parentId: "plugin-metadata" });
-  expect(records.at(-1)).not.toHaveProperty("appendMode");
+  const continued = (await records()).at(-1);
+  expect(continued).toMatchObject({ type: "message", parentId: "plugin-metadata" });
+  expect(continued).not.toHaveProperty("appendMode");
   expect(reopened.buildSessionContext().messages).toMatchObject([
     { role: "assistant", content: [{ type: "text", text: "active root" }] },
     { role: "user", content: "continued" },
@@ -303,7 +279,7 @@ it("keeps opaque append-parent metadata on the active fork branch", async () => 
 });
 
 it("keeps an explicit empty visible branch separate from its opaque append parent", async () => {
-  const { storePath } = await createParent("parent-empty-opaque", [
+  const { records, open } = await forkFixture("parent-empty-opaque", [
     messageEvent("inactive-root", null, "user", "inactive history"),
     leafEvent("empty-leaf", "inactive-root", null, {
       appendParentId: null,
@@ -311,8 +287,7 @@ it("keeps an explicit empty visible branch separate from its opaque append paren
     metadata("plugin-metadata", "inactive-root"),
   ]);
 
-  const fork = await forkChildTranscript(storePath, "parent-empty-opaque");
-  const reopened = await openForkedChildSession(storePath, fork);
+  const reopened = await open();
   expect(reopened.buildSessionContext().messages).toEqual([]);
   const continuedId = await appendUser(reopened);
   await reopened.appendMessageAsync({
@@ -323,155 +298,202 @@ it("keeps an explicit empty visible branch separate from its opaque append paren
     model: "gpt-test",
     timestamp: Date.now(),
   } as unknown as AssistantMessage);
-  const records = await childEvents(storePath, fork.sessionId);
-  expect(records.some((record) => record.id === "inactive-root")).toBe(false);
-  expect(records.find((record) => record.id === continuedId)).toMatchObject({
+  const continued = await records();
+  expect(continued.some((record) => record.id === "inactive-root")).toBe(false);
+  expect(continued.find((record) => record.id === continuedId)).toMatchObject({
     type: "message",
     parentId: "plugin-metadata",
   });
 });
 
-it("keeps a reachable branch suffix when an older parent is missing", async () => {
-  const { storePath } = await createParent("parent-missing-ancestor", [
-    messageEvent("reachable-tail", "missing-parent", "assistant", "reachable tail"),
+it("keeps visible history when the next append explicitly starts a root branch", async () => {
+  const { records, open } = await forkFixture("parent-root-append", [
+    messageEvent("visible-root", null, "assistant", "visible history"),
+    leafEvent("root-append-control", "inactive-tail", "visible-root", { appendParentId: null }),
   ]);
-
-  const fork = await forkChildTranscript(storePath, "parent-missing-ancestor");
-  const records = await childEvents(storePath, fork.sessionId);
-  const serialized = JSON.stringify(records);
-  expect(serialized).toContain("reachable tail");
-  expect(serialized).not.toContain("missing-parent");
+  const reopened = await open();
+  expect(reopened.buildSessionContext().messages).toHaveLength(1);
+  await appendUser(reopened, "new root");
+  expect((await records()).at(-1)).toMatchObject({ type: "message", parentId: null });
 });
 
-it("keeps visible history when the next append explicitly starts a root branch", async () => {
-  const { storePath } = await createParent("parent-root-append", [
-    messageEvent("visible-root", null, "assistant", "visible history"),
-    leafEvent("root-append-control", "inactive-tail", "visible-root", {
-      appendParentId: null,
+it("branches the current parent CLI session and preserves writes made during preparation", async () => {
+  const root = sessionDirs.make();
+  const storePath = path.join(root, "sessions.json");
+  const parentKey = "agent:main:main";
+  const childKey = "agent:main:child";
+  const parentSessionId = "parent-cli-binding";
+  const scope = (sessionKey: string) => ({ sessionKey, storePath });
+  const patch = (
+    sessionKey: string,
+    fields: Partial<NonNullable<ReturnType<typeof loadSessionEntry>>>,
+  ) =>
+    replaceSessionEntrySync(scope(sessionKey), {
+      ...loadSessionEntry(scope(sessionKey))!,
+      ...fields,
+    });
+  await replaceSessionEntry(scope(parentKey), {
+    sessionId: parentSessionId,
+    updatedAt: 1,
+    cliSessionBindings: {
+      "claude-cli": cliBinding("native-parent", "parent-checkpoint"),
+      "codex-cli": cliBinding("codex-parent", "codex-checkpoint"),
+    },
+  });
+  await replaceSessionEntry(scope(childKey), {
+    sessionId: "old-child",
+    updatedAt: 1,
+    totalTokens: 88_876,
+    totalTokensFresh: true,
+    totalTokensVersion: 1,
+  });
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteStoreScope(storePath)));
+  let preparedWrite = false;
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        ...forkableClaudeCliBackend,
+        normalizeConfig: (config) => {
+          expect(database.db.isTransaction).toBe(false);
+          if (!preparedWrite) {
+            preparedWrite = true;
+            patch(childKey, { label: "concurrent child" });
+            patch(parentKey, {
+              cliSessionBindings: {
+                "claude-cli": cliBinding("current-parent", "current-checkpoint"),
+                "codex-cli": cliBinding("codex-parent", "codex-checkpoint"),
+              },
+            });
+          }
+          return config;
+        },
+      },
+    ],
+    resolvePluginSetupCliBackend: () => undefined,
+  });
+  await seedParentTranscript(storePath, parentSessionId, [
+    { type: "session", version: 3, id: parentSessionId, timestamp: "2026-05-01T00:00:00Z" },
+    event("message", "parent-user", {
+      parentId: null,
+      message: { role: "user", content: "fork me" },
     }),
   ]);
 
-  const fork = await forkChildTranscript(storePath, "parent-root-append");
-  const reopened = await openForkedChildSession(storePath, fork);
-  expect(reopened.buildSessionContext().messages).toHaveLength(1);
-  await appendUser(reopened, "new root");
-  const records = await childEvents(storePath, fork.sessionId);
-  expect(records.at(-1)).toMatchObject({ type: "message", parentId: null });
-});
-
-it("preserves supported current-version linear transcripts", async () => {
-  const { storePath } = await createParent("parent-linear", [
-    messageEvent("linear-user", undefined, "user", "hello"),
-    messageEvent("linear-assistant", undefined, "assistant", "hi"),
-    metadata("linear-metadata", "linear-assistant"),
-  ]);
-
-  const fork = await forkChildTranscript(storePath, "parent-linear");
-  const records = await childEvents(storePath, fork.sessionId);
-  expect(records.slice(1)).toMatchObject([
-    { id: "linear-user", parentId: null },
-    { id: "linear-assistant", parentId: "linear-user" },
-    { id: "linear-metadata", parentId: "linear-assistant" },
-  ]);
-  const reopened = await openForkedChildSession(storePath, fork);
-  expect(reopened.buildSessionContext().messages).toHaveLength(2);
-  await appendUser(reopened);
-  const continuedRecords = await childEvents(storePath, fork.sessionId);
-  expect(continuedRecords.at(-1)).toMatchObject({
-    type: "message",
-    parentId: "linear-metadata",
+  const result = await forkSessionEntryFromParentTarget({
+    storePath,
+    parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+    sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
   });
+
+  expect(result.status).toBe("forked");
+  const childEntry = loadSessionEntry(scope(childKey));
+  // Non-forkable backends start fresh rather than sharing the parent thread.
+  const binding = cliBinding("current-parent", "current-checkpoint");
+  expect(childEntry).toMatchObject({
+    label: "concurrent child",
+    totalTokensFresh: false,
+  });
+  expect([childEntry?.totalTokens, childEntry?.totalTokensVersion]).toEqual([undefined, undefined]);
+  expect(childEntry?.cliSessionBindings).toEqual({
+    "claude-cli": { ...binding, forkNextResume: true },
+  });
+  expect(loadSessionEntry(scope(parentKey))?.cliSessionBindings?.["claude-cli"]).toEqual(binding);
 });
 
-it.each([false, true])(
-  "branches the current parent CLI session and preserves child writes (writeDuringPreparation=%s)",
-  async (writeDuringPreparation) => {
-    const root = sessionDirs.make();
-    const storePath = path.join(root, "sessions.json");
-    const parentKey = "agent:main:main";
-    const childKey = "agent:main:child";
-    const parentSessionId = "parent-cli-binding";
-    const scope = (sessionKey: string) => ({ sessionKey, storePath });
-    const patch = (
-      sessionKey: string,
-      fields: Partial<NonNullable<ReturnType<typeof loadSessionEntry>>>,
-    ) =>
-      replaceSessionEntrySync(scope(sessionKey), {
-        ...loadSessionEntry(scope(sessionKey))!,
-        ...fields,
-      });
-    await replaceSessionEntry(scope(parentKey), {
-      sessionId: parentSessionId,
-      updatedAt: 1,
-      cliSessionBindings: {
-        "claude-cli": cliBinding("native-parent", "parent-checkpoint"),
-        "codex-cli": cliBinding("codex-parent", "codex-checkpoint"),
-      },
-    });
-    await replaceSessionEntry(scope(childKey), {
-      sessionId: "old-child",
-      updatedAt: 1,
-      totalTokens: 88_876,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-    });
-    const database = openOpenClawAgentDatabase(
-      toDatabaseOptions(resolveSqliteStoreScope(storePath)),
-    );
-    let preparedWrite = false;
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          ...forkableClaudeCliBackend,
-          normalizeConfig: (config) => {
-            expect(database.db.isTransaction).toBe(false);
-            if (writeDuringPreparation && !preparedWrite) {
-              preparedWrite = true;
-              patch(childKey, { label: "concurrent child" });
-              patch(parentKey, {
-                cliSessionBindings: {
-                  "claude-cli": cliBinding("current-parent", "current-checkpoint"),
-                },
-              });
-            }
-            return config;
-          },
-        },
-      ],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
-    await seedParentTranscript({
-      storePath,
-      parentSessionId,
-      events: [
-        { type: "session", version: 3, id: parentSessionId, timestamp: "2026-05-01T00:00:00Z" },
-        event("message", "parent-user", {
-          parentId: null,
-          message: { role: "user", content: "fork me" },
-        }),
-      ],
-    });
-
-    const result = await forkSessionEntryFromParentTarget({
+it.each(["executor", "discovery"] as const)(
+  "commits bundled fork and existing-child patches without caller-thread SQL (cleanupFailure=%s)",
+  async (cleanupFailure) => {
+    const storePath = path.join(sessionDirs.make(), "shared.sqlite");
+    const agentId = "research";
+    const parentKey = "agent:research:main";
+    const childKey = "agent:research:typed-child";
+    const parentScope = { agentId, sessionKey: parentKey, storePath };
+    const childScope = { agentId, sessionKey: childKey, storePath };
+    const parentTranscriptScope = { ...parentScope, sessionId: "typed-parent" };
+    expect(openOpenClawAgentDatabase({ agentId: "main", path: storePath }).agentId).toBe("main");
+    await replaceSessionEntry(parentScope, { sessionId: "typed-parent", updatedAt: 1 });
+    await replaceTranscriptEvents(parentTranscriptScope, [
+      { type: "session", version: 3, id: "typed-parent", timestamp: "2026-09-15T00:00:00Z" },
+      createMessageEvent("assistant", null, { role: "assistant", content: "parent context" }),
+    ]);
+    const parentEntry = loadSessionEntry(parentScope);
+    const parentEvents = await loadTranscriptEvents(parentTranscriptScope);
+    const params = {
+      agentId,
       storePath,
       parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
       sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+      fallbackEntry: { sessionId: "", updatedAt: 1 },
+    };
+    const cleanupError = new Error(`synthetic fork ${cleanupFailure} cleanup failure`);
+    let cleanupFailures = 0;
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+    const discover = storeTargetRuntime.withSessionStoreTarget;
+    const cleanupSpy =
+      cleanupFailure === "executor"
+        ? vi
+            .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
+            .mockImplementation((...args): ReturnType<typeof capture> => {
+              const owner = capture(...args);
+              const release = owner.release.bind(owner);
+              owner.release = async () => {
+                await release();
+                cleanupFailures++;
+                throw cleanupError;
+              };
+              return owner;
+            })
+        : vi
+            .spyOn(storeTargetRuntime, "withSessionStoreTarget")
+            .mockImplementation(async <T>(...args: Parameters<typeof discover<T>>): Promise<T> => {
+              await discover(...args);
+              cleanupFailures++;
+              throw cleanupError;
+            });
+    let fork: Awaited<ReturnType<typeof forkWithPatch>>;
+    try {
+      fork = await withoutHostSql(async () => {
+        const result = await forkWithPatch(params, { forked: { label: "forked child" } });
+        expect(result).toMatchObject({ status: "forked", sessionEntry: { label: "forked child" } });
+        expect(
+          await forkWithPatch(params, {
+            skipExisting: true,
+            skipped: { label: "existing child" },
+          }),
+        ).toMatchObject({
+          status: "skipped",
+          reason: "existing-entry",
+          sessionEntry: { label: "existing child" },
+        });
+        return result;
+      });
+    } finally {
+      cleanupSpy.mockRestore();
+    }
+    expect(cleanupFailures).toBeGreaterThan(0);
+    assert(fork.status === "forked", "expected forked session");
+    expect(fork.fork.sessionFile).toBe(childKey);
+    expect(fork.fork.sessionId).not.toBe("typed-parent");
+    expect(fork.parentEntry).toEqual(parentEntry);
+    expect(loadSessionEntry(childScope)).toMatchObject({
+      sessionId: fork.fork.sessionId,
+      label: "existing child",
+      forkedFromParent: true,
+      forkSource: { sessionKey: parentKey, sessionId: "typed-parent" },
     });
-
-    expect(result.status).toBe("forked");
-    const childEntry = loadSessionEntry(scope(childKey));
-    expect(childEntry?.label).toBe(writeDuringPreparation ? "concurrent child" : undefined);
-    expect(childEntry?.totalTokens).toBeUndefined();
-    expect(childEntry?.totalTokensFresh).toBe(false);
-    expect(childEntry?.totalTokensVersion).toBeUndefined();
-    // Non-forkable backends start fresh rather than sharing the parent thread.
-    const binding = cliBinding(
-      writeDuringPreparation ? "current-parent" : "native-parent",
-      writeDuringPreparation ? "current-checkpoint" : "parent-checkpoint",
-    );
-    expect(childEntry?.cliSessionBindings).toEqual({
-      "claude-cli": { ...binding, forkNextResume: true },
-    });
-    expect(loadSessionEntry(scope(parentKey))?.cliSessionBindings?.["claude-cli"]).toEqual(binding);
+    const forkEvents = (await loadTranscriptEvents({
+      ...childScope,
+      sessionId: fork.fork.sessionId,
+    })) as Record<string, unknown>[];
+    const forkHeader = forkEvents[0];
+    expect(forkHeader).toMatchObject({ type: "session", id: fork.fork.sessionId });
+    expect(
+      parseSqliteSessionFileMarker(
+        typeof forkHeader?.parentSession === "string" ? forkHeader.parentSession : undefined,
+      ),
+    ).toEqual({ agentId, sessionId: "typed-parent", storePath });
+    expect(forkEvents.slice(1)).toEqual(parentEvents.slice(1));
+    expect(loadSessionEntry(parentScope)).toEqual(parentEntry);
+    await expect(loadTranscriptEvents(parentTranscriptScope)).resolves.toEqual(parentEvents);
   },
 );

@@ -6,6 +6,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupRuntimeToolFixtureTempRoots,
   makeEnv,
+  runRuntimeToolFixtureWithDeps,
   runtimeToolFixtureDeps,
   type RuntimeToolFixtureDeps,
   transcriptToolCall,
@@ -16,7 +17,6 @@ import {
   getQaNativeWorkspaceBehavior,
   type QaNativeWorkspaceBehavior,
 } from "./native-workspace-behavior.js";
-import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import { readQaScenarioFile } from "./scenario-catalog.js";
 import { createSession } from "./suite-runtime-agent-session.js";
 
@@ -43,6 +43,7 @@ function nativeReceipt(behavior: QaNativeWorkspaceBehavior, phase: "happy" | "fa
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginStateStoreForTests({ closeDatabase: false });
 });
 afterAll(cleanupRuntimeToolFixtureTempRoots);
@@ -67,7 +68,7 @@ describe("Codex-native workspace runtime tool fixtures", () => {
 
       let generatedSessionIndex = 0;
       const promptEvidence: [string | undefined, boolean | undefined][] = [];
-      const details = await runRuntimeToolFixture(
+      const details = await runRuntimeToolFixtureWithDeps(
         env,
         {
           toolName: runtimeToolName,
@@ -158,9 +159,9 @@ describe("Codex-native workspace runtime tool fixtures", () => {
       const scenario = readQaScenarioFile(
         path.resolve(import.meta.dirname, `../../../qa/scenarios/runtime/tools/${behaviorId}.yaml`),
       );
-      await expect(runRuntimeToolFixture(env, scenario.execution.config!, deps)).resolves.toContain(
-        `codex-native ${behaviorId} behavior passed`,
-      );
+      await expect(
+        runRuntimeToolFixtureWithDeps(env, scenario.execution.config!, deps),
+      ).resolves.toContain(`codex-native ${behaviorId} behavior passed`);
     }
 
     expect(requestedKeys).toEqual(Array.from({ length: 8 }, () => undefined));

@@ -2,14 +2,17 @@ import { createMemo, For, Show } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import {
   presenceActivityLabel,
   presenceViewerActivity,
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
-import { getLocale, t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SessionActivityFilters } from "./session-activity.ts";
+
+registerEnglishCatalog(registerActivityEnglish);
 
 type ActivityPerson = PresenceViewer & {
   count: number;
@@ -37,9 +40,8 @@ function PersonAvatar(props: {
   showPresence?: boolean;
   presentationRevision?: number;
 }) {
-  const resolvedPerson = createMemo(() =>
-    props.person && !isUnresolvedPerson(props.person) ? props.person : null,
-  );
+  const resolvedPerson = () =>
+    props.person && !isUnresolvedPerson(props.person) ? props.person : null;
   const activity = createMemo(() => {
     void props.presentationRevision;
     return props.person ? presenceViewerActivity(props.person) : "unknown";
@@ -120,7 +122,7 @@ export function PeopleControl(props: {
     popover?.hide();
     props.view.onFiltersChange({ ...props.view.filters, personId });
   };
-  const visible = createMemo(() => props.people.slice(0, 3));
+  const visible = () => props.people.slice(0, 3);
   const overflow = () => props.people.length - visible().length;
   const resolved = createMemo(() => props.people.filter((person) => !isUnresolvedPerson(person)));
   const unresolved = createMemo(() => props.people.filter(isUnresolvedPerson));

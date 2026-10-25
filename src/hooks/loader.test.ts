@@ -1,13 +1,19 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { buildPluginCapabilitySummary } from "../plugins/capability-summary.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { projectInstalledPluginComponents } from "../plugins/installed-plugin-components.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
-import { captureEnv } from "../test-utils/env.js";
+import { pinConfigDir } from "../utils.js";
 import { writeHookFixture } from "./hook-fixture.test-support.js";
 import {
   clearInternalHooks,
@@ -19,20 +25,23 @@ import {
 } from "./internal-hooks.js";
 import { prepareInternalHooks } from "./loader.js";
 import type { OpenClawHookMetadata } from "./types.js";
+import { loadWorkspaceHookEntries } from "./workspace.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("loader", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
   let tmpDir: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
   let managedHooksDir: string;
-  let options: { managedHooksDir: string; bundledHooksDir: string };
+
+  function prepare(cfg: OpenClawConfig, opts?: Parameters<typeof prepareInternalHooks>[2]) {
+    return prepareInternalHooks(cfg, tmpDir, opts);
+  }
 
   async function commitPreparedHooks(
     cfg: OpenClawConfig,
-    opts: Parameters<typeof prepareInternalHooks>[2] = options,
+    opts?: Parameters<typeof prepareInternalHooks>[2],
   ) {
-    const prepared = await prepareInternalHooks(cfg, tmpDir, opts);
+    const prepared = await prepare(cfg, opts);
     prepared.commit();
     return prepared.loadedCount;
   }
@@ -43,19 +52,13 @@ describe("loader", () => {
     expect(event.messages).toEqual(messages);
   }
 
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-loader-"));
-  });
-
-  beforeEach(async () => {
+  beforeEach(() => {
     clearInternalHooks();
     setInternalHooksEnabled(true);
-    tmpDir = path.join(fixtureRoot, `case-${caseId++}`);
-    await fs.mkdir(tmpDir, { recursive: true });
-    managedHooksDir = path.join(tmpDir, "managed-hooks");
-    options = { managedHooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
-    envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR"]);
-    process.env.OPENCLAW_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
+    tmpDir = tempDirs.make("openclaw-hooks-loader-");
+    managedHooksDir = path.join(tmpDir, "managed", "hooks");
+    pinConfigDir({ OPENCLAW_STATE_DIR: path.dirname(managedHooksDir) });
+    vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", "/nonexistent/bundled/hooks");
     setLoggerOverride({ level: "silent", consoleLevel: "error" });
     loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   });
@@ -109,15 +112,11 @@ describe("loader", () => {
     setInternalHooksEnabled(true);
     loggingState.rawConsole = null;
     setLoggerOverride(null);
-    envSnapshot.restore();
+    setCurrentPluginMetadataSnapshot(undefined);
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    pinConfigDir();
     vi.unstubAllGlobals();
-  });
-
-  afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("skips hook discovery until internal hooks are configured", async () => {
@@ -171,7 +170,7 @@ describe("loader", () => {
       handlerCode:
         'globalThis.openclawHookImportGate.started(); await globalThis.openclawHookImportGate.wait; export default async function(event) { event.messages.push("replacement"); }',
     });
-    const loading = prepareInternalHooks(createHooksConfig(["replacement"]), tmpDir, options);
+    const loading = prepare(createHooksConfig(["replacement"]));
     try {
       await importStarted.promise;
       await expectMessages(["original"]);
@@ -216,9 +215,8 @@ describe("loader", () => {
         sourceDir: extraDir,
         hookKey: "selected-name",
       });
-      const sourceOptions = { managedHooksDir: path.join(tmpDir, "managed-none") };
       const config = createHooksConfig(["selected-name"], undefined, [extraDir]);
-      await commitPreparedHooks(config, sourceOptions);
+      await commitPreparedHooks(config);
       await expectMessages(["original"]);
 
       if (failure === "descriptor") {
@@ -232,7 +230,7 @@ describe("loader", () => {
         );
       }
       writeDiscoveredHook("sibling", { sourceDir: extraDir });
-      await expect(commitPreparedHooks(config, sourceOptions)).rejects.toThrow();
+      await expect(commitPreparedHooks(config)).rejects.toThrow();
       await expectMessages(["original"]);
     },
   );
@@ -250,7 +248,7 @@ describe("loader", () => {
 
   it("does not activate a shadowed hook when its ineligible override loses its handler", async () => {
     const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
-    const sourceOptions = { bundledHooksDir, managedHooksDir };
+    vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", bundledHooksDir);
     writeDiscoveredHook("overridden", {
       sourceDir: bundledHooksDir,
       hookKey: "bundled-selection",
@@ -268,18 +266,15 @@ describe("loader", () => {
       browser: { enabled: false },
       hooks: { internal: { entries } },
     };
-    await expect(commitPreparedHooks(config, sourceOptions)).resolves.toBe(0);
+    await expect(commitPreparedHooks(config)).resolves.toBe(0);
     await expectMessages([]);
 
     await fs.unlink(path.join(overriding, "handler.js"));
     writeDiscoveredHook("sibling");
-    await commitPreparedHooks(
-      {
-        ...config,
-        hooks: { internal: { entries: { ...entries, sibling: { enabled: true } } } },
-      },
-      sourceOptions,
-    );
+    await commitPreparedHooks({
+      ...config,
+      hooks: { internal: { entries: { ...entries, sibling: { enabled: true } } } },
+    });
     await expectMessages(["sibling"]);
   });
 
@@ -288,7 +283,7 @@ describe("loader", () => {
     async (removal) => {
       const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
       const extraDir = path.join(tmpDir, "extra-hooks");
-      const sourceOptions = { bundledHooksDir, managedHooksDir };
+      vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", bundledHooksDir);
       writeDiscoveredHook("original", {
         sourceDir: bundledHooksDir,
         hookKey: "lower-name",
@@ -313,7 +308,7 @@ describe("loader", () => {
         removal === "install removal" ? { pack: { source: "path", hooks: ["selected-name"] } } : {},
       );
       try {
-        await commitPreparedHooks(config, sourceOptions);
+        await commitPreparedHooks(config);
         await fs.rm(original, { recursive: true });
         writeDiscoveredHook("sibling");
         const entries: Record<string, { enabled?: boolean }> = {
@@ -330,7 +325,7 @@ describe("loader", () => {
           ...config,
           hooks: { internal: { ...config.hooks?.internal, entries } },
         };
-        await commitPreparedHooks(next, sourceOptions);
+        await commitPreparedHooks(next);
         await expectMessages(removal === "disable" ? ["sibling"] : ["lower", "sibling"]);
       } finally {
         installed.mockRestore();
@@ -341,17 +336,14 @@ describe("loader", () => {
   it("commits disable and re-enable for registered internal hook listeners", async () => {
     const handler = vi.fn();
     registerInternalHook("command:new", handler);
-    const disabled = await prepareInternalHooks(
-      { hooks: { internal: { enabled: false } } },
-      tmpDir,
-    );
+    const disabled = await prepare(createHooksConfig([], false));
     await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
     expect(handler).toHaveBeenCalledTimes(1);
     disabled.commit();
     await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
     expect(handler).toHaveBeenCalledTimes(1);
 
-    const enabled = await prepareInternalHooks(createHooksConfig([], true), tmpDir);
+    const enabled = await prepare(createHooksConfig([], true));
     await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
     expect(handler).toHaveBeenCalledTimes(1);
     enabled.commit();
@@ -369,7 +361,7 @@ describe("loader", () => {
       if (transfer === "before preparation") {
         await disable();
       }
-      const startup = await prepareInternalHooks(createHooksConfig([], true), tmpDir);
+      const startup = await prepare(createHooksConfig([], true));
       if (transfer === "after preparation") {
         await disable();
       } else if (transfer === "after shutdown") {
@@ -399,10 +391,7 @@ describe("loader", () => {
       try {
         await started.promise;
         writeDiscoveredHook("replacement");
-        await commitPreparedHooks(
-          createHooksConfig(["replacement"], change !== "disable"),
-          options,
-        );
+        await commitPreparedHooks(createHooksConfig(["replacement"], change !== "disable"));
       } finally {
         release.resolve();
         await dispatch;
@@ -414,7 +403,7 @@ describe("loader", () => {
 
   it("keeps configured hooks across plugin cleanup and retires them on Gateway restart", async () => {
     writeDiscoveredHook("managed");
-    await commitPreparedHooks(createHooksConfig([], true), { managedHooksDir });
+    await commitPreparedHooks(createHooksConfig([], true));
     const unrelated = vi.fn();
     registerInternalHook("command:new", unrelated);
 
@@ -427,25 +416,16 @@ describe("loader", () => {
     expect(unrelated).toHaveBeenCalledTimes(2);
   });
 
-  it("should support named exports", async () => {
-    writeDiscoveredHook("named-export", {
-      exportName: "myHandler",
-      handlerCode: "export const myHandler = async function() {};\n",
-    });
-    const cfg = createHooksConfig(["named-export"], true);
-
-    const count = await commitPreparedHooks(cfg);
-    expect(count).toBe(1);
-  });
-
-  it("skips invalid handlers while preserving valid siblings during best-effort startup", async () => {
+  it("skips invalid handlers while preserving a named-export sibling during best-effort startup", async () => {
     writeDiscoveredHook("bad-export", {
       handlerCode: 'export default "not a function";\n',
     });
 
-    writeDiscoveredHook("valid");
+    writeDiscoveredHook("valid", {
+      exportName: "myHandler",
+      handlerCode: 'export const myHandler = async (event) => { event.messages.push("valid"); };\n',
+    });
     const count = await commitPreparedHooks(createHooksConfig(["bad-export", "valid"], true), {
-      ...options,
       failureMode: "best-effort",
     });
     expect(count).toBe(1);
@@ -462,9 +442,7 @@ describe("loader", () => {
     const enabledCount = await commitPreparedHooks(createHooksConfig(["workspace-hook"], true));
     expect(enabledCount).toBe(1);
 
-    const event = createInternalHookEvent("command", "new", "test-session");
-    await triggerInternalHook(event);
-    expect(event.messages).toContain("workspace-hook");
+    await expectMessages(["workspace-hook"]);
   });
 
   it("keeps managed hooks active when a workspace hook reuses the same name", async () => {
@@ -477,14 +455,190 @@ describe("loader", () => {
         'export default async function(event) { event.messages.push("workspace-override"); }\n',
     });
 
-    const count = await commitPreparedHooks(createHooksConfig(["session-memory"], true), {
-      managedHooksDir,
-    });
+    const count = await commitPreparedHooks(createHooksConfig(["session-memory"], true));
     expect(count).toBe(1);
 
-    const event = createInternalHookEvent("command", "new", "test-session");
-    await triggerInternalHook(event);
-    expect(event.messages).toContain("managed");
-    expect(event.messages).not.toContain("workspace-override");
+    await expectMessages(["managed"]);
+  });
+
+  describe("bundle plugin hooks", () => {
+    let workspaceDir: string;
+    beforeEach(() => {
+      workspaceDir = tmpDir;
+    });
+    async function writeBundleFiles(root: string, files: Record<string, string>) {
+      for (const [relative, content] of Object.entries(files)) {
+        const file = path.join(root, relative);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, content, "utf-8");
+      }
+    }
+
+    async function writeBundleHookFixture(
+      format = "codex",
+      withJsonHooks = false,
+      declaredRoot = "hooks",
+    ): Promise<string> {
+      const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
+      await writeBundleFiles(bundleRoot, {
+        [`.${format}-plugin/plugin.json`]: JSON.stringify({
+          name: "Sample Bundle",
+          hooks: declaredRoot,
+        }),
+      });
+      writeDiscoveredHook("bundle-hook", {
+        sourceDir: path.join(bundleRoot, "hooks"),
+        handlerCode:
+          'export default async (event) => { event.messages.push("bundle-hook-ok"); };\n',
+      });
+      if (withJsonHooks) {
+        await writeBundleFiles(bundleRoot, { "hooks/hooks.json": '{"hooks":[]}' });
+      }
+      return bundleRoot;
+    }
+
+    function createConfig(enabled: boolean, pluginId = "sample-bundle"): OpenClawConfig {
+      return {
+        hooks: { internal: { enabled: true } },
+        plugins: { entries: { [pluginId]: { enabled } } },
+      };
+    }
+
+    function publishSnapshot(config: OpenClawConfig, gateway = true) {
+      const snapshot = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+      const publish = gateway ? setGatewayPluginMetadataSnapshot : setCurrentPluginMetadataSnapshot;
+      publish(snapshot, { config, workspaceDir });
+    }
+
+    function expectBundleEntry(bundleRoot: string, config: OpenClawConfig) {
+      expect(loadWorkspaceHookEntries(workspaceDir, { config })).toEqual([
+        expect.objectContaining({
+          hook: expect.objectContaining({
+            name: "bundle-hook",
+            source: "openclaw-plugin",
+            pluginId: "sample-bundle",
+            baseDir: fsSync.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
+          }),
+          metadata: expect.objectContaining({ events: ["command:new"] }),
+        }),
+      ]);
+    }
+
+    function projectBundleComponents(pluginId: string, config: OpenClawConfig) {
+      const metadata = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+      const manifest = metadata.manifestRegistry.plugins.find(({ id }) => id === pluginId);
+      if (!manifest) {
+        throw new Error(`Expected bundle manifest for ${pluginId}`);
+      }
+      const { declared } = buildPluginCapabilitySummary({ manifest, origin: manifest.origin });
+      return { declared, components: projectInstalledPluginComponents({ manifest, declared }) };
+    }
+
+    it.each([
+      { format: "codex", withJsonHooks: false, root: "hooks", supported: ["hooks"] },
+      { format: "claude", withJsonHooks: false, root: "hooks", supported: ["hooks"] },
+      { format: "claude", withJsonHooks: true, root: "hooks", supported: ["hooks"] },
+      { format: "claude", withJsonHooks: false, root: "hooks/bundle-hook", supported: [] },
+    ])(
+      "matches $format hook components to discovery for $root with JSON hooks $withJsonHooks",
+      async ({ format, withJsonHooks, root, supported }) => {
+        const bundleRoot = await writeBundleHookFixture(format, withJsonHooks, root);
+        const config = createConfig(true);
+        if (supported.length > 0) {
+          expectBundleEntry(bundleRoot, config);
+        } else {
+          expect(loadWorkspaceHookEntries(workspaceDir, { config })).toHaveLength(0);
+        }
+
+        const { declared, components } = projectBundleComponents("sample-bundle", config);
+        expect(declared.hooks).toEqual(withJsonHooks ? [root, "hooks/hooks.json"] : [root]);
+        expect(components).toMatchObject({
+          mapped: supported.length > 0 ? ["hooks"] : [],
+          hooks: supported,
+          unavailable: { capabilities: supported.length > 0 ? [] : ["hooks"] },
+        });
+      },
+    );
+
+    it("reuses published plugin metadata without rescanning manifests", async () => {
+      const bundleRoot = await writeBundleHookFixture();
+      const config = createConfig(true);
+      publishSnapshot(config, false);
+      const manifestRegistry = await import("../plugins/manifest-registry-installed.js");
+      const scanManifests = vi.spyOn(
+        manifestRegistry,
+        "loadPluginManifestRegistryForInstalledIndex",
+      );
+
+      for (let iteration = 0; iteration < 2; iteration += 1) {
+        expectBundleEntry(bundleRoot, config);
+      }
+
+      expect(scanManifests).not.toHaveBeenCalled();
+    });
+
+    it("commits candidate plugin hook policy from the immutable Gateway inventory", async () => {
+      await writeBundleHookFixture();
+      const config = createConfig(true);
+      publishSnapshot(config);
+      const manifestRegistry = await import("../plugins/manifest-registry-installed.js");
+      const scanManifests = vi.spyOn(
+        manifestRegistry,
+        "loadPluginManifestRegistryForInstalledIndex",
+      );
+      const initial = await prepareInternalHooks(config, workspaceDir);
+      expect(initial.loadedCount).toBe(1);
+      initial.commit();
+
+      for (const enabled of [false, true]) {
+        const candidate = await prepareInternalHooks(createConfig(enabled), workspaceDir);
+        expect(candidate.loadedCount).toBe(enabled ? 1 : 0);
+        await expectMessages(enabled ? [] : ["bundle-hook-ok"]);
+        candidate.commit();
+        await expectMessages(enabled ? ["bundle-hook-ok"] : []);
+      }
+      expect(scanManifests).not.toHaveBeenCalled();
+    });
+
+    it.each(["root", "descriptor"])(
+      "retains a selected plugin hook after losing its %s until the plugin is disabled",
+      async (failure) => {
+        const bundleRoot = await writeBundleHookFixture();
+        const config = createConfig(true);
+        publishSnapshot(config);
+        (await prepareInternalHooks(config, workspaceDir)).commit();
+        const hookRoot = path.join(bundleRoot, "hooks");
+        await fs.rm(failure === "root" ? hookRoot : path.join(hookRoot, "bundle-hook", "HOOK.md"), {
+          recursive: true,
+        });
+
+        await expect(prepareInternalHooks(config, workspaceDir)).rejects.toThrow();
+        await expectMessages(["bundle-hook-ok"]);
+        (await prepareInternalHooks(createConfig(false), workspaceDir)).commit();
+        await expectMessages([]);
+      },
+    );
+
+    it("does not treat Claude hooks.json bundles as OpenClaw hook packs", async () => {
+      const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-bundle");
+      await writeBundleFiles(bundleRoot, {
+        ".claude-plugin/plugin.json": JSON.stringify({
+          name: "Claude Bundle",
+          hooks: [{ type: "command" }],
+        }),
+        "hooks/hooks.json": '{"hooks":[]}',
+      });
+      const config = createConfig(true, "claude-bundle");
+      const entries = loadWorkspaceHookEntries(workspaceDir, { config });
+      expect(entries).toHaveLength(0);
+
+      const { declared, components } = projectBundleComponents("claude-bundle", config);
+      expect(declared.hooks).toEqual(["hooks/hooks.json"]);
+      expect(components).toMatchObject({
+        mapped: [],
+        hooks: [],
+        unavailable: { capabilities: ["hooks"] },
+      });
+    });
   });
 });

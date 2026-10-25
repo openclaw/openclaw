@@ -8,6 +8,7 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import * as gatewayNamespace from "../../infra/gateway-lock-payload.js";
 import * as processes from "../../infra/gateway-lock-process.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as packageFilesystem from "../../infra/package-update-filesystem.js";
@@ -16,6 +17,7 @@ import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { isPublicUpdateFailureCode } from "../../infra/update-failure-public-codes.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import * as processIdentity from "../../shared/pid-alive.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { mockProcessPlatform, withMockedPlatform } from "../../test-utils/vitest-spies.js";
@@ -27,7 +29,32 @@ import * as packageUpdate from "./update-command-package.js";
 import { updateCommand } from "./update-command.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const hostPlatform = process.platform;
+const hostNamespace = gatewayNamespace.readGatewayLockProcessNamespace();
+function withHostPlatform<T>(run: () => T): T {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { configurable: true, value: hostPlatform });
+  try {
+    return run();
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+  }
+}
 beforeEach(() => {
+  // Service platform mocks do not change the local test process's namespace.
+  vi.spyOn(gatewayNamespace, "readGatewayLockProcessNamespace").mockReturnValue(hostNamespace);
+  const classifyNamespace = gatewayNamespace.classifyGatewayLockProcessNamespace;
+  vi.spyOn(gatewayNamespace, "classifyGatewayLockProcessNamespace").mockImplementation((...args) =>
+    withHostPlatform(() => classifyNamespace(...args)),
+  );
+  const isAlive = processIdentity.isPidAlive;
+  const isDead = processIdentity.isPidDefinitelyDead;
+  vi.spyOn(processIdentity, "isPidAlive").mockImplementation((pid) =>
+    withHostPlatform(() => isAlive(pid)),
+  );
+  vi.spyOn(processIdentity, "isPidDefinitelyDead").mockImplementation((pid) =>
+    withHostPlatform(() => isDead(pid)),
+  );
   for (const key of [
     "OPENCLAW_UPDATE_RUN_HANDOFF",
     "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META",
@@ -69,6 +96,7 @@ function gatewayOwner(pid = process.pid) {
     databasePath: resolveOpenClawStateSqlitePath(),
     payload: {
       pid,
+      processNamespace: gatewayNamespace.readGatewayLockProcessNamespace(),
       createdAt: new Date().toISOString(),
       configPath: process.env.OPENCLAW_CONFIG_PATH!,
       role: "gateway",
@@ -84,7 +112,7 @@ it.each([
   { platform: "win32", owner: "absent", refused: false },
   { platform: "win32", owner: "unreadable", refused: true },
   { platform: "win32", owner: "other", refused: false },
-  { platform: "win32", owner: "foreign", refused: false },
+  { platform: "win32", owner: "foreign", refused: true },
   { platform: "win32", owner: "dead", refused: false },
   { platform: "linux", owner: "same", refused: true },
   { platform: "linux", owner: "relative", refused: true },
@@ -108,7 +136,6 @@ it.each([
     }
     vi.stubEnv("HOME", home);
     serviceHome(home);
-    const hostPlatform = process.platform;
     mockProcessPlatform(platform);
     const native = unavailableService("service-manager-unavailable");
     const ownerRoot = owner === "other" || owner === "foreign" ? other : root;

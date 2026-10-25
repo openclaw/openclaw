@@ -37,6 +37,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import { prepareTtsPreferences, type PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -146,9 +147,7 @@ export async function gatherDispatchRequest(
     params: normalizedParams,
     turnAdoption,
     messageAuditTerminal,
-    allowInboundHandlers:
-      replyOperationRunState.heartbeat === undefined &&
-      !params.replyOptions?.internalEventExecution,
+    allowInboundHandlers: !params.replyOptions?.internalEventExecution,
     get inboundDedupeReplayUnsafe() {
       // Read the recorded input outcome even when source adoption or cleanup fails.
       // Queued followups have not transferred custody to the active run yet.
@@ -169,6 +168,9 @@ export async function gatherDispatchRequest(
     sessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
     config: cfg,
     fallbackAgentId: ctx.AgentId,
+  });
+  await waitForAgentDatabaseWriteAdmission(targetAgentId, {
+    signal: params.replyOptions?.abortSignal,
   });
   const refusal = readAgentDatabaseAdmissionRefusal(targetAgentId);
   if (refusal) {
@@ -384,21 +386,6 @@ export async function gatherDispatchRequest(
             : undefined,
         )
       : undefined;
-  if (
-    params.replyOptions?.isHeartbeat === true &&
-    dispatchOperationSessionKey &&
-    initialDispatchReplyOperation
-  ) {
-    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply-operation-active" });
-    messageAuditTerminal?.note("skipped", { reason: "reply-operation-active" });
-    return {
-      status: "complete" as const,
-      result: {
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      },
-    };
-  }
   const markProgress = () => {
     if (!canTrackSession || !sessionKey) {
       return;
@@ -492,7 +479,7 @@ export async function gatherDispatchRequest(
         const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
         return await loadPublishedGatewayReplyDispatchRuntime({
           agentId: preparedReplyDispatchAgentId,
-          demand: params.replyOptions?.isHeartbeat ? "scheduled" : "interactive",
+          demand: params.replyOptions?.scheduledAutomation ? "scheduled" : "interactive",
           abortSignal: params.replyOptions?.abortSignal,
           onRuntimeLease,
         });

@@ -12,6 +12,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listenLoopback,
+  closeHttpServer,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { installTestEnv } from "../../test/test-env.js";
 import { discoverAuthStorageFacts, discoverModelsAsync } from "../agents/agent-model-discovery.js";
@@ -47,6 +51,7 @@ import {
   isAudioOnlyModelErrorMessage,
   isUnsupportedThinkingToggleErrorMessage,
 } from "../agents/live-test-provider-drift.test-support.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "../agents/model-suppression.js";
@@ -123,10 +128,14 @@ import { redactSecrets } from "../logging/redact.js";
 import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-shared.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import { extractErrorHttpStatus } from "../shared/assistant-error-format.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
-import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import {
+  captureEnv,
+  deleteTestEnvValue,
+  setTestEnvValue,
+  withEnvAsync,
+} from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -136,12 +145,20 @@ import { toLiveModelConfig } from "./gateway-models.profiles.live.model-config.t
 import {
   createExplicitLiveFallbackModel,
   createGatewayLiveTestModel,
+  formatGatewayLiveFailureDiagnostic,
+  waitForGatewayAgentRun,
+  type GatewayLiveProbePhase,
   isolateLiveGatewayConfig,
   parseExplicitLiveModelRef,
   resolveExplicitLiveModelCandidates,
   resolveGatewayLiveModelThinkingLevel,
   resolveGatewayLiveThinkingLevel,
 } from "./gateway-models.profiles.live.test-helpers.js";
+import {
+  assertOpenAIUltraWireEffort,
+  OPENAI_ULTRA_NORMAL_EFFORT,
+  type OpenAIUltraWireObservation,
+} from "./gateway-models.profiles.live.ultra-wire.test-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
 import {
   hasExpectedSingleNonce,
@@ -1069,149 +1086,6 @@ describe("isGatewayLiveModelTimeout", () => {
   });
 });
 
-describe("formatGatewayLiveFailureDiagnostic", () => {
-  it.each([
-    ["google", "gemini-3.1-pro-preview", "503 Service unavailable", "provider-unavailable", 503],
-    ["anthropic", "claude-sonnet-4-6", "429 rate limit", "rate-limit", 429],
-    ["google", "gemini-3.1-pro-preview", "request timed out", "timeout", undefined],
-    [
-      "google",
-      "gemini-3.1-pro-preview",
-      "upstream error from google",
-      "provider-unavailable",
-      undefined,
-    ],
-    ["google", "gemini-3.1-pro-preview", "unexpected reply", "unclassified", undefined],
-  ])(
-    "preserves %s failure facts through the agent.wait envelope: %s / %s",
-    (provider, model, message, classification, explicitHttpStatus) => {
-      const error = formatGatewayLiveAgentWaitFailure({
-        context: "probe",
-        runId: "private-run-id",
-        result: { status: "error", error: message, providerStarted: true },
-      });
-      expect(
-        JSON.parse(
-          formatGatewayLiveFailureDiagnostic({ provider, model, phase: "tool-read", error }),
-        ),
-      ).toEqual({
-        provider,
-        model,
-        phase: "tool-read",
-        classification,
-        ...(explicitHttpStatus ? { explicitHttpStatus } : {}),
-        providerStarted: true,
-      });
-    },
-  );
-
-  it("omits bodies, URLs, credentials and arbitrary exception metadata without losing explicit status", () => {
-    const body =
-      "private-customer-body https://private.invalid/customer?note=private-value Bearer synthetic-private-token";
-    const error = Object.assign(new Error(`503 Service unavailable ${body}`), {
-      code: "OPAQUE_PRIVATE_CREDENTIAL",
-      provider: body,
-      model: body,
-      cause: { classification: body, providerStarted: body },
-    });
-    for (const failure of [
-      error,
-      formatGatewayLiveAgentWaitFailure({
-        context: body,
-        runId: body,
-        result: { status: body, error: error.message, providerStarted: body, stopReason: body },
-      }),
-    ]) {
-      const diagnostic = formatGatewayLiveFailureDiagnostic({
-        provider: "google",
-        model: "gemini-3.1-pro-preview",
-        phase: "tool-read",
-        error: failure,
-      });
-      expect(JSON.parse(diagnostic)).toEqual({
-        provider: "google",
-        model: "gemini-3.1-pro-preview",
-        phase: "tool-read",
-        classification: "provider-unavailable",
-        explicitHttpStatus: 503,
-      });
-      expect(diagnostic).not.toMatch(/private|https|Bearer|OPAQUE/);
-    }
-  });
-
-  it.each([
-    ["p".repeat(128), "m".repeat(256)],
-    ["p".repeat(129), "m".repeat(257)],
-    ["https://private.invalid", "model\nprivate"],
-  ])("keeps identifiers bounded and emits valid JSON", (provider, model) => {
-    const diagnostic = formatGatewayLiveFailureDiagnostic({
-      provider,
-      model,
-      phase: "tool-only-followup",
-      error: new Error("x".repeat(10_000)),
-    });
-    expect(`[live] failure ${diagnostic}\n`.length).toBeLessThanOrEqual(1024);
-    expect(JSON.parse(diagnostic)).toMatchObject({
-      phase: "tool-only-followup",
-      classification: "unclassified",
-    });
-    expect(diagnostic).not.toMatch(/private|https|xxxxx/);
-  });
-});
-
-describe("formatGatewayLiveAgentWaitFailure", () => {
-  it("retains body-free failure evidence before agent.wait flattens the provider error", () => {
-    const failure = formatGatewayLiveAgentWaitFailure({
-      context: "google tool-read",
-      runId: "private-run-id",
-      result: {
-        status: "error",
-        error: "503 Service unavailable: private response body https://private.invalid/customer",
-        providerStarted: true,
-      },
-    });
-    expect(failure.cause).toEqual({
-      classification: "provider-unavailable",
-      explicitHttpStatus: 503,
-      providerStarted: true,
-    });
-  });
-
-  it("includes terminal attribution fields without requiring transcript text", () => {
-    expect(
-      formatGatewayLiveAgentWaitFailure({
-        context: "anthropic prompt",
-        runId: "run-1",
-        result: {
-          status: "timeout",
-          timeoutPhase: "provider",
-          providerStarted: true,
-          stopReason: "rpc",
-        },
-      }).message,
-    ).toContain(
-      "anthropic prompt: agent.wait timeout for runId=run-1 (timeoutPhase=provider, providerStarted=true, stopReason=rpc)",
-    );
-  });
-});
-
-describe("isGatewayAgentWaitCompletedWithoutReply", () => {
-  it("accepts the malformed completion envelope used by tool-only turns", () => {
-    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "error", error: " completed " })).toBe(
-      true,
-    );
-  });
-
-  it("rejects genuine agent errors and non-error completion envelopes", () => {
-    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "error", error: "aborted" })).toBe(
-      false,
-    );
-    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "ok", error: "completed" })).toBe(
-      false,
-    );
-  });
-});
-
 describe("assertGatewayLiveDidNotSkipAllDueToTimeout", () => {
   it("allows all-skip runs when no timeout skip was involved", () => {
     expect(() =>
@@ -1360,18 +1234,11 @@ describe("resolveGatewayLiveMaxModels", () => {
   const originalGatewayModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS;
   const originalGatewayMax = process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
   const originalSharedMax = process.env.OPENCLAW_LIVE_MAX_MODELS;
-  function restoreEnvValue(name: string, value: string | undefined): void {
-    if (value === undefined) {
-      deleteTestEnvValue(name);
-    } else {
-      setTestEnvValue(name, value);
-    }
-  }
 
   afterEach(() => {
-    restoreEnvValue("OPENCLAW_LIVE_GATEWAY_MODELS", originalGatewayModels);
-    restoreEnvValue("OPENCLAW_LIVE_GATEWAY_MAX_MODELS", originalGatewayMax);
-    restoreEnvValue("OPENCLAW_LIVE_MAX_MODELS", originalSharedMax);
+    restoreOptionalEnv("OPENCLAW_LIVE_GATEWAY_MODELS", originalGatewayModels);
+    restoreOptionalEnv("OPENCLAW_LIVE_GATEWAY_MAX_MODELS", originalGatewayMax);
+    restoreOptionalEnv("OPENCLAW_LIVE_MAX_MODELS", originalSharedMax);
   });
 
   it("defaults modern gateway sweeps to the curated high-signal cap", () => {
@@ -1458,6 +1325,15 @@ describe("resolveGatewayLiveCandidatePoolLimit", () => {
     ).toBe(false);
   });
 });
+
+const GATEWAY_LIVE_AWS_ENV_KEYS = [
+  "AWS_REGION",
+  "AWS_DEFAULT_REGION",
+  "AWS_PROFILE",
+  "AWS_CONFIG_FILE",
+  "AWS_SHARED_CREDENTIALS_FILE",
+  "HOME",
+];
 
 const DEFAULT_BEDROCK_LIVE_REGION = "us-east-1";
 
@@ -2151,15 +2027,11 @@ describe("buildLiveGatewayConfig", () => {
               api: "google-generative-ai",
               baseUrl: "https://generativelanguage.googleapis.com",
               models: [
-                {
-                  id: "gemini-3-flash-preview",
-                  name: "gemini-3-flash-preview",
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                modelDefinition("gemini-3-flash-preview", {
                   contextWindow: 1_000,
                   maxTokens: 100,
                   reasoning: false,
-                },
+                }),
               ],
             },
           },
@@ -2198,14 +2070,7 @@ describe("buildLiveGatewayConfig", () => {
   });
 
   it("writes valid AWS SDK provider config for explicit Bedrock fallback models", () => {
-    const previous = {
-      awsRegion: process.env.AWS_REGION,
-      awsDefaultRegion: process.env.AWS_DEFAULT_REGION,
-      awsProfile: process.env.AWS_PROFILE,
-      awsConfigFile: process.env.AWS_CONFIG_FILE,
-      awsSharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      home: process.env.HOME,
-    };
+    const previous = captureEnv(GATEWAY_LIVE_AWS_ENV_KEYS);
     try {
       deleteTestEnvValue("AWS_REGION");
       deleteTestEnvValue("AWS_DEFAULT_REGION");
@@ -2235,24 +2100,12 @@ describe("buildLiveGatewayConfig", () => {
         ],
       });
     } finally {
-      restoreOptionalEnv("AWS_REGION", previous.awsRegion);
-      restoreOptionalEnv("AWS_DEFAULT_REGION", previous.awsDefaultRegion);
-      restoreOptionalEnv("AWS_PROFILE", previous.awsProfile);
-      restoreOptionalEnv("AWS_CONFIG_FILE", previous.awsConfigFile);
-      restoreOptionalEnv("AWS_SHARED_CREDENTIALS_FILE", previous.awsSharedCredentialsFile);
-      restoreOptionalEnv("HOME", previous.home);
+      previous.restore();
     }
   });
 
   it("uses AWS_REGION for explicit Bedrock fallback provider config", () => {
-    const previous = {
-      awsRegion: process.env.AWS_REGION,
-      awsDefaultRegion: process.env.AWS_DEFAULT_REGION,
-      awsProfile: process.env.AWS_PROFILE,
-      awsConfigFile: process.env.AWS_CONFIG_FILE,
-      awsSharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      home: process.env.HOME,
-    };
+    const previous = captureEnv(GATEWAY_LIVE_AWS_ENV_KEYS);
     try {
       setTestEnvValue("AWS_REGION", "eu-west-1");
       deleteTestEnvValue("AWS_DEFAULT_REGION");
@@ -2274,12 +2127,7 @@ describe("buildLiveGatewayConfig", () => {
         "https://bedrock-runtime.eu-west-1.amazonaws.com",
       );
     } finally {
-      restoreOptionalEnv("AWS_REGION", previous.awsRegion);
-      restoreOptionalEnv("AWS_DEFAULT_REGION", previous.awsDefaultRegion);
-      restoreOptionalEnv("AWS_PROFILE", previous.awsProfile);
-      restoreOptionalEnv("AWS_CONFIG_FILE", previous.awsConfigFile);
-      restoreOptionalEnv("AWS_SHARED_CREDENTIALS_FILE", previous.awsSharedCredentialsFile);
-      restoreOptionalEnv("HOME", previous.home);
+      previous.restore();
     }
   });
 
@@ -2377,14 +2225,7 @@ describe("buildLiveGatewayConfig", () => {
   });
 
   it("uses selected AWS profile region for explicit Bedrock fallback provider config", async () => {
-    const previous = {
-      awsRegion: process.env.AWS_REGION,
-      awsDefaultRegion: process.env.AWS_DEFAULT_REGION,
-      awsProfile: process.env.AWS_PROFILE,
-      awsConfigFile: process.env.AWS_CONFIG_FILE,
-      awsSharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      home: process.env.HOME,
-    };
+    const previous = captureEnv(GATEWAY_LIVE_AWS_ENV_KEYS);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bedrock-aws-home-"));
     try {
       const awsDir = path.join(tempHome, ".aws");
@@ -2414,25 +2255,13 @@ describe("buildLiveGatewayConfig", () => {
         "https://bedrock-runtime.ap-southeast-2.amazonaws.com",
       );
     } finally {
-      restoreOptionalEnv("AWS_REGION", previous.awsRegion);
-      restoreOptionalEnv("AWS_DEFAULT_REGION", previous.awsDefaultRegion);
-      restoreOptionalEnv("AWS_PROFILE", previous.awsProfile);
-      restoreOptionalEnv("AWS_CONFIG_FILE", previous.awsConfigFile);
-      restoreOptionalEnv("AWS_SHARED_CREDENTIALS_FILE", previous.awsSharedCredentialsFile);
-      restoreOptionalEnv("HOME", previous.home);
+      previous.restore();
       await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
   it("strips AWS profile region inline comments for explicit Bedrock fallback config", async () => {
-    const previous = {
-      awsRegion: process.env.AWS_REGION,
-      awsDefaultRegion: process.env.AWS_DEFAULT_REGION,
-      awsProfile: process.env.AWS_PROFILE,
-      awsConfigFile: process.env.AWS_CONFIG_FILE,
-      awsSharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      home: process.env.HOME,
-    };
+    const previous = captureEnv(GATEWAY_LIVE_AWS_ENV_KEYS);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bedrock-aws-home-"));
     try {
       const awsDir = path.join(tempHome, ".aws");
@@ -2462,25 +2291,13 @@ describe("buildLiveGatewayConfig", () => {
         "https://bedrock-runtime.eu-central-1.amazonaws.com",
       );
     } finally {
-      restoreOptionalEnv("AWS_REGION", previous.awsRegion);
-      restoreOptionalEnv("AWS_DEFAULT_REGION", previous.awsDefaultRegion);
-      restoreOptionalEnv("AWS_PROFILE", previous.awsProfile);
-      restoreOptionalEnv("AWS_CONFIG_FILE", previous.awsConfigFile);
-      restoreOptionalEnv("AWS_SHARED_CREDENTIALS_FILE", previous.awsSharedCredentialsFile);
-      restoreOptionalEnv("HOME", previous.home);
+      previous.restore();
       await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
   it("prefers AWS credentials profile regions over config profile regions", async () => {
-    const previous = {
-      awsRegion: process.env.AWS_REGION,
-      awsDefaultRegion: process.env.AWS_DEFAULT_REGION,
-      awsProfile: process.env.AWS_PROFILE,
-      awsConfigFile: process.env.AWS_CONFIG_FILE,
-      awsSharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      home: process.env.HOME,
-    };
+    const previous = captureEnv(GATEWAY_LIVE_AWS_ENV_KEYS);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bedrock-aws-home-"));
     try {
       const awsDir = path.join(tempHome, ".aws");
@@ -2515,12 +2332,7 @@ describe("buildLiveGatewayConfig", () => {
         "https://bedrock-runtime.ca-central-1.amazonaws.com",
       );
     } finally {
-      restoreOptionalEnv("AWS_REGION", previous.awsRegion);
-      restoreOptionalEnv("AWS_DEFAULT_REGION", previous.awsDefaultRegion);
-      restoreOptionalEnv("AWS_PROFILE", previous.awsProfile);
-      restoreOptionalEnv("AWS_CONFIG_FILE", previous.awsConfigFile);
-      restoreOptionalEnv("AWS_SHARED_CREDENTIALS_FILE", previous.awsSharedCredentialsFile);
-      restoreOptionalEnv("HOME", previous.home);
+      previous.restore();
       await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
@@ -4062,149 +3874,6 @@ async function waitForSessionAssistantText(params: {
   throw new Error(`${timeoutLabel} timeout after ${timeoutMs}ms (${params.context})`);
 }
 
-type GatewayLiveProbePhase =
-  | "session"
-  | "prompt"
-  | "ultra-handoff"
-  | "tool-read"
-  | "tool-exec"
-  | "image"
-  | "tool-only"
-  | "tool-only-followup"
-  | "refusal";
-
-function summarizeGatewayLiveFailure(error: unknown) {
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  return {
-    classification:
-      shouldSkipLiveProviderDrift({
-        error: message,
-        allowAuth: true,
-        allowBilling: true,
-        allowModelNotFound: true,
-        allowProviderUnavailable: true,
-        allowRateLimit: true,
-        allowTimeout: true,
-      })?.reason ?? "unclassified",
-    // An explicit status in the received text is evidence, not an inferred HTTP outcome.
-    explicitHttpStatus: extractErrorHttpStatus(message)?.code,
-  };
-}
-
-class GatewayLiveAgentWaitError extends Error {
-  constructor(
-    message: string,
-    override readonly cause: ReturnType<typeof summarizeGatewayLiveFailure> & {
-      providerStarted?: boolean;
-    },
-  ) {
-    super(message, { cause });
-  }
-}
-
-function formatGatewayLiveFailureDiagnostic(params: {
-  provider: string;
-  model: string;
-  phase: GatewayLiveProbePhase;
-  error: unknown;
-}): string {
-  const identifier = (value: string, limit: number) => {
-    const redacted = redactSecrets(value);
-    return redacted.length <= limit &&
-      /^[a-z0-9][a-z0-9._/-]*$/i.test(redacted) &&
-      !redacted.includes("//")
-      ? redacted
-      : "omitted";
-  };
-  // Secret redaction alone retains arbitrary response bodies and private URLs.
-  // Serialize only closed diagnostic facts; never add error prose or stack traces.
-  return JSON.stringify({
-    provider: identifier(params.provider, 128),
-    model: identifier(params.model, 256),
-    phase: params.phase,
-    ...(params.error instanceof GatewayLiveAgentWaitError
-      ? params.error.cause
-      : summarizeGatewayLiveFailure(params.error)),
-  });
-}
-
-function formatGatewayLiveAgentWaitFailure(params: {
-  context: string;
-  runId: string;
-  result: unknown;
-}): Error {
-  const result = params.result as
-    | {
-        status?: unknown;
-        error?: unknown;
-        stopReason?: unknown;
-        timeoutPhase?: unknown;
-        providerStarted?: unknown;
-      }
-    | null
-    | undefined;
-  const status = typeof result?.status === "string" ? result.status : "unknown";
-  const details = [
-    typeof result?.timeoutPhase === "string" ? `timeoutPhase=${result.timeoutPhase}` : undefined,
-    typeof result?.providerStarted === "boolean"
-      ? `providerStarted=${String(result.providerStarted)}`
-      : undefined,
-    typeof result?.stopReason === "string" ? `stopReason=${result.stopReason}` : undefined,
-    typeof result?.error === "string" ? `error=${result.error}` : undefined,
-  ].filter((value): value is string => Boolean(value));
-  return new GatewayLiveAgentWaitError(
-    `${params.context}: agent.wait ${status} for runId=${params.runId}${
-      details.length > 0 ? ` (${details.join(", ")})` : ""
-    }`,
-    {
-      ...summarizeGatewayLiveFailure(result?.error),
-      ...(typeof result?.providerStarted === "boolean"
-        ? { providerStarted: result.providerStarted }
-        : {}),
-    },
-  );
-}
-
-function isGatewayAgentWaitCompletedWithoutReply(result: unknown): boolean {
-  const value = result as { status?: unknown; error?: unknown } | null | undefined;
-  return (
-    value?.status === "error" &&
-    typeof value.error === "string" &&
-    value.error.trim().toLowerCase() === "completed"
-  );
-}
-
-async function waitForGatewayAgentRun(params: {
-  client: GatewayClient;
-  runId: string;
-  context: string;
-  timeoutMs?: number;
-  allowCompletedWithoutReply?: boolean;
-}): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS;
-  const result = await params.client.request(
-    "agent.wait",
-    {
-      runId: params.runId,
-      timeoutMs,
-    },
-    {
-      timeoutMs: timeoutMs + 5_000,
-    },
-  );
-  if (
-    (result as { status?: unknown } | undefined)?.status === "ok" ||
-    (params.allowCompletedWithoutReply && isGatewayAgentWaitCompletedWithoutReply(result))
-  ) {
-    return;
-  }
-  throw formatGatewayLiveAgentWaitFailure({
-    context: params.context,
-    runId: params.runId,
-    result,
-  });
-}
-
 async function requestGatewayAgentText(params: {
   client: GatewayClient;
   sessionKey: string;
@@ -4335,24 +4004,8 @@ type GatewayModelSuiteParams = {
   providerOverrides?: Record<string, ModelProviderConfig>;
 };
 
-type OpenAIUltraWireObservation = {
-  model?: string;
-  reasoningEffort?: string;
-  sessionsSpawn?: { strict?: boolean; categoryRequired: boolean };
-  requestIndex?: number;
-  traceparent?: string;
-  dispatch?: {
-    runId: string;
-    callId: string;
-    sessionId?: string;
-    sessionKey?: string;
-    isHeartbeat?: boolean;
-  } | null;
-};
-
 const OPENAI_ULTRA_WIRE_CAPTURE_LIMIT = 512;
 const OPENAI_ULTRA_UTILITY_MODEL = "openai/gpt-5.4-mini";
-const OPENAI_ULTRA_NORMAL_EFFORT = "medium";
 const openAIUltraRunsByClient = new WeakMap<GatewayClient, Map<string, string>>();
 
 function recordOpenAIUltraAdmission(client: GatewayClient, runId: string, sessionKey: string) {
@@ -4415,7 +4068,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
   );
   const observations: Array<
     OpenAIUltraWireObservation & {
-      owner?: { diagnostic: DiagnosticEmbeddedRunOwner; isHeartbeat: boolean };
+      owner?: { diagnostic: DiagnosticEmbeddedRunOwner };
     }
   > = [];
   const dispatches = new Map<
@@ -4513,9 +4166,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
               validateAgentRunDelegatedAuthority(authority);
             observations.push({
               ...readOpenAIUltraWireObservation(body),
-              ...(ownsRequest && typeof context.isHeartbeat === "boolean"
-                ? { owner: { diagnostic, isHeartbeat: context.isHeartbeat } }
-                : {}),
+              ...(ownsRequest ? { owner: { diagnostic } } : {}),
               requestIndex: observations.length + 1,
               ...(traceparent ? { traceparent } : {}),
             });
@@ -4543,8 +4194,8 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
           owner.diagnostic.sessionKey === dispatch.facts.sessionKey;
         return Object.assign(entry, {
           dispatch:
-            dispatch && dispatch.model === entry.model
-              ? { ...dispatch.facts, ...(matchesOwner ? { isHeartbeat: owner.isHeartbeat } : {}) }
+            dispatch && dispatch.model === entry.model && matchesOwner
+              ? { ...dispatch.facts }
               : null,
         });
       });
@@ -4559,24 +4210,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
 async function listenOnLoopbackForUltraWireTest(
   server: ReturnType<typeof createHttpServer>,
 ): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("failed to start Ultra wire test server");
-  }
-  return `http://127.0.0.1:${address.port}/v1`;
-}
-
-async function closeUltraWireTestServer(
-  server: ReturnType<typeof createHttpServer>,
-): Promise<void> {
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+  return `${await listenLoopback(server)}/v1`;
 }
 
 function createOpenAIUltraTestRun(purpose: string) {
@@ -4594,7 +4228,7 @@ function createOpenAIUltraTestRun(purpose: string) {
     isCompacting: () => false,
     abort: () => {},
   };
-  registerAgentRunContext(runId, { sessionId, sessionKey, isHeartbeat: true });
+  registerAgentRunContext(runId, { sessionId, sessionKey });
   const authority = claimAgentRunDelegatedAuthority({ runId, instanceId: randomUUID() });
   setActiveEmbeddedRun(sessionId, handle, sessionKey);
   return {
@@ -4620,11 +4254,9 @@ describe("OpenAI Ultra wire capture", () => {
     const capture = startOpenAIUltraWireCapture(["https://api.openai.com/v1"]);
     const model = createGatewayLiveTestModel("openai", "gpt-5.6-luna");
     const fetchModel = expectDefined(getAiTransportHost().buildModelFetch(model), "model fetch");
-    // Even a heartbeat flag on accepted probe/child admissions cannot lower Ultra.
     const probe = createOpenAIUltraTestRun("probe");
     const child = createOpenAIUltraTestRun("child");
-    const heartbeat = createOpenAIUltraTestRun("heartbeat");
-    const runs = [probe, child, heartbeat];
+    const runs = [probe, child];
     const ultraRuns = new Map([probe, child].map((run) => [run.runId, run.sessionKey]));
     const send = async (run: (typeof runs)[number], effort: string, call: number) => {
       const trace = createDiagnosticTraceContext();
@@ -4655,7 +4287,6 @@ describe("OpenAI Ultra wire capture", () => {
     };
     try {
       await send(probe, "max", 1);
-      await send(heartbeat, "medium", 1);
       await send(child, "max", 1);
       await send(probe, "max", 2);
       await send(child, "max", 2);
@@ -4667,21 +4298,20 @@ describe("OpenAI Ultra wire capture", () => {
       expect(runs.every((run) => getAgentRunContext(run.runId) === undefined)).toBe(true);
       expect(beforeDelivery.every((entry) => entry.dispatch === null)).toBe(true);
       const observations = capture.observations;
-      expect(observations.map((entry) => entry.dispatch?.isHeartbeat)).toEqual([
-        true,
-        true,
-        true,
-        true,
-        true,
+      expect(observations.map((entry) => entry.dispatch?.runId)).toEqual([
+        probe.runId,
+        child.runId,
+        probe.runId,
+        child.runId,
       ]);
-      expect(transport).toHaveBeenCalledTimes(5);
+      expect(transport).toHaveBeenCalledTimes(4);
       const childContinuation = observations.with(1, {
         ...observations[1],
+        reasoningEffort: "medium",
         dispatch: {
           runId: "continuation-run",
           callId: "continuation-call",
           sessionKey: child.sessionKey,
-          isHeartbeat: true,
         },
       });
       expect(() =>
@@ -4693,11 +4323,11 @@ describe("OpenAI Ultra wire capture", () => {
       ).toThrow(/observed=medium request=2/);
       expect(
         assertOpenAIUltraWireEffort({ expectedModel: model.id, observations, ultraRuns }),
-      ).toBe(5);
+      ).toBe(4);
       // A lost explicit override on a medium-default fixture is a failure, as are
-      // downgrades on descendants/continuations and a heartbeat elevated to max.
+      // downgrades on descendants and continuations.
       for (const [index, entry] of observations.entries()) {
-        const wrongEfforts = index === 1 ? ["low", "max"] : ["low", "medium"];
+        const wrongEfforts = ["low", "medium"];
         for (const reasoningEffort of wrongEfforts) {
           const changed = observations.with(index, { ...entry, reasoningEffort });
           expect(() =>
@@ -4720,7 +4350,7 @@ describe("OpenAI Ultra wire capture", () => {
           observations: capture.observations,
           ultraRuns,
         }),
-      ).toThrow(/observed=low request=6 run=unknown/);
+      ).toThrow(/observed=low request=5 run=unknown/);
     } finally {
       for (const run of runs) {
         run.close();
@@ -4740,13 +4370,13 @@ describe("OpenAI Ultra wire capture", () => {
     "stale lifecycle",
     "closed stream owner",
     "aborted stream",
-  ])("cannot grant medium effort from %s attribution", async (fault) => {
+  ])("does not attribute a request from %s", async (fault) => {
     const host = getAiTransportHost();
     configureAiTransportHost({ ...host, buildModelFetch: () => async () => new Response("ok") });
     const capture = startOpenAIUltraWireCapture(["https://api.openai.com/v1"]);
     const model = createGatewayLiveTestModel("openai", "gpt-5.6-luna");
     const fetchModel = expectDefined(getAiTransportHost().buildModelFetch(model), "model fetch");
-    const run = createOpenAIUltraTestRun("invalid-heartbeat");
+    const run = createOpenAIUltraTestRun("invalid-owner");
     const trace = createDiagnosticTraceContext();
     const event = {
       runId: run.runId,
@@ -4799,7 +4429,7 @@ describe("OpenAI Ultra wire capture", () => {
       );
       await waitForDiagnosticEventsDrained();
       expect(capture.observations).toHaveLength(1);
-      expect(capture.observations[0]?.dispatch?.isHeartbeat).toBeUndefined();
+      expect(capture.observations[0]?.dispatch).toBeNull();
       expect(() =>
         assertOpenAIUltraWireEffort({
           expectedModel: model.id,
@@ -4962,7 +4592,7 @@ describe("OpenAI Ultra wire capture", () => {
     } finally {
       controller.abort();
       capture.close();
-      await closeUltraWireTestServer(upstream);
+      await closeHttpServer(upstream);
     }
   });
 
@@ -5001,65 +4631,6 @@ function resolveOpenAIUltraUpstreamBaseUrl(params: {
     providerConfig?.baseUrl?.trim() ||
     OPENAI_LIVE_DEFAULT_BASE_URL
   );
-}
-
-function assertOpenAIUltraWireEffort(params: {
-  expectedModel: string;
-  observations: OpenAIUltraWireObservation[];
-  ultraRuns: ReadonlyMap<string, string>;
-}): number {
-  const matching = params.observations.filter((entry) => entry.model === params.expectedModel);
-  expect(
-    matching.length,
-    `expected captured OpenAI requests for ${params.expectedModel}; captured=${params.observations.length}`,
-  ).toBeGreaterThan(0);
-  const ultraSessions = new Set(params.ultraRuns.values());
-  const expectedEffort = ({ dispatch }: OpenAIUltraWireObservation) =>
-    dispatch?.isHeartbeat === true &&
-    !params.ultraRuns.has(dispatch.runId) &&
-    !ultraSessions.has(dispatch.sessionKey ?? "")
-      ? OPENAI_ULTRA_NORMAL_EFFORT
-      : "max";
-  const heartbeats = matching.filter(
-    (entry) => expectedEffort(entry) === OPENAI_ULTRA_NORMAL_EFFORT,
-  );
-  if (heartbeats.length) {
-    logProgress(
-      `[ultra] ${params.expectedModel}: independent_heartbeats=${heartbeats.length} first=${JSON.stringify(heartbeats.slice(0, 3))}`,
-    );
-  }
-  const violations = matching.flatMap((entry, index) =>
-    entry.reasoningEffort === expectedEffort(entry)
-      ? []
-      : [
-          {
-            ...entry,
-            requestIndex: entry.requestIndex ?? index + 1,
-            expectedEffort: expectedEffort(entry),
-          },
-        ],
-  );
-  const first = violations[0];
-  if (first) {
-    logProgress(
-      `[ultra] ${params.expectedModel}: violations=${violations.length}/${matching.length} first=${JSON.stringify(violations.slice(0, 3))}`,
-    );
-  }
-  expect(
-    matching.every((entry) => entry.reasoningEffort === expectedEffort(entry)),
-    `expected effort=${first?.expectedEffort ?? "max"} for ${params.expectedModel}; observed=${first?.reasoningEffort ?? "missing"} request=${first?.requestIndex} run=${first?.dispatch?.runId ?? "unknown"}; violations=${violations.length}/${matching.length}`,
-  ).toBe(true);
-  const spawnSchemas = [
-    ...new Set(
-      matching.flatMap((entry) =>
-        entry.sessionsSpawn ? [JSON.stringify(entry.sessionsSpawn)] : [],
-      ),
-    ),
-  ];
-  logProgress(
-    `[ultra] ${params.expectedModel}: checked=${matching.length} max=${matching.length - heartbeats.length} medium=${heartbeats.length} sessions_spawn wire schemas=${spawnSchemas.join(",")}`,
-  );
-  return matching.length;
 }
 
 type LiveModelRegistry = ModelRegistry;
@@ -5238,15 +4809,11 @@ describe("loadAuthBackedLiveModelRegistry", () => {
                   api: "openai-completions",
                   baseUrl: "https://example.test/v1",
                   models: [
-                    {
-                      id: "configured-model",
+                    modelDefinition("configured-model", {
                       name: "Configured Model",
                       reasoning: false,
-                      input: ["text"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                       contextWindow: 128000,
-                      maxTokens: 8192,
-                    },
+                    }),
                   ],
                 },
               },
@@ -6568,7 +6135,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           saveAuthProfileStore(preparedDiscoveryAuthProfileStore, discoveryAgentDir);
         }
         logProgress("[all-models] preparing models.json");
-        const modelsJsonResult = await withGatewayLiveSetupTimeout(
+        await withGatewayLiveSetupTimeout(
           ensureOpenClawModelsJson(cfg, discoveryAgentDir, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
@@ -6579,7 +6146,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           }),
           "[all-models] prepare models.json",
         );
-        const agentDir = modelsJsonResult.agentDir;
+        const agentDir = discoveryAgentDir;
         const providerScopedModelProviders = providerScopedModelRegistryProviders({
           providerList,
           useSmall,

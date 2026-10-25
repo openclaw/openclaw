@@ -5,13 +5,15 @@ import { setImmediate as yieldToGateway, setTimeout as delay } from "node:timers
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { computeBackoffSchedule } from "../../../packages/retry/src/index.js";
-import { createAbortError } from "../../infra/abort-signal.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import {
   borrowOpenClawAgentDatabase,
@@ -36,6 +38,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import { readFinalSessionTranscriptProjection } from "./session-transcript-authority.js";
 import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
 import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
@@ -74,11 +77,11 @@ import type {
 } from "./session-transcript-reconcile.worker.js";
 
 const log = createSubsystemLogger("sessions/transcript-index");
-const PROJECTION_READY_POLL_MS = 10;
 const RECONCILE_RETRY_BACKOFF_MS: readonly number[] = [0, 50, 200, 500, 1_000];
 type RunningReconcile = {
   assertCurrent?: () => void;
   pending: boolean;
+  projections: Map<string, Deferred>;
   signal?: AbortSignal;
   preferredSessionId?: string;
   promise?: Promise<SessionTranscriptReconcileResult>;
@@ -360,6 +363,9 @@ async function reconcilePreparedTranscriptIndexesPass(
               active = undefined;
               if (finalized) {
                 reconciledSessions += 1;
+                const projections = runningReconciles.get(databasePath)?.projections;
+                projections?.get(message.sessionId)?.resolve();
+                projections?.delete(message.sessionId);
               }
               worker.postMessage(
                 {
@@ -460,6 +466,7 @@ function startPreparedSessionTranscriptIndexReconcile(params: PreparedReconcileP
   }
   const state: RunningReconcile = {
     pending: false,
+    projections: new Map(),
     ...(params.preferredSessionId ? { preferredSessionId: params.preferredSessionId } : {}),
   };
   state.assertCurrent = () => {
@@ -500,6 +507,16 @@ function startPreparedSessionTranscriptIndexReconcile(params: PreparedReconcileP
     { agentId: params.agentId, path: key },
     params.signal,
   );
+  const stopProjection = sessionChanges.subscribeFacts((change) => {
+    if ("all" in change || change.storePath !== key || state.signal?.aborted) {
+      return;
+    }
+    const projection = readFinalSessionTranscriptProjection(change);
+    if (projection) {
+      state.projections.get(projection.sessionId)?.resolve();
+      state.projections.delete(projection.sessionId);
+    }
+  });
   const pending = accepted
     .catch((error: unknown) => {
       // Failed background work is rediscovered by the next request or restart.
@@ -509,6 +526,11 @@ function startPreparedSessionTranscriptIndexReconcile(params: PreparedReconcileP
       return { reconciledSessions: 0 };
     })
     .finally(() => {
+      stopProjection();
+      for (const projection of state.projections.values()) {
+        projection.resolve();
+      }
+      state.projections.clear();
       if (runningReconciles.get(key) === state) {
         runningReconciles.delete(key);
       }
@@ -574,31 +596,34 @@ export async function waitForSessionTranscriptProjection(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = prepareReconcileParams(toDatabaseOptions(resolved));
   const key = resolveOpenClawAgentSqlitePath(databaseOptions);
-  let running = runningReconciles.get(key);
+  const running = runningReconciles.get(key);
   if (!running) {
     return;
   }
-  const needsReconcile = () =>
-    readSessionTranscriptProjectionStatus(databaseOptions, resolved.sessionId, abortSignal);
+  // Subscribe before the initial read so a committed projection cannot be missed during it.
+  let projection = running.projections.get(resolved.sessionId);
+  if (!projection) {
+    projection = createDeferredCore();
+    running.projections.set(resolved.sessionId, projection);
+  }
   try {
-    while (running) {
-      abortSignal?.throwIfAborted();
-      // Revoked work retains its close fence until settlement; wait before admitting a reader.
-      if (!running.signal?.aborted) {
-        running.assertCurrent?.();
-        if (!(await needsReconcile())) {
-          return;
-        }
+    abortSignal?.throwIfAborted();
+    // Revoked work retains its close fence until settlement; wait before admitting a reader.
+    if (!running.signal?.aborted) {
+      running.assertCurrent?.();
+      if (
+        !(await readSessionTranscriptProjectionStatus(
+          databaseOptions,
+          resolved.sessionId,
+          abortSignal,
+        ))
+      ) {
+        return;
       }
-      await delay(
-        PROJECTION_READY_POLL_MS,
-        undefined,
-        abortSignal ? { signal: abortSignal } : undefined,
-      );
-      running = runningReconciles.get(key);
     }
+    await racePromiseWithAbortSignal(projection.promise, abortSignal);
   } catch (error) {
-    // Worker reads settle before exposing the same cancellation shape as polling.
+    // Worker reads and publication waits expose the same cancellation shape.
     if (abortSignal?.aborted && error === abortSignal.reason) {
       throw createAbortError("Operation aborted", { cause: error });
     }

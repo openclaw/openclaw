@@ -249,51 +249,6 @@ describe("runPostCorePluginConvergence", () => {
     },
   );
 
-  it("returns ok when no warnings/failures and includes repair changes", async () => {
-    mockRepairs(
-      { discord: { source: "npm", installPath: "/p/discord" } },
-      {
-        changes: ['Repaired missing configured plugin "discord".'],
-        repairedPluginIds: ["discord"],
-      },
-    );
-    expect(await converge(configured("discord"))).toMatchObject({
-      errored: false,
-      changes: ['Repaired missing configured plugin "discord".'],
-      repairedPluginIds: ["discord"],
-      warnings: [],
-    });
-  });
-
-  it("repairs managed npm openclaw peer links in every managed npm project before payload smoke checks", async () => {
-    const stateDir = makeTempDir();
-    mockRepairs({ codex: { source: "npm", installPath: "/p/codex" } });
-    const roots = [path.join(stateDir, "npm"), path.join(stateDir, "npm", "projects", "codex")];
-    mocks.managedRoots.mockReturnValue(roots);
-    mocks.relinkPeers
-      .mockResolvedValueOnce(peerResult)
-      .mockResolvedValueOnce({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
-
-    const result = await converge(configured("codex"), {
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-
-    roots.forEach((npmRoot, index) => {
-      expect(mocks.relinkPeers).toHaveBeenNthCalledWith(index + 1, {
-        npmRoot,
-        logger: {},
-        onPackageReadError: expect.any(Function),
-        beforePersistentApply: expect.any(Function),
-      });
-    });
-    expect(result.changes).toEqual([
-      "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",
-    ]);
-    expect(mocks.relinkPeers.mock.invocationCallOrder[0]).toBeLessThan(
-      expectDefined(mocks.smokeCheck.mock.invocationCallOrder[0], "smoke check called"),
-    );
-  });
-
   it("repairs the selected generation before smoke checks without walking stale roots", async () => {
     const stateDir = makeTempDir();
     const packageName = "@fixture/selected";
@@ -320,7 +275,13 @@ describe("runPostCorePluginConvergence", () => {
       packages.push(packageDir);
     }
     const active = expectDefined(packages[0], "active package");
-    mockRepairs({ selected: { source: "npm", installPath: active } });
+    mockRepairs(
+      { selected: { source: "npm", installPath: active } },
+      {
+        changes: ['Repaired missing configured plugin "selected".'],
+        repairedPluginIds: ["selected"],
+      },
+    );
     const roots = await vi.importActual<
       typeof import("../../../plugins/installed-plugin-npm-roots.js")
     >("../../../plugins/installed-plugin-npm-roots.js");
@@ -340,7 +301,15 @@ describe("runPostCorePluginConvergence", () => {
       const result = await converge(configured("selected"), {
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
-      expect(result.errored).toBe(false);
+      expect(result).toMatchObject({
+        errored: false,
+        changes: [
+          'Repaired missing configured plugin "selected".',
+          "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",
+        ],
+        repairedPluginIds: ["selected"],
+        warnings: [],
+      });
       expect(mocks.smokeCheck).toHaveBeenCalledOnce();
       for (const stale of packages.slice(1)) {
         expect(fs.existsSync(path.join(stale, "node_modules", "openclaw"))).toBe(false);

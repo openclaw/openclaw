@@ -209,6 +209,7 @@ export function createApplicationOverlays(
       ).catch(() => undefined);
     }
   };
+  // Revoke approval and pairing authority during the Gateway receipt, before views run.
   const stopGateway = gateway.subscribe(synchronizeGateway);
 
   const stopEvents = gateway.subscribeEvents((event) => {
@@ -260,6 +261,21 @@ export function createApplicationOverlays(
     holdUpdate: updates.holdUpdate,
     diagnoseUpdateFailure: updates.diagnoseUpdateFailure,
     reportUpdateFailure: updates.reportUpdateFailure,
+    reconcileApprovalTerminals(client, events) {
+      if (
+        !isCurrentClient(client) ||
+        !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
+      ) {
+        return;
+      }
+      const previousCount = promptState.execApprovalQueue.length;
+      for (const event of events) {
+        clearResolvedExecApprovalPrompt(promptState, event.approval.id);
+      }
+      if (promptState.execApprovalQueue.length !== previousCount) {
+        publish();
+      }
+    },
     async decideApproval(decision, approvalId, projectedApproval) {
       const active = approvalId
         ? (promptState.execApprovalQueue.find((entry) => entry.id === approvalId) ??

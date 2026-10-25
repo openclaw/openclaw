@@ -13,12 +13,12 @@ import { readQaScenarioById } from "./scenario-catalog.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import { qaMaturityTaxonomyIdentity, readQaMaturityTaxonomySource } from "./scorecard-taxonomy.js";
 import { resolveQaScriptRuntimeExecutable } from "./test-file-scenario-runner-commands.js";
-import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 import {
   buildScriptProducerEvidence,
   createScenarioRunnerTestHarness,
   makeTestFileScenario,
   resolveScriptAttemptOutputDir,
+  runQaTestFileScenariosWithCommand as runQaTestFileScenarios,
   writeScriptProducerEvidence,
   QA_TEST_RUNNER_DEFAULTS,
 } from "./test-file-scenario-runner.test-support.js";

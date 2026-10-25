@@ -18,6 +18,7 @@ import {
   readNodeSessionWithheldCommands,
   type NodeSession,
 } from "./node-registry.js";
+import { makeClient } from "./node-registry.test-helpers.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 const registries: NodeRegistry[] = [];
@@ -72,27 +73,17 @@ function createFixture(
   const registry = new NodeRegistry({ ...pairingOptions, getConfig: () => config });
   registries.push(registry);
   const socket = { readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
-  const client = {
-    connId: "policy-conn",
-    socket,
-    usesSharedGatewayAuth: false,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        version: "test",
-        platform: "linux",
-        deviceFamily: "Linux",
-        mode: "node",
-      },
-      device: { id: "policy-node" },
-      caps: ["computer"],
-      commands: ["computer.act", "system.run"],
-      declaredCaps: ["computer", "screen"],
-      declaredCommands: ["computer.act", "system.run", "screen.snapshot"],
-    },
-  } as unknown as GatewayWsClient;
+  const client = makeClient("policy-conn", "policy-node", [], {
+    socket: socket as unknown as GatewayWsClient["socket"],
+    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    version: "test",
+    platform: "linux",
+    caps: ["computer"],
+    commands: ["computer.act", "system.run"],
+    declaredCaps: ["computer", "screen"],
+    declaredCommands: ["computer.act", "system.run", "screen.snapshot"],
+  });
+  client.connect.client.deviceFamily = "Linux";
   const node = registry.register(client, { ...registration });
   return {
     registry,

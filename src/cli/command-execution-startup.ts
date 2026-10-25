@@ -47,14 +47,11 @@ export async function ensureCliExecutionBootstrap(params: {
   allowInvalid?: boolean;
   beforeStatePreparation?: StartupConfigPreflightOptions["beforeStatePreparation"];
   loadPlugins?: boolean;
-  skipConfigGuard?: boolean;
-  validateConfigOnly?: boolean;
 }) {
   const { runtime, commandPath, startupPolicy, allowInvalid, beforeStatePreparation } = params;
-  const { suppressDoctorStdout, pluginRegistry } = startupPolicy;
+  const { suppressDoctorStdout, pluginRegistry, skipConfigGuard, validateConfigOnly } =
+    startupPolicy;
   const loadPlugins = params.loadPlugins ?? startupPolicy.loadPlugins;
-  const skipConfigGuard = params.skipConfigGuard ?? startupPolicy.skipConfigGuard;
-  const validateConfigOnly = params.validateConfigOnly ?? startupPolicy.validateConfigOnly;
   if (!skipConfigGuard) {
     await measureCliCommandStartup("config-ready", async () => {
       const { ensureConfigReady } = await measureCliCommandStartup("config-guard-import", () =>

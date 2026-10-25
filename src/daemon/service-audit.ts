@@ -57,8 +57,6 @@ export const SERVICE_AUDIT_CODES = {
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayTokenDrift: "gateway-token-drift",
-  launchdKeepAlive: "launchd-keep-alive",
-  launchdRunAtLoad: "launchd-run-at-load",
 } as const;
 
 /** Returns whether audit issues require migrating a daemon to a stable Node runtime. */

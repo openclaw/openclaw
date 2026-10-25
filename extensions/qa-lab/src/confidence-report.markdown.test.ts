@@ -145,51 +145,16 @@ describe("qa confidence report Markdown", () => {
   );
 
   it.each([
-    {
-      name: "ordinary priorities",
-      productImpact: "P1",
-      qaImpact: "P2",
-      expectedImpacts: ["P1", "P2"],
-    },
-    {
-      name: "a product-impact pipe",
-      productImpact: "P1 | desktop",
-      qaImpact: "P2",
-      expectedImpacts: ["P1 | desktop", "P2"],
-    },
-    {
-      name: "a QA-impact pipe",
-      productImpact: "P1",
-      qaImpact: "P2 | harness",
-      expectedImpacts: ["P1", "P2 | harness"],
-    },
-    {
-      name: "a product-impact backslash and pipe",
-      productImpact: String.raw`P1 \| desktop`,
-      qaImpact: "P2",
-      expectedImpacts: [String.raw`P1 \| desktop`, "P2"],
-    },
-    {
-      name: "a QA-impact backslash and pipe",
-      productImpact: "P1",
-      qaImpact: String.raw`P2 \| harness`,
-      expectedImpacts: ["P1", String.raw`P2 \| harness`],
-    },
-    {
-      name: "a product-impact newline",
-      productImpact: "P1\ndesktop",
-      qaImpact: "P2",
-      expectedImpacts: ["P1 desktop", "P2"],
-    },
-    {
-      name: "a QA-impact newline",
-      productImpact: "P1",
-      qaImpact: "P2\nharness",
-      expectedImpacts: ["P1", "P2 harness"],
-    },
-  ])(
-    "preserves $name in the confidence table",
-    async ({ productImpact, qaImpact, expectedImpacts }) => {
+    ["P1", "P2", ["P1", "P2"]],
+    ["P1 | desktop", "P2", ["P1 | desktop", "P2"]],
+    ["P1", "P2 | harness", ["P1", "P2 | harness"]],
+    [String.raw`P1 \| desktop`, "P2", [String.raw`P1 \| desktop`, "P2"]],
+    ["P1", String.raw`P2 \| harness`, ["P1", String.raw`P2 \| harness`]],
+    ["P1\ndesktop", "P2", ["P1 desktop", "P2"]],
+    ["P1", "P2\nharness", ["P1", "P2 harness"]],
+  ] as const)(
+    "preserves impacts %s / %s in the confidence table",
+    async (productImpact, qaImpact, expectedImpacts) => {
       const report = await buildQaConfidenceReport({
         manifest: {
           version: 1,

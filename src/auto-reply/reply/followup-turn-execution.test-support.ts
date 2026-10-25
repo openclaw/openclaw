@@ -3,7 +3,7 @@ import { createReplyOperation } from "../../sessions/session-controller.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import { createMockReplyOperation } from "./test-helpers.js";
+import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -37,19 +37,6 @@ export const executeFollowupTurnForTest = executeFollowupTurn;
 
 export function getFollowupTurnTestState() {
   return followupTurnTestState;
-}
-
-export function createFollowupTurnTestTypingController() {
-  return {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    isActive: vi.fn(() => false),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
-  };
 }
 
 export function createFollowupTurnTestTurn(
@@ -108,7 +95,7 @@ export async function executeQueuedFollowupTurnForTest(
     config: queued.run.config,
   });
   const defaults = {
-    typing: createFollowupTurnTestTypingController(),
+    typing: createMockTypingController(),
     typingMode: "never" as const,
     defaultModel: "claude",
     opts: params.opts,
@@ -161,7 +148,12 @@ export async function executeQueuedFollowupTurnForTest(
       onCompactionNoticePayload: async () => {},
     });
   } finally {
-    admittedOperation?.complete();
+    try {
+      await turn.releaseSourceAdmission?.();
+    } finally {
+      admittedOperation?.complete();
+      await admittedOperation?.ownerSettlement;
+    }
   }
 }
 

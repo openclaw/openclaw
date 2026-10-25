@@ -1611,6 +1611,9 @@ class ChatControllerOutboxTest {
       val loaded = outbox.loadAttachments(queued.id)
       assertTrue(imageBytes.contentEquals(loaded[0].bytes))
       assertTrue(voiceBytes.contentEquals(loaded[1].bytes))
+      // The queued bubble's thumbnail reads the stored photo; audio never feeds an image preview.
+      assertTrue(imageBytes.contentEquals(chat.loadOutboxImagePreview(queued.attachments[0])))
+      assertNull(chat.loadOutboxImagePreview(queued.attachments[1]))
 
       // Reconnect flushes the attachment payload with the captured metadata.
       gateway.online = true

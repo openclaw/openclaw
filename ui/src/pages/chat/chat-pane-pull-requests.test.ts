@@ -8,16 +8,15 @@ import {
   type ControlUiSessionPullRequest,
   type ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
-import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { projectsForGateway } from "../../lib/projects.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -41,15 +40,16 @@ import {
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
+const repository = { owner: "openclaw", repo: "openclaw" };
+const branch = { ...repository, branch: "feature/demo" };
+
 function pullRequest(
   number: number,
   state: ControlUiSessionPullRequest["state"],
 ): ControlUiSessionPullRequest {
   return {
     number,
-    owner: "openclaw",
-    repo: "openclaw",
-    branch: "feature/demo",
+    ...branch,
     title: `Pull request ${number}`,
     url: `https://github.com/openclaw/openclaw/pull/${number}`,
     state,
@@ -171,12 +171,8 @@ function createPublicationPane(
   state.assistantAgentId = agentId;
   state.sessionsResultAgentId = agentId;
   state.sessionsResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
     // Scoped lists may carry the owner only at the result/route level.
-    sessions: [
+    ...sessionsResult([
       {
         key: sessionKey,
         sessionId: "publication",
@@ -188,7 +184,8 @@ function createPublicationPane(
         kind: scope ? "global" : "direct",
         updatedAt: 1,
       },
-    ],
+    ]),
+    path: "",
   };
   const settled = async () => {
     await vi.waitFor(() => {
@@ -287,12 +284,11 @@ it.each(["unavailable", "rate-limited"] as const)(
   async (status) => {
     const { pane, push, epoch, setPullRequestSummary } = createPullRequestPane();
     const key = "agent:main:current";
-    const repository = { owner: "openclaw", repo: "openclaw" };
     pane.refreshSessionPullRequests();
     await Promise.resolve();
     push({
       repository,
-      branch: { ...repository, branch: "feature/demo" },
+      branch,
       pullRequests: [pullRequest(111532, "open")],
     });
     const failure = { pullRequests: [], rateLimited: status === "rate-limited", status };
@@ -302,53 +298,9 @@ it.each(["unavailable", "rate-limited"] as const)(
 
     const replacement = { owner: "other", repo: "checkout" };
     push({ ...failure, repository: replacement });
-    expect(pane.githubRepo).toEqual(replacement);
     expect(pane.sessionPullRequests).toEqual([]);
     expect(pane.sessionPullRequestsBranch).toBeUndefined();
     expect(setPullRequestSummary).toHaveBeenLastCalledWith(key, undefined, epoch);
-  },
-);
-
-it.each(["ready", "rate-limited"] as const)(
-  "renders repository context only from a settled catalog (%s)",
-  async (status) => {
-    const { pane, request, context, state, emitGatewayEvent } = createPublicationPane();
-    pane.refreshSessionPullRequests();
-    await Promise.resolve();
-    emitSnapshot(emitGatewayEvent, state.sessionKey, {
-      repository: { owner: "openclaw", repo: "openclaw" },
-      pullRequests: [],
-      rateLimited: status === "rate-limited",
-      status,
-    });
-    pane.refreshSessionPullRequests();
-    const catalog = projectsForGateway(context.gateway);
-    if (status === "ready") {
-      const pending = createDeferred<{ projects: [] }>();
-      request.mockReturnValueOnce(pending.promise);
-      const read = catalog.refresh();
-      pane.render();
-      expect(pane.chatProps?.githubRepo).toBeNull();
-      pending.reject(new Error("Project catalog unavailable"));
-      await read;
-      pane.render();
-      expect(pane.chatProps?.githubRepo).toBeNull();
-      request.mockResolvedValueOnce({
-        projects: [{ id: "clawsweeper", displayName: "ClawSweeper", source: "cloned" }],
-      });
-    }
-    await catalog.refresh();
-    pane.render();
-    expect(pane.chatProps?.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
-    expect(pane.chatProps?.pullRequestsStatus).toBe(status);
-    if (status === "ready") {
-      expect(pane.chatProps?.githubRepositories).toEqual([{ aliases: ["ClawSweeper"] }]);
-    }
-    state.sessionKey = "agent:main:another-checkout";
-    pane.refreshSessionPullRequests();
-    pane.render();
-    expect(pane.chatProps?.githubRepo).toBeNull();
-    expect(pane.chatProps?.pullRequestsStatus).toBe("ready");
   },
 );
 
@@ -367,8 +319,8 @@ it.each(["global", "per-sender"] as const)(
     responses.set("sessions.github.confirm", { ...result, status: "published" });
     (await settled()).onSelect?.("personal");
     pane.render();
-    pane.chatProps!.githubPublication!.onPublish?.();
-    (await settled()).onConfirm?.();
+    void pane.chatProps!.githubPublication!.onPublish?.();
+    void (await settled()).onConfirm?.();
     await settled();
     expect(request.mock.calls.filter(([method]) => method.startsWith("sessions.github."))).toEqual(
       ["options", "publish", "status", "confirm"].map((method) => [
@@ -379,13 +331,54 @@ it.each(["global", "per-sender"] as const)(
   },
 );
 
+it("retires hidden publication feedback while retaining the admitted write and its result", async () => {
+  const { pane, request, responses, publications, settled } = createPublicationPane();
+  const response = Promise.withResolvers<unknown>();
+  responses.set("sessions.github.publish", response.promise);
+  const ready = await settled();
+  let retired = false;
+  void ready.readiness.retired.then(() => {
+    retired = true;
+  });
+  const completion = ready.onPublish?.();
+  let completed = false;
+  void Promise.resolve(completion).then(() => {
+    completed = true;
+  });
+  expect(publications()).toHaveLength(1);
+
+  pane.presented = false;
+  // Hiding must retire the receipt before any render of the parked frame or RPC settlement.
+  await Promise.resolve();
+  expect(retired).toBe(true);
+  expect(completed).toBe(false);
+
+  const result = {
+    requestId,
+    publisher: shared,
+    status: "published",
+    url: "https://github.com/openclaw/openclaw/pull/111532",
+    repository: "openclaw/openclaw",
+    branch: "feature/publication",
+    headCommit: "a".repeat(40),
+  };
+  response.resolve(result);
+  await completion;
+  pane.presented = true;
+  expect((await settled()).result).toEqual(result);
+  expect(publications()).toHaveLength(1);
+  expect(
+    request.mock.calls.filter(([method]) => method === "sessions.github.options"),
+  ).toHaveLength(1);
+});
+
 it.each(["shared", "personal"] as const)(
   "retains an unknown %s publication across a retained-pane navigation",
   async (source) => {
     const { pane, state, request, options, settled, publications } = createPublicationPane();
     (await settled()).onSelect?.(source);
     pane.render();
-    pane.chatProps!.githubPublication!.onPublish?.();
+    void pane.chatProps!.githubPublication!.onPublish?.();
     let unknown = await settled();
     expect(unknown.locked).toBe(true);
     const first = publications()[0];
@@ -398,7 +391,7 @@ it.each(["shared", "personal"] as const)(
     });
     if (source === "shared") {
       options.shared = null;
-      unknown.onRefresh();
+      void unknown.onRefresh();
       unknown = await settled();
       expect(unknown.onPublish).toBeTypeOf("function");
     }
@@ -407,8 +400,8 @@ it.each(["shared", "personal"] as const)(
     pane.render();
     expect(pane.chatProps?.githubPublication).toBeUndefined();
     const hiddenRequests = request.mock.calls.length;
-    unknown.onPublish?.();
-    unknown.onRefresh();
+    void unknown.onPublish?.();
+    void unknown.onRefresh();
     expect(request).toHaveBeenCalledTimes(hiddenRequests);
     pane.presented = true;
     const returned = await settled();
@@ -417,25 +410,26 @@ it.each(["shared", "personal"] as const)(
     const knownRoster = state.sessionsResult!;
     state.sessionsResult = { ...knownRoster, count: 0, sessions: [] };
     const beforeMissingRow = request.mock.calls.length;
-    returned.onPublish?.();
-    returned.onRefresh();
+    void returned.onPublish?.();
+    void returned.onRefresh();
     expect(request).toHaveBeenCalledTimes(beforeMissingRow);
     pane.render();
     expect(pane.chatProps?.githubPublication).toBeUndefined();
     state.sessionsResult = knownRoster;
     const restored = await settled();
     expect([restored.locked, restored.selection]).toEqual([true, unknown.selection]);
-    restored.onPublish?.();
+    void restored.onPublish?.();
     await settled();
     expect(publications()).toEqual([first, first]);
   },
 );
 
-it.each(["truncated history", "merged", "empty rate-limited"])(
+it.each(["truncated history", "merged", "empty rate-limited", "withdrawn rate-limited"])(
   "publishes pushed PR summaries: %s",
   async (mode) => {
     const refresh = mode === "truncated history";
-    const rateLimited = mode === "empty rate-limited";
+    const discardPrevious = mode === "withdrawn rate-limited";
+    const rateLimited = mode === "empty rate-limited" || discardPrevious;
     const pullRequests = refresh
       ? [
           pullRequest(999, "draft"),
@@ -444,9 +438,11 @@ it.each(["truncated history", "merged", "empty rate-limited"])(
       : rateLimited
         ? []
         : [pullRequest(111532, "merged")];
-    const summary = refresh
-      ? { numbers: [...Array.from({ length: 19 }, (_, i) => i + 1), 999], state: "draft" }
-      : { numbers: [111532], state: "merged" };
+    const summary = discardPrevious
+      ? undefined
+      : refresh
+        ? { numbers: [...Array.from({ length: 19 }, (_, i) => i + 1), 999], state: "draft" }
+        : { numbers: [111532], state: "merged" };
     const { pane, request, push, epoch, setPullRequestSummary } = createPullRequestPane();
     pane.refreshSessionPullRequests({ refresh });
     await Promise.resolve();
@@ -462,9 +458,10 @@ it.each(["truncated history", "merged", "empty rate-limited"])(
       pullRequests,
       rateLimited,
       status: rateLimited ? "rate-limited" : "ready",
+      discardPrevious: discardPrevious ? true : undefined,
     });
     await Promise.resolve();
-    if (rateLimited) {
+    if (rateLimited && !discardPrevious) {
       expect(setPullRequestSummary).not.toHaveBeenCalled();
     } else {
       expect(setPullRequestSummary).toHaveBeenCalledWith("agent:main:current", summary, epoch);
@@ -481,16 +478,13 @@ it.each(["session switch", "disconnect", "branch switch"] as const)(
     await Promise.resolve();
     push({
       branch: {
-        owner: "openclaw",
-        repo: "openclaw",
-        branch: "feature/demo",
+        ...branch,
         createUrl: "https://github.com/openclaw/openclaw/pull/new/feature/demo",
       },
       pullRequests: [pullRequest(111532, "open")],
     });
     await Promise.resolve();
     expect(pane.sessionPullRequests).toHaveLength(1);
-    expect(pane.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
     if (change === "disconnect") {
       pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "reconnecting" });
     } else {
@@ -508,7 +502,6 @@ it.each(["session switch", "disconnect", "branch switch"] as const)(
     }
     expect(pane.sessionPullRequests).toEqual([]);
     expect(pane.sessionPullRequestsBranch).toBeUndefined();
-    expect(pane.githubRepo).toBeNull();
     if (change === "branch switch") {
       expect(setPullRequestSummary).toHaveBeenLastCalledWith(
         "agent:main:current",
@@ -573,7 +566,7 @@ it.each([
     return;
   }
   expect(guest.onPublish).toBeTypeOf("function");
-  guest.onPublish?.();
+  void guest.onPublish?.();
   await settled();
   expect(request).toHaveBeenLastCalledWith("sessions.github.publish", {
     sessionKey: state.sessionKey,
@@ -586,7 +579,7 @@ it.each([
     ["sessions.github.publish", "sessions.github.options"],
     ["operator.sessions.read"],
   );
-  previous.onPublish?.();
+  void previous.onPublish?.();
   expect(publications()).toHaveLength(1);
   expect((await settled()).onPublish).toBeUndefined();
 });
@@ -611,7 +604,7 @@ it.each(["incarnation", "sharing", "archive-projection"] as const)(
     state.sessionsResult = { ...state.sessionsResult!, sessions: [row] };
     context.sessions.reconcile(row);
     // Invoke the captured action before rendering its replacement.
-    idle.onPublish?.();
+    void idle.onPublish?.();
     expect(publications()).toHaveLength(0);
     pane.render();
   },

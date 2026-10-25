@@ -255,7 +255,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
             // captured registration still owns its cancellation receipt, never a retry
             // of an uncertain write or a provider success under retired authority.
             storedOutcome = await store.complete(
-              { ...entry.storeInput, outcome: terminalError(error.reason, rawOutcome) },
+              { ...entry.storeInput, outcome: terminalError(error.reason, outcome) },
               () => assertEntry(entry),
             );
           }
@@ -389,6 +389,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       ),
       entry.storeInput,
     );
+    entry.execution = operation;
     providers.set(operation, entry.request.sessionId);
     void operation.then(
       () => providers.delete(operation),

@@ -21,11 +21,7 @@ const sendModuleMocks = vi.hoisted(() => {
   >(() => 4000);
   const convertMarkdownTablesMock = vi.fn((text: string) => text);
   const prepareMatrixSingleText = vi.fn(
-    (
-      text: string,
-      opts: { cfg?: unknown; accountId?: string; preserveWhitespace?: boolean } = {},
-    ) => {
-      const trimmedText = opts.preserveWhitespace ? text : text.trim();
+    (trimmedText: string, opts: { cfg?: unknown; accountId?: string } = {}) => {
       const convertedText = convertMarkdownTablesMock(trimmedText);
       const singleEventLimit = Math.min(
         resolveTextChunkLimitMock(opts.cfg ?? {}, "matrix", opts.accountId),
@@ -44,7 +40,6 @@ const sendModuleMocks = vi.hoisted(() => {
       const prepared = prepareMatrixSingleText(text, {
         cfg: opts.cfg,
         accountId: opts.accountId,
-        preserveWhitespace: true,
       });
       if (!prepared.trimmedText) {
         throw new Error("Matrix single-message send requires text");

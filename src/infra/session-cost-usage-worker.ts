@@ -4,10 +4,7 @@ import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
-import {
-  openOpenClawAgentDatabaseReadOnly,
-  withOpenClawAgentDatabaseReadOnly,
-} from "../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
@@ -395,57 +392,54 @@ export async function executeUsageCostWorker(
       return { ...result, invalidRows: [...report.invalidRows.values()] };
     };
     try {
-      const snapshot = await control.runNativeSection(() => {
-        const opened = openOpenClawAgentDatabaseReadOnly({ ...cacheDatabase, env });
-        if (!opened.found) {
-          return {
-            rows: [],
-            entries: new Map<string, ReturnType<typeof prepareUsageCostReportEntry>>(),
-          };
-        }
-        const { db } = opened.database;
-        try {
-          return runSqliteReadSnapshotSync(db, () => {
-            const bodies = new Map<string, Uint8Array | null>();
-            const rows = readSessionCostUsageRollupRowsInDatabase(db, selectedPaths, {
-              includeBody: true,
-              throwIfCancelled: control.throwIfCancelled,
-              budget: cacheBudget,
-            }).map(({ blob, ...row }) => {
-              bodies.set(row.key, blob);
-              return row;
-            });
-            let partitions: Map<string, UsageCostPartition[]> | undefined;
-            const entries = new Map(
-              rows.map((row) => [
-                row.key,
-                prepareUsageCostReportEntry({
-                  row,
-                  ...operation,
+      const snapshot = await control.runNativeSection(() =>
+        readDatabase(cacheDatabase, () =>
+          readCache(
+            (db) =>
+              runSqliteReadSnapshotSync(db, () => {
+                const bodies = new Map<string, Uint8Array | null>();
+                const rows = readSessionCostUsageRollupRowsInDatabase(db, selectedPaths, {
+                  includeBody: true,
                   throwIfCancelled: control.throwIfCancelled,
-                  body: (cachedRow) => bodies.get(cachedRow.key) ?? null,
-                  partitions: (filePath) => {
-                    partitions ??= readSessionCostUsagePartitionsInDatabase(
-                      db,
-                      rows
-                        .filter((cachedRow) => !cacheBudget.deferredPaths.has(cachedRow.key))
-                        .map((cachedRow) => cachedRow.key),
-                      operation.startMs,
-                      operation.endMs,
-                      control.throwIfCancelled,
-                      cacheBudget,
-                    );
-                    return partitions.get(filePath) ?? [];
-                  },
-                }),
-              ]),
-            );
-            return { rows, entries };
-          });
-        } finally {
-          opened.database.close();
-        }
-      });
+                  budget: cacheBudget,
+                }).map(({ blob, ...row }) => {
+                  bodies.set(row.key, blob);
+                  return row;
+                });
+                let partitions: Map<string, UsageCostPartition[]> | undefined;
+                const entries = new Map(
+                  rows.map((row) => [
+                    row.key,
+                    prepareUsageCostReportEntry({
+                      row,
+                      ...operation,
+                      throwIfCancelled: control.throwIfCancelled,
+                      body: (cachedRow) => bodies.get(cachedRow.key) ?? null,
+                      partitions: (filePath) => {
+                        partitions ??= readSessionCostUsagePartitionsInDatabase(
+                          db,
+                          rows
+                            .filter((cachedRow) => !cacheBudget.deferredPaths.has(cachedRow.key))
+                            .map((cachedRow) => cachedRow.key),
+                          operation.startMs,
+                          operation.endMs,
+                          control.throwIfCancelled,
+                          cacheBudget,
+                        );
+                        return partitions.get(filePath) ?? [];
+                      },
+                    }),
+                  ]),
+                );
+                return { rows, entries };
+              }),
+            {
+              rows: [],
+              entries: new Map<string, ReturnType<typeof prepareUsageCostReportEntry>>(),
+            },
+          ),
+        ),
+      );
       return await project(snapshot.rows, snapshot.entries);
     } catch (error) {
       if (!isTransientSqliteError(error)) {

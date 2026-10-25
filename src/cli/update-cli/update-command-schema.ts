@@ -7,12 +7,16 @@ import { tryReadJson } from "../../infra/json-files.js";
 import { readPackageName } from "../../infra/package-json.js";
 import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import { resolveUpdateStateContentVersion } from "../../infra/update-candidate-state.versions.js";
+import {
+  resolveUpdateStateContentVersion,
+  resolveUpdateStateTargetVersion,
+} from "../../infra/update-candidate-state.versions.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { prepareGitCandidateNodeRuntime } from "../../infra/update-runner-git-node-preflight.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../../shared/update-outcome.js";
@@ -305,7 +309,7 @@ export async function preflightUpdateCommandSchemas(params: {
       ? (params.candidateAdmissionChecks ?? run?.candidateAdmissionChecks)
       : undefined;
   if (run) {
-    recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
+    recordUpdateRunPhase(run.runId, "validating", undefined, run);
   }
   let packageSchemaPreflight: OpenClawDatabaseSchemaPreflight = {
     incompatible: [],
@@ -359,6 +363,9 @@ export async function preflightUpdateCommandSchemas(params: {
             })
           : { schemaVersions: packageTargetSchemaVersions };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
+        preflightNotes.push(
+          "Node compatibility was not checked because the Git target metadata is unavailable.",
+        );
         assertReadableGitMetadata(
           target.metadataUnreadable,
           "failureCode" in target && target.failureCode ? target.failureCode : undefined,
@@ -371,9 +378,36 @@ export async function preflightUpdateCommandSchemas(params: {
         target.schemaVersions,
         installedContexts,
       );
+      if (opts.dryRun && updateInstallKind === "git") {
+        if ("nodeEngine" in target && target.nodeEngine) {
+          preflightNotes.push(`Selected Git target requires Node ${target.nodeEngine}.`);
+          const runtime = await prepareGitCandidateNodeRuntime(
+            root,
+            process.env,
+            "package-tooling",
+            target.nodeEngine,
+          );
+          if (runtime.step) {
+            const message = [runtime.step.stdoutTail, runtime.step.stderrTail]
+              .filter(Boolean)
+              .join("\n");
+            preflightFailures.push({ reason: "preflight-node-runtime-incompatible", message });
+            preflightNotes.push(`Would refuse update: ${message}`);
+          }
+        } else {
+          preflightNotes.push(
+            "Node compatibility was not checked because the Git target does not declare engines.node.",
+          );
+        }
+      }
       if (opts.dryRun && updateInstallKind === "package") {
+        const engineOnly =
+          !params.packageAlreadyCurrent &&
+          Boolean(params.packageRuntimeTarget?.nodeEngine) &&
+          canResolveRegistryVersionForPackageTarget(params.packageInstallSpec ?? "");
         const runtime = await resolvePackageRuntimePreflight({
           ...params,
+          engineOnly,
           target: params.packageRuntimeTarget,
           nodeRunner: params.managedServiceNodeRunner,
           timeoutMs: updateStepTimeoutMs,
@@ -384,7 +418,7 @@ export async function preflightUpdateCommandSchemas(params: {
         if (!runtime.ok) {
           preflightNotes.push(`Would refuse update: ${runtime.error}`);
           preflightFailures.push({
-            reason: "node-runtime-preflight",
+            reason: engineOnly ? "preflight-node-runtime-incompatible" : "node-runtime-preflight",
             message: runtime.error,
             failureFacts: runtime.failureFacts,
             recoverySteps: runtime.recoverySteps,
@@ -489,7 +523,11 @@ export async function captureUpdateActivationSchemas(params: {
         const version = resolveUpdateStateContentVersion(entry);
         return (
           version !== null &&
-          version !== candidateSchemaVersions[entry.path === sharedPath ? "state" : "agent"]
+          version !==
+            resolveUpdateStateTargetVersion(entry.path, {
+              sharedPath,
+              candidateSchemaVersions,
+            })
         );
       })
     ) {

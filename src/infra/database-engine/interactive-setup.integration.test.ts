@@ -21,7 +21,7 @@ const connection = typeof configured === "string" ? configured : undefined;
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const nodeExecutable = resolveTestNodeExecPath();
 const commandTimeoutMs = 60_000;
-const localJournals = new Map([
+const localStores = new Map([
   [
     path.join("state", "openclaw-quarantine.sqlite"),
     ["agent_integrity_verifications", "quarantined_databases"],
@@ -29,6 +29,16 @@ const localJournals = new Map([
   [
     path.join("control", "services.sqlite"),
     ["daemon_runtime_pin_migration", "daemon_runtime_pins"],
+  ],
+  [
+    path.join("client", "credentials.sqlite"),
+    [
+      "client_credential_migration",
+      "device_auth_tokens",
+      "device_identities",
+      "gateway_origin_device_tokens",
+      "native_exec_socket_credentials",
+    ],
   ],
 ]);
 
@@ -114,10 +124,13 @@ for (const engine of ["sqlite", "postgres"] as const) {
             engine === "postgres" ? new pg.Client({ connectionString: connection }) : undefined;
           await client?.connect();
           const runs: PtyRun[] = [];
-          const start = async (args: string[]) =>
+          const start = async (
+            args: string[],
+            entryArgs = [path.join(runtimeRoot, "dist", "entry.js")],
+          ) =>
             await startRuntimePty(
               nodeExecutable,
-              [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
+              [...ISOLATED_RUNTIME_NODE_ARGS, ...entryArgs, ...args],
               {
                 activeRuns: runs,
                 cwd: runtimeRoot,
@@ -126,46 +139,35 @@ for (const engine of ["sqlite", "postgres"] as const) {
                 outputTimeoutMs: commandTimeoutMs,
               },
             );
+          const assertUnrepaired = async () => {
+            expect(await fs.readFile(configPath, "utf8")).toBe(
+              `synthetic warning\n${initialConfig}`,
+            );
+            expect(
+              (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
+                file.endsWith(".sqlite"),
+              ),
+            ).toEqual([]);
+          };
           try {
-            const args =
-              entry === "bare-root"
-                ? []
-                : entry === "crestodian"
-                  ? [entry]
-                  : [
-                      entry,
-                      ...(entry === "setup" ? ["--wizard"] : []),
-                      "--skip-ui",
-                      "--agent-name",
-                      "main",
-                      "--workspace",
-                      workspace,
-                    ];
+            const args: string[] = entry === "bare-root" ? [] : [entry];
+            if (entry === "setup") {
+              args.push("--wizard");
+            }
+            if (entry === "setup" || entry === "onboard") {
+              args.push("--skip-ui", "--agent-name", "main", "--workspace", workspace);
+            }
             const setup = await start(args);
             if (entry === "bare-root") {
               await answer(setup, "Continue?");
               await setup.waitForOutput("Config invalid. Run");
               expect((await setup.waitForExit()).exitCode, setup.output()).toBe(1);
-              expect(await fs.readFile(configPath, "utf8")).toBe(
-                `synthetic warning\n${initialConfig}`,
-              );
-              expect(
-                (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-                  file.endsWith(".sqlite"),
-                ),
-              ).toEqual([]);
+              await assertUnrepaired();
               return;
             }
             if (recoverConfig) {
               await setup.waitForOutput('Run "openclaw doctor --fix" now?');
-              expect(
-                (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-                  file.endsWith(".sqlite"),
-                ),
-              ).toEqual([]);
-              expect(await fs.readFile(configPath, "utf8")).toBe(
-                `synthetic warning\n${initialConfig}`,
-              );
+              await assertUnrepaired();
               await setup.write("\r");
               await setup.waitForOutput("Removed non-JSON prefix");
             }
@@ -185,10 +187,9 @@ for (const engine of ["sqlite", "postgres"] as const) {
             expect((await setup.waitForExit()).exitCode, setup.output()).toBe(0);
 
             const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-            expect(config.wizard.securityAcknowledgedAt).toEqual(expect.any(String));
-            expect(config.telemetry).toMatchObject({
-              enabled: false,
-              consentedAt: expect.any(String),
+            expect(config).toMatchObject({
+              wizard: { securityAcknowledgedAt: expect.any(String) },
+              telemetry: { enabled: false, consentedAt: expect.any(String) },
             });
             if (entry !== "crestodian") {
               expect(config.wizard.accessMode).toBe("guarded");
@@ -206,27 +207,26 @@ for (const engine of ["sqlite", "postgres"] as const) {
             let onboardingState: unknown;
             let stateSchema: string | undefined;
             for (const database of databases) {
+              const relative = path.relative(stateDir, database);
               using local = openNodeSqliteDatabase(database, { readOnly: true });
               if (engine === "postgres") {
-                const journal = localJournals.get(path.relative(stateDir, database));
+                const localStore = localStores.get(relative);
                 expect(
                   local
                     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
                     .all(),
-                  `${entry} left application state in ${path.relative(stateDir, database)}`,
-                ).toEqual((journal ?? ["openclaw_engine_anchor"]).map((name) => ({ name })));
-                if (!journal) {
+                  `${entry} left application state in ${relative}`,
+                ).toEqual((localStore ?? ["openclaw_engine_anchor"]).map((name) => ({ name })));
+                if (!localStore) {
                   const anchor = local
                     .prepare("SELECT engine, schema FROM openclaw_engine_anchor")
                     .get();
                   expect(anchor?.engine).toBe(engine);
-                  if (path.relative(stateDir, database) === path.join("state", "openclaw.sqlite")) {
+                  if (relative === path.join("state", "openclaw.sqlite")) {
                     stateSchema = String(anchor?.schema);
                   }
                 }
-              } else if (
-                path.relative(stateDir, database) === path.join("state", "openclaw.sqlite")
-              ) {
+              } else if (relative === path.join("state", "openclaw.sqlite")) {
                 onboardingState = local
                   .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
                   .get(localOnboardingStateKey(configPath))?.value_json;
@@ -261,11 +261,8 @@ for (const engine of ["sqlite", "postgres"] as const) {
                 },
               }),
             );
-            const gateway = await startRuntimePty(
-              nodeExecutable,
+            const gateway = await start(
               [
-                ...ISOLATED_RUNTIME_NODE_ARGS,
-                "--import",
                 path.join(runtimeRoot, "scripts", "tsx.mjs"),
                 fileURLToPath(
                   new URL(
@@ -276,13 +273,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
                 path.join(runtimeRoot, "dist", "entry.js"),
                 String(port.port),
               ],
-              {
-                activeRuns: runs,
-                cwd: runtimeRoot,
-                env,
-                exitTimeoutMs: commandTimeoutMs,
-                outputTimeoutMs: commandTimeoutMs,
-              },
+              ["--import"],
             );
             await gateway.waitForOutput("Onboarding child authenticated and ready");
             await gateway.write("\x03");

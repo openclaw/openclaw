@@ -1,18 +1,17 @@
 import { insert, type JSX } from "@solidjs/web";
 import {
   createMemo,
-  createRenderEffect,
+  createEffect,
   createRoot,
   createSignal,
   For,
   getOwner,
+  lazy,
   Match,
-  onCleanup,
   onSettled,
   runWithOwner,
   Show,
   Switch,
-  untrack,
   type Accessor,
 } from "solid-js";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
@@ -25,6 +24,7 @@ import {
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ActivityGroup,
   MessageGroup,
@@ -34,14 +34,18 @@ import {
 import {
   StreamGroup,
   StreamPartView,
-  WorkGroupSummary,
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import { ChatSourcePreviews } from "./chat-source-previews.tsx";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
+import "../../../styles/chat/source-previews.css";
+
+const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
+  export: "ChatSourcePreviews",
+});
 
 type AgentRunFrameOptions = {
   basePath?: string;
@@ -70,12 +74,14 @@ function FrameBody(props: {
   options: AgentRunFrameOptions;
   children: (input: Accessor<PartInput>) => JSX.Element;
 }): JSX.Element {
+  // Canvas widgets move between these foreign-DOM ranges without disconnecting.
+  // Mount new ranges under the frame's owner, not the transient reconciliation effect.
   const owner = getOwner();
   const anchor = document.createComment("frame-body");
   const [readParent, setParent] = createSignal<HTMLElement | null>(null, { ownedWrite: true });
   const ranges = new Map<string, PartRange>();
   const retire = (range: PartRange) => {
-    // Lit descendants must park their widgets while the range is still connected.
+    // Native descendants must park their widgets while the range is still connected.
     range.dispose();
     const after = range.end.nextSibling;
     for (let node: Node | null = range.start; node && node !== after;) {
@@ -84,22 +90,27 @@ function FrameBody(props: {
       node = following;
     }
   };
-  onCleanup(() => {
-    for (const range of ranges.values()) {
-      retire(range);
-    }
-    ranges.clear();
-  });
   onSettled(() => {
     const committedParent = anchor.parentElement;
     if (!committedParent) {
       throw new Error("Run frame body anchor was not committed");
     }
     setParent(committedParent);
+    return () => {
+      for (const range of ranges.values()) {
+        retire(range);
+      }
+      ranges.clear();
+    };
   });
-  createRenderEffect(
-    () => ({ parent: readParent(), parts: props.parts, options: props.options }),
-    ({ parent, parts, options }) => {
+  createEffect(
+    () => ({
+      parent: readParent(),
+      parts: props.parts,
+      options: props.options,
+      render: props.children,
+    }),
+    ({ parent, parts, options, render }) => {
       if (!parent) {
         return;
       }
@@ -126,11 +137,7 @@ function FrameBody(props: {
           createRoot((dispose): PartRange => {
             // The headline's connection scope must change with its activity.
             const [readInput, write] = createSignal({ part: value, options }, { ownedWrite: true });
-            insert(
-              parent,
-              untrack(() => props.children(readInput)),
-              end,
-            );
+            insert(parent, render(readInput), end);
             return { start, end, write, dispose };
           }),
         );
@@ -247,6 +254,19 @@ export function AgentRunFrame(props: FrameProps) {
 
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
+  const timedWork = createMemo(() => {
+    const recap = props.options.turnRecap;
+    const work = props.frame.parts.find(
+      (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
+    );
+    // The recap retains this run's terminal timing after the session moves on.
+    // Handoffs have no work summary: their request-wide timing stays in the recap.
+    if (!recap || work?.kind !== "work-group") {
+      return undefined;
+    }
+    const durationMs = work.durationMs ?? recap.runtimeMs;
+    return durationMs > 0 ? { ...work, durationMs } : undefined;
+  });
   const frameContent = [
     <FrameBody parts={state().bodyParts} options={props.options}>
       {(input) => {
@@ -294,9 +314,10 @@ function RunFrame(props: FrameProps) {
               {(work) => (
                 <>
                   <WorkGroupSummary
-                    item={work()}
+                    item={timedWork()?.key === work().key ? timedWork()! : work()}
                     options={{
                       expanded: options().isWorkExpanded(work().key),
+                      mediaReadAllowed: options().streamOptions.mediaReadAllowed,
                       bubbleMode: options().streamOptions.bubbleMode,
                       onToggle: () =>
                         options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
@@ -334,7 +355,10 @@ function RunFrame(props: FrameProps) {
               {(group) => (
                 <>
                   <MessageGroupContent group={group()} options={groupOptions(group())} />
-                  <BrowserTabPreviews previews={state().workPreviews.get(group().key)} />
+                  <BrowserTabPreviews
+                    previews={state().workPreviews.get(group().key)}
+                    mediaReadAllowed={options().streamOptions.mediaReadAllowed}
+                  />
                 </>
               )}
             </Match>
@@ -342,10 +366,14 @@ function RunFrame(props: FrameProps) {
         );
       }}
     </FrameBody>,
-    <ChatSourcePreviews
-      sources={state().sourcePreviews}
-      fetchFavicon={props.options.streamOptions.fetchLinkFavicon}
-    />,
+    <Show when={state().sourcePreviews.length > 0}>
+      <ChatLazyBoundary>
+        <ChatSourcePreviews
+          sources={state().sourcePreviews}
+          fetchFavicon={props.options.streamOptions.fetchLinkFavicon}
+        />
+      </ChatLazyBoundary>
+    </Show>,
     <Show when={props.frame.outcome.kind === "interrupted"}>
       <div class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation" role="status">
         {t("chat.composer.runInterrupted")}
@@ -361,6 +389,7 @@ function RunFrame(props: FrameProps) {
         frameReplyLine: state().frameReplyLine,
         frameActionOwner: state().actionOwner,
         turnRecap: props.options.turnRecap,
+        hideTurnRecapDuration: timedWork() !== undefined,
       }}
     />
   );

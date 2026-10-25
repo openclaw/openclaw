@@ -1280,10 +1280,7 @@ export function createModelAuthAvailabilityResolver(
   const evaluateModelAuth = (provider: string, ref?: ModelAuthAvailabilityRef) =>
     withSelectedCredential(provider, evaluateModelAuthSources(provider, ref));
   const providerDiscoveryProviderIds = new Set<string>();
-  const addProviderDiscoveryProviderId = (provider: string | undefined) => {
-    if (!provider) {
-      return;
-    }
+  const addProviderDiscoveryProviderId = (provider: string) => {
     const normalized = normalizeProvider(provider);
     if (normalized) {
       providerDiscoveryProviderIds.add(normalized);
@@ -1319,7 +1316,10 @@ export function createModelAuthAvailabilityResolver(
   if (synthetic.has("codex")) {
     addProviderDiscoveryProviderId(OPENAI_PROVIDER_ID);
   }
-  const evaluateCliRuntimeAuth = createCliRuntimeModelAuthEvaluator(params, evaluateModelAuth);
+  const evaluateCliRuntimeAuth = createCliRuntimeModelAuthEvaluator(
+    { ...params, authStore: orderStore },
+    evaluateModelAuth,
+  );
   return {
     providerDiscoveryProviderIds: [...providerDiscoveryProviderIds].toSorted((left, right) =>
       left.localeCompare(right),

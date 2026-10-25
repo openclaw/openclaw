@@ -23,10 +23,10 @@ import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import {
-  createAppServerOptions,
   createParams,
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
+import { nativeAppServerOptions, sendNativeResponse } from "./thread-native.test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.unmock("node:child_process");
@@ -39,12 +39,18 @@ afterEach(() => {
 // The loopback provider chooses deterministic actions; the pinned native binary
 // owns threads, subscriptions, shell execution, inventory, and notifications.
 describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () => {
-  it.for(["publication failure", "protected rotation", "protected publication failure"] as const)(
+  it.for([
+    "publication failure",
+    "protected rotation",
+    "protected publication failure",
+    "context refresh",
+  ] as const)(
     "%s permits continuation without disturbing sibling ownership",
     { timeout: 90_000 },
     async (scenario, context) => {
       const backgroundWork = scenario !== "publication failure";
-      const publicationFailure = scenario !== "protected rotation";
+      const contextRefresh = scenario === "context refresh";
+      const publicationFailure = scenario !== "protected rotation" && !contextRefresh;
       const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
         context.onTestFinished(async () => {
           await closeOpenClawStateDatabaseAsync();
@@ -107,24 +113,8 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
                   id: `native-answer-${providerRequests}`,
                   content: [{ type: "output_text", text: "NATIVE_CONTINUATION_OK" }],
                 };
-            const events = [
-              { type: "response.created", response: { id: `native-response-${providerRequests}` } },
-              { type: "response.output_item.done", item },
-              {
-                type: "response.completed",
-                response: {
-                  id: `native-response-${providerRequests}`,
-                  usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-                },
-              },
-            ];
             record("loopback-provider-response", { action: launch ? "exec_command" : "answer" });
-            response.writeHead(200, { "Content-Type": "text/event-stream" });
-            response.end(
-              events
-                .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-                .join(""),
-            );
+            sendNativeResponse(response, `native-response-${providerRequests}`, item);
           } catch (error) {
             providerFailures.push(error);
             response.writeHead(500).end();
@@ -177,24 +167,9 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
           "stream_max_retries=0",
         ].join("\n"),
       );
-      const childEnv = Object.fromEntries(
-        Object.entries(native.env).filter(
-          (entry): entry is [string, string] => entry[1] !== undefined,
-        ),
-      );
       const appServer = {
-        ...createAppServerOptions(),
+        ...nativeAppServerOptions(native),
         sandbox: "danger-full-access" as const,
-        start: {
-          transport: "stdio" as const,
-          command: native.command,
-          commandSource: "config" as const,
-          args: ["app-server"],
-          cwd: native.cwd,
-          headers: {},
-          env: childEnv,
-          clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
-        },
       };
       const agentDir = path.join(root, "agent");
       const client = await createIsolatedCodexAppServerClient({
@@ -233,6 +208,15 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         agentDir,
         modelId: "gpt-5.6-luna",
         disableTools: false,
+        ...(contextRefresh
+          ? {
+              contextEngine: {
+                info: { id: "test", name: "Test", ownsCompaction: true },
+                assemble: vi.fn(),
+                compact: vi.fn(),
+              } as never,
+            }
+          : {}),
       };
       const bindingStore = sessionBinding.createCodexAppServerBindingStore(
         createCodexSqliteTestBindingStateStore({
@@ -248,6 +232,9 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         params,
         cwd: native.cwd,
         dynamicTools: [],
+        contextEngineProjection: contextRefresh
+          ? { mode: "thread_bootstrap" as const, epoch: "before", fingerprint: "before" }
+          : undefined,
         appServer,
         userMcpServersEnabled: false,
         signal: AbortSignal.timeout(75_000),
@@ -413,7 +400,7 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         }
         publicationClaimed = isCodexAppServerLiveThreadClaimed(client, first.threadId);
         record("failed-publication-claim-state", { claimed: publicationClaimed });
-      } else {
+      } else if (!contextRefresh) {
         pluginFingerprint = "changed-policy";
         await expect(startOrResumeThread(common)).rejects.toThrow(
           `Codex thread ${first.threadId} is claimed by active work; stop it first.`,
@@ -424,9 +411,54 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       }
       sibling!.assertCurrent();
       record("sibling-owner-current-after-refusal", { threadId: siblingBinding.threadId });
+      if (contextRefresh) {
+        common.contextEngineProjection = {
+          mode: "thread_bootstrap",
+          epoch: "after",
+          fingerprint: "after",
+        };
+      }
+      if (contextRefresh) {
+        pluginFingerprint = "changed-policy";
+        await expect(startOrResumeThread(common)).rejects.toThrow(
+          "claimed by active work; stop it first",
+        );
+        expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))).toEqual(saved);
+        pluginFingerprint = "original-policy";
+      }
+      if (contextRefresh) {
+        const beforePolicyChange = requests.length;
+        await expect(
+          startOrResumeThread({
+            ...common,
+            developerInstructions: "Changed persistent thread policy",
+          }),
+        ).rejects.toThrow("claimed by active work; stop it first");
+        expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))).toEqual(saved);
+        expect(
+          requests
+            .slice(beforePolicyChange)
+            .some(({ method }) =>
+              ["thread/start", "thread/unsubscribe", "turn/start"].includes(method),
+            ),
+        ).toBe(false);
+        record("persistent-policy-refresh-refused", { threadId: first.threadId });
+      }
       const resumed = await startOrResumeThread(common);
-      expect(resumed.threadId).toBe(first.threadId);
-      expect(resumed.lifecycle.action).toBe("resumed");
+      if (contextRefresh) {
+        expect(resumed.threadId).not.toBe(first.threadId);
+        expect(resumed.contextEngine?.projection?.epoch).toBe("after");
+        expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))?.threadId).toBe(
+          resumed.threadId,
+        );
+        record("context-refreshed-with-background-owner", {
+          predecessor: first.threadId,
+          successor: resumed.threadId,
+        });
+      } else {
+        expect(resumed.threadId).toBe(first.threadId);
+        expect(resumed.lifecycle.action).toBe("resumed");
+      }
       record("warm-retry-prepared", { threadId: resumed.threadId });
       await runTurn(resumed.threadId);
       expect(publicationClaimed).toBe(false);
@@ -437,13 +469,13 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       expect(JSON.stringify(history.thread.turns)).toContain("NATIVE_CONTINUATION_OK");
       record("native-continuation-persisted", { threadId: resumed.threadId });
       const transitionRequests = requests.slice(before);
-      if (backgroundWork) {
+      if (backgroundWork && !contextRefresh) {
         expect(
           transitionRequests.some(({ method }) =>
             ["thread/start", "thread/resume", "thread/unsubscribe"].includes(method),
           ),
         ).toBe(false);
-      } else {
+      } else if (!contextRefresh) {
         expect(transitionRequests).toContainEqual({
           method: "thread/unsubscribe",
           threadId: first.threadId,
@@ -452,6 +484,14 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
           method: "thread/resume",
           threadId: first.threadId,
         });
+      }
+      if (contextRefresh) {
+        expect(
+          transitionRequests.some(
+            ({ method, threadId }) =>
+              method === "thread/unsubscribe" && threadId === first.threadId,
+          ),
+        ).toBe(false);
       }
       expect(
         transitionRequests.some(

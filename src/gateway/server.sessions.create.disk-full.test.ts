@@ -13,6 +13,7 @@ import {
   chatSendOwner,
   setupSessionCreateHandlerTestHarness,
 } from "./server.sessions.create.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const fault = vi.hoisted(() => ({
@@ -82,7 +83,9 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
 });
 
 const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness();
-afterEach(() => Atomics.store(new Int32Array(fault.state), 0, 0));
+const diskState = new Int32Array(fault.state);
+const diskFullMessage = "OpenClaw couldn't save your conversation because the disk is full";
+afterEach(() => Atomics.store(diskState, 0, 0));
 
 test.each(["transcript", "admission"] as const)(
   "sessions.create reports an initial %s failure after creating the session",
@@ -98,16 +101,12 @@ test.each(["transcript", "admission"] as const)(
     await initializeSessionReadContext(context);
     const client: GatewayClient = {
       connId: "disk-full-browser",
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.read", "operator.write", "operator.admin"],
-        client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
-      },
+      connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"], {
+        platform: "web",
+      }),
     };
     const key = "agent:main:dashboard:disk-full";
-    Atomics.store(new Int32Array(fault.state), 1, 0);
+    Atomics.store(diskState, 1, 0);
     let startingTurn = false;
     const admissionFailures: string[] = [];
     const begin = sessionLifecycle.beginSessionEffect;
@@ -120,7 +119,7 @@ test.each(["transcript", "admission"] as const)(
         return begin({
           ...params,
           revalidateAllowed: async () => {
-            Atomics.store(new Int32Array(fault.state), 0, 2);
+            Atomics.store(diskState, 0, 2);
             // Exercise real worker failure inside mandatory startup, independent of warm caches.
             try {
               await placements.getWithMoveAsync("disk-full-admission");
@@ -138,7 +137,7 @@ test.each(["transcript", "admission"] as const)(
       .mockImplementation(async (...args) => {
         startingTurn = true;
         if (phase === "transcript") {
-          Atomics.store(new Int32Array(fault.state), 0, 1);
+          Atomics.store(diskState, 0, 1);
         }
         return send(...args);
       });
@@ -163,17 +162,14 @@ test.each(["transcript", "admission"] as const)(
       respond,
       isWebchatConnect: () => true,
     });
-    Atomics.store(new Int32Array(fault.state), 0, 0);
+    Atomics.store(diskState, 0, 0);
     expect(respond).toHaveBeenCalledOnce();
     const [ok, payload, error] = respond.mock.calls[0]!;
     const created = { ok, payload: payload as Created | undefined, error };
-    expect(created.ok, JSON.stringify(created)).toBe(true);
     expect(sendSpy).toHaveBeenCalledOnce();
     expect(admissionSpy).toHaveBeenCalled();
-    expect(Atomics.load(new Int32Array(fault.state), 1), JSON.stringify(created)).toBeGreaterThan(
-      0,
-    );
-    expect(created, JSON.stringify(admissionFailures)).toMatchObject({
+    expect(Atomics.load(diskState, 1), JSON.stringify(created)).toBeGreaterThan(0);
+    expect(created, JSON.stringify({ created, admissionFailures })).toMatchObject({
       ok: true,
       payload: { key, runStarted: false },
     });
@@ -187,10 +183,8 @@ test.each(["transcript", "admission"] as const)(
       sessionId: created.payload!.sessionId,
       storePath,
     };
-    expect(await loadTranscriptEvents(scope)).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }),
-      ]),
+    expect(await loadTranscriptEvents(scope)).not.toContainEqual(
+      expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }),
     );
     expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
     expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBeUndefined();
@@ -200,14 +194,10 @@ test.each(["transcript", "admission"] as const)(
       expect.objectContaining({
         sessionKey: key,
         state: "error",
-        errorMessage: expect.stringContaining(
-          "OpenClaw couldn't save your conversation because the disk is full",
-        ),
+        errorMessage: expect.stringContaining(diskFullMessage),
       }),
       expect.anything(),
     );
-    expect(created.payload?.runError?.message).toContain(
-      "OpenClaw couldn't save your conversation because the disk is full",
-    );
+    expect(created.payload?.runError?.message).toContain(diskFullMessage);
   },
 );

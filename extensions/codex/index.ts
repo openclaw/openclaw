@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -107,7 +106,6 @@ export default definePluginEntry({
       const enabled = resolveEffectiveEnableState({
         id: "codex",
         origin: "bundled",
-        config: normalizePluginsConfig(liveConfig.plugins),
         rootConfig: liveConfig,
         // Core auto-enables this bundled plugin whenever the operator declares a
         // codex config block, so a live block is the plugin-side default. Gating
@@ -232,7 +230,7 @@ export default definePluginEntry({
     if (registrationConfig.supervision?.enabled === true) {
       const {
         resolveCodexAppServerAuthProfileIdForAgent,
-        resolveCodexAppServerAuthProfileIdAtEffect,
+        withCodexAppServerAuthProfileIdAtEffect,
       } = createCodexAuthProfileSelection(api.runtime.modelAuth);
       api.registerTool(
         {
@@ -250,7 +248,7 @@ export default definePluginEntry({
               getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
               getRuntimeConfig: resolveToolRuntimeConfig,
               resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
-              resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
+              withAuthProfileIdAtEffect: withCodexAppServerAuthProfileIdAtEffect,
               resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
               senderIsOwner: context.senderIsOwner,
               assertInvocationCurrent: context.assertInvocationCurrent,

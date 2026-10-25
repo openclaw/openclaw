@@ -13,7 +13,7 @@ import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
 } from "../../infra/update-run-timeouts.js";
-import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -50,23 +50,21 @@ function finalization(timeoutMs: number | undefined, json = false, attach = true
   return { lifecycle, stopChildren, read, hold };
 }
 
+it("reports standalone repair as repairing before Doctor maintenance", () => {
+  const lifecycle = new UpdateFinalizationLifecycle(false, undefined, () => {});
+  const runId = lifecycle.attachLedger(true);
+  lifecycle.recordInstallKind("package", "2026.10.5");
+  expect(getUpdateRun(runId)).toMatchObject({
+    phase: "repairing",
+    status: "running",
+    target: { kind: "package", version: "2026.10.5" },
+  });
+});
+
 it("writes successful finalization progress to stderr and failures as errors", async () => {
-  const logPath = path.join(dirs.make("openclaw-finalize-log-"), "openclaw.log");
-  setLoggerOverride({ level: "info", file: logPath });
   const { lifecycle } = finalization(5_000, false, false);
   await lifecycle.run("doctor", async () => undefined);
   expectMessages(stderrWrite, '"status":"in_progress"', '"status":"completed"');
-  await flushLogger();
-  const phaseRecords = fs
-    .readFileSync(logPath, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line))
-    .filter((record) => JSON.stringify(record).includes("finalize:doctor"));
-  expect(phaseRecords).toMatchObject([
-    { _meta: { logLevelName: "INFO" } },
-    { _meta: { logLevelName: "INFO" } },
-  ]);
   expect(defaultRuntime.error).not.toHaveBeenCalled();
   lifecycle.recordWarnings(["A plugin update was deferred."]);
   expectMessages(console.warn, '"step":"warning:finalize:doctor:0"');
@@ -180,6 +178,12 @@ it("records a returned failed outcome without requiring an exception", async () 
 it.each(["failed", "completed"] as const)(
   "settles a late completion-cache result without hiding its outcome (%s)",
   async (outcome) => {
+    // Exclude performance from fake timers and map it to the mocked wall clock
+    // so admission (performance.now() + budget) and inspection stay in one domain.
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const { lifecycle, read } = finalization(1_000, true);
     const entered = createDeferredCore();

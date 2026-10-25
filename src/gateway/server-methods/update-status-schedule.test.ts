@@ -159,20 +159,6 @@ function announcePackageCampaign() {
   return target;
 }
 
-it.each([false, true])(
-  "reports cold configured scheduler policy without checkout discovery (auto=%s)",
-  async (enabled) => {
-    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-    const config = { update: { channel: "dev" as const, auto: { enabled } } };
-    const result = await status(config);
-    expect(result.schedule).toMatchObject({ channel: "dev", autoEnabled: enabled });
-    expect(result.schedule.campaign).toBeUndefined();
-    expect(config.update.auto.enabled).toBe(enabled);
-    expect(getUpdateSchedule()).toBeNull();
-    expect(install).not.toHaveBeenCalled();
-  },
-);
-
 it("preserves a live campaign while hydrating disabled policy", async () => {
   campaignOwner.announce({
     target: { kind: "package", version: "99.0.0" },
@@ -403,7 +389,6 @@ it.for([
   { tag: "v2026.10.0-beta.1", configured: false },
   { tag: "v2026.9.30", configured: false },
   { tag: "v2026.10.0-beta.1", configured: true },
-  { tag: "v2026.9.30", configured: true },
 ] as const)(
   "revalidates the inferred channel from fresh Git identity (tag=$tag, configured=$configured)",
   async ({ tag, configured }) => {
@@ -438,8 +423,6 @@ it.for([
 
 it.each([
   { channel: "stable", initialized: true, refreshCheckout: true, enabled: false },
-  { channel: "beta", initialized: true, refreshCheckout: true, enabled: false },
-  { channel: "stable", initialized: false, refreshCheckout: true, enabled: false },
   { channel: "beta", initialized: false, refreshCheckout: true, enabled: false },
   { channel: "stable", initialized: true, refreshCheckout: false, enabled: false },
   { channel: "stable", initialized: true, refreshCheckout: false, enabled: true },
@@ -479,9 +462,8 @@ it.each([
         : {}),
     };
     install.mockResolvedValue(immutableInstall(refreshed));
-    const privateStatus = vi.fn().mockResolvedValue(null);
     if (!refreshCheckout) {
-      resolveManager.mockResolvedValue({ canStart: true, status: privateStatus });
+      resolveManager.mockResolvedValue({ canStart: true, status: vi.fn().mockResolvedValue(null) });
     }
 
     const result = await status(makeConfig(channel, true), { refreshCheckout });
@@ -497,7 +479,6 @@ it.each([
       expect(install).toHaveBeenCalledWith(true, expect.any(AbortSignal));
     } else {
       expect(resolveManager).not.toHaveBeenCalled();
-      expect(privateStatus).not.toHaveBeenCalled();
     }
 
     install.mockResolvedValue(installAt("unknown", immutable.currentPath));

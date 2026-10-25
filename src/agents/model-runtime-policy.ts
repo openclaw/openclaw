@@ -50,13 +50,11 @@ export function resolveAgentRuntimePolicyAgentId(
     : params.agentId;
 }
 
-/** Config surface that supplied a resolved model runtime policy. */
-type ModelRuntimePolicySource = "model" | "provider";
-
 /** Runtime policy plus the config surface that supplied it. */
 type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
-  source?: ModelRuntimePolicySource;
+  /** Config surface that supplied a resolved model runtime policy. */
+  source?: "model" | "provider";
   matchedProvider?: string;
   forcedByEnvironment?: true;
 };

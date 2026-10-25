@@ -5,16 +5,14 @@ import { expect } from "vitest";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 
+type Prefs = Record<string, unknown>;
+
+function hasFocus(element: Element, within: boolean) {
+  return within ? element.matches(":focus-within") : element === document.activeElement;
+}
+
 export function expectFocused(locator: Locator, within = false) {
-  return expect
-    .poll(() =>
-      locator.evaluate(
-        (element, subtree) =>
-          subtree ? element.matches(":focus-within") : element === document.activeElement,
-        within,
-      ),
-    )
-    .toBe(true);
+  return expect.poll(() => locator.evaluate(hasFocus, within)).toBe(true);
 }
 
 export async function pressAndExpectFocus(
@@ -27,25 +25,16 @@ export async function pressAndExpectFocus(
   await expectFocused(target, within);
 }
 
-export function expectText(locator: Locator, text: string) {
-  return expect.poll(() => locator.textContent()).toContain(text);
-}
-
-export function expectAttribute(locator: Locator, name: string, value: string) {
-  return expect.poll(() => locator.getAttribute(name)).toBe(value);
-}
-
-export function expectCount(locator: Locator, count: number) {
-  return expect.poll(() => locator.count()).toBe(count);
-}
-
-export function expectVisible(locator: Locator, visible = true) {
-  return expect.poll(() => locator.isVisible()).toBe(visible);
-}
-
-export function expectPath(page: Page, pathname: string) {
-  return expect.poll(() => new URL(page.url()).pathname).toBe(pathname);
-}
+export const expectText = (locator: Locator, text: string) =>
+  expect.poll(() => locator.textContent()).toContain(text);
+export const expectAttribute = (locator: Locator, name: string, value: string) =>
+  expect.poll(() => locator.getAttribute(name)).toBe(value);
+export const expectCount = (locator: Locator, count: number) =>
+  expect.poll(() => locator.count()).toBe(count);
+export const expectVisible = (locator: Locator, visible = true) =>
+  expect.poll(() => locator.isVisible()).toBe(visible);
+export const expectPath = (page: Page, pathname: string) =>
+  expect.poll(() => new URL(page.url()).pathname).toBe(pathname);
 
 export function mockRequests(page: Page, method: string) {
   return page.evaluate((name) => {
@@ -59,36 +48,34 @@ export function mockRequests(page: Page, method: string) {
 
 export function installPreferenceServer(
   page: Page,
-  initialEntries: Record<string, unknown>,
+  initialEntries: Prefs,
   persistenceKey?: string,
 ) {
   return page.evaluate(
     ({ initial, storageKey }) => {
       const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
       const saved = storageKey ? sessionStorage.getItem(storageKey) : null;
-      const values: Record<string, unknown> = saved ? JSON.parse(saved) : initial;
+      const values: Prefs = saved ? JSON.parse(saved) : initial;
       mock.setRequestHandler("users.prefs.get", ({ respond }) =>
         respond({ status: "ok", entries: values }),
       );
       mock.setRequestHandler("users.prefs.set", ({ params, respond }) => {
-        const request = params as {
-          entries: Record<string, unknown>;
-          expectedEntries?: Record<string, unknown>;
+        const { entries, expectedEntries } = params as {
+          entries: Prefs;
+          expectedEntries?: Prefs;
         };
-        if (
+        const conflict =
           storageKey &&
-          Object.entries(request.expectedEntries ?? {}).some(
+          Object.entries(expectedEntries ?? {}).some(
             ([key, value]) => JSON.stringify(values[key] ?? null) !== JSON.stringify(value),
-          )
-        ) {
-          respond({ status: "conflict" });
-          return;
+          );
+        if (!conflict) {
+          Object.assign(values, entries);
+          if (storageKey) {
+            sessionStorage.setItem(storageKey, JSON.stringify(values));
+          }
         }
-        Object.assign(values, request.entries);
-        if (storageKey) {
-          sessionStorage.setItem(storageKey, JSON.stringify(values));
-        }
-        respond({ status: "ok" });
+        respond({ status: conflict ? "conflict" : "ok" });
       });
     },
     { initial: initialEntries, storageKey: persistenceKey },
@@ -113,7 +100,7 @@ export function seedStorage(page: Page, entries: Record<string, string>, onceKey
 }
 
 export async function captureFrame(
-  directory: string,
+  dir: string,
   name: string,
   surface: Locator,
   content: Locator[],
@@ -121,48 +108,36 @@ export async function captureFrame(
   const frame = await takeControlUiScreenshotFrame(surface.page(), surface, content, {
     animations: "disabled",
   });
-  await writeFile(path.join(directory, name), frame.png);
+  await writeFile(path.join(dir, name), frame.png);
 }
 
-export function catalogList(fixture: {
-  id: string;
-  label: string;
-  host: string;
-  thread: string;
-  name: string;
-  status: string;
-  archive: boolean;
-  startTerminal?: boolean;
-}) {
+export function catalogList(
+  fixture: Record<"id" | "label" | "host" | "thread" | "name" | "status", string> & {
+    archive: boolean;
+    startTerminal?: boolean;
+  },
+) {
   const { id, label, host, thread, name, status, archive, startTerminal } = fixture;
+  const session = {
+    threadId: thread,
+    name,
+    status,
+    archived: false,
+    canContinue: true,
+    canArchive: archive,
+  };
+  const gateway = {
+    hostId: "gateway:local",
+    label: host,
+    kind: "gateway",
+    connected: true,
+    sessions: [session],
+  };
+  const capabilities = Object.assign(
+    { continueSession: true, archive },
+    startTerminal === undefined ? {} : { startTerminal },
+  );
   return {
-    catalogs: [
-      {
-        id,
-        label,
-        capabilities: Object.assign(
-          { continueSession: true, archive },
-          startTerminal === undefined ? {} : { startTerminal },
-        ),
-        hosts: [
-          {
-            hostId: "gateway:local",
-            label: host,
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId: thread,
-                name,
-                status,
-                archived: false,
-                canContinue: true,
-                canArchive: archive,
-              },
-            ],
-          },
-        ],
-      },
-    ],
+    catalogs: [{ id, label, capabilities, hosts: [gateway] }],
   };
 }

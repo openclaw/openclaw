@@ -2,7 +2,10 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
+import {
+  createOperatorInputRecoverySource,
+  createRestartRecoveryOperatorSource,
+} from "../../agents/operator-run-recovery-source.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { createRestartRecoveryRequesterSource } from "../../agents/requester-run-recovery-source.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
@@ -28,6 +31,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isBrowserOperatorUiClient,
 } from "../../utils/message-channel.js";
+import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { captureWorkerTurnInputSource } from "../worker-environments/worker-turn-transcript-target.js";
@@ -38,7 +42,7 @@ import {
   resolveChatSendReplyContext,
   type ChatSendReplyContextFields,
 } from "./chat-send-reply-context.js";
-import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import { createChatInputRecovery, type NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { createChatSendGoalCommitGuard } from "./chat-send-work-admission.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
@@ -99,9 +103,25 @@ export function createGatewayChatUserTurnController(params: {
     senderId: toolCaller ? undefined : sender?.id,
     senderName: toolCaller ? undefined : sender?.name,
   });
-  const selectedMentions = request.mentions;
   const mentionInbox = params.mentionInbox;
   const sourceId = buildRunUserTurnIdempotencyKey(session.clientRunId);
+  const recoveredInput = readChatInputRecoveryAdmission(session.clientRunId);
+  const selectedMentions =
+    recoveredInput?.target.message["__openclaw"]?.humanMentions ?? request.mentions;
+  const recoveryEntry = admission.admittedSessionEntry ?? admission.initialSessionEntry;
+  const recovery =
+    recoveredInput || admission.restartSafeAdmission || !recoveryEntry
+      ? undefined
+      : createChatInputRecovery({
+          request,
+          source: createOperatorInputRecoverySource({
+            authority: admission.operatorAuthority,
+            entry: recoveryEntry,
+            agentId: session.agentId,
+            sessionKey: session.sessionKey,
+            sourceRunId: session.clientRunId,
+          }),
+        });
   const sourceClients =
     !params.client?.internal?.syntheticClient &&
     (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user")
@@ -173,14 +193,13 @@ export function createGatewayChatUserTurnController(params: {
     : undefined;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     onMessagePersisted: params.onMessagePersisted,
-    ...(request.goalOperation
-      ? { pendingInputRequestFingerprint: request.goalOperation.requestFingerprint }
-      : {}),
-    ...(sender?.id && !request.goalOperation
-      ? {
-          // Attribution and submitted bytes survive reconnect; display names, leaf
-          // cursors and generated media paths are not immutable request identity.
-          pendingInputRequestFingerprint: sha256Hex(
+    ...(recoveredInput ? { message: recoveredInput.target.message } : {}),
+    // Attribution and submitted bytes survive reconnect; generated state does not.
+    pendingInputRequestFingerprint:
+      recoveredInput?.requestFingerprint ??
+      request.goalOperation?.requestFingerprint ??
+      (sender?.id
+        ? sha256Hex(
             stableStringify([
               {
                 ...request.p,
@@ -190,9 +209,8 @@ export function createGatewayChatUserTurnController(params: {
               sender.identity ?? sender.id,
               hasGatewayAdminScope(params.client),
             ]),
-          ),
-        }
-      : {}),
+          )
+        : undefined),
     ...(request.goalOperation
       ? {
           sessionTurnMutation: {
@@ -250,7 +268,12 @@ export function createGatewayChatUserTurnController(params: {
                 agentId: session.agentId,
                 sessionKey: session.sessionKey,
                 sourceRunId: session.clientRunId,
-                inputProvenance: request.systemInputProvenance,
+                // Goal Resume is an authenticated operator action even though its
+                // hidden transcript input is marked as an internal system message.
+                inputProvenance:
+                  request.goalOperation?.action === "resume"
+                    ? undefined
+                    : request.systemInputProvenance,
               }),
         })
       : {}),
@@ -260,6 +283,9 @@ export function createGatewayChatUserTurnController(params: {
       admission.operatorAuthority?.assertCurrent,
     ]),
     beforeMessageWrite: (event) => {
+      if (recoveredInput) {
+        return event.message;
+      }
       const originalInput = event.message.idempotencyKey === sourceId;
       const next = runAgentHarnessBeforeMessageWriteHook(event);
       if (originalInput && next?.role === "user") {
@@ -270,6 +296,7 @@ export function createGatewayChatUserTurnController(params: {
           ...(contextFreeCommand ? { excludeFromContext: true } : {}),
           __openclaw: {
             ...metadata,
+            ...(recovery ? { chatInputRecovery: recovery } : {}),
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
             ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
           },
@@ -287,20 +314,22 @@ export function createGatewayChatUserTurnController(params: {
                 joinWith: "\n",
                 normalizeText: (value) => value,
               }) ?? "";
-            const retained = selectedMentions.filter(
-              (mention) =>
-                Array.isArray(stored) &&
-                stored.some((value) => {
-                  const span = asOptionalRecord(value);
-                  return (
-                    span?.profileId === mention.profileId &&
-                    span.start === mention.start &&
-                    span.end === mention.end &&
-                    text.slice(mention.start, mention.end) ===
-                      request.rawMessage.slice(mention.start, mention.end)
-                  );
-                }),
-            );
+            const retained = recoveredInput
+              ? selectedMentions
+              : selectedMentions.filter(
+                  (mention) =>
+                    Array.isArray(stored) &&
+                    stored.some((value) => {
+                      const span = asOptionalRecord(value);
+                      return (
+                        span?.profileId === mention.profileId &&
+                        span.start === mention.start &&
+                        span.end === mention.end &&
+                        text.slice(mention.start, mention.end) ===
+                          request.rawMessage.slice(mention.start, mention.end)
+                      );
+                    }),
+                );
             if (!retained.length) {
               params.warn(
                 "Human mentions skipped because the committed text no longer contains the selected tokens.",

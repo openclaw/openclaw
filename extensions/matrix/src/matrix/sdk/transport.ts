@@ -114,14 +114,10 @@ function buildBufferedResponse(params: {
     statusText: params.source.statusText,
     headers: new Headers(params.source.headers),
   });
-  try {
-    Object.defineProperty(response, "url", {
-      value: params.source.url || params.url,
-      configurable: true,
-    });
-  } catch {
-    // Response.url is read-only in some runtimes; metadata is best-effort only.
-  }
+  Object.defineProperty(response, "url", {
+    value: params.source.url || params.url,
+    configurable: true,
+  });
   return response;
 }
 
@@ -174,7 +170,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   assertCurrent?: () => void;
   beforeDispatch?: () => Promise<void> | undefined;
   assertSendCurrent?: () => void;
-}): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
+}): Promise<{ response: Response; release: () => Promise<void> }> {
   const effect = captureEffectAuthority();
   const assertDispatchCurrent = () => {
     params.assertCurrent?.();
@@ -243,7 +239,6 @@ async function fetchWithMatrixGuardedRedirects(params: {
             cleanup();
             await closeDispatcher(dispatcher);
           },
-          finalUrl: currentUrl.toString(),
         };
       }
 

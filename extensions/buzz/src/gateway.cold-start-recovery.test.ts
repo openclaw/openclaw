@@ -121,6 +121,13 @@ vi.mock("./inbound.js", () => ({
   handleBuzzInbound: inboundMocks.handleBuzzInbound,
 }));
 
+// Reconnect scenarios wait on produced state; the real 1-1.2s backoff would spend
+// most of waitForSettled's budget before the reconnect even starts.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  computeBackoff: () => 0,
+}));
+
 import { startBuzzGatewayAccount } from "./gateway.js";
 import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
 import { setBuzzRuntime } from "./runtime.js";
@@ -158,15 +165,8 @@ function advanceSeconds(seconds: number): void {
 }
 
 function gateHandler(text: string): { settle: () => void; fail: (error: Error) => void } {
-  let settle = () => {};
-  let fail = (_error: Error) => {};
-  gates.set(
-    text,
-    new Promise<void>((resolve, reject) => {
-      settle = resolve;
-      fail = reject;
-    }),
-  );
+  const { promise, resolve: settle, reject: fail } = Promise.withResolvers<void>();
+  gates.set(text, promise);
   return { settle, fail };
 }
 

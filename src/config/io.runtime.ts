@@ -142,7 +142,7 @@ export function captureRuntimeConfigAsyncReader(
       try {
         assertPinned();
         try {
-          await loadDotEnvAsync({ env: stage.env, quiet: true, cwd });
+          await loadDotEnvAsync({ env: stage.env, cwd });
         } finally {
           stage.captureDotEnvBaseline();
         }
@@ -287,10 +287,12 @@ export async function readBestEffortConfig(options?: {
 export async function readBestEffortConfigSnapshot(options?: {
   observe?: boolean;
   skipPluginValidation?: boolean;
+  pluginValidation?: ConfigSnapshotReadOptions["pluginValidation"];
 }): Promise<BestEffortConfigSnapshot> {
   return await createConfigIO({
     ...(options?.observe === false ? { observe: false } : {}),
-    ...(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    pluginValidation:
+      options?.pluginValidation ?? (options?.skipPluginValidation ? "skip" : undefined),
   }).readBestEffortConfigSnapshot();
 }
 

@@ -1,15 +1,22 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { mountSolid } from "../test-helpers/solid-render.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
-import "./elapsed-time.tsx";
+import { ElapsedTime } from "./elapsed-time.tsx";
 
-type ElapsedTimeElement = HTMLElementTagNameMap["openclaw-elapsed-time"];
+type ElapsedTimeProps = Parameters<typeof ElapsedTime>[0];
 
 const NOW = 2_000_000_000;
 
 describe("openclaw-elapsed-time", () => {
-  let element: ElapsedTimeElement;
+  let element: HTMLElement;
+  let view: ReturnType<typeof mountSolid<ElapsedTimeProps>>;
+  let props: ElapsedTimeProps;
+  const update = (changes: Partial<ElapsedTimeProps>) => {
+    props = { ...props, ...changes };
+    view.update(props);
+  };
   let visibility: DocumentVisibilityState;
   let observer: MutationObserver;
 
@@ -25,14 +32,16 @@ describe("openclaw-elapsed-time", () => {
     vi.useFakeTimers({ now: NOW });
     visibility = "visible";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-    element = document.createElement("openclaw-elapsed-time");
-    element.startMs = NOW;
-    document.body.appendChild(element);
+    props = { startMs: NOW };
+    const container = document.body.appendChild(document.createElement("div"));
+    view = mountSolid(ElapsedTime, props, container);
+    element = container.querySelector<HTMLElement>("openclaw-elapsed-time")!;
   });
 
   afterEach(() => {
     observer?.disconnect();
-    element.remove();
+    view.dispose();
+    view.container.remove();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -44,10 +53,7 @@ describe("openclaw-elapsed-time", () => {
   ] as const)(
     "updates %s labels only when their displayed duration changes (single unit: %s, elapsed: %i)",
     async (minimumUnit, singleUnit, elapsedMs, advanceMs, initial, first, second, renders) => {
-      element.minimumUnit = minimumUnit;
-      element.singleUnit = singleUnit;
-      element.startMs = NOW - elapsedMs;
-      await element.updateComplete;
+      update({ minimumUnit, singleUnit, startMs: NOW - elapsedMs });
       expect(element.textContent?.trim()).toBe(initial);
       const changed = observeText();
       await vi.advanceTimersByTimeAsync(advanceMs);
@@ -59,30 +65,41 @@ describe("openclaw-elapsed-time", () => {
     },
   );
 
+  it.each([
+    [60_000, "1m", "1m 0s"],
+    [3_665_000, "1h 1m", "1h 1m 5s"],
+  ] as const)(
+    "retains seconds only when opted in at %i ms",
+    async (elapsedMs, compact, withSeconds) => {
+      update({ startMs: NOW - elapsedMs, endMs: NOW });
+      expect(element.textContent?.trim()).toBe(compact);
+
+      update({ includeSeconds: true });
+      expect(element.textContent?.trim()).toBe(withSeconds);
+
+      update({ includeSeconds: false });
+      expect(element.textContent?.trim()).toBe(compact);
+    },
+  );
+
   it("applies timing and format property changes even when the current label is unchanged", async () => {
-    element.minimumUnit = "minute";
-    element.startMs = NOW - 65_000;
-    await element.updateComplete;
-    element.endMs = NOW;
-    await element.updateComplete;
+    update({ minimumUnit: "minute", startMs: NOW - 65_000 });
+    update({ endMs: NOW });
     const changed = observeText();
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(changed).not.toHaveBeenCalled();
     expect(element.textContent?.trim()).toBe("1m");
 
-    element.endMs = null;
-    await element.updateComplete;
+    update({ endMs: null });
     expect(element.textContent?.trim()).toBe("2m");
-    element.minimumUnit = "second";
-    await element.updateComplete;
+    update({ minimumUnit: "second" });
     expect(element.textContent?.trim()).toBe("2m 5s");
     await vi.advanceTimersByTimeAsync(1_000);
     expect(element.textContent?.trim()).toBe("2m 6s");
   });
 
   it("pauses hidden polling, catches up on return, and stops after removal", async () => {
-    await element.updateComplete;
     const changed = observeText();
     visibility = "hidden";
     document.dispatchEvent(new Event("visibilitychange"));
@@ -98,8 +115,9 @@ describe("openclaw-elapsed-time", () => {
     expect(changed).toHaveBeenCalledOnce();
     expect(element.textContent?.trim()).toBe("1m");
 
-    element.remove();
-    // Settle bridge disposal and the resulting observer notification before checking for ticks.
+    view.dispose();
+    view.container.remove();
+    // Settle disposal and the resulting observer notification before checking for ticks.
     await Promise.resolve();
     await Promise.resolve();
     expect(vi.getTimerCount()).toBe(0);

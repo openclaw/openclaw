@@ -7,6 +7,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { MessagePort, parentPort, threadId, workerData } from "node:worker_threads";
 import zlib from "node:zlib";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   installDatabaseEngineSelection,
@@ -26,6 +27,7 @@ import {
 } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
+import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { routeLogsToStderr } from "../../logging/console.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
@@ -66,7 +68,7 @@ import type {
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
 } from "./session-cold-storage-worker.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { transcriptEventJsonSql } from "./transcript-payload-read.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -457,7 +459,7 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
         } catch (error) {
           return {
             status: "failed",
-            error: error instanceof Error ? error.message : String(error),
+            error: encodeNativeWorkerFailure(toStringifiedError(error)),
           };
         } finally {
           task?.port?.close();

@@ -1,5 +1,8 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
+import { installMockGateway } from "./chat-flow.test-support.ts";
 import {
   polledAttribute,
   polledCount,
@@ -7,8 +10,42 @@ import {
   polledVisible,
 } from "./chat-presentation.test-support.ts";
 import { modelAuthStatus, modelPicker } from "./chat-runtime-fixtures.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createChatFlowE2eSuite();
+const compositionScenario = {
+  agentModel: "openai/gpt-5.5",
+  models: [
+    { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+  ],
+};
+let compositionFixture: {
+  page: Page;
+  gateway: Awaited<ReturnType<typeof installMockGateway>>;
+};
+const suite = createControlUiE2eSuite({
+  name: "Control UI mocked Gateway E2E",
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+  resources: {
+    run: async () => {
+      const context = await suite.newBrowserContext({});
+      const page = await context.newPage();
+      await installControlUiE2eRendererStallProbe(page);
+      try {
+        const gateway = await installMockGateway(page, compositionScenario);
+        compositionFixture = { page, gateway };
+        await page.goto(`${suite.server.baseUrl}chat`);
+      } catch (error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: error instanceof Error ? error : new Error(String(error)),
+          label: "Model search composition setup",
+        });
+        throw error;
+      }
+    },
+  },
+});
 const accountLabel = "Sign in with ChatGPT";
 const catalog = (
   models: { id: string; name: string; provider: string }[],
@@ -41,7 +78,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const { picker, trigger } = modelPicker(page);
+      const { picker, trigger, search } = modelPicker(page);
       await trigger.click();
       await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(1);
       const account = picker.locator(".chat-controls__account-selection");
@@ -76,7 +113,11 @@ suite.define(() => {
         '[data-chat-account-option="account:openai:new-alternate"]',
       );
       await polledVisible(newAlternate).toBe(true);
+      await search.fill("Old alternate");
+      await polledVisible(picker.locator("[data-chat-model-search-empty]")).toBe(true);
       expect(await oldAlternate.count()).toBe(0);
+      await search.fill("New alternate");
+      await polledVisible(newAlternate).toBe(true);
     });
   });
 
@@ -106,6 +147,7 @@ suite.define(() => {
         const openai = picker.locator(
           '[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]',
         );
+        await page.locator(".agent-chat__composer-combobox textarea").click();
         await trigger.click();
         await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(2);
         const auth = picker.locator(
@@ -133,7 +175,6 @@ suite.define(() => {
         expect(await beta.isVisible()).toBe(false);
         await search.fill("shared");
         await polledVisible(beta).toBe(true);
-        expect(await openai.getAttribute("aria-expanded")).toBe("true");
         for (const query of ["shared-beta", "ANTHROPIC/SHARED-BETA"]) {
           await search.fill(query);
           expect({ beta: await beta.isVisible(), alpha: await alpha.isVisible() }).toEqual({
@@ -144,6 +185,7 @@ suite.define(() => {
         await search.press("ControlOrMeta+A");
         await search.press("Backspace");
         expect(await search.inputValue()).toBe("");
+        await polledAttribute(openai, "aria-expanded").toBe("true");
         expect(await alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
         await openai.click();
@@ -168,22 +210,21 @@ suite.define(() => {
   );
 
   for (const composition of ["active", "keyCode229", "none"] as const) {
-    it.each(["Enter", "Escape", "ArrowDown", "ArrowUp"])(
+    it.for(["Enter", "Escape", "ArrowDown", "ArrowUp"])(
       `respects ${composition} composition ownership for model-search %s`,
-      async (key) => {
-        await suite.withPage({}, async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            agentModel: "openai/gpt-5.5",
-            models: [
-              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-              { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-            ],
-          });
-          await page.goto(`${suite.server.baseUrl}chat`);
+      async (key, testContext) => {
+        const runCase = async ({ page }: { page: Page }) => {
+          const gateway =
+            composition === "none"
+              ? await installMockGateway(page, compositionScenario)
+              : compositionFixture.gateway;
+          if (composition === "none") {
+            await page.goto(`${suite.server.baseUrl}chat`);
+          }
           const { picker, trigger, search } = modelPicker(page);
           await polledAttribute(trigger, "aria-disabled").toBe("false");
           await trigger.click();
-          await polledCount(picker.locator("[data-chat-model-option]")).toBe(2);
+          await polledCount(picker.locator("[data-chat-model-option]")).toBe(1);
           await page.mouse.move(0, 0);
           const query = key.startsWith("Arrow") ? "" : "anthropic";
           if (key.startsWith("Arrow")) {
@@ -195,9 +236,12 @@ suite.define(() => {
             }
           }
           await search.fill(query);
+          await polledCount(picker.locator("[data-chat-model-option]")).toBe(
+            key.startsWith("Arrow") ? 2 : 1,
+          );
           await search.focus();
           // This exercises browser event ownership, not a native OS IME candidate window.
-          const { prevented, highlightedBefore, highlightedAfter } = await search.evaluate(
+          const { prevented, highlightedBefore } = await search.evaluate(
             (input, args) => {
               const previousHighlight = input.getAttribute("aria-activedescendant");
               const event = new KeyboardEvent("keydown", {
@@ -212,7 +256,6 @@ suite.define(() => {
               return {
                 prevented: event.defaultPrevented,
                 highlightedBefore: previousHighlight,
-                highlightedAfter: input.getAttribute("aria-activedescendant"),
               };
             },
             { key, composition },
@@ -224,7 +267,7 @@ suite.define(() => {
             expect.soft(prevented).toBe(false);
             expect.soft(await picker.getAttribute("open")).not.toBeNull();
             expect.soft(await search.inputValue()).toBe(query);
-            expect.soft(highlightedAfter).toBe(highlightedBefore);
+            expect.soft(await search.getAttribute("aria-activedescendant")).toBe(highlightedBefore);
             expect.soft(await gateway.getRequests("sessions.patch")).toEqual([]);
           } else {
             expect(prevented).toBe(true);
@@ -240,11 +283,64 @@ suite.define(() => {
                 await search.press("Escape");
                 expect(await picker.getAttribute("open")).toBeNull();
               } else {
-                expect(highlightedAfter).not.toBe(highlightedBefore);
+                await polledAttribute(search, "aria-activedescendant").not.toBe(highlightedBefore);
               }
             }
           }
-        });
+          if (composition !== "none") {
+            // Dismissal resets query/highlight; provider disclosure deliberately survives it.
+            await search.fill("");
+            const otherProvider = picker.locator(
+              '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
+            );
+            if ((await otherProvider.getAttribute("aria-expanded")) === "true") {
+              await otherProvider.focus();
+              await otherProvider.press("Enter");
+            }
+            await trigger.click();
+            await polledAttribute(picker, "open").toBeNull();
+          }
+        };
+        if (composition === "none") {
+          await suite.withPage({}, runCase);
+          return;
+        }
+        const { page } = compositionFixture;
+        let failedClose: Promise<void> | undefined;
+        const closeAfterFailure = (error: unknown) => {
+          failedClose ??= (async () => {
+            await captureControlUiE2eFailureDiagnostics(page, {
+              error: error instanceof Error ? error : new Error(String(error)),
+              label: "Model search composition",
+            });
+            await suite.closeBrowserContext(page.context());
+          })();
+          return failedClose;
+        };
+        // The page belongs to the suite; native case cancellation must still close it.
+        const onAbort = () => void closeAfterFailure(testContext.signal.reason).catch(() => {});
+        testContext.signal.addEventListener("abort", onAbort, { once: true });
+        try {
+          await suite.runScenario(testContext, {
+            run: async () => {
+              try {
+                await runCase({ page });
+              } catch (error) {
+                void closeAfterFailure(error).catch(() => {});
+                throw error;
+              }
+            },
+            close: async () => {
+              const failure = testContext.task.result?.errors?.[0];
+              if (failure !== undefined) {
+                await closeAfterFailure(failure);
+              }
+              await failedClose;
+            },
+          });
+        } finally {
+          testContext.signal.removeEventListener("abort", onAbort);
+        }
       },
     );
   }
