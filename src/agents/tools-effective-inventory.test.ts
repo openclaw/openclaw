@@ -7,21 +7,26 @@ import type { createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { resolveEffectiveToolInventory } from "./tools-effective-inventory.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-function mockTool(params: {
-  name: string;
-  label: string;
-  description: string;
-  displaySummary?: string;
-  parameters?: unknown;
-  pluginMeta?: Parameters<typeof setPluginToolMeta>[1];
-}): AnyAgentTool {
-  const { pluginMeta, ...toolParams } = params;
+function makeTool(
+  name: string,
+  label: string,
+  description: string,
+  options: {
+    displaySummary?: string;
+    parameters?: unknown;
+    pluginMeta?: Parameters<typeof setPluginToolMeta>[1];
+  } = {},
+): AnyAgentTool {
+  const { pluginMeta, ...toolParams } = options;
   const tool = {
+    name,
+    label,
+    description,
     ...toolParams,
-    parameters: Object.hasOwn(params, "parameters")
-      ? params.parameters
+    parameters: Object.hasOwn(options, "parameters")
+      ? options.parameters
       : { type: "object", properties: {} },
-    execute: async () => ({ text: params.description }),
+    execute: async () => ({ text: description }),
   } as unknown as AnyAgentTool;
   if (pluginMeta) {
     setPluginToolMeta(tool, pluginMeta);
@@ -29,12 +34,14 @@ function mockTool(params: {
   return tool;
 }
 
+const execTool = () => makeTool("exec", "Exec", "Run shell commands");
+
 function expectedTool(id: string, label: string, description: string, source: string, extra = {}) {
   return { id, label, description, rawDescription: description, source, ...extra };
 }
 
 function pluginTool(name: string, label: string, description: string, pluginId: string) {
-  return mockTool({ name, label, description, pluginMeta: { pluginId, optional: false } });
+  return makeTool(name, label, description, { pluginMeta: { pluginId, optional: false } });
 }
 const groupLabels = {
   core: "Built-in tools",
@@ -54,9 +61,7 @@ function expectedGroup(
   };
 }
 async function loadExecHarness() {
-  await loadHarness({
-    tools: [mockTool({ name: "exec", label: "Exec", description: "Run shell commands" })],
-  });
+  await loadHarness({ tools: [execTool()] });
 }
 const providerConfig = (provider: string, config: object) => ({
   models: { providers: { [provider]: config } },
@@ -155,8 +160,8 @@ async function loadHarness(options?: {
   normalizeToolsMock?: typeof effectiveInventoryState.normalizeToolsMock;
 }) {
   effectiveInventoryState.tools = options?.tools ?? [
-    mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
-    mockTool({ name: "docs_lookup", label: "Docs Lookup", description: "Search docs" }),
+    execTool(),
+    makeTool("docs_lookup", "Docs Lookup", "Search docs"),
   ];
   effectiveInventoryState.channelMeta = options?.channelMeta ?? {};
   effectiveInventoryState.normalizeToolsMock =
@@ -181,9 +186,9 @@ beforeEach(async () => {
 it("groups core, plugin, and channel tools from the effective runtime set", async () => {
   const result = await inventoryFor({
     tools: [
-      mockTool({ name: "exec", label: "Exec", description: "Run shell" }),
+      makeTool("exec", "Exec", "Run shell"),
       pluginTool("lookup", "Lookup", "Search docs", "docs"),
-      mockTool({ name: "actions", label: "Actions", description: "Act on messages" }),
+      makeTool("actions", "Actions", "Act on messages"),
     ],
     channelMeta: { actions: { channelId: "telegram" } },
   });
@@ -283,11 +288,8 @@ it.each([
 ])("quarantines $name while preserving plugin ownership", async ({ parameters, reason }) => {
   const result = await inventoryFor({
     tools: [
-      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
-      mockTool({
-        name: "fuzzplugin_move_angles",
-        label: "Fuzzplugin Move Angles",
-        description: "Move robot joints",
+      execTool(),
+      makeTool("fuzzplugin_move_angles", "Fuzzplugin Move Angles", "Move robot joints", {
         pluginMeta: { pluginId: "fuzzplugin", optional: false },
         parameters,
       }),
@@ -305,7 +307,7 @@ it.each([
 });
 
 it("reports unreadable inventory tool entries without crashing", async () => {
-  const healthy = mockTool({ name: "exec", label: "Exec", description: "Run shell commands" });
+  const healthy = execTool();
   const tools = new Proxy([healthy] as AnyAgentTool[], {
     get(target, property, receiver) {
       if (property === "0") {
@@ -433,10 +435,7 @@ it("uses prepared model context before quarantining runtime-normalized tools", a
   );
   await loadHarness({
     tools: [
-      mockTool({
-        name: "parameter_free",
-        label: "Parameter Free",
-        description: "Runtime-normalized tool",
+      makeTool("parameter_free", "Parameter Free", "Runtime-normalized tool", {
         parameters: undefined,
         pluginMeta: { pluginId: "normalized-plugin", optional: false },
       }),
@@ -487,11 +486,8 @@ it("uses prepared model context before quarantining runtime-normalized tools", a
 it("prefers displaySummary over raw description", async () => {
   const result = await inventoryFor({
     tools: [
-      mockTool({
-        name: "cron",
-        label: "Cron",
+      makeTool("cron", "Cron", "Long raw description\n\nACTIONS:\n- status", {
         displaySummary: "Schedule and manage cron jobs.",
-        description: "Long raw description\n\nACTIONS:\n- status",
       }),
     ],
   });
@@ -508,12 +504,11 @@ it("prefers displaySummary over raw description", async () => {
 it("falls back to a sanitized summary for multi-line raw descriptions", async () => {
   const result = await inventoryFor({
     tools: [
-      mockTool({
-        name: "cron",
-        label: "Cron",
-        description:
-          'Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }',
-      }),
+      makeTool(
+        "cron",
+        "Cron",
+        'Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }',
+      ),
     ],
   });
 
@@ -539,7 +534,7 @@ it("includes the resolved tool profile", async () => {
 
 it("adds an actionable notice when configured browser is filtered by the tool profile", async () => {
   await loadHarness({
-    tools: [mockTool({ name: "web_fetch", label: "Web Fetch", description: "Fetch web content" })],
+    tools: [makeTool("web_fetch", "Web Fetch", "Fetch web content")],
   });
 
   const result = await resolveEffectiveToolInventory({

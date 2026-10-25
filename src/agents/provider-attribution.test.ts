@@ -435,39 +435,26 @@ describe("provider attribution", () => {
   );
 
   it("respects compat.supportsPromptCacheKey override on prompt cache stripping", () => {
-    expect(
-      requestCapabilities({
-        provider: "custom-proxy",
-        api: "openai-responses",
-        baseUrl: "https://proxy.example.com/v1",
-        compat: { supportsPromptCacheKey: true },
-      }),
-    ).toMatchObject({
-      endpointClass: "custom",
-      shouldStripResponsesPromptCache: false,
-    });
-
-    expect(
-      requestCapabilities({
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        compat: { supportsPromptCacheKey: false },
-      }),
-    ).toMatchObject({
-      endpointClass: "openai-public",
-      shouldStripResponsesPromptCache: true,
-    });
-
-    expect(
-      requestCapabilities({
-        provider: "custom-proxy",
-        api: "openai-responses",
-        baseUrl: "https://proxy.example.com/v1",
-      }),
-    ).toMatchObject({
-      shouldStripResponsesPromptCache: true,
-    });
+    for (const [
+      provider,
+      host,
+      supportsPromptCacheKey,
+      endpointClass,
+      shouldStripResponsesPromptCache,
+    ] of [
+      ["custom-proxy", "proxy.example.com", true, "custom", false],
+      ["openai", "api.openai.com", false, "openai-public", true],
+      ["custom-proxy", "proxy.example.com", undefined, "custom", true],
+    ] as const) {
+      expect(
+        requestCapabilities({
+          provider,
+          api: "openai-responses",
+          baseUrl: `https://${host}/v1`,
+          ...(supportsPromptCacheKey === undefined ? {} : { compat: { supportsPromptCacheKey } }),
+        }),
+      ).toMatchObject({ endpointClass, shouldStripResponsesPromptCache });
+    }
   });
 
   it("resolves a provider capability matrix for representative native and proxied routes", () => {
