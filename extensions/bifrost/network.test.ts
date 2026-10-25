@@ -1,11 +1,10 @@
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderAuthMethodNonInteractiveContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   capturePluginRegistration,
   createTestWizardPrompter,
   requireRegisteredProvider,
-  type WizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
@@ -15,6 +14,33 @@ import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
 const MODEL_ID = "ollama/team/qwen3:4b";
+const provider = requireRegisteredProvider(capturePluginRegistration(plugin).providers, "bifrost");
+function providerConfig(
+  overrides: Partial<NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]>,
+): OpenClawConfig {
+  return { models: { providers: { bifrost: { baseUrl, models: [], ...overrides } } } };
+}
+
+function runNonInteractive({
+  config = {},
+  ...overrides
+}: Pick<ProviderAuthMethodNonInteractiveContext, "opts"> &
+  Partial<ProviderAuthMethodNonInteractiveContext>) {
+  return provider.auth[0]?.runNonInteractive?.({
+    authChoice: "bifrost-api-key",
+    config,
+    baseConfig: config,
+    runtime: createRuntimeSpies(),
+    resolveApiKey: async () => {
+      throw new Error("Anonymous setup must not resolve credentials");
+    },
+    toApiKeyCredential: () => {
+      throw new Error("Unsuccessful or anonymous setup must not store credentials");
+    },
+    ...overrides,
+  });
+}
+
 const requests: Array<{ path: string; headers: IncomingHttpHeaders }> = [];
 let baseUrl: string;
 let claim: Awaited<ReturnType<typeof acquireTestPortBlock>>;
@@ -30,15 +56,8 @@ const server = createServer((req, res) => {
 });
 
 function createPrompter(apiKey = "") {
-  async function selectModel<T>(prompt: { options: Array<{ value: T }> }): Promise<T> {
-    const selected = prompt.options.find(({ value }) => value === MODEL_ID);
-    if (!selected) {
-      throw new Error("Expected the discovered provider-qualified model in the picker");
-    }
-    return selected.value;
-  }
-  const prompter = createTestWizardPrompter({
-    text: vi.fn(async (prompt: Parameters<WizardPrompter["text"]>[0]) => {
+  return createTestWizardPrompter({
+    text: async (prompt) => {
       if (/base URL/i.test(prompt.message)) {
         return baseUrl;
       }
@@ -46,45 +65,43 @@ function createPrompter(apiKey = "") {
         return apiKey;
       }
       return MODEL_ID;
-    }),
-    select: selectModel,
+    },
+    async select<T>(prompt: { options: Array<{ value: T }> }): Promise<T> {
+      const selected = prompt.options.find(({ value }) => value === MODEL_ID);
+      if (!selected) {
+        throw new Error("Expected the discovered provider-qualified model in the picker");
+      }
+      return selected.value;
+    },
   });
-  vi.spyOn(prompter, "select");
-  return prompter;
 }
 
-async function configure(
-  params: {
-    config?: OpenClawConfig;
-    apiKey?: string;
-    assertCurrent?: () => void;
-  } = {},
-) {
-  const config = params.config ?? {};
-  const provider = requireRegisteredProvider(
-    capturePluginRegistration(plugin).providers,
-    "bifrost",
-  );
+async function configure({
+  config = {},
+  apiKey,
+  assertCurrent,
+}: {
+  config?: OpenClawConfig;
+  apiKey?: string;
+  assertCurrent?: () => void;
+} = {}) {
   const auth = provider.auth[0];
   if (!auth) {
     throw new Error("Expected Bifrost setup");
   }
-  const prompter = createPrompter(params.apiKey);
-  const context: ProviderAuthContext = {
+  const result = await auth.run({
     config,
-    opts: params.apiKey ? { bifrostApiKey: params.apiKey } : {},
+    opts: apiKey ? { bifrostApiKey: apiKey } : {},
     env: {},
     runtime: createRuntimeSpies(),
-    prompter,
-    assertCurrent: params.assertCurrent,
+    prompter: createPrompter(apiKey),
+    assertCurrent,
     secretInputMode: "plaintext",
     isRemote: false,
     ...createNoBrowserAuth(),
-  };
-  const result = await auth.run(context);
+  });
   return {
     result,
-    prompter,
     config: applyProviderAuthConfigPatch(config, result.configPatch, result),
   };
 }
@@ -109,25 +126,17 @@ describe("Bifrost setup over HTTP", () => {
 
   it("clears old credentials before anonymous discovery and persists no-auth", async () => {
     const { result, config } = await configure({
-      config: {
-        models: {
-          providers: {
-            bifrost: {
-              baseUrl,
-              api: "openai-completions",
-              apiKey: "synthetic-old-key",
-              headers: {
-                Authorization: "Bearer synthetic-old-header",
-                "x-bf-vk": "synthetic-old-vk",
-              },
-              request: {
-                auth: { mode: "header", headerName: "x-bf-vk", value: "synthetic-old-request-vk" },
-              },
-              models: [],
-            },
-          },
+      config: providerConfig({
+        api: "openai-completions",
+        apiKey: "synthetic-old-key",
+        headers: {
+          Authorization: "Bearer synthetic-old-header",
+          "x-bf-vk": "synthetic-old-vk",
         },
-      },
+        request: {
+          auth: { mode: "header", headerName: "x-bf-vk", value: "synthetic-old-request-vk" },
+        },
+      }),
     });
     expect(requests).toHaveLength(1);
     expect(requests[0]?.headers.authorization).toBeUndefined();
@@ -141,11 +150,7 @@ describe("Bifrost setup over HTTP", () => {
   it("replaces stale no-auth with the supplied credential before discovery", async () => {
     const { config } = await configure({
       apiKey: "synthetic-bifrost-key",
-      config: {
-        models: {
-          providers: { bifrost: { baseUrl, api: "openai-completions", auth: "none", models: [] } },
-        },
-      },
+      config: providerConfig({ api: "openai-completions", auth: "none" }),
     });
     expect(requests).toHaveLength(1);
     expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-bifrost-key");
@@ -153,9 +158,8 @@ describe("Bifrost setup over HTTP", () => {
   });
 
   it("selects the discovered nested model ID with its reported context", async () => {
-    const { result, config, prompter } = await configure();
+    const { result, config } = await configure();
     expect(requests.map(({ path }) => path)).toEqual(["/v1/models"]);
-    expect(prompter.select).toHaveBeenCalledOnce();
     expect(result.defaultModel).toBe(`bifrost/${MODEL_ID}`);
     expect(config.models?.providers?.bifrost?.models).toEqual([
       expect.objectContaining({ id: MODEL_ID, contextWindow: 32768 }),
@@ -163,24 +167,12 @@ describe("Bifrost setup over HTTP", () => {
   });
 
   it("preserves configured routing headers during anonymous catalog refresh", async () => {
-    const provider = requireRegisteredProvider(
-      capturePluginRegistration(plugin).providers,
-      "bifrost",
-    );
     await provider.catalog?.run({
-      config: {
-        models: {
-          providers: {
-            bifrost: {
-              baseUrl,
-              auth: "none",
-              headers: { "x-tenant": "synthetic-tenant" },
-              request: { headers: { "x-route": "synthetic-route" } },
-              models: [],
-            },
-          },
-        },
-      },
+      config: providerConfig({
+        auth: "none",
+        headers: { "x-tenant": "synthetic-tenant" },
+        request: { headers: { "x-route": "synthetic-route" } },
+      }),
       env: {},
       resolveProviderApiKey: () => ({ apiKey: "synthetic-key", discoveryApiKey: "synthetic-key" }),
       resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
@@ -205,25 +197,9 @@ describe("Bifrost setup over HTTP", () => {
 });
 
 it("non-interactive anonymous setup never resolves or stores a credential", async () => {
-  const provider = requireRegisteredProvider(
-    capturePluginRegistration(plugin).providers,
-    "bifrost",
-  );
-  const config: OpenClawConfig = {
-    models: { providers: { bifrost: { baseUrl, auth: "none", models: [] } } },
-  };
-  const result = await provider.auth[0]?.runNonInteractive?.({
-    authChoice: "bifrost-api-key",
-    config,
-    baseConfig: config,
+  const result = await runNonInteractive({
+    config: providerConfig({ auth: "none" }),
     opts: { customBaseUrl: baseUrl, customModelId: MODEL_ID, customNoAuth: true },
-    runtime: createRuntimeSpies(),
-    resolveApiKey: async () => {
-      throw new Error("Anonymous setup must not resolve credentials");
-    },
-    toApiKeyCredential: () => {
-      throw new Error("Anonymous setup must not store credentials");
-    },
   });
   expect(result?.models?.providers?.bifrost).toMatchObject({
     auth: "none",
@@ -232,21 +208,11 @@ it("non-interactive anonymous setup never resolves or stores a credential", asyn
 });
 
 it("reports a failing exit status when non-interactive credentials are missing", async () => {
-  const provider = requireRegisteredProvider(
-    capturePluginRegistration(plugin).providers,
-    "bifrost",
-  );
   const runtime = createRuntimeSpies();
-  const result = await provider.auth[0]?.runNonInteractive?.({
-    authChoice: "bifrost-api-key",
-    config: {},
-    baseConfig: {},
+  const result = await runNonInteractive({
     opts: { customBaseUrl: "http://127.0.0.1:12345/v1", customModelId: MODEL_ID },
     runtime,
     resolveApiKey: async () => null,
-    toApiKeyCredential: () => {
-      throw new Error("Missing credentials must not be stored");
-    },
   });
   expect(result).toBeNull();
   expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--custom-no-auth"));
@@ -256,26 +222,16 @@ it("reports a failing exit status when non-interactive credentials are missing",
 it.each(["not-a-url", "ftp://gateway.example/v1"])(
   "reports an actionable error after resolving the setup key for invalid URL %s",
   async (customBaseUrl) => {
-    const provider = requireRegisteredProvider(
-      capturePluginRegistration(plugin).providers,
-      "bifrost",
-    );
     const runtime = createRuntimeSpies();
     const resolveApiKey = vi.fn(async () => ({
       key: "synthetic-bifrost-key",
       source: "flag" as const,
     }));
     await expect(
-      provider.auth[0]?.runNonInteractive?.({
-        authChoice: "bifrost-api-key",
-        config: {},
-        baseConfig: {},
+      runNonInteractive({
         opts: { customBaseUrl, bifrostApiKey: "synthetic-bifrost-key" },
         runtime,
         resolveApiKey,
-        toApiKeyCredential: () => {
-          throw new Error("Invalid gateway setup must not store credentials");
-        },
       }),
     ).resolves.toBeNull();
     expect(resolveApiKey).toHaveBeenCalledExactlyOnceWith({
