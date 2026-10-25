@@ -48,10 +48,6 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     { container: mountTarget },
   );
   const picker = container.querySelector("openclaw-select-picker")!;
-  const next = document.createElement("button");
-  next.id = "next";
-  next.textContent = "Next";
-  container.append(next);
   const update = async (patch: Partial<PickerParams<PickerOption>>) => {
     Object.assign(params, patch);
     setParams({ ...params });
@@ -90,6 +86,11 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 describe("Picker", () => {
   it("keeps closed choices unmounted across catalog refreshes and shows current choices on open", async () => {
     const p = await mount({ searchable: false });
+    p.trigger.focus();
+    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Anchor");
+    await p.update({ value: "fixture/aurora-large" });
+    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Aurora Large");
+    expect(p.params.onChange).not.toHaveBeenCalled();
     const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
     expect(p.rows()).toHaveLength(0);
     const mutations: MutationRecord[] = [];
@@ -245,15 +246,6 @@ describe("Picker", () => {
     expect(document.activeElement).toBe(p.trigger);
     p.trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(pageKey).toHaveBeenCalledOnce();
-    expect(p.params.onChange).not.toHaveBeenCalled();
-  });
-
-  it("names the field and current selection when the closed trigger receives focus", async () => {
-    const p = await mount();
-    p.trigger.focus();
-    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Anchor");
-    await p.update({ value: "fixture/aurora-large" });
-    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Aurora Large");
     expect(p.params.onChange).not.toHaveBeenCalled();
   });
 
