@@ -48,7 +48,7 @@ it.each([
     let status = 200;
     const responseBody = () => ({
       model: resolvedModel,
-      provider: upstreamProvider,
+      provider: "TypeSafe",
       answers: {
         q: { type: "noul", noul: 0.37 },
         c: {
