@@ -74,6 +74,11 @@ card. OpenClaw then guides the remaining setup (memory import, channels, and
 permissions) in the same conversation. Grant macOS permissions any time from
 **Dashboard → Settings → This Mac → Permissions**.
 
+On a fresh Mac, first launch can also show a local-network prompt that names
+**Bun** (the runtime bundled for the Gateway) and a prompt to install Git or the
+Xcode Command Line Tools. Neither is required for a **This Mac** setup; see
+[Onboarding (macOS app)](/start/onboarding) for what each one is for.
+
 If runtime preparation, Gateway startup or authentication, or dashboard loading
 fails, the same window switches to the relevant native setup step with the error. An
 older Gateway without automatic AI setup opens the native AI picker instead.
