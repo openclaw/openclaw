@@ -20,6 +20,7 @@ import {
 import {
   readMemorySearchManagerStatus,
   type MemoryProviderStatus,
+  type MemorySearchManager,
   type MemorySearchResult,
 } from "../../memory-host-sdk/host/types.js";
 import {
@@ -754,9 +755,19 @@ describe("memory.search gateway method", () => {
   });
 
   it("shares one format repair across concurrent transient Gateway searches", async () => {
-    const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<
-      typeof import("../../../extensions/memory-core/runtime-api.js")
-    >("../../../extensions/memory-core/runtime-api.js");
+    const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
+      createMemoryRuntime: (host: { runInBackgroundContext: <T>(run: () => T) => T }) => Omit<
+        MemoryPluginRuntime,
+        "getMemorySearchManager"
+      > & {
+        getMemorySearchManager: (
+          params: Parameters<MemoryPluginRuntime["getMemorySearchManager"]>[0],
+        ) => Promise<{ manager: MemorySearchManager | null; error?: string }>;
+      };
+      configureMemoryCoreDreamingState: (
+        openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+      ) => void;
+    }>("../../../extensions/memory-core/runtime-api.js");
     const memoryRuntime = createMemoryRuntime({ runInBackgroundContext: (run) => run() });
     const stateEnv = testState.env;
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
@@ -891,8 +902,8 @@ describe("memory.search gateway method", () => {
         purpose: "cli",
       });
       const cliManager = cli.manager;
-      const cliSearch = memoryRuntime.searchForCli.bind(memoryRuntime);
-      assert(cliManager, "Expected the real CLI search runtime");
+      const cliSearch = memoryRuntime.searchForCli?.bind(memoryRuntime);
+      assert(cliManager && cliSearch, "Expected the real CLI search runtime");
       try {
         await expectSearchRetrievalBudget(
           2,
