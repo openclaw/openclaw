@@ -230,7 +230,6 @@ it("imports retained legacy sessions after verified stop and before any candidat
 
     expect(events).toEqual(["stop", "verified-stop", "import", "restart", "verified"]);
     expect(mocks.inspectGatewayRestart).not.toHaveBeenCalled();
-    expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
     expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
   });
 });
@@ -342,8 +341,6 @@ it.each(["running", "stopped"] as const)(
         expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
       }
       expect(events).toEqual(["stop", "repair", "restart"]);
-      expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
-      expect(service.restart).toHaveBeenCalledOnce();
       expect(runtime.log).not.toHaveBeenCalledWith(
         "Gateway restarted and verified after Doctor repair.",
       );

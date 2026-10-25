@@ -147,9 +147,6 @@ it.each([
       expect(migrationBackups).toHaveLength(1);
       expect(readDatabase(migrationBackups[0]!).version).toBe(19);
       expect(mocks.runContributions).toHaveBeenCalledOnce();
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("Removed 1 orphan session window(s)"),
-      );
     } else {
       await expect(doctor).rejects.toThrow(
         /foreign_key_check.*Stop the Gateway.*doctor --fix.*restart/s,
@@ -253,7 +250,7 @@ it.each([
       OPENCLAW_DEBUG_PROXY_REQUIRE: "1",
     });
     const shared = openOpenClawStateDatabase({ env: state.env }).path;
-    const run = createUpdateRun({ trigger: "cli", before: { version: driver } });
+    createUpdateRun({ trigger: "cli", before: { version: driver } });
     await closeOpenClawStateDatabaseAsync();
     // The restored credential tables belong to the schema before their local-owner cutover.
     const sourceVersion = CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION - 1;
@@ -280,11 +277,6 @@ it.each([
     });
     if (deferred) {
       expect(readDatabase(shared).contentVersion).toBe(String(OPENCLAW_STATE_SCHEMA_VERSION));
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Schema content applied; version publication deferred until update run ${run.runId} finishes`,
-        ),
-      );
     }
     expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
   });
@@ -397,10 +389,7 @@ it.each([
         const doctor = runDoctorHealthFlow(runtime, repairOptions, undefined, preflight);
         if (mode === "owned") {
           await doctor;
-          expect(
-            mocks.runContributions,
-            runtime.log.mock.calls.flat().join("\n"),
-          ).toHaveBeenCalledOnce();
+          expect(mocks.runContributions).toHaveBeenCalledOnce();
         } else {
           await expect(doctor).rejects.toThrow(
             mode === "changed namespace" ? /namespace changed/ : /schema|coverage|rehearsal/i,

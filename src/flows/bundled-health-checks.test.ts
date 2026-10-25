@@ -235,17 +235,16 @@ const implicitCodexConfig: OpenClawConfig = {
 };
 
 it("registers update readiness without loading unselected runtime health APIs", () => {
-  registerBundledHealthChecks({
-    cfg: {
+  register(
+    {
       ...codexConfig,
       plugins: {
         entries: { policy: { enabled: true }, "cua-computer": { enabled: true } },
       },
       cloudWorkers: { profiles: { aws: { provider: "crabbox" } } },
     },
-    cwd: workspaceDir,
-    updateReadiness: "post-plugin",
-  });
+    { updateReadiness: "post-plugin" },
+  );
 
   expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();
   expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();

@@ -123,10 +123,7 @@ it("preserves per-agent multimodal config for an incompatible provider", async (
     },
   };
   const original = structuredClone(config);
-  const prompt = prompter({
-    selects: ["openai", "existing"],
-    texts: ["text-embedding-3-small"],
-  });
+  const prompt = prompter({ selects: ["openai", "existing"], texts: ["text-embedding-3-small"] });
   const result = await runMemorySetupFlow(config, prompt);
   expect(result).toBe(config);
   expect(config).toEqual(original);
