@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 273167,
-  "reason": "Shared presentation subscriptions: 20 interleaved off-screen component-owner outbox pairs reduce script CPU median 11.49% and p95 17.62%, with task CPU median 10.67% and p95 9.77% lower. Accept 316 B startup gzip growth versus b7b264fd for this measured CPU win; stock head 2f0f04dd measures 273167 B with unchanged route requests and CSS. SDK CPU is inconclusive. Ratchet to the measured value.",
+  "startupJsGzipBytes": 272963,
+  "reason": "Shared presentation subscriptions: 20 interleaved component-owner outbox pairs measured script CPU median 11.49% and p95 17.62% lower on the original runtime proof. After merging current main, fresh same-host stock builds measure startup 272893 to 272963 B (+70 B), Chat -74 B, New Session +92 B, and all emitted JS -2596 B with unchanged requests and CSS. SDK CPU and idle energy remain inconclusive. Ratchet to the measured integrated head.",
   "updatedAt": "2026-10-25"
 }
