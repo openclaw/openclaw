@@ -11,6 +11,7 @@ import { readAgentAssistantSource } from "../infra/agent-events.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 
 const tool = { toolCallId: "tool-1", toolName: "read" };
+type Message = ReturnType<typeof makeAgentAssistantMessage>;
 const textMessage = (text: string) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 
@@ -29,25 +30,20 @@ function liveFixture(preview = true) {
     emitted,
     runtime,
     send: runtime.handleSessionEvent,
-    end: (message: ReturnType<typeof makeAgentAssistantMessage>) =>
+    start: (message: Message) => runtime.handleSessionEvent({ type: "message_start", message }),
+    finish: (message: Message) => runtime.handleSessionEvent({ type: "message_end", message }),
+    update: (message: Message, delta: string, kind: "text" | "thinking" = "text") =>
+      runtime.handleSessionEvent({
+        type: "message_update",
+        message,
+        assistantMessageEvent:
+          kind === "text"
+            ? { type: "text_delta", contentIndex: 0, delta }
+            : { type: "thinking_delta", contentIndex: 0, delta, partial: message },
+      }),
+    end: (message: Message) =>
       runtime.handleSessionEvent({ type: "agent_end", messages: [message], willRetry: false }),
   };
-}
-
-function textUpdate(
-  runtime: ReturnType<typeof createWorkerLiveRuntime>,
-  message: ReturnType<typeof makeAgentAssistantMessage>,
-  delta: string,
-  kind: "text" | "thinking" = "text",
-) {
-  runtime.handleSessionEvent({
-    type: "message_update",
-    message,
-    assistantMessageEvent:
-      kind === "text"
-        ? { type: "text_delta", contentIndex: 0, delta }
-        : { type: "thinking_delta", contentIndex: 0, delta, partial: message },
-  });
 }
 
 describe("createWorkerLiveRuntime", () => {
@@ -58,16 +54,16 @@ describe("createWorkerLiveRuntime", () => {
     (kind) => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(1_000);
-      const { emitted, runtime, send } = liveFixture();
+      const { emitted, start, finish, update, send } = liveFixture();
       const message = makeAgentAssistantMessage({ content: [] });
-      send({ type: "message_start", message });
+      start(message);
       let text = "";
       const append = (delta: string, time: number) => {
         vi.setSystemTime(time);
         text += delta;
         message.content =
           kind === "text" ? [{ type: "text", text }] : [{ type: "thinking", thinking: text }];
-        textUpdate(runtime, message, delta, kind);
+        update(message, delta, kind);
       };
       append("A", 1_000);
       append("界", 1_020);
@@ -76,12 +72,8 @@ describe("createWorkerLiveRuntime", () => {
       append("\n", 1_075);
       append("end", 1_080);
       expect(emitted).toHaveLength(2);
-      send({
-        type: "tool_execution_start",
-        ...tool,
-        args: {},
-      });
-      send({ type: "message_end", message });
+      send({ type: "tool_execution_start", ...tool, args: {} });
+      finish(message);
       const itemId = readAgentAssistantSource(message)?.itemId;
       expect(emitted).toEqual([
         ...[
@@ -106,15 +98,15 @@ describe("createWorkerLiveRuntime", () => {
     "handles an empty %s final after checked text was streamed",
     async (stopReason) => {
       vi.useFakeTimers({ toFake: ["Date"] });
-      const { emitted, runtime, send, end } = liveFixture();
+      const { emitted, runtime, start, finish, update, end } = liveFixture();
       const message = textMessage("Checked partial reply.");
-      send({ type: "message_start", message });
-      textUpdate(runtime, message, "Checked partial reply.");
+      start(message);
+      update(message, "Checked partial reply.");
       const pending = textMessage("Checked partial reply. More.");
-      textUpdate(runtime, pending, " More.");
+      update(pending, " More.");
       expect(emitted).toHaveLength(1);
       const terminal = makeAgentAssistantMessage({ content: [], stopReason });
-      send({ type: "message_end", message: terminal });
+      finish(terminal);
       expect(
         emitted.filter((event) => event.kind === "assistant").map((event) => event.payload),
       ).toEqual([
@@ -133,12 +125,12 @@ describe("createWorkerLiveRuntime", () => {
 
   it("flushes late commentary metadata before starting a new assistant occurrence", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const { emitted, runtime, send } = liveFixture();
+    const { emitted, start, finish, update, send } = liveFixture();
     const message = textMessage("Checking");
-    send({ type: "message_start", message });
-    textUpdate(runtime, message, "Checking");
+    start(message);
+    update(message, "Checking");
     message.content = [{ type: "text", text: "Checking a detail." }];
-    textUpdate(runtime, message, " a detail.");
+    update(message, " a detail.");
     message.content = [
       {
         type: "text",
@@ -157,8 +149,8 @@ describe("createWorkerLiveRuntime", () => {
       },
     });
     const final = textMessage("The answer.");
-    send({ type: "message_start", message: final });
-    send({ type: "message_end", message: final });
+    start(final);
+    finish(final);
     expect(emitted.map((event) => event.payload)).toEqual([
       { text: "Checking", delta: "Checking", itemId: readAgentAssistantSource(message)?.itemId },
       {
@@ -179,15 +171,15 @@ describe("createWorkerLiveRuntime", () => {
   });
 
   it("keeps distinct reasoning occurrences through bounded worker payloads", () => {
-    const { emitted, runtime, send } = liveFixture();
+    const { emitted, start, update } = liveFixture();
     const text = "Synthetic reasoning. ".repeat(2_000);
     const sources: string[] = [];
     for (let occurrence = 0; occurrence < 2; occurrence++) {
       const message = makeAgentAssistantMessage({
         content: [{ type: "thinking", thinking: text }],
       });
-      send({ type: "message_start", message });
-      textUpdate(runtime, message, text, "thinking");
+      start(message);
+      update(message, text, "thinking");
       const source = readAgentAssistantSource(message);
       if (!source?.itemId) {
         throw new Error("Worker persistence requires the source occurrence");
@@ -203,16 +195,16 @@ describe("createWorkerLiveRuntime", () => {
   });
 
   it("publishes attachment references only when the assistant message is complete", () => {
-    const { emitted, runtime, send } = liveFixture();
+    const { emitted, start, finish, update } = liveFixture();
     const message = textMessage("MEDIA:./report.txt");
-    send({ type: "message_start", message });
-    textUpdate(runtime, message, "MEDIA:./report.txt");
+    start(message);
+    update(message, "MEDIA:./report.txt");
     expect(emitted).toEqual([
       expect.objectContaining({
         payload: expect.not.objectContaining({ mediaUrls: expect.anything() }),
       }),
     ]);
-    send({ type: "message_end", message });
+    finish(message);
     expect(emitted.at(-1)).toMatchObject({
       kind: "assistant",
       payload: {

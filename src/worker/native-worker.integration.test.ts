@@ -179,16 +179,10 @@ describe.skipIf(process.platform === "win32")(
       addSiblingModel(registry);
       const worker = await launch(descriptor, registry);
       const outcome = result(await worker.finish());
-      expect(outcome).toMatchObject({
-        retainWorker: false,
-        result: { status: "completed" },
-      });
+      expect(outcome).toMatchObject({ retainWorker: false, result: { status: "completed" } });
       expect(worker.child.pid).not.toBe(process.pid);
       const proof = JSON.parse(await readFile(path.join(owner().root, "tool-proof.json"), "utf8"));
-      expect(proof).toMatchObject({
-        startupPresent: false,
-        credentialPresent: false,
-      });
+      expect(proof).toMatchObject({ startupPresent: false, credentialPresent: false });
       expect(proof.pid).not.toBe(process.pid);
       expect(proof.pid).not.toBe(worker.child.pid);
       if (process.platform === "linux") {
