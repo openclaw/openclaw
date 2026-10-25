@@ -26,6 +26,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type {
   SqliteArchiveOperation,
   SqliteArchiveSessionResponse,
@@ -159,7 +160,7 @@ async function measureFixture() {
     env,
   });
   archiveWorker.on("error", (error) => {
-    workerFailure = error;
+    workerFailure = toStringifiedError(error);
   });
   try {
     const prefix = path.join(output, `worker-${process.pid}-${archiveWorker.threadId}`);
