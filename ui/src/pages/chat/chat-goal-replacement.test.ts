@@ -178,47 +178,26 @@ it("retains the proposal on cancel and a failed edit, with the existing recovery
   expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(1);
 });
 it.each([
-  "session",
-  "incarnation",
-  "connection",
-  "goal",
-  "objective",
-  "status",
-  "revision",
-  "offline",
-  "busy",
-])("does not apply a pending decision after %s changes", async (change) => {
+  { change: "session", host: { sessionKey: "agent:main:other" } },
+  { change: "incarnation", host: { currentSessionId: "session-b" } },
+  { change: "connection", host: { connectionEpoch: 1 } },
+  { change: "goal", goal: { id: "goal-b" } },
+  { change: "objective", goal: { objective: "Newer objective" } },
+  { change: "status", goal: { status: "complete" } },
+  { change: "revision", goal: { updatedAt: 4 } },
+  { change: "offline", host: { connected: false } },
+  { change: "busy", host: { chatSending: true } },
+] satisfies Array<{
+  change: string;
+  host?: Partial<ReturnType<typeof fixture>["host"]>;
+  goal?: Partial<SessionGoal>;
+}>)("does not apply a pending decision after $change changes", async (change) => {
   const { host, row } = fixture();
   const draft = host.chatMessage;
   const pending = dialogs.track(handleSendChat(host));
   await waitForConfirmDialogActions();
-  if (change === "session") {
-    host.sessionKey = "agent:main:other";
-  }
-  if (change === "incarnation") {
-    host.currentSessionId = "session-b";
-  }
-  if (change === "connection") {
-    host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
-  }
-  if (change === "goal") {
-    row.goal.id = "goal-b";
-  }
-  if (change === "objective") {
-    row.goal.objective = "Newer objective";
-  }
-  if (change === "status") {
-    row.goal.status = "complete";
-  }
-  if (change === "revision") {
-    row.goal.updatedAt = 4;
-  }
-  if (change === "offline") {
-    host.connected = false;
-  }
-  if (change === "busy") {
-    host.chatSending = true;
-  }
+  Object.assign(host, change.host);
+  Object.assign(row.goal, change.goal);
   await answer("Replace objective");
   expect(await pending).toBe(false);
   expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(0);

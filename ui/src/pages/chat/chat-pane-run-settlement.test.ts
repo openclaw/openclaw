@@ -71,21 +71,17 @@ describe("mounted pane run settlement", () => {
     };
     const terminalDescriptor = createDeferred<{ session: GatewaySessionRow }>();
     let delayDescriptor = false;
+    const history = () => ({
+      messages: [prompt],
+      sessionInfo: running,
+      sessionId: running.sessionId,
+      inFlightRun: { runId, text: "Preparing the image.", startedAt },
+    });
     const { sessions, mount, emitGatewayEvent } = createMountedPanes([running], "main", undefined, {
       "sessions.describe": () =>
         delayDescriptor ? terminalDescriptor.promise : { session: running },
-      "chat.startup": () => ({
-        messages: [prompt],
-        sessionInfo: running,
-        sessionId: running.sessionId,
-        inFlightRun: { runId, text: "Preparing the image.", startedAt },
-      }),
-      "chat.history": () => ({
-        messages: [prompt],
-        sessionInfo: running,
-        sessionId: running.sessionId,
-        inFlightRun: { runId, text: "Preparing the image.", startedAt },
-      }),
+      "chat.startup": history,
+      "chat.history": history,
     });
     await sessions.refresh({ agentId: "main", force: true });
     const pane = mount(running.key);
