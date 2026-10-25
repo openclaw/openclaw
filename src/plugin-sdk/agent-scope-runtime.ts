@@ -22,7 +22,7 @@ export {
 export { resolveSessionAgentIdStrict, resolveSessionAgentIdsStrict };
 
 /** Preserve the SDK's writable array while core readers share immutable roster facts. */
-export function listAgentIds(config: Parameters<typeof readAgentIds>[0]): string[] {
+function listAgentIdsCompatibility(config: Parameters<typeof readAgentIds>[0]): string[] {
   return [...readAgentIds(config)];
 }
 
@@ -68,6 +68,7 @@ function resolveSessionAgentIdCompatibility(params: SessionAgentResolutionParams
 }
 
 export {
+  listAgentIdsCompatibility as listAgentIds,
   resolveSessionAgentIdCompatibility as resolveSessionAgentId,
   resolveSessionAgentIdsCompatibility as resolveSessionAgentIds,
 };
