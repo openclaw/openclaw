@@ -208,7 +208,7 @@ try {
             headers: Object.fromEntries(
               Object.entries(response.headers)
                 .filter(([name]) => /^(cache-control|content-encoding|vary)$/i.test(name))
-                .map(([name, value]) => [name.toLowerCase(), String(value)]),
+                .map(([name, value]) => [name.toLowerCase(), value]),
             ),
           });
         });
