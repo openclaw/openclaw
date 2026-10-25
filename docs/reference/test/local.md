@@ -144,14 +144,21 @@ The Mac run held the shared build lock but had substantial background load
 (about 65); it does not establish a write-speed gain there. Use the oxfmt
 override below when it performs better on your machine.
 
-The S3 lint comparison used Bun `1.4.4-canary.1+ef37c31de` and oxlint 1.87.0
-on a clean AWS `c7a.8xlarge`, with one warm-up and five interleaved runs per
-core, scripts, extensions, and UI scope. The sum of native scope medians was
-23.32 s for Bun versus 143.34 s for oxlint: 6.15× faster at default threads.
-At four threads it was 81.73 s versus 208.83 s, or 2.56× faster. At four threads, peak RSS across the scopes ranged from 1.72–4.69 GiB for Bun
-and 3.66–22.39 GiB for oxlint; the largest scopes used about a fifth of the memory. Full diagnostic multisets matched in every
-scope and both thread modes. These numbers exclude installation and wrapper
-preparation and are not loaded-Mac timings.
+The earlier S3 lint comparison used Bun `1.4.4-canary.1+ef37c31de` and
+oxlint 1.87.0 on AWS `c7a.8xlarge`. Summed across core, scripts, extensions,
+and UI at default threads, Bun took 23.3 s versus 143.3 s for oxlint: 6.15×
+faster, with no missing or extra diagnostics. These native timings exclude
+installation and wrapper preparation.
+
+An October 24, 2026 paired run on a loaded M3 Ultra Mac (32 logical cores,
+512 GiB RAM) used the same S3 fork and oxlint 1.88.0 through `pnpm lint
+--format=json`, under the shared build lock. Both reported the same 243
+diagnostics, including complete diagnostic payloads. Whole-command times were
+635.0 s for Bun and 912.7 s for oxlint. Summed native lint times were 1,037.8 s
+for Bun and 819.6 s for oxlint, with the wrapper's one-thread policy. The first
+oxlint run generated declarations that the Bun run reused, and background load
+reached 86. This single pair confirms parity, not a Mac lint-speed gain; use the
+oxlint override when it performs better locally.
 
 Formatting reads `.oxfmtrc.jsonc`, including the 100-column print width and ignore
 patterns. Selecting Bun lint retains the existing pipeline, configuration,

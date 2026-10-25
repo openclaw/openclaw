@@ -38,12 +38,13 @@ async function prepareScripts() {
   for (const file of collectRuntimeImportClosure(process.cwd(), sourceEntries)) {
     writeAt(root, file, fs.readFileSync(path.resolve(file)));
   }
-  for (const name of ["p-map", "@openclaw/fs-safe", "json5"]) {
+  const dependencies = { "p-map": "*", "@openclaw/fs-safe": "*", json5: "*" };
+  for (const name of Object.keys(dependencies)) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target, "junction");
   }
-  writeAt(root, "package.json", '{"type":"module"}');
+  writeAt(root, "package.json", JSON.stringify({ type: "module", dependencies }));
   writeAt(root, "pnpm-workspace.yaml", "packages: []\n");
   writeAt(
     root,

@@ -218,11 +218,17 @@ for overrides, staging, and benchmark details. On a clean AWS `c7a.8xlarge`,
 three interleaved runs measured `pnpm format` at 0.62 s with Bun versus 1.41 s
 with oxfmt, and `pnpm format:check` at 0.62 s versus 1.38 s. The loaded Mac
 sanity run measured 15.65 s versus 14.74 s for writes and 14.31 s versus 16.40 s
-for checks; the write gain is not universal. Five interleaved native runs per
-lint scope on the same AWS host measured S3 (`1.4.4-canary.1+ef37c31de`) at
-23.32 s versus oxlint 1.87.0 at 143.34 s summed across core, scripts, extensions,
-and UI: 6.15× faster at default threads and 2.56× at four threads. Full diagnostic
-multisets matched in both modes. These native timings exclude wrapper preparation.
+for checks; the write gain is not universal. An earlier native comparison on
+the same AWS host measured S3 (`1.4.4-canary.1+ef37c31de`) at 23.3 s versus
+oxlint 1.87.0 at 143.3 s summed across core, scripts, extensions, and UI:
+6.15× faster at default threads, with no missing or extra diagnostics.
+These native timings exclude wrapper preparation.
+One loaded M3 Ultra Mac pair with S3 and oxlint 1.88.0 reported identical 243
+diagnostics: whole `pnpm lint --format=json` times were 635.0 s for Bun and
+912.7 s for oxlint, while summed native lint times were 1,037.8 s and 819.6 s.
+The runs held the shared build lock, but background load reached 86 and the
+first oxlint run generated declarations reused by Bun. This confirms parity,
+not a Mac lint-speed gain; the oxlint override remains useful.
 Bun receives the repository's existing configuration; no separate configuration
 is maintained.
 
