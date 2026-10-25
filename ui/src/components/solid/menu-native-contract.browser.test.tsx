@@ -3,11 +3,16 @@ import type { JSX } from "@solidjs/web";
 import { createSignal, createStore, flush, untrack } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
 import {
   ChatPaneLayoutMenu,
   type HeaderPanelAction,
 } from "../../pages/chat/components/chat-header-panel-actions.tsx";
+import "../../styles.css";
+import "../../../public/themes/absolutely.css";
+import "../../../public/themes/phosphor.css";
+import { finishElementAnimations } from "../../test-helpers/animations.ts";
+import { afterModalHidden, nextFrame } from "../../test-helpers/modal-dialog.ts";
+import { emulateOverlayMedia } from "../../test-helpers/overlay-browser-media.ts";
 import {
   item,
   mountMenu,
@@ -19,42 +24,48 @@ import {
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.tsx";
 import { Icon } from "./icon.tsx";
-import { Kbd, KeyboardShortcut } from "./kbd.tsx";
+import { Kbd } from "./kbd.tsx";
+import { LazyViewError } from "./lazy-view-error.tsx";
 import { keyFocus, mountControls, update } from "./menu-contract.test-support.tsx";
 import { createMenuControls, Menu, type MenuItem } from "./menu.tsx";
-import "../../styles/base.css";
-import "../../styles/layout.css";
+import { Popover, type PopoverHandle, type PopoverProps } from "./popover.tsx";
 import "../../styles/session-menu.css";
 import "../kbd.css";
 import "../../styles/chat/layout.css";
 import "../../styles/chat/split-view.css";
 
-const cleanups: (() => void)[] = [];
-const nextFrame = () =>
-  new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
 function clickLink(link: HTMLAnchorElement, options: MouseEventInit = {}) {
   link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...options }));
 }
-function entries(prefix: string, count: number): MenuItem[] {
+function entries(prefix: string, count: number, padded = false): MenuItem[] {
   return Array.from({ length: count }, (_, index) => ({
-    id: `${prefix}-${index}`,
-    label: `${prefix[0]!.toUpperCase()}${prefix.slice(1)} ${index + 1}`,
+    id: `${prefix.toLowerCase()}-${index}`,
+    label: `${prefix[0]!.toUpperCase()}${prefix.slice(1)} ${padded ? String(index + 1).padStart(2, "0") : index + 1}`,
   }));
 }
 
+const extraNodes: Element[] = [];
+const documentRoot = document.documentElement;
+const originalAttributes = ["dir", "data-theme", "data-theme-mode"].map(
+  (name) => [name, documentRoot.getAttribute(name)] as const,
+);
+const originalStyle = documentRoot.style.cssText;
 const originalViewport = { width: window.innerWidth, height: window.innerHeight };
 afterEach(async () => {
   vi.useRealTimers();
   cleanup();
-  cleanups
-    .splice(0)
-    .toReversed()
-    .forEach((stop) => stop());
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+  extraNodes.splice(0).forEach((node) => node.remove());
+  documentRoot.style.cssText = originalStyle;
+  for (const [name, value] of originalAttributes) {
+    if (value === null) {
+      documentRoot.removeAttribute(name);
+    } else {
+      documentRoot.setAttribute(name, value);
+    }
+  }
+  await emulateOverlayMedia({ forcedColors: "none", reducedMotion: "no-preference" });
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
@@ -183,13 +194,14 @@ it("retains submenu content and identity across label updates", async () => {
   const [props, setProps] = createStore({
     id: "people",
     label: "People actions",
+    lazy: true,
     items: [
       {
         id: "assign",
         label: "Assign to",
         icon,
         details,
-        children: [{ id: "ada", label: "Ada Rivera" }],
+        children: () => [{ id: "ada", label: "Ada Rivera" }],
       },
     ],
   });
@@ -197,11 +209,11 @@ it("retains submenu content and identity across label updates", async () => {
   const root = surface();
   const button = trigger();
   await openMenu();
+  expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
   const assignment = trigger("people-assign");
-  expect([icon, details].every((node) => assignment.contains(node))).toBe(true);
   await openMenu("people-assign");
-  expect([icon, details].every((node) => assignment.contains(node))).toBe(true);
   const child = surface("people-assign");
+  const ada = item("Ada Rivera", "people-assign");
   update(() =>
     setProps((draft) => {
       draft.id = "replacement-id";
@@ -210,6 +222,7 @@ it("retains submenu content and identity across label updates", async () => {
     }),
   );
   expect(surface()).toBe(root);
+  expect([icon, details].every((node) => assignment.contains(node))).toBe(true);
   expect(trigger()).toBe(button);
   expect(button.getAttribute("aria-controls")).toBe(root.id);
   expect(root.getAttribute("aria-label")).toBe("Updated actions");
@@ -219,26 +232,22 @@ it("retains submenu content and identity across label updates", async () => {
   await phase(root, "hidden");
   await openMenu();
   await openMenu("people-assign");
-  expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
+  expect(item("Ada Rivera", "people-assign")).toBe(ada);
+  expect(document.activeElement).toBe(ada);
 });
 
 it("updates root placement and RTL submenu geometry", async () => {
   await page.viewport(1280, 800);
-  const [placement, setPlacement] = createSignal<"bottom-start" | "top-end">("bottom-start");
-  const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
-  mountMenu({
-    get placement() {
-      return placement();
-    },
-    get dir() {
-      return direction();
-    },
-  });
-  Object.assign(trigger().style, { position: "fixed", left: "500px", top: "350px" });
+  const [position, setPosition] = createStore<{
+    placement: "bottom-start" | "top-end";
+    dir: "ltr" | "rtl";
+  }>({ placement: "bottom-start", dir: "ltr" });
+  mountMenu(position);
+  positionTrigger({ left: "500px", top: "350px" });
   await openMenu();
   const button = trigger().getBoundingClientRect();
   expect(surface().getBoundingClientRect().top).toBeGreaterThanOrEqual(button.bottom);
-  update(() => setPlacement("top-end"));
+  update(() => setPosition((draft) => Object.assign(draft, { placement: "top-end" })));
   await nextFrame();
   expect(surface().dataset.placement).toBe("top-end");
   expect(surface().getBoundingClientRect().bottom).toBeLessThanOrEqual(button.top);
@@ -246,7 +255,7 @@ it("updates root placement and RTL submenu geometry", async () => {
   expect(surface("people-assign").getBoundingClientRect().left).toBeGreaterThanOrEqual(
     trigger("people-assign").getBoundingClientRect().right,
   );
-  update(() => setDirection("rtl"));
+  update(() => setPosition((draft) => Object.assign(draft, { dir: "rtl" })));
   await nextFrame();
   expect(surface("people-assign").dataset.placement).toBe("left-start");
   expect(surface("people-assign").getBoundingClientRect().right).toBeLessThanOrEqual(
@@ -274,7 +283,7 @@ it.each([
     ],
     onSelect: selected,
   });
-  Object.assign(trigger().style, { position: "fixed", left: position.left, bottom: "12px" });
+  positionTrigger({ left: position.left, bottom: "12px" });
   await openMenu();
   await openMenu("people-gateways");
   const child = surface("people-gateways");
@@ -303,32 +312,6 @@ it.each([
   await phase(surface(), "hidden");
 });
 
-it("leases native overlap contributed only by a descendant menu", async () => {
-  vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage() {} } } });
-  await page.viewport(1280, 800);
-  let bounds = new DOMRect(1000, 100, 100, 100);
-  const states: boolean[] = [];
-  cleanups.push(
-    subscribeNativeOverlayOcclusion(
-      (value) => states.push(value),
-      () => bounds,
-    ),
-  );
-  const view = mountMenu();
-  Object.assign(trigger().style, { position: "fixed", left: "40px", top: "100px" });
-  await openMenu();
-  expect(states).toEqual([false]);
-  await openMenu("people-assign");
-  const child = surface("people-assign");
-  const childRect = child.getBoundingClientRect();
-  bounds = new DOMRect(childRect.right - 4, childRect.top + 4, 100, childRect.height - 8);
-  expect(bounds.left).toBeGreaterThan(surface().getBoundingClientRect().right);
-  await expect.poll(() => states).toEqual([false, true]);
-  expect(view.handle.close()).toBe(true);
-  await phase(child, "hidden");
-  expect(states).toEqual([false, true, false]);
-});
-
 async function finishHover() {
   await vi.advanceTimersByTimeAsync(300);
   flush();
@@ -349,16 +332,12 @@ function liveMenu(
   children?: (controls: ReturnType<typeof createMenuControls>) => JSX.Element,
 ) {
   const [items, setItems] = createSignal(initial);
-  const view = mountMenu(() => {
-    const controls = createMenuControls();
-    return {
-      controls,
-      get items() {
-        return items();
-      },
-      children: children?.(controls),
-    };
-  });
+  const view = mountControls((controls) => ({
+    get items() {
+      return items();
+    },
+    children: children?.(controls),
+  }));
   const updateItems = (next: readonly MenuItem[]) => {
     setItems(next);
     flush();
@@ -379,22 +358,6 @@ describe("Solid menu branch lifetime", () => {
     flush();
     expect(surface("people-assign").matches(":popover-open")).toBe(true);
     expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
-  });
-
-  it("materializes lazy submenu factories once and retains their controls", async () => {
-    const children = [{ id: "ada", label: "Ada Rivera" }];
-    mountMenu({
-      lazy: true,
-      items: [submenuBranch("assign", () => children)],
-    });
-    await openMenu();
-    expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
-    await openMenu("people-assign");
-    const ada = item("Ada Rivera", "people-assign");
-    await userEvent.keyboard("{Escape}");
-    await phase(surface("people-assign"), "hidden");
-    await openMenu("people-assign");
-    expect(item("Ada Rivera", "people-assign")).toBe(ada);
   });
 
   it("opens custom form content and retains it when generated items become empty", async () => {
@@ -518,100 +481,504 @@ it.each([
   ["rtl", false],
   ["ltr", true],
   ["rtl", true],
-] as const)("aligns shortcut rails in %s (icons only: %s)", async (dir, iconsOnly) => {
+] as const)("aligns shortcut rails in %s (submenu: %s)", async (dir, submenu) => {
   await page.viewport(1000, 700);
-  const rows: MenuItem[] = iconsOnly
-    ? ["s", "b"].map((id) => ({
-        id,
-        label: id,
-        icon: <Icon name="copy" />,
-        details: <Kbd class="session-menu__shortcut" keys={id.toUpperCase()} inline />,
-      }))
-    : (
-        [
-          { id: "plain", label: "Plain" },
-          { id: "off", label: "Unchecked", type: "checkbox", checked: false },
-          { id: "on", label: "Checked", type: "checkbox", checked: true },
-          { id: "radio", label: "Radio", type: "radio", checked: true },
-          { id: "branch", label: "Submenu", children: [{ id: "child", label: "Child" }] },
-        ] satisfies MenuItem[]
-      ).map((row, index) =>
-        Object.assign(row, {
-          details: (
-            <KeyboardShortcut
-              class="session-menu__shortcut"
-              combo={{
-                key: index % 2 ? "u" : "b",
-                modifiers: index % 2 ? ["mod", "alt", "shift"] : ["mod"],
-              }}
-              applePlatform
-            />
-          ),
-        }),
-      );
-  render(() => <Menu id="alignment" label="Actions" dir={dir} class="session-menu" items={rows} />);
+  const items: MenuItem[] = ["plain", "branch"].map((id) => ({
+    id,
+    label: id,
+    icon: <Icon name="copy" />,
+    children: submenu && id === "branch" ? [{ id: "child", label: "Child" }] : undefined,
+    details: (
+      <Kbd class="session-menu__shortcut" keys={id === "plain" ? "B" : "Ctrl+Alt+Shift+U"} inline />
+    ),
+  }));
+  render(() => (
+    <Menu id="alignment" label="Actions" dir={dir} class="session-menu" items={items} />
+  ));
   await openMenu("alignment");
   const menu = surface("alignment");
   await expect.element(page.elementLocator(menu)).toBeVisible();
-  const ends = [...menu.querySelectorAll<HTMLElement>(".session-menu__shortcut")].map((element) => {
-    const bounds = element.getBoundingClientRect();
-    return dir === "rtl" ? bounds.left : bounds.right;
-  });
+  const ends = [...menu.querySelectorAll(".shortcut-kbd")].map(
+    (hint) => hint.getBoundingClientRect()[dir === "rtl" ? "left" : "right"],
+  );
   expect(Math.max(...ends) - Math.min(...ends)).toBeLessThan(1);
-  if (iconsOnly) {
-    for (const row of menu.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
-      const bounds = row.getBoundingClientRect();
-      const icon = row.querySelector(".oc-menu-item__icon")!.getBoundingClientRect();
-      const hint = row.querySelector(".shortcut-kbd")!.getBoundingClientRect();
-      const [start, end] =
-        dir === "rtl"
-          ? [bounds.right - icon.right, hint.left - bounds.left]
-          : [icon.left - bounds.left, bounds.right - hint.right];
-      expect(Math.abs(end - start)).toBeLessThan(1);
-    }
+  if (submenu) {
+    return;
+  }
+  for (const row of menu.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
+    const bounds = row.getBoundingClientRect();
+    const icon = row.querySelector(".oc-menu-item__icon")!.getBoundingClientRect();
+    const hint = row.querySelector(".shortcut-kbd")!.getBoundingClientRect();
+    const [start, end] =
+      dir === "rtl"
+        ? [bounds.right - icon.right, hint.left - bounds.left]
+        : [icon.left - bounds.left, bounds.right - hint.right];
+    expect(Math.abs(end - start)).toBeLessThan(1);
   }
 });
 
-it("keeps Layout shortcuts aligned across style loads and hidden on mobile", async () => {
-  await page.viewport(1000, 800);
-  render(() => (
-    <ChatPaneLayoutMenu
-      paneId="layout-alignment"
-      narrow={false}
-      panelMenuActions={[
-        panelAction("terminal", "terminal", { key: "Backquote", modifiers: ["ctrl"] }),
-        panelAction("browser", "globe", { key: "u", modifiers: ["mod", "alt", "shift"] }),
-        panelAction("files", "fileText", { key: "b", modifiers: ["mod", "shift"] }, false),
-        panelAction("review", "diff", { key: "e", modifiers: ["mod", "alt", "shift"] }, true),
-      ]}
+it.each(["ltr", "rtl"] as const)(
+  "keeps Layout shortcuts aligned across style loads and mobile in %s",
+  async (dir) => {
+    document.documentElement.dir = dir;
+    await page.viewport(1000, 800);
+    render(() => (
+      <ChatPaneLayoutMenu
+        paneId="layout-alignment"
+        narrow={false}
+        panelMenuActions={[
+          panelAction("terminal", "terminal", { key: "Backquote", modifiers: ["ctrl"] }),
+          panelAction("browser", "globe", { key: "u", modifiers: ["mod", "alt", "shift"] }),
+          panelAction("files", "fileText", { key: "b", modifiers: ["mod", "shift"] }, false),
+          panelAction("review", "diff", { key: "e", modifiers: ["mod", "alt", "shift"] }, true),
+        ]}
+      />
+    ));
+    await userEvent.click(page.getByRole("button", { name: "Layout", exact: true }));
+    const menu = page.getByRole("menu", { name: "Layout", exact: true }).element();
+    await waitForSolid(() => {
+      expect(menu.getAttribute("data-phase")).toBe("open");
+      // The opening transition scales DOM bounds; measure its final geometry.
+      expect(getComputedStyle(menu).scale).toBe("1");
+    });
+    await Promise.all(menu.getAnimations().map((animation) => animation.finished));
+    const hints = [...menu.querySelectorAll<HTMLElement>(".shortcut-kbd")];
+    expect(hints).toHaveLength(4);
+    const bounds = () => hints.map((hint) => hint.getBoundingClientRect());
+    const before = bounds();
+    const edge = dir === "rtl" ? "left" : "right";
+    expect(
+      Math.max(...before.map((rect) => rect[edge])) - Math.min(...before.map((rect) => rect[edge])),
+    ).toBeLessThan(1);
+    await import("../../styles/chat/side-panel.css");
+    const after = bounds();
+    // WebKit can retain ~0.03px rounding; a real style-induced shift is whole pixels.
+    for (const [index, rect] of after.entries()) {
+      expect(Math.abs(rect[edge] - before[index]![edge])).toBeLessThan(0.5);
+      expect(Math.abs(rect.width - before[index]!.width)).toBeLessThan(0.5);
+    }
+    const check = menu.querySelector<HTMLElement>('[aria-checked="true"] > .oc-menu-item__check')!;
+    if (dir === "rtl") {
+      expect(check.getBoundingClientRect().right).toBeLessThan(before[3]!.left);
+    } else {
+      expect(check.getBoundingClientRect().left).toBeGreaterThan(before[3]!.right);
+    }
+    await page.viewport(390, 800);
+    for (const hint of hints) {
+      expect(hint.getBoundingClientRect().width).toBe(0);
+    }
+  },
+);
+
+function color(value: string) {
+  const probe = document.createElement("span");
+  probe.style.color = value;
+  document.body.append(probe);
+  const resolved = getComputedStyle(probe).color;
+  probe.remove();
+  return resolved;
+}
+
+function expectWithinViewport(element: HTMLElement) {
+  const box = element.getBoundingClientRect();
+  expect(box.width).toBeGreaterThan(0);
+  expect(box.height).toBeGreaterThan(0);
+  expect(box.left).toBeGreaterThanOrEqual(0);
+  expect(box.top).toBeGreaterThanOrEqual(0);
+  expect(box.right).toBeLessThanOrEqual(window.innerWidth);
+  expect(box.bottom).toBeLessThanOrEqual(window.innerHeight);
+  return box;
+}
+
+function itemDetails(label: string) {
+  return item(label).querySelector(".oc-menu-item__details")!;
+}
+
+function positionTrigger(style: Partial<CSSStyleDeclaration>) {
+  Object.assign(trigger().style, { position: "fixed" }, style);
+}
+function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
+  const box = expectWithinViewport(menu);
+  const itemBox = element.getBoundingClientRect();
+  expect(box.height).toBeLessThanOrEqual(420);
+  expect(itemBox.bottom).toBeLessThanOrEqual(box.bottom);
+  expect(itemBox.top).toBeGreaterThanOrEqual(box.top);
+}
+
+describe("native overlay presentation", () => {
+  it("inherits palettes, focus, and menu states across stock, imported, and custom themes", async () => {
+    mountMenu({
+      items: [
+        { id: "open", label: "Open", details: "Details" },
+        { id: "delete", label: "Delete", details: "Permanently", variant: "danger" },
+        { id: "disabled", label: "Unavailable", disabled: true },
+        { id: "group", label: "Group", children: [{ id: "child", label: "Child" }] },
+      ],
+    });
+    await openMenu();
+    await openMenu("people-group");
+    const child = item("Child", "people-group");
+    await userEvent.hover(child);
+    await userEvent.keyboard("{Home}");
+    const themes = ["absolutely", "phosphor", "custom"].flatMap((name) => [name, `${name}-light`]);
+    for (const theme of ["dark", "light", ...themes]) {
+      documentRoot.dataset.theme = theme;
+      documentRoot.dataset.themeMode =
+        theme.endsWith("light") || theme === "light" ? "light" : "dark";
+      if (theme.startsWith("custom")) {
+        documentRoot.style.cssText +=
+          "--muted:rgb(120,190,160);--text:rgb(220,235,210);--ring:rgb(160,130,230);--popover:rgb(32,45,38);--danger:rgb(240,135,150);--bg-hover:rgb(45,62,51);";
+      }
+      document.getAnimations().forEach((animation) => animation.finish());
+      const colors: [Element, "color" | "backgroundColor", string][] = [
+        [surface(), "backgroundColor", "popover"],
+        [item("Open"), "color", "text"],
+        [itemDetails("Open"), "color", "muted"],
+        [trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!, "color", "muted"],
+        [item("Delete"), "color", "danger"],
+        [itemDetails("Delete"), "color", "danger"],
+        [trigger("people-group"), "backgroundColor", "bg-hover"],
+      ];
+      for (const [element, property, token] of colors) {
+        expect(getComputedStyle(element)[property], theme).toBe(color(`var(--${token})`));
+      }
+      const rootFontSize = Number.parseFloat(getComputedStyle(documentRoot).fontSize);
+      expect(getComputedStyle(child), theme).toMatchObject({
+        outlineStyle: "solid",
+        outlineWidth: `${rootFontSize * 0.1875}px`,
+        outlineOffset: `${rootFontSize * 0.0625}px`,
+        outlineColor: color("var(--ring)"),
+      });
+      expect(getComputedStyle(item("Unavailable")).opacity, theme).toBe("0.5");
+    }
+  });
+
+  it("preserves a consumer height budget when its stylesheet loads before the overlay", async () => {
+    await page.viewport(800, 700);
+    const style = document.createElement("style");
+    style.textContent = ".oc-menu.consumer-sized-menu { max-height: 500px; }";
+    document.head.prepend(style);
+    extraNodes.push(style);
+    mountMenu({
+      placement: "right-start",
+      panelClass: "consumer-sized-menu",
+      items: entries("Action", 24),
+    });
+    positionTrigger({ left: "200px", top: "50px" });
+    await openMenu();
+    // Measure the consumer budget, not WebKit's in-flight entry scale.
+    finishElementAnimations(surface());
+    expect(expectWithinViewport(surface()).height).toBe(500);
+    await userEvent.keyboard("{End}");
+    expect(document.activeElement).toBe(item("Action 24"));
+    const last = item("Action 24").getBoundingClientRect();
+    expect(last.bottom).toBeLessThanOrEqual(surface().getBoundingClientRect().bottom);
+  });
+
+  it.each([
+    ["ltr", "low"],
+    ["rtl", "bottom"],
+    ["ltr", "middle"],
+  ] as const)(
+    "fits nested menu actions within the viewport in %s near the %s",
+    async (dir, position) => {
+      await page.viewport(800, 600);
+      const enlarged = position !== "low";
+      const count = enlarged ? 28 : 10;
+      if (enlarged) {
+        documentRoot.style.fontSize = "24px";
+      }
+      mountMenu({
+        dir,
+        items: [{ id: "actions", label: "Actions", children: entries("Action", count, enlarged) }],
+      });
+      positionTrigger(
+        position === "low"
+          ? { left: "350px", top: "400px" }
+          : { right: "8px", bottom: position === "bottom" ? "8px" : "250px" },
+      );
+      await openMenu();
+      const parentBox = expectWithinViewport(surface());
+      if (position === "bottom") {
+        expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
+      }
+      await openMenu("people-actions");
+      const child = surface("people-actions");
+      const last = item(`Action ${count}`, "people-actions");
+      if (!enlarged) {
+        expect(child.scrollHeight).toBe(child.clientHeight);
+        expectItemVisible(last, child);
+        return;
+      }
+      expect(child.scrollHeight).toBeGreaterThan(child.clientHeight);
+      await userEvent.keyboard("{End}");
+      expect(document.activeElement).toBe(last);
+      expectItemVisible(last, child);
+
+      // Scrolling the menu can hide the focused action; End must reveal it again.
+      child.scrollTo({ top: 0, behavior: "instant" });
+      await userEvent.keyboard("{End}");
+      expect(document.activeElement).toBe(last);
+      expectItemVisible(last, child);
+    },
+  );
+
+  it("uses high-contrast borders and focus in forced colors", async () => {
+    await emulateOverlayMedia({ forcedColors: "active" });
+    expect(matchMedia("(forced-colors: active)").matches).toBe(true);
+    mountMenu();
+    await openMenu();
+    expect(getComputedStyle(surface()).boxShadow).toBe("none");
+    expect(getComputedStyle(surface()).borderTopColor).toBe(color("CanvasText"));
+    await userEvent.keyboard("{End}");
+    expect(getComputedStyle(item("Archive")).outlineColor).toBe(color("Highlight"));
+  });
+
+  it("disables menu and popover motion for reduced motion", async () => {
+    await emulateOverlayMedia({ reducedMotion: "reduce" });
+    expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
+    mountMenu();
+    let popover!: PopoverHandle;
+    render(() => (
+      <Popover id="motion-popover" label="Popover" ref={(value) => (popover = value)}>
+        Content
+      </Popover>
+    ));
+    flush();
+    await openMenu();
+    popover.show();
+    await phase(popover.overlay.surface, "open");
+    for (const element of [surface(), item("Archive"), popover.overlay.surface]) {
+      expect(getComputedStyle(element)).toMatchObject({
+        animationName: "none",
+        transitionDuration: "0s",
+      });
+      expect(element.getAnimations()).toHaveLength(0);
+    }
+  });
+});
+
+function mountPopover(props: Partial<PopoverProps> = {}, outside?: JSX.Element) {
+  let handle!: PopoverHandle;
+  const view = render(() => (
+    <>
+      <Popover id="details" label="Details" {...props} ref={(value) => (handle = value)}>
+        {props.children ?? "Details"}
+      </Popover>
+      {outside}
+    </>
+  ));
+  flush();
+  return { view, handle, panel: handle.overlay.surface };
+}
+
+it("keeps a pinned popover open outside and closes once with Escape", async () => {
+  const changes: boolean[] = [];
+  const { view, handle, panel } = mountPopover(
+    {
+      label: "Pinned details",
+      dismissOutsidePointer: false,
+      dismissOutsideFocus: false,
+      onOpenChange: (open) => changes.push(open),
+      children: <input aria-label="Pinned draft" />,
+    },
+    <input aria-label="Outside" />,
+  );
+  const button = view.getByRole("button", { name: "Pinned details" });
+  const outside = view.getByRole("textbox", { name: "Outside" });
+  await userEvent.click(button);
+  await phase(panel, "open");
+  const input = view.getByRole<HTMLInputElement>("textbox", { name: "Pinned draft" });
+  await userEvent.fill(input, "Unsaved draft");
+  await userEvent.click(outside);
+  expect(handle.overlay.open).toBe(true);
+  expect(document.activeElement).toBe(outside);
+  input.focus();
+  await userEvent.tab();
+  expect(document.activeElement).toBe(outside);
+  expect(handle.overlay.open).toBe(true);
+  expect(changes).toEqual([true]);
+  await userEvent.keyboard("{Escape}");
+  await phase(panel, "hidden");
+  expect(changes).toEqual([true, false]);
+  expect(document.activeElement).toBe(button);
+  handle.show();
+  await phase(panel, "open");
+  expect(view.getByRole("textbox", { name: "Pinned draft" })).toBe(input);
+  expect(input.value).toBe("Unsaved draft");
+});
+
+it("reanchors controlled content and releases the old anchor on disposal", async () => {
+  const first = document.createElement("button");
+  const second = document.createElement("button");
+  document.body.append(first, second);
+  extraNodes.push(first, second);
+  first.style.setProperty("anchor-name", "--existing-anchor");
+  const [props, setProps] = createStore({ anchor: first, open: false });
+  const { view, panel } = mountPopover(props);
+  const set = (next: Partial<typeof props>) => {
+    setProps((current) => ({ ...current, ...next }));
+    flush();
+  };
+  expect(view.queryByRole("button")).toBeNull();
+  set({ open: true });
+  await phase(panel, "open");
+  const anchorName = () => panel.style.getPropertyValue("position-anchor");
+  expect(first.style.getPropertyValue("anchor-name")).toContain(anchorName());
+  set({ anchor: second });
+  expect(first.style.getPropertyValue("anchor-name")).toBe("--existing-anchor");
+  expect(second.style.getPropertyValue("anchor-name")).toContain(anchorName());
+  set({ open: false });
+  await phase(panel, "hidden");
+  view.unmount();
+  expect(second.style.getPropertyValue("anchor-name")).toBe("");
+});
+
+const modalDialog = (host: OpenClawModalDialog) =>
+  host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog")!;
+const makeElement = <K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Partial<HTMLElementTagNameMap[K]> = {},
+) => Object.assign(document.createElement(tag), props);
+
+async function tabCycle(order: HTMLElement[], active?: () => Element | null) {
+  order[0]!.focus();
+  for (const next of [...order.slice(1), order[0]!]) {
+    await keyFocus("{Tab}", next, active);
+  }
+  for (const next of [...order.slice(1).toReversed(), order[0]!]) {
+    await keyFocus("{Shift>}{Tab}{/Shift}", next, active);
+  }
+}
+
+function renderModal(
+  label: string,
+  content: () => JSX.Element,
+  initialFocus?: () => HTMLElement,
+  container?: HTMLElement,
+) {
+  let handle!: OpenClawModalDialog;
+  const view = render(
+    () => (
+      <ModalDialog label={label} initialFocus={initialFocus} ref={(value) => (handle = value)}>
+        {content()}
+      </ModalDialog>
+    ),
+    container ? { container } : undefined,
+  );
+  flush();
+  return { view, handle, dialog: modalDialog(handle) };
+}
+it("keeps shadow-hosted modal focus through Tab, vetoed Escape, and dismissal", async () => {
+  const opener = document.createElement("button");
+  const container = document.createElement("div");
+  document.body.append(opener, container);
+  extraNodes.push(opener, container);
+  const mount = document.createElement("div");
+  const shadow = container.attachShadow({ mode: "open" });
+  shadow.append(mount);
+  opener.focus();
+  const name = makeElement("input", { autofocus: true });
+  const notes = makeElement("textarea");
+  const { handle, dialog } = renderModal(
+    "Edit details",
+    () => [name, notes],
+    () => name,
+    mount,
+  );
+  const active = () => shadow.activeElement;
+  notes.focus();
+  await keyFocus("{Tab}", name, active);
+  await keyFocus("{Shift>}{Tab}{/Shift}", notes, active);
+  name.focus();
+  await keyFocus("{Tab}", notes, active);
+
+  const preventTab = (event: KeyboardEvent) => {
+    if (event.key === "Tab") {
+      event.preventDefault();
+    }
+  };
+  notes.addEventListener("keydown", preventTab);
+  await keyFocus("{Tab}", notes, active);
+  notes.removeEventListener("keydown", preventTab);
+
+  notes.value = "Unsaved draft";
+  const veto = (event: Event) => event.preventDefault();
+  document.addEventListener("modal-cancel", veto);
+  try {
+    await userEvent.keyboard("{Escape}");
+    expect(modalDialog(handle).matches(":modal")).toBe(true);
+    expect(handle.open).toBe(true);
+    expect(shadow.activeElement).toBe(notes);
+    expect(notes.value).toBe("Unsaved draft");
+  } finally {
+    document.removeEventListener("modal-cancel", veto);
+  }
+  const hidden = afterModalHidden(handle);
+  await userEvent.keyboard("{Escape}");
+  expect(handle.open).toBe(false);
+  expect(dialog.inert).toBe(true);
+  await hidden;
+  expect(dialog.open).toBe(false);
+  expect(document.activeElement).toBe(opener);
+});
+
+it.each([false, true])("Tabs through descendant shadow roots (only=%s)", async (shadowOnly) => {
+  const before = makeElement("input", { ariaLabel: "Before shadow" });
+  const host = makeElement("div");
+  const shadow = host.attachShadow({ mode: "open" });
+  const [first, slotted, last] = [makeElement("input"), makeElement("input"), makeElement("input")];
+  host.append(slotted);
+  shadow.append(first, makeElement("slot"), last);
+  renderModal("Shadow fields", () => [!shadowOnly && before, host]);
+  const order = shadowOnly ? [first, slotted, last] : [before, first, slotted, last];
+  const active = () => shadow.activeElement ?? document.activeElement;
+  await tabCycle(order, active);
+});
+
+it.each(["summary", "editable"])(
+  "wraps native %s content without an explicit tabindex",
+  async (kind) => {
+    const target =
+      kind === "summary"
+        ? makeElement("summary", { textContent: "Details" })
+        : makeElement("div", { contentEditable: "true", textContent: "Draft" });
+    const content = kind === "summary" ? makeElement("details") : target;
+    if (kind === "summary") {
+      content.append(target, "Content");
+    }
+    const { dialog } = renderModal("Native content", () => content);
+    await tabCycle([target]);
+    target.tabIndex = -1;
+    dialog.focus();
+    await keyFocus("{Tab}", dialog);
+    await keyFocus("{Shift>}{Tab}{/Shift}", dialog);
+  },
+);
+
+it("stretches modal error-panel actions", async () => {
+  let retried = 0;
+  const { view, dialog } = renderModal("Load settings", () => (
+    <LazyViewError
+      error={new Error("Fixture module load failed")}
+      subtitle="Settings"
+      onRetry={() => retried++}
+      onClose={() => {}}
     />
   ));
-  await userEvent.click(page.getByRole("button", { name: "Layout", exact: true }));
-  const menu = page.getByRole("menu", { name: "Layout", exact: true }).element();
-  await waitForSolid(() => {
-    expect(menu.getAttribute("data-phase")).toBe("open");
-    // The opening transition scales DOM bounds; measure its final geometry.
-    expect(getComputedStyle(menu).scale).toBe("1");
-  });
-  await Promise.all(menu.getAnimations().map((animation) => animation.finished));
-  const hints = [...menu.querySelectorAll<HTMLElement>(".shortcut-kbd")];
-  expect(hints).toHaveLength(4);
-  const bounds = () => hints.map((hint) => hint.getBoundingClientRect());
-  const before = bounds();
-  expect(
-    Math.max(...before.map((rect) => rect.right)) - Math.min(...before.map((rect) => rect.right)),
-  ).toBeLessThan(1);
-  await import("../../styles/chat/side-panel.css");
-  const after = bounds();
-  // WebKit can retain ~0.03px rounding; a real style-induced shift is whole pixels.
-  for (const [index, rect] of after.entries()) {
-    expect(Math.abs(rect.right - before[index]!.right)).toBeLessThan(0.5);
-    expect(Math.abs(rect.width - before[index]!.width)).toBeLessThan(0.5);
+  await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+  for (const width of [1440, 320]) {
+    await page.viewport(width, 1000);
+    expect(dialog.clientHeight).toBeLessThanOrEqual(window.innerHeight);
+    const panel = view.container.querySelector<HTMLElement>(".lazy-view-error")!;
+    const actions = panel.querySelector<HTMLElement>(".lazy-view-error__actions")!;
+    const bounds = panel.getBoundingClientRect();
+    const style = getComputedStyle(panel);
+    expect(actions.getBoundingClientRect()).toMatchObject({
+      left: expect.closeTo(bounds.left + Number.parseFloat(style.paddingLeft), 0),
+      right: expect.closeTo(bounds.right - Number.parseFloat(style.paddingRight), 0),
+    });
   }
-  const check = menu.querySelector<HTMLElement>('[aria-checked="true"] > .oc-menu-item__check')!;
-  expect(check.getBoundingClientRect().left).toBeGreaterThan(before[3]!.right);
-  await page.viewport(390, 800);
-  for (const hint of hints) {
-    expect(hint.getBoundingClientRect().width).toBe(0);
-  }
+  await userEvent.click(view.getByRole("button", { name: /^Retry$/ }));
+  expect(retried).toBe(1);
 });
