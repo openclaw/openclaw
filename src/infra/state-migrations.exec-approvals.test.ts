@@ -98,6 +98,10 @@ function receipt(run = false) {
       );
 }
 
+function seedCanonical(raw?: string) {
+  writeExecApprovalsConfigRow({ db: database(), file: denyPolicy, raw });
+}
+
 it("imports nullable and absent usage metadata and releases the runtime gate", async () => {
   const expected = {
     version: 1 as const,
@@ -161,11 +165,7 @@ it.each([
   const stub = { ...emptyStub, ...(socket ? { socket } : {}) };
   const claimed = canonical === "valid";
   if (canonical !== "missing") {
-    writeExecApprovalsConfigRow({
-      db: database(),
-      file: denyPolicy,
-      raw: canonical === "invalid" ? "{invalid" : undefined,
-    });
+    seedCanonical(canonical === "invalid" ? "{invalid" : undefined);
   }
   const originalRow = readExecApprovalsConfigRow(database());
   const legacyPath = claimed ? `${sourcePath}.doctor-importing` : sourcePath;
@@ -359,43 +359,40 @@ it.each<[string | Buffer, string]>([
   expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
 });
 
-it("removes a byte-identical source when canonical state already exists", async () => {
-  const raw = serializeExecApprovals(denyPolicy);
-  writeExecApprovalsConfigRow({ db: database(), file: denyPolicy, raw });
-  await fsp.writeFile(sourcePath, raw, "utf8");
-  const result = await migrate();
-  expect(result.warnings).toEqual([]);
-  expect(result.changes).toEqual(["Preserved byte-identical canonical SQLite exec approvals."]);
-  expect(fs.existsSync(sourcePath)).toBe(false);
-  expect(receipt()).toMatchObject({ removed_source: 1 });
-});
-
-it("preserves conflicting legacy bytes while canonical SQLite wins", async () => {
-  writeExecApprovalsConfigRow({ db: database(), file: denyPolicy });
-  await writeLegacy({ ...denyPolicy, defaults: { security: "full" } });
-  const result = await migrate();
-  expect(result.changes).toEqual([]);
-  expect(result.warnings[0]).toContain("Conflicting legacy exec approvals remain");
-  expect(result.warnings[0]).toContain(sourcePath);
-  expect(result.warnings[0]).toContain("reconcile this file");
-  expect(fs.existsSync(sourcePath)).toBe(true);
-  expect(readExecApprovalsConfigRow(database())?.raw_json).toBe(serializeExecApprovals(denyPolicy));
-  expect(receipt()).toMatchObject({ removed_source: 0 });
-});
-
-it("repairs an invalid canonical row from validated legacy policy", async () => {
-  const db = database();
-  db.prepare(
-    "INSERT INTO exec_approvals_config (config_key, raw_json, socket_path, has_socket_token, default_security, default_ask, default_ask_fallback, auto_allow_skills, agent_count, allowlist_count, updated_at_ms) VALUES ('current', '{invalid', NULL, 0, NULL, NULL, NULL, NULL, 0, 0, 1)",
-  ).run();
-  await writeLegacy(denyPolicy);
-  const result = await migrate();
-  expect(result.warnings).toEqual([]);
-  expect(result.changes).toEqual([
-    "Replaced an invalid SQLite exec approvals row with validated legacy state.",
-  ]);
-  expect(readExecApprovalsConfigRow(database())?.raw_json).toContain('"security": "deny"');
-});
+it.each(["identical", "conflicting", "invalid"] as const)(
+  "reconciles a legacy policy with %s canonical state",
+  async (canonical) => {
+    seedCanonical(canonical === "invalid" ? "{invalid" : undefined);
+    await fsp.writeFile(
+      sourcePath,
+      serializeExecApprovals(
+        canonical === "conflicting"
+          ? { ...denyPolicy, defaults: { security: "full" } }
+          : denyPolicy,
+      ),
+    );
+    const result = await migrate();
+    const conflict = canonical === "conflicting";
+    if (conflict) {
+      expect(result.changes).toEqual([]);
+      expect(result.warnings[0]).toContain("Conflicting legacy exec approvals remain");
+      expect(result.warnings[0]).toContain(sourcePath);
+      expect(result.warnings[0]).toContain("reconcile this file");
+    } else {
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toEqual([
+        canonical === "invalid"
+          ? "Replaced an invalid SQLite exec approvals row with validated legacy state."
+          : "Preserved byte-identical canonical SQLite exec approvals.",
+      ]);
+    }
+    expect(fs.existsSync(sourcePath)).toBe(conflict);
+    expect(readExecApprovalsConfigRow(database())?.raw_json).toBe(
+      serializeExecApprovals(denyPolicy),
+    );
+    expect(receipt()).toMatchObject({ removed_source: conflict ? 0 : 1 });
+  },
+);
 
 it("preserves changed source bytes before claim and writes no receipt", async () => {
   await writeLegacy({ version: 1, agents: {} });

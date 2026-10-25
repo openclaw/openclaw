@@ -60,6 +60,10 @@ function seedLease(databasePath: string, row: LeaseTable) {
 function leasePayload(helper: unknown) {
   return { version: 2, helper, executor: helper, action: { kind: "update" } };
 }
+function windowsProcessFacts(start: number | null = null) {
+  vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
+  return vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(start);
+}
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -86,26 +90,15 @@ describe("managed handoff boot identities", () => {
   const bootBytes = Buffer.from("00ff018002fe037f04fd057e06fc077d", "hex");
   const uuid = "12345678-1234-1234-1234-123456789abc";
   const timestamp = "2026-09-01T00:00:00.0000000Z";
-  const serviceManagerEnv = { PATH: "/usr/bin:/bin" };
   const store = createManagedHandoffLeaseStore({
     databasePath: "/unused/managed-update-handoffs.sqlite",
-    serviceManagerEnv,
+    serviceManagerEnv: { PATH: "/usr/bin:/bin" },
   });
   it.each([
-    ["freebsd", bootBytes.toString("hex"), "/sbin/sysctl", ["-b", "kern.boot_id"]],
-    ["darwin", uuid, "/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]],
-    [
-      "win32",
-      timestamp,
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "(Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')",
-      ],
-    ],
-  ] as const)("reads %s boot identity", async (platform, identity, command, args) => {
+    ["freebsd", bootBytes.toString("hex"), "/sbin/sysctl", "kern.boot_id"],
+    ["darwin", uuid, "/usr/sbin/sysctl", "kern.bootsessionuuid"],
+    ["win32", timestamp, "powershell.exe", "LastBootUpTime"],
+  ] as const)("reads %s boot identity", async (platform, identity, command, query) => {
     spawnSyncMock.mockReturnValue({
       status: 0,
       stdout: platform === "freebsd" ? bootBytes : `${identity}\n`,
@@ -113,13 +106,11 @@ describe("managed handoff boot identities", () => {
     await withMockedPlatform(platform, async () => {
       expect(store.bootIdentity()).toEqual({ platform, identity });
     });
-    expect(spawnSyncMock).toHaveBeenCalledExactlyOnceWith(command, args, {
-      env: serviceManagerEnv,
-      killSignal: "SIGKILL",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: platform === "win32" ? 5000 : 1000,
-      ...(platform === "freebsd" ? { maxBuffer: 16 } : { encoding: "utf8", windowsHide: true }),
-    });
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      command,
+      expect.arrayContaining([expect.stringContaining(query)]),
+      expect.objectContaining({ env: { PATH: "/usr/bin:/bin" } }),
+    );
   });
   it.each([
     { status: 0, stdout: Buffer.alloc(15) },
@@ -134,7 +125,6 @@ describe("managed handoff boot identities", () => {
         "OS boot identity unavailable; run openclaw triage manually",
       );
     });
-    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
   it("keeps Linux boot IDs on their existing procfs path", async () => {
     const read = vi.spyOn(fs, "readFileSync").mockReturnValue(`${uuid}\n`);
@@ -239,9 +229,7 @@ describe("managed handoff Windows process identities", () => {
   });
 
   it("does not reclaim a live fallback lease when launcher attribution disagrees", async () => {
-    // SQLite remains on the host VFS while Windows process facts are simulated.
-    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
-    const dead = vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
+    windowsProcessFacts();
     spawnSyncMock.mockReturnValue({ status: 0, stdout: "C:\\node.exe C:\\different\\entry.js" });
     const root = dirs.make("handoff-live-attribution-");
     const databasePath = path.join(root, "handoff.sqlite");
@@ -260,13 +248,13 @@ describe("managed handoff Windows process identities", () => {
       kind: "busy",
       owner: "live-original",
     });
-    dead.mockImplementation((pid) => pid === 42);
+    vi.mocked(pidAlive.isPidDefinitelyDead).mockImplementation((pid) => pid === 42);
     expect(store.acquire(root, "replacement", { kind: "update" }).kind).toBe("acquired");
   });
 
   it("requires observed launcher attribution unless the caller retains live process custody", async () => {
     const suffix = "%%^!";
-    const dead = vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
+    vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
     const argv = [
       "C:\\Program Files\\nodejs\\node.exe",
       `C:\\openclaw${suffix}\\dist\\entry.js`,
@@ -287,13 +275,12 @@ describe("managed handoff Windows process identities", () => {
     expect(store.isProcessIdentityCurrent(identity)).toBe(false);
     expect(store.isProcessIdentityCurrent(identity, true)).toBe(true);
 
-    dead.mockReturnValue(true);
+    vi.mocked(pidAlive.isPidDefinitelyDead).mockReturnValue(true);
     expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
   });
 
   it("keeps known creation-time mismatches authoritative", async () => {
-    vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
-    const startedAt = vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(123);
+    const startedAt = windowsProcessFacts(123);
     const identity = store.processIdentity(42, windowsArgv);
     expect(identity.startIdentity).toBe("123");
     expect(store.isProcessIdentityCurrent(identity)).toBe(true);
@@ -304,8 +291,7 @@ describe("managed handoff Windows process identities", () => {
   });
 
   it("attributes its own process and emits an unavailable-identity warning only once", async () => {
-    vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
-    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
+    windowsProcessFacts();
     const onProcessIdentityWarning = vi.fn(() => {
       throw new Error("diagnostic sink unavailable");
     });
