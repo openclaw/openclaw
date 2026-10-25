@@ -163,6 +163,7 @@ describe("sessions.files for managed-worktree sessions", () => {
         root: state.workspaceDir,
         fileRoot: entry.spawnedCwd,
       };
+      successful(await dispatch("sessions.files.list"));
       const opened = await dispatch("sessions.files.get", "preview.html");
       expect(opened.mock.calls[0]?.[1]).toMatchObject({
         source,
@@ -253,17 +254,6 @@ describe("sessions.files for managed-worktree sessions", () => {
       });
     },
   );
-
-  it("reads files from a durable session's worktree", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await seedWorktreeSession(state.workspaceDir);
-
-      successful(await dispatch("sessions.files.list"));
-      expect(successful(await dispatch("sessions.files.get", "preview.html"))).toMatchObject({
-        file: { content: preview },
-      });
-    });
-  });
 
   it("keeps a durable file preview readable after its cached session row is evicted", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

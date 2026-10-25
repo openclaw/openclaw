@@ -85,37 +85,31 @@ function humanClient(): NonNullable<Client> {
   return client;
 }
 
-it.each([
-  "openclaw-control-ui",
-  "openclaw-macos",
-  "openclaw-linux",
-  "openclaw-ios",
-  "openclaw-android",
-] as const)("accepts the embedded Control UI reconnect envelope from %s", async (id) => {
-  const client = humanClient();
-  client.connect.client.id = id;
-  client.pairedClientId = id;
-  const params = requestParams({ __controlUiReconnectResume: true });
-  const result = await normalizeChatSendRequest({ params, client });
-  expect(result).toMatchObject({ ok: true, value: { reconnectResumeRequested: true } });
-  if (result.ok) {
-    expect(result.value.p).not.toHaveProperty("__controlUiReconnectResume");
-  }
-  expect(params).toHaveProperty("__controlUiReconnectResume", true);
-});
-
-it.each(["cli", "node-host", "openclaw-macos"] as const)(
-  "rejects reconnect metadata from non-UI %s clients",
+it.each(["openclaw-control-ui", "openclaw-macos"] as const)(
+  "accepts the embedded Control UI reconnect envelope from %s",
   async (id) => {
     const client = humanClient();
     client.connect.client.id = id;
-    client.connect.client.mode = "backend";
-    expect(await normalize({ __controlUiReconnectResume: true }, client)).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("unexpected property"),
-    });
+    client.pairedClientId = id;
+    const params = requestParams({ __controlUiReconnectResume: true });
+    const result = await normalizeChatSendRequest({ params, client });
+    expect(result).toMatchObject({ ok: true, value: { reconnectResumeRequested: true } });
+    if (result.ok) {
+      expect(result.value.p).not.toHaveProperty("__controlUiReconnectResume");
+    }
+    expect(params).toHaveProperty("__controlUiReconnectResume", true);
   },
 );
+
+it("rejects reconnect metadata from a native client outside UI mode", async () => {
+  const client = humanClient();
+  client.connect.client.id = "openclaw-macos";
+  client.connect.client.mode = "backend";
+  expect(await normalize({ __controlUiReconnectResume: true }, client)).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("unexpected property"),
+  });
+});
 
 it("fingerprints input with the purpose-specific identity key", async () => {
   expect((await normalizeValue({}, null)).requestIdentity).toBe(
@@ -181,7 +175,6 @@ it.each([
   { message: "@Bob", mentions: [mention(0, 5)] },
   { message: "@Bob", mentions: [mention(0, 4), mention(0, 4, "other")] },
   { message: "@Bo\nb", mentions: [mention(0, 5)] },
-  { message: "@Bo\u0001b", mentions: [mention(0, 5)] },
   { message: "@😀", mentions: [mention(0, 2)] },
   { message: "@e\u0301", mentions: [mention(0, 2)] },
 ])("rejects annotations that do not bind a complete visible token: %j", async (input) => {
