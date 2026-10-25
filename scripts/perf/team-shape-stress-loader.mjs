@@ -28,7 +28,13 @@ if (isMainThread) {
         if (!/\/(?:operator-model-policy|session-row-presentation)-[^/]+\.mjs$/.test(url)) {
           return result;
         }
-        let source = String(result.source);
+        if (result.source == null) {
+          return result;
+        }
+        let source =
+          typeof result.source === "string"
+            ? result.source
+            : new TextDecoder().decode(result.source);
         for (const name of names) {
           const declaration = new RegExp(`function ${name}\\([^)]*\\) \\{`);
           if (declaration.test(source)) {
