@@ -1,9 +1,9 @@
 import "./service-http-mock.test-support.js";
 import "./session-authority.test-support.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { buffer as consumeBuffer } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { resolveClickClackAccount } from "../accounts.js";
 import { handleClickClackInbound } from "../inbound.js";
 import { createInboundMessage, createInboundRuntime } from "../inbound.test-support.js";
@@ -83,22 +83,16 @@ async function startMockClickClack() {
       sendJson(res, 500, { error: "mock ClickClack request failed" });
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
     channels,
     messages,
     patches,
     get createCount() {
       return createCount;
     },
-    close: async () =>
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
+    close: () => server[Symbol.asyncDispose](),
   };
 }
 
