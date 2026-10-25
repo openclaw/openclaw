@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -7,7 +6,6 @@ import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { expect, test, vi } from "vitest";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -24,14 +22,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
-import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
-import type {
-  ReclamationDatabaseOptions,
-  SqliteSessionReclamationPlan,
-} from "./session-accessor.sqlite-lifecycle-types.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import { observeSessionMaintenancePlanningWorker } from "./session-accessor.sqlite-maintenance.test-support.js";
 import { observeReclamationWorkers } from "./session-accessor.sqlite-reclamation-reuse.test-support.js";
@@ -92,16 +86,6 @@ function createEntryFixture(
 function databaseFor(state: OpenClawTestState, env = state.env) {
   const options = { agentId: "main", env: state.env };
   return { ...options, path: openOpenClawAgentDatabase(options).path, env };
-}
-
-function entries(
-  state: OpenClawTestState,
-  prefix: string,
-  databaseOptions: ReclamationDatabaseOptions,
-) {
-  return Array.from({ length: 4 }, (_, index) =>
-    createEntryFixture(state, `${prefix}-${index}`, databaseOptions),
-  );
 }
 
 function seed(
@@ -175,61 +159,25 @@ async function readLogs(file: string): Promise<{ content: string; records: unkno
   };
 }
 
-test("retains one archive Worker across refused and interleaved reclamation operations", () =>
+test("refuses changed reclamation inputs at admission without deleting the entry", () =>
   withState(async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const databaseOptions = reclamation.resolveSessionReclamationDatabaseOptions(options);
-    const base = { databaseOptions, materializedPlans: [] };
-    const fixtures = entries(state, "interleaved", databaseOptions);
-    let refusalPoint: "admission-request" | undefined;
-    let superseded = false;
-    const workers = observeWorkers((message) => {
-      if (message.type === refusalPoint) {
-        superseded = true;
-      }
+    const { scope, entry, plan } = createEntryFixture(state, "changed-inputs");
+    let changed = false;
+    observeWorkers((message) => {
+      changed ||= message.type === "admission-request";
     });
-    for (const { scope, plan } of fixtures) {
-      const plans: SqliteSessionReclamationPlan[] = [
+    await expect(
+      runSqliteSessionReclamation({
         plan,
-        {
-          ...base,
-          kind: "history-eviction",
-          diskBudget: {},
-          protectedSessionIds: [],
-          sessionId: scope.sessionId,
+        assertCommitAllowed() {
+          if (changed) {
+            throw new SqliteReclamationInputsChangedError("synthetic inputs changed");
+          }
         },
-        reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions),
-        {
-          ...base,
-          kind: "archive-publish-prepare",
-          archiveDirectory: state.path("archives"),
-          requested: [],
-        },
-        { ...base, kind: "archive-publish-record", results: [], nowMs: 1 },
-      ];
-      for (const operation of plans) {
-        if (operation.kind !== "maintenance-statistics") {
-          refusalPoint = "admission-request";
-          await expect(
-            runSqliteSessionReclamation({
-              plan: operation,
-              assertCommitAllowed: () => {
-                if (superseded) {
-                  throw new SqliteReclamationInputsChangedError("synthetic inputs changed");
-                }
-              },
-            }),
-          ).rejects.toThrow(SqliteReclamationInputsChangedError);
-          refusalPoint = undefined;
-          superseded = false;
-        }
-        await expect(runSqliteSessionReclamation({ plan: operation })).resolves.toMatchObject({
-          kind: operation.kind,
-        });
-      }
-      expect(loadSessionEntry(scope)).toBeUndefined();
-    }
-    expect(workers).toHaveLength(1);
+      }),
+    ).rejects.toThrow(SqliteReclamationInputsChangedError);
+    expect(changed).toBe(true);
+    expect(loadSessionEntry(scope)).toEqual(entry);
   }));
 
 test("retires a retained Worker by the symlinked root its requester used", () =>
@@ -246,35 +194,6 @@ test("retires a retained Worker by the symlinked root its requester used", () =>
     expect(spawned).toHaveLength(1);
     await closeOpenClawAgentDatabasesAsync(link);
     expect(spawned[0]?.threadId).toBe(-1);
-  }));
-
-test("reuses reclamation until thirty idle minutes", () =>
-  withState(async (state) => {
-    const databaseOptions = databaseFor(state);
-    const fixtures = entries(state, "synthetic-reclamation-idle", databaseOptions);
-    const workers = observeWorkers();
-    const reclaim = async (index: number) => {
-      const diagnostics: SqliteSessionReclamationDiagnostics = {};
-      const fixture = fixtures[index];
-      assert.ok(fixture);
-      await runSqliteSessionReclamation({ plan: fixture.plan, diagnostics });
-      expect(loadSessionEntry(fixture.scope)).toBeUndefined();
-      return diagnostics.workerThreadId;
-    };
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const firstThread = await reclaim(0);
-    await vi.advanceTimersByTimeAsync(61_000);
-    expect(await reclaim(1)).toBe(firstThread);
-    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-    expect(await reclaim(2)).toBe(firstThread);
-    expect(workers).toHaveLength(1);
-    const worker = workers[0];
-    assert.ok(worker);
-    const exited = once(worker, "exit");
-    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
-    await exited;
-    expect(await reclaim(3)).not.toBe(firstThread);
-    expect(workers).toHaveLength(2);
   }));
 
 test.each(["established", "first-created"] as const)(

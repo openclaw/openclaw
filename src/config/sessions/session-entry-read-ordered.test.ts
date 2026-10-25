@@ -49,54 +49,20 @@ test("returns immutable exact reads and hides internal entries from lists", asyn
   expect((await readInternal("list")).entries).toEqual([]);
 });
 
-test("retires cached lifecycle and runtime targets on replacement", async ({ store }) => {
-  const { scope, input, sessionKey, options: owner, read, entry } = store;
-  const runtimeTarget = { agentId: "logical", sessionId: "original", sessionKey };
-  const request = {
-    sessionKeys: [sessionKey],
-    lifecycleSessionKey: sessionKey,
-    runtimeTarget,
-  };
-  store.replace({ sessionStartedAt: 100, lastInteractionAt: 200 });
-  await read();
-  expect(readRetainedSessionEntryFacts(owner, request)).toMatchObject({
-    lifecycleTimestamps: { sessionStartedAt: 100, lastInteractionAt: 200 },
-    runtimeTarget: { ...runtimeTarget, storePath: scope.storePath },
-  });
-  expect(
-    (await readSessionEntriesFromStoreInWorker({ ...input, lifecycleSessionKey: sessionKey }))
-      .lifecycleTimestamps,
-  ).toEqual({ sessionStartedAt: 100, lastInteractionAt: 200 });
-
-  store.replace({
-    sessionId: "replacement",
-    updatedAt: 2,
-    sessionStartedAt: 300,
-    lastInteractionAt: 400,
-  });
-  expect(readRetainedSessionEntryFacts(owner, request)).toBeUndefined();
-  expect((await entry())?.sessionId).toBe("replacement");
-  const currentRequest = {
-    ...request,
-    runtimeTarget: { ...runtimeTarget, sessionId: "replacement" },
-  };
-  expect(readRetainedSessionEntryFacts(owner, currentRequest)).toMatchObject({
-    lifecycleTimestamps: { sessionStartedAt: 300, lastInteractionAt: 400 },
-    runtimeTarget: { ...currentRequest.runtimeTarget, storePath: scope.storePath },
-  });
-  expect(readRetainedSessionEntryFacts(owner, request)).toBeUndefined();
-
-  store.replace({ sessionId: "replacement", updatedAt: 3 });
-  await read();
-  expect(readRetainedSessionEntryFacts(owner, currentRequest)).toBeUndefined();
-});
-
-test("refreshes cached sharing on revocation and entry replacement", async ({ store }) => {
-  const { scope, sessionKey, read: readExact } = store;
+test("refreshes cached sharing, lifecycle and runtime targets on replacement", async ({
+  store,
+}) => {
+  const { scope, sessionKey, options: owner, read: readExact } = store;
   const skillsSnapshot = { prompt: "retained prompt".repeat(8192), skills: [] };
-  store.replace({ skillsSnapshot });
+  store.replace({ skillsSnapshot, sessionStartedAt: 100, lastInteractionAt: 200 });
   addSessionMember(scope, { identityId: "reader", addedBy: "owner", addedAt: 1 });
-  const input = { ...store.input, includeAuthorization: true };
+  const runtimeTarget = { agentId: "logical", sessionId: "original", sessionKey };
+  const request = { sessionKeys: [sessionKey], lifecycleSessionKey: sessionKey, runtimeTarget };
+  const facts = (sessionId = "original") =>
+    readRetainedSessionEntryFacts(owner, {
+      ...request,
+      runtimeTarget: { ...runtimeTarget, sessionId },
+    });
   const read = (projection: "sharing" | "full") =>
     readExact({
       includeAuthorization: true,
@@ -105,6 +71,14 @@ test("refreshes cached sharing on revocation and entry replacement", async ({ st
       snapshotFields: projection === "sharing" ? ["skillsSnapshot"] : undefined,
     });
   await read("full");
+  expect(facts()).toMatchObject({
+    lifecycleTimestamps: { sessionStartedAt: 100, lastInteractionAt: 200 },
+    runtimeTarget: { ...runtimeTarget, storePath: scope.storePath },
+  });
+  expect((await readExact({ lifecycleSessionKey: sessionKey })).lifecycleTimestamps).toEqual({
+    sessionStartedAt: 100,
+    lastInteractionAt: 200,
+  });
   const warm = await read("sharing");
   expect(warm.entries[0]?.entry.sessionId).toBe("original");
   expect(warm.entries[0]?.entry).not.toHaveProperty("skillsSnapshot");
@@ -124,13 +98,29 @@ test("refreshes cached sharing on revocation and entry replacement", async ({ st
     sessionId: "replacement",
     lifecycleRevision: "replacement-revision",
     updatedAt: 2,
+    sessionStartedAt: 300,
+    lastInteractionAt: 400,
   });
+  expect(facts()).toBeUndefined();
   expect((await read("sharing")).entries[0]?.entry).toMatchObject({
     sessionId: "replacement",
     lifecycleRevision: "replacement-revision",
   });
+  await read("full");
+  expect(facts("replacement")).toMatchObject({
+    lifecycleTimestamps: { sessionStartedAt: 300, lastInteractionAt: 400 },
+    runtimeTarget: { ...runtimeTarget, sessionId: "replacement", storePath: scope.storePath },
+  });
+  expect(facts()).toBeUndefined();
+  store.replace({ sessionId: "replacement", updatedAt: 3 });
+  await read("full");
+  expect(facts("replacement")).toBeUndefined();
 
-  const missing = { ...input, sessionKeys: ["agent:main:absent-sharing"] };
+  const missing = {
+    ...store.input,
+    includeAuthorization: true,
+    sessionKeys: ["agent:main:absent-sharing"],
+  };
   await readSessionEntriesFromStoreInWorker(missing);
   const absent = await readSessionEntriesFromStoreInWorker({
     ...missing,
@@ -226,21 +216,33 @@ test("refreshes cached entry, participant and membership writes", async ({ store
     },
   );
   expect((await readMissing()).entries[0]?.entry.sessionId).toBe("created-after-miss");
-  for (const writer of ["native", "worker"] as const) {
+  const patch = (label: string) =>
+    patchSessionEntryCore(scope, () => ({ label }), {
+      assertCommitAllowed() {},
+      shouldCommit: () => true,
+      skipMaintenance: true,
+    });
+  for (const [writer, record, add, remove] of [
+    ["native", recordSessionParticipant, addSessionMember, removeSessionMember],
+    [
+      "worker",
+      recordSessionParticipantInWorker,
+      addSessionMemberInWorker,
+      removeSessionMemberInWorker,
+    ],
+  ] as const) {
     const participant = { identity: { type: "agent" as const, id: writer }, promptedAt: 20 };
     const member = { identityId: writer, addedBy: "owner", addedAt: 10 };
     if (writer === "native") {
       store.replace({ sessionId: "same-session", updatedAt: 2, label: writer });
-      recordSessionParticipant(scope, participant);
-      addSessionMember(scope, member);
     } else {
       await patchSessionEntryCore(scope, () => ({ label: writer }), {
         workerGuard: {},
         skipMaintenance: true,
       });
-      await recordSessionParticipantInWorker(scope, participant);
-      await addSessionMemberInWorker(scope, member);
     }
+    await record(scope, participant);
+    await add(scope, member);
     const changed = await read();
     expect(changed.entries[0]?.entry).toMatchObject({ label: writer });
     expect(changed.entries[0]?.entry.participants).toContainEqual({
@@ -254,26 +256,13 @@ test("refreshes cached entry, participant and membership writes", async ({ store
     );
     expect(changed.members?.[sessionKey]).toEqual([member]);
     expect(await read()).toEqual(changed);
-    await patchSessionEntryCore(scope, () => ({ label: `${writer}-metadata` }), {
-      assertCommitAllowed() {},
-      shouldCommit: () => true,
-      skipMaintenance: true,
-    });
+    await patch(`${writer}-metadata`);
     const patched = await read();
     expect(patched.entries[0]?.entry.label).toBe(`${writer}-metadata`);
     expect(patched.members).toEqual(changed.members);
     expect(patched.participantRecords).toEqual(changed.participantRecords);
-    const repeated = { ...participant, promptedAt: 22 };
-    if (writer === "native") {
-      recordSessionParticipant(scope, repeated);
-    } else {
-      await recordSessionParticipantInWorker(scope, repeated);
-    }
-    await patchSessionEntryCore(scope, () => ({ label: writer }), {
-      assertCommitAllowed() {},
-      shouldCommit: () => true,
-      skipMaintenance: true,
-    });
+    await record(scope, { ...participant, promptedAt: 22 });
+    await patch(writer);
     const contributed = await read();
     expect(contributed.participantRecords?.[sessionKey]).toContainEqual(
       expect.objectContaining({
@@ -282,11 +271,7 @@ test("refreshes cached entry, participant and membership writes", async ({ store
         lastPromptedAt: 22,
       }),
     );
-    if (writer === "native") {
-      removeSessionMember(scope, writer);
-    } else {
-      await removeSessionMemberInWorker(scope, writer);
-    }
+    await remove(scope, writer);
     const removed = await read();
     expect(removed.members?.[sessionKey]).toEqual([]);
     expect(removed.participantRecords).toEqual(contributed.participantRecords);

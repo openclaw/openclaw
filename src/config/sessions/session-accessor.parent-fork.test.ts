@@ -221,7 +221,6 @@ it.each([undefined, "missing-ancestor"])(
     expect(fork.sessionId).not.toBe(parentSessionId);
     const forkedEntries = await childEvents(targetStorePath, fork.sessionId);
     const forkedHeader = forkedEntries[0];
-    expect(forkedHeader).toMatchObject({ type: "session", version: 3, id: fork.sessionId, cwd });
     expect(
       parseSqliteSessionFileMarker(
         typeof forkedHeader?.parentSession === "string" ? forkedHeader.parentSession : undefined,
@@ -230,24 +229,13 @@ it.each([undefined, "missing-ancestor"])(
       agentId: "main",
       sessionId: parentSessionId,
     });
-    expect(forkedEntries.map((entry) => entry.type)).toEqual([
-      "session",
-      "message",
-      "message",
-      "label",
-      "leaf",
+    expect(forkedEntries).toMatchObject([
+      { type: "session", version: 3, id: fork.sessionId, cwd },
+      { type: "message", id: "user-1", parentId: null },
+      { type: "message", id: "assistant-1", parentId: "user-1" },
+      { type: "label", targetId: "user-1", label: "start" },
+      { type: "leaf", targetId: "label-1", appendParentId: "label-1" },
     ]);
-    expect(forkedEntries.slice(1, 3)).toMatchObject([
-      { id: "user-1", parentId: null },
-      { id: "assistant-1", parentId: "user-1" },
-    ]);
-    const forkedLabel = forkedEntries.find((entry) => entry.type === "label");
-    expect(forkedLabel).toMatchObject({ type: "label", targetId: "user-1", label: "start" });
-    expect(forkedEntries.at(-1)).toMatchObject({
-      type: "leaf",
-      targetId: "label-1",
-      appendParentId: "label-1",
-    });
     expect(JSON.stringify(forkedEntries)).not.toContain("side delivery");
   },
 );
@@ -264,10 +252,7 @@ it("keeps opaque append-parent metadata on the active fork branch", async () => 
     }),
   ]);
   const forkedRecords = await records();
-  const serialized = JSON.stringify(forkedRecords);
-  expect(serialized).toContain('"id":"active-root"');
-  expect(serialized).toContain('"id":"plugin-metadata"');
-  expect(serialized).not.toContain("side delivery");
+  expect(JSON.stringify(forkedRecords)).not.toContain("side delivery");
   expect(forkedRecords.find((entry) => entry.id === "plugin-metadata")).toMatchObject({
     parentId: "active-root",
   });
