@@ -52,6 +52,23 @@ function probeClient(server: Parameters<typeof sendRequest>[0]) {
       const response = await request(input);
       expect([response.res.statusCode, response.getBody()]).toEqual([status, body]);
     },
+    async getAndHead(input: ProbeRequest, status: number, body: object) {
+      const json = JSON.stringify(body);
+      for (const method of ["GET", "HEAD"]) {
+        const response = await request({
+          ...(typeof input === "string" ? { path: input } : input),
+          method,
+        });
+        expect([response.res.statusCode, response.getBody()]).toEqual([
+          status,
+          method === "HEAD" ? "" : json,
+        ]);
+        expect(response.setHeader).toHaveBeenCalledWith(
+          "Content-Length",
+          String(Buffer.byteLength(json)),
+        );
+      }
+    },
   };
 }
 function withProbeServer(
@@ -326,15 +343,7 @@ describe("gateway probe endpoints", () => {
             const body = path.startsWith("/ready")
               ? { ready }
               : { ok: ready, status: ready ? "started" : "starting" };
-            for (const method of ["GET", "HEAD"]) {
-              const response = await probe.request({ ...remote(path), method });
-              expect(response.res.statusCode, `${method} ${path}`).toBe(ready ? 200 : 503);
-              expect(response.getBody()).toBe(method === "HEAD" ? "" : JSON.stringify(body));
-              expect(response.setHeader).toHaveBeenCalledWith(
-                "Content-Length",
-                String(Buffer.byteLength(JSON.stringify(body))),
-              );
-            }
+            await probe.getAndHead(remote(path), ready ? 200 : 503, body);
           }
         }
         const protectedResponse = await probe.request(remote("/tools/invoke"));
@@ -555,18 +564,8 @@ describe("gateway probe endpoints", () => {
       return AUTH_NONE;
     });
     await withProbeServer({ getRuntimeConfig, getResolvedAuth }, async (probe) => {
-      const liveBody = JSON.stringify({ ok: true, status: "live" });
       for (const path of ["/health", "/healthz"]) {
-        for (const method of ["GET", "HEAD"] as const) {
-          const { res, getBody, setHeader } = await probe.request({ path, method });
-
-          expect(res.statusCode, `${method} ${path}`).toBe(200);
-          expect(getBody(), `${method} ${path}`).toBe(method === "HEAD" ? "" : liveBody);
-          expect(setHeader).toHaveBeenCalledWith(
-            "Content-Length",
-            String(Buffer.byteLength(liveBody)),
-          );
-        }
+        await probe.getAndHead(path, 200, { ok: true, status: "live" });
       }
       expect(getRuntimeConfig).not.toHaveBeenCalled();
       expect(getResolvedAuth).not.toHaveBeenCalled();

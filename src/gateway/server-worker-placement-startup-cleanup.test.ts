@@ -78,6 +78,37 @@ function createEnvironments(
   return createService(createProvider(provider), options);
 }
 
+function createHeldInspection(options?: Parameters<typeof createService>[1], abortable = true) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore<{ status: "active" }>();
+  let held = false;
+  let signal: AbortSignal | undefined;
+  const environments = createEnvironments(
+    {
+      inspect: async ({ signal: current }) => {
+        if (!held) {
+          return { status: "active" };
+        }
+        signal = current;
+        entered.resolve();
+        return abortable ? racePromiseWithAbortSignal(release.promise, current) : release.promise;
+      },
+    },
+    options,
+  );
+  return {
+    environments,
+    entered: entered.promise,
+    hold: () => {
+      held = true;
+    },
+    release: () => release.resolve({ status: "active" }),
+    get signal() {
+      return signal;
+    },
+  };
+}
+
 function failPlacement(
   store: ReturnType<typeof createPlacements>,
   placement: { sessionId: string; generation: number },
@@ -146,31 +177,19 @@ describe("worker placement startup cleanup ownership", () => {
 
   it("cancels a pre-existing environment inspection when restart drain begins", async () => {
     await seedReadyNodeDesktop("preexisting-reconciliation");
-    const entered = createDeferredCore();
-    const remote = createDeferredCore<{ status: "active" }>();
-    let holdInspection = false;
-    let inspectionSignal: AbortSignal | undefined;
-    const environments = createEnvironments({
-      inspect: async ({ signal }) => {
-        if (!holdInspection) {
-          return { status: "active" };
-        }
-        inspectionSignal = signal;
-        entered.resolve();
-        return racePromiseWithAbortSignal(remote.promise, signal);
-      },
-    });
+    const inspection = createHeldInspection();
+    const { environments } = inspection;
     const placements = createPlacements();
     const sidecar = await startRuntime(createRuntime({ placements, environments }));
-    holdInspection = true;
+    inspection.hold();
     const sweeping = environments.reconcileOnce();
     try {
-      await entered.promise;
+      await inspection.entered;
       markGatewayRestartDraining();
-      expect(inspectionSignal?.aborted).toBe(true);
+      expect(inspection.signal?.aborted).toBe(true);
       await sweeping;
     } finally {
-      remote.resolve({ status: "active" });
+      inspection.release();
       await sweeping;
       await sidecar.stop();
       resetGatewayWorkAdmission();
@@ -183,22 +202,9 @@ describe("worker placement startup cleanup ownership", () => {
     }
     const time = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(time.clock);
-    const entered = createDeferredCore();
-    const remote = createDeferredCore<{ status: "active" }>();
     const blockedStore = createDeferredCore();
-    let holdInspection = false;
-    const environments = createEnvironments(
-      {
-        inspect: async ({ signal }) => {
-          if (!holdInspection) {
-            return { status: "active" };
-          }
-          entered.resolve();
-          return racePromiseWithAbortSignal(remote.promise, signal);
-        },
-      },
-      { scheduler },
-    );
+    const inspection = createHeldInspection({ scheduler });
+    const { environments } = inspection;
     const placements = createPlacements();
     const runtime = createRuntime({ placements, environments, scheduler });
     const sidecar = await startRuntime(runtime);
@@ -223,9 +229,9 @@ describe("worker placement startup cleanup ownership", () => {
     let stopping: Promise<void> | undefined;
     let sweeping: void | Promise<void> = undefined;
     try {
-      holdInspection = true;
+      inspection.hold();
       sweeping = time.advanceBy(60_000);
-      await entered.promise;
+      await inspection.entered;
       stopping = sidecar.stop();
       expect(await Promise.race([stopping.then(() => "stopped"), tailEntered.promise])).toBe(
         "stopped",
@@ -233,7 +239,7 @@ describe("worker placement startup cleanup ownership", () => {
       expect(testState.store.list()).toHaveLength(3);
     } finally {
       blockedStore.resolve();
-      remote.resolve({ status: "active" });
+      inspection.release();
       await (stopping ?? sidecar.stop());
       await sweeping;
       await scheduler.stop();
@@ -297,46 +303,31 @@ describe("worker placement startup cleanup ownership", () => {
 
   it("aborts in-flight inspection before joining placement reconciliation and retains producer custody", async () => {
     await seedReadyNodeDesktop("worker-close-inspection");
-    const inspectionStarted = createDeferredCore();
-    const producerSettled = createDeferredCore();
     const time = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(time.clock);
-    let holdInspection = false;
-    let inspectionSignal: AbortSignal | undefined;
-    const environments = createEnvironments(
-      {
-        inspect: async ({ signal }) => {
-          if (holdInspection) {
-            inspectionSignal = signal;
-            inspectionStarted.resolve();
-            await producerSettled.promise;
-          }
-          return { status: "active" };
-        },
-      },
-      { scheduler },
-    );
+    const inspection = createHeldInspection({ scheduler }, false);
+    const { environments } = inspection;
     const placements = createPlacements();
     const sidecar = await startRuntime(createRuntime({ placements, environments, scheduler }));
     let stopping: Promise<void> | undefined;
     const stopped = vi.fn();
     try {
-      holdInspection = true;
+      inspection.hold();
       void time.advanceBy(60_000);
-      await inspectionStarted.promise;
+      await inspection.entered;
       stopping = sidecar.stop().then(stopped);
-      expect(inspectionSignal?.aborted).toBe(true);
+      expect(inspection.signal?.aborted).toBe(true);
       await Promise.resolve();
       expect(stopped).not.toHaveBeenCalled();
       expect(testState.store.get("worker-close-inspection")).toMatchObject({
         state: "ready",
         leaseId: "lease:worker-close-inspection",
       });
-      producerSettled.resolve();
+      inspection.release();
       await stopping;
       expect(stopped).toHaveBeenCalledOnce();
     } finally {
-      producerSettled.resolve();
+      inspection.release();
       await (stopping ?? sidecar?.stop());
       await scheduler.stop();
     }
