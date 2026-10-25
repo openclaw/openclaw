@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -110,12 +110,11 @@ describe("chat.send error broadcast", () => {
           await release.promise;
           return true;
         });
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          sending.then(() => {
-            throw new Error("send finished before reaching admission");
-          }),
-        ]);
+          sending,
+          "send finished before reaching admission",
+        );
         expect(client.personPresence?.lastActivityAt).toBeUndefined();
         const duplicateResponse = vi.fn();
         await handleChatSend({ ...options, respond: duplicateResponse });

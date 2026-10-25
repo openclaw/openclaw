@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import * as workspaceOwner from "../../agents/workspace.js";
 import * as configBackup from "../../config/backup-rotation.js";
@@ -12,7 +13,6 @@ import {
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as fsSafe from "../../infra/fs-safe.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -79,10 +79,7 @@ function call(
   const target =
     method === "agents.create" ? { name: "New Avatar Agent", workspace } : { agentId: "existing" };
   const params = { ...target, ...fields };
-  return callAgentHandler(agentsHandlers[method]!, method, params, {
-    context,
-    client: requester,
-  });
+  return callAgentHandler(agentsHandlers[method]!, method, params, { context, client: requester });
 }
 beforeAll(async () => {
   state = await createOpenClawTestState({ layout: "state-only", label: "agent-avatar-policy" });
@@ -123,8 +120,8 @@ it.each([
   { method: "agents.update", stage: "remote-read" },
   { method: "agents.update", stage: "remote-write" },
 ] as const)("$method: upload revocation at $stage", async ({ method, stage }) => {
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
+  const entered = createDeferred();
+  const resume = createDeferred();
   const pause = async () => {
     entered.resolve();
     await resume.promise;
@@ -171,12 +168,7 @@ it.each([
   const originalConfig = await readConfig();
   const pending = call(method);
   try {
-    await Promise.race([
-      entered.promise,
-      pending.then(() => {
-        throw new Error(`handler did not reach ${stage}`);
-      }),
-    ]);
+    await awaitGateBeforeSettlement(entered.promise, pending, `handler did not reach ${stage}`);
     const accepted = stage === "config" || stage === "remote-write";
     const admittedIdentity = await readIdentity();
     if (accepted) {

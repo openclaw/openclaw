@@ -128,13 +128,11 @@ describe("openclaw.chat session lifecycle", () => {
     "rejoins with the current wizard interaction when live=%s",
     async (live) => {
       const engine = makeEngine();
-      const liveQuestion = { id: "wizard-q", header: "Pick", options: [{ label: "A" }] };
-      const liveStep = { id: "step-1", type: "text", message: "Enter a value" };
       const interaction = {
         sensitive: true,
         wizardInputPending: true,
-        question: liveQuestion,
-        step: liveStep,
+        question: { id: "wizard-q", header: "Pick", options: [{ label: "A" }] },
+        step: { id: "step-1", type: "text", message: "Enter a value" },
       };
       if (live) {
         engine.decorateRejoinReply = vi.fn((reply: Record<string, unknown>) => ({
