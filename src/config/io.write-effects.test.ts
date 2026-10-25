@@ -188,22 +188,12 @@ it("refuses a backup destination replaced between mode and rename", async () => 
   const f = fixture();
   const base = `${f.target}.bak`;
   fs.writeFileSync(base, "previous backup");
-  const handles = new Map<number, string>();
   let replaced = false;
   const io: typeof fs = {
     ...fs,
-    openSync: (name, flags, mode) => {
-      const fd = fs.openSync(name, flags, mode);
-      handles.set(fd, String(name));
-      return fd;
-    },
-    closeSync: (fd) => {
-      handles.delete(fd);
-      fs.closeSync(fd);
-    },
     fchmodSync: (fd, mode) => {
       fs.fchmodSync(fd, mode);
-      if (!replaced && handles.get(fd) === base) {
+      if (!replaced && fs.fstatSync(fd).ino === fs.statSync(base).ino) {
         replaced = true;
         fs.writeFileSync(`${base}.1`, "concurrent backup");
       }

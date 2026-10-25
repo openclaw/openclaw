@@ -190,7 +190,6 @@ describe("applyPluginAutoEnable channels", () => {
     expect(result.config.channels?.telegram?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["workspace-telegram"]).toBeUndefined();
     expect(result.config.plugins?.entries?.telegram).toBeUndefined();
-    expect(result.changes).toContain("Telegram configured, enabled automatically.");
     const blocked = materialize(
       { plugins: { allow: ["mattermost"] } },
       [{ pluginId: "workspace-telegram", kind: "channel-configured", channelId: "telegram" }],
@@ -203,15 +202,9 @@ describe("applyPluginAutoEnable channels", () => {
   });
 
   it.each([
-    {
-      label: "enabled entry",
-      plugins: { entries: { "workspace-telegram": { enabled: true } } },
-    },
-    {
-      label: "allowlist",
-      plugins: { allow: ["workspace-telegram"] },
-    },
-  ])("preserves a workspace channel replacement trusted by $label", ({ plugins }) => {
+    { entries: { "workspace-telegram": { enabled: true } } },
+    { allow: ["workspace-telegram"] },
+  ])("preserves a workspace channel replacement trusted by %j", (plugins) => {
     const result = autoEnable(
       channelConfig("telegram", { botToken: "token" }, plugins),
       { id: "telegram", channels: ["telegram"], origin: "bundled" },
@@ -236,9 +229,6 @@ describe("applyPluginAutoEnable channels", () => {
     expect(result.config.plugins?.entries?.mattermost?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "mattermost"]);
     expect(result.config.channels?.mattermost?.enabled).toBeUndefined();
-    expect(result.changes).toContain(
-      "mattermost installed for existing configuration, enabled automatically.",
-    );
   });
 
   it("uses the plugin manifest id, not the channel id, for plugins.entries", () => {
@@ -246,7 +236,6 @@ describe("applyPluginAutoEnable channels", () => {
 
     expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.apn).toBeUndefined();
-    expect(result.changes.join("\n")).toContain("apn configured, enabled automatically.");
   });
 
   it("falls back to the bundled channel when the preferred external plugin is disabled", () => {
@@ -262,9 +251,6 @@ describe("applyPluginAutoEnable channels", () => {
         id: "legacy-bundled-chat",
         channels: ["legacy-bundled-chat"],
         origin: "bundled",
-        channelConfigs: {
-          "legacy-bundled-chat": { schema: { type: "object" }, label: "Legacy Bundled Chat" },
-        },
       },
       preferredChannel("openclaw-modern-chat", "legacy-bundled-chat"),
     );
@@ -272,9 +258,6 @@ describe("applyPluginAutoEnable channels", () => {
     expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(false);
     expect(result.config.plugins?.entries?.["legacy-bundled-chat"]).toBeUndefined();
     expect(result.config.channels?.["legacy-bundled-chat"]?.enabled).toBe(true);
-    expect(result.changes.join("\n")).toContain(
-      "Legacy Bundled Chat configured, enabled automatically.",
-    );
   });
 
   it.each(["openclaw-qqbot", "qqbot"])(

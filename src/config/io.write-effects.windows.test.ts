@@ -192,63 +192,31 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
     testTimeout,
   );
 
-  it.for(["publication", "rollback"] as const)(
-    "stops %s after authority is revoked during a native fallback partial write",
+  it.for([
+    ["publication", "revoked"],
+    ["rollback", "revoked"],
+    ["rollback", "parent-directory"],
+    ["rollback", "same-byte-file"],
+  ] as const)(
+    "%s rejects %s during native fallback",
     { timeout: testTimeout },
-    async (phase, { signal }) => {
+    async ([phase, fault], { signal }) => {
       const f = fixture();
       const initial = await prepareClosedWrite(f, phase === "rollback");
+      const parentBefore = fs.lstatSync(f.dir, { bigint: true });
+      const movedParent = `${f.dir}-owned`;
       let observed: ReturnType<typeof identity> | undefined;
       let writes = 0;
       await withNativeSharingViolation(f.target, signal, async (io) => {
         const instrumented = instrumentDestination(io, f.target, {
+          closeOnOpenError: fault !== "revoked",
           chunkSize: 3,
-          write() {
-            writes++;
-            f.revoke();
-            observed = identity(f.target);
-          },
-        });
-        if (phase === "publication") {
-          await using prepared = (await prepare(f, instrumented)).prepared;
-          expect(() => prepared.publish()).toThrow(f.refusal);
-        } else {
-          await expect(
-            f.rollback(
-              instrumented,
-              initial.captureRollbackProof(f.assertCurrent),
-              rollbackOptions,
-            ),
-          ).rejects.toBe(f.refusal);
-        }
-      });
-      expect(writes).toBe(1);
-      expect(observed?.raw).toHaveLength(3);
-      expect(identity(f.target)).toEqual(observed);
-      expectRecoveryFiles(f);
-    },
-  );
-
-  it.for(["parent-directory", "same-byte-file"] as const)(
-    "does not write the open rollback destination after a %s replacement attempt",
-    { timeout: testTimeout },
-    async (replacement, { signal }) => {
-      const f = fixture();
-      const guarded = await prepareClosedWrite(f);
-      const rollbackProof = guarded.captureRollbackProof(f.assertCurrent);
-      const parentBefore = fs.lstatSync(f.dir, { bigint: true });
-      const movedParent = `${f.dir}-owned`;
-      let observed: ReturnType<typeof identity> | undefined;
-      let destinationWrites = 0;
-      await withNativeSharingViolation(f.target, signal, async (io) => {
-        const instrumented = instrumentDestination(io, f.target, {
-          closeOnOpenError: true,
           open() {
-            if (replacement === "parent-directory") {
+            if (fault === "parent-directory") {
               observed = identity(f.target);
-              // Windows denies this move while the atomic stage/destination is open.
+              // Windows denies this move while the stage/destination is open.
               fs.renameSync(f.dir, movedParent);
-            } else {
+            } else if (fault === "same-byte-file") {
               const raw = fs.readFileSync(f.target, "utf8");
               fs.renameSync(f.target, `${f.target}.owned`);
               fs.writeFileSync(f.target, raw);
@@ -256,25 +224,39 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
             }
           },
           write() {
-            destinationWrites++;
+            writes++;
+            if (fault === "revoked") {
+              f.revoke();
+              observed = identity(f.target);
+            }
           },
         });
-        const rollback = f.rollback(instrumented, rollbackProof, rollbackOptions);
-        if (replacement === "parent-directory") {
-          await expect(rollback).rejects.toMatchObject({
-            code: "EPERM",
-            syscall: "rename",
-            path: f.dir,
-            dest: movedParent,
-          });
+        if (phase === "publication") {
+          await using prepared = (await prepare(f, instrumented)).prepared;
+          expect(() => prepared.publish()).toThrow(f.refusal);
         } else {
-          await expect(rollback).rejects.toThrow(/changed/u);
+          const rollback = expect(
+            f.rollback(
+              instrumented,
+              initial.captureRollbackProof(f.assertCurrent),
+              rollbackOptions,
+            ),
+          ).rejects;
+          if (fault === "revoked") {
+            await rollback.toBe(f.refusal);
+          } else if (fault === "parent-directory") {
+            await rollback.toMatchObject({ code: "EPERM" });
+          } else {
+            await rollback.toThrow(/changed/u);
+          }
         }
       });
       expect(observed).toBeDefined();
-      expect(destinationWrites).toBe(0);
+      expect(writes).toBe(fault === "revoked" ? 1 : 0);
       expect(identity(f.target)).toEqual(observed);
-      if (replacement === "parent-directory") {
+      if (fault === "revoked") {
+        expect(observed?.raw).toHaveLength(3);
+      } else if (fault === "parent-directory") {
         expect(observed?.raw).toBe("");
         expect(fs.lstatSync(f.dir, { bigint: true })).toMatchObject({
           dev: parentBefore.dev,

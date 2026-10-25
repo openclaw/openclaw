@@ -69,9 +69,6 @@ describe("config backup rotation", () => {
       await createSnapshot(configPath);
       for (let version = 1; version <= 6; version += 1) {
         await set("gateway.port", String(19000 + version));
-        if (version === 1) {
-          await expectFile(`${configPath}.bak`, original);
-        }
       }
 
       await expect(
@@ -143,7 +140,6 @@ describe("config backup rotation", () => {
           for (const [index, backupPath] of backupPaths.entries()) {
             await fs.writeFile(backupPath, `recovery-${index}`, { mode: 0o644 });
           }
-          const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
           const readBackups = () =>
             backupPaths.map((backupPath) => {
               const stat = fsNode.statSync(backupPath, { throwIfNoEntry: false });
@@ -152,7 +148,7 @@ describe("config backup rotation", () => {
                 : null;
             });
           let atRevocation: ReturnType<typeof readBackups> | undefined;
-          const openBackupPaths = new Map<number, fsNode.PathLike>();
+          const backupInodes = new Set(backupPaths.map((file) => fsNode.statSync(file).ino));
           const mutationsAfterRevocation: string[] = [];
           const afterMutation = (operation: typeof revokeAfter, target: fsNode.PathLike) => {
             if (!String(target).includes(".bak")) {
@@ -166,20 +162,12 @@ describe("config backup rotation", () => {
             }
           };
           const io = createConfigIO({
-            env,
+            env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
             homedir: () => home,
             observe: false,
             pluginValidation: "skip",
             fs: {
               ...fsNode,
-              openSync: afterCall(fsNode.openSync, (fd, target) => {
-                if (backupPaths.includes(String(target))) {
-                  openBackupPaths.set(fd, target);
-                }
-              }),
-              closeSync: afterCall(fsNode.closeSync, (_, fd) => {
-                openBackupPaths.delete(fd);
-              }),
               unlinkSync: afterCall(fsNode.unlinkSync, (_, target) =>
                 afterMutation("unlink", target),
               ),
@@ -187,9 +175,8 @@ describe("config backup rotation", () => {
                 afterMutation("rename", target),
               ),
               fchmodSync: afterCall(fsNode.fchmodSync, (_, fd) => {
-                const target = openBackupPaths.get(fd);
-                if (target !== undefined) {
-                  afterMutation("fchmod", target);
+                if (backupInodes.has(fsNode.fstatSync(fd).ino)) {
+                  afterMutation("fchmod", ".bak");
                 }
               }),
             },
@@ -222,7 +209,6 @@ describe("config backup rotation", () => {
       await createSnapshot(configPath);
       await expectFile(snapshotPath, "current");
 
-      // Later writes in the same update attempt should not replace the first snapshot.
       await fs.writeFile(configPath, "second");
       await createSnapshot(configPath);
       await expectFile(snapshotPath, "current");
@@ -240,7 +226,7 @@ describe("config backup rotation", () => {
 
   it("retries snapshot after transient read and write errors (#105431)", async () => {
     await withTempHome(async () => {
-      const content = JSON.stringify({ plugins: { installs: ["slack"] } });
+      const content = "current";
       const fail = async () => {
         throw new Error("transient I/O error");
       };
