@@ -2,10 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getWindowsCmdExePath } from "./windows-install-roots.js";
 import { decodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
+import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn(() => os.tmpdir()));
@@ -34,16 +35,11 @@ vi.mock("./windows-encoding.js", async (original) => ({
   resolveWindowsOemEncoding: resolveWindowsOemEncodingMock,
 }));
 
-type WindowsTaskRestartModule = typeof import("./windows-task-restart.js");
-
-let relaunchGatewayScheduledTask: WindowsTaskRestartModule["relaunchGatewayScheduledTask"];
-
 const originalArgv = [...process.argv];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let scriptPath: string | undefined;
 const unref = vi.fn();
 const readScript = () => fs.readFileSync(expectDefined(scriptPath, "helper path"), "utf8");
-const detachedOptions = { detached: true, stdio: "ignore", windowsHide: true };
 
 function executeRestart(command: (line: string) => number, env: NodeJS.ProcessEnv = {}) {
   expect(relaunchGatewayScheduledTask(env).ok).toBe(true);
@@ -129,10 +125,6 @@ afterEach(() => {
   scriptPath = undefined;
 });
 
-beforeAll(async () => {
-  ({ relaunchGatewayScheduledTask } = await import("./windows-task-restart.js"));
-});
-
 beforeEach(() => {
   process.argv = [process.execPath, "C:\\OpenClaw\\dist\\entry.js", "gateway", "--port", "18789"];
   unref.mockReset();
@@ -163,7 +155,7 @@ it("writes a detached schtasks relaunch helper", () => {
   expect(spawnCall).toStrictEqual([
     cmdExePath,
     ["/d", "/s", "/c", seenCommandArg],
-    detachedOptions,
+    { detached: true, stdio: "ignore", windowsHide: true },
   ]);
   expect(unref).toHaveBeenCalledOnce();
   const script = readScript();
@@ -253,17 +245,13 @@ it("isolates task names from PowerShell observation", () => {
   );
 });
 
-// Keep host home/state paths ASCII; only the task name tests GBK encoding.
-const asciiPathEnv = {
-  HOME: "C:\\ocw-test",
-  USERPROFILE: "C:\\ocw-test",
-  OPENCLAW_STATE_DIR: "C:\\ocw-test\\state",
-};
-
 it("roundtrips marked CJK task names", () => {
   resolveWindowsOemEncodingMock.mockReturnValue("gbk");
   const result = relaunchGatewayScheduledTask({
-    ...asciiPathEnv,
+    // Keep host paths ASCII; only the task name tests GBK encoding.
+    HOME: "C:\\ocw-test",
+    USERPROFILE: "C:\\ocw-test",
+    OPENCLAW_STATE_DIR: "C:\\ocw-test\\state",
     OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (隆)",
   });
   expect(result.ok).toBe(true);
