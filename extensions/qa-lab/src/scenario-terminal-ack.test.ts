@@ -245,16 +245,26 @@ async function replayPrivateKickoff(text: string, fault?: string) {
 }
 
 describe("terminal private kickoff progress oracle", () => {
-  it("accepts the public spawn status", async () => {
-    await expect(
-      replayPrivateKickoff("<b>Working</b>\nLast activity: Sub-agent"),
-    ).resolves.toMatchObject({ status: "pass" });
+  it.each([
+    "<b>Working</b>",
+    "<b>Working</b>\nSub-agent: running",
+    "<b>Working</b>\nLast activity: Sub-agent",
+  ])("accepts the public spawn status %s", async (text) => {
+    await expect(replayPrivateKickoff(text)).resolves.toMatchObject({ status: "pass" });
   });
 
-  it("rejects private prose appended to the public status", async () => {
-    await expect(
-      replayPrivateKickoff("<b>Working</b>\nLast activity: Sub-agent\nprivate child prose"),
-    ).rejects.toThrow("private completion emitted unexpected");
+  it.each([
+    "<b>Working</b>\nprivate child prose",
+    "<b>Working</b>\nQA-PARENT-PRIVATE-CHILD1-0123456789ABCDEF0123456789ABCDEF",
+    "<b>Working</b>\nMEDIA:qa-private-result.png",
+    "<b>Working</b>\nNO_REPLY",
+    "<b>Working</b>\nExec: running",
+    "<b>Working</b>\nLast activity: Sub-agent\nprivate child prose",
+    "<b>Working</b>\nqa-terminal-private-first: completed",
+  ])("rejects non-fixture status %s", async (text) => {
+    await expect(replayPrivateKickoff(text)).rejects.toThrow(
+      "private completion emitted unexpected",
+    );
   });
 
   it.each(["target", "media", "transient", "wire", "non-telegram"])(

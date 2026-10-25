@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { cancelPendingConversationTurn } from "../../sessions/conversation-turns.js";
 import {
   ConversationInputError,
   ConversationOperationConflictError,
 } from "../conversation-errors.js";
+import { runGatewayConversationList } from "../conversation-list.js";
 import { runGatewayConversationSend } from "../conversation-send.js";
 import { runGatewayConversationTurn } from "../conversation-turn.js";
 import { conversationHandlers } from "./conversations.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 vi.mock("../../sessions/conversation-turns.js", () => ({ cancelPendingConversationTurn: vi.fn() }));
 vi.mock("../conversation-list.js", () => ({ runGatewayConversationList: vi.fn() }));
@@ -15,8 +17,10 @@ vi.mock("../conversation-send.js", () => ({ runGatewayConversationSend: vi.fn() 
 vi.mock("../conversation-turn.js", () => ({ runGatewayConversationTurn: vi.fn() }));
 
 beforeEach(() => vi.resetAllMocks());
+const runConversationList = vi.mocked(runGatewayConversationList);
 const runConversationSend = vi.mocked(runGatewayConversationSend);
 const runConversationTurn = vi.mocked(runGatewayConversationTurn);
+const cancelConversationTurn = vi.mocked(cancelPendingConversationTurn);
 
 const request = {
   agentId: "main",
@@ -58,7 +62,15 @@ const sendResult = {
   queueId: "conversation-send-1",
 };
 
-function caller(method = "conversations.turn", defaults: Record<string, unknown> = request) {
+const adminClient = {
+  connect: { scopes: ["operator.admin"] },
+} as never;
+
+function caller(
+  method = "conversations.turn",
+  defaults: Record<string, unknown> = request,
+  client: GatewayClient | null = adminClient,
+) {
   const gatewayContext = {
     dedupe: new Map(),
     getRuntimeConfig: () => ({}),
@@ -69,7 +81,7 @@ function caller(method = "conversations.turn", defaults: Record<string, unknown>
       respond,
       context: gatewayContext,
       req: { type: "req", id: "1", method },
-      client: { connect: { scopes: ["operator.admin"] } } as never,
+      client,
       isWebchatConnect: () => false,
     });
   const start = (params = defaults) => {
@@ -280,5 +292,24 @@ describe("conversations.turn Gateway handler", () => {
     const retryRespond = await query();
     expect(runConversationTurn).toHaveBeenCalledOnce();
     expectFailure(retryRespond, error, { cached: true });
+  });
+
+  it("cancels an abandoned turn through the active Gateway connection", async () => {
+    cancelConversationTurn.mockReturnValue(true);
+    const { query } = caller(
+      "conversations.turn.cancel",
+      {
+        agentId: request.agentId,
+        turnId: request.turnId,
+      },
+      null,
+    );
+    const respond = await query();
+
+    expect(cancelConversationTurn).toHaveBeenCalledWith({
+      agentId: request.agentId,
+      id: request.turnId,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { cancelled: true }, undefined);
   });
 });

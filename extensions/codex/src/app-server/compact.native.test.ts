@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessCompactParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -155,6 +157,14 @@ it(
           "stream_max_retries=0",
         ].join("\n"),
       );
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            handler: () => ({ systemPrompt: "Reply with only COMPACT_READY. Do not use tools." }),
+          },
+        ]),
+      );
       const factory: CodexAppServerClientFactory = async (options) => {
         options?.assertCurrent?.();
         expect(options?.preparedAuth).toBeUndefined();
@@ -287,7 +297,14 @@ it(
       expect(tokensAfter).toBeGreaterThan(0);
       const target = params.sessionTarget;
       assert(target?.sessionId && target.sessionKey && target.storePath);
-      const activities = (await readSessionTranscriptEvents(target)).flatMap((event) =>
+      const activities = (
+        await readSessionTranscriptEvents({
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath: target.storePath,
+        })
+      ).flatMap((event) =>
         isJsonObject(event) &&
         isJsonObject(event.message) &&
         event.message.customType === "openclaw.context-compaction"
@@ -313,7 +330,8 @@ it(
     } finally {
       try {
         if (client) {
-          expect(await client.closeAndWait()).toMatchObject({ exited: true });
+          const closed = await client.closeAndWait();
+          expect(closed).toMatchObject({ exited: true });
         }
       } finally {
         closeHost?.();

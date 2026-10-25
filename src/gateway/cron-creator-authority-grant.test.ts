@@ -90,6 +90,7 @@ describe("cron creator authority grants", () => {
       cronCreatorAuthorityCapability: scope,
     };
     const current: Pick<EmbeddedRunAttemptParamsV2, "cronCreatorAuthorityCapability"> = legacy;
+    expect(legacy.cronCreatorAuthorityCapability?.controlUiAdmin).toBe(true);
     expect(current.cronCreatorAuthorityCapability?.controlUiAdmin).toBe(true);
     expect(() => mint(scope)).toThrow("Automation creation is not granted");
   });
@@ -115,6 +116,7 @@ describe("cron creator authority grants", () => {
       payload: { apps: [{ id: "calendar" }] },
     };
     const grant = mint(scope, undefined, runtimeAuthority);
+    expect(grant).toEqual({ runId: "run-authority", token: expect.any(String) });
     expect(() => consume({ ...grant, runId: "run-other" })).toThrow(
       "Configured MCP cron authority is no longer active",
     );
@@ -145,7 +147,9 @@ describe("cron creator authority grants", () => {
       const grant = mintCurrent();
       const consumed = consume(grant);
       const unspent = mintCurrent();
+      expect(consumed.authority).toBeUndefined();
       expect(consumed.assertCurrent).not.toThrow();
+      expect(() => consume(grant)).toThrow("no longer active");
       await Promise.resolve();
       if (revoked === "issuer" || revoked === "scope") {
         current[revoked] = false;
@@ -194,6 +198,14 @@ describe("cron management authority grants", () => {
     await fixture.deny({ runId: fixture.scope.runId, token: "missing-grant" });
   });
 
+  it("expires at sixty seconds before redemption", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const fixture = createManagementFixture();
+    const grant = fixture.mint();
+    clock.mockReturnValue(61_000);
+    await fixture.deny(grant);
+  });
+
   it("retains only the stream mutation through one bounded approval wait", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const fixture = createManagementFixture();
@@ -206,13 +218,16 @@ describe("cron management authority grants", () => {
     clock.mockReturnValue(61_000);
     await fixture.deny(ordinaryGrant, "cron.update");
 
+    const effect = vi.fn();
     await withGrant(streamGrant, fixture.identity, "cron.update", async () => {
       const assertActive = getCronManagementAuthority(fixture.identity)!;
       await Promise.resolve();
       assertActive();
+      effect();
       clock.mockReturnValue(1_000 + DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000);
       expect(assertActive).toThrow(denied);
     });
+    expect(effect).toHaveBeenCalledOnce();
     await fixture.deny(streamGrant, "cron.update");
   });
 
@@ -221,18 +236,18 @@ describe("cron management authority grants", () => {
     async (substitution) => {
       const fixture = createManagementFixture();
       const grant = fixture.mint();
-      const operationalRunInstance = { ...fixture.identity.operationalRunInstance };
-      const delegatedAuthority = { ...fixture.identity.delegatedAuthority };
-      if (substitution === "instance") {
-        operationalRunInstance.instanceId = "other-instance";
-      }
-      if (substitution === "lifecycle") {
-        delegatedAuthority.lifecycleGeneration = "other-lifecycle";
-      }
-      if (substitution === "claim") {
-        delegatedAuthority.claimId = "other-claim";
-      }
-      const identity = { ...fixture.identity, operationalRunInstance, delegatedAuthority };
+      const identity: AgentRuntimeIdentity = {
+        ...fixture.identity,
+        operationalRunInstance: {
+          ...fixture.identity.operationalRunInstance,
+          ...(substitution === "instance" ? { instanceId: "other-instance" } : {}),
+        },
+        delegatedAuthority: {
+          ...fixture.identity.delegatedAuthority,
+          ...(substitution === "lifecycle" ? { lifecycleGeneration: "other-lifecycle" } : {}),
+          ...(substitution === "claim" ? { claimId: "other-claim" } : {}),
+        },
+      };
       await fixture.deny(
         substitution === "run" ? { ...grant, runId: "other-run" } : grant,
         substitution === "method" ? "cron.remove" : "cron.get",

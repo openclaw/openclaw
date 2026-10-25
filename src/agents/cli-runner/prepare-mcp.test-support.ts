@@ -34,21 +34,31 @@ const loopbackRuntime = () => ({
 });
 
 export function createCliMcpTool(name: string, label: string, description: string) {
-  return createCliTool(name, label, description);
+  return {
+    name,
+    label,
+    description,
+    parameters: { type: "object", properties: {} },
+    execute: vi.fn(),
+  };
 }
 
 export function mockCliMcpPreparation(overrides: Record<string, unknown> = {}) {
   const mint = vi.fn(createTestMcpLoopbackClientGrant);
   const revoke = vi.fn(() => true);
   setCliRunnerPrepareTestDeps({
-    ...emptyCliPreparation(),
+    isWorkspaceBootstrapPending: async () => false,
     makeBootstrapWarn: () => () => undefined,
+    resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
     getActiveMcpLoopbackRuntime: loopbackRuntime,
     createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
     mintMcpLoopbackClientGrant: mint,
     bindMcpLoopbackClientGrantAdmission: () => true,
     revokeMcpLoopbackClientGrant: revoke,
+    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
+    prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
     getCliLiveSessionGeneration: () => undefined,
+    loadManifestModelCatalog: () => [],
     ...overrides,
   });
   return { mint, revoke };
@@ -90,7 +100,7 @@ export function registerCliMcpPreparationTests({
       nativeAuthOnly: true,
       config: {},
     });
-    await withCliContext(context, async () => {
+    try {
       const { env } = resolveCliChildEnv(context.preparedBackend, context.params);
       expect(env.GEMINI_CLI_HOME).toBe(home);
       const settingsPath = expectDefined(
@@ -100,27 +110,25 @@ export function registerCliMcpPreparationTests({
       expect(settingsPath).toBe(context.preparedBackend.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH);
       const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
       expect(settings.mcp.allowed).toEqual(["openclaw"]);
-    });
+    } finally {
+      await context.preparedBackend.cleanup?.();
+    }
   });
 
-  it("keeps one prepared admission through MCP projection, grant transfer and cleanup", async () => {
+  it("preserves already-admitted authority through MCP grant transfer", async () => {
     const messageActionTurnCapability = "test-current-message-authority";
     const activateCapture = vi.fn(() => ({ captureNativeToolAuthority: () => true }));
     const deactivateCapture = vi.fn(() => true);
     const transferGrant = vi.fn(() => true);
-    const bindAdmission = vi.fn(() => true);
-    const projectTools = vi.fn((_scope: McpProjectionParams) => ({
-      agentId: "main",
-      tools: [createCliMcpTool("message", "Message", "Send a message")],
-    }));
     const { mint, revoke } = mockCliMcpPreparation({
       activateMcpLoopbackClientGrantCapture: activateCapture,
       deactivateMcpLoopbackClientGrantCapture: deactivateCapture,
       transferMcpLoopbackClientGrant: transferGrant,
-      resolveMcpLoopbackScopedTools: projectTools,
-      bindMcpLoopbackClientGrantAdmission: bindAdmission,
+      resolveMcpLoopbackScopedTools: () => ({
+        agentId: "main",
+        tools: [createCliMcpTool("message", "Message", "Send a message")],
+      }),
     });
-    const config = createConfig();
     setRawCliBackendForPrepareTest({
       id: "native-cli",
       pluginId: "native-plugin",
@@ -130,31 +138,49 @@ export function registerCliMcpPreparationTests({
     });
     const sessionKey = "agent:main:telegram:group:chat123";
     const senderId = "canonical-sender";
-    const runId = "run-test-room-event-tools";
+    const sender = {
+      senderName: "Canonical Name",
+      senderUsername: "canonical-user",
+      senderE164: "+15551234567",
+      groupId: "chat123",
+      groupChannel: "ops",
+      groupSpace: "workspace-a",
+    };
+    const sessionEntry = { execHost: "node", execNode: "mac-a" } as const;
     const forwarded = {
       runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-      runId,
+      modelProvider: "anthropic",
+      runId: "run-test-room-event-tools",
+      execOverrides: { host: "node", security: "allowlist", ask: "always", node: "mac-b" },
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      },
+      trigger: "user",
       clientCaps: ["tool-events", "inline-widgets"],
       pinnedWidgetAuthoring: true,
       currentChannelId: "telegram:-100123:topic:42",
       currentThreadTs: "42",
       currentMessageId: "reply-message-1",
+      currentInboundAudio: true,
       sourceReplyDeliveryMode: "message_tool_only",
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,
       approvalReviewerDeviceId: "reviewer-device",
       spawnedBy: "agent:main:telegram:group:parent",
     } satisfies Partial<RunCliAgentParams>;
-    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "cli-mcp-projection");
-    try {
-      const context = await getFixture().prepare({
+    const { preparedBackend, params, workspaceDir, mcpDeliveryCapture, systemPrompt } =
+      await getFixture().prepare({
         ...forwarded,
-        config,
-        preparedRunAdmission: admission,
+        ...sender,
         sessionKey,
         agentId: "worker",
         provider: "native-cli",
         messageActionTurnCapability,
+        sessionEntry: sessionEntry as never,
         currentInboundEventKind: "room_event",
         messageChannel: "telegram",
         messageProvider: "discord",
@@ -164,62 +190,62 @@ export function registerCliMcpPreparationTests({
           chat: { id: "chat-1", title: "not-forwarded" },
         },
       });
-      const { preparedBackend, params, mcpDeliveryCapture, systemPrompt } = context;
-      await withCliContext(context, async () => {
-        const { admittedRunContext } = params;
-        expect(admittedRunContext.operationalRunInstance).toBe(admission.operationalRunInstance);
-        expect(projectTools.mock.calls[0]?.[0].admittedRunContext).toBe(admittedRunContext);
-        expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
-        expect(bindAdmission.mock.calls).toEqual([
-          [{ token, runtimeOwnerToken, admittedRunContext }],
-        ]);
-        expect(preparedBackend.env).toMatchObject({
-          OPENCLAW_MCP_TOKEN: token,
-          OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
-        });
-        expect(JSON.stringify(preparedBackend.env)).not.toContain(messageActionTurnCapability);
-        expect(mint).toHaveBeenCalledWith(
-          expect.objectContaining({
-            context: expect.objectContaining({
-              ...forwarded,
-              sessionKey,
-              requesterOrigin: { sessionKey, messageProvider: "discord", senderId },
-              runtimePolicyAgentId: "worker",
-              agentId: "main",
-              messageProvider: "telegram",
-              inboundEventKind: "room_event",
-              senderIsOwner: false,
-              channelContext: { sender: { id: senderId }, chat: { id: "chat-1" } },
-            }),
-            runtimeOwnerToken,
-            admittedRunContext: params.admittedRunContext,
-            messageActionTurnCapability,
-            bindQuestionAnswerAuthority: expect.any(Function),
-          }),
-        );
-        const capture = preparedBackend.mcpClientGrantCapture;
-        expect(capture?.transportToken).toBe(token);
-        capture?.adoptProcessToken(processToken);
-        const assertCurrent = () => {};
-        const captureKey = "capture-test";
-        capture?.activate(captureKey, assertCurrent);
-        capture?.deactivate(captureKey);
-        const transfer = { sourceToken: token, targetToken: processToken, runtimeOwnerToken };
-        expect(transferGrant.mock.calls).toEqual([[transfer]]);
-        const processCapture = { token: processToken, runtimeOwnerToken, captureKey };
-        expect(activateCapture.mock.calls).toEqual([[{ ...processCapture, assertCurrent }]]);
-        expect(deactivateCapture.mock.calls).toEqual([[processCapture]]);
-        capture?.revokeProcessToken();
-        expect(revoke).toHaveBeenCalledExactlyOnceWith(processToken);
-        expect(mcpDeliveryCapture).toBe(true);
-        expect(systemPrompt).toContain("`send`: `target` + `message`; target required this turn");
-        expect(systemPrompt).not.toContain("current source is default target");
-      });
-      expect(revoke).toHaveBeenCalledTimes(2);
-      expect(revoke).toHaveBeenLastCalledWith(token);
-    } finally {
-      admission.close();
-    }
+
+    expect(preparedBackend.env).toMatchObject({
+      OPENCLAW_MCP_TOKEN: token,
+      OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+    });
+    expect(JSON.stringify(preparedBackend.env)).not.toContain(messageActionTurnCapability);
+    const settings = { permissionMode: undefined, toolOverrides: undefined };
+    expect(mint).toHaveBeenCalledWith({
+      context: {
+        ...forwarded,
+        ...sender,
+        sessionKey,
+        requesterOrigin: { ...sender, sessionKey, messageProvider: "discord", senderId },
+        runtimePolicyAgentId: "worker",
+        agentId: "main",
+        sessionId: "session-test",
+        workspaceDir,
+        modelId: "test-model",
+        messageProvider: "telegram",
+        accountId: undefined,
+        inboundEventKind: "room_event",
+        senderIsOwner: false,
+        nodeExecAllowed: true,
+        execSession: sessionEntry,
+        channelContext: { sender: { id: senderId }, chat: { id: "chat-1" } },
+      },
+      runtimeOwnerToken,
+      admittedRunContext: params.admittedRunContext,
+      toolPolicyConfig: {},
+      sessionEventSourcePolicy: { toolsAllow: undefined, settings },
+      messageActionTurnCapability,
+      bindQuestionAnswerAuthority: expect.any(Function),
+      toolAuth: {
+        agentDir: expect.any(String),
+        store: expect.objectContaining({ version: 1, profiles: {} }),
+      },
+    });
+    const capture = preparedBackend.mcpClientGrantCapture;
+    expect(capture?.transportToken).toBe(token);
+    capture?.adoptProcessToken(processToken);
+    const assertCurrent = () => {};
+    capture?.activate("capture-test", assertCurrent);
+    capture?.deactivate("capture-test");
+    const transfer = { sourceToken: token, targetToken: processToken, runtimeOwnerToken };
+    expect(transferGrant.mock.calls).toEqual([[transfer]]);
+    const processCapture = { token: processToken, runtimeOwnerToken, captureKey: "capture-test" };
+    expect(activateCapture.mock.calls).toEqual([[{ ...processCapture, assertCurrent }]]);
+    expect(deactivateCapture.mock.calls).toEqual([[processCapture]]);
+    capture?.revokeProcessToken();
+    expect(revoke).toHaveBeenCalledExactlyOnceWith(processToken);
+    expect(mcpDeliveryCapture).toBe(true);
+    expect(systemPrompt).toContain("`send`: `target` + `message`; target required this turn");
+    expect(systemPrompt).not.toContain("current source is default target");
+    await preparedBackend.cleanup?.();
+    expect(revoke).toHaveBeenCalledTimes(2);
+    expect(revoke).toHaveBeenLastCalledWith(token);
   });
 
   it.each<[name: string, managed: boolean, overrides?: McpRunOverrides]>([
@@ -304,6 +330,42 @@ export function registerCliMcpPreparationTests({
     await context.preparedBackend.cleanup?.();
     expect(revoke).toHaveBeenCalledWith(token);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("binds one live prepared admission to tool projection and the CLI MCP grant", async () => {
+    const bindAdmission = vi.fn(() => true);
+    const projectTools = vi.fn((_scope: McpProjectionParams) => ({ agentId: "main", tools: [] }));
+    mockCliMcpPreparation({
+      resolveMcpLoopbackScopedTools: projectTools,
+      bindMcpLoopbackClientGrantAdmission: bindAdmission,
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      "run-prepared-mcp",
+      "main",
+      "cli-mcp-projection",
+    );
+    try {
+      const context = await getFixture().prepare({
+        runId: "run-prepared-mcp",
+        preparedRunAdmission: admission,
+        config: createConfig(),
+      });
+
+      try {
+        const { admittedRunContext } = context.params;
+        expect(admittedRunContext.operationalRunInstance).toBe(admission.operationalRunInstance);
+        expect(projectTools.mock.calls[0]?.[0].admittedRunContext).toBe(admittedRunContext);
+        expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
+        expect(bindAdmission.mock.calls).toEqual([
+          [{ token, runtimeOwnerToken, admittedRunContext }],
+        ]);
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    } finally {
+      admission.close();
+    }
   });
 }
 

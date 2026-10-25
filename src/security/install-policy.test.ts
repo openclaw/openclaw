@@ -92,12 +92,21 @@ async function expectInvalidExec(exec: Omit<PolicyExec, "source">, message: stri
   expect(validation.issues.map((issue) => issue.message)).toContain(message);
 }
 
+function configWithPolicy(scriptPath: string, env: Record<string, string>): OpenClawConfig {
+  return configWithExec({
+    command: scriptPath,
+    env,
+    trustedDirs: [path.dirname(scriptPath)],
+    timeoutMs: 5000,
+    maxOutputBytes: 16 * 1024,
+  });
+}
+
 describe("runInstallPolicy", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let sourceDir: string;
   let scriptPath: string;
   let receipts: FixtureReceiptChannel;
-  const debugLogs: string[] = [];
 
   beforeAll(async () => {
     receipts = await openFixtureReceiptChannel();
@@ -107,46 +116,35 @@ describe("runInstallPolicy", () => {
   });
 
   beforeEach(async () => {
-    debugLogs.length = 0;
     sourceDir = tempDirs.make("openclaw-install-policy-");
     scriptPath = await writePolicyScript(sourceDir);
   });
 
-  function runPolicy(config: OpenClawConfig, options: PolicyOptions = {}) {
-    return runInstallPolicy({
-      config,
-      request: baseRequest(sourceDir),
-      logger: { debug: (message) => debugLogs.push(message) },
-      ...options,
-    });
+  async function writeWritableParentPolicy() {
+    const dir = tempDirs.make("openclaw-install-policy-");
+    const writableDir = path.join(dir, "writable-parent");
+    await fs.mkdir(writableDir, { recursive: true });
+    await fs.chmod(writableDir, 0o777);
+    return { writableDir, writableScriptPath: await writePolicyScript(writableDir) };
   }
 
-  function runExec(
-    exec: Partial<Omit<PolicyExec, "source">>,
-    options: PolicyOptions = {},
-    policy: Omit<NonNullable<SecurityConfig["installPolicy"]>, "exec"> = {},
-  ) {
+  function runPolicy(config: OpenClawConfig, options: PolicyOptions = {}) {
+    return runInstallPolicy({ config, request: baseRequest(sourceDir), ...options });
+  }
+
+  function runResponse(response: unknown, options: Pick<PolicyOptions, "logger"> = {}) {
     return runPolicy(
-      configWithExec(
-        {
-          command: scriptPath,
-          trustedDirs: [sourceDir],
-          timeoutMs: 5000,
-          maxOutputBytes: 16 * 1024,
-          ...exec,
-        },
-        policy,
-      ),
+      configWithPolicy(scriptPath, { POLICY_RESPONSE: JSON.stringify(response) }),
       options,
     );
   }
 
-  function runResponse(response: unknown) {
-    return runExec({ env: { POLICY_RESPONSE: JSON.stringify(response) } });
-  }
-
-  function runDecision(decision: "allow" | "warn" | "block", fields: Record<string, unknown>) {
-    return runResponse({ protocolVersion: 1, decision, ...fields });
+  function runDecision(
+    decision: "allow" | "warn" | "block",
+    fields: Record<string, unknown>,
+    options: Pick<PolicyOptions, "logger"> = {},
+  ) {
+    return runResponse({ protocolVersion: 1, decision, ...fields }, options);
   }
 
   it("does nothing when install policy is present but not enabled", async () => {
@@ -157,16 +155,20 @@ describe("runInstallPolicy", () => {
     if (process.platform === "win32") {
       return;
     }
-    await writePolicyScript(
+    const envNodeScriptPath = await writePolicyScript(
       sourceDir,
       '#!/usr/bin/env node\nprocess.stdout.write(process.env.POLICY_RESPONSE || "");\n',
     );
-    const result = await runExec(
-      {
+    const result = await runPolicy(
+      configWithExec({
+        command: envNodeScriptPath,
         env: { POLICY_RESPONSE: JSON.stringify({ protocolVersion: 1, decision: "allow" }) },
         passEnv: ["PATH"],
+        trustedDirs: [path.dirname(envNodeScriptPath)],
+      }),
+      {
+        env: { PATH: path.dirname(requireNodeTool("node")) },
       },
-      { env: { PATH: path.dirname(requireNodeTool("node")) } },
     );
     expect(result).toEqual({});
   });
@@ -197,11 +199,15 @@ describe("runInstallPolicy", () => {
         });
 
       try {
-        resultPromise = runExec({
-          command: forkScriptPath,
-          env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-          noOutputTimeoutMs: 1_000,
-          timeoutMs: 10_000,
+        resultPromise = runInstallPolicy({
+          config: configWithExec({
+            command: forkScriptPath,
+            env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
+            trustedDirs: [path.dirname(forkScriptPath)],
+            noOutputTimeoutMs: 1_000,
+            timeoutMs: 10_000,
+          }),
+          request: baseRequest(sourceDir),
         });
         void resultPromise.catch(() => undefined);
         // The PID record precedes the receipt; operation settlement can win the socket race.
@@ -242,9 +248,11 @@ describe("runInstallPolicy", () => {
   it("does not inherit PATH unless passEnv includes it", async () => {
     const envPath = path.join(sourceDir, "env.json");
     const response = JSON.stringify({ protocolVersion: 1, decision: "allow" });
-    const result = await runExec(
-      { env: { ENV_FILE: envPath, POLICY_RESPONSE: response } },
-      { env: { PATH: "/tmp/untrusted-path" } },
+    const result = await runPolicy(
+      configWithPolicy(scriptPath, { ENV_FILE: envPath, POLICY_RESPONSE: response }),
+      {
+        env: { PATH: "/tmp/untrusted-path" },
+      },
     );
     expect(result).toEqual({});
     const captured = JSON.parse(await fs.readFile(envPath, "utf8")) as {
@@ -255,36 +263,59 @@ describe("runInstallPolicy", () => {
   });
 
   it("skips skill requests when targets only include plugins", async () => {
-    await expect(
-      runExec({ env: { EXIT_CODE: "1" } }, {}, { targets: ["plugin"] }),
-    ).resolves.toBeUndefined();
+    const config = configWithExec(
+      {
+        command: process.execPath,
+        args: [scriptPath],
+        env: { EXIT_CODE: "1" },
+        trustedDirs: [path.dirname(scriptPath)],
+      },
+      { targets: ["plugin"] },
+    );
+
+    await expect(runPolicy(config)).resolves.toBeUndefined();
   });
 
   const reasonPrefix = "r".repeat(999);
   const criticalFinding = makeFinding("review", "Registry is not approved.", {
     severity: "critical",
   });
-  const malformedFindings = [
-    makeFinding("  review  ", "  Review.  ", { file: 42, line: "7", evidence: false }),
-    { ruleId: 42, severity: "warn", message: "invalid required field" },
-  ];
-  it.each<{
-    name: string;
-    decision: "allow" | "block";
-    fields: Record<string, unknown>;
-    expected: unknown;
-  }>`
-    name                                     | decision   | fields                                                            | expected
-    ${"UTF-16 block truncation"}             | ${"block"} | ${{ reason: `${reasonPrefix}🎉tail` }}                            | ${blocked(`${reasonPrefix.slice(0, 997)}...`)}
-    ${"malformed fields and findings"}       | ${"allow"} | ${{ findings: malformedFindings }}                                | ${{ findings: [makeFinding("review", "Review.")] }}
-    ${"block findings without file or line"} | ${"block"} | ${{ reason: "unapproved registry", findings: [criticalFinding] }} | ${{ ...blocked("unapproved registry"), findings: [criticalFinding] }}
-  `("$name", async ({ decision, fields, expected }) => {
+  it.each([
+    [
+      "UTF-16 block truncation",
+      "block",
+      { reason: `${reasonPrefix}🎉tail` },
+      blocked(`${reasonPrefix.slice(0, 997)}...`),
+    ],
+    [
+      "malformed fields and findings",
+      "allow",
+      {
+        findings: [
+          makeFinding("  review  ", "  Review.  ", { file: 42, line: "7", evidence: false }),
+          { ruleId: 42, severity: "warn", message: "invalid required field" },
+        ],
+      },
+      { findings: [makeFinding("review", "Review.")] },
+    ],
+    [
+      "block findings without file or line",
+      "block",
+      { reason: "unapproved registry", findings: [criticalFinding] },
+      { ...blocked("unapproved registry"), findings: [criticalFinding] },
+    ],
+  ] as const)("%s", async (_name, decision, fields, expected) => {
     expect(await runDecision(decision, fields)).toStrictEqual(expected);
   });
 
   it("returns warnings with their reason and findings", async () => {
+    const debugLogs: string[] = [];
     const findings = [makeFinding("manual-review", "Suspicious install script.")];
-    const result = await runDecision("warn", { reason: "review this source", findings });
+    const result = await runDecision(
+      "warn",
+      { reason: "review this source", findings },
+      { logger: { debug: (message) => debugLogs.push(message) } },
+    );
     expect(result).toEqual({
       warning: {
         reason: "review this source",
@@ -339,8 +370,8 @@ describe("runInstallPolicy", () => {
     const findings = Array.from({ length: 101 }, (_, index) =>
       makeFinding(`finding-${index}`, `Finding ${index}`),
     );
-    const runWarning = (warningFindings: typeof findings) =>
-      runDecision("warn", { reason: "review all findings", findings: warningFindings });
+    const runWarning = async (warningFindings: typeof findings) =>
+      await runDecision("warn", { reason: "review all findings", findings: warningFindings });
     const boundary = await runWarning(findings.slice(0, 100));
     const result = await runWarning(findings);
     expect(boundary?.warning).toBeDefined();
@@ -350,20 +381,34 @@ describe("runInstallPolicy", () => {
     expect(result?.findings).toBeUndefined();
   });
 
-  it.each<{ name: string; response: unknown; expected: string }>`
-    name                              | response                                      | expected
-    ${"missing warning reason"}       | ${{ protocolVersion: 1, decision: "warn" }}   | ${'decision "warn" requires a non-empty reason'}
-    ${"non-object"}                   | ${[]}                                         | ${"must be a JSON object"}
-    ${"unsupported protocol version"} | ${{ protocolVersion: 2, decision: "allow" }}  | ${"protocolVersion must be 1"}
-    ${"unknown decision"}             | ${{ protocolVersion: 1, decision: "review" }} | ${'decision must be "allow", "warn", or "block"'}
-  `("fails closed for a $name response", async ({ response, expected }) => {
+  it.each([
+    [
+      "missing warning reason",
+      { protocolVersion: 1, decision: "warn" },
+      'decision "warn" requires a non-empty reason',
+    ],
+    ["non-object", [], "must be a JSON object"],
+    [
+      "unsupported protocol version",
+      { protocolVersion: 2, decision: "allow" },
+      "protocolVersion must be 1",
+    ],
+    [
+      "unknown decision",
+      { protocolVersion: 1, decision: "review" },
+      'decision must be "allow", "warn", or "block"',
+    ],
+  ])("fails closed for a %s response", async (_label, response, expected) => {
     expectFailed(await runResponse(response), expected);
   });
 
   async function runLoggedPolicy(env: Record<string, string>) {
-    const result = await runExec({ env });
+    const logs: string[] = [];
+    const result = await runPolicy(configWithPolicy(scriptPath, env), {
+      logger: { debug: (message) => logs.push(message) },
+    });
     expect(result?.blocked?.code).toBe("security_scan_failed");
-    return { reason: result?.blocked?.reason, logs: debugLogs.join("\n") };
+    return { reason: result?.blocked?.reason, logs: logs.join("\n") };
   }
 
   it("fails closed on malformed policy output", async () => {
@@ -397,35 +442,41 @@ describe("runInstallPolicy", () => {
   });
 
   it.each([
-    ["command", (_safe, unsafe) => ({ command: unsafe })],
-    [
-      "args[2]",
-      (safe, unsafe) => ({ command: process.execPath, args: ["--require", safe, unsafe] }),
-    ],
-    [
-      "args[0]",
-      (safe, unsafe) => ({ command: process.execPath, args: [`--require=${unsafe}`, safe] }),
-    ],
-  ] satisfies Array<[string, (safe: string, unsafe: string) => Omit<PolicyExec, "source">]>)(
-    "rejects writable parent directories for %s",
-    async (field, exec) => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const writableDir = path.join(sourceDir, "writable-parent");
-      await fs.mkdir(writableDir);
-      await fs.chmod(writableDir, 0o777);
-      const writableScriptPath = await writePolicyScript(writableDir);
-      await expectInvalidExec(
-        exec(scriptPath, writableScriptPath),
-        `security.installPolicy.exec.${field} parent directory permissions are too open: ${writableDir}`,
-      );
+    {
+      name: "policy commands under writable parent directories",
+      field: "command",
+      exec: (_safe, unsafe) => ({ command: unsafe }),
     },
-  );
+    {
+      name: "later interpreter script args after path-taking options",
+      field: "args[2]",
+      exec: (safe, unsafe) => ({ command: process.execPath, args: ["--require", safe, unsafe] }),
+    },
+    {
+      name: "interpreter option values that embed script paths",
+      field: "args[0]",
+      exec: (safe, unsafe) => ({ command: process.execPath, args: [`--require=${unsafe}`, safe] }),
+    },
+  ] satisfies Array<{
+    name: string;
+    field: string;
+    exec: (safe: string, unsafe: string) => Omit<PolicyExec, "source">;
+  }>)("rejects $name", async ({ exec, field }) => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { writableDir, writableScriptPath } = await writeWritableParentPolicy();
+    await expectInvalidExec(
+      exec(scriptPath, writableScriptPath),
+      `security.installPolicy.exec.${field} parent directory permissions are too open: ${writableDir}`,
+    );
+  });
 
   it.runIf(process.platform !== "win32")("rejects symlinked interpreter script args", async () => {
-    const symlinkScriptPath = path.join(sourceDir, "policy-link.cjs");
-    await fs.symlink(scriptPath, symlinkScriptPath);
+    const dir = tempDirs.make("openclaw-install-policy-");
+    const realScriptPath = await writePolicyScript(dir);
+    const symlinkScriptPath = path.join(dir, "policy-link.cjs");
+    await fs.symlink(realScriptPath, symlinkScriptPath);
 
     await expectInvalidExec(
       { command: process.execPath, args: [symlinkScriptPath] },

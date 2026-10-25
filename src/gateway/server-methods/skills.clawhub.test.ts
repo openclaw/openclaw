@@ -64,6 +64,7 @@ function linkedSkill(registry: string, ownerHandle?: string, slug = "weather") {
 describe("skills gateway handlers (clawhub)", () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
+    mocks.resolveClawHubBaseUrl.mockReturnValue("https://clawhub.ai");
     mocks.report.mockReturnValue({ skills: [] });
     mocks.files.mockReturnValue([]);
   });

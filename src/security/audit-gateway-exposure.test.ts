@@ -11,28 +11,54 @@ import {
   collectHooksHardeningFindings,
 } from "./audit-extra.sync.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
+import { collectAuditModelRefs } from "./audit-model-refs.js";
 import { runSecurityAuditCore } from "./audit.js";
 
 const audit = (cfg: OpenClawConfig) => collectGatewayConfigFindings(cfg, cfg, {});
 const auth = { mode: "token", token: "very-long-browser-token-0123456789" } as const;
 
-const dangerousId = "config.insecure_or_dangerous_flags";
-const originRequired = "gateway.control_ui.allowed_origins_required";
+function hasFinding(
+  checkId: string,
+  severity: "warn" | "critical",
+  findings: ReturnType<typeof collectGatewayConfigFindings>,
+) {
+  return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
+}
+
+function dangerousFlags(findings: ReturnType<typeof collectGatewayConfigFindings>) {
+  const flags = findings.filter((entry) => entry.checkId === "config.insecure_or_dangerous_flags");
+  expect(flags.length).toBeGreaterThan(0);
+  return flags;
+}
 
 describe("security audit gateway exposure findings", () => {
   it("warns when the MCP Apps bridge is enabled", () => {
-    checkFinding(audit({ mcp: { apps: { enabled: true } } }), "mcp.apps.enabled", warn);
+    const cfg: OpenClawConfig = { mcp: { apps: { enabled: true } } };
+    expect(audit(cfg)).toContainEqual(
+      expect.objectContaining({ checkId: "mcp.apps.enabled", severity: "warn" }),
+    );
   });
 
-  it("warns on unsafe hook mappings", () => {
-    checkFinding(
-      audit({ hooks: { mappings: [{ allowUnsafeExternalContent: true }] } }),
-      dangerousId,
-      {
-        ...warn,
-        detail: ["hooks.mappings[0].allowUnsafeExternalContent=true"],
+  it("warns on insecure or dangerous flags", () => {
+    const cfg: OpenClawConfig = {
+      hooks: {
+        gmail: { allowUnsafeExternalContent: true },
+        mappings: [{ allowUnsafeExternalContent: true }],
       },
-    );
+      tools: { exec: { applyPatch: { workspaceOnly: false } } },
+    };
+    const dangerousFindings = dangerousFlags(audit(cfg));
+    expect(dangerousFindings.every((finding) => finding.severity === "warn")).toBe(true);
+    for (const snippet of [
+      "hooks.gmail.allowUnsafeExternalContent=true",
+      "hooks.mappings[0].allowUnsafeExternalContent=true",
+      "tools.exec.applyPatch.workspaceOnly=false",
+    ]) {
+      expect(
+        dangerousFindings.some((finding) => finding.detail.includes(snippet)),
+        snippet,
+      ).toBe(true);
+    }
   });
 
   it.each([
@@ -42,21 +68,38 @@ describe("security audit gateway exposure findings", () => {
     const findings = audit({
       gateway: { bind, ...(bind === "lan" ? { auth } : {}), controlUi: { allowedOrigins: ["*"] } },
     });
-    checkFinding(findings, "gateway.control_ui.allowed_origins_wildcard", { severity });
+    expect(hasFinding("gateway.control_ui.allowed_origins_wildcard", severity, findings)).toBe(
+      true,
+    );
     if (bind === "lan") {
-      expect(findings.map((finding) => finding.checkId)).not.toContain(originRequired);
+      expect(findings.map((finding) => finding.checkId)).not.toContain(
+        "gateway.control_ui.allowed_origins_required",
+      );
     }
   });
 
   it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", () => {
-    const findings = audit({
-      gateway: { bind: "lan", auth, controlUi: { dangerouslyAllowHostHeaderOriginFallback: true } },
-    });
-    checkFinding(findings, "gateway.control_ui.host_header_origin_fallback", critical);
-    expect(findings.map((finding) => finding.checkId)).not.toContain(originRequired);
-    checkFinding(findings, dangerousId, {
-      detail: ["gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true"],
-    });
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth,
+        controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
+      },
+    };
+
+    const findings = audit(cfg);
+    expect(hasFinding("gateway.control_ui.host_header_origin_fallback", "critical", findings)).toBe(
+      true,
+    );
+    expect(
+      findings.some((finding) => finding.checkId === "gateway.control_ui.allowed_origins_required"),
+    ).toBe(false);
+    const flags = dangerousFlags(findings);
+    expect(
+      flags.some((finding) =>
+        finding.detail.includes("gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true"),
+      ),
+    ).toBe(true);
   });
 
   it.each([
@@ -73,7 +116,7 @@ describe("security audit gateway exposure findings", () => {
         auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" } },
       },
     };
-    checkFinding(audit(cfg), "gateway.real_ip_fallback_enabled", { severity: expectedSeverity });
+    expect(hasFinding("gateway.real_ip_fallback_enabled", expectedSeverity, audit(cfg))).toBe(true);
   });
 
   it.each([
@@ -81,16 +124,17 @@ describe("security audit gateway exposure findings", () => {
     { bind: "lan", expectedSeverity: "critical" },
   ] as const)("scores mDNS full mode risk on $bind", ({ bind, expectedSeverity }) => {
     const cfg: OpenClawConfig = {
-      gateway: { bind, auth },
+      gateway: { bind, auth: { mode: "token", token: "very-long-token-1234567890" } },
       discovery: { mdns: { mode: "full" } },
     };
-    checkFinding(audit(cfg), "discovery.mdns_full_mode", { severity: expectedSeverity });
+    expect(hasFinding("discovery.mdns_full_mode", expectedSeverity, audit(cfg))).toBe(true);
   });
 
   it("evaluates trusted-proxy auth guardrails on lan", () => {
     const proxy = { userHeader: "x-forwarded-user" };
     const allowed = { ...proxy, allowUsers: ["nick@example.com"] };
     const cases: Array<[string, "warn" | "critical", GatewayTrustedProxyConfig, string[]?]> = [
+      ["auth", "critical", proxy],
       ["no_proxies", "critical", proxy, []],
       ["no_user_header", "critical", {} as never],
       ["no_allowlist", "warn", { ...proxy, allowUsers: [] }],
@@ -107,16 +151,17 @@ describe("security audit gateway exposure findings", () => {
     ];
 
     for (const [suffix, severity, trustedProxy, proxies] of cases) {
-      const findings = audit({
+      const cfg: OpenClawConfig = {
         gateway: {
           bind: "lan",
           trustedProxies: proxies ?? ["10.0.0.1"],
           auth: { mode: "trusted-proxy", trustedProxy },
         },
-      });
-      checkFinding(findings, `gateway.trusted_proxy_${suffix}`, { severity });
+      };
+      const findings = audit(cfg);
+      expect(hasFinding(`gateway.trusted_proxy_${suffix}`, severity, findings), suffix).toBe(true);
       const checkIds = findings.map((finding) => finding.checkId);
-      checkFinding(findings, "gateway.trusted_proxy_auth", critical);
+      expect(checkIds, suffix).toContain("gateway.trusted_proxy_auth");
       for (const id of [
         "gateway.bind_no_auth",
         "gateway.loopback_no_auth",
@@ -234,66 +279,157 @@ describe("security audit trust model findings", () => {
     }
   });
 
-  const dm = { feishu: { groupPolicy: "disabled", dmPolicy: "open" } } as const;
-  const scopedRoom: OpenClawConfig = {
-    session: { groupScope: "per-group" },
-    ...bindings({
-      agentId: "support",
-      session: { groupScope: "main" },
-      match: {
-        channel: "discord",
-        accountId: "work",
-        peer: { kind: "channel", id: "1234567890" },
-        guildId: "9876543210",
-        roles: ["operators", "reviewers"],
+  it("evaluates trust-model exposure findings", () => {
+    check(
+      openGroup({ elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } }),
+      elevated,
+      critical,
+    );
+    check(openGroup(), runtime, critical);
+    absent(openGroup({ profile: "coding" }, { defaults: { sandbox: { mode: "all" } } }), runtime);
+    absent(
+      openGroup({ profile: "coding", deny: ["group:runtime"], fs: { workspaceOnly: true } }),
+      runtime,
+    );
+    check(
+      channel({
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "1234567890": { channels: { "7777777777": { enabled: true } } },
+          },
+        },
+      }),
+      multiUser,
+      {
+        ...warn,
+        detail: ['channels.discord.groupPolicy="allowlist" with configured group targets'],
       },
-    }),
-  };
-  it.each<{ name: string; cfg: OpenClawConfig; id: string | string[]; expected: Expected | false }>`
-    name                                 | cfg                                                                                                                                          | id                         | expected
-    ${"group elevated"}                  | ${openGroup({ elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } })}                                                               | ${elevated}                | ${critical}
-    ${"open group runtime"}              | ${openGroup()}                                                                                                                               | ${runtime}                 | ${critical}
-    ${"sandboxed runtime"}               | ${openGroup({ profile: "coding" }, { defaults: { sandbox: { mode: "all" } } })}                                                              | ${runtime}                 | ${false}
-    ${"workspace-only filesystem"}       | ${openGroup({ profile: "coding", deny: ["group:runtime"], fs: { workspaceOnly: true } })}                                                    | ${runtime}                 | ${false}
-    ${"configured group target"}         | ${channel({ discord: { groupPolicy: "allowlist", guilds: { "1234567890": { channels: { "7777777777": { enabled: true } } } } } })}           | ${multiUser}               | ${{ ...warn, detail: ['channels.discord.groupPolicy="allowlist" with configured group targets'] }}
-    ${"unconfigured group target"}       | ${channel({ discord: { groupPolicy: "allowlist" } })}                                                                                        | ${[multiUser, groupScope]} | ${false}
-    ${"global shared session"}           | ${{ session: { groupScope: "main" } }}                                                                                                       | ${groupScope}              | ${{ ...warn, detail: ['session.groupScope="main"', "all group/channel rooms"] }}
-    ${"binding-scoped shared session"}   | ${scopedRoom}                                                                                                                                | ${groupScope}              | ${{ ...warn, detail: ["discord accountId=work peer=channel:1234567890 guild=9876543210 roles=operators,reviewers"], notDetail: ["all group/channel rooms"] }}
-    ${"direct binding is not a group"}   | ${bindings({ agentId: "support", match: { channel: "whatsapp", peer: { kind: "direct", id: "user-a" } }, session: { groupScope: "main" } })} | ${groupScope}              | ${false}
-    ${"first matching binding isolates"} | ${bindings(room("isolated", "per-group", "group"), room("shared", "main", "channel"))}                                                       | ${groupScope}              | ${false}
-    ${"first matching binding shares"}   | ${bindings(room("shared", "main", "channel"), room("isolated", "per-group", "group"))}                                                       | ${groupScope}              | ${{ detail: ["discord accountId=work peer=channel:room-1"] }}
-    ${"specific group binding"}          | ${bindings(room("isolated", "per-group"), room("shared", "main", "group"))}                                                                  | ${groupScope}              | ${{ detail: ["discord accountId=work peer=group:room-1"] }}
-    ${"DM elevated"}                     | ${channel(dm, { elevated: { enabled: true, allowFrom: { feishu: ["ou_123"] } } })}                                                           | ${elevated}                | ${{ ...critical, detail: ["channels.feishu.dmPolicy"] }}
-    ${"DM runtime"}                      | ${channel(dm, { ...disabled, profile: "coding" })}                                                                                           | ${runtime}                 | ${{ ...critical, detail: ["channels.feishu.dmPolicy"] }}
-    ${"account DM override"}             | ${{ channels: { discord: { dmPolicy: "allowlist", accounts: { work: { dmPolicy: "open" } } } } }}                                            | ${elevated}                | ${{ detail: ["channels.discord.accounts.work.dmPolicy"], notDetail: ["channels.discord.dmPolicy"] }}
-    ${"legacy nested DM"}                | ${{ channels: { discord: { dm: { policy: "open" } } } } as unknown as OpenClawConfig}                                                        | ${elevated}                | ${{ detail: ["channels.discord.dm.policy"] }}
-    ${"Matrix nested DM"}                | ${{ channels: { matrix: { dm: { policy: "open" } } } }}                                                                                      | ${elevated}                | ${{ detail: ["channels.matrix.dm.policy"], remediation: ["each listed group/DM policy"], notRemediation: ["dmPolicy"] }}
-    ${"group control plane"}             | ${openGroup({ profile: "coding" })}                                                                                                          | ${control}                 | ${{ ...critical, detail: ["channels.whatsapp.groupPolicy"] }}
-    ${"DM control plane"}                | ${openDm({ allow: ["gateway"] })}                                                                                                            | ${control}                 | ${{ ...critical, detail: ["channels.slack.dmPolicy"] }}
-    ${"additive control policy"}         | ${openDm({ profile: "messaging", alsoAllow: ["cron"] })}                                                                                     | ${control}                 | ${{}}
-    ${"agent control policy"}            | ${openGroup({ profile: "messaging" }, { entries: { ops: { tools: { profile: "messaging", alsoAllow: ["gateway"] } } } })}                    | ${control}                 | ${{ detail: ["agents.entries.ops", "agents.defaults"] }}
-    ${"denied control tools"}            | ${openGroup({ profile: "coding", deny: ["gateway", "cron", "plugins"] })}                                                                    | ${control}                 | ${false}
-    ${"non-control tools"}               | ${openGroup({ allow: ["nodes", "computer"] })}                                                                                               | ${control}                 | ${false}
-    ${"closed group policy"}             | ${channel({ whatsapp: { groupPolicy: "allowlist" } }, { ...disabled, profile: "coding" })}                                                   | ${control}                 | ${false}
-  `("evaluates $name", ({ cfg, id, expected }) => {
-    if (expected === false) {
-      absent(cfg, ...(Array.isArray(id) ? id : [id]));
-    } else {
-      for (const checkId of Array.isArray(id) ? id : [id]) {
-        check(cfg, checkId, expected);
-      }
-    }
-  });
-
-  it("prefers canonical DM policy over legacy nested policy", () => {
+    );
+    absent(channel({ discord: { groupPolicy: "allowlist" } }), multiUser, groupScope);
+    check({ session: { groupScope: "main" } }, groupScope, {
+      ...warn,
+      detail: ['session.groupScope="main"', "all group/channel rooms"],
+    });
+    check(
+      {
+        session: { groupScope: "per-group" },
+        ...bindings({
+          agentId: "support",
+          match: {
+            channel: "discord",
+            accountId: "work",
+            peer: { kind: "channel", id: "1234567890" },
+            guildId: "9876543210",
+            roles: ["operators", "reviewers"],
+          },
+          session: { groupScope: "main" },
+        }),
+      },
+      groupScope,
+      {
+        ...warn,
+        detail: [
+          "discord accountId=work peer=channel:1234567890 guild=9876543210 roles=operators,reviewers",
+        ],
+        notDetail: ["all group/channel rooms"],
+      },
+    );
+    absent(
+      bindings({
+        agentId: "support",
+        match: { channel: "whatsapp", peer: { kind: "direct", id: "user-a" } },
+        session: { groupScope: "main" },
+      }),
+      groupScope,
+    );
+    absent(
+      bindings(room("isolated", "per-group", "group"), room("shared", "main", "channel")),
+      groupScope,
+    );
+    check(
+      bindings(room("shared", "main", "channel"), room("isolated", "per-group", "group")),
+      groupScope,
+      { detail: ["discord accountId=work peer=channel:room-1"] },
+    );
+    check(bindings(room("isolated", "per-group"), room("shared", "main", "group")), groupScope, {
+      detail: ["discord accountId=work peer=group:room-1"],
+    });
+    const dm = { feishu: { groupPolicy: "disabled", dmPolicy: "open" } } as const;
+    check(
+      channel(dm, { elevated: { enabled: true, allowFrom: { feishu: ["ou_123"] } } }),
+      elevated,
+      { ...critical, detail: ["channels.feishu.dmPolicy"] },
+    );
+    check(channel(dm, { ...disabled, profile: "coding" }), runtime, {
+      ...critical,
+      detail: ["channels.feishu.dmPolicy"],
+    });
+    check(
+      {
+        channels: { discord: { dmPolicy: "allowlist", accounts: { work: { dmPolicy: "open" } } } },
+      },
+      elevated,
+      {
+        detail: ["channels.discord.accounts.work.dmPolicy"],
+        notDetail: ["channels.discord.dmPolicy"],
+      },
+    );
+    check(
+      { channels: { discord: { dm: { policy: "open" } } } } as unknown as OpenClawConfig,
+      elevated,
+      { detail: ["channels.discord.dm.policy"] },
+    );
+    check({ channels: { matrix: { dm: { policy: "open" } } } }, elevated, {
+      detail: ["channels.matrix.dm.policy"],
+      remediation: ["each listed group/DM policy"],
+      notRemediation: ["dmPolicy"],
+    });
     const canonical = trustAudit({
       channels: { discord: { dmPolicy: "allowlist", dm: { policy: "open" } } },
     } as unknown as OpenClawConfig);
     expect(
       canonical.some((entry) => entry.checkId.startsWith("security.exposure.open_groups_")),
     ).toBe(false);
+    check(openGroup({ profile: "coding" }), control, {
+      ...critical,
+      detail: ["channels.whatsapp.groupPolicy"],
+    });
+    check(openDm({ allow: ["gateway"] }), control, {
+      ...critical,
+      detail: ["channels.slack.dmPolicy"],
+    });
+    check(openDm({ profile: "messaging", alsoAllow: ["cron"] }), control);
+    check(
+      openGroup(
+        { profile: "messaging" },
+        { entries: { ops: { tools: { profile: "messaging", alsoAllow: ["gateway"] } } } },
+      ),
+      control,
+      {
+        detail: ["agents.entries.ops", "agents.defaults"],
+      },
+    );
+    absent(openGroup({ profile: "coding", deny: ["gateway", "cron", "plugins"] }), control);
+    absent(openGroup({ allow: ["nodes", "computer"] }), control);
+    absent(
+      channel({ whatsapp: { groupPolicy: "allowlist" } }, { ...disabled, profile: "coding" }),
+      control,
+    );
   });
 });
+
+function hasHookFinding(
+  findings: ReturnType<typeof collectHooksHardeningFindings>,
+  checkId: string,
+  severity: "warn" | "critical",
+) {
+  return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
+}
+
+function getFinding(findings: ReturnType<typeof collectHooksHardeningFindings>, checkId: string) {
+  return findings.find((finding) => finding.checkId === checkId);
+}
 
 type AuditOptions = Parameters<typeof runSecurityAuditCore>[0];
 const hookToken = "shared-gateway-token-1234567890";
@@ -322,123 +458,235 @@ function auditSecretReuse(
 }
 
 describe("security audit hooks ingress findings", () => {
-  const requestSessionKeyHooks = { ...baseHooks, allowRequestSessionKey: true };
-  it.each<{
-    name: string;
-    cfg: OpenClawConfig;
-    env: NodeJS.ProcessEnv | undefined;
-    ids: string[];
-    severity: string;
-  }>`
-    name                              | cfg                                                            | env                                      | ids                                                                        | severity
-    ${"short token"}                  | ${{ hooks: { enabled: true, token: "short" } }}                | ${undefined}                             | ${["token_too_short"]}                                                     | ${"warn"}
-    ${"environment token reuse"}      | ${{ hooks: { enabled: true, token: hookToken } }}              | ${{ OPENCLAW_GATEWAY_TOKEN: hookToken }} | ${["token_reuse_gateway_token"]}                                           | ${"critical"}
-    ${"missing default session"}      | ${{ hooks: { enabled: true, token: hookToken } }}              | ${undefined}                             | ${["default_session_key_unset"]}                                           | ${"warn"}
-    ${"wildcard routing"}             | ${{ hooks: { ...baseHooks, allowedAgentIds: ["*"] } }}         | ${undefined}                             | ${["allowed_agent_ids_unrestricted"]}                                      | ${"warn"}
-    ${"unrestricted local routing"}   | ${{ hooks: baseHooks }}                                        | ${undefined}                             | ${["allowed_agent_ids_unrestricted"]}                                      | ${"warn"}
-    ${"unrestricted remote routing"}  | ${{ gateway: { bind: "lan" }, hooks: baseHooks }}              | ${undefined}                             | ${["allowed_agent_ids_unrestricted"]}                                      | ${"critical"}
-    ${"unrestricted request session"} | ${{ hooks: requestSessionKeyHooks }}                           | ${undefined}                             | ${["request_session_key_enabled", "request_session_key_prefixes_missing"]} | ${"warn"}
-    ${"remote request session"}       | ${{ gateway: { bind: "lan" }, hooks: requestSessionKeyHooks }} | ${undefined}                             | ${["request_session_key_enabled"]}                                         | ${"critical"}
-  `("reports $name", ({ cfg, env, ids, severity }) => {
-    const findings = collectHooksHardeningFindings(cfg, env);
-    for (const id of ids) {
-      checkFinding(findings, `hooks.${id}`, { severity });
+  it("evaluates hooks ingress auth and routing findings", () => {
+    const requestSessionKeyHooks = { ...baseHooks, allowRequestSessionKey: true };
+    function checkHooks(
+      cfg: OpenClawConfig,
+      suffix: string,
+      severity: "warn" | "critical" = "warn",
+      env = process.env,
+    ) {
+      const findings = collectHooksHardeningFindings(cfg, env);
+      expect(hasHookFinding(findings, `hooks.${suffix}`, severity), suffix).toBe(true);
+      return findings;
     }
-  });
-
-  it("flags explicit audit password reuse when config mode is token", () => {
-    const runtimePassword = "runtime-only-gateway-password-1234567890";
-    checkFinding(
-      collectHooksHardeningFindings(
-        {
-          gateway: { auth },
-          hooks: { enabled: true, token: runtimePassword },
-        },
-        {},
-        {
-          gatewayAuthOverride: {
-            mode: "password",
-            password: runtimePassword,
-          },
-        },
-      ),
-      reuseId,
+    checkHooks({ hooks: { enabled: true, token: "short" } }, "token_too_short");
+    checkHooks(
+      { hooks: { enabled: true, token: hookToken } },
+      "token_reuse_gateway_token",
+      "critical",
       {
-        severity: "critical",
-        detail: ["gateway.auth password"],
+        OPENCLAW_GATEWAY_TOKEN: hookToken,
       },
+    );
+    checkHooks({ hooks: { enabled: true, token: hookToken } }, "default_session_key_unset");
+    checkHooks(
+      { hooks: { ...baseHooks, allowedAgentIds: ["*"] } },
+      "allowed_agent_ids_unrestricted",
+    );
+    checkHooks({ hooks: baseHooks }, "allowed_agent_ids_unrestricted");
+    checkHooks(
+      { gateway: { bind: "lan" }, hooks: baseHooks },
+      "allowed_agent_ids_unrestricted",
+      "critical",
+    );
+    const local = checkHooks({ hooks: requestSessionKeyHooks }, "request_session_key_enabled");
+    expect(hasHookFinding(local, "hooks.request_session_key_prefixes_missing", "warn")).toBe(true);
+    checkHooks(
+      { gateway: { bind: "lan" }, hooks: requestSessionKeyHooks },
+      "request_session_key_enabled",
+      "critical",
     );
   });
 
-  type ReuseCase = {
-    name: string;
-    auth: NonNullable<OpenClawConfig["gateway"]>["auth"];
-    token: string;
-    options: Partial<AuditOptions>;
-    providers: NonNullable<OpenClawConfig["secrets"]>["providers"];
-    expected: Expected | false;
-  };
-  it.each<ReuseCase>`
-    name                                             | auth                                                                                                  | token                                   | options                                                                                                                                         | providers                                                                                                                     | expected
-    ${"persisted password despite runtime override"} | ${{ mode: "password", password: passwordRef }}                                                        | ${gatewayPassword}                      | ${{ env: { GW_PASSWORD: gatewayPassword }, auditGatewayAuthOverride: { mode: "password", password: "different-runtime-password-1234567890" } }} | ${undefined}                                                                                                                  | ${{ ...critical, remediation: ["openclaw doctor --fix"] }}
-    ${"trusted-proxy password fallback"}             | ${{ mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" }, password: passwordRef }} | ${gatewayPassword}                      | ${{ env: { GW_PASSWORD: gatewayPassword } }}                                                                                                    | ${undefined}                                                                                                                  | ${critical}
-    ${"unavailable reference"}                       | ${{ mode: "password", password: { ...passwordRef, id: "MISSING_GW_PASSWORD" } }}                      | ${"shared-gateway-password-1234567890"} | ${{}}                                                                                                                                           | ${undefined}                                                                                                                  | ${false}
-    ${"exec references are not executed"}            | ${{ mode: "password", password: { source: "exec", provider: "vault", id: "GW_PASSWORD" } }}           | ${"shared-gateway-password-1234567890"} | ${{}}                                                                                                                                           | ${{ vault: { source: "exec", command: "node", args: ["-e", "process.stdout.write('shared-gateway-password-1234567890')"] } }} | ${false}
-  `("audits reuse: $name", async ({ auth: gatewayAuth, token, options, providers, expected }) => {
-    const { findings } = await auditSecretReuse(gatewayAuth, token, options, providers);
-    if (expected === false) {
-      expect(findings).not.toContainEqual(
-        expect.objectContaining({ checkId: reuseId, ...critical }),
-      );
-    } else {
-      checkFinding(findings, reuseId, expected);
-    }
+  it("flags explicit audit password reuse when config mode is token", () => {
+    const findings = collectHooksHardeningFindings(
+      {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "config-gateway-token-1234567890", // pragma: allowlist secret
+          },
+        },
+        hooks: {
+          enabled: true,
+          token: "runtime-only-gateway-password-1234567890",
+        },
+      },
+      {},
+      {
+        gatewayAuthOverride: {
+          mode: "password",
+          password: "runtime-only-gateway-password-1234567890", // pragma: allowlist secret
+        },
+      },
+    );
+
+    const finding = getFinding(findings, reuseId);
+    expect(finding).toMatchObject({
+      severity: "critical",
+      detail: expect.stringContaining("gateway.auth password"),
+    });
+  });
+
+  it("keeps persisted SecretRef reuse findings when audit password override differs", async () => {
+    const report = await auditSecretReuse(
+      { mode: "password", password: passwordRef },
+      gatewayPassword,
+      {
+        env: { GW_PASSWORD: gatewayPassword },
+        auditGatewayAuthOverride: {
+          mode: "password",
+          password: "different-runtime-password-1234567890", // pragma: allowlist secret
+        },
+      },
+    );
+
+    const finding = getFinding(report.findings, reuseId);
+    expect(finding).toMatchObject({
+      severity: "critical",
+      remediation: expect.stringContaining("openclaw doctor --fix"),
+    });
+  });
+
+  it("flags hooks token reuse of SecretRef-backed trusted-proxy password fallback", async () => {
+    const report = await auditSecretReuse(
+      {
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-forwarded-user" },
+        password: passwordRef,
+      },
+      "trusted-proxy-local-password-1234567890",
+      { env: { GW_PASSWORD: "trusted-proxy-local-password-1234567890" } }, // pragma: allowlist secret
+    );
+
+    expect(hasHookFinding(report.findings, reuseId, "critical")).toBe(true);
+  });
+
+  it("skips unavailable gateway auth SecretRefs when auditing hooks token reuse", async () => {
+    const report = await auditSecretReuse(
+      {
+        mode: "password",
+        password: { ...passwordRef, id: "MISSING_GW_PASSWORD" },
+      },
+      "shared-gateway-password-1234567890",
+    );
+
+    expect(hasHookFinding(report.findings, reuseId, "critical")).toBe(false);
+  });
+
+  it("does not execute gateway auth SecretRefs during hooks token reuse audit", async () => {
+    const report = await auditSecretReuse(
+      { mode: "password", password: { source: "exec", provider: "vault", id: "GW_PASSWORD" } },
+      "shared-gateway-password-1234567890",
+      {},
+      {
+        vault: {
+          source: "exec",
+          command: "node",
+          args: ["-e", "process.stdout.write('shared-gateway-password-1234567890')"],
+        },
+      },
+    );
+
+    expect(hasHookFinding(report.findings, reuseId, "critical")).toBe(false);
   });
 });
 
 const web = { search: { enabled: true }, fetch: { enabled: true } };
-const smallModel = "ollama/mistral-8b";
-const noWeb = { deny: ["web_search", "web_fetch", "browser"] };
+const browser = { enabled: true };
 function modelConfig(
-  primary = smallModel,
+  primary: string,
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {},
-  tools: OpenClawConfig["tools"] = { web },
-  enabled = true,
 ): OpenClawConfig {
-  return { agents: { defaults: { model: { primary }, ...defaults } }, tools, browser: { enabled } };
+  return { agents: { defaults: { model: { primary }, ...defaults } }, tools: { web }, browser };
 }
 function risk(cfg: OpenClawConfig, expected: Expected, env: NodeJS.ProcessEnv = {}) {
   checkFinding(collectSmallModelRiskFindings({ cfg, env }), "models.small_params", expected);
 }
 
 describe("security audit small-model risk findings", () => {
-  it("preserves canonical model paths and their agent policy context", () => {
-    const entries = {
-      simple: { model: smallModel, tools: noWeb },
-      ops: { model: { primary: "ollama/gemma-4b", fallbacks: ["ollama/phi-3b"] }, tools: noWeb },
-    };
+  it("reports canonical paths for agent model references", () => {
+    expect(
+      collectAuditModelRefs({
+        agents: {
+          entries: {
+            simple: { model: "ollama/mistral-8b" },
+            structured: { model: { primary: "ollama/gemma-4b", fallbacks: ["ollama/phi-3b"] } },
+          },
+        },
+      } satisfies OpenClawConfig),
+    ).toEqual([
+      { id: "ollama/mistral-8b", source: "agents.entries.simple.model" },
+      { id: "ollama/gemma-4b", source: "agents.entries.structured.model.primary" },
+      { id: "ollama/phi-3b", source: "agents.entries.structured.model.fallbacks" },
+    ]);
+  });
+
+  it("preserves agent policy context for canonical model source paths", () => {
     risk(
-      { ...modelConfig(), agents: { entries } },
       {
-        severity: "info",
-        detail: [
-          `${smallModel} (8B) @ agents.entries.simple.model`,
-          "ollama/gemma-4b (4B) @ agents.entries.ops.model.primary",
-          "ollama/phi-3b (3B) @ agents.entries.ops.model.fallbacks",
-          "web=[off]",
-        ],
+        agents: {
+          entries: {
+            ops: {
+              model: { primary: "ollama/mistral-8b" },
+              tools: { deny: ["web_search", "web_fetch", "browser"] },
+            },
+          },
+        },
+        tools: { web },
+        browser,
       },
+      { severity: "info", detail: ["@ agents.entries.ops.model.primary", "web=[off]"] },
     );
   });
 
-  const remoteModel = "openrouter/google/gemma-3-4b-it:free";
-  it.each<{ name: string; cfg: OpenClawConfig; expected: Expected; env: NodeJS.ProcessEnv }>`
-    name                            | cfg                                                                                                                                 | expected                                                                                  | env
-    ${"exposed web tools"}          | ${modelConfig()}                                                                                                                    | ${{ severity: "critical", detail: ["mistral-8b", "web_search", "web_fetch", "browser"] }} | ${process.env}
-    ${"sandbox with web disabled"}  | ${modelConfig(smallModel, { sandbox: { mode: "all" } }, { web: { search: { enabled: false }, fetch: { enabled: false } } }, false)} | ${{ severity: "info", detail: ["mistral-8b", "sandbox=all"] }}                            | ${process.env}
-    ${"configured model alias"}     | ${modelConfig("tiny", { models: { [smallModel]: { alias: "tiny" } } })}                                                             | ${{ detail: [smallModel, "@ agents.defaults.model.primary"], notDetail: ["- tiny"] }}     | ${{}}
-    ${"provider/model deny policy"} | ${modelConfig(remoteModel, {}, { web, byProvider: { [remoteModel]: noWeb } })}                                                      | ${{ severity: "info", detail: [remoteModel, "web=[off]"] }}                               | ${{}}
-  `("scores $name", ({ cfg, expected, env }) => risk(cfg, expected, env));
+  it("scores small-model risk by tool/sandbox exposure", () => {
+    risk(
+      modelConfig("ollama/mistral-8b"),
+      {
+        severity: "critical",
+        detail: ["mistral-8b", "web_search", "web_fetch", "browser"],
+      },
+      process.env,
+    );
+    risk(
+      {
+        ...modelConfig("ollama/mistral-8b", { sandbox: { mode: "all" } }),
+        tools: { web: { search: { enabled: false }, fetch: { enabled: false } } },
+        browser: { enabled: false },
+      },
+      { severity: "info", detail: ["mistral-8b", "sandbox=all"] },
+      process.env,
+    );
+  });
+
+  it("resolves configured aliases before parameter-size classification", () => {
+    risk(modelConfig("tiny", { models: { "ollama/mistral-8b": { alias: "tiny" } } }), {
+      detail: ["ollama/mistral-8b", "@ agents.defaults.model.primary"],
+      notDetail: ["- tiny"],
+    });
+  });
+
+  it("honors provider/model tool deny policy before reporting web exposure", () => {
+    risk(
+      {
+        ...modelConfig("openrouter/google/gemma-3-4b-it:free"),
+        tools: {
+          web,
+          byProvider: {
+            "openrouter/google/gemma-3-4b-it:free": {
+              deny: ["web_search", "web_fetch", "browser"],
+            },
+          },
+        },
+      },
+      {
+        severity: "info",
+        detail: ["openrouter/google/gemma-3-4b-it:free", "web=[off]"],
+      },
+    );
+  });
 });
 
 describe("security audit gateway auth selection", () => {

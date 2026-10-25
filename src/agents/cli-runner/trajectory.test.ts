@@ -1,5 +1,8 @@
-/** CLI trajectory proof keeps the runner, recovery, and canonical SQLite store real. */
+/** CLI trajectory proof uses a real child process and the canonical SQLite store. */
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
@@ -17,8 +20,6 @@ const { prepareContext } = vi.hoisted(() => ({ prepareContext: vi.fn() }));
 vi.mock("./prepare.runtime.js", () => ({ prepareCliRunContext: prepareContext }));
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-trajectory-");
-const expectReply = (run: ReturnType<typeof runCliAgent>) =>
-  expect(run).resolves.toMatchObject({ payloads: [{ text: "fixture reply" }] });
 
 async function runCliAgent(params: RunCliAgentParams) {
   const admission = prepareSystemAgentRunAdmission({}, params.runId, "main", "trajectory-fixture");
@@ -63,6 +64,13 @@ async function fixture(
   };
   await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
   const abortController = options.abortKind ? new AbortController() : undefined;
+  const script = options.abortKind
+    ? "setTimeout(() => {}, 30_000)"
+    : options.fail
+      ? 'process.stderr.write("fixture process failed"); process.exitCode = 1'
+      : options.recover
+        ? 'if (process.env.FIXTURE_SESSION === "stale-session") { process.stderr.write("fixture session expired"); process.exitCode = 1; } else { process.stdout.write("fixture reply"); }'
+        : 'process.stdout.write("fixture reply")';
   const context = buildPreparedCliRunContext({
     sessionTarget: target,
     workspaceDir: root,
@@ -71,8 +79,8 @@ async function fixture(
     timeoutMs: 10_000,
     backend: {
       command: process.execPath,
-      args: [],
-      ...(options.recover ? { resumeArgs: [] } : {}),
+      args: ["-e", script],
+      ...(options.recover ? { resumeArgs: ["-e", script] } : {}),
       modelArg: undefined,
       sessionArgs: undefined,
       systemPromptFileArg: undefined,
@@ -92,37 +100,57 @@ async function fixture(
     context.openClawHistoryPrompt = "Earlier history\nExplain the fixture";
   }
   const execute: CliBackendExecute = async function* (execution) {
+    const child = spawn(execution.command, execution.args, {
+      cwd: execution.cwd,
+      env: { FIXTURE_SESSION: execution.sessionId ?? "" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const abortSignal = execution.abortSignal;
+    const abortChild = () => child.kill();
+    abortSignal?.addEventListener("abort", abortChild, { once: true });
     if (abortController) {
-      abortController.abort(
-        options.abortKind === "timeout"
-          ? Object.assign(new Error("fixture deadline exceeded"), { name: "TimeoutError" })
-          : undefined,
-      );
-      return;
-    }
-    if (options.recover && execution.sessionId === "stale-session") {
-      throw new FailoverError("fixture session expired", {
-        reason: "session_expired",
-        provider: "claude-cli",
+      queueMicrotask(() => {
+        if (options.abortKind === "timeout") {
+          const timeout = new Error("fixture deadline exceeded");
+          timeout.name = "TimeoutError";
+          abortController.abort(timeout);
+        } else {
+          abortController.abort();
+        }
       });
     }
-    if (options.fail) {
-      throw new Error("fixture process failed");
+    try {
+      const [[code], stdout, stderr] = await Promise.all([
+        once(child, "close"),
+        text(child.stdout),
+        text(child.stderr),
+      ]);
+      if (abortSignal?.aborted) {
+        return;
+      }
+      if (code !== 0) {
+        if (options.recover) {
+          throw new FailoverError(stderr, { reason: "session_expired", provider: "claude-cli" });
+        }
+        throw new Error(stderr || `Fixture exited with code ${code}`);
+      }
+      yield {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: stdout }],
+          usage: { input_tokens: 12, output_tokens: 5 },
+        },
+      };
+      yield {
+        type: "result",
+        subtype: "success",
+        result: stdout,
+        usage: { input_tokens: 12, output_tokens: 534 },
+      };
+    } finally {
+      abortSignal?.removeEventListener("abort", abortChild);
     }
-    yield {
-      type: "assistant",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "fixture reply" }],
-        usage: { input_tokens: 12, output_tokens: 5 },
-      },
-    };
-    yield {
-      type: "result",
-      subtype: "success",
-      result: "fixture reply",
-      usage: { input_tokens: 12, output_tokens: 534 },
-    };
   };
   context.executionTarget = { kind: "plugin", execute };
   prepareContext.mockImplementation(async (params: RunCliAgentParams) => ({ ...context, params }));
@@ -134,7 +162,9 @@ async function fixture(
 
 it("persists a complete pure Claude CLI turn by default before resolving", async () => {
   const { context, events } = await fixture({ defaults: true });
-  await expectReply(runCliAgent(context.params));
+  await expect(runCliAgent(context.params)).resolves.toMatchObject({
+    payloads: [{ text: "fixture reply" }],
+  });
   const recorded = await events();
   expect(recorded.map((event) => event.type)).toEqual([
     "session.started",
@@ -175,19 +205,19 @@ it("still executes and cleans up when trajectory metadata capture fails", async 
   context.preparedBackend.cleanup = async () => {
     cleanedUp = true;
   };
-  await expectReply(runCliAgent(context.params));
+  await expect(runCliAgent(context.params)).resolves.toMatchObject({
+    payloads: [{ text: "fixture reply" }],
+  });
   expect(cleanedUp).toBe(true);
   expect(await events()).toEqual([]);
 });
 
-it.each([
-  { name: "isolated completion", options: {}, isolatedCompletion: true },
-  { name: "environment opt-out", options: { disabled: true }, isolatedCompletion: undefined },
-  { name: "run opt-out", options: { disableTrajectory: true }, isolatedCompletion: undefined },
-])("executes without persisting trajectory for $name", async ({ options, isolatedCompletion }) => {
-  const { context, events } = await fixture(options);
-  context.params.isolatedCompletion = isolatedCompletion;
-  await expectReply(runCliAgent(context.params));
+it("does not persist isolated completion into a borrowed session target", async () => {
+  const { context, events } = await fixture();
+  context.params.isolatedCompletion = true;
+  await expect(runCliAgent(context.params)).resolves.toMatchObject({
+    payloads: [{ text: "fixture reply" }],
+  });
   expect(await events()).toEqual([]);
 });
 
@@ -223,9 +253,27 @@ it.each([
   });
 });
 
+it("leaves trajectory disabled while still executing the CLI", async () => {
+  const { context, events } = await fixture({ disabled: true });
+  await expect(runCliAgent(context.params)).resolves.toMatchObject({
+    payloads: [{ text: "fixture reply" }],
+  });
+  expect(await events()).toEqual([]);
+});
+
+it("honors the disableTrajectory opt-out while still executing the CLI", async () => {
+  const { context, events } = await fixture({ disableTrajectory: true });
+  await expect(runCliAgent(context.params)).resolves.toMatchObject({
+    payloads: [{ text: "fixture reply" }],
+  });
+  expect(await events()).toEqual([]);
+});
+
 it("records both retry prompts but ends a recovered CLI turn only once", async () => {
   const { context, events } = await fixture({ recover: true });
-  await expectReply(runCliAgent(context.params));
+  await expect(runCliAgent(context.params)).resolves.toMatchObject({
+    payloads: [{ text: "fixture reply" }],
+  });
   const recorded = await events();
   expect(recorded.map((event) => event.type)).toEqual([
     "session.started",

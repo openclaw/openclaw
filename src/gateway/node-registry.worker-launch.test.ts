@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND as LAUNCH } from "../infra/node-commands.js";
+import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import {
   testNodeWorkerLaunchIdentity,
@@ -40,12 +40,6 @@ describe("private worker launch wire", () => {
       ok: true,
       payloadJSON: JSON.stringify(payload),
     });
-  const launchParams = (input: ReturnType<typeof testWorkerLaunchInput>) => ({
-    command: LAUNCH,
-    params: input,
-    timeoutMs: 0,
-    idempotencyKey: input.launchId,
-  });
   const startLaunch = (
     input: Parameters<ReturnType<typeof createNodeWorkerLaunchAdapter>["launch"]>[0]["input"],
     timeoutMs: number,
@@ -84,7 +78,14 @@ describe("private worker launch wire", () => {
     const nodeClient = makeClient(connId, nodeId, [], {
       socket: gatewayTestTextTransport(socket),
       clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      commands: [LAUNCH],
+      version: "test",
+      platform: "test",
+      commands: [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
+    });
+    Object.assign(nodeClient.connect.device!, {
+      publicKey: "fixture",
+      signature: "fixture",
+      nonce: "fixture",
     });
     nodeRegistry.register(nodeClient, {
       pairingIdentity: "fixture-pairing",
@@ -127,7 +128,10 @@ describe("private worker launch wire", () => {
         buildNodeInvokeRequest({
           id: "00000000-0000-0000-0000-000000000000",
           nodeId,
-          ...launchParams(input),
+          command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+          params: input,
+          timeoutMs: 0,
+          idempotencyKey: input.launchId,
         }),
       );
     const targetBytes = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + delta;
@@ -142,40 +146,51 @@ describe("private worker launch wire", () => {
       "private runner proof",
     );
     const received = delta <= 0 ? once(client, "message") : undefined;
-    using sent = vi.spyOn(socket, "send");
+    const sent = vi.spyOn(socket, "send");
     const dispatched = vi.fn((id: string) => {
       settle(id, null);
     });
-    const result = await nodeWorkerSupervisorTransport.invoke({
-      node,
-      ...launchParams(input),
-      isDispatchAuthorized: () => true,
-      onDispatchReady: dispatched,
-    });
-    if (received) {
-      expect(result.ok).toBe(true);
-      const [data] = await received;
-      const frame = Buffer.from(data);
-      expect(frame.byteLength).toBe(targetBytes);
-      const decoded = JSON.parse(frame.toString("utf8"));
-      const launch = parseNodeWorkerLaunchInput(decoded.payload.paramsJSON);
-      expect(launch.descriptor.assignment.systemPrompt?.length).toBe(
-        input.descriptor.assignment.systemPrompt.length,
-      );
-      expect(launch.descriptor.assignment.operationalRunInstance).toEqual(
-        input.descriptor.assignment.operationalRunInstance,
-      );
-      expect(dispatched).toHaveBeenCalledOnce();
-    } else {
-      expect(result).toEqual({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "worker launch exceeds the node payload limit",
-        },
+    try {
+      const result = await nodeWorkerSupervisorTransport.invoke({
+        node,
+        command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+        params: input,
+        timeoutMs: 0,
+        idempotencyKey: input.launchId,
+        isDispatchAuthorized: () => true,
+        onDispatchReady: dispatched,
       });
-      expect(sent).not.toHaveBeenCalled();
-      expect(dispatched).not.toHaveBeenCalled();
+      if (received) {
+        expect(result.ok).toBe(true);
+        const [data] = await received;
+        const frame = Buffer.from(data);
+        expect(frame.byteLength).toBe(targetBytes);
+        const decoded = JSON.parse(frame.toString("utf8"));
+        const launch = parseNodeWorkerLaunchInput(decoded.payload.paramsJSON);
+        expect(launch.descriptor.assignment.systemPrompt?.length).toBe(
+          input.descriptor.assignment.systemPrompt.length,
+        );
+        expect(launch.descriptor.assignment.operationalRunInstance).toEqual(
+          input.descriptor.assignment.operationalRunInstance,
+        );
+        expect(dispatched).toHaveBeenCalledOnce();
+      } else {
+        expect(result).toEqual({
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message: "worker launch exceeds the node payload limit",
+          },
+        });
+        expect(sent).not.toHaveBeenCalled();
+        expect(dispatched).not.toHaveBeenCalled();
+      }
+      console.info(
+        "worker-node-frame",
+        JSON.stringify({ bytes: targetBytes, dispatched: result.ok }),
+      );
+    } finally {
+      sent.mockRestore();
     }
   });
 
@@ -191,14 +206,15 @@ describe("private worker launch wire", () => {
         transcriptNextSeq: 2,
       }),
     };
-    using sent = vi.spyOn(socket, "send");
+    const sent = vi.spyOn(socket, "send");
     const received = once(client, "message");
     const dispatched = vi.fn();
     const { controller, outcome } = startLaunch(input, 60_000, dispatched);
     try {
       const [data] = await received;
       const request = JSON.parse(Buffer.from(data).toString("utf8"));
-      expect(request).toMatchObject({ event: "node.invoke.request", payload: { command: LAUNCH } });
+      expect(request.event).toBe("node.invoke.request");
+      expect(request.payload.command).toBe(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
       expect(dispatched).toHaveBeenCalledOnce();
 
       await vi.advanceTimersByTimeAsync(11_000);
@@ -212,6 +228,7 @@ describe("private worker launch wire", () => {
       controller.abort();
       await vi.runAllTimersAsync();
       await outcome;
+      sent.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -227,14 +244,14 @@ describe("private worker launch wire", () => {
       const getCurrentNode = nodeWorkerSupervisorTransport.getCurrentNode.bind(
         nodeWorkerSupervisorTransport,
       );
-      using _ = vi
+      const discovery = vi
         .spyOn(nodeWorkerSupervisorTransport, "getCurrentNode")
         .mockImplementationOnce(async (requestedNodeId) => {
           const node = await getCurrentNode(requestedNodeId);
           vi.setSystemTime(startedAt + 10_000);
           return node;
         });
-      using sent = vi.spyOn(socket, "send");
+      const sent = vi.spyOn(socket, "send");
       const unhandledRejection = vi.fn();
       process.on("unhandledRejection", unhandledRejection);
       const { controller, outcome } = startLaunch(
@@ -254,6 +271,8 @@ describe("private worker launch wire", () => {
         await vi.runAllTimersAsync();
         await outcome;
         process.off("unhandledRejection", unhandledRejection);
+        discovery.mockRestore();
+        sent.mockRestore();
         vi.useRealTimers();
       }
     },
@@ -264,19 +283,23 @@ describe("private worker launch wire", () => {
     expect(socket.readyState).toBe(WebSocket.OPEN);
     expect(nodeRegistry.sendEvent(nodeId, "runtime.proof", { phase: "open" })).toBe(true);
     await received;
-    using sent = vi.spyOn(socket, "send");
-    socket.close(1000, "runtime proof");
-    expect(socket.readyState).toBe(WebSocket.CLOSING);
-    expect(nodeRegistry.sendEvent(nodeId, "runtime.proof", { phase: "closing" })).toBe(false);
-    expect(nodeRegistry.sendEventRaw(nodeId, "runtime.raw", null)).toBe(false);
-    const onDispatchReady = vi.fn();
-    await expect(
-      nodeRegistry.invoke({ nodeId, command: "runtime.proof", timeoutMs: 0, onDispatchReady }),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
-    });
-    expect(onDispatchReady).not.toHaveBeenCalled();
-    expect(sent).not.toHaveBeenCalled();
+    const sent = vi.spyOn(socket, "send");
+    try {
+      socket.close(1000, "runtime proof");
+      expect(socket.readyState).toBe(WebSocket.CLOSING);
+      expect(nodeRegistry.sendEvent(nodeId, "runtime.proof", { phase: "closing" })).toBe(false);
+      expect(nodeRegistry.sendEventRaw(nodeId, "runtime.raw", null)).toBe(false);
+      const onDispatchReady = vi.fn();
+      await expect(
+        nodeRegistry.invoke({ nodeId, command: "runtime.proof", timeoutMs: 0, onDispatchReady }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+      });
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      expect(sent).not.toHaveBeenCalled();
+    } finally {
+      sent.mockRestore();
+    }
   });
 });

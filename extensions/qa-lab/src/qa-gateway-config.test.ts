@@ -21,34 +21,42 @@ function buildConfig(params: Partial<Parameters<typeof buildQaGatewayConfig>[0]>
   });
 }
 
-const qaChannel = {
-  transportPluginIds: ["qa-channel"],
-  transportConfig: createQaChannelGatewayConfig({ baseUrl: "http://127.0.0.1:43124" }),
-};
+function createQaChannelTransportParams(baseUrl = "http://127.0.0.1:43124") {
+  return {
+    transportPluginIds: ["qa-channel"],
+    transportConfig: createQaChannelGatewayConfig({ baseUrl }),
+  };
+}
 
 describe("buildQaGatewayConfig", () => {
   it.each([
-    [
-      "anthropic-thinking-error-recovery-replay-safe-read",
-      "mock-openai",
-      "mock-openai/gpt-5.6-luna",
-      ["anthropic/claude-opus-4-8"],
-    ],
-    [
-      "thinking-slash-model-remap",
-      "live-frontier",
-      "openai/gpt-5.5",
-      ["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"],
-    ],
-  ] as const)("replaces the model policy for %s", (id, providerMode, primaryModel, allowedRefs) => {
-    const base = buildConfig({ providerMode, primaryModel });
-    const config = applyQaSuiteGatewayConfigPatches(
-      base,
-      collectQaSuiteGatewayConfigPatches([readQaScenarioById(id)]),
-    );
-    expect(config.agents?.defaults?.modelPolicy?.allow).toEqual(allowedRefs);
-    expect(base.agents?.defaults?.modelPolicy?.allow).not.toContain(allowedRefs.at(-1));
-  });
+    {
+      scenarioId: "anthropic-thinking-error-recovery-replay-safe-read",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      allowedRefs: ["anthropic/claude-opus-4-8"],
+    },
+    {
+      scenarioId: "thinking-slash-model-remap",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.5",
+      allowedRefs: ["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"],
+    },
+  ] as const)(
+    "composes an exact override policy for $scenarioId",
+    ({ scenarioId, providerMode, primaryModel, allowedRefs }) => {
+      const base = buildConfig({ providerMode, primaryModel });
+      const config = applyQaSuiteGatewayConfigPatches(
+        base,
+        collectQaSuiteGatewayConfigPatches([readQaScenarioById(scenarioId)]),
+      );
+
+      expect(config).toMatchObject({
+        agents: { defaults: { modelPolicy: { allow: [...allowedRefs] } } },
+      });
+      expect(base.agents?.defaults?.modelPolicy?.allow).not.toContain(allowedRefs.at(-1));
+    },
+  );
 
   it("uses only active full-mock observer registrations across endpoint aliases", () => {
     const baseUrl = "http://127.0.0.1:44082";
@@ -81,8 +89,10 @@ describe("buildQaGatewayConfig", () => {
       );
       try {
         const cfg = buildConfig({
+          providerBaseUrl: "http://127.0.0.1:44080/v1",
           mockSessionObserverUrl: sessionObserverUrl,
           forcedRuntime,
+          enabledPluginIds: ["qa-lab"],
         });
 
         expect(cfg.plugins?.entries?.["qa-lab"]).toEqual({ enabled: true });
@@ -111,7 +121,7 @@ describe("buildQaGatewayConfig", () => {
   );
 
   it("requires explicit ACP fixture selection", () => {
-    const cfg = buildConfig({ enabledPluginIds: ["acpx"] });
+    const cfg = buildConfig({ transportPluginIds: ["telegram"], enabledPluginIds: ["acpx"] });
 
     expect(cfg.plugins?.allow).toContain("acpx");
     expect(cfg.plugins?.entries?.acpx).toEqual({
@@ -122,6 +132,7 @@ describe("buildQaGatewayConfig", () => {
 
   it("maps provider-qualified openai and anthropic refs through the mock provider lane", () => {
     const cfg = buildConfig({
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-opus-4-8",
@@ -149,7 +160,7 @@ describe("buildQaGatewayConfig", () => {
     const cfg = buildConfig({
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-sol",
-      ...qaChannel,
+      ...createQaChannelTransportParams(),
     });
     expect(cfg.agents?.defaults?.model).toMatchObject({
       primary: "openai/gpt-5.6-sol",
@@ -169,7 +180,7 @@ describe("buildQaGatewayConfig", () => {
       primaryModel: mock ? primary.replace("openai/", "mock-openai/") : primary,
       alternateModel: mock ? alternate.replace("openai/", "mock-openai/") : alternate,
       enabledPluginIds: mock ? ["codex"] : undefined,
-      ...qaChannel,
+      ...createQaChannelTransportParams(),
     });
     expect(cfg.agents?.defaults?.models).toEqual({ [primary]: {}, [alternate]: {} });
     expect(cfg.plugins?.entries?.codex).toEqual({
@@ -219,8 +230,9 @@ describe("buildQaGatewayConfig", () => {
       providerMode: "live-frontier",
       primaryModel: "custom-openai/model-a",
       alternateModel: "custom-openai/model-b",
+      imageGenerationModel: null,
       enabledPluginIds: ["openai"],
-      ...qaChannel,
+      ...createQaChannelTransportParams(),
       liveProviderConfigs: {
         "custom-openai": {
           baseUrl: "https://api.example.test/v1",
@@ -240,8 +252,9 @@ describe("buildQaGatewayConfig", () => {
     const cfg = buildConfig({
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-sol",
       thinkingDefault: "xhigh",
-      ...qaChannel,
+      ...createQaChannelTransportParams(),
     });
 
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("xhigh");
@@ -249,7 +262,7 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("can disable control ui for suite-only gateway children", () => {
-    const cfg = buildConfig({ controlUiEnabled: false, ...qaChannel });
+    const cfg = buildConfig({ controlUiEnabled: false, ...createQaChannelTransportParams() });
     expect(cfg.gateway?.controlUi).toEqual({ enabled: false });
   });
 
@@ -262,7 +275,7 @@ describe("buildQaGatewayConfig", () => {
         "http://localhost:18789",
         "http://127.0.0.1:60196",
       ],
-      ...qaChannel,
+      ...createQaChannelTransportParams(),
     });
 
     expect(cfg.gateway?.controlUi).toMatchObject({

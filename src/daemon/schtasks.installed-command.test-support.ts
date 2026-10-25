@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
-import { isDeepStrictEqual } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
@@ -234,9 +233,15 @@ export async function run(
     : undefined;
   const { stdout, stderr } = output;
   const stderrMatches = expectedStderr.every((expected) => stderr.includes(expected));
-  const actual = [beforeCleanup, truncated, exitSignal, code, result, stderrMatches];
-  const expected = ["dead", false, null, expectedExit, expectedExit, true];
-  const failed = failure || afterCleanup !== "dead" || !isDeepStrictEqual(actual, expected);
+  const failed =
+    failure ||
+    afterCleanup !== "dead" ||
+    beforeCleanup !== "dead" ||
+    truncated ||
+    exitSignal !== null ||
+    code !== expectedExit ||
+    result !== expectedExit ||
+    !stderrMatches;
   const redaction = { env, stateDir: env.OPENCLAW_STATE_DIR ?? cwd };
   const diagnostic = (value: string) => {
     // A truncated capture may have lost the field name needed for redaction.
@@ -287,6 +292,16 @@ export async function run(
   if (failure) {
     throw failure;
   }
-  assert.deepEqual(actual, expected, failureOutput ? JSON.stringify(failureOutput, null, 2) : "");
+  assert.equal(beforeCleanup, "dead", "Installed command required descendant cleanup after exit");
+  assert.equal(truncated, false, "Command output was truncated");
+  assert.equal(exitSignal, null);
+  const details = failureOutput ? JSON.stringify(failureOutput, null, 2) : "";
+  assert.equal(code, expectedExit, details);
+  assert.equal(result, expectedExit, details);
+  assert.equal(
+    stderrMatches,
+    true,
+    `Command stderr did not match expected diagnostics.\n${details}`,
+  );
   return stdout;
 }

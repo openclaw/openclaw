@@ -12,16 +12,13 @@ vi.mock("../../audit/audit-event-store.js", () => ({ listAuditEvents }));
 vi.mock("../../audit/execution-identity-context.js", () => ({ inspectExecutionIdentityRun }));
 
 const accountRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
-const eventMetadata = {
-  schemaVersion: 1,
-  redaction: "metadata_only",
+const eventMetadata = { schemaVersion: 1, redaction: "metadata_only" };
+const runEvent = {
+  ...eventMetadata,
   eventId: "event-1",
   sequence: 10,
   sourceSequence: 2,
   occurredAt: 100,
-};
-const runEvent = {
-  ...eventMetadata,
   kind: "agent_run",
   action: "agent.run.finished",
   status: "succeeded",
@@ -37,6 +34,10 @@ const messageMetadata = {
 };
 const messageEvent = {
   ...messageMetadata,
+  eventId: "event-message-1",
+  sequence: 11,
+  sourceSequence: 3,
+  occurredAt: 101,
   action: "message.outbound.finished",
   direction: "outbound",
   outcome: "sent",
@@ -52,13 +53,17 @@ const unknownIdentity = {
   missingEvidence: ["run.record"],
   remediation: [],
 };
+const unknownCoverage = { state: "unknown", missingEvidence: ["run.record"] };
 const unknownInspection = {
   schemaVersion: 1,
   run: { runId: "run-1", status: "unknown" },
-  identity: unknownIdentity,
+  identity: {
+    ...unknownIdentity,
+    remediation: [{ code: "verify_run_id", text: "Verify the exact run id." }],
+  },
   decisions: [],
   decisionDisplays: [],
-  coverage: { state: "unknown", missingEvidence: ["run.record"] },
+  coverage: unknownCoverage,
 };
 
 function expectInvalid(respond: ReturnType<typeof vi.fn>, message?: unknown) {
@@ -92,19 +97,30 @@ describe("audit gateway methods", () => {
     inspectExecutionIdentityRun.mockReset().mockReturnValue(unknownInspection);
   });
 
-  it("preserves legacy event projection and range filters", async () => {
+  it("preserves the exact shipped audit.list request and result shape", async () => {
     const respond = await runAuditHandler("audit.list", {
+      agentId: " main ",
       kind: "agent_run",
+      sessionKey: " agent:main:main ",
+      runId: " run-1 ",
       after: 50,
       before: 150,
+      limit: 25,
+      cursor: " 11 ",
     });
 
-    // Real-store pagination and padded filters are covered in audit.trim.store.test.ts.
-    expect(listAuditEvents).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filters: expect.objectContaining({ kind: "agent_run", after: 50, before: 150 }),
-      }),
-    );
+    expect(listAuditEvents).toHaveBeenCalledWith({
+      limit: 25,
+      cursor: 11,
+      filters: {
+        agentId: "main",
+        kind: "agent_run",
+        sessionKey: "agent:main:main",
+        runId: "run-1",
+        after: 50,
+        before: 150,
+      },
+    });
     const { schemaVersion: _schemaVersion, ...legacyEvent } = runEvent;
     expect(respond).toHaveBeenCalledWith(true, {
       events: [{ ...legacyEvent, actor: { type: "agent", id: "main" } }],
@@ -124,6 +140,10 @@ describe("audit gateway methods", () => {
     {
       event: {
         ...messageMetadata,
+        eventId: "event-message-2",
+        sequence: 12,
+        sourceSequence: 4,
+        occurredAt: 102,
         action: "message.inbound.processed",
         direction: "inbound",
         outcome: "completed",
@@ -142,11 +162,10 @@ describe("audit gateway methods", () => {
         ...(channel ? { channel } : {}),
       };
       const respond = await runAuditHandler("audit.activity.list", filters);
-      expect(listAuditEvents).toHaveBeenCalledWith(
-        expect.objectContaining({
-          filters: { includeMessages: true, ...filters },
-        }),
-      );
+      expect(listAuditEvents).toHaveBeenCalledWith({
+        limit: 100,
+        filters: { includeMessages: true, ...filters },
+      });
       const projected = { eventType: `${event.direction}_message`, actor };
       expect(respond).toHaveBeenCalledWith(true, {
         events: [channel ? { ...event, ...projected } : expect.objectContaining(projected)],
@@ -192,12 +211,35 @@ describe("audit gateway methods", () => {
   });
 
   it("serializes only the safe decision projection", async () => {
+    const secrets = (...fields: string[]) =>
+      Object.fromEntries(fields.map((field) => [field, `SYNTHETIC_PRIVATE_${field}`]));
     inspectExecutionIdentityRun.mockReturnValueOnce({
       ...unknownInspection,
       run: { runId: "run-1", executionId: "execution-1", status: "known" },
       identity: unknownIdentity,
-      // The Gateway must omit this opaque collection, irrespective of its private fields.
-      decisions: [{ receiptId: "SYNTHETIC_PRIVATE_receiptId" }],
+      decisions: [
+        {
+          schemaVersion: 1,
+          ...secrets("receiptId", "contextId", "executionId", "runId", "actionId"),
+          occurredAt: 1,
+          action: {
+            family: "tool",
+            operation: "execute",
+            ...secrets("resourceRef", "targetRef", "summary"),
+          },
+          decision: { outcome: "allowed", ...secrets("reasonCode") },
+          enforcement: {
+            coverageState: "enforced",
+            ...secrets("evaluatorRef"),
+            policyRefs: ["SYNTHETIC_PRIVATE_policy"],
+            grantRefs: ["SYNTHETIC_PRIVATE_grant"],
+            contextFieldsUsed: [],
+          },
+          source: secrets("owner", "recordRef", "decisionBoundary"),
+          missingEvidence: [],
+          remediation: [secrets("code", "text")],
+        },
+      ],
     });
 
     const respond = await runAuditHandler("audit.run.inspect", { executionId: "execution-1" });
@@ -206,6 +248,9 @@ describe("audit gateway methods", () => {
 
     expect(result).not.toHaveProperty("decisions");
     expect(result).toMatchObject({ decisionDisplays: [], coverage: expect.any(Object) });
+    for (const rawKey of ["receiptId", "resolutionRef", "eventId"]) {
+      expect(json).not.toContain(`"${rawKey}"`);
+    }
     expect(json).not.toContain("SYNTHETIC_PRIVATE_");
   });
 
@@ -242,15 +287,19 @@ describe("audit gateway methods", () => {
   });
 
   it("tells the operator how to recover from an expired decision cursor", async () => {
-    const message = "decision cursor is no longer retained; restart inspection without --cursor";
     inspectExecutionIdentityRun.mockImplementationOnce(() => {
-      throw new ExecutionDecisionCursorError(message);
+      throw new ExecutionDecisionCursorError(
+        "decision cursor is no longer retained; restart inspection without --cursor",
+      );
     });
 
     const respond = await runAuditHandler("audit.run.inspect", {
       runId: "run-1",
       decisionCursor: "a:2000:42",
     });
-    expectInvalid(respond, message);
+    expectInvalid(
+      respond,
+      "decision cursor is no longer retained; restart inspection without --cursor",
+    );
   });
 });
