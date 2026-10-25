@@ -2,13 +2,13 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { makeStallingStream } from "../test-helpers/http.js";
 import {
   cancelUnreadResponseBody,
   readResponseTextPrefix,
   readResponseTextSnippet,
   readResponseWithLimit,
 } from "./http-body.js";
+import { makeStallingStream } from "./http-body.test-support.js";
 
 afterEach(() => vi.useRealTimers());
 

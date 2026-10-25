@@ -11,10 +11,7 @@ import {
   fetchClawHubPluginVersionCategories,
   fetchClawHubPluginDetail,
 } from "./clawhub-plugin-catalog.js";
-import {
-  captureClawHubJson as mockResponse,
-  captureClawHubResponse,
-} from "./clawhub.test-support.js";
+import { captureClawHubJson as mockResponse } from "./clawhub.test-support.js";
 
 const listingMetadata = {
   displayName: "Memory Plus",
@@ -284,7 +281,12 @@ it("batch-reads current and legacy categories for exact package versions", async
     { ...packages[0], categories },
     { ...packages[1], categories: null },
   ];
-  const fetchImpl = captureClawHubResponse(() => jsonResponse({ packages: response }));
+  let request: Request | undefined;
+  const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    request = new Request(input, init);
+    return jsonResponse({ packages: response });
+  });
+  vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
 
   const result = await fetchClawHubPluginVersionCategories({
     baseUrl: "https://example.com",
@@ -293,7 +295,6 @@ it("batch-reads current and legacy categories for exact package versions", async
     packages,
   });
 
-  const request = new Request(fetchImpl.url(), fetchImpl.init());
   expect(request?.method).toBe("POST");
   expect(request?.headers.has("authorization")).toBe(false);
   expect(new URL(request?.url ?? "").pathname).toBe("/api/v1/packages/categories:batch");

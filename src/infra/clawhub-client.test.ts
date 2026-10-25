@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeStallingStream } from "../test-helpers/http.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { fetchClawHubJson, type ClawHubFetchOptions } from "./clawhub-client.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { fetchClawHubSkillVerification, searchClawHubSkills } from "./clawhub-skills.js";
 import { captureClawHubResponse } from "./clawhub.test-support.js";
+import { makeStallingStream } from "./http-body.test-support.js";
 
 const search = (options: ClawHubFetchOptions) =>
   searchClawHubSkills({ query: "calendar", ...options });

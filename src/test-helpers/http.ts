@@ -23,17 +23,3 @@ export function requestUrl(input: string | URL | Request): string {
 export function requestBodyText(body: BodyInit | null | undefined): string {
   return typeof body === "string" ? body : "{}";
 }
-
-export function makeStallingStream(
-  initialChunks: Uint8Array[],
-  onCancel?: UnderlyingSource<Uint8Array>["cancel"],
-) {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const chunk of initialChunks) {
-        controller.enqueue(chunk);
-      }
-    },
-    cancel: onCancel,
-  });
-}

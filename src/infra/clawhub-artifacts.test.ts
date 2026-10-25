@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as privateTempWorkspace from "@openclaw/fs-safe/temp";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeStallingStream } from "../test-helpers/http.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   type ClawHubDownloadResult,
@@ -14,6 +13,7 @@ import {
 } from "./clawhub-artifacts.js";
 import { normalizeClawHubSha256Integrity, normalizeClawHubSha256Hex } from "./clawhub-integrity.js";
 import { captureClawHubResponse } from "./clawhub.test-support.js";
+import { makeStallingStream } from "./http-body.test-support.js";
 
 vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/temp")>()),
