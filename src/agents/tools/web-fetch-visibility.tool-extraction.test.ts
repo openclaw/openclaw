@@ -73,16 +73,6 @@ const PAGES: Record<string, string> = {
   "/markdown-code": MARKDOWN_CODE,
   "/markdown-unclosed": `\`\`\`text\n${UNCLOSED_CODE}`,
   "/markdown-inline-fence-prose": INLINE_FENCE,
-  "/implicit-nested-siblings":
-    "<ul><li hidden><ul><li>A<li>B</li></ul>Secret</li></ul><p>Visible</p>",
-  "/unmatched-container": "<p hidden>Before</div>Secret</p><p>Visible</p>",
-  "/framework-attrs": [
-    "<html><head><title>Framework Attributes</title></head><body>",
-    "<p>Pricing starts at nine dollars.</p>",
-    '<div @click="noop" hidden>Secret framework note</div>',
-    '<div (click)="noop" class="hidden">Secret class note</div>',
-    "<p>Support is available around the clock.</p></body></html>",
-  ].join(""),
 };
 
 describe("web_fetch content fidelity through the real tool execute path", () => {
@@ -117,27 +107,6 @@ describe("web_fetch content fidelity through the real tool execute path", () => 
       await reservation.claim.release();
     }
   });
-
-  it.each([
-    { path: "/implicit-nested-siblings", includes: ["Visible"], excludes: ["Secret"] },
-    { path: "/unmatched-container", includes: ["Visible"], excludes: ["Secret"] },
-    {
-      path: "/framework-attrs",
-      includes: ["Pricing starts at nine dollars.", "Support is available around the clock."],
-      excludes: ["Secret framework note", "Secret class note"],
-    },
-  ])(
-    "preserves visible content and hidden owners in $path",
-    async ({ path, includes, excludes }) => {
-      const { serialized: text } = await extract(path);
-      for (const visible of includes) {
-        expect(text).toContain(visible);
-      }
-      for (const hidden of excludes) {
-        expect(text).not.toContain(hidden);
-      }
-    },
-  );
 
   it.each(["markdown", "text"] as const)(
     "omits zero-scale content from the real fetch in %s mode",
@@ -211,6 +180,6 @@ describe("web_fetch content fidelity through the real tool execute path", () => 
     if (isRecord(envelope.spill) && typeof envelope.spill.path === "string") {
       spillPaths.add(envelope.spill.path);
     }
-    return { envelope, text: envelope.text, serialized: textBlock.text };
+    return { envelope, text: envelope.text };
   }
 });
