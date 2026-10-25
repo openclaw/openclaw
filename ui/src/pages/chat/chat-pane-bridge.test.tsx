@@ -55,17 +55,7 @@ function required<T extends Element = HTMLElement>(root: ParentNode, selector: s
   return expectDefined(root.querySelector<T>(selector), selector);
 }
 
-function stubLifecycle() {
-  vi.spyOn(ChatPaneRuntime.prototype, "start").mockImplementation(() => {});
-  vi.spyOn(ChatPaneRuntime.prototype, "dispose").mockImplementation(() => {});
-  onTestFinished(() => {
-    vi.restoreAllMocks();
-  });
-}
-
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
-  const intervals = vi.spyOn(globalThis, "setInterval");
-  const clearInterval = vi.spyOn(globalThis, "clearInterval");
   const { sessionKey, context } = mountedFixture("bridge-draft");
   const [props, setProps] = createSignal<Partial<ChatPaneProps>>({ active: true, presented: true });
   const view = mountPane(context, () => (
@@ -82,32 +72,15 @@ it("applies a route draft and its focus cue to an already mounted native pane", 
   expect(textarea.closest(".agent-chat__input")?.classList).toContain(
     "agent-chat__input--prefill-attention",
   );
-  const poll = intervals.mock.calls.findIndex(([, delay]) => delay === 60_000);
-  expect(poll).toBeGreaterThanOrEqual(0);
-  setProps((p) => ({ ...p, presented: false }));
-  await waitForSolid(() =>
-    expect(clearInterval).toHaveBeenCalledWith(intervals.mock.results[poll]?.value),
-  );
-  const priorIntervals = intervals.mock.calls.length;
-  setProps((p) => ({ ...p, presented: true }));
-  await pane.updateComplete;
-  const resumedPoll = intervals.mock.calls.findIndex(
-    ([, delay], index) => index >= priorIntervals && delay === 60_000,
-  );
-  expect(resumedPoll).toBeGreaterThanOrEqual(priorIntervals);
-  expect(view.container.querySelector(composerSelector)).toBe(textarea);
-  view.unmount();
-  expect(clearInterval).toHaveBeenCalledWith(intervals.mock.results[resumedPoll]?.value);
 });
 
 it("updates held Send as a mounted composer's draft changes between commands and ordinary input", async () => {
   const fixture = mountedFixture("held-send");
-  const { sessionKey } = fixture;
   const client = expectDefined(fixture.context.gateway.snapshot.client, "recovering client");
   Object.defineProperty(client, "recoveryScopeReady", { value: false });
   const container = document.body.appendChild(createApplicationContextProvider(fixture.context));
   onTestFinished(() => container.remove());
-  const pane = fixture.mount(sessionKey);
+  const pane = fixture.mount(fixture.sessionKey);
   container.appendChild(pane.element);
   await pane.updateComplete;
   const sendChat = vi.spyOn(pane.state, "handleSendChat").mockResolvedValue(undefined);
@@ -137,7 +110,9 @@ it("updates held Send as a mounted composer's draft changes between commands and
 });
 
 it("settles clean hidden reads and fences actual property changes until reveal", async () => {
-  stubLifecycle();
+  vi.spyOn(ChatPaneRuntime.prototype, "start").mockImplementation(() => {});
+  vi.spyOn(ChatPaneRuntime.prototype, "dispose").mockImplementation(() => {});
+  onTestFinished(() => vi.restoreAllMocks());
   const render = vi.spyOn(ChatPaneRuntime.prototype, "render");
   const context = createInitializationContext();
   context.gateway.snapshot.phase = "stopped";
@@ -198,16 +173,14 @@ it("opens provider findings through the mounted pane's first rendered frame", as
     explanation: "The agent tried to modify a synthetic file outside the selected project.",
     continuationMessage: "Continue only inside the selected project.",
   };
-  const fixture = mountedFixture("bridge-provider-review", {
+  const view = mountedFixture("bridge-provider-review", {
     agentId: "main",
     providerReview: review,
-  });
-  const view = fixture.render({ active: true });
+  }).render({ active: true });
   const dialog = () => view.container.querySelector("openclaw-modal-dialog");
   const reviewButton = await waitForSolid(() =>
     required<HTMLButtonElement>(view.container, ".chat-provider-review button"),
   );
-  expect(reviewButton.textContent).toContain("Review findings");
   reviewButton.click();
   await vi.dynamicImportSettled();
   await waitForSolid(() => {

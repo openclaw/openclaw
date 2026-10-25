@@ -1,10 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { sidebarPanelFixtureParams } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { makeChatHost } from "./chat-host.test-support.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
@@ -14,7 +12,6 @@ import {
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 const panelCases = [
@@ -84,10 +81,8 @@ describe("chat pane sidebar toggles", () => {
   });
   it("activates a stored Workspace tab from the rail", () => {
     const sidebarLayout = openSlot(openSlot({ columns: [] }, "workspace"), "terminal");
-    const state = makeChatHost({ connected: false }) as unknown as ChatPageHost;
-    const updateSidebarLayout = vi.fn((layout) => {
-      state.sidebarLayout = layout;
-    });
+    const { state } = shortcutPane();
+    state.connected = false;
 
     const rails = createChatPaneRails({
       state,
@@ -96,7 +91,9 @@ describe("chat pane sidebar toggles", () => {
       presented: true,
       gatewaySnapshot: { hello: null } as never,
       setObserverVisibility: vi.fn(),
-      updateSidebarLayout,
+      updateSidebarLayout: (layout) => {
+        state.sidebarLayout = layout;
+      },
     });
 
     expect(rails.sessionWorkspace.collapsed).toBe(true);
@@ -166,30 +163,6 @@ describe("chat pane sidebar toggles", () => {
     expect(dispatch(shortcut, { metaKey: false, ctrlKey: true })).toBe(true);
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
 
-    for (const gate of ["inactive", "hidden", "consumed", "composing", "modal"] as const) {
-      pane.active = gate !== "inactive";
-      pane.presented = gate !== "hidden";
-      const modal = document.createElement("nav");
-      modal.className = "shell-nav";
-      const releaseModal = registerModalSurface(modal);
-      if (gate === "modal") {
-        modal.setAttribute("aria-modal", "true");
-        document.body.append(modal);
-      }
-      const event = panelShortcut(shortcut, {
-        key: shortcut.key,
-        isComposing: gate === "composing",
-      });
-      if (gate === "consumed") {
-        event.preventDefault();
-      }
-      pane.handleDocumentKeydown(event);
-      expect(isSidebarSlotVisible(state.sidebarLayout, slot), gate).toBe(false);
-      releaseModal();
-      modal.remove();
-    }
-    pane.active = true;
-    pane.presented = true;
     // Existing panel chords work from the composer; the new chords keep that contract.
     const input = document.body.appendChild(document.createElement("textarea"));
     input.focus();

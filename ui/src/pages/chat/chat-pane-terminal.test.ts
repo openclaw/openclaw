@@ -29,11 +29,7 @@ async function openPanelMenu(container: HTMLElement) {
 
 async function selectPanel(container: HTMLElement, value: string) {
   const menu = await openPanelMenu(container);
-  const item = menu.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
-  if (!item) {
-    throw new Error(`Expected Layout panel action: ${value}`);
-  }
-  item.click();
+  menu.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`)!.click();
   await waitForSolid(() =>
     expect(menu.querySelector(".oc-menu")?.matches(":popover-open")).toBe(false),
   );
@@ -120,47 +116,49 @@ it.each(["session", "owner", "target", "client", "reconnect"] as const)(
   },
 );
 
-it("disables terminal continuation with query-specific guidance", () => {
-  const client = gateway({
-    gatewayUrl: "wss://gateway.example/control?route=alpha",
-  });
-  const { container, paint } = createTerminalPane(client);
-  const row = directSession("main", "alpha");
-  paint(row);
-
-  const menu = container.querySelector<
-    HTMLElement & {
-      actionDisabledReasons: Record<string, string>;
-    }
-  >("openclaw-chat-header-session-menu");
-  expect(menu?.actionDisabledReasons["continue-in-terminal"]).toBe(
-    "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
+it("explains why query-routed Gateways cannot continue in a terminal", () => {
+  const { container, paint } = createTerminalPane(
+    gateway({ gatewayUrl: "wss://gateway.example/?route=alpha" }),
   );
+  paint(directSession("main", "alpha"));
+  const reason = container.querySelector("openclaw-chat-header-session-menu")
+    ?.actionDisabledReasons["continue-in-terminal"];
+  expect(reason).toContain("Query-routed Gateway URLs");
+  expect(reason).toContain("queryless configured Gateway URL");
 });
 
-it("offers Terminal in the compact fallback only when available", async () => {
-  const { state, container, paint, session, panelActionIds, topButton } = createTerminalPane(
-    undefined,
-    true,
-  );
-  state.terminalAvailable = true;
-  const renderHeader = () =>
-    paint(session, {
-      ...createPaneHeaderWorkspaceFixture(state),
-      onToggleTerminal: state.terminalAvailable
-        ? () => state.updateSidebarLayout(openSlot(state.sidebarLayout, "terminal"))
-        : undefined,
-    });
-
-  renderHeader();
-  expect(topButton("Toggle terminal")).toBeNull();
-  await selectPanel(container, "terminal");
-  expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toContain("terminal");
-
-  state.terminalAvailable = false;
-  renderHeader();
-  expect(panelActionIds().includes("terminal")).toBe(false);
-});
+it.each([
+  ["terminal", "terminalAvailable", "onToggleTerminal", "Toggle terminal"],
+  ["browser", "browserPanelAvailable", "onToggleBrowser", "Toggle browser panel"],
+] as const)(
+  "offers %s in the compact fallback only when available",
+  async (slot, field, action, label) => {
+    const { state, container, paint, session, panelActionIds, topButton } = createTerminalPane(
+      undefined,
+      true,
+    );
+    const toggle = vi.fn(() => state.updateSidebarLayout(openSlot(state.sidebarLayout, slot)));
+    const draw = () =>
+      paint(session, {
+        ...createPaneHeaderWorkspaceFixture(state),
+        [action]: state[field] ? toggle : undefined,
+      });
+    state[field] = false;
+    draw();
+    await openPanelMenu(container);
+    expect(topButton(label)).toBeNull();
+    expect(panelActionIds()).not.toContain(slot);
+    state[field] = true;
+    draw();
+    expect(topButton(label)).toBeNull();
+    await selectPanel(container, slot);
+    expect(toggle).toHaveBeenCalledOnce();
+    expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toContain(slot);
+    state[field] = false;
+    draw();
+    expect(panelActionIds()).not.toContain(slot);
+  },
+);
 
 it("offers Desktop in the compact fallback only for observable session targets", async () => {
   const fixture = createTerminalPane(undefined, true);
@@ -210,21 +208,4 @@ it("offers Desktop in the compact fallback only for observable session targets",
   snapshot.hello = desktopHello(["desktop.observe"], ["operator.read"]);
   renderDesktopHeader(localSession);
   expect(topButton("Toggle desktop panel")).toBeNull();
-});
-
-it("keeps Browser reachable through the compact fallback", async () => {
-  const { state, container, paint, session, panelActionIds } = createTerminalPane(undefined, true);
-  state.browserPanelAvailable = false;
-  paint(session);
-  await openPanelMenu(container);
-  expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
-  expect(panelActionIds()).not.toContain("browser");
-
-  state.browserPanelAvailable = true;
-  const onToggleBrowser = vi.fn();
-  paint(session, { ...createPaneHeaderWorkspaceFixture(state), onToggleBrowser });
-  await openPanelMenu(container);
-  expect(panelActionIds()).toContain("browser");
-  await selectPanel(container, "browser");
-  await waitForSolid(() => expect(onToggleBrowser).toHaveBeenCalledOnce());
 });

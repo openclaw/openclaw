@@ -44,44 +44,34 @@ function tool(
   owner = runId,
   timestamp = 2,
 ) {
-  const activity: AgentActivityItem = {
-    itemId: id,
-    toolCallId: id,
-    kind: "tool",
-    name: "read",
-    title,
-    status,
-    phase: status === "running" ? "start" : "end",
-  };
+  const calls = ["prior-" + id, id];
   return {
     role: "assistant",
     runId: owner,
     timestamp,
     __openclaw: { id: "tool-" + id, runId: owner },
     // Two cards take the expandable activity path, not the single-tool card path.
-    content: [
-      { type: "toolCall", id: "prior-" + id, name: "read", arguments: { path: "/repo/prior.ts" } },
-      { type: "toolCall", id, name: "read", arguments: { path: "/repo/" + id + ".ts" } },
-    ],
-    activity: [
-      {
-        ...activity,
-        itemId: "prior-" + id,
-        toolCallId: "prior-" + id,
-        title: "Prior file",
-        status: "completed",
-        phase: "end",
-      },
-      activity,
-    ] satisfies AgentActivityItem[],
+    content: calls.map((callId, index) => ({
+      type: "toolCall",
+      id: callId,
+      name: "read",
+      arguments: { path: "/repo/" + (index ? id : "prior") + ".ts" },
+    })),
+    activity: calls.map((callId, index): AgentActivityItem => ({
+      itemId: callId,
+      toolCallId: callId,
+      kind: "tool",
+      name: "read",
+      title: index ? title : "Prior file",
+      status: index ? status : "completed",
+      phase: index && status === "running" ? "start" : "end",
+    })),
   };
 }
 
-function labels() {
-  return texts(".chat-activity-group__label");
-}
 const texts = (selector: string) =>
   Array.from(container.querySelectorAll(selector), (node) => node.textContent);
+const labels = () => texts(".chat-activity-group__label");
 const expectLabels = (expected: string[]) => expect(labels()).toEqual(expected);
 const first = (status: AgentActivityItem["status"] = "running") =>
   tool("first", "Inspect the first file", status);
@@ -113,7 +103,7 @@ it("retains live running activity when history contains an unfinished call", asy
     ] satisfies AgentActivityItem[],
   };
   const live = {
-    ...tool("active", "Inspect the active file"),
+    ...call,
     __openclawToolStreamLive: true,
     __openclawToolStreamResultReceived: false,
     __openclawToolStreamItemEnded: false,

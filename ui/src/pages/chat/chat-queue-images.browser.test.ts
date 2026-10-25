@@ -1,4 +1,4 @@
-import { createComponent, merge } from "solid-js";
+import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { t } from "../../i18n/index.ts";
@@ -11,7 +11,6 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
-import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 import baseStyles from "../../styles/base.css?inline";
 import queueStyles from "../../styles/chat/composer-queue.css?inline";
 import componentStyles from "../../styles/components.css?inline";
@@ -24,8 +23,7 @@ let styles: HTMLStyleElement;
 let attachments: ChatAttachment[];
 let view: ReturnType<typeof mountSolid> | undefined;
 type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
-let current: QueueProps;
-let invalidate: (() => void) | undefined;
+let update: ((props: QueueProps) => void) | undefined;
 const all = <T extends HTMLElement = HTMLElement>(selector: string) => [
   ...container.querySelectorAll<T>(selector),
 ];
@@ -50,7 +48,7 @@ beforeEach(() => {
 afterEach(() => {
   view?.unmount();
   view = undefined;
-  invalidate = undefined;
+  update = undefined;
   container.remove();
   styles.remove();
   releaseChatAttachmentPayloads(attachments);
@@ -59,7 +57,7 @@ afterEach(() => {
 });
 
 function draw(queue: ChatQueueItem[], editingId?: string, onQueueMove?: QueueProps["onQueueMove"]) {
-  current = {
+  const props: QueueProps = {
     queue,
     onQueueMove,
     queuedEdit: onQueueMove
@@ -67,18 +65,14 @@ function draw(queue: ChatQueueItem[], editingId?: string, onQueueMove?: QueuePro
       : { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
     onQueueRemove: vi.fn(),
   };
-  if (invalidate) {
-    invalidate();
+  if (update) {
+    update(props);
   } else {
     view = mountSolid(
       () => {
-        const lifecycle = createSolidRenderLifecycle({
-          host: {},
-          presented: () => true,
-          read: () => current,
-        });
-        invalidate = () => lifecycle.invalidate();
-        return createComponent(renderChatQueueSolid, merge(lifecycle.snapshot));
+        const [current, setCurrent] = createSignal(props);
+        update = setCurrent;
+        return createComponent(renderChatQueueSolid, merge(current));
       },
       { container },
     );
@@ -100,8 +94,7 @@ it.each([
   const ids = key === "ArrowUp" ? ["a", "c", "b", "d"] : ["a", "b", "d", "c"];
   const onQueueMove = vi.fn<(id: string, targetId: string) => void>(() => {
     queue = ids.map((id, index) => waiting(id, index));
-    current = { ...current, queue };
-    invalidate?.();
+    draw(queue, undefined, onQueueMove);
   });
   draw(queue, undefined, onQueueMove);
   await waitForSolid(() => expect(all(".chat-queue__grip")).toHaveLength(4));
@@ -163,10 +156,7 @@ it.each([
     const rows = all(".chat-queue__item");
     const snippets = all<HTMLImageElement>(".chat-queue__images");
     expect(snippets).toHaveLength(3);
-    // Compare like-for-like: the last row intentionally has no bottom divider.
-    for (const [index, row] of rows.entries()) {
-      expect(row.getBoundingClientRect().height).toBe(baselineHeights[index]);
-    }
+    expect(rows.map((row) => row.getBoundingClientRect().height)).toEqual(baselineHeights);
     const textStarts = rows.slice(1).map((row) => left(row, ".chat-queue__text"));
     expect(new Set(textStarts).size).toBe(1);
     for (const row of rows.slice(1)) {

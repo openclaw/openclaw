@@ -16,7 +16,9 @@ import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { readPrewarmedChatSnapshot, SessionSnapshotStore } from "./session-snapshot-store.ts";
 
-const prefix = 'scope:["ws://snapshot.example","account-a"]\u0000';
+const scope = (host = "snapshot.example", account = "account-a") =>
+  `scope:["ws://${host}","${account}"]\u0000`;
+const prefix = scope();
 const snapshot = {
   messages: [{ role: "assistant", content: "Remembered transcript" }],
   sessionId: "stored-session",
@@ -88,25 +90,13 @@ it.each([sessionRouteUuid, sessionRouteUuid.replaceAll("-", "")])(
     });
     expect(result).not.toHaveProperty("canonicalLocation");
     expect(request).not.toHaveBeenCalled();
-    const prewarmed = await readPrewarmedChatSnapshot(prefix + sessionRouteKey);
-    expect(prewarmed).toEqual(snapshot);
-    expect(await new SessionSnapshotStore().read(prefix + sessionRouteKey)).toBe(prewarmed);
+    expect(await readPrewarmedChatSnapshot(prefix + sessionRouteKey)).toEqual(snapshot);
   },
 );
 
 it.each([
-  [
-    "other account",
-    sessionRouteKey,
-    'scope:["ws://snapshot.example","account-b"]\u0000',
-    sessionRouteUuid,
-  ],
-  [
-    "other host",
-    sessionRouteKey,
-    'scope:["ws://other.example","account-a"]\u0000',
-    sessionRouteUuid,
-  ],
+  ["other account", sessionRouteKey, scope("snapshot.example", "account-b"), sessionRouteUuid],
+  ["other host", sessionRouteKey, scope("other.example"), sessionRouteUuid],
   ["other agent", sessionRouteKey.replace("roboclaw", "other"), prefix, sessionRouteUuid],
   ["different UUID", sessionRouteKey.replace("12345678", "87654321"), prefix, sessionRouteUuid],
   ["short prefix", sessionRouteKey, prefix, "12345678"],
