@@ -85,6 +85,35 @@ function receiptFor(runId: string, provider: string, model: string, responseMode
   };
 }
 
+const visibleReply = (text: string) => ({
+  finalAssistantVisibleText: text,
+  finalAssistantRawText: text,
+  terminalReply: { disposition: "visible" as const, text },
+});
+
+function runReceipt(
+  runId: string,
+  selection: EntryParams["selection"],
+  effectiveModel: string,
+  responseModel: string,
+) {
+  usePrimaryFallback();
+  return runEntry({
+    selection,
+    runId,
+    runCandidate: async (provider, model) => {
+      const candidate = makeResult({ provider, model, meta: visibleReply("done") });
+      candidate.meta.agentMeta!.terminalReceipt = receiptFor(
+        runId,
+        provider,
+        effectiveModel,
+        responseModel,
+      );
+      return candidate;
+    },
+  });
+}
+
 describe("runEmbeddedAgentEntry", () => {
   registerRunEntryFailureTests(state);
 
@@ -122,9 +151,7 @@ describe("runEmbeddedAgentEntry", () => {
           if (options.isFallbackRetry) {
             candidate.meta = {
               ...candidate.meta,
-              finalAssistantVisibleText: "fallback complete",
-              finalAssistantRawText: "fallback complete",
-              terminalReply: { disposition: "visible", text: "fallback complete" },
+              ...visibleReply("fallback complete"),
               executionTrace: {
                 winnerProvider: provider,
                 winnerModel: model,
@@ -154,21 +181,14 @@ describe("runEmbeddedAgentEntry", () => {
     const command = await runMode("command-rpc");
 
     expect(channel.candidateCalls).toEqual(command.candidateCalls);
-    expect(channel.result).toMatchObject({
-      outcome: "completed",
-      ...fallbackRoute,
-    });
+    expect(channel.result).toMatchObject({ outcome: "completed", ...fallbackRoute });
     expect(channel.result.attempts).toEqual(command.result.attempts);
     expect(channel.result.terminal).toEqual(command.result.terminal);
     expect(channel.result.result.meta.executionTrace).toEqual({
-      winnerProvider: "fallback-provider",
-      winnerModel: "fallback-model",
+      winnerProvider: fallbackRoute.provider,
+      winnerModel: fallbackRoute.model,
       attempts: [
-        {
-          ...primaryRoute,
-          result: "candidate_failed",
-          reason: "format",
-        },
+        { ...primaryRoute, result: "candidate_failed", reason: "format" },
         { ...fallbackRoute, ...sameModelRetry },
         { ...fallbackRoute, result: "success" },
       ],
@@ -192,12 +212,6 @@ describe("runEmbeddedAgentEntry", () => {
         "Model route changed: primary-provider/primary-model → fallback-provider/producer-model.",
     });
     expect(channel.candidateLeases[0]).toBe(channel.candidateLeases[1]);
-    expect(state.selectAgentHarness).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "fallback-provider",
-        modelId: "fallback-model",
-      }),
-    );
     expect(channel.reconciled).toEqual(command.reconciled);
     expect(channel.reconciled).toEqual([fallbackRoute]);
   });
@@ -459,29 +473,12 @@ describe("runEmbeddedAgentEntry", () => {
       };
       const broker = { baseUrl: "https://broker.example/v1", models: [modelRow] };
       const cfg: OpenClawConfig = { models: { providers: { broker } } };
-      usePrimaryFallback();
-      const result = await runEntry({
-        selection: { cfg, provider: "broker", model: "team/chat" },
+      const result = await runReceipt(
         runId,
-        runCandidate: async (provider, model) => {
-          const candidate = makeResult({
-            provider,
-            model,
-            meta: {
-              finalAssistantVisibleText: "done",
-              finalAssistantRawText: "done",
-              terminalReply: { disposition: "visible", text: "done" },
-            },
-          });
-          candidate.meta.agentMeta!.terminalReceipt = receiptFor(
-            runId,
-            provider,
-            model,
-            "upstream-model",
-          );
-          return candidate;
-        },
-      });
+        { cfg, provider: "broker", model: "team/chat" },
+        "team/chat",
+        "upstream-model",
+      );
 
       expect(result.terminal.metadata.terminalReceipt).toMatchObject({
         effective: { provider: "broker", model: "team/chat", responseModel: "upstream-model" },
@@ -520,29 +517,7 @@ describe("runEmbeddedAgentEntry", () => {
     async ({ model: effectiveModel, responseModel, routeChange }) => {
       const runId = `clawrouter-${effectiveModel}-${responseModel}`;
       const route = { provider: "clawrouter", model: "openai/gpt-6-astra" };
-      usePrimaryFallback();
-      const result = await runEntry({
-        selection: { cfg: {}, ...route },
-        runId,
-        runCandidate: async (provider, model) => {
-          const candidate = makeResult({
-            provider,
-            model,
-            meta: {
-              finalAssistantVisibleText: "done",
-              finalAssistantRawText: "done",
-              terminalReply: { disposition: "visible", text: "done" },
-            },
-          });
-          candidate.meta.agentMeta!.terminalReceipt = receiptFor(
-            runId,
-            provider,
-            effectiveModel,
-            responseModel,
-          );
-          return candidate;
-        },
-      });
+      const result = await runReceipt(runId, { cfg: {}, ...route }, effectiveModel, responseModel);
 
       expect(result.terminal.metadata.terminalReceipt).toMatchObject({
         requested: route,

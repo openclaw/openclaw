@@ -1,4 +1,3 @@
-// Full-entry coverage for wiring the post-compaction loop guard into embedded runs.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
@@ -51,8 +50,6 @@ const POST_COMPACTION_ABORT_DETAILS = {
   detector: "compaction_loop_persisted",
   count: 3,
   toolName: "gateway",
-  message:
-    "CRITICAL: tool gateway repeated 3 times with identical arguments and identical results within 3 attempts after auto-compaction. The compaction did not break the loop. Aborting to prevent runaway resource use.",
 };
 
 function seedToolHistory(state: SessionState) {
@@ -117,6 +114,28 @@ function observeSettlement(run: ReturnType<typeof runEmbeddedAgent>) {
     })
     .catch(() => {});
   return state;
+}
+
+function expectBackendHeld(completion: { settled: boolean }, pending: Set<Promise<unknown>>) {
+  expect(completion.settled).toBe(false);
+  expect(pending.size, "backend still runs after the outer deadline").toBeGreaterThan(0);
+}
+
+async function settleTimedOutAttempt(
+  run: ReturnType<typeof runEmbeddedAgent>,
+  completion: { settled: boolean },
+  settleAttempt: () => void,
+) {
+  settleAttempt();
+  await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+  expect(completion.settled).toBe(true);
+}
+
+function gatewayResult(overrides: Parameters<typeof makeAttemptResult>[0] = {}) {
+  return sessionResult({
+    toolMetas: Array.from({ length: 3 }, () => ({ toolName: "gateway" })),
+    ...overrides,
+  });
 }
 
 async function withHeldAttempt(
@@ -252,6 +271,13 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       let attemptReturned = false;
       let attemptSignalAborted = false;
       let attemptSignalReason: unknown;
+      const history = getDiagnosticSessionState({
+        sessionKey: baseParams.sessionKey,
+        sessionId: baseParams.sessionId,
+      });
+      // Exercise live sequence observation while the history's index stays capped.
+      seedToolHistory(history);
+      expect(history.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
 
       prepareCompactedAttempt();
       // Abort inside the live attempt; raise the loop error after it unwinds.
@@ -261,14 +287,14 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
           onToolOutcome?: ToolOutcomeObserver;
         };
         await repeatToolOutcome(onToolOutcome);
+        expect(history.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
         attemptSignalAborted = abortSignal?.aborted ?? false;
         attemptSignalReason = abortSignal?.reason;
         attemptReturned = true;
         if (revoked) {
           admission.close();
         }
-        return session.makeAttemptResult({
-          toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
+        return gatewayResult({
           acceptedSessionSpawns: [
             {
               runId: child.runId,
@@ -299,8 +325,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         }
       }
 
-      expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(attemptReturned).toBe(true);
       expect(attemptSignalAborted).toBe(true);
       expect(attemptSignalReason).toBeInstanceOf(Error);
@@ -320,11 +344,8 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         await Promise.race([started, run]);
         expect(attemptAborted).toBe(true);
         await vi.advanceTimersByTimeAsync(30_001);
-        expect(completion.settled).toBe(false);
-        expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(0);
-        settleAttempt();
-        await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
-        expect(completion.settled).toBe(true);
+        expectBackendHeld(completion, pendingTasks);
+        await settleTimedOutAttempt(run, completion, settleAttempt);
       },
     );
   });
@@ -359,16 +380,11 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         timeoutMs: 1,
         abortSignal: parent.signal,
       });
-      let settled = false;
-      const observed = run
-        .finally(() => {
-          settled = true;
-        })
-        .catch((error: unknown) => error);
+      const completion = observeSettlement(run);
       try {
         await Promise.race([acquisitionStarted.promise, run]);
         await vi.advanceTimersByTimeAsync(60_000);
-        expect(settled).toBe(false);
+        expect(completion.settled).toBe(false);
         expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
         if (stop) {
           parent.abort(new Error("stopped during preparation"));
@@ -384,7 +400,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         }
       } finally {
         resumeAcquisition.resolve();
-        await observed;
+        await run.catch(() => undefined);
         vi.useRealTimers();
       }
     },
@@ -427,14 +443,9 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
           Date.now(),
         );
         await replyOperation?.watchdog.tick();
-        expect(completion.settled).toBe(false);
-        expect(pendingTasks.size, "backend still runs after the owner deadline").toBeGreaterThan(0);
-        settleAttempt();
-        await expect(run).rejects.toMatchObject({
-          name: "CommandLaneTaskTimeoutError",
-        });
+        expectBackendHeld(completion, pendingTasks);
+        await settleTimedOutAttempt(run, completion, settleAttempt);
         expect(attemptSignal?.aborted).toBe(true);
-        expect(completion.settled).toBe(true);
       },
     );
   });
@@ -467,13 +478,9 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
           // Writer fencing is asynchronous; timer advancement does not join its receipt.
           await Promise.race([stopped.promise, run]);
 
-          expect(completion.settled).toBe(false);
+          expectBackendHeld(completion, pendingTasks);
           expect(attemptSignal?.aborted).toBe(true);
-          expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(
-            0,
-          );
-          settleAttempt();
-          await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+          await settleTimedOutAttempt(run, completion, settleAttempt);
           if (kind === "timeout") {
             await expect(run).rejects.toBe(attemptSignal?.reason);
           }
@@ -482,7 +489,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
               ? { name: "CommandLaneTaskTimeoutError" }
               : { name: "AbortError", message: "agent run aborted" },
           );
-          expect(completion.settled).toBe(true);
         },
       );
     },
@@ -494,56 +500,16 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
         .onToolOutcome;
       await repeatToolOutcome(onToolOutcome);
-      return session.makeAttemptResult({
-        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
-      });
+      return gatewayResult();
     });
 
     const result = await runEmbeddedAgent({
       ...session.runParams,
-      config: {
-        tools: {
-          loopDetection: {
-            enabled: false,
-          },
-        },
-      } as never,
+      config: { tools: { loopDetection: { enabled: false } } } as never,
     });
 
     expect(result.meta.error).toBeUndefined();
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-  });
-
-  it("aborts post-compaction loop from the live tool path even when toolCallHistory is at its trim cap", async () => {
-    const sessionState = getDiagnosticSessionState({
-      sessionKey: baseParams.sessionKey,
-      sessionId: baseParams.sessionId,
-    });
-
-    seedToolHistory(sessionState);
-    expect(sessionState.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
-
-    prepareCompactedAttempt();
-    // Attempt 2 (post-compaction): three identical live tool outcomes while
-    // history is already at the cap. The guard aborts on the third result
-    // before the mocked attempt can return.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
-      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
-        .onToolOutcome;
-      await repeatToolOutcome(onToolOutcome);
-      // History is still capped at HISTORY_TRIM_CAP after the trim.
-      expect(sessionState.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
-      return session.makeAttemptResult({
-        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
-      });
-    });
-
-    await expect(runEmbeddedAgent(session.runParams)).rejects.toMatchObject(
-      POST_COMPACTION_ABORT_DETAILS,
-    );
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 });

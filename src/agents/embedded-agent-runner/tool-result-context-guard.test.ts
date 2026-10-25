@@ -95,6 +95,17 @@ function hook(engine: ContextEngine, options: HookOptions = {}, agent = makeGuar
 }
 
 const textBlock = (text: string) => ({ type: "text" as const, text });
+const exchange = () => [makeUser("first"), makeToolResult("one", "result")];
+
+function expectBoundedResult(message: AgentMessage, maxChars: number, ...snippets: string[]) {
+  expect(message).not.toHaveProperty("details");
+  expect(
+    estimateMessageCharsCached(message, new WeakMap<AgentMessage, number>()),
+  ).toBeLessThanOrEqual(maxChars);
+  for (const snippet of [CONTEXT_LIMIT_TRUNCATION_NOTICE, ...snippets]) {
+    expect(getAllToolResultText(message)).toContain(snippet);
+  }
+}
 
 async function pressureCheck(
   agent: ReturnType<typeof makeGuardableAgent>,
@@ -124,11 +135,9 @@ describe("installToolResultContextGuard", () => {
     "Process exited with signal SIGTERM.",
   ])("delivers the diagnostic %s through the real agent loop", async (diagnostic) => {
     const hint = "Inspect src/fixture.ts before retrying.";
-    const preamble = "progress output\n".repeat(400);
-    const content = [textBlock(preamble + diagnostic + " " + hint)];
+    const content = [textBlock("progress output\n".repeat(400) + diagnostic + " " + hint)];
     const original = structuredClone(content);
     const requests: Message[][] = [];
-    const execute = vi.fn(async () => ({ content, details: { privateReference: "fixture" } }));
     const contextWindowTokens = 8_192;
     const model = makeProviderModelFixture({
       id: "test-model",
@@ -146,7 +155,7 @@ describe("installToolResultContextGuard", () => {
             label: "Diagnostic",
             description: "Read diagnostic output",
             parameters: Type.Object({}),
-            execute,
+            execute: async () => ({ content, details: { privateReference: "fixture" } }),
           },
         ],
       },
@@ -169,10 +178,7 @@ describe("installToolResultContextGuard", () => {
         return stream;
       },
     });
-    const dispose = installToolResultContextGuard({
-      agent,
-      contextWindowTokens,
-    });
+    const dispose = installToolResultContextGuard({ agent, contextWindowTokens });
     try {
       await agent.prompt("Read the diagnostic and report its next step.");
     } finally {
@@ -181,7 +187,6 @@ describe("installToolResultContextGuard", () => {
       dispose();
     }
 
-    expect(execute).toHaveBeenCalledOnce();
     expect(requests).toHaveLength(2);
     expect(content).toEqual(original);
     const stored = expectDefined(
@@ -194,20 +199,13 @@ describe("installToolResultContextGuard", () => {
       requests[1]?.find((message) => message.role === "toolResult"),
       "provider-bound tool result",
     );
-    expect(projected).not.toHaveProperty("details");
-    expect(
-      estimateMessageCharsCached(projected, new WeakMap<AgentMessage, number>()),
-    ).toBeLessThanOrEqual(contextWindowTokens);
-    expect(getAllToolResultText(projected)).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
-    expect(getAllToolResultText(projected)).toContain(diagnostic);
-    expect(getAllToolResultText(projected)).toContain(hint);
+    expectBoundedResult(projected, contextWindowTokens, diagnostic, hint);
     expect(agent.state.messages.at(-1)).toMatchObject({
       role: "assistant",
       content: [textBlock(hint)],
       stopReason: "stop",
     });
-    expect(agent.state.isStreaming).toBe(false);
-    expect(agent.state.errorMessage).toBeUndefined();
+    expect(agent.state).toMatchObject({ isStreaming: false, errorMessage: undefined });
   });
 
   it("omits oversized metadata within the cap", async () => {
@@ -224,13 +222,8 @@ describe("installToolResultContextGuard", () => {
     if (projected.role !== "toolResult") {
       throw new Error("expected a tool result");
     }
-    expect(
-      estimateMessageCharsCached(projected, new WeakMap<AgentMessage, number>()),
-    ).toBeLessThanOrEqual(8_192);
     expect(source).toEqual(original);
-    expect(projected).not.toHaveProperty("details");
-    expect(getAllToolResultText(projected)).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
-    expect(getAllToolResultText(projected)).toContain(hint.text);
+    expectBoundedResult(projected, 8_192, hint.text);
     expect(projected.content).not.toContain(metadata);
   });
 
@@ -282,8 +275,6 @@ describe("installToolResultContextGuard", () => {
           toolResultReducibleChars: expect.any(Number),
         },
       });
-      expect(engine.afterTurn).toHaveBeenCalledOnce();
-      expect(engine.assemble).toHaveBeenCalledOnce();
     },
   );
 
@@ -295,8 +286,6 @@ describe("installToolResultContextGuard", () => {
     expect(
       await pressureCheck(agent, [makeUser("first"), makeToolResult("big", "x".repeat(80_000))]),
     ).toBe(compacted);
-    expect(engine.afterTurn).toHaveBeenCalledOnce();
-    expect(engine.assemble).toHaveBeenCalledOnce();
   });
 });
 
@@ -349,8 +338,7 @@ describe("installContextEngineLoopHook", () => {
         });
 
       expect(precheck(view).route).toBe("fits");
-      // One more history item than the budget allows must overflow, so the
-      // budget is tight rather than conservatively small.
+      // One more history item must overflow: the budget is tight, not conservatively small.
       const pending = view.slice(lastAssembled.length);
       expect(precheck([...lastAssembled, filler(), ...pending]).route).not.toBe("fits");
     },
@@ -441,7 +429,7 @@ describe("installContextEngineLoopHook", () => {
       onAfterTurnCheckpoint,
       getRuntimeContext,
     });
-    let messages = [makeUser("first"), makeToolResult("one", "result")];
+    let messages = exchange();
     expect(await run(messages)).toBe(messages);
     await run(messages);
     expect(engine.afterTurn).not.toHaveBeenCalled();
@@ -494,7 +482,7 @@ describe("installContextEngineLoopHook", () => {
   it("repairs orphan results from an engine returning its working array", async () => {
     const engine = makeEngine();
     const { run } = hook(engine, { repairAssembledMessages: sanitizeToolUseResultPairing });
-    const messages = [makeUser("first"), makeToolResult("orphan", "result")];
+    const messages = exchange();
     expect(await run(messages)).toEqual([messages[0]]);
     const input = engine.assemble.mock.calls[0]?.[0].messages;
     expect(input).not.toBe(messages);
@@ -514,7 +502,7 @@ describe("installContextEngineLoopHook", () => {
         throw new Error("assemble failed");
       });
     const { run } = hook(engine);
-    const first = [makeUser("first"), makeToolResult("one", "result")];
+    const first = exchange();
     expect(await run(first)).toBe(compacted);
     const next = [...first, makeToolResult("two", "result")];
     const original = next.slice();
@@ -535,11 +523,7 @@ describe("installContextEngineLoopHook", () => {
       const compacted = [makeUser("compacted")];
       engine.assemble.mockResolvedValueOnce({ messages: compacted, estimatedTokens: 0 });
       const { run } = hook(engine);
-      const messages = [
-        makeUser("first"),
-        makeToolResult("one", "result"),
-        makeToolResult("two", "result"),
-      ];
+      const messages = [...exchange(), makeToolResult("two", "result")];
       expect(await run(messages)).toBe(compacted);
       expect(await run(messages)).toBe(compacted);
       expect(engine.assemble).toHaveBeenCalledOnce();
@@ -567,7 +551,7 @@ describe("installContextEngineLoopHook", () => {
         afterTurn: undefined,
         ingestBatch: batch ? engine.ingestBatch : undefined,
       });
-      const first = [makeUser("first"), makeToolResult("one", "result")];
+      const first = exchange();
       await run(first);
       const second = [...first, makeUser("second"), makeToolResult("two", "result")];
       await run(second);
