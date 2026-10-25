@@ -58,19 +58,26 @@ function transportFixture(
     requestId: 1,
   });
   const sent = vi.spyOn(port1, "postMessage");
-  const waits: number[] = [];
+  const waits: Array<{ observed: number | bigint; timeout: number | undefined }> = [];
   let now = 0;
   let wakes = 0;
   let pending: BridgeRequest | undefined;
   vi.spyOn(performance, "now").mockImplementation(() => now);
-  vi.spyOn(Atomics, "wait").mockImplementation((_state, index, _observed, timeout) => {
-    pending = (receiveMessageOnPort(port2)?.message as BridgeRequest | undefined) ?? pending;
+  vi.spyOn(Atomics, "wait").mockImplementation((state, index, observed, timeout) => {
+    if (index === 1) {
+      return "not-equal";
+    }
+    const received = receiveMessageOnPort(port2)?.message as BridgeRequest | undefined;
+    if (received) {
+      pending = received;
+      wakes = 0;
+    }
     if (!pending) {
       throw new Error("No request was sent to the bridge");
     }
     const query = pending.operation === "query" ? pending : undefined;
     if (query) {
-      waits.push(timeout ?? 0);
+      waits.push({ observed, timeout });
       if (mode === "spurious" && wakes++ === 0) {
         Atomics.notify(control, index);
         now += 1;
@@ -93,9 +100,15 @@ function transportFixture(
           : {
               id: mode === "mismatched" && query ? id + 1 : id,
               result: {
-                inTransaction: !/^(COMMIT|ROLLBACK)$/.test(sql) && db.isTransaction,
+                inTransaction: /^\s*BEGIN\b/i.test(sql)
+                  ? true
+                  : /^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)
+                    ? false
+                    : db.isTransaction,
                 command,
-                mutation: command === "UPDATE" ? "scoped" : undefined,
+                mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
+                  ? "scoped"
+                  : undefined,
                 rows: [{ value: 7 }],
                 rowCount: 1,
                 fields: [{ name: "value", dataTypeID: 23 }],
@@ -217,7 +230,10 @@ it.each([
 it("waits through a late notify until its own completion and preserves increasing ids", () => {
   const { db, sent, waits, normal } = transportFixture("spurious");
   expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
-  expect(waits).toEqual([50, 50]);
+  expect(waits).toEqual([
+    { observed: 1, timeout: 50 },
+    { observed: 1, timeout: 50 },
+  ]);
   normal();
   expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
   expect(sent.mock.calls.map(([request]) => request.id)).toEqual([2, 3]);
@@ -242,11 +258,11 @@ it.each(["mismatched", "missing", "timeout", "service-death"] as const)(
     const after = readToken(db.anchor, "entry");
     expect(after).not.toBe(before);
     if (mode === "timeout") {
-      expect(waits.reduce((sum, wait) => sum + wait, 0)).toBe(120_000);
-      expect(waits.every((wait) => wait <= 50)).toBe(true);
+      expect(waits.reduce((sum, wait) => sum + (wait.timeout ?? 0), 0)).toBe(120_000);
+      expect(waits.every((wait) => wait.timeout! <= 50)).toBe(true);
     }
     if (mode === "service-death") {
-      expect(waits).toEqual([50]);
+      expect(waits).toEqual([{ observed: 1, timeout: 50 }]);
     }
     const count = sent.mock.calls.length;
     expect(() => db.exec("SELECT 8")).toThrow("PostgreSQL connection lost; outcome unknown");
@@ -306,10 +322,23 @@ it.each(["reserved", "worker"] as const)(
   },
 );
 
-it.each([false, true])("guards prepared commits (refuse=%s)", async (refuse) => {
+it("runs the commit authority guard and rolls back when it refuses", () => {
   const { db, statements } = transactionFixture();
   const refusal = new Error("authority revoked");
-  const result = prepared(
+  expect(() =>
+    immediate(db, () => 1, {
+      withCommit() {
+        throw refusal;
+      },
+    }),
+  ).toThrow(refusal);
+  expect(statements).toEqual([writeBegin, "ROLLBACK"]);
+  expect(db.isTransaction).toBe(false);
+});
+
+it("prepares before asynchronous admission and commits only inside its guard", async () => {
+  const { db, statements } = transactionFixture();
+  const result = await prepared(
     db,
     async () => {
       statements.push("prepare");
@@ -318,9 +347,6 @@ it.each([false, true])("guards prepared commits (refuse=%s)", async (refuse) => 
     {
       withCommit(commit) {
         statements.push("guard");
-        if (refuse) {
-          throw refusal;
-        }
         commit();
       },
     },
@@ -329,17 +355,26 @@ it.each([false, true])("guards prepared commits (refuse=%s)", async (refuse) => 
       return write();
     },
   );
-  if (refuse) {
-    await expect(result).rejects.toThrow(refusal);
-  } else {
-    await expect(result).resolves.toBe("result");
-  }
+  expect(result).toBe("result");
+  expect(statements).toEqual(["prepare", "admit", writeBegin, "guard", "COMMIT"]);
+});
+
+it("rolls a failed inner write back to its savepoint before the outer commit", () => {
+  const { db, statements } = transactionFixture();
+  const failure = new Error("inner write refused");
+  immediate(db, () => {
+    expect(() =>
+      immediate(db, () => {
+        throw failure;
+      }),
+    ).toThrow(failure);
+    expect(db.isTransaction).toBe(true);
+  });
   expect(statements).toEqual([
-    "prepare",
-    "admit",
     writeBegin,
-    "guard",
-    refuse ? "ROLLBACK" : "COMMIT",
+    "SAVEPOINT openclaw_tx_nested",
+    "ROLLBACK TO SAVEPOINT openclaw_tx_nested",
+    "RELEASE SAVEPOINT openclaw_tx_nested",
+    "COMMIT",
   ]);
-  expect(db.isTransaction).toBe(false);
 });

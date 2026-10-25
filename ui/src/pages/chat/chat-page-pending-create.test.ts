@@ -59,15 +59,17 @@ async function mountPage(previousSessionKey: string) {
   Object.assign(context, { theme: { subscribe: () => () => undefined } });
   Object.assign(context.agents, { subscribe: () => () => undefined });
   Object.assign(context.gateway.snapshot, { phase: "connected" });
-  context.agents.state.agentsList = makeBootRoster({
+  const agentsList = makeBootRoster({
     agents: [{ id: "main", name: "Previous agent" }],
   });
+  context.agents.state.agentsList = agentsList;
   page.data = { sessionKey: previousSessionKey };
   document.body.append(page);
   await settleChatPage(page);
   return {
     page,
     context,
+    agentsList,
     beginCreate(agentId: string, displayName: string, agentCreation = true) {
       const sessionKey = `agent:${agentId}:main`;
       const creation = { sessionKey, admitted: false };
@@ -134,7 +136,7 @@ it.each([
     expect(page.querySelector(".chat-group.user")).toBeNull();
 
     presentedSessions.length = 0;
-    context.agents.state.agentsList.agents.push({ id: agentId, name: displayName });
+    f.agentsList.agents.push({ id: agentId, name: displayName });
     context.agents.state.pendingAgent = undefined;
     creation.admitted = true;
     clear();
@@ -177,7 +179,7 @@ it.each(["rollback", "admission"] as const)(
 
     context.agents.state.pendingAgent = undefined;
     if (outcome === "admission") {
-      context.agents.state.agentsList.agents.push({ id: agentId, name: "New agent" });
+      f.agentsList.agents.push({ id: agentId, name: "New agent" });
       creation.admitted = true;
     } else {
       page.data = previousRoute;

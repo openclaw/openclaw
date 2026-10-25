@@ -6,10 +6,16 @@ import { SdkError, SdkErrorCode } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   areDiagnosticsEnabledForProcess,
+  onDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import * as schedulerModule from "../infra/gateway-scheduler.js";
-import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../plugin-sdk/logging-core.js";
+import {
+  logWebhookReceived,
+  startDiagnosticHeartbeat,
+  stopDiagnosticHeartbeat,
+} from "../plugin-sdk/logging-core.js";
 import { resolvePluginProviders } from "../plugin-sdk/provider-catalog-runtime.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import {
@@ -33,6 +39,7 @@ import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-std
 class NativeState {
   database?: DatabaseSync;
   disposals = 0;
+  factories = 0;
   workspaceDir?: string;
   aborted = createDeferredCore();
   started = createDeferredCore();
@@ -51,7 +58,8 @@ function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = 
   Object.defineProperty(globalThis, key, { value: state, configurable: true });
   const plugin = writePlugin({
     id: "mcp-native",
-    registration: `const { DatabaseSync } = require("node:sqlite");
+    body: `const { DatabaseSync } = require("node:sqlite");
+module.exports = { id: "mcp-native", register(api) {
   const state = globalThis[${JSON.stringify(key)}];
   const { resolvePluginProviders } = state;
   const db = state.database = new DatabaseSync(":memory:");
@@ -64,6 +72,7 @@ function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = 
     isCacheTtlEligible() { state.abortRead = db.prepare("SELECT 42 AS n").get().n; return true; }
   });
   api.registerTool(() => {
+    state.factories++;
     return { name: "mcp_native_read", label: "Native read", description: "Native read",
       parameters: { type: "object", properties: {} },
       async execute(_id, _params, signal) {
@@ -71,10 +80,12 @@ function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = 
           signal.addEventListener("abort", () => {
             state.abortReason = signal.reason;
             try {
-              resolvePluginProviders({ config: api.config, env: process.env,
+              const provider = resolvePluginProviders({ config: api.config, env: process.env,
                 workspaceDir: state.workspaceDir, onlyPluginIds: ["mcp-native"], registryScope: "loaded"
-              }).find((entry) => entry.id === "mcp-native")
-                ?.isCacheTtlEligible({ provider: "mcp-native", modelId: "abort" });
+              }).find((entry) => entry.id === "mcp-native");
+              if (!provider || provider.isCacheTtlEligible({ provider: "mcp-native", modelId: "abort" }) !== true) {
+                throw new Error("Abort callback lost its admitted provider registry");
+              }
             } catch (error) { state.abortFailure = error; }
             finally { state.aborted.resolve(); }
           }, { once: true });
@@ -84,7 +95,7 @@ function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = 
         return { content: [{ type: "text", text: String(db.prepare("SELECT 42 AS n").get().n) }] }; }
     };
   }, { names: ["mcp_native_read"] });
-`,
+}};`,
   });
   state.workspaceDir = plugin.dir;
   fs.writeFileSync(
@@ -123,10 +134,7 @@ function causes(error: unknown): unknown[] {
   if (error instanceof AggregateError) {
     return error.errors.flatMap(causes);
   }
-  if (error instanceof Error && error.cause !== undefined) {
-    return causes(error.cause);
-  }
-  return [error instanceof SdkError ? error.code : String(error)];
+  return error instanceof Error && error.cause !== undefined ? causes(error.cause) : [error];
 }
 
 function expectDisposed(state: NativeState) {
@@ -134,49 +142,68 @@ function expectDisposed(state: NativeState) {
 }
 
 describe("MCP serving registration ownership", () => {
-  it.each(["standalone", "borrowed"] as const)("validation cleanup (%s)", async (ownership) => {
-    const { state, acquire, cleanup } = nativePlugin();
-    let acquisition: Awaited<ReturnType<typeof acquire>> | undefined;
-    const clock = createGatewaySchedulerClock(0);
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const host = ownership === "borrowed" ? new LegacyPluginSdkResourceHost() : undefined;
-    host?.bindScheduler(scheduler);
-    vi.spyOn(schedulerModule, "GatewayScheduler").mockImplementation(function () {
-      return scheduler;
-    });
-    const previouslyEnabled = areDiagnosticsEnabledForProcess();
-    const serve = () =>
-      serveRegisteredToolsMcpServer({
-        acquireRegistry: async () => {
-          startDiagnosticHeartbeat({}, { sampleLiveness: () => null });
-          await clock.advanceBy(30_000);
-          return (acquisition = await acquire());
-        },
-        createServer: (tools) => createCodexSupervisionToolsMcpServer({ tools }),
+  it.each(["standalone", "borrowed"] as const)(
+    "releases registrations and only its owned scheduler after validation fails (%s)",
+    async (ownership) => {
+      const { state, acquire, cleanup } = nativePlugin();
+      let acquisition: Awaited<ReturnType<typeof acquire>> | undefined;
+      const clock = createGatewaySchedulerClock(0);
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const host = ownership === "borrowed" ? new LegacyPluginSdkResourceHost() : undefined;
+      host?.bindScheduler(scheduler);
+      const constructor = vi
+        .spyOn(schedulerModule, "GatewayScheduler")
+        .mockImplementation(function () {
+          return scheduler;
+        });
+      const previouslyEnabled = areDiagnosticsEnabledForProcess();
+      const heartbeats: string[] = [];
+      const unsubscribe = onDiagnosticEvent((event) => {
+        if (event.type === "diagnostic.heartbeat") {
+          heartbeats.push(event.type);
+        }
       });
-    try {
-      setDiagnosticsEnabledForProcess(true);
-      await expect(host ? host.run(serve) : serve()).rejects.toThrow(
-        "Install or update @openclaw/codex",
-      );
-      expectDisposed(state);
-      if (!acquisition) {
-        throw new Error("Expected registry acquisition");
+      const serve = () =>
+        serveRegisteredToolsMcpServer({
+          acquireRegistry: async () => {
+            startDiagnosticHeartbeat({}, { sampleLiveness: () => null });
+            logWebhookReceived({ channel: "test" });
+            await clock.advanceBy(30_000);
+            await waitForDiagnosticEventsDrained();
+            expect(heartbeats).toHaveLength(1);
+            return (acquisition = await acquire());
+          },
+          createServer: (tools) => createCodexSupervisionToolsMcpServer({ tools }),
+        });
+      try {
+        setDiagnosticsEnabledForProcess(true);
+        await expect(host ? host.run(serve) : serve()).rejects.toThrow(
+          "Install or update @openclaw/codex",
+        );
+        expect(state.factories).toBe(1);
+        expectDisposed(state);
+        if (!acquisition) {
+          throw new Error("Expected registry acquisition");
+        }
+        const released = acquisition;
+        markPluginRegistryActive(released.registry);
+        expect(() => released.resolveTools()).toThrow("Plugin tool registry has been released");
+        expect(state.factories).toBe(1);
+        expect(scheduler.signal.aborted).toBe(ownership === "standalone");
+        expect(scheduler.nextWakeAtMs).toBe(
+          ownership === "standalone" ? null : clock.clock.now() + 30_000,
+        );
+      } finally {
+        stopDiagnosticHeartbeat();
+        unsubscribe();
+        await host?.close();
+        await scheduler.stop();
+        constructor.mockRestore();
+        setDiagnosticsEnabledForProcess(previouslyEnabled);
+        cleanup();
       }
-      markPluginRegistryActive(acquisition.registry);
-      expect(acquisition.resolveTools).toThrow("Plugin tool registry has been released");
-      expect(scheduler.signal.aborted).toBe(ownership === "standalone");
-      expect(scheduler.nextWakeAtMs).toBe(
-        ownership === "standalone" ? null : clock.clock.now() + 30_000,
-      );
-    } finally {
-      stopDiagnosticHeartbeat();
-      await host?.close();
-      await scheduler.stop();
-      setDiagnosticsEnabledForProcess(previouslyEnabled);
-      cleanup();
-    }
-  });
+    },
+  );
 
   it("keeps peer cancellation SDK borrows with the admitted host under a foreign ambient host", async () => {
     const { state, acquire, cleanup } = nativePlugin({ abortSdk: true });
@@ -279,7 +306,9 @@ describe("MCP serving registration ownership", () => {
         if (connectError) {
           const failures = causes(failure);
           expect(failures).toHaveLength(3);
-          expect(failures).toEqual(
+          expect(
+            failures.map((error) => (error instanceof SdkError ? error.code : String(error))),
+          ).toEqual(
             expect.arrayContaining([
               SdkErrorCode.AlreadyConnected,
               expect.stringContaining("synthetic transport close failure"),
@@ -292,6 +321,7 @@ describe("MCP serving registration ownership", () => {
           expect(failure).toBe(expected);
         }
         expect(onclose).toHaveBeenCalledOnce();
+        expect(server?.onclose).toBe(onclose);
         expectDisposed(state);
       } finally {
         await outbound.close();

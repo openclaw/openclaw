@@ -16,49 +16,80 @@ const RETAINED_LOCAL = {
   nativeBootstrapDisabled: true,
 };
 
-function nativePort(disconnectOnPost = false) {
+const cleanupStages = [
+  "marker_set",
+  "session_remove",
+  "retired_local_remove",
+  "marker_remove",
+] as const;
+type CleanupFailureStage = (typeof cleanupStages)[number];
+
+type EnsurePortScript = (request: { nonce: string }) => unknown;
+
+function nativePort(script?: EnsurePortScript | "disconnect") {
   const onMessage = chromeEvent<[unknown]>();
   const onDisconnect = chromeEvent<[]>();
   return {
     disconnect: vi.fn(() => onDisconnect.emit()),
     onMessage,
     onDisconnect,
-    postMessage: vi.fn(() => {
-      if (disconnectOnPost) {
-        queueMicrotask(() => onDisconnect.emit());
+    postMessage: vi.fn((request: { nonce: string }) => {
+      if (script) {
+        queueMicrotask(() => {
+          if (script === "disconnect") {
+            onDisconnect.emit();
+          } else {
+            onMessage.emit(script(request));
+          }
+        });
       }
     }),
   };
 }
 
-function cleanupStorage(registry?: unknown, failOnMarkerRemoval = false) {
-  let failMarkerRemoval = failOnMarkerRemoval;
+function cleanupStorage(params: { registry?: unknown; failureStage?: CleanupFailureStage }) {
+  let failureStage = params.failureStage;
+  const failAt = (stage: CleanupFailureStage) => {
+    if (failureStage === stage) {
+      throw new Error(`${stage} failed`);
+    }
+  };
   const local = storageArea(
     {
       ...RETAINED_LOCAL,
       copilotDeviceIdentitiesV1: { device: "identity" },
       copilotDeviceTokensV1: { device: "token" },
-      copilotSessionRegistryV1: registry,
+      copilotSessionRegistryV1: params.registry,
     },
     (operation, keys) => {
-      if (failMarkerRemoval && operation === "remove" && keys.includes(CUSTODY_BLOCKED_KEY)) {
-        throw new Error("marker removal failed");
+      if (operation === "get") {
+        return;
       }
+      const removal = keys.includes(CUSTODY_BLOCKED_KEY) ? "marker_remove" : "retired_local_remove";
+      failAt(operation === "set" ? "marker_set" : removal);
     },
   );
-  const session = storageArea({
-    copilotBrowserInstanceV1: "browser-instance",
-    copilotPanelBindingsV1: { 7: "panel-binding" },
-  });
+  const session = storageArea(
+    {
+      copilotBrowserInstanceV1: "browser-instance",
+      copilotPanelBindingsV1: { 7: "panel-binding" },
+    },
+    () => failAt("session_remove"),
+  );
   const chromeApi = { storage: { local, session } };
-  vi.stubGlobal("chrome", chromeApi);
   return {
     local,
     session,
-    prepare: prepareRetiredCopilotState,
-    discard: discardRetiredCopilotState,
+    prepare: () => {
+      vi.stubGlobal("chrome", chromeApi);
+      return prepareRetiredCopilotState();
+    },
+    discard: () => {
+      vi.stubGlobal("chrome", chromeApi);
+      return discardRetiredCopilotState();
+    },
     retry: () => {
-      failMarkerRemoval = false;
+      failureStage = undefined;
     },
     expectClean: () => {
       expect(local.values).toEqual(RETAINED_LOCAL);
@@ -69,26 +100,60 @@ function cleanupStorage(registry?: unknown, failOnMarkerRemoval = false) {
 
 describe("retired copilot custody", () => {
   it("preserves every retired key when the registry read fails", async () => {
-    const storage = cleanupStorage();
+    const storage = cleanupStorage({});
     storage.local.get.mockRejectedValue(new Error("storage unavailable"));
     const beforeLocal = structuredClone(storage.local.values);
     const beforeSession = structuredClone(storage.session.values);
 
     await expect(storage.prepare()).resolves.toEqual({ blocked: true });
 
+    expect(storage.local.remove).not.toHaveBeenCalled();
+    expect(storage.session.remove).not.toHaveBeenCalled();
     expect(storage.local.values).toEqual(beforeLocal);
     expect(storage.session.values).toEqual(beforeSession);
   });
 
-  it("keeps custody blocked when final marker removal fails until explicit retry", async () => {
-    const registry = { sessions: { 7: { creationPending: true } }, pendingArchives: [] };
-    const storage = cleanupStorage(registry, true);
-    await expect(storage.discard()).rejects.toThrow("failed");
-    expect(storage.local.values[CUSTODY_BLOCKED_KEY]).toBe(true);
-    expect(storage.local.values).not.toHaveProperty("copilotSessionRegistryV1");
+  it.each(cleanupStages)(
+    "keeps cleanup restart-safe when %s fails and an explicit retry finishes",
+    async (stage) => {
+      const storage = cleanupStorage({
+        registry: { sessions: { 7: { creationPending: true } }, pendingArchives: [] },
+        failureStage: stage,
+      });
+
+      await expect(storage.discard()).rejects.toThrow("failed");
+      if (stage === "marker_set") {
+        expect(storage.local.values).toHaveProperty("copilotSessionRegistryV1");
+        expect(storage.local.values).not.toHaveProperty(CUSTODY_BLOCKED_KEY);
+      } else {
+        expect(storage.local.values[CUSTODY_BLOCKED_KEY]).toBe(true);
+      }
+      if (stage === "session_remove") {
+        expect(storage.local.values).toHaveProperty("copilotSessionRegistryV1");
+      }
+      if (stage === "marker_remove") {
+        expect(storage.local.values).not.toHaveProperty("copilotSessionRegistryV1");
+      }
+
+      await expect(storage.prepare()).resolves.toEqual({ blocked: true });
+      storage.retry();
+      await expect(storage.discard()).resolves.toBeUndefined();
+      storage.expectClean();
+    },
+  );
+
+  it("retries harmless cleanup after session removal fails", async () => {
+    const storage = cleanupStorage({
+      registry: { sessions: {}, pendingArchives: [] },
+      failureStage: "session_remove",
+    });
+
     await expect(storage.prepare()).resolves.toEqual({ blocked: true });
+    expect(storage.local.values).not.toHaveProperty(CUSTODY_BLOCKED_KEY);
+    expect(storage.local.values).toHaveProperty("copilotSessionRegistryV1");
+
     storage.retry();
-    await expect(storage.discard()).resolves.toBeUndefined();
+    await expect(storage.prepare()).resolves.toEqual({ blocked: false });
     storage.expectClean();
   });
 });
@@ -149,9 +214,28 @@ it.each(["current", "re-enabled"])(
   },
 );
 
-it("reports native disconnection to the reconnect owner", async () => {
+function ensureChromeApi(script: EnsurePortScript | "disconnect") {
   vi.stubGlobal("chrome", {
-    runtime: { connectNative: vi.fn(() => nativePort(true)), lastError: undefined },
+    runtime: { connectNative: vi.fn(() => nativePort(script)), lastError: undefined },
   });
-  await expect(requestRelayEnsure(20123)).rejects.toThrow("Native messaging host disconnected.");
+}
+
+describe("requestRelayEnsure", () => {
+  it("settles the exact relay wake-up request after the native host answers", async () => {
+    ensureChromeApi((request) => {
+      expect(request).toEqual({
+        v: 1,
+        op: "ensure_relay",
+        nonce: expect.any(String),
+        relayPort: 20123,
+      });
+      return { v: 1, ok: true, nonce: request.nonce, relay: "spawned" };
+    });
+    await expect(requestRelayEnsure(20123)).resolves.toBeUndefined();
+  });
+
+  it("reports native disconnection to the reconnect owner's failure handler", async () => {
+    ensureChromeApi("disconnect");
+    await expect(requestRelayEnsure(20123)).rejects.toThrow("Native messaging host disconnected.");
+  });
 });

@@ -9,11 +9,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createTeamReportsHttpHandler } from "./http.js";
 import { describePeriod } from "./periods.js";
+import { renderMarkdown } from "./render/markdown.js";
 import { measureReads, reportDocument, reportMember } from "./reports-data.test-support.js";
 import { githubCounts } from "./reports.fixtures.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
-import type { Period, Person, PersonReport } from "./types.js";
+import type { Period, Person, PersonReport, ReportDocument, SummaryDocument } from "./types.js";
 import type { WorkSessions } from "./work-sessions.js";
 
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMethod: vi.fn() }));
@@ -39,26 +40,59 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
 }));
 
+const maliciousTitle = '<script>alert("report")</script>';
 const hostileLogin = 'bad"><img src=x onerror=alert(1)>';
 const hostileDisplay = '"Quoted <Name>';
 const counts = githubCounts(1);
 const markdownSuffix = "\nStored Markdown only 雪 🦞\n".repeat(4096);
-const markdown = `# Stored report\n${markdownSuffix}`;
 const avatarPeople: Person[] = [
+  { github: ["invalid.login", "invalid-alias"], display: "Fallback Name" },
   { github: [hostileLogin, "hostile-alias"], display: hostileDisplay },
   { github: ["safe-login"], display: hostileDisplay },
+  { github: ["a".repeat(40), "long-login-alias"], display: "Long Login" },
 ];
 
 const member = (login: string, display = login, aliases: string[] = []): PersonReport =>
   reportMember(login, { display, aliases });
 
-function report(period: Period, key: string, partial = false) {
-  return reportDocument([member("alice", "Alice")], {
-    period: describePeriod(period, key),
-    status: partial ? "partial" : "closed",
-    otherActors: [{ login: "bob", github: counts }],
-  });
+function report(period: Period, key: string, partial = false): ReportDocument {
+  const descriptor = describePeriod(period, key);
+  return reportDocument(
+    [
+      {
+        ...member("alice", "Alice"),
+        github: {
+          ...counts,
+          items: [
+            {
+              kind: "commit",
+              repo: "example/project",
+              title: maliciousTitle,
+              url: "javascript:alert(1)",
+              actor: "alice",
+              atMs: descriptor.sinceMs,
+            },
+          ],
+        },
+      },
+    ],
+    {
+      period: descriptor,
+      status: partial ? "partial" : "closed",
+      otherActors: [{ login: "bob", github: counts }],
+      sources: { github: { ok: true, warnings: ["Fixture coverage warning"], stats: {} } },
+    },
+  );
 }
+
+const summary: SummaryDocument = {
+  source: "fallback",
+  generatedAtMs: 1,
+  globalSummary: "Collected **one contribution**.",
+  highlights: ["A recorded commit."],
+  fingerprint: "fixture",
+  warnings: ["Model summary unavailable: completion failed"],
+};
 
 const privateHeaders = {
   "cache-control": "private, no-store",
@@ -148,23 +182,17 @@ beforeAll(async () => {
     report("month", "2026-08"),
   ]) {
     if (document.period.key === "2026-08-21") {
-      document.members[0]!.github.items = [
-        {
-          kind: "commit",
-          repo: "example/app",
-          title: "Large evidence",
-          url: "https://example.test/commit",
-          actor: "alice",
-          atMs: document.period.sinceMs,
-          body: "unrendered activity ".repeat(4096),
-        },
-      ];
+      document.members[0]!.github.items[0]!.body = "unrendered activity ".repeat(4096);
       document.members.push(member("report-only", "Report Only Person", ["report-only-alias"]));
       document.memberCount = 2;
       document.activeMembers = 2;
       document.totals.github = githubCounts(2);
     }
-    await store.upsertPeriod({ report: document, markdown });
+    await store.upsertPeriod({
+      report: document,
+      summary,
+      markdown: renderMarkdown(document, summary) + markdownSuffix,
+    });
   }
   const handler = createTeamReportsHttpHandler({
     basePath: "/reports",
@@ -210,7 +238,20 @@ describe("Team Reports HTTP responses", () => {
     "denies GET and HEAD without read authority ($context) before store access",
     async ({ scopes }) => {
       runtimeScopeMock.mockReturnValue(scopes ? { client: { connect: { scopes } } } : undefined);
-      for (const url of ["/reports/assets/crab.avif", "/reports/day/2026-08-20/"]) {
+      for (const url of [
+        "/reports/",
+        "/reports/assets/crab.avif",
+        "/reports/assets/icon.png",
+        "/reports/status",
+        "/reports/sessions/",
+        "/reports/index.json",
+        "/reports/latest/",
+        "/reports/people/",
+        "/reports/people/alice/",
+        "/reports/day/2026-08-20/",
+        "/reports/day/2026-08-20/report.md",
+        "/reports/day/2026-08-20/data.json",
+      ]) {
         for (const method of ["GET", "HEAD"]) {
           const response = await fetchPath(url, method);
           expect(response).toMatchObject({
@@ -222,6 +263,8 @@ describe("Team Reports HTTP responses", () => {
             Buffer.byteLength("Forbidden: operator.read scope required.\n"),
           );
           expect(response.headers).toMatchObject(privateHeaders);
+          expect(response.headers["content-security-policy"]).toContain("default-src 'none'");
+          expect(response.headers["content-security-policy"]).toMatch(/style-src 'nonce-[^']+'/);
         }
       }
       expect(getStore).not.toHaveBeenCalled();
@@ -245,7 +288,7 @@ describe("Team Reports HTTP responses", () => {
     },
   );
 
-  it("authorizes page styles and scripts with its CSP nonce and resolves forwarded navigation", async () => {
+  it("serves escaped HTML with one nonce-authorized script and safe navigation", async () => {
     const response = await page("/reports/day/2026-08-20/", "GET", {
       "x-forwarded-proto": "https",
     });
@@ -257,27 +300,39 @@ describe("Team Reports HTTP responses", () => {
     expect(csp).toBe(
       `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src 'self' https://avatars.githubusercontent.com data:; base-uri 'none'; form-action 'none'`,
     );
+    expect(response.body.match(/<script\b/g)).toHaveLength(1);
+    expect(response.body).not.toContain('href="javascript:');
     expect(response.body).toContain(`<style nonce="${nonce}">`);
     expect(response.body).toContain(`<script nonce="${nonce}">`);
+    expect(response.body).toContain("&lt;script&gt;alert(&quot;report&quot;)&lt;/script&gt;");
     expect(response.body).toContain(
       `href="https://127.0.0.1:${port}/reports/day/2026-08-20/" target="_blank" rel="noopener" data-report-open-window aria-label="Open in a new window"`,
     );
+    expect(response.body).toContain('href="/reports/people/alice/"');
+    expect(response.body).toContain("Summary without a model");
+    expect(response.body).toContain("Fixture coverage warning");
+    expect(response.body).toContain("Model summary unavailable: completion failed");
+    expect(response.body).toContain("GitHub coverage is incomplete");
   });
 
   it("keeps unsafe avatar identities escaped and falls back to initials", async () => {
     const response = await page("/reports/day/2026-08-19/");
     const avatars = response.body.match(/<span class="oc-avatar\b[^>]*>[\s\S]*?<\/span>/g) ?? [];
-    expect(
-      avatars.find(
-        (avatar) => avatar.includes('data-initials="&quot;&lt;"') && !avatar.includes("<img"),
-      ),
-    ).toBeDefined();
+    for (const value of ["FN", "LL", "&quot;&lt;"]) {
+      const fallback = avatars.find(
+        (avatar) => avatar.includes(`data-initials="${value}"`) && !avatar.includes("<img"),
+      );
+      expect(fallback).toBeDefined();
+    }
+    expect(response.body).not.toContain("avatars.githubusercontent.com/invalid.login");
+    expect(response.body).not.toContain(`avatars.githubusercontent.com/${"a".repeat(40)}`);
     expect(response.body).not.toContain("avatars.githubusercontent.com/bad");
     expect(response.body).not.toContain(hostileLogin);
     expect(response.body).not.toContain(hostileDisplay);
     expect(response.body).not.toContain("<img src=x");
     expect(response.body).toContain("bad&quot;&gt;&lt;img src=x onerror=alert(1)&gt;");
     expect(response.body).toContain("&quot;Quoted &lt;Name&gt;");
+    expect(response.body).toContain('data-initials="&quot;&lt;"');
     expect(response.body).toContain('src="https://avatars.githubusercontent.com/safe-login?s=40"');
   });
 
@@ -309,6 +364,7 @@ describe("Team Reports HTTP responses", () => {
     "/reports/assets/unknown.png",
     "/reports/missing/",
     "/reports/day/2026-02-30/",
+    "/reports/week/2026-W54/",
     "/reports/day/2026-08-20/unknown",
     "/reports/day/../2026-08-20/",
     "/reports/people/alice%2fextra/",
@@ -328,12 +384,13 @@ describe("Team Reports HTTP responses", () => {
   it("serves week Markdown and canonical JSON", async () => {
     const period = "week";
     const key = "2026-W34";
-    const exported = await fetchPath(`/reports/${period}/${key}/report.md`);
-    expect(exported).toMatchObject({
-      status: 200,
-      body: markdown,
-      headers: { "content-type": "text/markdown; charset=utf-8" },
-    });
+    const markdown = await fetchPath(`/reports/${period}/${key}/report.md`);
+    expect(markdown.status).toBe(200);
+    expect(markdown.headers["content-type"]).toBe("text/markdown; charset=utf-8");
+    expect(markdown.body).toContain(key);
+    expect(markdown.body).not.toContain(maliciousTitle);
+    expect(markdown.body).toContain("> Model summary unavailable: completion failed\n");
+    expect(markdown.body).toBe(renderMarkdown(report(period, key), summary) + markdownSuffix);
     const json = await fetchPath(`/reports/${period}/${key}/data.json`);
     expect(json.status).toBe(200);
     expect(json.headers["content-type"]).toBe("application/json; charset=utf-8");
@@ -356,6 +413,7 @@ describe("Team Reports HTTP responses", () => {
 
   it("renders stored trends, history, archived people, index, and status", async () => {
     const index = await page("/reports/");
+    expect(index.body).toContain('aria-label="Activity dateline"');
     expect(index.body).toContain('href="/reports/week/2026-W34/"');
     await measureReads(workerReads, async () => {
       const people = await page("/reports/people/");
@@ -474,6 +532,7 @@ describe("per-member session links through HTTP", () => {
     expect(response.body).toContain("not activity from this report period");
     expect(response.body).toContain("?person=alice");
     expect(workSessions).toHaveBeenCalledExactlyOnceWith(0, 3, "alice-profile");
+    expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("users.list", {});
   });
 
   it("keeps person selection in directory pagination and resolves configured aliases", async () => {

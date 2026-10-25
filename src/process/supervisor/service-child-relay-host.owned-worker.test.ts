@@ -1,17 +1,21 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NodeWorkerJournalWorker } from "../../node-host/node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "../../node-host/node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "../../node-host/node-worker-process-identity.js";
+import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
 import type { ProcessExtinctionResult } from "./types.js";
 
@@ -25,7 +29,14 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 it
   .runIf(process.platform === "linux" || process.platform === "darwin")
-  .for(["close-before-open", "stdin-closed", "journal-write-failed"] as const)(
+  .for([
+    "open",
+    "close-before-open",
+    "stdin-closed",
+    "delayed-output",
+    "journal-write-failed",
+    "force-descendant",
+  ] as const)(
   "runs a real owned worker through its IPC start gate and output drain (%s)",
   { timeout: 20_000 },
   async (action, { signal }) => {
@@ -51,22 +62,53 @@ it
     expect((await store.claim(claim, supervisor, 1)).action).toBe("start");
     const cleanupBinding = await store.cleanupBinding({ ...claim, supervisor });
     const marker = path.join(home, "started.txt");
-    const waiting = createDeferred();
+    const descendantReady = createDeferred<number>();
+    const onWorkerMessage = vi.fn<(message: unknown) => void>((message) => {
+      if (isRecord(message) && message.phase === "descendant" && typeof message.pid === "number") {
+        descendantReady.resolve(message.pid);
+      }
+    });
+    let descendantPid: number | undefined;
     let adapter: Awaited<ReturnType<typeof createServiceChildRelayAdapter>>["adapter"] | undefined;
     let cleanup: Promise<ProcessExtinctionResult> | undefined;
-    const expectedOutput = "owned worker finished\n";
+    const expectedOutput =
+      action === "delayed-output" ? "x".repeat(256 * 1024) : "owned worker finished\n";
+    const rootExited = createDeferred();
     const output: string[] = [];
     let stderr = "";
     try {
+      const descendantSource = `
+        process.on("SIGTERM", () => {});
+        globalThis.keepAlive = new (require("node:worker_threads").MessageChannel)();
+        globalThis.keepAlive.port1.on("message", () => {});
+        process.send(process.pid);
+      `;
       const workerArgs = [
         "-e",
         `
             const fs = require("node:fs");
-            process.on("message", () => {
+            process.on("message", (message) => {
+              if (message.type !== "openclaw-worker-start-v1" ||
+                  !Array.isArray(message.lineageFds) || message.lineageFds.length === 0 ||
+                  message.lineageFds.some((fd) => !Number.isSafeInteger(fd) || fd < 3)) {
+                process.exit(42);
+              }
+              for (const fd of message.lineageFds) fs.fstatSync(fd);
               fs.appendFileSync(${JSON.stringify(marker)}, "started\\n");
-              process.stdout.write(${JSON.stringify(expectedOutput)}, () => process.disconnect());
+              process.send({ phase: "started", message }, () => {
+                process.stdout.write(${action === "delayed-output" ? '"x".repeat(256 * 1024)' : JSON.stringify(expectedOutput)}, () => {
+                  ${
+                    action === "force-descendant"
+                      ? `const descendant = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}], {
+                          stdio: ["ignore", "ignore", "ignore", ...message.lineageFds, "ipc"],
+                        });
+                        descendant.once("message", pid => process.send({ phase: "descendant", pid }));`
+                      : "process.disconnect();"
+                  }
+                });
+              });
             });
-            process.send("waiting");
+            process.send({ phase: "waiting", pid: process.pid, parentPid: process.ppid });
           `,
       ];
       const startup = await createServiceChildRelayAdapter({
@@ -81,13 +123,9 @@ it
         stdinMode: "pipe-open",
         oomScoreWrapperSelected: false,
         ownedWorker: true,
-        nativeProcessOwnerSupported: true,
+        ...(action === "force-descendant" ? {} : { nativeProcessOwnerSupported: true as const }),
         cleanupBinding,
-        onWorkerMessage: (message) => {
-          if (message === "waiting") {
-            waiting.resolve();
-          }
-        },
+        onWorkerMessage,
         onSpawnCleanup: (pending) => {
           cleanup = pending;
           void pending.catch(() => undefined);
@@ -96,7 +134,10 @@ it
       adapter = startup.adapter;
       await startup.ready;
       const collectOutput = output.push.bind(output);
-      adapter.onStdout(collectOutput);
+      if (action !== "delayed-output") {
+        adapter.onStdout(collectOutput);
+      }
+      adapter.onExit(() => rootExited.resolve());
       adapter.onStderr((chunk) => {
         stderr = (stderr + chunk).slice(-8192);
       });
@@ -114,7 +155,15 @@ it
           BEGIN SELECT RAISE(ABORT, 'synthetic journal write failure'); END;
         `);
       }
-      await withinTest(waiting.promise, signal);
+      await vi.waitFor(() => {
+        expect(onWorkerMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ phase: "waiting", parentPid: ownerPid }),
+        );
+      });
+      const waiting = onWorkerMessage.mock.calls.find(
+        ([message]) => isRecord(message) && message.phase === "waiting",
+      )?.[0];
+      expect(waiting).not.toMatchObject({ pid: adapter.pid });
       expect(existsSync(marker)).toBe(false);
 
       if (action !== "close-before-open") {
@@ -128,7 +177,35 @@ it
           expect(stderr).toBe("");
         }
         await Promise.all([adapter.openStartGate!(), adapter.openStartGate!()]);
-        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+        if (action === "delayed-output") {
+          await withinTest(rootExited.promise, signal);
+          // Leave the host pipe backpressured while the anchor processes root exit.
+          await delay(100);
+          adapter.onStdout(collectOutput);
+        }
+        if (action === "force-descendant") {
+          descendantPid = await withinTest(descendantReady.promise, signal);
+          expect(isPidDefinitelyDead(descendantPid)).toBe(false);
+          adapter.kill("SIGKILL");
+          await withinTest(adapter.waitForExtinction(), signal);
+          expect(isPidDefinitelyDead(descendantPid)).toBe(true);
+        }
+        await expect(adapter.wait()).resolves.toEqual(
+          action === "force-descendant"
+            ? { code: null, signal: "SIGKILL" }
+            : { code: 0, signal: null },
+        );
+        expect(onWorkerMessage).toHaveBeenCalledWith({
+          phase: "started",
+          message: {
+            type: "openclaw-worker-start-v1",
+            lineageFds: expect.any(Array),
+            ...(action !== "force-descendant"
+              ? { nativeProcessOwner: expect.stringMatching(/^file:/u) }
+              : {}),
+          },
+        });
+        expect(onWorkerMessage).toHaveBeenCalledTimes(action === "force-descendant" ? 3 : 2);
         expect(await readFile(marker, "utf8")).toBe("started\n");
         expect(output.join("")).toBe(expectedOutput);
       } else {
@@ -136,6 +213,7 @@ it
         await expect(adapter.openStartGate!()).rejects.toThrow("closed before startup");
         await adapter.waitForExtinction();
         expect(existsSync(marker)).toBe(false);
+        expect(onWorkerMessage).toHaveBeenCalledTimes(1);
         expect(output.join("")).toBe("");
       }
       await adapter.waitForExtinction();
@@ -154,6 +232,7 @@ it
         );
       }
     } finally {
+      killPidIfAlive(descendantPid);
       adapter?.kill("SIGKILL");
       await adapter?.wait().catch(() => undefined);
       await cleanup?.catch((error: unknown) => {

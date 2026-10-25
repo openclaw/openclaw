@@ -114,9 +114,16 @@ it.each([true, false])(
               ...createEmbeddedRunHandle({
                 runId: params.runId,
                 toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-                guarded: true,
                 queueMessage,
               }),
+              messageInjectionV2: {
+                version: 2,
+                isAvailable: () => true,
+                queueMessage: async (_text, _options, assertCurrent) => {
+                  assertCurrent();
+                  await queueMessage();
+                },
+              },
               kind: "embedded" as const,
               cancel: () => {},
             } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
@@ -129,6 +136,7 @@ it.each([true, false])(
             const queuedTarget = beforePublication ? captureTarget() : undefined;
             operation.attachBackend(handle);
             operation.setPhase("running");
+            expect(registration.entry.input.claim?.operation).toBe(operation);
             setActiveEmbeddedRun(
               params.sessionId,
               handle,
@@ -138,6 +146,7 @@ it.each([true, false])(
               operation,
             );
             const runTarget = beforePublication ? queuedTarget : captureTarget();
+            expect(runTarget?.isCurrent(params.sessionId)).toBe(true);
             const steer = (source: "reply" | "attempt" | undefined, current = authority) =>
               controlRealtimeVoiceAgentRun({
                 sessionKey: sessionTarget.canonicalKey,
@@ -208,6 +217,7 @@ it.each([true, false])(
       // Reply recovery may consume backend failures; still surface every assertion above.
       await vi.mocked(runEmbeddedAgent).mock.results[0]?.value;
       expect([result].flat()).toContainEqual(expect.objectContaining(reply));
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     });
   },
 );

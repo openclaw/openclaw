@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
@@ -9,6 +10,7 @@ import {
   canSplitSessionView,
   registerSessionSplitHost,
   runSessionNavigationAction,
+  type SessionNavigationTarget,
 } from "./session-menu-navigation.ts";
 
 vi.mock("../clipboard.ts", () => ({ copyToClipboard: vi.fn(async () => true) }));
@@ -21,7 +23,7 @@ const session = {
 const agent = { id: "research", name: "Research" };
 const sessionPath = "/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef";
 
-let params: Parameters<typeof runSessionNavigationAction>[1];
+let params: SessionNavigationTarget<RouteId>;
 let request: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<ChatHistoryResult>>>;
 beforeEach(() => {
   request = vi.fn<(...args: unknown[]) => Promise<ChatHistoryResult>>();

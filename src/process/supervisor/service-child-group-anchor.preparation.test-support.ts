@@ -2,10 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { Duplex } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -15,19 +15,29 @@ import { requireNodeWorkerProcessIdentity } from "../../node-host/node-worker-pr
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import type {
   ServiceChildAnchorMessage,
-  ServiceChildControlPayload,
+  ServiceChildControlMessage,
   ServiceChildStart,
 } from "./service-child-protocol.js";
 
 type PreparationFact = {
-  type: "lineage-loading" | "lineage-loaded" | "spawn" | "duplicate-start";
+  type: "lineage-loading" | "lineage-loaded" | "spawn" | "command-exit" | "duplicate-start";
   pid?: number;
 };
 
+type ControlPayload<Message = ServiceChildControlMessage> =
+  Message extends ServiceChildControlMessage ? Omit<Message, "generation" | "sequence"> : never;
+
 export function readLines(stream: Duplex, receive: (line: string) => void) {
-  createInterface({ input: stream, crlfDelay: Infinity })
-    .on("line", receive)
-    .on("error", () => {});
+  let pending = "";
+  const decoder = new StringDecoder("utf8");
+  stream.on("data", (chunk: Buffer) => {
+    pending += decoder.write(chunk);
+    for (let newline; (newline = pending.indexOf("\n")) >= 0;) {
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      receive(line);
+    }
+  });
 }
 
 export function waitForAnchorClosure<T>(child: ChildProcess, exited: Promise<T>) {
@@ -103,6 +113,7 @@ export function createHeldAnchorPreparation(
         const child = nativeSpawn.apply(this, args);
         if (args[0] === process.execPath && args[1]?.[1] === ${JSON.stringify(commandSource)}) {
           if (child.pid) emit({ type: "spawn", pid: child.pid });
+          child.once("exit", () => emit({ type: "command-exit", pid: child.pid }));
         }
         return child;
       };
@@ -152,7 +163,8 @@ export function createHeldAnchorPreparation(
   }
   const { messages: facts, waitFor } = observeMessages<PreparationFact>(probe);
   let sequence = 0;
-  const send = (message: ServiceChildControlPayload) => {
+  let stderr = "";
+  const send = (message: ControlPayload) => {
     if (!control.destroyed && !control.writableEnded) {
       control.write(`${JSON.stringify({ ...message, generation, sequence: ++sequence })}\n`);
     }
@@ -160,7 +172,9 @@ export function createHeldAnchorPreparation(
   control.on("error", () => {});
   probe.on("error", () => {});
   child.stdout?.resume();
-  child.stderr?.resume();
+  child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+  });
   const { messages, waitFor: waitForControl } = observeMessages<ServiceChildAnchorMessage>(
     control,
     (message) => {
@@ -193,7 +207,12 @@ export function createHeldAnchorPreparation(
     },
   };
   const beforeClose = <T>(operation: Promise<T>) =>
-    awaitGateBeforeSettlement(operation, closed, "Anchor closed before fixture event");
+    Promise.race([
+      operation,
+      closed.then((result) => {
+        throw new Error(`Anchor closed before fixture event: ${JSON.stringify(result)} ${stderr}`);
+      }),
+    ]);
   child.send(start);
   return {
     child,

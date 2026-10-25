@@ -4084,6 +4084,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/chat/chat-pane-swarm-startup.test.ts",
   "ui/src/pages/chat/chat-pane-task-suggestions.test.tsx",
   "ui/src/pages/chat/chat-pane-terminal.test.ts",
+  "ui/src/pages/chat/chat-pane-warm-reload.test.ts",
   "ui/src/pages/chat/chat-pane.read-marker.test.ts",
   "ui/src/pages/chat/chat-pane.session-discussion.test.tsx",
   "ui/src/pages/chat/chat-pane.test.ts",
