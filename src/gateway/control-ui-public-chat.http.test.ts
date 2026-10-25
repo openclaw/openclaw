@@ -76,6 +76,29 @@ function request(
     remoteAddress: "127.0.0.1",
   });
 }
+async function expectLanApp(instance: Server, requestPath: string) {
+  const response = await sendRequest(instance, {
+    path: requestPath,
+    host: "gateway.lan:18789",
+    remoteAddress: "192.168.1.25",
+  });
+  expect(response.res.statusCode).toBe(200);
+  expect(response.getBody()).toContain("<openclaw-app>");
+}
+
+async function openPrivateEntry(instance: Server, requestPath: string) {
+  const privateChat = await request(instance, requestPath);
+  expect(privateChat.res.statusCode).toBe(404);
+  expect(privateChat.getBody()).toContain('data-gateway-path="/control"');
+  expect(privateChat.getBody()).not.toContain("Published answer");
+  const entry = `/control/__openclaw__/session-entry?${new URLSearchParams({ path: requestPath })}`;
+  expect((await request(instance, `${entry}&probe=1`)).res.statusCode).toBe(401);
+  const app = await request(instance, entry);
+  expect(app.res.statusCode).toBe(200);
+  expect(app.getBody()).toContain("<openclaw-app>");
+  return app;
+}
+
 beforeEach(() => {
   setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
   projection = createSessionRowProjectionFixture({
@@ -137,13 +160,7 @@ describe("canonical anonymous HTTP entry", () => {
       fallbackAgentId: "main",
       basePath: "/control",
     });
-    const response = await sendRequest(server(), {
-      path: target.options.pathname + (target.options.search ?? ""),
-      host: "gateway.lan:18789",
-      remoteAddress: "192.168.1.25",
-    });
-    expect(response.res.statusCode).toBe(200);
-    expect(response.getBody()).toContain("<openclaw-app>");
+    await expectLanApp(server(), target.options.pathname + (target.options.search ?? ""));
     expect(resolveSession).not.toHaveBeenCalled();
     expect(reader).not.toHaveBeenCalled();
   });
@@ -160,23 +177,9 @@ describe("canonical anonymous HTTP entry", () => {
     const requestPath = target.options.pathname + (target.options.search ?? "");
     resolveSession.mockResolvedValue(null);
     const instance = server();
-    const local = await sendRequest(instance, {
-      path: requestPath,
-      host: "gateway.lan:18789",
-      remoteAddress: "192.168.1.25",
-    });
-    expect(local.res.statusCode).toBe(200);
-    expect(local.getBody()).toContain("<openclaw-app>");
+    await expectLanApp(instance, requestPath);
     expect(resolveSession).not.toHaveBeenCalled();
-    const privateChat = await request(instance, requestPath);
-    expect(privateChat.res.statusCode).toBe(404);
-    expect(privateChat.getBody()).toContain('data-gateway-path="/control"');
-    expect(privateChat.getBody()).not.toContain("Published answer");
-    const entry = `/control/__openclaw__/session-entry?${new URLSearchParams({ path: requestPath })}`;
-    expect((await request(instance, `${entry}&probe=1`)).res.statusCode).toBe(401);
-    const app = await request(instance, entry);
-    expect(app.res.statusCode).toBe(200);
-    expect(app.getBody()).toContain("<openclaw-app>");
+    await openPrivateEntry(instance, requestPath);
     expect(reader).not.toHaveBeenCalled();
   });
 
@@ -193,23 +196,9 @@ describe("canonical anonymous HTTP entry", () => {
     const recoveryPath = recoveryUrl.pathname + recoveryUrl.search;
     resolveSession.mockResolvedValue(null);
     const instance = server();
-    const privateChat = await request(instance, recoveryPath);
-    expect(privateChat.res.statusCode).toBe(404);
-    expect(privateChat.getBody()).toContain('data-gateway-path="/control"');
-    expect(privateChat.getBody()).not.toContain("Published answer");
-    const entry = `/control/__openclaw__/session-entry?${new URLSearchParams({ path: recoveryPath })}`;
-    expect((await request(instance, `${entry}&probe=1`)).res.statusCode).toBe(401);
-    const app = await request(instance, entry);
-    expect(app.res.statusCode).toBe(200);
-    expect(app.getBody()).toContain("<openclaw-app>");
+    const app = await openPrivateEntry(instance, recoveryPath);
     expect(app.getBody()).toContain(JSON.stringify(recoveryPath));
-    const nonSecureApp = await sendRequest(instance, {
-      path: recoveryPath,
-      host: "gateway.lan:18789",
-      remoteAddress: "192.168.1.25",
-    });
-    expect(nonSecureApp.res.statusCode).toBe(200);
-    expect(nonSecureApp.getBody()).toContain("<openclaw-app>");
+    await expectLanApp(instance, recoveryPath);
     expect(reader).not.toHaveBeenCalled();
   });
 
