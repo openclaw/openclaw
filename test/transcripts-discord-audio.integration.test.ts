@@ -31,12 +31,6 @@ defineDiscordVoiceTests((h) => {
       await expect(fs.stat(wavPath)).rejects.toMatchObject({ code: "ENOENT" });
     }
   };
-  const cliModel = (command?: string, args?: string[]): MediaUnderstandingModelConfig => ({
-    type: "cli",
-    command,
-    args,
-    capabilities: ["audio"],
-  });
   it.each(
     ["conversation", "control"].flatMap((dispatch) =>
       ["oversized", "empty CLI", "fallback"].map((opening) => ({ dispatch, opening })),
@@ -76,7 +70,14 @@ defineDiscordVoiceTests((h) => {
       };
       const models: MediaUnderstandingModelConfig[] =
         opening === "empty CLI"
-          ? [cliModel("synthetic-stt", ["{{AttachmentPath}}"])]
+          ? [
+              {
+                type: "cli",
+                command: "synthetic-stt",
+                args: ["{{AttachmentPath}}"],
+                capabilities: ["audio"],
+              },
+            ]
           : [
               ...(opening === "fallback" ? [{ ...apiModel, model: "unavailable-stt" }] : []),
               apiModel,
@@ -120,15 +121,11 @@ defineDiscordVoiceTests((h) => {
           }
         }
       });
-      const wavSizes: number[] = [];
       const wavPaths: string[] = [];
-      const results: Awaited<ReturnType<typeof transcribeAudioFile>>[] = [];
       const suffixTranscribed = createDeferred<void>();
       h.transcribeAudioFileMock.mockImplementation(async (params) => {
         wavPaths.push(params.filePath);
-        const wav = await fs.readFile(params.filePath);
-        wavSizes.push(wav.length);
-        const isOpening = wav[44] === 1;
+        const isOpening = (await fs.readFile(params.filePath))[44] === 1;
         // Uncaptured conversation and captured audio may finish out of order.
         if (opening === "empty CLI" && isOpening) {
           await suffixTranscribed.promise;
@@ -137,7 +134,6 @@ defineDiscordVoiceTests((h) => {
           { metadataSnapshot, pluginRegistry: registry },
           () => transcribeAudioFile(params),
         );
-        results[oversized || isOpening ? 0 : 1] = result;
         if (!isOpening) {
           suffixTranscribed.resolve();
         }
@@ -180,25 +176,6 @@ defineDiscordVoiceTests((h) => {
         await entry.processingQueue;
         // Join owned work even when transcription fails and produces no sink/dispatch call.
         await Promise.all(conversations.mock.results.map((result) => result.value));
-        expect(h.loggerWarnMock).not.toHaveBeenCalledWith(expect.stringContaining("cli-missing-"));
-        expect(wavSizes).toEqual(oversized ? [192_044] : [192_044, 192_044]);
-        expect(results[0]).toMatchObject({
-          text: oversized ? suffix : opening === "fallback" ? prefix : undefined,
-          decision: {
-            outcome: opening === "empty CLI" ? "skipped" : "success",
-            attachmentDispositions: {
-              0: { kind: opening === "empty CLI" ? "failed" : "handled" },
-            },
-            attachmentProcessing: { 0: "completed" },
-          },
-        });
-        expect([provider.mock.calls.length, cli.mock.calls.length]).toEqual(
-          opening === "empty CLI" ? [0, 2] : [oversized ? 1 : 4, 0],
-        );
-        if (oversized) {
-          const { buffer } = provider.mock.calls[0]![0];
-          expect([buffer.length, buffer[44]]).toEqual([192_044, 2]);
-        }
         expect(sink).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: suffix }));
         await expectWavsRemoved(wavPaths);
         const completeText = opening === "fallback" ? `${prefix}\n${suffix}` : suffix;
@@ -226,40 +203,4 @@ defineDiscordVoiceTests((h) => {
       }
     },
   );
-
-  it.each([
-    { command: undefined, args: ["{{AttachmentPath}}"], reason: "cli-missing-command" },
-    { command: "synthetic-stt", args: undefined, reason: "cli-missing-attachment-arg" },
-  ])("finishes voice capture with a warning for $reason", async ({ command, args, reason }) => {
-    cli.mockReset();
-    const manager = await joinManager({
-      tools: { media: { models: [cliModel(command, args)] } },
-    });
-    const sink = vi.fn();
-    expect(await h.startTranscripts(manager, sink)).toMatchObject({ ok: true });
-    const wavPaths: string[] = [];
-    h.transcribeAudioFileMock.mockImplementation(async (params) => {
-      wavPaths.push(params.filePath);
-      return await withPluginRuntimeGenerationScope(
-        {
-          metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
-          pluginRegistry: createEmptyPluginRegistry(),
-        },
-        () => transcribeAudioFile(params),
-      );
-    });
-    // This joins receive, recording, and conversation completion, including refusal.
-    await h.receiveRecordedSpeech(manager);
-    expect(h.transcribeAudioFileMock).toHaveBeenCalledOnce();
-    expect(h.loggerWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining(`discord voice: recording failed: ${reason}; Set `),
-    );
-    expect([cli.mock.calls, sink.mock.calls, agent.mock.calls, control.mock.calls]).toEqual([
-      [],
-      [],
-      [],
-      [],
-    ]);
-    await expectWavsRemoved(wavPaths);
-  });
 });

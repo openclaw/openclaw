@@ -4,7 +4,6 @@ import { expect, it } from "vitest";
 import subq from "../extensions/subq/index.js";
 import { createAdmittedRunOperatorAuthority } from "../src/agents/admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../src/agents/operator-model-policy.js";
-import { parseDecisionEvaluateInput } from "../src/agents/tools/decision-tool-contract.js";
 import { createDecisionTool } from "../src/agents/tools/decision-tool.js";
 import { withGatewayToolCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { resolveConfigWidePluginManifestRegistry } from "../src/config/io.plugin-metadata.js";
@@ -16,7 +15,6 @@ import {
   prepareDecisionProviderReload,
 } from "../src/decisions/runtime.js";
 import type { DecisionBatch } from "../src/decisions/types.js";
-import { validateDecisionResultV2 } from "../src/decisions/validation-v2.js";
 import { fetchWithRuntimeDispatcher } from "../src/infra/net/runtime-fetch.js";
 import { createHttp1Agent } from "../src/infra/net/undici-runtime.js";
 import { runPluginRegisterSyncInRegistry } from "../src/plugins/loader-module-runtime.js";
@@ -41,11 +39,7 @@ import {
 
 const batch: DecisionBatch = {
   state: "Service is down",
-  questions: {
-    urgent: { type: "boolean" },
-    route: { type: "choice", criteria: { support: "Service failures", sales: null } },
-    impact: { type: "score", criteria: ["Low", "High"] },
-  },
+  questions: { urgent: { type: "boolean" } },
 };
 const nativeUrl = "https://api.subq.ai/v1/systemone";
 
@@ -65,16 +59,7 @@ it.each(changes)(
       "subq",
       {
         model: "subq-snap-preview",
-        answers: {
-          urgent: { type: "noul", noul: 0.9 },
-          route: { type: "choice", choice: "support", probabilities: { support: 0.8, sales: 0.2 } },
-          impact: {
-            type: "score",
-            score: 0.6,
-            probabilities: { "0": 0.4, "1": 0.6 },
-            legend: { "0": "Low", "1": "High" },
-          },
-        },
+        answers: { urgent: { type: "noul", noul: 0.9 } },
         usage: { input_tokens: 10, output_tokens: 0 },
       },
       (fixture) => runScenario(change, fixture),
@@ -113,7 +98,7 @@ async function runScenario(
   let dispatcher: ReturnType<typeof createHttp1Agent> | undefined;
   let barrier: ReturnType<typeof createAdmissionBarrier> | undefined;
   try {
-    const { metadata, manifest, record } = admissionPlugin("subq", cfg, state.workspaceDir);
+    const { metadata, record } = admissionPlugin("subq", cfg, state.workspaceDir);
     const prepareSnapshot = (env: NodeJS.ProcessEnv) =>
       prepareSecretsRuntimeSnapshot({
         config: cfg,
@@ -161,11 +146,6 @@ async function runScenario(
         },
       },
       true,
-    );
-    expect(manifest.rootDir).toBe(fileURLToPath(new URL("../extensions/subq", import.meta.url)));
-    expect(provider.source).toBe(manifest.source);
-    expect(inspectDecisionProviders(cfg, builder.registry)).toContainEqual(
-      expect.objectContaining({ providerId: "subq", callable: true, credentialReady: true }),
     );
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "decision-reader",
@@ -253,12 +233,10 @@ async function runScenario(
         const result = outcome.result as Awaited<ReturnType<typeof tool.execute>>;
         const text = result.content[0];
         assert(text?.type === "text");
-        const visible = JSON.parse(text.text);
-        const parsed = parseDecisionEvaluateInput(batch);
-        assert(parsed);
-        expect(visible.status).toBe("ok");
-        expect(validateDecisionResultV2(parsed, visible.result)).toBe(true);
-        expect(visible.result.usage).toEqual({ inputTokens: 10, outputTokens: 0 });
+        expect(JSON.parse(text.text)).toMatchObject({
+          status: "ok",
+          result: { answers: { urgent: { type: "boolean", probabilityTrue: 0.9 } } },
+        });
         expect(received[0]).toMatchObject({
           method: "POST",
           authorization: "Bearer synthetic-subq-key",

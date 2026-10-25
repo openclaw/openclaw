@@ -1,5 +1,4 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
@@ -19,17 +18,12 @@ import {
   writePackedBundledPluginActivationConfig,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture(files: Record<string, string> = {}) {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
-  tempRoots.push(root);
+  const root = tempDirs.make("openclaw-release-check-");
   for (const [file, content] of Object.entries(files)) {
     const target = join(root, file);
     mkdirSync(dirname(target), { recursive: true });
@@ -46,6 +40,7 @@ const ambientEnv = {
   TMPDIR: "/tmp/original-tmp",
   OPENAI_API_KEY: "real-secret",
   OPENCLAW_CONFIG_PATH: "/tmp/leaky-config.json",
+  OPENCLAW_STATE_DIR: "/tmp/operator-state",
 };
 const isolatedEnv = (home: string) => ({
   PATH:
@@ -89,7 +84,7 @@ describe("packed CLI smoke", () => {
           SystemRoot: "C:\\Windows",
           GITHUB_TOKEN: "redacted",
         },
-        smokeHome,
+        { ...smokeHome, OPENAI_API_KEY: "override-openai-secret" },
       ),
     ).toEqual({
       ...isolatedEnv(smokeHome.HOME),
@@ -103,13 +98,10 @@ describe("packed CLI smoke", () => {
   });
 
   it("isolates bundled plugin activation from ambient OpenClaw state", () => {
-    const env = createPackedBundledPluginActivationSmokeEnv(
-      { HOME: "/tmp/operator-home", OPENCLAW_STATE_DIR: "/tmp/operator-state" },
-      "/tmp/release-check",
-    );
-
     const homeDir = join("/tmp/release-check", "activation-home");
-    expect(env).toMatchObject({
+    expect(
+      createPackedBundledPluginActivationSmokeEnv(ambientEnv, "/tmp/release-check"),
+    ).toMatchObject({
       HOME: homeDir,
       OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
     });
@@ -128,16 +120,6 @@ describe("packed CLI smoke", () => {
       plugins: { enabled: true, allow: ["telegram"], entries: { telegram: { enabled: true } } },
     });
     expect(config).not.toHaveProperty("models");
-  });
-
-  it("does not admit provider credentials through smoke overrides", () => {
-    const env = createPackedCliSmokeEnv(
-      { HOME: "/tmp/original-home" },
-      { ...smokeHome, OPENAI_API_KEY: "override-openai-secret" },
-    );
-
-    expect(env).toMatchObject(smokeHome);
-    expect(env).not.toHaveProperty("OPENAI_API_KEY");
   });
 
   it("skips plugin command discovery during packed completion cache smoke", () => {
