@@ -10,6 +10,7 @@ import type { BrowserRequest } from "./types.js";
 
 const routeState = vi.hoisted(() => ({
   driver: "openclaw",
+  cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
   cookiesSetManyViaPlaywright: vi.fn(async () => ({ added: 2 })),
   setDeviceViaPlaywright: vi.fn(async () => {}),
   setTimezoneViaPlaywright: vi.fn(async () => {}),
@@ -194,7 +195,7 @@ describe("browser storage route boundaries", () => {
   });
 
   it("keeps cookie reads behind the current-tab URL guard", async () => {
-    const response = await get("/cookies");
+    const response = await runRoute(getHandler("get", "/cookies"), {});
     expect(routeState.withPlaywrightRouteContext).toHaveBeenCalledWith(
       expect.objectContaining({ feature: "cookies", enforceCurrentUrlAllowed: true }),
     );

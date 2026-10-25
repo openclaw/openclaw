@@ -193,7 +193,7 @@ it.each([
   [undefined, undefined, false, null],
 ] satisfies Array<[string | undefined, string | undefined, boolean, (string | null)?]>)(
   "classifies silent overflow for %s/%s as %s (endpoint %s)",
-  (provider, modelId, expected, baseUrl) => {
+  (provider, modelId, expected, baseUrl?: string | null) => {
     expect(isSilentOverflowProneModel({ provider, modelId, baseUrl })).toBe(expected);
   },
 );

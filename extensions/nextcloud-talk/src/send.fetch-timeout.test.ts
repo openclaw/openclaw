@@ -1,8 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
+import * as guardedResponse from "./guarded-response.js";
 import { sendMessageNextcloudTalk, sendReactionNextcloudTalk } from "./send.js";
 import type { CoreConfig } from "./types.js";
 
@@ -69,10 +71,68 @@ async function expectHangingTalkRequestTimesOut(operation: "message" | "reaction
   }
 }
 
+function captureStalledErrorBodyDeadline() {
+  const readBody = guardedResponse.readNextcloudTalkErrorBody;
+  const ready = createDeferred<void>();
+  let refreshes = 0;
+  let delay: number | undefined;
+  let fireDeadline: (() => void) | undefined;
+  let restoreRefresh: (() => void) | undefined;
+  const bodySpy = vi
+    .spyOn(guardedResponse, "readNextcloudTalkErrorBody")
+    .mockImplementationOnce((...args) => {
+      const schedule = globalThis.setTimeout;
+      const timerSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementationOnce((callback, ms, ...timerArgs) => {
+          const timer = schedule(callback, ms, ...timerArgs);
+          delay = ms;
+          const refresh = timer.refresh.bind(timer);
+          const refreshSpy = vi.spyOn(timer, "refresh").mockImplementation(() => {
+            refreshes += 1;
+            if (refreshes === 2) {
+              ready.resolve();
+            }
+            return refresh();
+          });
+          restoreRefresh = () => refreshSpy.mockRestore();
+          fireDeadline = () => {
+            clearTimeout(timer);
+            callback(...timerArgs);
+          };
+          return timer;
+        });
+      // This async reader installs its idle timer before returning; exclude socket timers.
+      const pending = readBody(...args);
+      timerSpy.mockRestore();
+      return pending;
+    });
+  return {
+    async fire(pending: ReturnType<typeof observe>) {
+      // Refresh precedes each reader.read(); this observes the next read, not its byte count.
+      const readyFirst = await Promise.race([
+        ready.promise.then(() => true),
+        pending.result.then(() => false),
+      ]);
+      expect(readyFirst).toBe(true);
+      expect(pending.settled).toBe(false);
+      expect(delay).toBe(10_000);
+      expectDefined(fireDeadline, "native error-body deadline")();
+    },
+    restore() {
+      try {
+        restoreRefresh?.();
+      } finally {
+        bodySpy.mockRestore();
+      }
+    },
+  };
+}
+
 it.each(["message", "reaction", "preflight"] as const)(
   "redacts reflected credentials and drops incomplete %s error bodies",
   async (operation) => {
-    for (const mode of ["complete", "display-boundary", "oversized"]) {
+    for (const mode of ["complete", "display-boundary", "oversized", "stalled"]) {
       let credential = "";
       await withServer(
         (request, response) => {
@@ -90,10 +150,20 @@ it.each(["message", "reaction", "preflight"] as const)(
               : `upstream rejected ${mode === "display-boundary" ? "x".repeat(160) : ""}${credential}; password=fixture-private-value${
                   request.headers.authorization ? "; decoded test-password" : ""
                 }`;
-          response.end(body);
+          response[mode === "stalled" ? "write" : "end"](body);
         },
         async (baseUrl) => {
-          const result = await observe(send(operation, baseUrl)).result;
+          const deadline = mode === "stalled" ? captureStalledErrorBodyDeadline() : undefined;
+          const pending = observe(send(operation, baseUrl));
+          let result: unknown;
+          try {
+            await deadline?.fire(pending);
+            result = await pending.result;
+          } finally {
+            // Keep the native deadline as fallback if readiness assertions fail.
+            await pending.result;
+            deadline?.restore();
+          }
           if (operation === "preflight" && result instanceof Error) {
             throw result;
           }
@@ -106,7 +176,7 @@ it.each(["message", "reaction", "preflight"] as const)(
           expect(message).not.toContain(credential.slice(0, 16));
           expect(message).not.toContain("fixture-private-value");
           expect(message).not.toContain("test-password");
-          if (mode === "oversized") {
+          if (mode === "oversized" || mode === "stalled") {
             expect(message).not.toContain("xxxxxxxx");
             expect(message).not.toContain("upstream rejected");
             expect(message).toContain("500");

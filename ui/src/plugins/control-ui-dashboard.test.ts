@@ -2,14 +2,13 @@
 
 import type { BoardGetParams, BoardWidget } from "@openclaw/gateway-protocol";
 import { expect, it, onTestFinished, vi } from "vitest";
-import type { ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiHost, ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { acquireBoardProviderForSession } from "../lib/board/provider.ts";
 import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import { createInertViewHost } from "./control-ui-view.test-support.ts";
 import "./control-ui-dashboard.tsx";
 import "./control-ui-contributions.solid.tsx";
 
@@ -51,8 +50,23 @@ async function boardView(element: DashboardElement) {
   return element.querySelector("openclaw-board-view")!;
 }
 
-const widget = (overrides: Partial<BoardWidget> = {}) =>
-  createBoardWidget({ name: "status", title: "Status", ...overrides });
+async function setPermissions(element: DashboardElement, value: boolean) {
+  element.canMutate = element.canGrant = value;
+  await settle(element);
+  const board = element.querySelector("openclaw-board-view")!;
+  await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
+  expect([board.canMutate, board.canGrant]).toEqual([value, value]);
+}
+
+function widget(overrides: Partial<BoardWidget> = {}): BoardWidget {
+  return createBoardWidget({
+    name: "status",
+    title: "Status",
+    sizeW: 12,
+    sizeH: 2,
+    ...overrides,
+  });
+}
 
 function createClient(widgets: BoardWidget[] = [], load?: (params?: BoardGetParams) => unknown) {
   let listener: GatewayEventListener | undefined;
@@ -110,7 +124,14 @@ it.each([
   async ({ sessionKey, hydrateOwner }) => {
     const widgetSignals: AbortSignal[] = [];
     const signal = new AbortController().signal;
-    const host = createInertViewHost(signal);
+    const host = {
+      signal,
+      sessions: {},
+      agents: {},
+      navigation: {},
+      ui: {},
+      components: {},
+    } as unknown as ControlUiHost;
     const entry = {
       key: "identity/context",
       pluginId: "identity",
@@ -126,6 +147,7 @@ it.each([
         },
       },
     };
+    const reportError = vi.fn();
     const context = {
       agentSelection: { state: { selectedId: "main" } },
       gateway: {
@@ -142,20 +164,22 @@ it.each([
       plugins: {
         registrations: (kind: string) => (kind === "widgets" ? [entry] : []),
         subscribe: () => () => undefined,
-        reportError: vi.fn(),
+        reportError,
       },
     } as unknown as ApplicationContext;
     const provider = createApplicationContextProvider(context);
     onTestFinished(() => provider.remove());
     document.body.append(provider);
-    const { client } = createClient([
+    const { client, request } = createClient([
       widget({ contentKind: "plugin", pluginKind: "identity:context" }),
     ]);
     const session = { sessionKey, agentId: "writer" };
     const initial: BoardGetParams = hydrateOwner ? { sessionKey } : session;
     const element = await mountDashboard(initial, client, {}, provider);
 
+    await customElements.whenDefined("openclaw-board-view");
     await vi.waitFor(() => expect(nativeOwner(element)).not.toBeNull());
+    expect(request).toHaveBeenCalledWith("board.get", initial);
     expect(nativeOwner(element)?.textContent).toBe(`${initial.agentId}/${sessionKey}`);
     if (hydrateOwner) {
       const previousSignal = widgetSignals.at(-1);
@@ -170,6 +194,8 @@ it.each([
       expect(previousSignal?.aborted).toBe(true);
       expect(widgetSignals.at(-1)?.aborted).toBe(false);
     }
+    expect(request).toHaveBeenCalledOnce();
+    expect(reportError).not.toHaveBeenCalled();
   },
 );
 
@@ -190,7 +216,7 @@ it("waits for the initial gateway snapshot before choosing its expanded state", 
 });
 
 it("updates mounted dashboard controls immediately when gateway permissions or connectivity change", async () => {
-  const { client } = createClient([widget({ grantState: "pending" })]);
+  const { client, request } = createClient([widget({ grantState: "pending" })]);
   const element = await mountDashboard({ sessionKey: "agent:main:workboard-live-scopes" }, client, {
     canMutate: true,
     canGrant: true,
@@ -202,26 +228,26 @@ it("updates mounted dashboard controls immediately when gateway permissions or c
   );
   const allow = board.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')!;
 
+  expect([board.canMutate, board.canGrant]).toEqual([true, true]);
+  expect(allow.disabled).toBe(false);
+
   toggle(element).click();
   await element.updateComplete;
   expect(expanded(element)).toBe("false");
 
   for (const permitted of [false, true]) {
-    element.canMutate = element.canGrant = permitted;
-    await settle(element);
-    await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
-    expect([board.canMutate, board.canGrant, allow.disabled]).toEqual([
-      permitted,
-      permitted,
-      !permitted,
-    ]);
+    await setPermissions(element, permitted);
+    expect(allow.disabled).toBe(!permitted);
     expect(expanded(element)).toBe("false");
   }
   element.connected = false;
   await settle(element);
   await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
   expect(element.querySelector("openclaw-board-view")).toBe(board);
-  expect([board.canMutate, board.canGrant, allow.disabled]).toEqual([false, false, true]);
+  expect(board.canMutate).toBe(false);
+  expect(board.canGrant).toBe(false);
+  expect(allow.disabled).toBe(true);
+  expect(request).toHaveBeenCalledOnce();
 });
 
 it.each([
@@ -239,6 +265,7 @@ it.each([
     chat ??= acquireChat();
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("board.get", session);
     const board = await boardView(dashboard);
     const chatCapabilities = {
       canPinWidgets: true,
@@ -255,6 +282,7 @@ it.each([
     expect(dashboard.querySelector("openclaw-board-view")).toBe(board);
     expect(board.canMutate).toBe(false);
     expect(chat.provider).toMatchObject(chatCapabilities);
+    expect(request).toHaveBeenCalledOnce();
 
     dashboard.remove();
     await dashboard.updateComplete;

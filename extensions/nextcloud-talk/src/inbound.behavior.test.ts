@@ -20,6 +20,7 @@ import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "
 import {
   createAccount as createFixtureAccount,
   createMessage,
+  requireFirstMockArg,
 } from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import {
@@ -31,6 +32,9 @@ import type { CoreConfig } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   pairing: vi.fn(),
+  groupPolicy: vi.fn(),
+  defaultPolicy: vi.fn(),
+  warn: vi.fn(),
   send: vi.fn(),
   roomKind: vi.fn(),
 }));
@@ -40,6 +44,9 @@ vi.mock("../runtime-api.js", async () => {
   return {
     ...actual,
     createChannelPairingController: mocks.pairing,
+    resolveAllowlistProviderRuntimeGroupPolicy: mocks.groupPolicy,
+    resolveDefaultGroupPolicy: mocks.defaultPolicy,
+    warnMissingProviderGroupPolicyFallbackOnce: mocks.warn,
   };
 });
 
@@ -63,6 +70,10 @@ function installRuntime() {
       inbound: {
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
         dispatch: vi.fn(async () => undefined),
+      },
+      pairing: {
+        readAllowFromStore: vi.fn(async () => []),
+        upsertPairingRequest: vi.fn(async () => ({ code: "123456", created: true })),
       },
       commands: { shouldHandleTextCommands: vi.fn(() => false) },
       text: { hasControlCommand: vi.fn(() => false) },
@@ -92,27 +103,6 @@ function installCommandRuntime(
 
 function createAccount(config: ResolvedNextcloudTalkAccount["config"] = {}) {
   return createFixtureAccount({ config: { ...createFixtureAccount().config, ...config } });
-}
-
-function groupAccount(
-  room: { requireMention: boolean; allowFrom?: string[] },
-  groupAllowFrom = ["user-1"],
-) {
-  return createAccount({ groupAllowFrom, rooms: { "room-1": room } });
-}
-
-function quote(body: string, senderId = "users/other") {
-  return { id: "parent", senderId, senderName: "Quoted author", body };
-}
-
-function adoptionLifecycle(abortSignal = new AbortController().signal) {
-  return {
-    abortSignal,
-    onAdopted: vi.fn(async () => {}),
-    onDeferred: vi.fn(),
-    onAdoptionFinalizing: vi.fn(),
-    onAbandoned: vi.fn(async () => {}),
-  };
 }
 
 function installPairingController(readStoreForDmPolicy = vi.fn(), issueChallenge = vi.fn()) {
@@ -212,11 +202,21 @@ async function withNativeAutomaticReply(
     const controller = new AbortController();
     const onPlatformSendDispatch = vi.fn(async () => {});
     try {
-      await inbound({
-        message: createMessage({ roomToken: "allowed", quote: options.quote }),
+      await handleNextcloudTalkInbound({
+        message: {
+          ...createMessage({ roomToken: "allowed" }),
+          ...(options.quote ? { quote: options.quote } : {}),
+        },
         account: resolveNextcloudTalkAccount({ cfg: config, accountId: "work" }),
         config,
-        turnAdoptionLifecycle: adoptionLifecycle(controller.signal),
+        runtime: createRuntimeSpies(),
+        turnAdoptionLifecycle: {
+          abortSignal: controller.signal,
+          onAdopted: async () => {},
+          onDeferred: () => {},
+          onAdoptionFinalizing: () => {},
+          onAbandoned: async () => {},
+        },
       });
       const request = expectDefined(
         vi.mocked<ProviderReplyDispatch>(core.channel.inbound.dispatch).mock.calls[0]?.[0],
@@ -258,6 +258,12 @@ describe("nextcloud-talk inbound behavior", () => {
     vi.clearAllMocks();
     installRuntime();
     mocks.roomKind.mockResolvedValue("direct");
+    mocks.defaultPolicy.mockReturnValue("allowlist");
+    mocks.groupPolicy.mockReturnValue({
+      groupPolicy: "allowlist",
+      providerMissingFallbackApplied: false,
+    });
+    mocks.warn.mockReturnValue(undefined);
   });
 
   it("keeps quoted context separate from current command and reply targets", async () => {
@@ -287,19 +293,50 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(request.ctxPayload.MessageSid).toBe(message.messageId);
   });
 
+  it.each([
+    { mode: "all" as const, visible: true },
+    { mode: "allowlist" as const, visible: false },
+    { mode: "allowlist_quote" as const, visible: true },
+  ])("honors $mode visibility for a quoted group sender", async ({ mode, visible }) => {
+    mocks.roomKind.mockResolvedValue("group");
+    const account = createAccount({
+      groupAllowFrom: ["user-1"],
+      rooms: { "room-1": { requireMention: false } },
+    });
+    const message = {
+      ...createMessage({ isGroupChat: true, text: "Current message" }),
+      quote: { id: "parent", senderId: "users/other", senderName: "Other", body: "Quoted" },
+    };
+    const request = await allowedInbound({
+      message,
+      account,
+      config: {
+        channels: {
+          defaults: { contextVisibility: mode },
+          "nextcloud-talk": account.config,
+        },
+      },
+    });
+    expect(request.ctxPayload.ReplyChain?.[0]?.body).toBe(visible ? "Quoted" : undefined);
+    expect(request.ctxPayload.SenderId).toBe("user-1");
+  });
+
   it("does not count a quoted mention as addressing the current message", async () => {
     mocks.roomKind.mockResolvedValue("group");
     const core = installCommandRuntime((body) => body?.startsWith("/") ?? false, {
       matchesMentionPatterns: (body) => /@openclaw/i.test(body),
     });
     installPairingController(vi.fn(async () => []));
+    const message = {
+      ...createMessage({ isGroupChat: true, text: "Current message" }),
+      quote: { id: "parent", senderId: "user-1", senderName: "Alice", body: "@openclaw /status" },
+    };
     await inbound({
-      message: createMessage({
-        isGroupChat: true,
-        text: "Current message",
-        quote: quote("@openclaw /status", "user-1"),
+      message,
+      account: createAccount({
+        groupAllowFrom: ["user-1"],
+        rooms: { "room-1": { requireMention: true } },
       }),
-      account: groupAccount({ requireMention: true }),
     });
     expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
     expect(mocks.send).not.toHaveBeenCalled();
@@ -313,18 +350,27 @@ describe("nextcloud-talk inbound behavior", () => {
     "applies access-group quote visibility for $senderId (room=$roomAllowFrom)",
     async ({ senderId, roomAllowFrom, visible }) => {
       mocks.roomKind.mockResolvedValue("group");
-      const account = groupAccount({ requireMention: false, allowFrom: roomAllowFrom }, [
-        "accessGroup:operators",
-      ]);
+      const account = createAccount({
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["accessGroup:operators"],
+        rooms: { "room-1": { requireMention: false, allowFrom: roomAllowFrom } },
+      });
       const request = await allowedInbound({
         account,
-        message: createMessage({
-          senderId: "users/alice",
-          senderName: "Alice",
-          isGroupChat: true,
-          text: "What about this?",
-          quote: quote("Group member quote", senderId),
-        }),
+        message: {
+          ...createMessage({
+            senderId: "users/alice",
+            senderName: "Alice",
+            isGroupChat: true,
+            text: "What about this?",
+          }),
+          quote: {
+            id: "parent",
+            senderId,
+            senderName: "Quoted author",
+            body: "Group member quote",
+          },
+        },
         config: {
           accessGroups: {
             operators: {
@@ -361,6 +407,13 @@ describe("nextcloud-talk inbound behavior", () => {
       statusSink,
     });
 
+    expect(requireFirstMockArg(issueChallenge, "Nextcloud Talk pairing challenge")).toEqual(
+      expect.objectContaining({
+        senderId: "user-1",
+        senderIdLine: "Your Nextcloud user id: user-1",
+        meta: { name: "Alice" },
+      }),
+    );
     expect(mocks.send).toHaveBeenCalledExactlyOnceWith("room-1", "Pair with code 123456", {
       cfg: defaultConfig,
       accountId: "default",
@@ -373,39 +426,43 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(outboundStatus?.lastOutboundAt).toBeGreaterThanOrEqual(1_736_380_800_000);
   });
 
-  it.each(["", "/help", JSON.stringify({ message: "/help", parameters: {} })])(
-    "drops empty or unauthorized command content before delivery: %s",
-    async (text) => {
-      let core: PluginRuntime | undefined;
-      if (text) {
-        mocks.roomKind.mockResolvedValue("group");
-        installPairingController();
+  it.each([
+    {
+      message: { text: "", mediaType: "application/pdf" },
+      account: {},
+      command: false,
+      log: "nextcloud-talk: drop empty message body (mediaType=application/pdf) target=user-1",
+    },
+    {
+      message: { isGroupChat: true, text: "/help" },
+      account: { rooms: { "room-1": { allowFrom: ["user-1"], requireMention: false } } },
+      command: true,
+      log: "nextcloud-talk: drop control command (unauthorized) target=user-1",
+    },
+    {
+      message: { isGroupChat: true, text: JSON.stringify({ message: "/help", parameters: {} }) },
+      account: { rooms: { "room-1": { allowFrom: ["user-1"], requireMention: false } } },
+      command: true,
+      log: "nextcloud-talk: drop control command (unauthorized) target=user-1",
+    },
+  ])("drops before delivery: $log", async ({ message, account, command, log }) => {
+    let core: PluginRuntime | undefined;
+    if (message.isGroupChat) {
+      mocks.roomKind.mockResolvedValue("group");
+      installPairingController();
+      if (command) {
         core = installCommandRuntime(vi.fn((body?: string) => body === "/help"));
       }
-      const runtime = createRuntimeSpies();
-      await inbound({
-        message: createMessage({
-          text,
-          isGroupChat: Boolean(text),
-          mediaType: text ? "text/plain" : "application/pdf",
-        }),
-        account: text
-          ? createAccount({ rooms: { "room-1": { allowFrom: ["user-1"], requireMention: false } } })
-          : createAccount(),
-        runtime,
-      });
-      expect(mocks.send).not.toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith(
-        text
-          ? "nextcloud-talk: drop control command (unauthorized) target=user-1"
-          : "nextcloud-talk: drop empty message body (mediaType=application/pdf) target=user-1",
-      );
-      if (core) {
-        expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
-        expect(core.channel.mentions.buildMentionRegexes).not.toHaveBeenCalled();
-      }
-    },
-  );
+    }
+    const runtime = createRuntimeSpies();
+    await inbound({ message: createMessage(message), account: createAccount(account), runtime });
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(log);
+    if (core) {
+      expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
+      expect(core.channel.mentions.buildMentionRegexes).not.toHaveBeenCalled();
+    }
+  });
 
   it("keeps command and raw projections separate for structured group commands without mention", async () => {
     const text = '{"message":"/help","parameters":{}}';
@@ -430,7 +487,10 @@ describe("nextcloud-talk inbound behavior", () => {
       config,
     });
 
+    expect(hasControlCommand).toHaveBeenCalledWith(command, config);
+    expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     expect(dispatched(coreRuntime)).toMatchObject({
+      replyPipeline: {},
       ctxPayload: {
         CommandBody: command,
         BodyForCommands: command,
@@ -484,7 +544,14 @@ describe("nextcloud-talk inbound behavior", () => {
   });
 
   it("binds durable ingress adoption into reply options", async () => {
-    const lifecycle = adoptionLifecycle();
+    const lifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+
     const request = await allowedInbound({ turnAdoptionLifecycle: lifecycle });
     expect(request.replyOptions?.turnAdoptionLifecycle).toMatchObject({
       admission: "exclusive",
@@ -493,36 +560,60 @@ describe("nextcloud-talk inbound behavior", () => {
   });
 
   it.each([
-    { kind: "final" as const, caption: "The report", replyToId: "41" },
-    { kind: "block" as const, caption: "The report", replyToId: undefined },
+    { kind: "final" as const, caption: "The report" },
+    { kind: "block" as const, caption: "The report" },
+    { kind: "final" as const, caption: "" },
   ])(
-    "uploads an automatic $kind reply with caption '$caption' and explicit target $replyToId",
-    async ({ kind, caption, replyToId }) => {
-      await withNativeAutomaticReply(
-        async ({ fixture, deliver }) => {
-          const result = await deliver(
-            {
-              text: caption ? `${caption}\n⚠️ 🛠️ \`search repos (agent)\` failed` : undefined,
-              mediaUrl: fixture.mediaUrl,
-              replyToId,
-            },
-            kind,
-          );
-          const shareRequest = fixture.requests.find(({ url }) => url.pathname.endsWith("/shares"));
-          const share = new URLSearchParams(shareRequest?.body.toString());
-          expect(JSON.parse(share.get("talkMetaData") ?? "{}")).toEqual({
-            caption,
-            ...(replyToId ? { replyTo: 41 } : {}),
-          });
-          expect(result).toMatchObject({
-            visibleReplySent: true,
-            receipt: { platformMessageIds: ["42"] },
-          });
-        },
-        { quote: { ...quote("Earlier message", "users/quoted"), id: "40" } },
-      );
+    "uploads an automatic $kind reply with caption '$caption' through native delivery",
+    async ({ kind, caption }) => {
+      await withNativeAutomaticReply(async ({ fixture, deliver }) => {
+        const result = await deliver(
+          {
+            text: caption ? `${caption}\n⚠️ 🛠️ \`search repos (agent)\` failed` : undefined,
+            mediaUrl: fixture.mediaUrl,
+            replyToId: "41",
+          },
+          kind,
+        );
+        const upload = fixture.requests.find(({ method }) => method === "PUT");
+        expect(upload?.body).toEqual(fixture.bytes);
+        const shareRequests = fixture.requests.filter(({ url }) =>
+          url.pathname.endsWith("/shares"),
+        );
+        expect(shareRequests).toHaveLength(1);
+        const share = new URLSearchParams(shareRequests[0]!.body.toString());
+        expect(JSON.parse(share.get("talkMetaData") ?? "{}")).toEqual({ caption, replyTo: 41 });
+        expect(result).toMatchObject({
+          visibleReplySent: true,
+          receipt: { platformMessageIds: ["42"] },
+        });
+      });
     },
   );
+
+  it("preserves ordered bot-only automatic links and caption through the shared planner", async () => {
+    await withNativeAutomaticReply(
+      async ({ fixture, deliver }) => {
+        const urls = ["https://example.com/first.pdf", "https://example.com/second.pdf"];
+        const result = await deliver(
+          { text: "The reports", mediaUrls: urls, replyToId: "41" },
+          "final",
+        );
+        expect(result).toMatchObject({ visibleReplySent: true });
+        expect(fixture.requests).toHaveLength(2);
+        expect(fixture.requests.map((request) => JSON.parse(request.body.toString()))).toEqual([
+          { message: `The reports\n\nAttachment: ${urls[0]}`, replyTo: "41" },
+          { message: `Attachment: ${urls[1]}`, replyTo: "41" },
+        ]);
+        expect(
+          fixture.requests.every((request) =>
+            request.url.pathname.endsWith("/bot/allowed/message"),
+          ),
+        ).toBe(true);
+      },
+      { botOnly: true },
+    );
+  });
 
   it.each(["final", "block"] as const)(
     "retains the first bot-only $kind link receipt when a later link fails",
@@ -550,10 +641,11 @@ describe("nextcloud-talk inbound behavior", () => {
             deliveryResult: { visibleReplySent: true, receipt: { platformMessageIds: ["900"] } },
           });
           expect(fixture.requests).toHaveLength(2);
-          expect(fixture.requests.map((request) => JSON.parse(request.body.toString()))).toEqual([
-            { message: "The reports\n\nAttachment: https://example.com/first.pdf" },
-            { message: "Attachment: https://example.com/second.pdf" },
-          ]);
+          expect(
+            fixture.requests.every((request) =>
+              request.url.pathname.endsWith("/bot/allowed/message"),
+            ),
+          ).toBe(true);
         },
         { botOnly: true },
       );
@@ -579,6 +671,32 @@ describe("nextcloud-talk inbound behavior", () => {
       },
     );
   });
+
+  it.each([
+    { kind: "final" as const, replyToId: undefined, expectedReply: undefined },
+    { kind: "block" as const, replyToId: undefined, expectedReply: undefined },
+    { kind: "final" as const, replyToId: "41", expectedReply: 41 },
+  ])(
+    "preserves $kind delivery targeting with quoted context ($replyToId)",
+    async ({ kind, replyToId, expectedReply }) => {
+      await withNativeAutomaticReply(
+        async ({ fixture, deliver }) => {
+          await deliver({ text: "Current answer", mediaUrl: fixture.mediaUrl, replyToId }, kind);
+          const share = fixture.requests.find(({ url }) => url.pathname.endsWith("/shares"));
+          const body = new URLSearchParams(share?.body.toString());
+          expect(JSON.parse(body.get("talkMetaData") ?? "{}").replyTo).toBe(expectedReply);
+        },
+        {
+          quote: {
+            id: "40",
+            senderId: "users/quoted",
+            senderName: "Quoted author",
+            body: "Earlier message",
+          },
+        },
+      );
+    },
+  );
 
   it("keeps a warning-only automatic reply invisible after sanitation", async () => {
     await withNativeAutomaticReply(async ({ fixture, deliver }) => {

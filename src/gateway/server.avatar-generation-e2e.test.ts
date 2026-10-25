@@ -1,25 +1,49 @@
 import { createServer, type ServerResponse } from "node:http";
-import { expect, it } from "vitest";
-import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
+import { expect, it, vi } from "vitest";
+import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
-import { listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
 const token = "avatar-generation-e2e-bootstrap";
+const routeGate = vi.hoisted(() => ({ pause: null as null | (() => Promise<void>) }));
+
+// Keep the production route resolver; the one-shot gate only controls when a revoked request resumes.
+vi.mock("../agents/isolated-completion-route.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/isolated-completion-route.js")>();
+  return {
+    ...actual,
+    resolveIsolatedCompletionRoute: async (
+      ...args: Parameters<typeof actual.resolveIsolatedCompletionRoute>
+    ) => {
+      const pause = routeGate.pause;
+      if (pause) {
+        routeGate.pause = null;
+        await pause();
+      }
+      return actual.resolveIsolatedCompletionRoute(...args);
+    },
+  };
+});
 const design = {
   version: 1,
   id: "garden-keeper",
   name: "Garden Keeper",
   description: "A friendly gardener with a cream apron.",
   palette: { shell: "#87b891", claw: "#5b9471", glint: "#fff0b3" },
-  layers: { back: "", left_prop: "", right_prop: "", shell_overlay: "", accessory: "" },
+  layers: {
+    back: "",
+    left_prop: "",
+    right_prop: "",
+    shell_overlay: '<path d="M35 49 L85 49 L88 84 Q60 99 32 84 Z" fill="#f1e4c4"/>',
+    accessory: "",
+  },
 };
 
 function respond(response: ServerResponse, id: string, content = JSON.stringify(design)) {
@@ -34,7 +58,7 @@ function respond(response: ServerResponse, id: string, content = JSON.stringify(
 }
 
 it(
-  "generates through authenticated RPC and stops a revoked caller during provider I/O",
+  "generates through authenticated RPC and provider I/O, rejecting read-only and revoked callers",
   { timeout: 120_000 },
   async ({ signal }) => {
     const state = await createOpenClawTestState({
@@ -51,18 +75,28 @@ it(
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
     });
-    const secondArrival = createDeferred();
+    const arrivals = [createDeferred(), createDeferred(), createDeferred()];
     const responses: ServerResponse[] = [];
+    let holdSecond = false;
     const provider = createServer((request, response) => {
       request.resume();
       const index = responses.push(response) - 1;
-      if (index === 1) {
-        secondArrival.resolve();
-      } else {
+      arrivals[index]?.resolve();
+      if (index !== 1 || !holdSecond) {
         respond(response, `avatar-response-${index}`);
       }
     });
-    const baseUrl = await listenProvider(provider);
+    await new Promise<void>((resolve, reject) => {
+      provider.once("error", reject);
+      provider.listen(0, "127.0.0.1", () => {
+        provider.removeListener("error", reject);
+        resolve();
+      });
+    });
+    const address = provider.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Missing local completion provider listener");
+    }
     const clients: GatewayClient[] = [];
     let gateway: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
     try {
@@ -86,7 +120,7 @@ it(
             "avatar-proof": {
               api: "openai-completions",
               apiKey: "synthetic-local-provider-key",
-              baseUrl,
+              baseUrl: `http://127.0.0.1:${address.port}/v1`,
               models: [
                 modelDefinition("avatar-model", {
                   name: "Avatar model",
@@ -110,7 +144,7 @@ it(
         deviceToken?: string;
         deviceIdentity?: GatewayClientOptions["deviceIdentity"];
       }) => {
-        const ready = createDeferred();
+        const ready = createDeferred<HelloOk>();
         const closed = createDeferred();
         const client = new GatewayClient({
           url: `ws://127.0.0.1:${claim.port}`,
@@ -125,7 +159,7 @@ it(
             storeDeviceAuthToken: () => {},
             clearDeviceAuthToken: () => {},
           },
-          onHelloOk: () => ready.resolve(),
+          onHelloOk: (hello) => ready.resolve(hello),
           onConnectError: (error) => ready.reject(error),
           onClose: () => closed.resolve(),
         });
@@ -175,14 +209,35 @@ it(
           (error: unknown) => ({ error }),
         );
       const admin = await pair("admin", ["operator.admin"]);
+      const reader = await pair("reader", ["operator.read"]);
       const first = await generate(admin.connection.client);
       expect(first.svg).toContain("<svg");
       expect(first.name).toBe("Garden Keeper");
       expect(responses).toHaveLength(1);
 
+      await expect(generate(reader.connection.client)).rejects.toThrow(
+        "missing scope: operator.admin",
+      );
+      expect(responses).toHaveLength(1);
+
+      const revokedBeforeDispatch = await pair("revoked-before-dispatch", ["operator.admin"]);
+      const routeEntered = createDeferred();
+      const releaseRoute = createDeferred();
+      routeGate.pause = async () => {
+        routeEntered.resolve();
+        await releaseRoute.promise;
+      };
+      const beforeSettled = observe(generate(revokedBeforeDispatch.connection.client));
+      await withinTest(routeEntered.promise, signal);
+      await revoke(revokedBeforeDispatch);
+      releaseRoute.resolve();
+      expect(await withinTest(beforeSettled, signal)).toHaveProperty("error");
+      expect(responses).toHaveLength(1);
+
       const revoked = await pair("revoked", ["operator.admin"]);
+      holdSecond = true;
       const settled = observe(generate(revoked.connection.client));
-      await withinTest(secondArrival.promise, signal);
+      await withinTest(arrivals[1]!.promise, signal);
       await revoke(revoked);
       respond(responses[1]!, "avatar-revoked", "invalid design");
       expect(await withinTest(settled, signal)).toHaveProperty("error");
@@ -191,6 +246,7 @@ it(
       });
       expect(responses).toHaveLength(2);
     } finally {
+      routeGate.pause = null;
       for (const response of responses) {
         response.end();
       }
@@ -199,7 +255,10 @@ it(
         ...clients.map((client) => () => client.stopAndWait()),
         async () => gateway?.close(),
         () => state.cleanup(),
-        () => closeHttpServer(provider),
+        () =>
+          new Promise<void>((resolve) => {
+            provider.close(() => resolve());
+          }),
       );
     }
   },

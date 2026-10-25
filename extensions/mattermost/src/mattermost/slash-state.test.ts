@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { createMockIncomingRequest, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -51,6 +52,14 @@ function createRequest(body: string, authorization?: string): IncomingMessage {
   const req = createMockIncomingRequest([body]);
   req.method = "POST";
   req.headers = { "content-type": "application/x-www-form-urlencoded", authorization };
+  return req;
+}
+
+function createStalledRequest(remoteAddress: string, authorization?: string): IncomingMessage {
+  const req = new IncomingMessage(new Socket());
+  req.method = "POST";
+  req.headers = { "content-type": "application/x-www-form-urlencoded", authorization };
+  Object.defineProperty(req.socket, "remoteAddress", { value: remoteAddress });
   return req;
 }
 
@@ -123,6 +132,30 @@ function activate(
   }
 }
 
+async function expectIsolatedCapacity(fullToken: string, otherToken: string) {
+  const { handler } = createSlashRoute();
+  const requests = Array.from({ length: 8 }, (_, index) =>
+    createStalledRequest(`203.0.113.${index + 1}`, `Token ${fullToken}`),
+  );
+  const responses = requests.map(() => createResponse());
+  const runs = requests.map((req, index) => handler(req, responses[index]!.res));
+  const overflow = createResponse();
+  await handler(createRequest("", `Token ${fullToken}`), overflow.res);
+  const other = createStalledRequest("203.0.113.20", `Token ${otherToken}`);
+  const otherResponse = createResponse();
+  const otherRun = handler(other, otherResponse.res);
+  try {
+    expect(overflow.res.statusCode).toBe(429);
+    expect(otherResponse.res.statusCode).toBe(200);
+  } finally {
+    for (const req of [...requests, other]) {
+      req.complete = true;
+      req.push(null);
+    }
+    await Promise.all([...runs, otherRun]);
+  }
+}
+
 afterEach(() => {
   deactivateSlashCommands();
   vi.mocked(safeEqualSecret).mockClear();
@@ -172,6 +205,18 @@ describe("slash-state", () => {
     }
   });
 
+  it("isolates distinct credentials across accounts", async () => {
+    activate("a1", ["tok-a"]);
+    activate("a2", ["tok-b"]);
+    await expectIsolatedCapacity("tok-a", "tok-b");
+  });
+
+  it("collapses duplicate credentials without merging distinct duplicate groups", async () => {
+    activate("a1", ["tok-a", "tok-shared", "tok-shared-other"]);
+    activate("a2", ["tok-shared", "tok-shared-other"]);
+    await expectIsolatedCapacity("tok-shared", "tok-shared-other");
+  });
+
   it.each([
     {
       name: "token match",
@@ -215,23 +260,31 @@ describe("slash-state", () => {
     );
   });
 
-  it.each([
-    ["token", "token=tok-shared", "command token is not unique"],
-    [
-      "command",
-      "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
-      "slash command is not unique",
-    ],
-  ])("rejects ambiguous account routing via %s", async (via, body, message) => {
-    for (const accountId of ["a1", "a2"]) {
-      const token = via === "token" ? "tok-shared" : accountId;
-      activate(accountId, [token], [createRegisteredCommand({ id: accountId, token })]);
-    }
-    const result = await routeSlashRequest({ body });
+  it("rejects a token shared by multiple accounts", async () => {
+    activate("a1", ["tok-shared"]);
+    activate("a2", ["tok-shared"]);
+
+    const result = await routeSlashRequest({ body: "token=tok-shared" });
+
     expect(result.statusCode).toBe(409);
-    expect(result.body).toContain(message);
+    expect(result.body).toContain("command token is not unique");
     expect(result.warn).toHaveBeenCalledWith(
-      `mattermost: slash callback matched multiple accounts via ${via} (a1, a2)`,
+      "mattermost: slash callback matched multiple accounts via token (a1, a2)",
+    );
+  });
+
+  it("rejects a registered team and command shared by multiple accounts", async () => {
+    activate("a1", ["tok-a"], [createRegisteredCommand({ id: "cmd-a" })]);
+    activate("a2", ["tok-b"], [createRegisteredCommand({ id: "cmd-b" })]);
+
+    const result = await routeSlashRequest({
+      body: "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
+    });
+
+    expect(result.statusCode).toBe(409);
+    expect(result.body).toContain("slash command is not unique");
+    expect(result.warn).toHaveBeenCalledWith(
+      "mattermost: slash callback matched multiple accounts via command (a1, a2)",
     );
   });
 });

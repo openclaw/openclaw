@@ -36,9 +36,29 @@ function embeddingSearch(baseUrl: string) {
 
 function references(provider: string, pin = "") {
   const ref = `${provider}/qwen:cloud${pin}`;
+  const scalarKeys = [
+    "model",
+    "primary",
+    "summaryModel",
+    "imageModel",
+    "utilityModel",
+    "voiceModel",
+    "imageGenerationModel",
+    "musicGenerationModel",
+    "pdfModel",
+    "videoGenerationModel",
+    "preferredModel",
+  ];
+  const arrayKeys = [
+    "fallback",
+    "fallbacks",
+    "allowedModels",
+    "modelFallbacks",
+    "imageModelFallbacks",
+  ];
   return {
-    model: ref,
-    fallbacks: [ref, "custom/keep"],
+    ...Object.fromEntries(scalarKeys.map((key) => [key, ref])),
+    ...Object.fromEntries(arrayKeys.map((key) => [key, [ref, "custom/keep"]])),
     mediaModels: { image: `${provider}/image` },
     modelByChannel: { telegram: `${provider}/channel` },
     media: { provider, model: "vision" },
@@ -48,11 +68,17 @@ function references(provider: string, pin = "") {
 
 describe("provider rename config migration", () => {
   it.each([
-    ["https://OLLAMA.COM:443/path?query=1#fragment", true],
+    ["https://ollama.com", true],
+    ["https://OLLAMA.COM/", true],
+    ["https://ollama.com:443/api/v1/", true],
+    ["https://ollama.com/path?query=1#fragment", true],
     ["http://ollama.com", false],
     ["https://ollama.com:444", false],
     ["https://ollama.com.example/api", false],
+    ["http://localhost:11434", false],
     ["http://127.0.0.1:11434", false],
+    ["http://192.168.1.5:11434", false],
+    ["https://inference.example/api", false],
     ["not a URL", false],
   ])("matches only the hosted origin: %s", (baseUrl, matches) => {
     const config = configFor(baseUrl);
@@ -72,7 +98,10 @@ describe("provider rename config migration", () => {
 
   it.each([
     ["http://127.0.0.1:11434", "ollama"],
+    ["http://192.168.1.5:11434", "ollama"],
+    ["https://embeddings.example/api", "ollama"],
     ["https://ollama.com/v1", "ollama-cloud"],
+    ["", "ollama-cloud"],
     ["   ", "ollama-cloud"],
   ])("respects the memory embedding endpoint %s", (baseUrl, provider) => {
     const config = configFor("https://ollama.com/v1");
@@ -86,6 +115,9 @@ describe("provider rename config migration", () => {
     expect(result.config.agents?.defaults?.model).toBe("ollama-cloud/qwen:cloud");
     expect(result.config.models?.providers?.ollama).toBeUndefined();
     expect(config.memory.search?.provider).toBe("ollama");
+    expect(
+      result.changes.some((change) => change.includes("config.memory.search provider/model")),
+    ).toBe(provider === "ollama-cloud");
   });
 
   it.each([
@@ -144,7 +176,7 @@ describe("provider rename config migration", () => {
     expectStable(config, before, result.config);
   });
 
-  it("rewrites each reference shape, drops profile pins once, and preserves policy denials", () => {
+  it("rewrites every reference location, drops profile pins once, and preserves policy denials", () => {
     const config = configFor("https://ollama.com");
     Object.assign(config, {
       fixture: {
@@ -182,7 +214,13 @@ describe("provider rename config migration", () => {
     }
     expect(policy?.allows({ provider: "ollama-cloud", model: "allowed" })).toBe(true);
     expect(policy?.allows({ provider: "custom", model: "allowed" })).toBe(false);
-    for (const ref of ["ollamax/model", "ollama:default"]) {
+    for (const ref of [
+      "ollamax/model",
+      "custom/model:cloud",
+      "ollama-cloud/model",
+      "ollama:default",
+      "model:cloud",
+    ]) {
       expect(rewriteProviderModelRef(ref, renames)).toBeUndefined();
     }
   });

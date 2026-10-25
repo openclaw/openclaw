@@ -56,14 +56,16 @@ const { assertPageNavigationCompletedSafely, withPageNavigationRequestGuard } = 
 
 const closePageViaPlaywright = vi.fn(async () => {});
 const resizeViewportViaPlaywright = vi.fn(async () => {});
+const drainDownloads = vi.fn(async () => undefined);
+const disposeDownloads = vi.fn();
 const cleanupDialogAbort = vi.fn();
 
 // mock-isolation: Exercise synthetic page actions without connecting to a live browser session.
 vi.mock("./pw-session.js", () => ({
   ...session,
   beginActionDownloadCaptureOnPage: vi.fn(() => ({
-    drain: vi.fn(async () => undefined),
-    dispose: vi.fn(),
+    drain: drainDownloads,
+    dispose: disposeDownloads,
   })),
   createObservedDialogAbortSignalForPage: vi.fn(
     ({ parentSignal }: { parentSignal?: AbortSignal }) => ({
@@ -136,7 +138,11 @@ describe("executeActViaPlaywright batches", () => {
     closePageViaPlaywright.mockImplementation(async () => setPageClosed(true));
   });
 
-  afterEach(() => expect(cleanupDialogAbort).toHaveBeenCalledOnce());
+  afterEach(() => {
+    expect(drainDownloads).toHaveBeenCalledOnce();
+    expect(disposeDownloads).toHaveBeenCalledOnce();
+    expect(cleanupDialogAbort).toHaveBeenCalledOnce();
+  });
 
   it("does not expose pasted text when native insertion fails", async () => {
     const text = "synthetic-password-paste";
@@ -219,16 +225,24 @@ describe("executeActViaPlaywright batches", () => {
     },
   );
 
-  it("reports the first nested failure after continuing children, then stops the parent", async () => {
-    locator.fill.mockRejectedValueOnce(new Error("first failure"));
-    locator.hover.mockRejectedValueOnce(new Error("second failure"));
-    const result = await batch([nested([type, hover, { ...press, delayMs: 0 }]), press]);
+  it.each([false, true])("reports the first nested failure (multiple=%s)", async (multiple) => {
+    const error = multiple ? "first failure" : "not editable";
+    locator.fill.mockRejectedValueOnce(new Error(error));
+    if (multiple) {
+      locator.hover.mockRejectedValueOnce(new Error("second failure"));
+    }
+    const actions = nested([type, hover, ...(multiple ? [{ ...press, delayMs: 0 }] : [])]);
+    const result = await batch([actions, ...(!multiple ? [press] : [])]);
     expect(result).toEqual({
       targetId: "tab-1",
-      results: [{ ok: false, error: "first failure" }],
+      results: [{ ok: false, error }],
     });
     expect(locator.hover).toHaveBeenCalledOnce();
-    expect(page.keyboard.press).toHaveBeenCalledExactlyOnceWith("Enter", { delay: 0 });
+    if (multiple) {
+      expect(page.keyboard.press).toHaveBeenCalledExactlyOnceWith("Enter", { delay: 0 });
+    } else {
+      expect(page.keyboard.press).not.toHaveBeenCalled();
+    }
   });
 
   it("preserves failure and aborts after a same-URL reload", async () => {

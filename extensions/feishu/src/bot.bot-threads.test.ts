@@ -25,11 +25,13 @@ const { getMessage, dispatch, resolveRoute } = vi.hoisted(() => ({
   ),
 }));
 
+// mock-isolation: thread admission inspects synthetic messages without Feishu network I/O.
 vi.mock("./send.js", () => ({
   getMessageFeishu: getMessage,
   listFeishuThreadMessages: vi.fn().mockResolvedValue([]),
   sendMessageFeishu: vi.fn(),
 }));
+// mock-isolation: thread admission uses a controlled dispatcher without sending real replies.
 vi.mock("./reply-dispatcher.js", () => ({
   createFeishuReplyDispatcher: vi.fn(() => replyDispatcher()),
 }));

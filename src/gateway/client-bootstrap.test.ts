@@ -187,17 +187,23 @@ it.each([
         scope,
       ] as const,
   ),
-] as const)("selects TLS ownership for %s %s", async (source, url, config, pin, inspect, scope) => {
-  mocks.details.mockReturnValue(connection(url, source));
-  inspectLocalCertificate();
-  const result = await bootstrap({ config, gatewayUrl: source === "cli --url" ? url : undefined });
-  expect(result.tlsFingerprint).toBe(pin);
-  expect(mocks.certificate.mock.calls).toEqual(inspect ? [[TLS_CONFIG]] : []);
-  if (scope) {
-    expect(result.deviceAuthScope).toBe(scope);
-    expect(result.sshTunnel).toBeUndefined();
-  }
-});
+] as const)(
+  "selects TLS ownership for %s %s",
+  async (source, url, config, pin, inspect, scope?: string) => {
+    mocks.details.mockReturnValue(connection(url, source));
+    inspectLocalCertificate();
+    const result = await bootstrap({
+      config,
+      gatewayUrl: source === "cli --url" ? url : undefined,
+    });
+    expect(result.tlsFingerprint).toBe(pin);
+    expect(mocks.certificate.mock.calls).toEqual(inspect ? [[TLS_CONFIG]] : []);
+    if (scope) {
+      expect(result.deviceAuthScope).toBe(scope);
+      expect(result.sshTunnel).toBeUndefined();
+    }
+  },
+);
 
 it.each([
   ["public origin", "gateway.example", "https://gateway.example", false, undefined],
