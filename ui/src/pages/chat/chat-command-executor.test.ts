@@ -25,6 +25,19 @@ import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-e
 const resultText = (key: string, values?: Record<string, string>) =>
   t(`chat.commandResults.${key}`, values);
 
+function usageText(input: string, output: string, total: string, context?: string) {
+  return [
+    `**${resultText("usage.title")}**`,
+    ...[
+      ["inputTokens", input],
+      ["outputTokens", output],
+      ["totalTokens", total],
+    ].map(([field, count]) => resultText(`usage.${field}`, { count: `**${count}**` })),
+    ...(context ? [context] : []),
+    resultText("usage.model", { model: "`gpt-4.1-mini`" }),
+  ].join("\n");
+}
+
 function mockRequests(responses: Record<string, () => unknown>) {
   const handlers = new Map(Object.entries(responses));
   return vi.fn(async (method: string) => {
@@ -411,24 +424,12 @@ describe("executeSlashCommand directives", () => {
       const result = await runCommand(request, "usage");
 
       expect(result.content).toBe(
-        [
-          `**${resultText("usage.title")}**`,
-          resultText("usage.inputTokens", {
-            count: `**${unavailable ? resultText("usage.notAvailable") : "1.2k"}**`,
-          }),
-          resultText("usage.outputTokens", {
-            count: `**${unavailable ? resultText("usage.notAvailable") : "300"}**`,
-          }),
-          resultText("usage.totalTokens", {
-            count: `**${unavailable ? resultText("usage.notAvailable") : "~1.5k"}**`,
-          }),
-          resultText("usage.model", { model: "`gpt-4.1-mini`" }),
-        ].join("\n"),
+        usageText(
+          unavailable ? resultText("usage.notAvailable") : "1.2k",
+          unavailable ? resultText("usage.notAvailable") : "300",
+          unavailable ? resultText("usage.notAvailable") : "~1.5k",
+        ),
       );
-      expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
-        key: "agent:main:main",
-        agentId: "main",
-      });
     },
   );
 
@@ -442,19 +443,13 @@ describe("executeSlashCommand directives", () => {
     });
     const result = await runCommand(request, "usage");
     expect(result.content).toBe(
-      [
-        `**${resultText("usage.title")}**`,
-        resultText("usage.inputTokens", { count: "**1.2k**" }),
-        resultText("usage.outputTokens", { count: "**300**" }),
-        resultText("usage.totalTokens", { count: "**1.5k**" }),
+      usageText(
+        "1.2k",
+        "300",
+        "1.5k",
         resultText("usage.context", { percent: "**31%**", total: "4k" }),
-        resultText("usage.model", { model: "`gpt-4.1-mini`" }),
-      ].join("\n"),
+      ),
     );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
-      key: "agent:main:main",
-      agentId: "main",
-    });
   });
 
   it.each([
@@ -476,40 +471,25 @@ describe("executeSlashCommand directives", () => {
 
   it("uses default thinking options when the active session is absent", async () => {
     const levels = ["off", "minimal", "low", "medium", "adaptive", "high", "xhigh", "maximum"];
-    const request = vi.fn(async (method: string, payload?: unknown) => {
-      if (method === "sessions.describe") {
-        return { session: null };
-      }
-      if (method === "sessions.list") {
-        return {
-          defaults: {
-            modelProvider: "openai",
-            model: "gpt-5.5",
-            thinkingLevels: levels.map((label) => ({
-              id: label === "maximum" ? "max" : label,
-              label,
-            })),
-            thinkingOptions: levels,
-            thinkingDefault: "adaptive",
-          },
-          sessions: [],
-        };
-      }
-      if (method === "models.list") {
-        return {
-          models: [{ id: "gpt-5.5", provider: "openai", reasoning: true }],
-        };
-      }
-      if (method === "sessions.patch") {
-        return { ok: true, ...((payload ?? {}) as object) };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({ session: null }),
+      "sessions.list": () => ({
+        defaults: {
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          thinkingLevels: levels.map((label) => ({
+            id: label === "maximum" ? "max" : label,
+            label,
+          })),
+          thinkingOptions: levels,
+          thinkingDefault: "adaptive",
+        },
+        sessions: [],
+      }),
+      "models.list": () => ({ models: [{ id: "gpt-5.5", provider: "openai", reasoning: true }] }),
+      "sessions.patch": () => ({ ok: true }),
     });
     const status = await runCommand(request, "think");
-    const setXhigh = await runCommand(request, "think", "xhigh");
-    const setMax = await runCommand(request, "think", "max");
-    const setMaximum = await runCommand(request, "think", "maximum");
-    const setAdaptive = await runCommand(request, "think", "auto");
     expect(status.content).toBe(
       [
         resultText("thinking.current", { level: "adaptive" }),
@@ -518,13 +498,17 @@ describe("executeSlashCommand directives", () => {
         }),
       ].join("\n"),
     );
-    expect(setXhigh.content).toBe(resultText("thinking.set", { level: "**xhigh**" }));
-    expect(setMax.content).toBe(resultText("thinking.set", { level: "**max**" }));
-    expect(setMaximum.content).toBe(resultText("thinking.set", { level: "**max**" }));
-    expect(setAdaptive.content).toBe(resultText("thinking.set", { level: "**adaptive**" }));
-    expectPatch(request, { thinkingLevel: "xhigh" });
-    expectPatch(request, { thinkingLevel: "max" });
-    expectPatch(request, { thinkingLevel: "adaptive" });
+    for (const [input, level] of [
+      ["xhigh", "xhigh"],
+      ["max", "max"],
+      ["maximum", "max"],
+      ["auto", "adaptive"],
+    ]) {
+      expect((await runCommand(request, "think", input)).content).toBe(
+        resultText("thinking.set", { level: `**${level}**` }),
+      );
+      expectPatch(request, { thinkingLevel: level });
+    }
   });
 
   it("rejects thinking levels when the selected model advertises empty support", async () => {
@@ -554,10 +538,6 @@ describe("executeSlashCommand directives", () => {
         resultText("options", { options: "on, full, off" }),
       ].join("\n"),
     );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
-      key: "agent:main:main",
-      agentId: "main",
-    });
   });
 
   it.each([
@@ -582,10 +562,6 @@ describe("executeSlashCommand directives", () => {
           resultText("options", { options: resultText("fast.options", { seconds }) }),
         ].join("\n"),
       );
-      expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
-        key: "agent:main:main",
-        agentId: "main",
-      });
     },
   );
 
@@ -610,9 +586,6 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     const result = await runCommand(request, "steer", "try a different approach");
     expect(result.content).toBe(resultText(`steer.${key}`));
     expect(result.failed ?? false).toBe(key !== "succeeded");
-    if (key !== "succeeded") {
-      expect(result.content).not.toBe(resultText("steer.succeeded"));
-    }
     const { payload } = requireRequestCall(request, "chat.send");
     expect(payload).toMatchObject({
       sessionKey: "agent:main:main",

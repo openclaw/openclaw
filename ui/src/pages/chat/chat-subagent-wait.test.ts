@@ -13,8 +13,20 @@ import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
 
 type ChatWorkingIndicatorOptions = Parameters<typeof ChatWorkingIndicator>[0]["options"];
 
-function resolveChatSubagentWait(input: Parameters<typeof projectSubagentStatus>[0]) {
-  return projectSubagentStatus(input, false).wait;
+function status(
+  input: Partial<Parameters<typeof projectSubagentStatus>[0]> = {},
+  searching = false,
+) {
+  return projectSubagentStatus(
+    {
+      selectedSession: parent,
+      messages,
+      subagentSessions: [child],
+      subagentSessionsHydrated: true,
+      ...input,
+    },
+    searching,
+  );
 }
 
 function mountWorkingIndicator(
@@ -104,15 +116,7 @@ describe("chat waiting on subagents", () => {
       hasActiveSubagentRun: true,
     };
     const project = (rows: GatewaySessionRow[], searching = false) =>
-      projectSubagentStatus(
-        {
-          selectedSession: parent,
-          messages,
-          subagentSessions: rows,
-          subagentSessionsHydrated: true,
-        },
-        searching,
-      );
+      status({ subagentSessions: rows }, searching);
     const initial = project([delegated, queued, active]);
     const activity = (rows: GatewaySessionRow[]) =>
       listSubagents({
@@ -219,40 +223,24 @@ describe("chat waiting on subagents", () => {
     expect(container.querySelector("button")).toBeNull();
   });
 
-  it.each([
-    {
-      name: "idle parent with active descendants",
-      session: parent,
-      ownRunActive: false,
-      waiting: true,
-    },
-    { name: "new local parent run", session: parent, ownRunActive: true, waiting: false },
-    {
-      name: "own run reported by the row",
-      session: { ...parent, hasActiveRun: true },
-      ownRunActive: false,
-      waiting: false,
-    },
-    {
-      name: "settled descendants despite a stale child row",
-      session: { ...parent, hasActiveSubagentRun: false },
-      ownRunActive: false,
-      waiting: false,
-    },
-    {
-      name: "yielded parent remains running without its own run",
-      session: { ...parent, status: "running" as const, activeRunIds: [] },
-      ownRunActive: false,
-      waiting: true,
-    },
-  ])("$name", ({ session, ownRunActive, waiting }) => {
-    const result = resolveChatSubagentWait({
-      selectedSession: session,
-      runActive: ownRunActive,
-      messages,
-      subagentSessions: [child],
-      subagentSessionsHydrated: true,
-    });
+  it.each<[string, GatewaySessionRow, boolean, boolean]>([
+    ["idle parent with active descendants", parent, false, true],
+    ["new local parent run", parent, true, false],
+    ["own run reported by the row", { ...parent, hasActiveRun: true }, false, false],
+    [
+      "settled descendants despite a stale child row",
+      { ...parent, hasActiveSubagentRun: false },
+      false,
+      false,
+    ],
+    [
+      "yielded parent remains running without its own run",
+      { ...parent, status: "running", activeRunIds: [] },
+      false,
+      true,
+    ],
+  ])("%s", (_name, session, ownRunActive, waiting) => {
+    const result = status({ selectedSession: session, runActive: ownRunActive }).wait;
     expect(result !== null).toBe(waiting);
     if (waiting) {
       expect(result).toEqual({
@@ -265,13 +253,8 @@ describe("chat waiting on subagents", () => {
 
   it("waits for roster hydration and counts only unfinished direct subagents", () => {
     const derive = (childRows?: GatewaySessionRow[]) =>
-      resolveChatSubagentWait({
-        selectedSession: parent,
-        runActive: false,
-        messages,
-        subagentSessions: childRows,
-        subagentSessionsHydrated: childRows !== undefined,
-      });
+      status({ subagentSessions: childRows, subagentSessionsHydrated: childRows !== undefined })
+        .wait;
     expect(derive()).toEqual({ startedAt: 2_000, runId: "parent-run", runningCount: 0 });
     const summarize = (childRows: GatewaySessionRow[]) => {
       const wait = derive(childRows);
@@ -294,27 +277,12 @@ describe("chat waiting on subagents", () => {
       hasActiveRun: false,
       hasActiveSubagentRun: true,
     };
-    expect(
-      resolveChatSubagentWait({
-        selectedSession: parent,
-        runActive: false,
-        messages,
-        subagentSessions: [child, yielded],
-        subagentSessionsHydrated: true,
-      }),
-    ).toMatchObject({ runningCount: 2 });
+    expect(status({ subagentSessions: [child, yielded] }).wait).toMatchObject({ runningCount: 2 });
   });
 
   it("counts child sessions that are not subagents without naming them", () => {
     const session = { ...child, key: "agent:main:dashboard:opened", label: "Opened session" };
-    const derive = (rows: GatewaySessionRow[]) =>
-      resolveChatSubagentWait({
-        selectedSession: parent,
-        runActive: false,
-        messages,
-        subagentSessions: rows,
-        subagentSessionsHydrated: true,
-      });
+    const derive = (rows: GatewaySessionRow[]) => status({ subagentSessions: rows }).wait;
     expect(derive([session])).toEqual({
       startedAt: 2_000,
       runId: "parent-run",
@@ -332,14 +300,7 @@ describe("chat waiting on subagents", () => {
   });
 
   it("counts children only once the pane's own child query has answered", () => {
-    const derive = (subagentSessionsHydrated: boolean) =>
-      resolveChatSubagentWait({
-        selectedSession: parent,
-        runActive: false,
-        messages,
-        subagentSessions: [child],
-        subagentSessionsHydrated,
-      });
+    const derive = (subagentSessionsHydrated: boolean) => status({ subagentSessionsHydrated }).wait;
     // A row seeded from another list is not proof that it is the only child left.
     expect(derive(false)).toEqual({ startedAt: 2_000, runId: "parent-run", runningCount: 0 });
     expect(derive(true)).toMatchObject({ runningCount: 1 });
@@ -353,13 +314,7 @@ describe("chat waiting on subagents", () => {
       startedAt: 1_500,
     },
   ])("counts the wait from $name", ({ endedAt, startedAt }) => {
-    expect(
-      resolveChatSubagentWait({
-        selectedSession: { ...parent, endedAt },
-        runActive: false,
-        messages,
-      })?.startedAt,
-    ).toBe(startedAt);
+    expect(status({ selectedSession: { ...parent, endedAt } }).wait?.startedAt).toBe(startedAt);
   });
 
   it("keeps lifecycle wait timing after an announcement resumes and settles the parent", () => {
@@ -368,16 +323,7 @@ describe("chat waiting on subagents", () => {
       session: GatewaySessionRow,
       history: unknown[],
       descendants = [dashboardChild],
-    ) =>
-      projectSubagentStatus(
-        {
-          selectedSession: session,
-          messages: history,
-          subagentSessions: descendants,
-          subagentSessionsHydrated: true,
-        },
-        false,
-      );
+    ) => status({ selectedSession: session, messages: history, subagentSessions: descendants });
     expect(project({ ...parent, endedAt: 2_500 }, messages).wait?.startedAt).toBe(2_500);
     const resumed = { ...parent, startedAt: 3_000, endedAt: undefined, hasActiveRun: true };
     expect(project(resumed, messages).wait).toBeNull();
@@ -404,15 +350,7 @@ describe("chat waiting on subagents", () => {
     { name: "an unsettled parent", startedAt: 1_000, endedAt: undefined },
     { name: "an end from an older turn", startedAt: 3_000, endedAt: 2_000 },
   ])("keeps child activity without inventing a wait for $name", ({ startedAt, endedAt }) => {
-    const projection = projectSubagentStatus(
-      {
-        selectedSession: { ...parent, startedAt, endedAt },
-        messages,
-        subagentSessions: [child],
-        subagentSessionsHydrated: true,
-      },
-      false,
-    );
+    const projection = status({ selectedSession: { ...parent, startedAt, endedAt } });
     expect(projection.wait).toBeNull();
     expect(projection.running).toBe(1);
     expect(projection.listed).toBe(true);
@@ -423,10 +361,11 @@ describe("chat waiting on subagents", () => {
     { name: "only an earlier turn's handoff", history: messages },
   ])("renders the recorded wait clock with $name", ({ history }) => {
     const now = Date.UTC(2026, 9, 12, 20, 48);
-    const wait = resolveChatSubagentWait({
+    const wait = status({
       selectedSession: { ...parent, startedAt: now - 100_000, endedAt: now - 65_000 },
       messages: history,
-    });
+      subagentSessionsHydrated: false,
+    }).wait;
     expect(wait?.startedAt).toBe(now - 65_000);
     if (!wait) {
       throw new Error("Expected a settled parent wait");
@@ -459,17 +398,13 @@ describe("chat waiting on subagents", () => {
     const working = { ...parent, hasActiveRun: true };
     const roster = [child, { ...child, key: "agent:main:subagent:other" }];
     const count = (input: Partial<Parameters<typeof projectSubagentStatus>[0]> = {}) =>
-      projectSubagentStatus(
-        {
-          selectedSession: working,
-          subagentSessions: roster,
-          subagentSessionsHydrated: true,
-          runWorking: true,
-          messages: [],
-          ...input,
-        },
-        false,
-      ).running;
+      status({
+        selectedSession: working,
+        subagentSessions: roster,
+        runWorking: true,
+        messages: [],
+        ...input,
+      }).running;
     expect(count()).toBe(2);
     expect(count({ subagentSessions: [{ ...child, hasActiveRun: false }] })).toBe(0);
     // A child session opened in its own right is not a subagent.
@@ -508,16 +443,12 @@ describe("chat waiting on subagents", () => {
 
   it("leads to the Subagents panel only when it lists every subagent the line mentions", () => {
     const listed = (subagentSessions: GatewaySessionRow[], working = true) =>
-      projectSubagentStatus(
-        {
-          selectedSession: working ? { ...parent, hasActiveRun: true } : parent,
-          subagentSessions,
-          subagentSessionsHydrated: true,
-          runWorking: working,
-          messages: working ? [] : messages,
-        },
-        false,
-      ).listed;
+      status({
+        selectedSession: working ? { ...parent, hasActiveRun: true } : parent,
+        subagentSessions,
+        runWorking: working,
+        messages: working ? [] : messages,
+      }).listed;
     expect(listed([child])).toBe(true);
     expect(listed([child], false)).toBe(true);
     const worker = { ...child, key: "agent:main:subagent:worker", swarmGroupId: "audit" };
@@ -576,9 +507,9 @@ describe("chat waiting on subagents", () => {
       expect(
         container.querySelector(".chat-reading-indicator, .chat-bubble-dots--working"),
       ).toBeNull();
-      expect(container.querySelector("openclaw-working-phrase")).toBeNull();
-      expect(container.querySelector("details")).toBeNull();
-      expect(container.querySelector(".chat-subagent-activity")).toBeNull();
+      expect(
+        container.querySelector("openclaw-working-phrase, details, .chat-subagent-activity"),
+      ).toBeNull();
       expect(container.textContent).not.toContain("Backend implementation");
       expect(container.textContent).toContain("4.7k output tokens");
       expect(container.querySelector("openclaw-elapsed-time")?.textContent).toBe("1m 5s");
