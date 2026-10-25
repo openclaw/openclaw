@@ -189,6 +189,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE,
         SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
+        GATEWAY_SERVER_CAPS.CHAT_INPUT_CUSTODY,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
         // Configured UI roots may serve an older route contract than this Gateway.
         ...(controlUiBuildSource === "bundled" &&
