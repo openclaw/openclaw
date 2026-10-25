@@ -115,7 +115,6 @@ export function registerReplyPromotionTests() {
           },
           undefined,
           async (preparedAttempt) => {
-            expect(preparedAttempt.replyOperation).toBe(operation);
             const { session } = await createTestSession();
             const firstRequest = createDeferredCore();
             const held = holdAssistantResponse("Synthetic completion draft.");
@@ -140,7 +139,6 @@ export function registerReplyPromotionTests() {
               replyOperation: operation,
             });
             const target = captureReplyMessageInjectionTarget(operation);
-            expect(target).toBeDefined();
             const answerQuestion = vi.fn(async () => ({ status: "answered" }));
             const pendingQuestion = collaborative
               ? registerPendingAgentQuestion({

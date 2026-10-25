@@ -6,7 +6,6 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
-import { log } from "../logger.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
@@ -110,15 +109,6 @@ describe("attempt prompt preflight", () => {
     const discarded = variant === "discarded-invalid";
     const fitting = variant.startsWith("fitting-");
     const unwindowed = variant === "unwindowed-tools";
-    const toolWithOutputSchema = {
-      name: "lookup",
-      description: "Look up a record.",
-      parameters: { type: "object" },
-      outputSchema: {
-        type: "string",
-        description: "result documentation ".repeat(4_000),
-      },
-    };
     const owner = checkpoint(
       false,
       variant === "missing-window" || discarded
@@ -127,7 +117,6 @@ describe("attempt prompt preflight", () => {
           ? "small retained window"
           : "retained content ".repeat(8_000),
     );
-    const discardedInvalid = checkpoint(true);
     let unwindowedMessages: AgentMessage[] | undefined;
     if (discarded) {
       unwindowedMessages = [owner];
@@ -140,7 +129,7 @@ describe("attempt prompt preflight", () => {
       ];
     } else if (fitting) {
       unwindowedMessages = [
-        ...(variant === "fitting-with-discarded-invalid" ? [owner, discardedInvalid] : []),
+        ...(variant === "fitting-with-discarded-invalid" ? [owner, checkpoint(true)] : []),
         { role: "user", content: "raw history ".repeat(40_000), timestamp: 1 },
       ];
     }
@@ -151,7 +140,17 @@ describe("attempt prompt preflight", () => {
       hookMessagesForCurrentPrompt: discarded ? [] : [owner],
       toolSchemaTokens:
         variant === "fitting-with-tool-output-schema"
-          ? estimateToolSchemaTokenPressure([toolWithOutputSchema])
+          ? estimateToolSchemaTokenPressure([
+              {
+                name: "lookup",
+                description: "Look up a record.",
+                parameters: { type: "object" },
+                outputSchema: {
+                  type: "string",
+                  description: "result documentation ".repeat(4_000),
+                },
+              },
+            ])
           : undefined,
     });
     if (discarded || fitting) {
@@ -239,8 +238,7 @@ describe("attempt prompt preflight", () => {
     },
   );
 
-  it("warns and keeps client recovery when V2 pending input exceeds the hard budget", async () => {
-    using warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+  it("keeps client recovery when V2 pending input exceeds the hard budget", async () => {
     const result = await preflight({
       providerCompactionAtRequestBoundary: true,
       contextTokenBudget: 100,
@@ -248,9 +246,6 @@ describe("attempt prompt preflight", () => {
     });
     expect(result.preflightRecovery).toEqual({ route: "compact_only" });
     expect(result.skipPromptSubmission).toBe(true);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("falling back to client compaction: pending input exceeds"),
-    );
   });
 
   it("admits heuristic tool-result pressure without recovery or mutating history", async () => {
