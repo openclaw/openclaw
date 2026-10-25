@@ -22,8 +22,16 @@ const elevated = { enabled: true, allowed: true, defaultLevel: "full" } as const
 const approvalCalls = ["exec.approval.request", "exec.approval.waitDecision"];
 const text = (result: { content: Array<{ type: string; text?: string }> }) =>
   result.content[0]?.text;
-const makeReviewer = (decision: Awaited<ReturnType<ExecAutoReviewer>>) =>
-  vi.fn<ExecAutoReviewer>(async () => decision);
+const makeReviewer = (
+  rationale: string,
+  overrides: Partial<Awaited<ReturnType<ExecAutoReviewer>>> = {},
+) =>
+  vi.fn<ExecAutoReviewer>(async () => ({
+    decision: "allow-once",
+    risk: "low",
+    rationale,
+    ...overrides,
+  }));
 const transcript = (message: string): ExecAutoReviewTranscript => ({
   entries: [{ kind: "user", origin: "operator", text: message }],
   omittedEntries: 0,
@@ -241,11 +249,7 @@ it.each([undefined, "deny"] as const)(
 
 it("intersects normalized gateway auto mode with host approval deny defaults", async () => {
   writePolicy("deny");
-  const autoReviewer = makeReviewer({
-    decision: "allow-once",
-    risk: "low",
-    rationale: "would otherwise run",
-  });
+  const autoReviewer = makeReviewer("would otherwise run");
   await expect(runAuto({ autoReviewer }, "echo blocked")).rejects.toThrow(
     /security=deny|exec denied/i,
   );
@@ -254,12 +258,7 @@ it("intersects normalized gateway auto mode with host approval deny defaults", a
 
 it("reviews current conversation context and retains Guardian approval without a run ID", async () => {
   const reviewTranscript = vi.fn(() => currentTranscript);
-  const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-    decision: "allow-once",
-    risk: "low",
-    rationale: "read-only version check",
-    userAuthorization: "high",
-  }));
+  const autoReviewer = makeReviewer("read-only version check", { userAuthorization: "high" });
   const tool = createAutoTool({
     autoReviewer,
     reviewTranscript,
@@ -333,11 +332,7 @@ it.each(process.platform === "win32" ? [true] : [false, true])(
     const command = "sh script.sh; ls *.sh";
     const script = path.join(tempRoot, "script.sh");
     fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
-    const autoReviewer = makeReviewer({
-      decision: "allow-once",
-      risk: "low",
-      rationale: "approved script",
-    });
+    const autoReviewer = makeReviewer("approved script");
     const tool = createAutoTool({
       autoReviewer,
       runId: "run-guardian-script",
@@ -410,10 +405,9 @@ it.each([
 
 it("honors normalized auto mode before elevated full bypass", async () => {
   const calls = mockApprovalGateway();
-  const autoReviewer = makeReviewer({
+  const autoReviewer = makeReviewer("test reviewer asks for approval", {
     decision: "ask",
     risk: "high",
-    rationale: "test reviewer asks for approval",
   });
   const result = await runAuto({ autoReviewer, elevated }, "whoami", { elevated: true });
   expect(autoReviewer).toHaveBeenCalledWith(
