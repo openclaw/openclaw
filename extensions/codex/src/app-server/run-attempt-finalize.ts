@@ -49,7 +49,7 @@ import {
   markCodexAuthProfileBlockedFromRateLimits,
   refreshCodexUsageLimitPromptError,
 } from "./usage-limit-error.js";
-import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
+import { buildCodexAgentEndMessages, buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function finalizeCodexAttempt(
   resources: StartedCodexAttemptResources,
@@ -499,7 +499,7 @@ export async function finalizeCodexAttempt(
     await runCodexAgentEndHook(params, {
       skillExperienceReviewSource: providerRefusal ? undefined : terminalAnchor,
       event: {
-        messages: result.messagesSnapshot,
+        messages: buildCodexAgentEndMessages(params, result.messagesSnapshot, activeTurnId),
         success: !finalAborted && !finalPromptError,
         ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
         durationMs: Date.now() - attemptStartedAt,
