@@ -288,9 +288,7 @@ describe("doctor retirement owner scope", () => {
       const result = repair(cfg);
       const updated = result.config.agents?.defaults;
       const expected = scenario === "native" ? "personal/grok-4.7" : ref;
-      expect(updated?.model).toEqual({
-        primary: `${expected}@personal:fixture`,
-      });
+      expect(updated?.model).toEqual({ primary: `${expected}@personal:fixture` });
       expect(updated?.subagents?.model).toBe(`${expected}@personal:fixture`);
       expect(updated?.models).toEqual({
         [expected]: { alias: "Personal", params: { temperature: 0.25 } },

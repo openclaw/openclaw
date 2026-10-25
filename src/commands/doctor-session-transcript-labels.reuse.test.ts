@@ -58,23 +58,19 @@ describe("update Doctor retained transcript scan reuse", () => {
     fs.writeFileSync(path.join(sessions, "sessions.json"), "{}");
     openOpenClawStateDatabase({ env });
     closeOpenClawStateDatabaseForTest();
-    const db = sqliteOwner.openNodeSqliteDatabase(databasePath);
-    try {
-      db.exec("CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT)");
-      const insert = db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?)");
-      // Retained history without a live sessions projection must still be inspected.
-      for (let seq = 0; seq < 40; seq++) {
-        insert.run(
-          "archived",
-          seq,
-          JSON.stringify({
-            type: "message",
-            message: { role: "user", content: "ordinary history " + seq },
-          }),
-        );
-      }
-    } finally {
-      db.close();
+    using db = sqliteOwner.openNodeSqliteDatabase(databasePath);
+    db.exec("CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT)");
+    const insert = db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?)");
+    // Retained history without a live sessions projection must still be inspected.
+    for (let seq = 0; seq < 40; seq++) {
+      insert.run(
+        "archived",
+        seq,
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: "ordinary history " + seq },
+        }),
+      );
     }
   });
   afterEach(() => {
@@ -142,12 +138,26 @@ describe("update Doctor retained transcript scan reuse", () => {
     };
   }
   function write(sql: string) {
-    const db = sqliteOwner.openNodeSqliteDatabase(databasePath);
-    try {
-      db.exec(sql);
-    } finally {
-      db.close();
+    using db = sqliteOwner.openNodeSqliteDatabase(databasePath);
+    db.exec(sql);
+  }
+  function stateAlias(copy = false) {
+    const admittedState = env.OPENCLAW_STATE_DIR!;
+    const alias = path.join(root, ".openclaw-profile");
+    const replacement = path.join(root, "replacement-state");
+    if (copy) {
+      fs.cpSync(admittedState, replacement, { recursive: true });
     }
+    fs.symlinkSync(admittedState, alias, "dir");
+    env.OPENCLAW_STATE_DIR = alias;
+    databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    return {
+      admittedState,
+      retarget(target = replacement) {
+        fs.unlinkSync(alias);
+        fs.symlinkSync(target, alias, "dir");
+      },
+    };
   }
   it("does not scan unchanged retained history twice across update passes", async () => {
     const reads = vi.spyOn(ReadOnlySqliteTranscriptReader.prototype, "labelRepairSnapshot");
@@ -191,10 +201,7 @@ describe("update Doctor retained transcript scan reuse", () => {
   });
   it("reuses canonical admitted generations through a symlinked state directory", async () => {
     const canonicalDatabasePath = fs.realpathSync(databasePath);
-    const alias = path.join(root, ".openclaw-profile");
-    fs.symlinkSync(env.OPENCLAW_STATE_DIR!, alias, "dir");
-    env.OPENCLAW_STATE_DIR = alias;
-    databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    stateAlias();
     expect(databasePath).not.toBe(canonicalDatabasePath);
     const reads = vi.spyOn(ReadOnlySqliteTranscriptReader.prototype, "labelRepairSnapshot");
     const first = await pass();
@@ -205,33 +212,19 @@ describe("update Doctor retained transcript scan reuse", () => {
     expect(reads).toHaveBeenCalledOnce();
   });
   it("rescans when the state alias is retargeted after admission", async () => {
-    const alias = path.join(root, ".openclaw-profile");
-    const replacement = path.join(root, "replacement-state");
-    fs.cpSync(env.OPENCLAW_STATE_DIR!, replacement, { recursive: true });
-    fs.symlinkSync(env.OPENCLAW_STATE_DIR!, alias, "dir");
-    env.OPENCLAW_STATE_DIR = alias;
-    databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    const alias = stateAlias(true);
     const first = await pass();
     const reads = vi.spyOn(ReadOnlySqliteTranscriptReader.prototype, "labelRepairSnapshot");
-    const second = await pass(first.receipts, () => {
-      fs.unlinkSync(alias);
-      fs.symlinkSync(replacement, alias, "dir");
-    });
+    const second = await pass(first.receipts, () => alias.retarget());
     expect(reads).toHaveBeenCalledOnce();
     expect(second.receipts).toEqual([]);
     expect(second.warnings).toEqual([]);
   });
   it("scans the admitted owner when a state alias is retargeted away and back at open", async () => {
-    const alias = path.join(root, ".openclaw-profile");
-    const replacement = path.join(root, "replacement-state");
-    fs.cpSync(env.OPENCLAW_STATE_DIR!, replacement, { recursive: true });
+    const alias = stateAlias(true);
     write(
       "UPDATE transcript_events SET event_json = replace(event_json, 'ordinary history 0', 'Chat history since last reply (untrusted, for context):') WHERE seq = 0",
     );
-    fs.symlinkSync(env.OPENCLAW_STATE_DIR!, alias, "dir");
-    const admittedState = env.OPENCLAW_STATE_DIR!;
-    env.OPENCLAW_STATE_DIR = alias;
-    databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
     let retargetedOpens = 0;
     const result = await pass(undefined, () => {
       const original = sqliteOwner.openNodeSqliteDatabase;
@@ -240,13 +233,11 @@ describe("update Doctor retained transcript scan reuse", () => {
           return original(...args);
         }
         retargetedOpens++;
-        fs.unlinkSync(alias);
-        fs.symlinkSync(replacement, alias, "dir");
+        alias.retarget();
         try {
           return original(...args);
         } finally {
-          fs.unlinkSync(alias);
-          fs.symlinkSync(admittedState, alias, "dir");
+          alias.retarget(alias.admittedState);
         }
       });
     });
@@ -258,12 +249,7 @@ describe("update Doctor retained transcript scan reuse", () => {
     );
   });
   it("does not certify a scan when the state alias changes during it", async () => {
-    const alias = path.join(root, ".openclaw-profile");
-    const replacement = path.join(root, "replacement-state");
-    fs.cpSync(env.OPENCLAW_STATE_DIR!, replacement, { recursive: true });
-    fs.symlinkSync(env.OPENCLAW_STATE_DIR!, alias, "dir");
-    env.OPENCLAW_STATE_DIR = alias;
-    databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    const alias = stateAlias(true);
     let payloadReads = 0;
     const reads = vi.spyOn(ReadOnlySqliteTranscriptReader.prototype, "labelRepairSnapshot");
     reads.mockImplementationOnce(function (this: ReadOnlySqliteTranscriptReader, ...args) {
@@ -271,8 +257,7 @@ describe("update Doctor retained transcript scan reuse", () => {
       reads.mockRestore();
       const result = this.labelRepairSnapshot(...args);
       payloadReads++;
-      fs.unlinkSync(alias);
-      fs.symlinkSync(replacement, alias, "dir");
+      alias.retarget();
       return result;
     });
     const result = await pass();
