@@ -64,22 +64,30 @@ export function createControlUiMockResponses(
   }
 
   function applyAgentModel(method: string, response: unknown): unknown {
-    if (method !== "agents.list" || !isRecord(response)) {
-      return response;
+    const value =
+      method === "agents.list" && isRecord(response)
+        ? { sessionPlacement: {}, ...response }
+        : response;
+    if (!input.agentModel || !isRecord(value)) {
+      return value;
     }
-    return {
-      sessionPlacement: {},
-      ...response,
-      ...(input.agentModel && Array.isArray(response.agents)
-        ? {
-            agents: response.agents.map((agent) =>
-              isRecord(agent) && !Object.hasOwn(agent, "model")
-                ? { ...agent, model: { primary: input.agentModel } }
-                : agent,
-            ),
-          }
-        : {}),
+    const applyAgentsList = (agentsList: unknown): unknown => {
+      if (!isRecord(agentsList) || !Array.isArray(agentsList.agents)) {
+        return agentsList;
+      }
+      return {
+        ...agentsList,
+        agents: agentsList.agents.map((agent) =>
+          isRecord(agent) && !Object.hasOwn(agent, "model")
+            ? { ...agent, model: { primary: input.agentModel } }
+            : agent,
+        ),
+      };
     };
+    if (method === "agents.list") {
+      return applyAgentsList(value);
+    }
+    return value;
   }
 
   function applySessionPlacement(params: unknown, response: Record<string, unknown>) {
@@ -160,7 +168,10 @@ export function createControlUiMockResponses(
       return { found: true, value: configured };
     }
     const matchingCase = cases.find((candidate) => paramsMatch(params, candidate.match));
-    return matchingCase ? { found: true, value: matchingCase.response } : { found: false };
+    if (!matchingCase) {
+      return { found: false };
+    }
+    return { found: true, value: matchingCase.response };
   }
 
   function sessionListResponse(
