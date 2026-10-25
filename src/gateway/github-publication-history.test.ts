@@ -1,18 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   BRANCH,
-  SESSION_KEY,
   commandResult,
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  publicationRequest,
   root,
 } from "./github-publication.test-support.js";
-import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
 const url = "https://github.com/openclaw/openclaw/pull/125200";
@@ -56,10 +54,9 @@ async function historyFixture() {
       }
       if (argv.includes("fetch")) {
         const sha = argv.at(-1)!;
-        if (sha === (await remoteHead())) {
-          return gitResult("fetch", "--no-tags", "--no-write-fetch-head", remote, sha);
-        }
-        return commandResult();
+        return sha === (await remoteHead())
+          ? gitResult("fetch", "--no-tags", "--no-write-fetch-head", remote, sha)
+          : commandResult();
       }
       if (argv.includes("push")) {
         try {
@@ -87,16 +84,11 @@ async function historyFixture() {
       return await fallback(argv, options);
     },
   );
-  const coordinator = createTestGitHubPublicationCoordinator({
-    placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
-  });
+  const coordinator = createTestGitHubPublicationCoordinator();
   const publish = (idempotencyKey: string, draft?: boolean) =>
-    coordinator.requestForSessionV2({
-      agentId: "main",
-      sessionKey: SESSION_KEY,
-      idempotencyKey,
-      ...(draft !== undefined ? { draft } : {}),
-    });
+    coordinator.requestForSessionV2(
+      publicationRequest(idempotencyKey, draft === undefined ? {} : { draft }),
+    );
   const state = async () => ({
     head: await git("rev-parse", "HEAD"),
     index: await fs.readFile(path.join(cwd, ".git", "index")),
@@ -134,7 +126,6 @@ async function historyFixture() {
     ...workspace,
     calls,
     publish,
-    state,
     remote,
     remoteHead,
     commit,
@@ -179,18 +170,16 @@ describe("GitHub publication branch history", () => {
     const signedCommit = path.join(root, "signed-commit.txt");
     await fs.writeFile(
       signedCommit,
-      [
-        `tree ${await f.head("HEAD^{tree}")}`,
-        `parent ${await f.head()}`,
-        "author Fixture <fixture@example.invalid> 1700000000 +0000",
-        "committer Fixture <fixture@example.invalid> 1700000000 +0000",
-        "gpgsig -----BEGIN PGP SIGNATURE-----",
-        " synthetic-invalid-signature",
-        " -----END PGP SIGNATURE-----",
-        "",
-        "Signed fixture",
-        "",
-      ].join("\n"),
+      `tree ${await f.head("HEAD^{tree}")}
+parent ${await f.head()}
+author Fixture <fixture@example.invalid> 1700000000 +0000
+committer Fixture <fixture@example.invalid> 1700000000 +0000
+gpgsig -----BEGIN PGP SIGNATURE-----
+ synthetic-invalid-signature
+ -----END PGP SIGNATURE-----
+
+Signed fixture
+`,
     );
     const signedHead = await f.git("hash-object", "-t", "commit", "-w", signedCommit);
     await f.git("update-ref", "HEAD", signedHead);

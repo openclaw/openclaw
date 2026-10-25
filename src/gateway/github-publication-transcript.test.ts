@@ -37,20 +37,20 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-async function createSession(sessionId: string) {
+async function createSession(sessionId: string, sessionKey = "agent:main:main") {
   setRuntimeConfigSnapshot({});
-  const identity = { agentId: "main", sessionKey: "agent:main:main", sessionId };
+  const identity = { agentId: "main", sessionKey, sessionId };
   await upsertSessionEntryCore(identity, { sessionId, updatedAt: 1 });
   return identity;
 }
 
-function failedResult(
-  requestId: string,
-  message = "Publication failed.",
-  nextAction = "Retry.",
-): SessionGitHubPublicationResult {
-  return { requestId, status: "failed", code: "push_rejected", message, nextAction };
-}
+const failedResult = (requestId: string): SessionGitHubPublicationResult => ({
+  requestId,
+  status: "failed",
+  code: "push_rejected",
+  message: "Publication failed.",
+  nextAction: "Retry.",
+});
 
 const publishedResult = {
   requestId: "publication-success",
@@ -142,22 +142,14 @@ const tails: Array<
 describe("GitHub publication transcript reporting", () => {
   it("commits one memory-only private report before marking its publication receipt", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const session = {
-        agentId: "main",
-        sessionKey: "agent:main:dashboard:incognito-publication-transcript",
-        sessionId: "private-publication",
-      };
+      const session = await createSession(
+        "private-publication",
+        "agent:main:dashboard:incognito-publication-transcript",
+      );
       const location = {
         agentId: session.agentId,
         path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: session.agentId, env: state.env }),
       };
-      await upsertSessionEntryCore(
-        { ...session, env: state.env },
-        {
-          sessionId: session.sessionId,
-          updatedAt: Date.now(),
-        },
-      );
       const result = { ...publishedResult, requestId: "private-result" };
       const loadRuntime = vi.fn(async () => {
         throw new Error("Private reports must not select native storage");
@@ -252,16 +244,12 @@ describe("GitHub publication transcript reporting", () => {
       const result = failedResult("retry-publication");
       const database = openOpenClawAgentDatabase({ agentId: identity.agentId });
       const markReportedAsync = vi.fn(async () => {
-        const reader = new DatabaseSync(database.path, { readOnly: true });
-        try {
-          expect(
-            reader
-              .prepare("SELECT count(*) AS count FROM transcript_events WHERE session_id = ?")
-              .get(identity.sessionId),
-          ).toMatchObject({ count: 2 });
-        } finally {
-          reader.close();
-        }
+        using reader = new DatabaseSync(database.path, { readOnly: true });
+        expect(
+          reader
+            .prepare("SELECT count(*) AS count FROM transcript_events WHERE session_id = ?")
+            .get(identity.sessionId),
+        ).toMatchObject({ count: 2 });
       });
       reportFault.enable();
       try {
