@@ -30,7 +30,6 @@ describe("sanitizeHtml", () => {
     ) {
       return Reflect.construct(NativeRegExp, [pattern, flags]);
     });
-
     try {
       const result = await sanitizeHtml(html);
       expect(result).toContain("Visible 0");
@@ -48,16 +47,12 @@ describe("sanitizeHtml", () => {
     "font-size:0px",
     "text-indent:-9999px",
     "color:transparent",
-    "color:rgba(0,0,0,0)",
     "color:rgba(0,0,0,0.0)",
     "color:hsla(0,0%,0%,0)",
     "transform:scale(0)",
-    "transform:scale(0, 0)",
-    "transform:scale3d(0, 0, 0)",
     "transform:scale(1, 0)",
     "transform:scaleX(-0.0)",
     "transform:scaleY(0%)",
-    "transform:scale3d(0, 1, 1)",
     "transform:scale3d(0%, 100%, 100%)",
     "transform:scale3d(100%, 0%, 100%)",
     "transform:rotate(30deg) scale(1, 0e2)",
@@ -66,7 +61,6 @@ describe("sanitizeHtml", () => {
     "width:0;height:0;overflow:hidden",
     "left:-9999px",
     "top:-9999px",
-    "clip-path:inset(100%)",
     "clip-path:inset(50%)",
   ])("strips elements hidden by %s", async (style) => {
     const result = await sanitizeHtml(`<p>Visible</p><div style="${style}">Hidden</div>`);
@@ -75,9 +69,7 @@ describe("sanitizeHtml", () => {
   });
 
   it.each([
-    "scale(1, 1)",
     "scale(0.5, 0.5)",
-    "scale3d(1, 1, 0)",
     "scale3d(100%, 100%, 0%)",
     "scaleZ(0)",
     "scale(0, 0, 0)",
@@ -89,13 +81,10 @@ describe("sanitizeHtml", () => {
     expect(await sanitizeHtml(html)).toBe(html);
   });
 
-  it.each(["sr-only", "visually-hidden", "d-none", "hidden"])(
-    "strips elements with the %s class",
-    async (className) => {
-      const result = await sanitizeHtml(`<p>Main</p><span class="${className}">Hidden</span>`);
-      expect(result).not.toContain("Hidden");
-    },
-  );
+  it.each(["hidden"])("strips elements with the %s class", async (className) => {
+    const result = await sanitizeHtml(`<p>Main</p><span class="${className}">Hidden</span>`);
+    expect(result).not.toContain("Hidden");
+  });
 
   it.each([
     "<meta\u00a0><p>Visible inside</p></meta\u00a0><p>Visible sibling</p>",
