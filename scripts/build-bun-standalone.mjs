@@ -1007,6 +1007,7 @@ const artifactsToPublish = await compileStandaloneArtifacts({
   supportDestination,
   mode,
   compileFlags,
+  aotCompileOptions: options.aotCompileOptions,
   compileRoot,
   compileCwd,
   mainEntry,
