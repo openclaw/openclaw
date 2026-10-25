@@ -190,16 +190,19 @@ export function LogsView(props: LogsProps) {
           tabindex={0}
           onScroll={(event) => props.onScroll(event)}
         >
+          {/* Keep empty-result feedback live without announcing incoming log rows. */}
+          <div role="status">
+            <Show when={props.status.hasLoaded && display().entries.length === 0}>
+              <SettingsEmpty message={t("gatewayLogs.empty")} />
+            </Show>
+          </div>
           <Show
             when={props.status.hasLoaded}
             fallback={
               <Loading fallback={<LoadingState />}>{loading() ? <LoadingState /> : null}</Loading>
             }
           >
-            <For
-              each={display().entries}
-              fallback={<SettingsEmpty message={t("gatewayLogs.empty")} />}
-            >
+            <For each={display().entries}>
               {(entry) => (
                 <div class="log-row">
                   <div class="log-time mono">{formatLogTime(entry.time, display().formatTime)}</div>
