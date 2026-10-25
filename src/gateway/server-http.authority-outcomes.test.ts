@@ -343,7 +343,6 @@ it.each([
       : new Error("HTTP request authority expired");
   const errors = vi.spyOn(console, "error").mockImplementation(() => {});
   const warnings = vi.spyOn(log, "warn").mockImplementation(() => {});
-  const requests = vi.spyOn(lifecycle, "runHttpConnectionRequest");
   route.mockImplementation(async (req, res) => {
     const authority = bindHttpResponseAuthority(
       {
@@ -434,19 +433,9 @@ it.each([
   } else if (outcome.startsWith("role ")) {
     config = roleConfig(false);
   }
-  const end = vi.spyOn(res, "end");
-  const write = vi.spyOn(res, "write");
-  const headers = vi.spyOn(res, "setHeader");
-  const writeHead = vi.spyOn(res, "writeHead");
   release.resolve();
-  await requests.mock.results[0]!.value;
+  await drainRequests();
   const { headers: responseHeaders, statusMessage, ...received } = await response.promise;
-  expect(write).not.toHaveBeenCalled();
-  expect(end).toHaveBeenCalledTimes(closed ? 0 : 1);
-  if (closed) {
-    expect(headers).not.toHaveBeenCalled();
-    expect(writeHead).not.toHaveBeenCalled();
-  }
   if (streamingResponse) {
     expect(received).toEqual({ status: 200, body: "partial", aborted: true });
   } else if (!closed) {

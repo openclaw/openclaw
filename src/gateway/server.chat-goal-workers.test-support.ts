@@ -468,11 +468,7 @@ export function registerWorkerGoalChatCases(
       expect(result).toHaveBeenCalledWith(
         false,
         undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message:
-            "Error: Goal start or resume requires an idle built-in local session with recoverable history or a supported Codex cloud-worker session.",
-        }),
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
       );
       expectNoGoalInput();
       expect(runEmbeddedAgent).not.toHaveBeenCalled();

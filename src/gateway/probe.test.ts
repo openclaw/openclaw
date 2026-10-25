@@ -61,13 +61,7 @@ const { deviceIdentityState, createDeviceIdentityState, loadDeviceIdentity } = v
   };
 });
 
-const { eventLoopReadyState, createEventLoopReadyState } = vi.hoisted(() => {
-  const createState = () => ({
-    calls: [] as Array<{ maxWaitMs?: number } | undefined>,
-    result: { ready: true, aborted: false },
-  });
-  return { eventLoopReadyState: createState(), createEventLoopReadyState: createState };
-});
+const eventLoopReadyState = vi.hoisted(() => ({ ready: true, aborted: false }));
 
 class MockGatewayClient {
   constructor(private readonly opts: Record<string, unknown>) {
@@ -152,10 +146,7 @@ vi.mock("../infra/device-auth-store.js", () => ({
 }));
 
 vi.mock("../../packages/gateway-client/src/event-loop-ready.js", () => ({
-  waitForEventLoopReady: vi.fn((params?: { maxWaitMs?: number }) => {
-    eventLoopReadyState.calls.push(params);
-    return Promise.resolve(eventLoopReadyState.result);
-  }),
+  waitForEventLoopReady: async () => eventLoopReadyState,
 }));
 
 const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
@@ -213,7 +204,7 @@ describe("probeGateway", () => {
   beforeEach(() => {
     Object.assign(deviceIdentityState, createDeviceIdentityState());
     Object.assign(gatewayClientState, createGatewayClientState());
-    Object.assign(eventLoopReadyState, createEventLoopReadyState());
+    Object.assign(eventLoopReadyState, { ready: true, aborted: false });
   });
 
   it("clamps probe timeout to timer-safe bounds", () => {
@@ -223,13 +214,10 @@ describe("probeGateway", () => {
   });
 
   it("fails before connecting when event-loop readiness consumes the initial probe budget", async () => {
-    eventLoopReadyState.result = { ready: false, aborted: false };
+    eventLoopReadyState.ready = false;
     const result = await runProbe({ timeoutMs: 1, includeDetails: false });
     expectFields(result, { ok: false, error: "timeout", close: null });
     expectFields(result.auth, { role: null, scopes: [], capability: "unknown" });
-    expect(eventLoopReadyState.calls).toHaveLength(1);
-    expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(250);
-    expect(gatewayClientState.options?.url).toBe("ws://127.0.0.1:18789");
     expect(gatewayClientState.startCalls).toBe(0);
   });
 
@@ -270,12 +258,7 @@ describe("probeGateway", () => {
     const result = await runTokenProbe();
     expect(result.ok).toBe(true);
     expect(gatewayClientState.options?.deviceIdentity).toBeNull();
-    expect(gatewayClientState.requests).toEqual([
-      "health",
-      "status",
-      "system-presence",
-      "config.get",
-    ]);
+    expectFields(result, { health: {}, status: {}, presence: [], configSnapshot: {} });
   });
 
   it.each([

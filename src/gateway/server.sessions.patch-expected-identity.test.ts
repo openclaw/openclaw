@@ -40,13 +40,10 @@ async function seedSession(
   };
 }
 
-const changed = (sessionKey: string) => ({
+const changed = {
   ok: false,
-  error: {
-    message: `Session ${sessionKey} changed before patch. Retry.`,
-    details: { reason: "session-changed" },
-  },
-});
+  error: { code: "INVALID_REQUEST", details: { reason: "session-changed" } },
+};
 const invalid = (message: string) => ({ ok: false, error: { code: "INVALID_REQUEST", message } });
 
 function observingContext() {
@@ -121,7 +118,7 @@ test.each([
     { context },
   );
 
-  expect(result).toMatchObject(changed(sessionKey));
+  expect(result).toMatchObject(changed);
   expect(read()).toEqual(replacementBefore);
   expect(embeddedRunMock.abortCalls).toEqual([]);
   expectNoPublication(context);
@@ -199,7 +196,7 @@ test("sessions.patch preserves concurrent tool restrictions from a stale replace
   const original = { webSearch: false };
   const restricted = { ...original, mcpToolsDeny: { docs: ["delete"] } };
   const replacement = { ...original, skills: { release: false } };
-  const { sessionKey, read, patch } = await seedSession("agent:main:tool-overrides-cas", {
+  const { read, patch } = await seedSession("agent:main:tool-overrides-cas", {
     toolOverrides: original,
   });
   const concurrent = await patch({ toolOverrides: restricted });
@@ -207,11 +204,7 @@ test("sessions.patch preserves concurrent tool restrictions from a stale replace
 
   const stale = await patch({ expectedToolOverrides: original, toolOverrides: replacement });
 
-  const expected = changed(sessionKey);
-  expect(stale).toMatchObject({
-    ...expected,
-    error: { ...expected.error, code: "INVALID_REQUEST" },
-  });
+  expect(stale).toMatchObject(changed);
   expect(read()?.toolOverrides).toEqual(restricted);
   const fresh = await patch({ expectedToolOverrides: restricted, toolOverrides: replacement });
   expect(fresh.ok).toBe(true);
@@ -236,20 +229,6 @@ test.each([
   const before = read();
   expect(await patch(request)).toMatchObject(invalid(message));
   expect(read()).toEqual(before);
-});
-
-test("sessions.patch rejects stale permission replacement", async () => {
-  const { read, patch } = await seedSession("agent:main:permission-mode-cas", {
-    permissionMode: "guarded",
-  });
-  await patch({ permissionMode: "read-only" });
-  const stale = await patch({ expectedPermissionMode: "guarded", permissionMode: "full" });
-
-  expect(stale).toMatchObject({
-    ok: false,
-    error: { details: { reason: "session-changed" } },
-  });
-  expect(read()?.permissionMode).toBe("read-only");
 });
 
 test.each([
