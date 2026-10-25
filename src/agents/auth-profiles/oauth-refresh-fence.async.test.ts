@@ -1,17 +1,12 @@
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { createOAuthRefreshCredential } from "./credential-fixtures.test-support.js";
 import * as fence from "./oauth-refresh-fence.js";
 import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import * as sqlite from "./sqlite.js";
+import { withAgentDirEnv } from "./sqlite.test-support.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function trackSettlement(promise: Promise<unknown>) {
   const tracked = { settled: false };
@@ -46,9 +41,7 @@ it("preserves an undefined pre-deadline rejection", async () => {
 it.each(["success", "failure"] as const)(
   "waits for durable claim and %s settlement before publishing",
   async (outcome) => {
-    const root = tempDirs.make("oauth-awaited-sqlite-");
-    const agentDir = path.join(root, "agents", "work", "agent");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+    await withAgentDirEnv("oauth-awaited-sqlite-", async (agentDir) => {
       const profileId = "synthetic:default";
       const expired = createOAuthRefreshCredential({
         provider: "synthetic",
@@ -146,9 +139,6 @@ it.each(["success", "failure"] as const)(
         claim.release.resolve();
         settlement.release.resolve();
         await tracked.outcome;
-        sqlite.closeAuthProfileReadPool();
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
       }
     });
   },

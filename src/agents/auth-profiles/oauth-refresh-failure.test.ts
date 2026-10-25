@@ -12,21 +12,17 @@ import {
   OAuthManagerRefreshError,
   OAuthRefreshFailureError,
 } from "./oauth-refresh-failure.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
-
-type Profiles = AuthProfileStore["profiles"];
 const refreshProfileId = "openai:oauth";
 const secrets = (prefix: string) => ({
   access: `${prefix}-access`,
   refresh: `${prefix}-refresh`,
   idToken: `${prefix}-id-token`,
 });
-const stored = credential(secrets("store"));
 const presentation = {
   errorType: "invalid_request_error",
   reason: "refresh_token_reused",
   status: 401,
-  summary: "refresh rejected error-access",
+  summary: "refresh rejected abc123456",
 };
 const access = "sk-oauthreviewredaction1234567890zzzz";
 const refresh = "ya29.oauthreviewredaction1234567890yyyy";
@@ -41,64 +37,41 @@ const geminiRecovery =
 const refreshMessage = (message: string) => `OAuth token refresh failed for openai: ${message}`;
 const oauthMessageCase = (message: string, reason: string, command?: string) =>
   [refreshMessage(message), { provider: "openai", reason }, command] as const;
-function managerError(cred: OAuthCredential, cause: unknown, profiles: Profiles = {}) {
-  return new OAuthManagerRefreshError({
-    credential: cred,
-    profileId: refreshProfileId,
-    refreshedStore: { version: 1, profiles },
-    cause,
-  });
-}
-
-it.each<[string, OAuthCredential, Error, string[], number, Profiles?]>([
-  [
-    "stored and attempted secrets with structured diagnostics",
-    credential(secrets("error")),
-    Object.assign(
-      new Error(
-        "refresh rejected error-access error-refresh error-id-token store-access store-refresh store-id-token",
-      ),
-      { oauthRefreshFailure: presentation },
-    ),
-    [...Object.values(secrets("error")), ...Object.values(secrets("store"))],
-    6,
-    { [refreshProfileId]: stored },
-  ],
-  [
-    "token-shaped secrets before generic masking, including nested causes",
-    credential({ access, refresh }),
-    new Error(`refresh rejected ${access} ${refresh}`, {
+it("redacts stored, attempted, overlapping and token-shaped secrets before public serialization", () => {
+  const attempted = { ...secrets("attempt"), access: "abc123" };
+  const stored = secrets("store");
+  const tokens = [
+    access,
+    refresh,
+    "abc123456",
+    ...Object.values(attempted),
+    ...Object.values(stored),
+  ];
+  const cause = Object.assign(
+    new Error(`refresh rejected ${tokens.join(" ")}`, {
       cause: new Error(`nested failure ${access}`),
     }),
-    [access, refresh, "sk-oau", "zzzz", "ya29.o", "yyyy"],
-    3,
-  ],
-  [
-    "overlapping secrets longest first",
-    credential({ access: "abc123", refresh: "abc123456" }),
-    new Error("refresh rejected abc123 abc123456"),
-    ["abc123", "abc123456", "[redacted]456"],
-    2,
-  ],
-])(
-  "redacts %s from public errors and serialization",
-  (_name, cred, cause, forbidden, redactions, profiles) => {
-    const error = managerError(cred, cause, profiles);
-    const serialized = JSON.stringify(error);
-    expect(serialized).toContain("openai");
-    expect(serialized).toContain(refreshProfileId);
-    for (const message of [error.message, formatErrorMessage(error.cause), serialized]) {
-      expect(message).toContain("refresh rejected");
-      for (const secret of forbidden) {
-        expect(message).not.toContain(secret);
-      }
-      expect(message.match(/\[redacted\]/g)?.length).toBe(redactions);
+    { oauthRefreshFailure: presentation },
+  );
+  const error = new OAuthManagerRefreshError({
+    credential: credential({ access, refresh, idToken: "abc123456" }),
+    attemptedCredentials: [credential(attempted)],
+    profileId: refreshProfileId,
+    refreshedStore: { version: 1, profiles: { [refreshProfileId]: credential(stored) } },
+    cause,
+  });
+  const serialized = JSON.stringify(error);
+  expect(serialized).toContain("openai");
+  expect(serialized).toContain(refreshProfileId);
+  for (const message of [error.message, formatErrorMessage(error.cause), serialized]) {
+    expect(message).toContain("refresh rejected");
+    for (const secret of [...tokens, "sk-oau", "zzzz", "ya29.o", "yyyy", "[redacted]456"]) {
+      expect(message).not.toContain(secret);
     }
-    if ("oauthRefreshFailure" in cause) {
-      expect(error).toMatchObject({ ...presentation, summary: "refresh rejected [redacted]" });
-    }
-  },
-);
+    expect(message.match(/\[redacted\]/g)?.length).toBe(10);
+  }
+  expect(error).toMatchObject({ ...presentation, summary: "refresh rejected [redacted]" });
+});
 
 it.each([
   ["openai", "auth", "openai:default", reauth(openaiLogin)],
@@ -230,65 +203,46 @@ const unchanged = (evidence: string, status = 503) => ({
   recovery: { kind: "later", evidence },
 });
 it.each([
-  [
-    "owner-accepted provider retry cannot admit a client rejection",
-    withOutcome(unchanged("owner-accepted-provider-retry", 401)),
-    false,
-  ],
-  [
-    "challenge evidence cannot admit ordinary forbidden responses",
-    withOutcome({ ...documentedUnchanged, status: 403 }),
-    false,
-  ],
+  ["documented nonconsuming response", withOutcome(documentedUnchanged)],
+  ["nested valid evidence", new Error("wrapper", { cause: withOutcome(notDispatched) })],
+] as const)("accepts provider facts: %s", (_name, error) => {
+  expect(isTransientOAuthRefreshFailure(error)).toBe(true);
+});
+
+it.each([
+  ["client rejection", unchanged("owner-accepted-provider-retry", 401)],
+  ["ordinary forbidden response", { ...documentedUnchanged, status: 403 }],
   [
     "challenge evidence cannot hide a terminal rejection",
-    withOutcome(unchanged("verified-intermediary-challenge", 403), { error: "invalid_grant" }),
-    false,
+    unchanged("verified-intermediary-challenge", 403),
+    { error: "invalid_grant" },
   ],
-  ["documented nonconsuming response", withOutcome(documentedUnchanged), true],
-  ["nested valid evidence", new Error("wrapper", { cause: withOutcome(notDispatched) }), true],
-  ["unknown version", withOutcome({ ...notDispatched, version: 2 }), false],
-  [
-    "post-success evidence contradiction",
-    withOutcome({ ...notDispatched, phase: "after-token-response" }),
-    false,
-  ],
-  ["unknown outcome contradiction", withOutcome({ ...notDispatched, outcome: "unknown" }), false],
-  ["malformed status", withOutcome({ ...notDispatched, status: "503" }), false],
-  ["invalid status range", withOutcome({ ...notDispatched, status: 600 }), false],
+  ["unknown version", { ...notDispatched, version: 2 }],
+  ["post-success phase", { ...notDispatched, phase: "after-token-response" }],
+  ["unknown outcome", { ...notDispatched, outcome: "unknown" }],
+  ["malformed status", { ...notDispatched, status: "503" }],
+  ["invalid status range", { ...notDispatched, status: 600 }],
   [
     "unknown recovery evidence",
-    withOutcome({
+    {
       ...notDispatched,
       recovery: { kind: "later", evidence: "headers-not-received" },
-    }),
-    false,
+    },
   ],
-  ["success status contradiction", withOutcome({ ...documentedUnchanged, status: 200 }), false],
-  ["ordinary configuration rejection", withOutcome({ ...documentedUnchanged, status: 400 }), false],
+  ["success status", { ...documentedUnchanged, status: 200 }],
+  ["configuration rejection", { ...documentedUnchanged, status: 400 }],
   [
-    "nested terminal OAuth error wins",
-    withOutcome(notDispatched, { error: { code: "invalid_grant" }, reason: "provider_error" }),
-    false,
+    "nested terminal reason",
+    notDispatched,
+    { error: { code: "invalid_grant" }, reason: "provider_error" },
   ],
-  [
-    "nested explicit veto wins",
-    withOutcome(notDispatched, { oauthRefreshFailure: { retryable: false } }),
-    false,
-  ],
-  [
-    "nested client rejection wins",
-    withOutcome(notDispatched, retryPresentation("unauthorized", 401)),
-    false,
-  ],
+  ["nested explicit veto", notDispatched, { oauthRefreshFailure: { retryable: false } }],
+  ["nested client rejection", notDispatched, retryPresentation("unauthorized", 401)],
   [
     "nested post-success failure wins",
-    withOutcome(
-      notDispatched,
-      withOutcome({ version: 1, phase: "after-token-response", outcome: "unknown" }),
-    ),
-    false,
+    notDispatched,
+    withOutcome({ version: 1, phase: "after-token-response", outcome: "unknown" }),
   ],
-] as const)("validates provider facts: %s", (_name, error, expected) => {
-  expect(isTransientOAuthRefreshFailure(error)).toBe(expected);
+] as const)("rejects provider facts: %s", (_name, facts, cause) => {
+  expect(isTransientOAuthRefreshFailure(withOutcome(facts, cause))).toBe(false);
 });
