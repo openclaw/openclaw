@@ -826,7 +826,7 @@
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-section-label {
   padding: 0 8px 4px;
-  color: color-mix(in srgb, var(--muted) 82%, var(--panel-strong));
+  color: var(--muted);
   font-size: 13px;
   font-weight: 400;
   line-height: 18px;
@@ -915,7 +915,7 @@
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-section {
   margin-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border-strong) 70%, var(--border));
+  border-top: 1px solid var(--border);
   padding-top: 8px;
 }
 
