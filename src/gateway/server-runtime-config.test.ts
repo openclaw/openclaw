@@ -20,6 +20,11 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
+const TRUSTED_PROXY_AUTH = {
+  mode: "trusted-proxy" as const,
+  trustedProxy: { userHeader: "x-forwarded-user" },
+};
+
 const TOKEN_AUTH = { mode: "token" as const, token: "test-token-123" };
 
 function gateway(config: OpenClawConfig["gateway"]): OpenClawConfig {
@@ -33,7 +38,7 @@ function resolve(cfg: OpenClawConfig, host?: string) {
 const allowedOrigins = ["https://control.example.com"];
 const trustedProxyGateway = {
   bind: "lan" as const,
-  auth: { mode: "trusted-proxy" as const, trustedProxy: { userHeader: "x-forwarded-user" } },
+  auth: TRUSTED_PROXY_AUTH,
   controlUi: { allowedOrigins },
 };
 
@@ -57,11 +62,9 @@ describe("resolveGatewayRuntimeConfig", () => {
           ),
         );
         const result = await resolve(cfg);
-        expect(result).toMatchObject({
-          hooksConfig: null,
-          bindHost: "127.0.0.1",
-          resolvedAuth: { token: TOKEN_AUTH.token },
-        });
+        expect(result.hooksConfig).toBeNull();
+        expect(result.bindHost).toBe("127.0.0.1");
+        expect(result.resolvedAuth.token).toBe(TOKEN_AUTH.token);
         expect(hooksWarn).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining("External hooks disabled at startup:"),
         );
@@ -83,7 +86,8 @@ describe("resolveGatewayRuntimeConfig", () => {
       const result = await resolve(
         gateway({ ...trustedProxyGateway, trustedProxies: ["192.168.1.1"] }),
       );
-      expect(result).toMatchObject({ authMode: "trusted-proxy", bindHost: "0.0.0.0" });
+      expect(result.authMode).toBe("trusted-proxy");
+      expect(result.bindHost).toBe("0.0.0.0");
     });
 
     it("rejects lan binding without trusted proxies", async () => {
@@ -118,7 +122,8 @@ describe("resolveGatewayRuntimeConfig", () => {
 
     it("allows loopback binding with explicit none auth", async () => {
       const result = await resolve(gateway({ bind: "loopback", auth: { mode: "none" } }));
-      expect(result).toMatchObject({ authMode: "none", bindHost: "127.0.0.1" });
+      expect(result.authMode).toBe("none");
+      expect(result.bindHost).toBe("127.0.0.1");
     });
 
     it.each([
@@ -212,13 +217,16 @@ describe("resolveGatewayRuntimeConfig", () => {
     afterEach(() => vi.restoreAllMocks());
 
     const authenticated = { auth: TOKEN_AUTH, controlUi: { allowedOrigins } };
-    it.each<[string, GatewayConfig, string]>([
+    it.each<[string, NonNullable<OpenClawConfig["gateway"]>, string]>([
       ["auto", authenticated, "0.0.0.0"],
       ["explicit loopback", { bind: "loopback", auth: { mode: "none" } }, "127.0.0.1"],
       ["implicit serve loopback", { auth: TOKEN_AUTH, tailscale: { mode: "serve" } }, "127.0.0.1"],
       [
         "implicit funnel loopback",
-        { auth: { mode: "password", password: "test-pw" }, tailscale: { mode: "funnel" } },
+        {
+          auth: { mode: "password", password: "test-pw" },
+          tailscale: { mode: "funnel" },
+        },
         "127.0.0.1",
       ],
       ["explicit lan", { ...authenticated, bind: "lan" }, "0.0.0.0"],
@@ -226,7 +234,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect((await resolve(gateway(config))).bindHost).toBe(bindHost);
     });
 
-    it.each<[string, GatewayConfig, string]>([
+    it.each<[string, NonNullable<OpenClawConfig["gateway"]>, string]>([
       [
         "auto-bind without origins",
         { auth: TOKEN_AUTH },

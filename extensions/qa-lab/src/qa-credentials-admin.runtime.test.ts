@@ -1,5 +1,3 @@
-import { Readable } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { jsonResponse, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,13 +28,21 @@ function mockFetch(response: unknown, status = 200) {
   );
 }
 
+function fetchCall(fetchImpl: ReturnType<typeof mockFetch>) {
+  const [call] = fetchImpl.mock.calls;
+  if (!call?.[1]) {
+    throw new Error("expected fetch call and init");
+  }
+  return { input: call[0], init: call[1] };
+}
+
 async function expectQaCredentialAdminError(promise: Promise<unknown>, code: string) {
   await expect(promise).rejects.toBeInstanceOf(QaCredentialAdminError);
   await expect(promise).rejects.toMatchObject({ name: "QaCredentialAdminError", code });
 }
 
 function requestBody(fetchImpl: ReturnType<typeof mockFetch>) {
-  const body = fetchImpl.mock.calls[0]?.[1]?.body;
+  const body = fetchCall(fetchImpl).init.body;
   expect(typeof body).toBe("string");
   return JSON.parse(body as string) as Record<string, unknown>;
 }
@@ -65,10 +71,12 @@ describe("qa credential admin runtime", () => {
       credentialId: "cred-1",
       credentialFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{16}$/),
     });
-    expect(fetchImpl.mock.calls[0]).toMatchObject([
-      `${adminOptions.siteUrl}/qa-credentials/v1/admin/add`,
-      { headers: { authorization: "Bearer maint-secret" } },
-    ]);
+    expect(fetchCall(fetchImpl).input).toBe(
+      "https://first-schnauzer-821.convex.site/qa-credentials/v1/admin/add",
+    );
+    const { init } = fetchCall(fetchImpl);
+    const headers = init?.headers as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer maint-secret");
     const body = requestBody(fetchImpl);
     expect(body).toMatchObject({ kind: "telegram", actorId: "maintainer-local" });
     expect(body.payload).toEqual(payload);
@@ -100,7 +108,7 @@ describe("qa credential admin runtime", () => {
     });
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBe(timeoutController.signal);
+    expect(fetchCall(fetchImpl).init.signal).toBe(timeoutController.signal);
   });
 
   it("surfaces broker error codes for remove", async () => {
@@ -153,20 +161,31 @@ describe("qa credential admin runtime", () => {
     await withServer(
       (_req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
-        const stream = Readable.from(
-          (async function* () {
-            while (chunksSent < totalChunks) {
-              chunksSent += 1;
-              yield chunk;
-              await delay(2);
-            }
-          })(),
-        );
+        let nextChunkTimer: ReturnType<typeof setTimeout> | undefined;
         res.once("close", () => {
           responseClosed = true;
-          stream.destroy();
+          if (nextChunkTimer) {
+            clearTimeout(nextChunkTimer);
+          }
         });
-        stream.pipe(res);
+        const scheduleNext = () => {
+          nextChunkTimer = setTimeout(sendNext, 2);
+        };
+        const sendNext = () => {
+          if (res.destroyed || chunksSent >= totalChunks) {
+            if (!res.destroyed) {
+              res.end();
+            }
+            return;
+          }
+          chunksSent += 1;
+          if (res.write(chunk)) {
+            scheduleNext();
+          } else {
+            res.once("drain", scheduleNext);
+          }
+        };
+        sendNext();
       },
       async (baseUrl) => {
         const error = await listQaCredentialSets({
@@ -181,10 +200,9 @@ describe("qa credential admin runtime", () => {
         );
 
         expect(error).toBeInstanceOf(QaCredentialAdminError);
-        expect(error).toMatchObject({
-          code: "BROKER_REQUEST_FAILED",
-          message: expect.stringMatching(/Convex credential admin response exceeds/),
-        });
+        const adminError = error as QaCredentialAdminError;
+        expect(adminError.code).toBe("BROKER_REQUEST_FAILED");
+        expect(adminError.message).toMatch(/Convex credential admin response exceeds/);
         await vi.waitFor(() => expect(responseClosed).toBe(true));
         expect(chunksSent).toBeLessThan(totalChunks);
       },

@@ -124,11 +124,11 @@ it.each([
         mocks.callGateway.mockResolvedValue(summary);
         if (readinessElapsedMs) {
           mocks.waitForGatewayDiagnosticReadiness.mockImplementationOnce(async () => {
-            vi.mocked(performance.now).mockReturnValue(readinessElapsedMs);
+            vi.spyOn(performance, "now").mockReturnValue(readinessElapsedMs);
             return { healthy: true, elapsedMs: readinessElapsedMs, waitOutcome: "healthy" };
           });
           mocks.probeGateway.mockImplementationOnce(async () => {
-            vi.mocked(performance.now).mockReturnValue(readinessElapsedMs + 1000);
+            vi.spyOn(performance, "now").mockReturnValue(readinessElapsedMs + 1000);
             return { ok: true, connectLatencyMs: 1, error: null, status: null, presence: [] };
           });
         }

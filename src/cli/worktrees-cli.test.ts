@@ -96,7 +96,7 @@ describe("worktrees cli", () => {
 
   it("requires an exact pending commit and returns recovery's actual outcome", async () => {
     const snapshot = "a".repeat(40);
-    const result = {
+    const result: Awaited<ReturnType<ManagedWorktreeService["recoverRemoval"]>> = {
       removed: true,
       snapshotRef: "refs/openclaw/snapshots/worktree-id",
     };

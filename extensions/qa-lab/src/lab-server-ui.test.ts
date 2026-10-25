@@ -1,13 +1,10 @@
 import { on, once } from "node:events";
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import net, { type Server, type Socket } from "node:net";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import net, { type NetConnectOpts, type Server, type Socket } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
-import {
-  PROXY_FIXTURE_CERTIFICATE,
-  PROXY_FIXTURE_KEY,
-  useAutoCleanupTempDirTracker,
-} from "openclaw/plugin-sdk/test-env";
+import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   detectContentType,
@@ -26,11 +23,15 @@ afterEach(async () => {
   }
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+async function makeUiDir() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-"));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  return root;
+}
 
 describe("qa-lab server ui helpers", () => {
   it("versions UI assets only when the index is a regular file", async () => {
-    const root = tempDirs.make("qa-lab-ui-");
+    const root = await makeUiDir();
     const index = path.join(root, "index.html");
     expect(resolveUiAssetVersion(root)).toBeNull();
     await mkdir(index);
@@ -46,6 +47,8 @@ describe("qa-lab server ui helpers", () => {
   it("detects basic UI asset content types", () => {
     expect(detectContentType("index.html")).toBe("text/html; charset=utf-8");
     expect(detectContentType("styles.css")).toBe("text/css; charset=utf-8");
+    expect(detectContentType("main.js")).toBe("text/javascript; charset=utf-8");
+    expect(detectContentType("icon.svg")).toBe("image/svg+xml");
   });
 
   it("renders the missing-ui placeholder html", () => {
@@ -53,8 +56,8 @@ describe("qa-lab server ui helpers", () => {
     expect(missingUiHtml()).toContain("pnpm qa:lab:build");
   });
 
-  it("resolves the UI index but rejects traversal and malformed asset paths", async () => {
-    const rootDir = tempDirs.make("qa-lab-ui-");
+  it("never resolves sibling files outside the UI dist root", async () => {
+    const rootDir = await makeUiDir();
     const uiDistDir = path.join(rootDir, "dist");
     const siblingDir = path.join(rootDir, "dist-other");
     await mkdir(uiDistDir, { recursive: true });
@@ -64,7 +67,13 @@ describe("qa-lab server ui helpers", () => {
 
     expect(tryResolveUiAsset("/", uiDistDir, rootDir)).toBe(path.join(uiDistDir, "index.html"));
     expect(tryResolveUiAsset("/../dist-other/secret.txt", uiDistDir, rootDir)).toBeNull();
-    expect(tryResolveUiAsset("/%E0%A4", uiDistDir, rootDir)).toBeNull();
+  });
+
+  it("rejects malformed percent-encoded UI asset paths", async () => {
+    const uiDistDir = await makeUiDir();
+    await writeFile(path.join(uiDistDir, "index.html"), "bundle-root", "utf8");
+
+    expect(tryResolveUiAsset("/%E0%A4", uiDistDir, uiDistDir)).toBeNull();
   });
 });
 
@@ -79,7 +88,7 @@ const TEST_TLS_OPTIONS = {
   maxVersion: "TLSv1.2",
 } as const;
 
-async function listenLoopback(server: Server, host = "127.0.0.1"): Promise<number> {
+function trackServer<T extends Server>(server: T): T {
   const sockets = new Set<Socket>();
   server.on("connection", (socket) => {
     sockets.add(socket);
@@ -95,6 +104,10 @@ async function listenLoopback(server: Server, host = "127.0.0.1"): Promise<numbe
       });
     }
   });
+  return server;
+}
+
+async function listenLoopback(server: Server, host = "127.0.0.1"): Promise<number> {
   server.listen(0, host);
   await once(server, "listening");
   const address = server.address();
@@ -105,7 +118,7 @@ async function listenLoopback(server: Server, host = "127.0.0.1"): Promise<numbe
 }
 
 async function openBrowserPair(): Promise<{ browser: Socket; proxySocket: Socket }> {
-  const server = net.createServer({ allowHalfOpen: true });
+  const server = trackServer(net.createServer({ allowHalfOpen: true }));
   const port = await listenLoopback(server);
   const connected = once(server, "connection");
   const browser = net.connect({ host: "127.0.0.1", port });
@@ -153,16 +166,19 @@ async function readSocket(socket: Socket, marker?: string, timeoutMs = 2_000): P
 
 async function expectOpeningFailure(kind: "tls" | "reset") {
   const accepted = Promise.withResolvers<Socket>();
-  const server = net.createServer((socket) => {
-    if (kind === "tls") {
-      socket.resume();
-    } else {
-      socket.once("data", () => socket.resetAndDestroy());
-    }
-    accepted.resolve(socket);
-  });
+  const server = trackServer(
+    net.createServer((socket) => {
+      if (kind === "tls") {
+        socket.resume();
+      } else {
+        socket.once("data", () => socket.resetAndDestroy());
+      }
+      accepted.resolve(socket);
+    }),
+  );
   const port = await listenLoopback(server, "localhost");
   const { browser, proxySocket } = await openBrowserPair();
+  const endSpy = vi.spyOn(proxySocket, "end");
   const timeoutSpy = vi.spyOn(net.Socket.prototype, "setTimeout");
   const response = kind === "tls" ? GATEWAY_TIMEOUT_RESPONSE : BAD_GATEWAY_RESPONSE;
   const responsePromise = readSocket(browser, undefined, kind === "tls" ? 14_000 : 2_000);
@@ -171,6 +187,7 @@ async function expectOpeningFailure(kind: "tls" | "reset") {
   const closed = once(upstream, "close");
   await expect(responsePromise).resolves.toBe(response);
   await closed;
+  expect(endSpy).toHaveBeenCalledWith(response, expect.any(Function));
   expect([upstream.destroyed, proxySocket.destroyed]).toEqual([true, true]);
   if (kind === "tls") {
     expect(timeoutSpy).toHaveBeenCalledWith(10_000);
@@ -188,12 +205,14 @@ describe("proxyUpgradeRequest loopback transport", () => {
       })) as typeof tls.connect);
 
     const request = Promise.withResolvers<string>();
-    const upstreamServer = tls.createServer(TEST_TLS_OPTIONS, (socket) => {
-      void readSocket(socket, "\r\n\r\n").then((data) => {
-        request.resolve(data);
-        socket.write(UPGRADE_RESPONSE);
-      }, request.reject);
-    });
+    const upstreamServer = trackServer(
+      tls.createServer(TEST_TLS_OPTIONS, (socket) => {
+        void readSocket(socket, "\r\n\r\n").then((data) => {
+          request.resolve(data);
+          socket.write(UPGRADE_RESPONSE);
+        }, request.reject);
+      }),
+    );
     const upstreamPort = await listenLoopback(upstreamServer, "localhost");
     const { browser, proxySocket } = await openBrowserPair();
     const setTimeoutSpy = vi.spyOn(net.Socket.prototype, "setTimeout");
@@ -214,17 +233,29 @@ describe("proxyUpgradeRequest loopback transport", () => {
   }, 16_000);
 
   it("closes a connecting upstream exactly once when the browser sends EOF", async () => {
+    const upstreamServer = trackServer(net.createServer());
+    const upstreamPort = await listenLoopback(upstreamServer);
     const { browser, proxySocket } = await openBrowserPair();
     const upstream = new net.Socket();
     const destroySpy = vi.spyOn(upstream, "destroy");
-    // Keep connect pending: the EOF must close it before any connection event.
-    vi.spyOn(net, "connect").mockReturnValueOnce(upstream);
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
+    vi.spyOn(net, "connect").mockImplementationOnce(((options: NetConnectOpts) => {
+      connectTimer = setTimeout(() => {
+        if (!upstream.destroyed) {
+          upstream.connect(options);
+        }
+      }, 50);
+      return upstream;
+    }) as typeof net.connect);
     cleanups.push(async () => {
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+      }
       upstream.destroy();
     });
     const proxyEnded = once(proxySocket, "end");
 
-    runUpgradeProxy(proxySocket, "http://127.0.0.1:1");
+    runUpgradeProxy(proxySocket, `http://127.0.0.1:${upstreamPort}`);
     browser.end();
 
     await proxyEnded;

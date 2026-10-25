@@ -5756,7 +5756,6 @@
 ["src/infra/exec-approval-channel-runtime.test.ts","../logging/subsystem.js","fc4434c1911dc1d112b82ef46c4a3919466eccead33d01159189ea8383c21407",1]
 ["src/infra/exec-approval-forwarder.test.ts","../logging/subsystem.js","05239ec9b9ad5860ee40d0f0bb429adc7bc6b3f0e5fda5aeb1b8b32fd335eab3",1]
 ["src/infra/exec-approval-session-target.test.ts","../channels/plugins/session-conversation.js","4233b3c92a3d95626e551637edb2db3e69b30ffc7e789b986d59bffdbf5dc651",1]
-["src/infra/exec-approval-surface.test.ts","../utils/message-channel.js","e8d8f9fe389f66c412b39f5ea740e7b083346636448cb599511d6f40298c0384",1]
 ["src/infra/exec-approvals-store.read-worker.test.ts","../logging/subsystem.js","71cc680d067f1feb654e6cd97018aff599e7e56faa5fcf55f5d86f3e55a65a0b",1]
 ["src/infra/gateway-scheduler.test.ts","../logging/subsystem.js","37e837a28be05ecee3458e3f0eac0f7b55cbad0043b767f45acee35d3ca87044",1]
 ["src/infra/git-read-cache.test.ts","./git-worker.js","73b1601423791dced3e8926147c1acbbc424d262187b7a663c2d4c6ba6471644",1]
