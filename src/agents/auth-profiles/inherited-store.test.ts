@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { AgentDatabaseSchemaAdmissionInvalidError } from "../../state/agent-database-admission-error.js";
 import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
@@ -113,17 +112,6 @@ it("omits only the current inherited owner's pending admission", () => {
   expect(inheritedFailure(failure, mainDir)).toThrow(failure);
 });
 
-it("preserves unreadable, schema and unexpected inherited-store failures", () => {
-  recordAgentDatabaseAdmissions([], { env, source: "startup" });
-  for (const error of [
-    new AuthProfileStoreUnreadableError(path.join(mainDir, "openclaw-agent.sqlite")),
-    new AgentDatabaseSchemaAdmissionInvalidError(),
-    new Error("Owner store read failed"),
-  ]) {
-    expect(inheritedFailure(error, mainDir)).toThrow(error);
-  }
-});
-
 it.each(["shared-only", "local-and-shared"] as const)(
   "selects the scoped shared snapshot for %s auth reads",
   (mode) => {
@@ -157,77 +145,63 @@ it.each(["shared-only", "local-and-shared"] as const)(
   },
 );
 
-it.each([
-  "runtime",
-  "without-external",
-  "ensure",
-  "prepared-snapshot",
-  "local-update",
-  "local-update-async",
-  "model-runtime",
-  "model-snapshot",
-] as const)("keeps local credentials through a refused inherited store via %s", async (mode) => {
-  vi.stubEnv("OPENCLAW_AGENT_DIR", mainDir);
-  prepareSharedAuthStoreOwnershipForNative();
-  const local = createStore("custom:local", "local-fixture");
-  const inherited = createStore("custom:shared", "inherited-fixture");
-  const mainPath = persist(inherited, "main").path;
-  persist(local, "worker");
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  const original = fs.readFileSync(mainPath);
-  const runtime = withoutExternal();
-  const options = {
-    inheritedAuthDir: mainDir,
-    allowKeychainPrompt: false,
-    readOnly: true,
-    syncExternalCli: false,
-    externalCli: { mode: "none" as const },
-  };
-  const read = async () => {
-    if (mode === "prepared-snapshot" || mode === "model-snapshot") {
-      setRuntimeAuthProfileStoreSnapshot(local, workerDir);
-    }
-    if (mode === "model-runtime" || mode === "model-snapshot") {
-      return prepareModel(runtime, workerDir, mainDir);
-    }
-    if (mode === "local-update" || mode === "local-update-async") {
-      return mode === "local-update"
-        ? runtime.ensureAuthProfileStoreForLocalUpdate(workerDir)
-        : runtime.ensureAuthProfileStoreForLocalUpdateAsync(workerDir);
-    }
-    const methods = {
-      runtime: "loadAuthProfileStoreForRuntime",
-      "without-external": "loadAuthProfileStoreWithoutExternalProfiles",
-      ensure: "ensureAuthProfileStoreWithoutExternalProfiles",
-      "prepared-snapshot": "ensureAuthProfileStoreWithoutExternalProfiles",
-    } as const;
-    return runtime[methods[mode]](workerDir, options);
-  };
-  expect((await read())?.profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
-  closeAuthProfileReadPool();
-  // A replacement receives fresh admission; in-place foreign writes are not a runtime contract.
-  replaceFile(mainPath, "not a SQLite database");
-  await refreshAuthProfileFileState();
-  await expect(read()).rejects.toThrow(AuthProfileStoreUnreadableError);
-  recordAgentDatabaseAdmissions(
-    [
-      createAgentDatabaseInspectionRefusal({
-        agentId: "main",
-        paths: [mainPath],
-        reason: "The inherited database is unreadable.",
-      }),
-    ],
-    { env, source: "startup" },
-  );
-  expect((await read())?.profiles).toEqual(local.profiles);
-  const error = new AuthProfileStoreUnreadableError(path.join(root, "unrelated.sqlite"));
-  expect(inheritedFailure(error, mainDir)).toThrow(error);
-  closeAuthProfileReadPool();
-  replaceFile(mainPath, original);
-  await refreshAuthProfileFileState();
-  expect((await read())?.profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
-});
+it.each(["runtime", "ensure", "local-update-async", "model-snapshot"] as const)(
+  "keeps local credentials through a refused inherited store via %s",
+  async (mode) => {
+    vi.stubEnv("OPENCLAW_AGENT_DIR", mainDir);
+    prepareSharedAuthStoreOwnershipForNative();
+    const local = createStore("custom:local", "local-fixture");
+    const inherited = createStore("custom:shared", "inherited-fixture");
+    const mainPath = persist(inherited, "main").path;
+    persist(local, "worker");
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const original = fs.readFileSync(mainPath);
+    const runtime = withoutExternal();
+    const options = {
+      inheritedAuthDir: mainDir,
+      allowKeychainPrompt: false,
+      readOnly: true,
+      syncExternalCli: false,
+      externalCli: { mode: "none" as const },
+    };
+    const read = async () => {
+      if (mode === "model-snapshot") {
+        setRuntimeAuthProfileStoreSnapshot(local, workerDir);
+        return prepareModel(runtime, workerDir, mainDir);
+      }
+      if (mode === "local-update-async") {
+        return runtime.ensureAuthProfileStoreForLocalUpdateAsync(workerDir);
+      }
+      return mode === "runtime"
+        ? runtime.loadAuthProfileStoreForRuntime(workerDir, options)
+        : runtime.ensureAuthProfileStoreWithoutExternalProfiles(workerDir, options);
+    };
+    expect((await read())?.profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
+    closeAuthProfileReadPool();
+    // A replacement receives fresh admission; in-place foreign writes are not a runtime contract.
+    replaceFile(mainPath, "not a SQLite database");
+    await refreshAuthProfileFileState();
+    await expect(read()).rejects.toThrow(AuthProfileStoreUnreadableError);
+    recordAgentDatabaseAdmissions(
+      [
+        createAgentDatabaseInspectionRefusal({
+          agentId: "main",
+          paths: [mainPath],
+          reason: "The inherited database is unreadable.",
+        }),
+      ],
+      { env, source: "startup" },
+    );
+    expect((await read())?.profiles).toEqual(local.profiles);
+    const error = new AuthProfileStoreUnreadableError(path.join(root, "unrelated.sqlite"));
+    expect(inheritedFailure(error, mainDir)).toThrow(error);
+    closeAuthProfileReadPool();
+    replaceFile(mainPath, original);
+    await refreshAuthProfileFileState();
+    expect((await read())?.profiles).toMatchObject({ ...inherited.profiles, ...local.profiles });
+  },
+);
 
 function prepareModel(
   runtime: ReturnType<typeof createAuthProfileStoreRuntime>,

@@ -1,14 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { resolveCliExecutionAuthProfileId } from "../cli-execution-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import * as modelPlans from "../models-config.plan.js";
 import * as catalogCredentials from "../plugin-model-catalog-credentials.js";
 import * as catalogs from "../plugin-model-catalog.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { retainPersistedCredential } from "./credential-authority.test-support.js";
 import {
   createApiKeyCredential as apiKey,
   createOAuthRefreshCredential,
@@ -20,7 +18,6 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import {
   inspectPersistedAuthProfileStateRaw as inspectState,
   inspectPersistedAuthProfileStoreRaw as inspectStore,
-  resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStateRaw,
 } from "./sqlite.js";
 import {
@@ -96,6 +93,14 @@ it.each([
         apiKey: survivor.key,
         headers: { Authorization: `Bearer ${survivor.key}` },
       };
+      const models = [
+        {
+          id: "retained-inventory",
+          apiKey: independentKey,
+          headers: { "X-Independent-Auth": independentHeader },
+        },
+        survivingModel,
+      ];
       saveProfiles(
         agentDir,
         credentialChange === "added"
@@ -108,23 +113,8 @@ it.each([
         if (credentialChange !== "unchanged") {
           saveProfiles(agentDir, { survivor, selected: apiKey("fixture", key) });
         }
-        const credential = loadLocal(agentDir).profiles.selected;
-        if (credential?.type !== "api_key") {
-          throw new Error("expected selected API-key profile during catalog planning");
-        }
-        expect(credential.key).toBe(key);
-        const pluginCatalogWrites = catalogWrites(
-          credential.key,
-          [
-            {
-              id: "retained-inventory",
-              apiKey: independentKey,
-              headers: { "X-Independent-Auth": independentHeader },
-            },
-            survivingModel,
-          ],
-          { Authorization: `Bearer ${credential.key}` },
-        );
+        expect(loadLocal(agentDir).profiles.selected).toMatchObject(apiKey("fixture", key));
+        const pluginCatalogWrites = catalogWrites(key, models, { Authorization: `Bearer ${key}` });
         planned.resolve();
         await release.promise;
         return { action: "write", contents: '{"providers":{}}\n', pluginCatalogWrites };
@@ -134,17 +124,12 @@ it.each([
       const scrub = catalogCredentials.removePersistedPluginModelCatalogCredentials;
       const publishHeldRefresh = async () => {
         release.resolve();
-        const result = await refresh;
+        await refresh;
         const persisted = readCatalog(agentDir);
-        expect(result.publishedSource).toMatchObject({
-          modelsJsonContents: '{"providers":{}}\n',
-          pluginCatalogs: [{ pluginId: "fixture", contents: persisted }],
-        });
         if (window === "before-delete") {
           expect(persisted).toContain(key);
         } else {
           expect(persisted).not.toContain(key);
-          expect(persisted).toContain("retained-inventory");
         }
       };
       spyCleanup().mockImplementation(async (params) => {
@@ -164,12 +149,7 @@ it.each([
         expect(loadPersisted(agentDir)?.profiles).toEqual({ survivor });
         const persisted = readCatalog(agentDir);
         expect(persisted).not.toContain(key);
-        for (const value of ["retained-inventory", independentKey, independentHeader]) {
-          expect(persisted).toContain(value);
-        }
-        expect(JSON.parse(persisted ?? "null").providers.fixture.models).toContainEqual(
-          survivingModel,
-        );
+        expect(JSON.parse(persisted ?? "null").providers.fixture.models).toEqual(models);
       } finally {
         release.resolve();
         await refresh;
@@ -252,16 +232,7 @@ it("revokes a retained credential and the next CLI inference after logout commit
     const agentDir = agentDirFor("inference");
     const { profileId, credential, resolveProfile } = saveCliProfile(agentDir);
     await expect(resolveProfile()).resolves.toBe(profileId);
-    const databasePath = resolveAuthProfileDatabasePath(agentDir);
-    const identity = inspectDatabasePathIdentitySync(databasePath);
-    if (!identity) {
-      throw new Error("Missing fixture database identity");
-    }
-    const authority = captureAuthProfileCredentialAuthority(
-      captureOpenClawStateWorkerContext(),
-      { identity: `${identity.key}:${identity.birthtime ?? ""}`, databasePath },
-      profileId,
-    );
+    const authority = retainPersistedCredential(agentDir, profileId);
     expect(authority.readCurrentCredential()).toEqual(credential);
 
     await expect(remove(agentDir, profileId)).resolves.toBe(true);

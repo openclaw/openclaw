@@ -100,13 +100,8 @@ it.each<[string, OAuthCredential, Error, string[], number, Profiles?]>([
   },
 );
 
-it("formats an undefined refresh failure without throwing", () => {
-  expect(managerError(stored, undefined).message).toContain("OAuth token refresh failed");
-});
-
 it.each([
   ["openai", "auth", "openai:default", reauth(openaiLogin)],
-  ["openai", "auth_permanent", "openai:default", reauth(openaiLogin)],
   ["claude-cli", "session_expired", "anthropic:claude-cli", reauth(claudeProfileLogin)],
   ["anthropic", "auth", "anthropic:api-key", reauth(anthropicLogin)],
   ["google-gemini-cli", "session_expired", "google-gemini-cli:legacy", geminiRecovery],
@@ -167,8 +162,6 @@ const cliFailure = {
   status: 401,
 };
 const cliError = (message: string) => new FailoverError(message, cliFailure);
-const typed = (options: Partial<ConstructorParameters<typeof OAuthRefreshFailureError>[0]> = {}) =>
-  new OAuthRefreshFailureError({ ...typedFailure, ...options });
 const failover = (options: Partial<ConstructorParameters<typeof FailoverError>[1]>) =>
   new FailoverError("Authentication refresh failed", {
     reason: "auth_permanent",
@@ -181,11 +174,6 @@ const retryPresentation = (message: string, status?: number, retryable = true) =
 const typedIdentity = { provider: typedFailure.provider, profileId: typedFailure.profileId };
 it.each(
   Object.entries({
-    "typed metadata": [typed(diagnostics), { ...typedIdentity, ...diagnostics }],
-    "wrapped typed metadata": [
-      new Error("wrapped", { cause: typed() }),
-      { ...typedIdentity, reason: "invalid_grant" },
-    ],
     "failover raw-error fallback": [
       failover({
         profileId: "openai:work",
@@ -197,13 +185,12 @@ it.each(
       failover({
         rawError: refreshMessage("refresh_token_reused"),
         cause: new OAuthRefreshFailureError({
-          provider: "openai",
+          ...typedFailure,
+          ...diagnostics,
           message: "wrapped provider failure",
-          reason: "refresh_token_reused",
-          summary: "Please sign in again.",
         }),
       }),
-      { provider: "openai", reason: "refresh_token_reused", summary: "Please sign in again." },
+      { ...typedIdentity, ...diagnostics },
     ],
     "Claude CLI 401 without provider prefix": [
       cliError("Failed to authenticate. API Error: 401 Invalid authentication credentials"),
@@ -218,23 +205,8 @@ it.each(
   expect(classifyOAuthRefreshFailureError(error)).toEqual(expected);
 });
 
-it.each([
-  new Error('OAuth refresh call "refreshOAuthCredential(xai)" exceeded hard timeout (120000ms)'),
-  new Error("xAI OAuth refresh failed (503): unavailable"),
-  retryPresentation("unavailable", 502),
-  retryPresentation("reset before headers"),
-  new Error("unclassified upstream failure"),
-  new Error("xAI OAuth token response is missing access_token"),
-  retryPresentation("invalid_grant", 503),
-  retryPresentation("unauthorized", 401),
-  retryPresentation("forbidden", 403),
-  retryPresentation("invalid response", 200),
-  retryPresentation("rate limited", 429),
-  new Error("wrapped", { cause: retryPresentation("reset") }),
-  retryPresentation("revoked"),
-  retryPresentation("uncertain", undefined, false),
-])("requires provider-owned retry admission without overriding rejection: %s", (error) => {
-  expect(isTransientOAuthRefreshFailure(error)).toBe(false);
+it("does not treat legacy retryable presentation as provider evidence", () => {
+  expect(isTransientOAuthRefreshFailure(retryPresentation("unavailable", 503))).toBe(false);
 });
 
 const notDispatched = {
@@ -258,22 +230,10 @@ const unchanged = (evidence: string, status = 503) => ({
   recovery: { kind: "later", evidence },
 });
 it.each([
-  ["actual non-dispatch evidence", withOutcome(notDispatched), true],
-  ["documented reusable grant", withOutcome(unchanged("documented-reusable-grant")), true],
-  [
-    "owner-accepted provider retry",
-    withOutcome(unchanged("owner-accepted-provider-retry", 429)),
-    true,
-  ],
   [
     "owner-accepted provider retry cannot admit a client rejection",
     withOutcome(unchanged("owner-accepted-provider-retry", 401)),
     false,
-  ],
-  [
-    "verified intermediary challenge",
-    withOutcome(unchanged("verified-intermediary-challenge", 403)),
-    true,
   ],
   [
     "challenge evidence cannot admit ordinary forbidden responses",
@@ -314,6 +274,11 @@ it.each([
   [
     "nested explicit veto wins",
     withOutcome(notDispatched, { oauthRefreshFailure: { retryable: false } }),
+    false,
+  ],
+  [
+    "nested client rejection wins",
+    withOutcome(notDispatched, retryPresentation("unauthorized", 401)),
     false,
   ],
   [

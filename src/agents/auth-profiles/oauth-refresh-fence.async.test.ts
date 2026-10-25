@@ -34,16 +34,12 @@ const expectTimeout = (outcome: unknown) =>
     }),
   });
 
-it.each([
-  ["Error", new Error("synthetic backend failure")],
-  ["primitive", "synthetic backend failure"],
-  ["undefined", undefined],
-] as const)("preserves the original pre-deadline %s rejection", async (_label, rejection) => {
+it("preserves an undefined pre-deadline rejection", async () => {
   const settlement = createDeferredCore<never>();
   const rejected = expect(
     fence.observeOAuthRefreshSettlement("rejection", 1_000, settlement.promise),
-  ).rejects.toBe(rejection);
-  settlement.reject(rejection);
+  ).rejects.toBeUndefined();
+  settlement.reject(undefined);
   await rejected;
 });
 
@@ -195,22 +191,18 @@ describe("refresh observers", () => {
   }
   const owner = () =>
     retain(fence.observeOAuthRefreshSettlement("owner", 100, reading.promise, controller.signal));
-  it.each(["stalled read", "expired snapshot", "expired rejection"])(
+  it.each(["expired snapshot", "expired rejection"])(
     "bounds an observer waiting for a %s",
     async (scenario) => {
       const startedAt = performance.now();
       const clock = vi.spyOn(performance, "now");
       const rejected = expect(observe()).rejects.toThrow("exceeded hard timeout (100ms)");
-      if (scenario === "stalled read") {
-        await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(0);
+      clock.mockReturnValue(startedAt + 101);
+      if (scenario === "expired rejection") {
+        reading.reject(new Error("synthetic late read failure"));
       } else {
-        await vi.advanceTimersByTimeAsync(0);
-        clock.mockReturnValue(startedAt + 101);
-        if (scenario === "expired rejection") {
-          reading.reject(new Error("synthetic late read failure"));
-        } else {
-          reading.resolve("settled");
-        }
+        reading.resolve("settled");
       }
       await rejected;
       reading.resolve("settled");

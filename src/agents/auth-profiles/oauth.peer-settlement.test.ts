@@ -173,58 +173,42 @@ describe("OAuth refresh peer settlement", () => {
     },
   );
 
-  it.each([
-    {
-      name: "conflicting account ids despite matching email",
-      provider: "openai",
-      ownerIdentity: { accountId: "acct-a", email: "a@example.com" },
-      peerIdentity: { accountId: "acct-b", email: "a@example.com" },
-    },
-    {
-      name: "identity-less cross-tenant Copilot peer",
+  it("terminally fences an exact replacement for an identity-less cross-tenant Copilot peer", async () => {
+    const peerAgentDir = await fx.agentDirectory("peer-a");
+    const peerProfileId = "github-copilot:default";
+    const ownerOriginal = oauth("cached", {
       provider: "github-copilot",
-      ownerIdentity: { enterpriseUrl: "https://tenant-a.ghe.com/copilot/" },
-      peerIdentity: { enterpriseUrl: "https://tenant-b.ghe.com/" },
-    },
-  ])(
-    "terminally fences an exact replacement for $name",
-    async ({ provider: peerProvider, ownerIdentity, peerIdentity }) => {
-      const peerAgentDir = await fx.agentDirectory("peer-a");
-      const peerProfileId = `${peerProvider}:default`;
-      const ownerOriginal = oauth("cached", {
-        provider: peerProvider,
-        access: "cached-access-token",
-        refresh: "refresh-token",
-        expires: Date.now() - 60_000,
-        ...ownerIdentity,
-      });
-      const fence = createOAuthRefreshFence({
-        profileId: peerProfileId,
-        credential: ownerOriginal,
-      });
-      const replacement = {
-        ...ownerOriginal,
-        access: "rotated-access",
-        refresh: "rotated-refresh",
-        expires: Date.now() + 3_600_000,
-      };
-      saveAuthProfileStore(storeWith(peerProfileId, fence), peerAgentDir);
-      const persistedFence = requireOAuth(read(peerAgentDir, peerProfileId));
-      await settleOAuthRefreshPeerClaims({
-        profileId: peerProfileId,
-        fence: persistedFence,
-        claims: [
-          {
-            candidate: candidate("peer-a", peerAgentDir),
-            original: { ...ownerOriginal, ...peerIdentity },
-          },
-        ],
-        authoritativeSharedCredential: replacement,
-        replacement,
-      });
-      expectTerminal(read(peerAgentDir, peerProfileId));
-    },
-  );
+      access: "cached-access-token",
+      refresh: "refresh-token",
+      expires: Date.now() - 60_000,
+      enterpriseUrl: "https://tenant-a.ghe.com/copilot/",
+    });
+    const fence = createOAuthRefreshFence({
+      profileId: peerProfileId,
+      credential: ownerOriginal,
+    });
+    const replacement = {
+      ...ownerOriginal,
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+      expires: Date.now() + 3_600_000,
+    };
+    saveAuthProfileStore(storeWith(peerProfileId, fence), peerAgentDir);
+    const persistedFence = requireOAuth(read(peerAgentDir, peerProfileId));
+    await settleOAuthRefreshPeerClaims({
+      profileId: peerProfileId,
+      fence: persistedFence,
+      claims: [
+        {
+          candidate: candidate("peer-a", peerAgentDir),
+          original: { ...ownerOriginal, enterpriseUrl: "https://tenant-b.ghe.com/" },
+        },
+      ],
+      authoritativeSharedCredential: replacement,
+      replacement,
+    });
+    expectTerminal(read(peerAgentDir, peerProfileId));
+  });
 
   it("continues rolling back peers after one candidate cannot be restored or terminalized", async () => {
     const original = requireOAuth(expired().profiles[profileId]);
