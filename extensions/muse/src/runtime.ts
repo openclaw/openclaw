@@ -19,6 +19,7 @@ export type MuseOpenSession = {
   approvalMode: "allowAll" | "promptUnmatched" | "denyUnmatched";
   /** Reports a refused resume that was replaced by a new Muse session. */
   onResumeRefused?: (message: string) => void;
+  onSession?: (session: Session) => void;
 };
 const RESUME_RETRY_KINDS: Record<string, true> = {
   sessionInUse: true,
@@ -46,10 +47,21 @@ export async function openMuseSession(runtime: MuseRuntime, options: MuseOpenSes
   if (options.sessionId) {
     const existing = runtime.sessions.get(options.sessionId);
     if (existing) {
+      options.onSession?.(existing);
       return existing;
     }
   }
   const { connection } = runtime.host;
+  const prepareSession = (sessionId: string) => {
+    const session = new Session({
+      sessionId,
+      connection,
+      durability: readSessionDurability(runtime.host.initializeResult),
+    });
+    options.onSession?.(session);
+    runtime.sessions.set(sessionId, session);
+    return session;
+  };
   const start = () =>
     connection.command("session/start", {
       workspaceRoot: options.workspace,
@@ -58,15 +70,21 @@ export async function openMuseSession(runtime: MuseRuntime, options: MuseOpenSes
       approvalMode: options.approvalMode,
     });
   let result: Record<string, unknown>;
+  let resumedSession: Session | undefined;
   if (!options.sessionId) {
     result = await start();
   } else {
+    // Pending approvals can follow the resume response in the same transport
+    // drain. Route them to the configured exact-ID session before sending.
+    resumedSession = prepareSession(options.sessionId);
     try {
       result = await connection.command("session/resume", {
         sessionId: options.sessionId,
         excludeItems: true,
       });
     } catch (error) {
+      runtime.sessions.delete(options.sessionId);
+      resumedSession = undefined;
       // A server-authored refusal means Muse ran nothing, so a new root session
       // is safe (the OpenClaw transcript keeps the conversation). Transport
       // failures stay ambiguous, and an in-use or overloaded session may still
@@ -83,15 +101,18 @@ export async function openMuseSession(runtime: MuseRuntime, options: MuseOpenSes
     }
   }
   if (!isRecord(result.session) || typeof result.session.sessionId !== "string") {
+    if (resumedSession) {
+      runtime.sessions.delete(resumedSession.sessionId);
+    }
     throw new Error("Muse returned an invalid session identity.");
   }
-  const session = new Session({
-    sessionId: result.session.sessionId,
-    connection,
-    durability: readSessionDurability(runtime.host.initializeResult),
-  });
-  runtime.sessions.set(session.sessionId, session);
-  return session;
+  if (resumedSession) {
+    if (resumedSession.sessionId === result.session.sessionId) {
+      return resumedSession;
+    }
+    runtime.sessions.delete(resumedSession.sessionId);
+  }
+  return prepareSession(result.session.sessionId);
 }
 
 export class MusePool {

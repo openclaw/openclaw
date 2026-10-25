@@ -430,7 +430,10 @@ describe("Muse native MSP harness", () => {
       expect(terminal(result).kind).toBe(
         failure === "abort" ? "aborted" : failure === "timeout" ? "timeout" : "failed",
       );
-      expect(await readFile(log, "utf8")).toContain('"event":"terminal","terminal":"cancelled"');
+      const nativeTerminal = failure === "approval" ? "failed" : "cancelled";
+      expect(await readFile(log, "utf8")).toContain(
+        `"event":"terminal","terminal":"${nativeTerminal}"`,
+      );
     },
   );
 
@@ -570,10 +573,213 @@ describe("Muse native MSP harness", () => {
     },
   );
 
+  it("answers through resumed native work without replacing its active turn or children", async () => {
+    const state = setup(true);
+    await state.run();
+    await state.harness.dispose();
+    const binding = state.bindings.get(state.params.sessionId)!;
+    state.bindings.set(state.params.sessionId, { ...binding, sessionId: "resumed-native-work" });
+    const next = createMuseAgentHarness({ binaryPath: fixture, sessionStore: state.sessionStore });
+    state.events.length = 0;
+    const result = await next.runAttempt({
+      ...state.params,
+      prompt: "status update",
+      timeoutMs: 1_000,
+    });
+    expect(terminal(result).kind).toBe("ok");
+    expect(result.assistantTexts).toEqual(["resumed: hello"]);
+    expect(result.messagesSnapshot).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "native-tool",
+        isError: false,
+      }),
+    );
+    expect(state.events).toContainEqual(
+      expect.objectContaining({
+        stream: "item",
+        data: expect.objectContaining({
+          type: "subagent",
+          id: "native-background-turn-subagent",
+          status: "completed",
+        }),
+      }),
+    );
+    const requests = await readRequests(state.log);
+    expect(requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
+    expect(requests.filter((request) => request.method === "session/start")).toHaveLength(1);
+    expect(requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+  });
+
+  it.each(["abort", "timeout"] as const)(
+    "detaches a joined native turn on %s without stopping its work or publishing late results",
+    async (interruption) => {
+      const state = setup(true);
+      await state.run();
+      await state.harness.dispose();
+      const binding = state.bindings.get(state.params.sessionId)!;
+      state.bindings.set(state.params.sessionId, { ...binding, sessionId: "resumed-native-work" });
+      const next = createMuseAgentHarness({
+        binaryPath: fixture,
+        sessionStore: state.sessionStore,
+      });
+      const controller = new AbortController();
+      const detachedRunId = crypto.randomUUID();
+      const result = await next.runAttempt({
+        ...state.params,
+        runId: detachedRunId,
+        prompt: "hold-native-work",
+        timeoutMs: interruption === "timeout" ? 150 : 1_000,
+        abortSignal: controller.signal,
+        onExecutionStarted: () => {
+          if (interruption === "abort") {
+            controller.abort();
+          }
+        },
+      });
+      expect(terminal(result).kind).toBe(interruption === "abort" ? "aborted" : "timeout");
+      expect(
+        (await readRequests(state.log)).some((request) => request.method === "turn/interrupt"),
+      ).toBe(false);
+      const writesAfterDetach = writes.append.mock.calls.length;
+      vi.useFakeTimers();
+      try {
+        await vi.advanceTimersByTimeAsync(300_000);
+      } finally {
+        vi.useRealTimers();
+      }
+      const continued = await next.runAttempt({ ...state.params, runId: crypto.randomUUID() });
+      expect(terminal(continued).kind).toBe("ok");
+      expect(continued.assistantTexts).toEqual(["resumed: hello"]);
+      expect(continued.messagesSnapshot).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: "native-tool",
+          isError: false,
+        }),
+      );
+      expect(state.events).toContainEqual(
+        expect.objectContaining({
+          stream: "item",
+          data: expect.objectContaining({
+            type: "subagent",
+            id: "native-background-turn-subagent",
+            status: "completed",
+          }),
+        }),
+      );
+      const laterMessages = writes.append.mock.calls
+        .slice(writesAfterDetach)
+        .flatMap(([call]) => call.messages);
+      expect(laterMessages).not.toContainEqual(
+        expect.objectContaining({
+          __openclaw: expect.objectContaining({ runId: detachedRunId }),
+        }),
+      );
+      const requests = await readRequests(state.log);
+      expect(requests.filter((request) => request.event === "spawn")).toHaveLength(2);
+      expect(requests.filter((request) => request.method === "session/resume")).toHaveLength(1);
+      expect(requests.filter((request) => request.method === "turn/start")).toHaveLength(3);
+      expect(requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+    },
+  );
+
+  it("detaches a failed joined approval without interrupting the existing native turn", async () => {
+    const state = setup(true);
+    await state.run();
+    await state.harness.dispose();
+    const binding = state.bindings.get(state.params.sessionId)!;
+    state.bindings.set(state.params.sessionId, { ...binding, sessionId: "resumed-native-work" });
+    const next = createMuseAgentHarness({ binaryPath: fixture, sessionStore: state.sessionStore });
+    const result = await next.runAttempt({
+      ...state.params,
+      prompt: "approval-native-work",
+      hostCapabilities: {
+        ...state.params.hostCapabilities,
+        requestApproval: async () => {
+          throw new Error("approval owner unavailable");
+        },
+      },
+    });
+    expectFailure(result, "approval owner unavailable");
+    const requests = await readRequests(state.log);
+    expect(requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "approval/decide",
+        params: expect.objectContaining({ choiceId: "native-deny" }),
+      }),
+    );
+    expect(requests).toContainEqual({ event: "terminal", terminal: "failed" });
+  });
+
+  it.each(["allow", "unavailable"])(
+    "handles same-chunk resumed approvals when host decision is %s",
+    async (decision) => {
+      const state = setup(true);
+      await state.run();
+      await state.harness.dispose();
+      const binding = state.bindings.get(state.params.sessionId)!;
+      state.bindings.set(state.params.sessionId, {
+        ...binding,
+        sessionId: "resumed-native-approval",
+      });
+      const next = createMuseAgentHarness({
+        binaryPath: fixture,
+        sessionStore: state.sessionStore,
+      });
+      const result = await next.runAttempt({
+        ...state.params,
+        timeoutMs: 1_000,
+        hostCapabilities: {
+          ...state.params.hostCapabilities,
+          requestApproval: async () => {
+            if (decision === "unavailable") {
+              throw new Error("approval owner unavailable");
+            }
+            return { decision: "allow-once" };
+          },
+        },
+      });
+      if (decision === "allow") {
+        expect(terminal(result).kind).toBe("ok");
+      } else {
+        expectFailure(result, "approval owner unavailable");
+      }
+      const requests = await readRequests(state.log);
+      expect(requests).toContainEqual(
+        expect.objectContaining({
+          method: "approval/decide",
+          params: expect.objectContaining({
+            choiceId: decision === "allow" ? "native-allow" : "native-deny",
+          }),
+        }),
+      );
+      expect(requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+    },
+  );
+
+  it("still interrupts a newly started turn in an idle resumed native session", async () => {
+    const state = setup(true);
+    await state.run();
+    await state.harness.dispose();
+    const next = createMuseAgentHarness({ binaryPath: fixture, sessionStore: state.sessionStore });
+    const controller = new AbortController();
+    const result = await next.runAttempt({
+      ...state.params,
+      prompt: "wait",
+      abortSignal: controller.signal,
+      onExecutionStarted: () => controller.abort(),
+    });
+    expect(terminal(result).kind).toBe("aborted");
+    const requests = await readRequests(state.log);
+    expect(requests.filter((request) => request.method === "turn/interrupt")).toHaveLength(1);
+  });
+
   it.each(["denied", "approval gateway unavailable"])(
     "reports approval failure: %s",
     async (error) => {
-      const { params, run } = setup();
+      const { params, run, log } = setup(true);
       params.hostCapabilities = {
         ...params.hostCapabilities,
         requestApproval: async () => {
@@ -585,6 +791,9 @@ describe("Muse native MSP harness", () => {
       };
       const result = await run({ prompt: "approval" });
       expectFailure(result, error);
+      expect((await readRequests(log)).some((request) => request.method === "turn/interrupt")).toBe(
+        false,
+      );
       if (error === "denied") {
         expect(result.assistantTexts).toEqual([]);
       }

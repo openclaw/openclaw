@@ -25,8 +25,17 @@ log({
 let cursor = 0;
 let sessionCount = 0;
 let active;
+let pendingNativeApproval = false;
+let outboundBatch;
 const sessions = new Map();
-const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
+const send = (value) => {
+  const line = `${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`;
+  if (outboundBatch) {
+    outboundBatch.push(line);
+  } else {
+    process.stdout.write(line);
+  }
+};
 const reply = (id, result) => send({ id, result });
 const reject = (id, code, message, kind) => send({ id, error: { code, message, data: { kind } } });
 const accept = (id, params, extra = {}) =>
@@ -48,11 +57,41 @@ function complete(terminal, error) {
   event("turn/completed", { terminal, sourceRange, ...(error ? { error } : {}) });
 }
 const fail = (kind, message) => complete("failed", { kind, message, retryable: false });
+function nativeApproval() {
+  pendingNativeApproval = true;
+  event("approval/requested", {
+    approvalId: "native-approval",
+    currentRequirementId: { approvalId: "native-approval", sourceIndex: 0 },
+    availableChoices: [
+      { choiceId: "native-allow", decision: "approved", scope: "once", label: "Allow" },
+      { choiceId: "native-deny", decision: "denied", scope: "once", label: "Deny" },
+    ],
+    itemId: "native-tool",
+    toolCallId: "native-tool",
+    toolName: "bash",
+    subject: { kind: "command", command: "work" },
+    judgeEscalated: false,
+    protectedWrite: false,
+    taskId: "native-tool",
+    sourceRange,
+  });
+}
 function answer() {
   const itemId = item("reasoning", "inProgress", { text: "" });
   event("item/delta", { itemId, field: "summary.0", delta: "Considering" });
   item("reasoning", "completed", { text: "", summary: ["Considering"] });
-  if (active.prompt === "tool" || active.prompt === "tool-failure") {
+  if (
+    active.prompt === "tool" ||
+    active.prompt === "tool-failure" ||
+    active.prompt === "tool-replay"
+  ) {
+    if (active.prompt !== "tool-replay") {
+      item("toolCall", "inProgress", {
+        tool: "read_file",
+        callId: "call-1",
+        args: '{"path":"a.txt"}',
+      });
+    }
     item("toolCall", active.prompt === "tool-failure" ? "failed" : "completed", {
       tool: "read_file",
       callId: "call-1",
@@ -124,12 +163,79 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         ? randomUUID()
         : `session-${++sessionCount}`;
     sessions.set(sessionId, resumed);
+    if (sessionId === "resumed-native-approval") {
+      outboundBatch = [];
+    }
     reply(id, {
       session: { sessionId },
       ...(resumed ? { history: { mode: "none" } } : {}),
       viewCursor: String(cursor),
     });
+    if (resumed && ["resumed-native-work", "resumed-native-approval"].includes(sessionId)) {
+      active = { sessionId, turnId: "native-background-turn", prompt: "wait", resumed: true };
+      if (sessionId === "resumed-native-approval") {
+        event("turn/started", { commandId: active.turnId, sourceRange });
+        item("toolCall", "inProgress", {
+          tool: "bash",
+          callId: "native-tool",
+          args: '{"command":"work"}',
+        });
+        nativeApproval();
+        process.stdout.write(outboundBatch.join(""));
+        outboundBatch = undefined;
+      }
+    }
   } else if (method === "turn/start") {
+    if (
+      ["resumed-native-work", "resumed-native-approval"].includes(params.sessionId) &&
+      active?.turnId === "native-background-turn"
+    ) {
+      // Resume may restore native background work before the next user submit.
+      // Keep its actual turn, tool, and child identities when input steers it.
+      event("turn/started", { commandId: active.turnId, sourceRange });
+      item("toolCall", "inProgress", {
+        tool: "bash",
+        callId: "native-tool",
+        args: '{"command":"work"}',
+      });
+      item("subagent", "inProgress", {
+        subagentId: "native-child",
+        fallbackText: "Existing child",
+      });
+      if (params.ifBusy !== "steer") {
+        accept(id, params, {
+          disposition: "queued",
+          startedNewTurn: false,
+          turnId: params.commandId,
+        });
+        return;
+      }
+      accept(id, params, { disposition: "steered", startedNewTurn: false, turnId: active.turnId });
+      if (pendingNativeApproval) {
+        return;
+      }
+      if (params.input[0].text.trim() === "approval-native-work") {
+        nativeApproval();
+        return;
+      }
+      if (params.input[0].text.trim() === "hold-native-work") {
+        return;
+      }
+      setImmediate(() => {
+        item("toolCall", "completed", {
+          tool: "bash",
+          callId: "native-tool",
+          args: '{"command":"work"}',
+          visibleOutput: "Existing work finished",
+        });
+        item("subagent", "completed", {
+          subagentId: "native-child",
+          fallbackText: "Existing child finished",
+        });
+        answer();
+      });
+      return;
+    }
     active = {
       sessionId: params.sessionId,
       turnId: params.commandId,
@@ -198,6 +304,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     });
   } else if (method === "approval/decide") {
     accept(id, params, { approvalId: params.approvalId });
+    if (params.approvalId === "native-approval") {
+      pendingNativeApproval = false;
+      if (params.choiceId === "native-deny") {
+        item("toolCall", "failed", {
+          tool: "bash",
+          callId: "native-tool",
+          failureReason: "Approval denied",
+        });
+        fail("approvalDenied", "Approval denied");
+      } else {
+        setImmediate(answer);
+      }
+      return;
+    }
     if (params.choiceId !== "server-allow-id") {
       fail("approvalDenied", "denied");
     } else {
@@ -205,6 +325,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
   } else if (method === "turn/interrupt") {
     accept(id, params);
+    if (active?.sessionId === "resumed-native-work" && params.turnId !== active.turnId) {
+      // Interrupting a queued submit does not stop the existing native work.
+      send({
+        method: "turn/completed",
+        params: {
+          sessionId: active.sessionId,
+          turnId: params.turnId,
+          terminal: "cancelled",
+          sourceRange,
+          viewCursor: String(++cursor),
+        },
+      });
+      return;
+    }
     if (active.prompt === "settle" || active.prompt === "approval-settle") {
       // Deliberately separate admission from native settlement.
       setTimeout(() => complete("cancelled"), 80);

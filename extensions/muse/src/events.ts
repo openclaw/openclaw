@@ -2,6 +2,7 @@ import type { FoldedItem, Turn } from "@muse-code/sdk";
 import {
   emitAgentHarnessAttemptEvent,
   makeZeroUsageSnapshot,
+  racePromiseWithAbortSignal,
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   embeddedAgentLog,
@@ -10,6 +11,7 @@ import {
   type AgentHarnessAttemptResult,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type MuseAssistant = Extract<AgentMessage, { role: "assistant" }>;
@@ -41,17 +43,42 @@ export async function consumeTurn(
   const emitted = new Map<string, number>();
   const settled = new Set<string>();
   const foregroundItems = new Set<string>();
+  const toolStartedAt = new Map<string, number>();
   let answerRecorded = false;
   let finalizing = false;
   let visibleText = "";
   let lastToolError: AgentHarnessAttemptResult["lastToolError"];
   let messageStarted = false;
   let streamQueue = Promise.resolve();
+  let closed = false;
+  const assertCurrent = () => {
+    if (closed) {
+      throw new Error("Muse turn projection is closed.");
+    }
+    params.abortSignal?.throwIfAborted();
+    params.hostCapabilities.assertActive();
+  };
   const emitEvent = (
     event: Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0],
-  ) => emitAgentHarnessAttemptEvent(params, event, { label: "Muse", log: embeddedAgentLog });
-  const emitField = (item: FoldedItem, field: string, value: string) => {
+  ) => {
+    assertCurrent();
+    return emitAgentHarnessAttemptEvent(params, event, { label: "Muse", log: embeddedAgentLog });
+  };
+  const noteProgress = (reason: string) => {
+    assertCurrent();
+    params.onRunProgress?.({ reason, provider: "meta", model: params.modelId, backend: "muse" });
+  };
+  const toolIdentity = (item: FoldedItem) => ({
+    runId: params.runId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    toolCallId: item.callId ?? item.itemId,
+    toolName: item.tool ?? "muse_tool",
+  });
+  const emitField = (item: FoldedItem, field: string, value: string, live = false) => {
     streamQueue = streamQueue.then(async () => {
+      assertCurrent();
       const key = `${item.itemId}:${field}`;
       const offset = emitted.get(key) ?? 0;
       if (value.length <= offset) {
@@ -64,6 +91,9 @@ export async function consumeTurn(
           messageStarted = true;
           await params.onAssistantMessageStart?.();
         }
+        if (live) {
+          noteProgress("muse:assistant_message");
+        }
         await emitEvent({ stream: "assistant", data: { itemId: item.itemId, delta, text: value } });
       } else if (item.kind === "reasoning" && (field === "text" || field.startsWith("summary."))) {
         await params.onReasoningStream?.({ text: delta });
@@ -71,20 +101,24 @@ export async function consumeTurn(
     });
     return streamQueue;
   };
+  const deltaIterator = turn.deltas();
+  const itemIterator = turn.items();
   const deltas = (async () => {
-    for await (const delta of turn.deltas()) {
+    for await (const delta of deltaIterator) {
+      assertCurrent();
       const field = delta.field ?? "text";
       const key = `${delta.itemId}:${field}`;
       const value = (streamed.get(key) ?? "") + delta.delta;
       streamed.set(key, value);
       const item = items.get(delta.itemId);
       if (item) {
-        await emitField(item, field, value);
+        await emitField(item, field, value, true);
       }
     }
   })();
   const projections = (async () => {
-    for await (const item of turn.items()) {
+    for await (const item of itemIterator) {
+      assertCurrent();
       const first = !items.has(item.itemId);
       items.set(item.itemId, item);
       if (item.kind !== "reminderChild" && item.kind !== "userMessage") {
@@ -115,11 +149,19 @@ export async function consumeTurn(
       if (first) {
         for (const [key, value] of streamed) {
           if (key.startsWith(`${item.itemId}:`)) {
-            await emitField(item, key.slice(item.itemId.length + 1), value);
+            await emitField(item, key.slice(item.itemId.length + 1), value, true);
           }
         }
       }
       if (item.kind === "toolCall" && first) {
+        if (item.status === "inProgress") {
+          toolStartedAt.set(item.itemId, Date.now());
+          emitTrustedDiagnosticEvent({
+            type: "tool.execution.started",
+            ...toolIdentity(item),
+          });
+          noteProgress("muse:tool:started");
+        }
         await emitEvent({
           stream: "item",
           data: projectAgentToolActivity({
@@ -132,9 +174,22 @@ export async function consumeTurn(
       if (item.status === "inProgress" || settled.has(item.itemId)) {
         continue;
       }
+      assertCurrent();
       settled.add(item.itemId);
       const messages: AgentMessage[] = [];
       if (item.kind === "toolCall") {
+        const startedAt = toolStartedAt.get(item.itemId);
+        if (startedAt !== undefined) {
+          toolStartedAt.delete(item.itemId);
+          emitTrustedDiagnosticEvent({
+            ...toolIdentity(item),
+            durationMs: Math.max(0, Date.now() - startedAt),
+            ...(item.status === "completed"
+              ? { type: "tool.execution.completed" as const }
+              : { type: "tool.execution.error" as const, errorCategory: "muse_native_tool_error" }),
+          });
+          noteProgress("muse:tool:completed");
+        }
         const toolName = item.tool ?? "muse_tool";
         let args: Record<string, unknown> = {};
         if (item.args) {
@@ -196,6 +251,7 @@ export async function consumeTurn(
             { type: "thinking", thinking: item.text ?? item.summary?.join("\n") ?? "" },
           ]),
         );
+        assertCurrent();
         await params.onReasoningEnd?.();
       } else if (item.kind !== "userMessage") {
         await emitEvent({
@@ -209,6 +265,7 @@ export async function consumeTurn(
         });
       }
       if (messages.length) {
+        assertCurrent();
         await record(item.itemId, messages);
         if (item.kind === "agentMessage") {
           answerRecorded = true;
@@ -216,6 +273,13 @@ export async function consumeTurn(
       }
     }
   })();
-  await Promise.all([projections, deltas]);
-  return { visibleText, lastToolError, outcome: await turn.completed };
+  try {
+    await racePromiseWithAbortSignal(Promise.all([projections, deltas]), params.abortSignal);
+    const outcome = await racePromiseWithAbortSignal(turn.completed, params.abortSignal);
+    return { visibleText, lastToolError, outcome };
+  } finally {
+    // Detach observers without interrupting native work owned by another turn.
+    closed = true;
+    await Promise.allSettled([itemIterator.return?.(), deltaIterator.return?.()]);
+  }
 }

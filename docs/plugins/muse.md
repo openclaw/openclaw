@@ -306,16 +306,24 @@ bootstrap-mode filters. MSP has no system-message or history-import field, so
 the harness prefixes this context to the first native user input. Resumed
 sessions do not repeat that prefix.
 
-`/new` and `/reset` stop an active Muse turn and delete the binding.
+A resumed session may already be continuing native background work. The next
+OpenClaw request joins that existing turn instead of waiting behind it; its tools
+and children keep running. Requests arriving during an active OpenClaw attempt
+still use OpenClaw's normal queue.
+
+`/new` and `/reset` end the active OpenClaw attempt and delete the binding.
 Rewinding or switching branches within the same OpenClaw session also
 invalidates the binding, but only after the history change commits.
 
-Stopping a turn waits for Muse's terminal event, not just its interrupt
-acknowledgement. If Muse does not settle within five seconds, the harness
-closes the host before releasing the attempt.
+Stopping a native turn started by the current attempt waits for Muse's terminal
+event, not just its interrupt acknowledgement. If Muse does not settle within
+five seconds, the harness closes the host before releasing the attempt. When an
+attempt joined earlier native work, stopping or timing out that attempt detaches
+its observation without interrupting the earlier work.
 
 `muse serve` processes are pooled per workspace, credential, and read-only
-posture, and shut down after five idle minutes.
+posture, and shut down after five idle minutes. Detached native work retains its
+process until it settles or its host exits.
 
 ## Transcript
 

@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import type { ApprovalHandler, Session, Turn } from "@muse-code/sdk";
+import type { Session, Turn } from "@muse-code/sdk";
 import {
   createAgentHarnessAttemptLifecycle,
   emitAgentHarnessAttemptEvent,
@@ -38,6 +38,7 @@ import {
   appendSessionTranscriptMessagesByIdentity,
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { createMuseApprovalHandler } from "./src/approvals.js";
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
 import { MuseCatalogReader } from "./src/verify-setup.js";
@@ -54,29 +55,6 @@ export type MuseHarnessOptions = {
 /** Configuration Muse cannot honor; the message is safe and actionable for the chat user. */
 function museRefusal(message: string): AgentHarnessPreflightError {
   return new AgentHarnessPreflightError(message, { scope: "harness", userMessage: message });
-}
-
-// Matches the Codex harness: a pending native approval should not hold a turn for hours.
-const APPROVAL_TIMEOUT_MS = 120_000;
-
-function selectApprovalChoice(
-  request: Parameters<ApprovalHandler>[0],
-  decision: string | null | undefined,
-) {
-  const wanted = decision === "allow-once" ? "approved" : "denied";
-  const choice =
-    request.availableChoices.find(
-      (candidate) => candidate.decision === wanted && candidate.scope === "once",
-    ) ??
-    (wanted === "denied"
-      ? request.availableChoices.find(
-          (candidate) => candidate.decision === "denied" || candidate.decision === "abort",
-        )
-      : undefined);
-  if (!choice) {
-    throw new Error(`Muse offered no safe ${wanted} approval choice`);
-  }
-  return { choiceId: choice.choiceId };
 }
 
 export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnessV2 {
@@ -207,11 +185,13 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       ]);
       let session: Session | undefined;
       let turn: Turn | undefined;
+      let submitCommandId: string | undefined;
       let forceCloseTimer: ReturnType<typeof setTimeout> | undefined;
       let timedOut = false;
       let aborted = false;
       let abortPromise: Promise<void> | undefined;
       let failure: unknown;
+      let unsettledApprovalFailure = false;
       let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
       const messages: AgentMessage[] = [];
       let text = "";
@@ -233,6 +213,22 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       const signal = bound
         ? AbortSignal.any([bound.signal, ...(params.abortSignal ? [params.abortSignal] : [])])
         : params.abortSignal;
+      const projectionAbort = new AbortController();
+      const projectionSignal = AbortSignal.any([
+        projectionAbort.signal,
+        ...(signal ? [signal] : []),
+      ]);
+      const ownsTurn = () => {
+        if (!session || !turn || !submitCommandId) {
+          return false;
+        }
+        // A materialized user-message echo can retire the pending ack; the fold
+        // still records which command started the turn.
+        return (
+          session.pending.get(submitCommandId)?.ack?.disposition === "started" ||
+          session.fold.turn(turn.turnId)?.commandId === submitCommandId
+        );
+      };
       const assertDispatchActive = () => {
         params.hostCapabilities.assertActive();
         bound?.assertCurrent();
@@ -243,6 +239,14 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       };
       const stop = async () => {
         if (!session || !turn) {
+          return;
+        }
+        const nativeState = session.fold.turn(turn.turnId)?.state;
+        if (nativeState === "settled" || nativeState === "unqueued") {
+          return;
+        }
+        if (!ownsTurn()) {
+          projectionAbort.abort(failure ?? new Error("Muse attempt detached from native work"));
           return;
         }
         if (!abortPromise) {
@@ -268,6 +272,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       const abort = async () => {
         aborted = true;
         await stop();
+        projectionAbort.abort(new Error(timedOut ? "Muse turn timed out" : "Muse attempt aborted"));
       };
       const onAbort = () => {
         void abort().catch(() => runtime.close());
@@ -314,6 +319,20 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           workspace,
           modelId: params.modelId,
           approvalMode,
+          onSession: (nativeSession) => {
+            nativeSession.onApproval(
+              createMuseApprovalHandler(params, (error) => {
+                failure ??= error;
+              }),
+            );
+            nativeSession.onApprovalError((error) => {
+              failure ??= new Error(
+                `Muse approval failed (${error.kind}): ${error.kind === "unofferedChoice" ? `choice ${error.choiceId} was not offered` : formatErrorMessage(error.error)}`,
+              );
+              unsettledApprovalFailure = true;
+              void stop().catch(() => runtime.close());
+            });
+          },
           onResumeRefused: (message) => {
             freshSession = true;
             options.logger?.warn(`${message}; started a new Muse session.`);
@@ -375,51 +394,6 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           }
           assertDispatchActive();
         }
-        session.onApproval(async (request) => {
-          params.hostCapabilities.assertActive();
-          const timeoutMs = Math.min(APPROVAL_TIMEOUT_MS, params.timeoutMs);
-          // The Gateway approval schema bounds title (80), description (512), and
-          // detail (1..16384) characters; Muse commands and arguments can exceed them.
-          const answer = await params.hostCapabilities.requestApproval({
-            title: `Muse: ${request.toolName}`.slice(0, 80),
-            description: (
-              request.subject.command ??
-              request.subject.path ??
-              request.subject.host ??
-              request.toolName
-            ).slice(0, 512),
-            ...(request.rawArgs ? { detail: request.rawArgs.slice(0, 16_384) } : {}),
-            toolName: request.toolName,
-            toolCallId: request.toolCallId,
-            severity: "warning",
-            allowedDecisions: ["allow-once", "deny"],
-            timeoutMs,
-            signal: params.abortSignal,
-          });
-          let decision = answer?.decision;
-          if (answer?.id && decision == null) {
-            decision = (
-              await params.hostCapabilities.waitForApproval({
-                approvalId: answer.id,
-                timeoutMs,
-                signal: params.abortSignal,
-              })
-            )?.decision;
-          }
-          params.hostCapabilities.assertActive();
-          params.abortSignal?.throwIfAborted();
-          return selectApprovalChoice(request, decision);
-        });
-        session.onApprovalError((error) => {
-          failure = new Error(
-            `Muse approval failed (${error.kind}): ${
-              error.kind === "unofferedChoice"
-                ? `choice ${error.choiceId} was not offered`
-                : formatErrorMessage(error.error)
-            }`,
-          );
-          void stop().catch(() => runtime.close());
-        });
         assertDispatchActive();
         await params.userTurnTranscriptRecorder?.persistApproved();
         assertDispatchActive();
@@ -438,12 +412,23 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           })),
         ];
         lifecycle.emitExecutionPhaseOnce("context", { phase: "context_assembled" });
-        turn = await session.sendUserTurn({
+        const composerInput = { runId: params.runId };
+        const submitted = session.sendUserTurn({
           input,
+          composerInput,
+          // A resumed session can already have native background continuation
+          // work. Join its authoritative turn instead of queueing behind it.
+          ...(!freshSession ? { ifBusy: "steer" as const } : {}),
           ...(params.thinkLevel
             ? { reasoningEffort: params.thinkLevel === "off" ? "minimal" : params.thinkLevel }
             : {}),
         });
+        // The SDK registers its optimistic entry synchronously, before I/O.
+        // Retain that command identity even if its user-message echo retires it.
+        submitCommandId = session.pending
+          .list()
+          .find((entry) => entry.input === composerInput)?.commandId;
+        turn = await submitted;
         lifecycle.emitLifecycleStart({ provider: "meta", model: params.modelId });
         lifecycle.emitExecutionPhaseOnce("accepted", { phase: "turn_accepted" });
         // Publish the binding only once Muse accepted the turn carrying any fresh-session
@@ -454,7 +439,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         });
         if (signal?.aborted) {
           onAbort();
-        } else if (failure) {
+        } else if (unsettledApprovalFailure) {
           // An approval can fail before sendUserTurn resolves; interrupt now that the turn exists.
           void stop().catch(() => runtime.close());
         }
@@ -468,7 +453,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         active.set(params.sessionId, abort);
         params.onExecutionStarted?.({ backend: "muse" });
         const nativeSessionId = session.sessionId;
-        const result = await consumeTurn(turn, params, async (itemId, group) => {
+        const observation = { ...params, abortSignal: projectionSignal };
+        const result = await consumeTurn(turn, observation, async (itemId, group) => {
           const entries = group.map((message, index) => {
             const idempotencyKey = `muse:${nativeSessionId}:${itemId}:${index}`;
             if (message.role === "assistant" && message.stopReason !== "toolUse") {
@@ -528,7 +514,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         }
         lifecycle.emitLifecycleTerminal({ phase: "end" });
       } catch (error) {
-        if (signal?.aborted && !failure) {
+        if ((signal?.aborted || projectionAbort.signal.aborted) && !failure) {
           // The caller's abort, not a Muse failure, ended this attempt.
           aborted = true;
         } else {
@@ -556,7 +542,17 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           activeAttachment,
         );
         bound?.release();
-        lease.release();
+        if (turn && !ownsTurn() && projectionAbort.signal.aborted) {
+          // Detached observation releases caller authority above. Retain only
+          // the process lease so idle shutdown cannot kill the joined work.
+          void Promise.race([
+            turn.completed,
+            runtime.host.child.exit,
+            runtime.host.connection.closed,
+          ]).then(lease.release, lease.release);
+        } else {
+          lease.release();
+        }
       }
       const toolMetas = messages
         .filter((message) => message.role === "toolResult")
