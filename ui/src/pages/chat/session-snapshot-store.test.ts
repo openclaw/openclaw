@@ -155,6 +155,17 @@ async function readRawRecord(
 }
 
 describe("persistent chat session snapshots", () => {
+  it("restores model display data with the conversation, isolated from another account", async () => {
+    const writer = new SessionSnapshotStore();
+    const remembered = { id: "model", provider: "openai", name: "Remembered model" };
+    await persist(writer, sessionKey, { ...snapshot(), composer: remembered });
+    expect((await readSnapshot())?.composer).toEqual(remembered);
+    const otherKey = resolveChatSnapshotKey(
+      { ...snapshotHost, client: { recoveryScope: "account-b", recoveryScopeReady: true } },
+      { sessionKey: rawKey(sessionKey) },
+    );
+    expect(await readSnapshot(otherKey)).toBeNull();
+  });
   let writer: SessionSnapshotStore;
   const seed = async (value = snapshot(), cacheKey = sessionKey) =>
     persist(writer, cacheKey, value);

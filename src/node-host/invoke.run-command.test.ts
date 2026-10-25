@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import * as processExec from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { runCommand } from "./invoke-run-command.js";
 
@@ -123,14 +124,9 @@ describe("runCommand", () => {
 
     async function captureLaunch(platform: NodeJS.Platform, argv: string[]) {
       mockProcessPlatform(platform);
-      const launch = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce({
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-        stdout: "",
-        stderr: "",
-      });
+      const launch = vi
+        .spyOn(processExec, "runCommandWithTimeout")
+        .mockResolvedValueOnce(createCommandResult());
       await runCommand(argv, undefined, undefined, undefined);
       expect(launch).toHaveBeenCalledTimes(1);
       const [launchedArgv, options] = launch.mock.calls[0] ?? [];

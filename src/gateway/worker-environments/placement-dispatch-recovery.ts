@@ -431,13 +431,17 @@ export function createPlacementRecoveryActions(
     }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
+      const lookups = initialPlacements.map((placement) => ({
+        placement,
+        target: undefined,
+        dirty: false,
+      }));
       orphanCleanupPending =
-        initialPlacements.length > 0
+        lookups.length > 0
           ? {
-              placements: [...initialPlacements],
+              placements: lookups,
               initialDiscoveryPending: true,
-              unresolved: new Map(initialPlacements.map((placement) => [placement, undefined])),
-              dirty: new Set(),
+              unresolved: new Set(lookups),
               rootsBySession: new Map(),
               completedRoots: new Set(),
             }

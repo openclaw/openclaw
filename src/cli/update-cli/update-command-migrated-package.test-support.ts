@@ -11,10 +11,10 @@ import * as childCommands from "../../process/exec-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createCommandResult as processResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { expectNoCalls } from "../daemon-cli/lifecycle-assertions.test-support.js";
 import {
   finishParams,
-  processResult,
   updateResult,
   updateStep,
 } from "./update-command-maintenance-fixtures.test-support.js";

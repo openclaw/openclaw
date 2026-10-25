@@ -168,6 +168,7 @@ describe("streaming Markdown DOM", () => {
       draw("A growing reply with more text");
       const text = container.querySelector("p")?.textContent;
       observer.observe(container, { characterData: true, subtree: true });
+      draw("A growing reply with more text");
       await vi.advanceTimersByTimeAsync(50);
       expect(container.querySelector("p")?.textContent).toBe(text);
       expect([...mutations, ...observer.takeRecords()]).toHaveLength(0);

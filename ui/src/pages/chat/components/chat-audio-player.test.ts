@@ -476,13 +476,19 @@ describe("ChatAudioPlayer", () => {
     async (change) => {
       const intersect = observeIntersections();
       mockAudioContext();
-      const observe = vi.fn();
-      const disconnect = vi.fn();
+      const targets = new Set<Element>();
       vi.stubGlobal(
         "ResizeObserver",
         class {
-          observe = observe;
-          disconnect = disconnect;
+          observe(target: Element) {
+            targets.add(target);
+          }
+          unobserve(target: Element) {
+            targets.delete(target);
+          }
+          disconnect() {
+            targets.clear();
+          }
         },
       );
       vi.stubGlobal(
@@ -503,8 +509,7 @@ describe("ChatAudioPlayer", () => {
       await waitForSolid(() => expect(waveformElement(player)).not.toBeNull());
       const waveform = waveformElement(player)!;
       const media = player.querySelector("audio")!;
-      expect(observe).toHaveBeenCalledExactlyOnceWith(waveform);
-      expect(disconnect).not.toHaveBeenCalled();
+      expect(targets.has(waveform)).toBe(true);
       expect(media.getAttribute("src")).toBe("blob:waveform-disposal");
       const { pause } = mockActivePlayback(media);
       if (change === "unmount") {
@@ -520,7 +525,7 @@ describe("ChatAudioPlayer", () => {
         );
       }
       expect(waveform.isConnected).toBe(false);
-      expect(disconnect).toHaveBeenCalledOnce();
+      expect(targets.has(waveform)).toBe(false);
       expect(pause).toHaveBeenCalledOnce();
     },
   );

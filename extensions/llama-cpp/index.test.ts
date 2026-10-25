@@ -7,13 +7,13 @@ import type {
   OpenClawPluginApi,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import {
   clearEmbeddingProviders,
+  createCapturedPluginRegistration,
   createEmptyPluginRegistry,
   getActivePluginRegistry,
   getRegisteredEmbeddingProvider,
@@ -108,13 +108,8 @@ afterEach(() => {
 });
 
 function registerTextProvider(): ProviderPlugin {
-  const providers: ProviderPlugin[] = [];
-  llamaCppPlugin.register(
-    createTestPluginApi({
-      id: PROVIDER_ID,
-      registerProvider: (provider) => providers.push(provider),
-    }),
-  );
+  const { api, providers } = createCapturedPluginRegistration({ id: PROVIDER_ID });
+  llamaCppPlugin.register(api);
   expect(providers.map((provider) => provider.id)).toEqual([PROVIDER_ID]);
   return expectDefined(providers[0], "llama.cpp provider");
 }

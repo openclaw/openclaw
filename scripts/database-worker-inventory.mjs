@@ -2699,9 +2699,18 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["readScratchStateFromDatabase", "readHeartbeatMonitorScratchFromDatabase"],
+        operations: ["readScratchStateFromDatabase"],
         evidence:
-          "Native maintenance reads: Doctor scratch migration, task scratch, and scratch preflight call readScratchStateFromDatabase, directly or through scratch-store.ts. Worker snapshots, including the private legacy-heartbeat selector, enter through src/cron/store/read-command.ts.",
+          "Native maintenance reads: Doctor scratch migration, task scratch, and scratch preflight call readScratchStateFromDatabase, directly or through scratch-store.ts.",
+      },
+      {
+        tier: "W",
+        operations: [
+          "readCronScratchSnapshotInDatabase",
+          "readHeartbeatMonitorScratchFromDatabase",
+        ],
+        evidence:
+          "Only cron/store/read-command.ts calls the snapshot through openclaw-state-read-handlers.ts in openclaw-state-read.worker.ts. The private heartbeat reader is called only by that snapshot; host callers dispatch cron.scratch through scratch-read.ts.",
       },
     ],
   ],

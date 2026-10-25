@@ -21,6 +21,7 @@ const output = process.env.OPENCLAW_BENCH_RETAINED_WORKER_DIR;
 const baseline = process.env.OPENCLAW_BENCH_BASELINE_DIR;
 const traceGc = process.env.OPENCLAW_BENCH_TRACE_GC === "1";
 const sampleAllocation = process.env.OPENCLAW_BENCH_SAMPLE_ALLOCATION === "1";
+const sampleCpu = process.env.OPENCLAW_BENCH_SAMPLE_CPU === "1";
 if ((!output && !baseline) || (output && !path.isAbsolute(output))) {
   throw new Error("Worker heap preload requires an absolute synthetic benchmark output directory");
 }
@@ -68,6 +69,7 @@ workerThreads.Worker = class extends NativeWorker {
               ...(output ? { OPENCLAW_BENCH_RETAINED_WORKER_DIR: output } : {}),
               ...(output && traceGc ? { OPENCLAW_BENCH_TRACE_GC: "1" } : {}),
               ...(output && sampleAllocation ? { OPENCLAW_BENCH_SAMPLE_ALLOCATION: "1" } : {}),
+              ...(output && sampleCpu ? { OPENCLAW_BENCH_SAMPLE_CPU: "1" } : {}),
               ...(baseline ? { OPENCLAW_BENCH_BASELINE_DIR: baseline } : {}),
             },
     });
@@ -130,6 +132,7 @@ if (
     node: process.version,
     traceGc,
     sampleAllocation,
+    sampleCpu,
   };
   const traceMarker = (marker: string, commandId: string) => {
     writeSync(1, `${marker} pid=${process.pid} threadId=${threadId} command=${commandId}\n`);
@@ -236,6 +239,14 @@ if (
           includeObjectsCollectedByMinorGC: true,
         });
       }
+      if (sampleCpu) {
+        if (!inspector) {
+          inspector = new Session();
+          inspector.connect();
+        }
+        await inspector.post("Profiler.enable");
+        await inspector.post("Profiler.start");
+      }
       if (traceGc) {
         // Identify the isolate before starting counters; forced collections are not workload GC.
         traceMarker("WORKER_GC_IDENTIFY_BEGIN", command.id);
@@ -274,6 +285,7 @@ if (
       const allocation = sampleAllocation
         ? (await inspector!.post("HeapProfiler.stopSampling")).profile
         : undefined;
+      const cpuProfile = sampleCpu ? (await inspector!.post("Profiler.stop")).profile : undefined;
       if (traceGc) {
         setFlagsFromString("--no-trace-gc-nvp");
         traceMarker("WORKER_GC_END", command.id);
@@ -282,6 +294,15 @@ if (
       drainGc(false);
       const result = measured;
       measured = undefined;
+      const finalMemory = memory();
+      const allocationProfilePath = allocation ? `${prefix}.${command.id}.heapprofile` : undefined;
+      const cpuProfilePath = cpuProfile ? `${prefix}.${command.id}.cpuprofile` : undefined;
+      if (allocationProfilePath) {
+        writeFileSync(allocationProfilePath, JSON.stringify(allocation));
+      }
+      if (cpuProfilePath) {
+        writeFileSync(cpuProfilePath, JSON.stringify(cpuProfile));
+      }
       publish(command.id, {
         ok: true,
         operation: command.operation,
@@ -292,6 +313,8 @@ if (
         endedAtEpochMs,
         elapsedMs,
         cpu,
+        allocationProfilePath,
+        cpuProfilePath,
         ...(allocation
           ? {
               allocation: {
@@ -303,7 +326,7 @@ if (
             }
           : {}),
         initialMemory: result.initialMemory,
-        finalMemory: memory(),
+        finalMemory,
         gc: Object.fromEntries(
           [...result.gc].map(([kind, samples]) => [kind, distribution(samples)]),
         ),

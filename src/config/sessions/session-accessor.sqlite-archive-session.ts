@@ -3,9 +3,11 @@ import path from "node:path";
 import { MessageChannel, type Worker } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { WorkerTaskError } from "@openclaw/worker-runtime";
+import { createWorkerIdleTimers, WorkerTaskError } from "@openclaw/worker-runtime";
+import { markWorkerRetirement } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
@@ -40,6 +42,8 @@ type ArchiveConnection = {
   exited: Promise<void>;
   didExit: boolean;
   operationId: number;
+  idle: ReturnType<typeof createWorkerIdleTimers>;
+  idleTimer?: NodeJS.Timeout;
   failure?: Error;
   retiring?: Promise<void>;
 };
@@ -319,6 +323,9 @@ class ArchiveSession {
     // The FIFO leaves no native handles in the idle worker; transfer execution, not authority.
     const previous = sessions.warm;
     if (previous && previous !== this) {
+      if (previous.connection) {
+        previous.connection.idle.clear(previous.connection);
+      }
       if (
         !previous.revoked &&
         previous.options.env.OPENCLAW_STATE_DIR === this.options.env.OPENCLAW_STATE_DIR &&
@@ -337,6 +344,9 @@ class ArchiveSession {
       }
     }
     this.assertCurrent();
+    if (this.connection) {
+      this.connection.idle.clear(this.connection);
+    }
     await this.connection?.retiring;
     this.assertCurrent();
     const connection = (this.connection ??= this.start(createWorker));
@@ -355,6 +365,15 @@ class ArchiveSession {
       if (this.dispatched === dispatched) {
         this.dispatched = undefined;
       }
+      if (!connection.retiring && !connection.didExit && !connection.failure) {
+        connection.idle.arm(connection, 5 * 60_000, () => {
+          // An open scope remains usable after its idle carrier exits.
+          markWorkerRetirement(connection.worker, "idle_timeout");
+          void (this.released ? this.close() : this.retire()).catch((error: unknown) => {
+            process.emitWarning(`SQLite archive worker retirement failed: ${String(error)}`);
+          });
+        });
+      }
     }
   }
 
@@ -369,6 +388,7 @@ class ArchiveSession {
       didExit: false,
       exited: Promise.resolve(),
       operationId: 0,
+      idle: createWorkerIdleTimers(runInDetachedAsyncContext),
     };
     worker.on("error", (error) => {
       connection.failure ??= toStringifiedError(error);
@@ -379,6 +399,7 @@ class ArchiveSession {
     });
     connection.exited = new Promise((resolve) => {
       worker.once("exit", (code) => {
+        connection.idle.clear(connection);
         connection.didExit = true;
         if (code !== 0) {
           connection.failure ??= new Error(`SQLite archive Worker exited with code ${code}`);
@@ -394,6 +415,7 @@ class ArchiveSession {
     if (!connection) {
       return Promise.resolve();
     }
+    connection.idle.clear(connection);
     return (connection.retiring ??= (async () => {
       // Queued requests own no native work and will refuse at FIFO admission.
       await this.dispatched?.catch(() => {});

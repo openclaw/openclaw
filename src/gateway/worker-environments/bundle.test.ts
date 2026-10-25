@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import {
+  planStandaloneRuntime,
+  pruneStandaloneRuntime,
+} from "../../../scripts/lib/bun-standalone-sidecar.mjs";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   extractWorkerBundleArchive,
@@ -160,49 +164,65 @@ describe("worker bundle producer", () => {
     });
   });
 
-  it("reuses the sealed worker graph from an installed npm package", async () => {
-    await withTestDir({ prefix: "openclaw-worker-packaged-" }, async (root) => {
-      const sourceRoot = path.join(root, "source");
-      await writeFixture(sourceRoot, 'export { value } from "./worker-chunk-runtime.mjs";');
-      await fs.writeFile(
-        path.join(sourceRoot, "dist/worker/worker-chunk-runtime.mjs"),
-        "export const value = 1;",
-      );
-      const built = await producer(sourceRoot, path.join(root, "source-cache")).prepare();
+  it.each(["npm", "standalone"])(
+    "reuses the sealed worker graph from a %s package",
+    async (kind) => {
+      await withTestDir({ prefix: "openclaw-worker-packaged-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        await writeFixture(sourceRoot, 'export { value } from "./worker-chunk-runtime.mjs";');
+        await fs.writeFile(
+          path.join(sourceRoot, "dist/worker/worker-chunk-runtime.mjs"),
+          "export const value = 1;",
+        );
+        const built = await producer(sourceRoot, path.join(root, "source-cache")).prepare();
 
-      const installedRoot = path.join(root, "installed");
-      const archiveRoot = path.join(installedRoot, "dist/worker-artifacts");
-      await fs.mkdir(archiveRoot, { recursive: true });
-      await fs.writeFile(
-        path.join(installedRoot, "package.json"),
-        `${JSON.stringify({ name: "openclaw", version: "1.2.3" })}\n`,
-      );
-      const packagedArchive = path.join(archiveRoot, `${built.bundleHash}.tar.gz`);
-      await fs.copyFile(built.tarballPath, packagedArchive);
+        const installedRoot = path.join(root, "installed");
+        const archiveRoot = path.join(installedRoot, "dist/worker-artifacts");
+        await fs.mkdir(archiveRoot, { recursive: true });
+        await fs.writeFile(
+          path.join(installedRoot, "package.json"),
+          `${JSON.stringify({ name: "openclaw", version: "1.2.3" })}\n`,
+        );
+        const packagedArchive = path.join(archiveRoot, `${built.bundleHash}.tar.gz`);
+        await fs.copyFile(built.tarballPath, packagedArchive);
+        if (kind === "standalone") {
+          await fs.mkdir(path.join(installedRoot, "dist/worker"));
+          pruneStandaloneRuntime(
+            planStandaloneRuntime(installedRoot, [], new Set(), ["dist/worker"]),
+          );
+          expect(await fs.readdir(path.join(installedRoot, "dist/worker"))).toEqual([]);
+        }
 
-      const installed = await producer(installedRoot, path.join(root, "installed-cache")).prepare();
-      expect(installed).toMatchObject({
-        bundleHash: built.bundleHash,
-        tarballPath: packagedArchive,
-      });
-      expect(installed.tarballSha256).toBe(built.tarballSha256);
-      await expect(fs.stat(path.join(root, "installed-cache"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+        const installed = await producer(
+          installedRoot,
+          path.join(root, "installed-cache"),
+        ).prepare();
+        expect(installed).toMatchObject({
+          bundleHash: built.bundleHash,
+          tarballPath: packagedArchive,
+        });
+        expect(installed.tarballSha256).toBe(built.tarballSha256);
+        await expect(fs.stat(path.join(root, "installed-cache"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
 
-      const installedAlias = path.join(root, "installed-alias");
-      await fs.symlink(installedRoot, installedAlias, "junction");
-      const throughAlias = await producer(installedAlias, path.join(root, "alias-cache")).prepare();
-      expect(throughAlias).toMatchObject({
-        bundleHash: built.bundleHash,
-        tarballPath: path.join(
+        const installedAlias = path.join(root, "installed-alias");
+        await fs.symlink(installedRoot, installedAlias, "junction");
+        const throughAlias = await producer(
           installedAlias,
-          "dist/worker-artifacts",
-          `${built.bundleHash}.tar.gz`,
-        ),
+          path.join(root, "alias-cache"),
+        ).prepare();
+        expect(throughAlias).toMatchObject({
+          bundleHash: built.bundleHash,
+          tarballPath: path.join(
+            installedAlias,
+            "dist/worker-artifacts",
+            `${built.bundleHash}.tar.gz`,
+          ),
+        });
       });
-    });
-  });
+    },
+  );
 
   it("hashes and archives only the dedicated deploy artifacts", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-" }, async (root) => {

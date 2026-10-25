@@ -3,14 +3,12 @@ import { createServer, type IncomingHttpHeaders, type ServerResponse } from "nod
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 import { buffer } from "node:stream/consumers";
-import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import type {
   OpenClawConfig,
   UnifiedModelCatalogProviderContext,
-  UnifiedModelCatalogProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { acquireTestPortBlock, useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -80,8 +78,7 @@ function catalog() {
 
 describe("registered ClawRouter image generation over HTTP", () => {
   useIsolatedStateGuard();
-  const providers: ImageGenerationProvider[] = [];
-  const catalogs: UnifiedModelCatalogProviderPlugin[] = [];
+  let captured: ReturnType<typeof createCapturedPluginRegistration>;
   let baseUrl: string;
   let externalResultUrl: string;
   const proxyTargets: string[] = [];
@@ -180,16 +177,8 @@ describe("registered ClawRouter image generation over HTTP", () => {
     await once(storageServer, "listening");
     baseUrl = "http://127.0.0.1:" + claim.port;
     externalResultUrl = "http://127.0.0.1:" + (claim.port + 1) + "/external-result.png";
-    plugin.register?.(
-      createTestPluginApi({
-        registerImageGenerationProvider(provider) {
-          providers.push(provider);
-        },
-        registerModelCatalogProvider(provider) {
-          catalogs.push(provider);
-        },
-      }),
-    );
+    captured = createCapturedPluginRegistration();
+    plugin.register?.(captured.api);
   });
   afterAll(async () => {
     for (const socket of proxySockets) {
@@ -237,8 +226,9 @@ describe("registered ClawRouter image generation over HTTP", () => {
         ...overrides,
       },
       {
-        getProvider: (id) => providers.find((provider) => provider.id === id),
-        listProviders: () => providers,
+        getProvider: (id) =>
+          captured.imageGenerationProviders.find((provider) => provider.id === id),
+        listProviders: () => captured.imageGenerationProviders,
         log: { warn() {} },
       },
     );
@@ -607,7 +597,9 @@ describe("registered ClawRouter image generation over HTTP", () => {
   it("publishes only same-key entitled image rows through the registered catalog family", async () => {
     // Catalog discovery uses a literal synthetic key; runtime tests above use a real profile binding.
     cfg.models!.providers!.clawrouter!.apiKey = "synthetic-router-key";
-    const selected = catalogs.find((provider) => provider.kinds.includes("image_generation"));
+    const selected = captured.modelCatalogProviders.find((provider) =>
+      provider.kinds.includes("image_generation"),
+    );
     expect(selected).toBeDefined();
     const context: UnifiedModelCatalogProviderContext = {
       config: cfg,

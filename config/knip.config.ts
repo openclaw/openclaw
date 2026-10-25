@@ -292,6 +292,27 @@ const repositoryScriptEntries = [
   "scripts/perf/session-initial-context-measure.ts!",
   "scripts/perf/sql-probe-measure.ts!",
   "scripts/perf/workspace-manifest-retention.ts!",
+  // Maintained guides and source headers invoke these focused workloads by exact path.
+  "scripts/bench-memory-publication.mjs!",
+  "scripts/perf/bash-parser-memory.ts!",
+  "scripts/perf/chat-progress-capture-measure.ts!",
+  "scripts/perf/code-mode-json-fit-measure.ts!",
+  "scripts/perf/code-mode-json-gateway-measure.ts!",
+  "scripts/perf/crabbox-state-polling.mts!",
+  "scripts/perf/local-workspace-manifest-equivalence.ts!",
+  "scripts/perf/local-workspace-manifest-measure.ts!",
+  "scripts/perf/operator-model-policy-list-probe.mjs!",
+  "scripts/perf/operator-model-policy-load.mjs!",
+  "scripts/perf/operator-model-policy-measure.ts!",
+  "scripts/perf/provider-rate-limit-retention.ts!",
+  "scripts/perf/session-cost-refresh-measure.ts!",
+  "scripts/perf/sqlite-operation-receive-measure.ts!",
+  "scripts/perf/tool-search-lexical-measure.ts!",
+  "scripts/perf/worker-cold-fixture.ts!",
+  // The performance drivers load these instrumentation preloads by exact path.
+  "scripts/perf/bash-parser-gateway-preload.mjs!",
+  "scripts/perf/provider-rate-limit-stress-probe.mjs!",
+  "scripts/perf/worker-creation-preload.mjs!",
   // Merged benchmark PRs and source headers invoke these retained workloads by exact path.
   // The transcript broadcast benchmark loads the stall recorder through --gateway-preload.
   "scripts/bench-filesystem-preconditions.mts!",

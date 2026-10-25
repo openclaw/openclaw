@@ -95,6 +95,14 @@ builds with `--disallow-code-generation-from-strings=strict` still report action
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw
 does not silently switch executors.
 
+The sidecar retains the canonical worker deployment archive for transfer to paired
+nodes. It does not retain loose host worker modules. A standalone node uses the
+same executable's generic Bun runner to prewarm and execute a transferred worker
+bundle, preserving its normal bundle and protocol checks. In a run-only AOT build,
+that portable worker graph runs interpreted; embedded host worker threads still
+execute their compiled entries. Qualify this child path on the exact signed
+artifact without adding JIT entitlements or substituting a host runtime.
+
 ### Original TypeScript and compiler options
 
 `--compile-aot` compiles the completed JavaScript runtime build. `--aot-source` resolves
@@ -196,7 +204,8 @@ of identical prepared inputs share that identity; changing compiled code or nati
 resources invalidates it.
 For reproducible preparation, set the same `OPENCLAW_BUILD_TIMESTAMP` when running
 `pnpm build` in each checkout. Local cache freshness stamps are omitted from the
-standalone runtime. Compare executable hashes before timestamped signing;
+standalone runtime, and retained plugin-loader bytes omit staging directory names.
+Compare executable hashes before timestamped signing;
 a matching build identity alone does not prove byte-identical executables.
 
 For breakpoints, the companion also retains the selected input runtime, its
@@ -437,7 +446,7 @@ boundaries. The sidecar contains the resources read from disk:
 - Session-card fonts, HTML export templates, and bundled hook metadata.
 - Native addons, shared libraries, dependency resources, and their package and
   license metadata.
-- The host-owned plugin transform package for JIT and bytecode builds.
+- The host-owned plugin loading and transform package.
 - Runtime identity and startup metadata, install-owner metadata, and license notices.
 
 The builder removes embedded application and bundled plugin JavaScript, source
@@ -448,20 +457,19 @@ executable metadata supplies bundled plugin source checks and Doctor contract
 hashes. Installed plugins keep their normal filesystem admission and loading
 rules and live in the configured state directory.
 
-JIT and bytecode builds, including the matched JIT companion, retain Jiti and its
-lazy Babel transformer in one host-owned package under
+Standalone builds retain native plugin loading, Jiti, and its lazy Babel transformer
+in one host-owned package under
 `runtime/node_modules/@openclaw/plugin-loader/`. The package loads only when a
-plugin needs source transformation; native JavaScript loading, including supported
-native ESM entry behavior, keeps its existing path. The `pluginLoader` resource
-category includes the bundle, package metadata, and license.
+plugin needs source transformation or an AOT host loads an external module.
+Native plugin loading leaves Jiti and Babel uninitialized. The `pluginLoader`
+resource category includes the bundle, package metadata, and license.
 
-AOT builds admit only compiler-embedded plugin modules; an install does not add
-code to the executable. An AOT build without `--support-output` omits the loader
-package. A paired AOT/JIT build keeps the same resource snapshot in both sidecars,
-including the inactive loader package in the AOT sidecar. Only the JIT artifact
-publishes its lazy loader
-factory; the AOT artifact does not enable it. The compiled entry contract and
-presence of package files do not establish source-plugin support.
+AOT builds keep bundled plugins and the host SDK in the compiled image. Fetched
+plugins load through the declared external loader and run interpreted against
+that same SDK; installing one does not change the executable. Existing plugin
+admission and generation ownership still apply. A paired AOT/JIT build keeps the
+same loader resource snapshot in both sidecars. Strict code-generation policies
+can still reject interpreted plugins with runtime execution guidance.
 
 On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
 the standalone executable's Bun mode. This preserves npm registry authentication,

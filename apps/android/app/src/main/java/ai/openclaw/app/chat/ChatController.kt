@@ -584,6 +584,25 @@ class ChatController internal constructor(
 
   @Volatile private var progressCardNeedsRetry = false
 
+  private val sessionGroupCatalogSequence = AtomicLong(0L)
+  private val sessionGroupCatalogMutable = MutableStateFlow(SessionGroupCatalogSnapshot())
+  internal val sessionGroupCatalog: StateFlow<SessionGroupCatalogSnapshot> = sessionGroupCatalogMutable.asStateFlow()
+
+  internal fun refreshSessionGroups() {
+    val gatewayScope = currentCacheScope() ?: return
+    val lease = captureRequestLease(gatewayScope) ?: return
+    val sequence = sessionGroupCatalogSequence.incrementAndGet()
+    scope.launch {
+      val catalog =
+        runCatchingCancellable {
+          parseSessionGroupCatalog(lease.request("sessions.groups.list", "{}"))
+        }.getOrNull() ?: return@launch
+      publishGatewayState(lease, { gatewayScope == currentCacheScope() && sequence == sessionGroupCatalogSequence.get() }) {
+        sessionGroupCatalogMutable.value = catalog
+      }
+    }
+  }
+
   private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   private val presentedSessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   val sessions: StateFlow<List<ChatSessionEntry>> = presentedSessions.asStateFlow()
@@ -810,6 +829,23 @@ class ChatController internal constructor(
 
   // Retained selection and event rows must not enlarge the next requested page.
   private var sessionsListLimit: Int? = null
+  private var sessionRosterNextOffset: Int? = null
+  private var sessionRosterLoadedLimit: Int? = null
+  private val sessionRosterHasMoreMutable = MutableStateFlow(false)
+  internal val sessionRosterHasMore: StateFlow<Boolean> = sessionRosterHasMoreMutable.asStateFlow()
+  private val sessionRosterLoadingMoreMutable = MutableStateFlow(false)
+  internal val sessionRosterLoadingMore: StateFlow<Boolean> = sessionRosterLoadingMoreMutable.asStateFlow()
+  private val sessionRosterLoadFailedMutable = MutableStateFlow(false)
+  internal val sessionRosterLoadFailed: StateFlow<Boolean> = sessionRosterLoadFailedMutable.asStateFlow()
+  private val sessionRosterLoadMutex = Mutex()
+
+  private fun clearSessionRosterPaging() {
+    sessionRosterNextOffset = null
+    sessionRosterLoadedLimit = null
+    sessionRosterHasMoreMutable.value = false
+    sessionRosterLoadingMoreMutable.value = false
+    sessionRosterLoadFailedMutable.value = false
+  }
 
   // One acknowledgement per unread episode: the pending flag clears when the
   // server-confirmed read (unread=false) arrives, so fresh activity on the open
@@ -1038,11 +1074,14 @@ class ChatController internal constructor(
       clearProgressCard()
       liveHistoryMarker = null
       publishSessions(emptyList())
+      sessionGroupCatalogSequence.incrementAndGet()
+      sessionGroupCatalogMutable.value = SessionGroupCatalogSnapshot()
       publishRunPresentation()
       clearQuestions()
       applyThinkingMetadata(null)
       sessionsListArchived = false
       sessionsListLimit = null
+      clearSessionRosterPaging()
       unreadPatchSessionKey = null
       unreadActivationObserved = false
       unreadActivationMarkedUnreadAt = null
@@ -1210,6 +1249,7 @@ class ChatController internal constructor(
     publishSessions(emptyList())
     sessionsListArchived = false
     sessionsListLimit = null
+    clearSessionRosterPaging()
     val generation = beginHistoryLoad(key, ownerAgentId = null)
     bootstrap(sessionKey = key, generation = generation)
   }
@@ -1248,8 +1288,27 @@ class ChatController internal constructor(
     limit: Int? = null,
     archived: Boolean = false,
   ) {
-    scope.launch { fetchSessions(limit = limit, archived = archived) }
+    scope.launch { fetchSessionsForCurrentWindow(limit, archived) }
   }
+
+  internal suspend fun loadMoreSessions(): Boolean =
+    sessionRosterLoadMutex.withLock {
+      val offset = sessionRosterNextOffset ?: return false
+      if (sessionsListArchived || !sessionRosterHasMoreMutable.value) return false
+      val owner = currentCacheScope()
+      val ownerAgentId = resolveAgentIdForSessionKey(_sessionKey.value)
+      sessionRosterLoadingMoreMutable.value = true
+      sessionRosterLoadFailedMutable.value = false
+      try {
+        val loaded = fetchSessions(sessionsListLimit ?: SIDEBAR_SESSION_ROSTER_LIMIT, offset = offset, append = true)
+        if (owner == currentCacheScope() && ownerAgentId == resolveAgentIdForSessionKey(_sessionKey.value)) {
+          sessionRosterLoadFailedMutable.value = !loaded
+        }
+        loaded
+      } finally {
+        if (owner == currentCacheScope()) sessionRosterLoadingMoreMutable.value = false
+      }
+    }
 
   internal suspend fun patchSession(request: ChatSessionPatch): Boolean =
     with(request) {
@@ -1499,7 +1558,7 @@ class ChatController internal constructor(
         }
       val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
       val createdKey = parseCreatedSessionKey(json, requestSessionCreate(requestCacheScope, params, lease))
-      fetchSessions(limit = sessionsListLimit, archived = false)
+      fetchSessionsForCurrentWindow(archived = false)
       createdKey
     } catch (err: Throwable) {
       updateErrorText(err.message)
@@ -4649,6 +4708,9 @@ class ChatController internal constructor(
   private suspend fun fetchSessions(
     limit: Int?,
     archived: Boolean = false,
+    offset: Int? = null,
+    append: Boolean = false,
+    preserveWindow: Boolean = false,
   ): Boolean {
     val requestCacheScope = currentCacheScope()
     val requestLimit = limit?.takeIf { it > 0 }
@@ -4677,9 +4739,10 @@ class ChatController internal constructor(
             refresh.settingsSnapshots.clear()
             settingsMutationRevision(requestCacheScope)
           }
-        val params = sessionListParams(requestAgentId, requestLimit, archived)
+        val params = sessionListParams(requestAgentId, requestLimit, archived, offset = offset)
         val res = requestGateway("sessions.list", params.toString())
-        val (entries, isTruncated) = parseSessions(res)
+        val parsed = parseSessions(res, offset ?: 0)
+        val entries = parsed.sessions
         val result = entries.map { session -> session.copy(ownerAgentId = requestAgentId) }
         var retainedSessionKey: String? = null
         val appliedSessions =
@@ -4701,16 +4764,24 @@ class ChatController internal constructor(
                   .firstOrNull {
                     it.key == activeSessionKey && it.ownerAgentId == requestAgentId
                   }?.takeIf { result.none { row -> row.key == activeSessionKey } }
-              val sessions = if (selected == null) result else result + selected
+              val page = if (append) mergeSessionRosterPages(_sessions.value, result) else result
+              val sessions = if (selected == null || page.any { it.key == activeSessionKey }) page else page + selected
               publishSessions(sessions)
               result.forEach { observeSessionSettings(it) }
               sessionsListArchived = archived
-              sessionsListLimit = requestLimit
+              if (!append && !preserveWindow) sessionsListLimit = requestLimit
+              if (archived) {
+                clearSessionRosterPaging()
+              } else {
+                sessionRosterLoadedLimit = requestLimit?.plus(offset ?: 0)
+                sessionRosterNextOffset = parsed.nextOffset
+                sessionRosterHasMoreMutable.value = parsed.hasMore
+              }
               val activeOutsideLocalWindow =
                 sessions
                   .drop(MAX_CACHED_SESSIONS)
                   .any { session -> session.key == activeSessionKey }
-              retainedSessionKey = activeSessionKey.takeIf { selected != null || isTruncated || activeOutsideLocalWindow }
+              retainedSessionKey = activeSessionKey.takeIf { selected != null || parsed.isTruncated || activeOutsideLocalWindow }
               pruneRunTelemetryToAuthoritativeOwnership()
               publishRunPresentation()
               sessions
@@ -4988,7 +5059,23 @@ class ChatController internal constructor(
     }
   }
 
-  private suspend fun fetchSessionsForCurrentWindow(): Boolean = fetchSessions(limit = sessionsListLimit, archived = sessionsListArchived)
+  private suspend fun fetchSessionsForCurrentWindow(
+    limit: Int? = null,
+    archived: Boolean? = null,
+  ): Boolean =
+    sessionRosterLoadMutex.withLock {
+      val requestArchived = archived ?: sessionsListArchived
+      val pageSize = limit?.takeIf { it > 0 } ?: sessionsListLimit ?: SIDEBAR_SESSION_ROSTER_LIMIT.takeUnless { requestArchived }
+      val loadedLimit =
+        sessionRosterLoadedLimit.takeIf {
+          !requestArchived && !sessionsListArchived && (limit == null || limit == sessionsListLimit)
+        }
+      fetchSessions(
+        limit = loadedLimit?.let { maxOf(it, pageSize ?: it) } ?: pageSize,
+        archived = requestArchived,
+        preserveWindow = loadedLimit != null,
+      )
+    }
 
   private fun refreshSessionsForCurrentWindow() {
     scope.launch { fetchSessionsForCurrentWindow() }
@@ -5068,7 +5155,7 @@ class ChatController internal constructor(
           }
           if (!applied || lease?.isCurrent() != true || !synchronized(gatewayScopeApplyLock) { ownsSelection() }) return@async
           if (healthy == true && !hasCurrentChatMetadata()) fetchChatMetadata()
-          if (refresh.refreshSessions && lease.isCurrent() && synchronized(gatewayScopeApplyLock) { ownsSelection() }) fetchSessions(limit = 50)
+          if (refresh.refreshSessions && lease.isCurrent() && synchronized(gatewayScopeApplyLock) { ownsSelection() }) fetchSessionsForCurrentWindow()
         } finally {
           synchronized(gatewayScopeApplyLock) { refresh.claimed = false }
         }
@@ -6125,6 +6212,7 @@ class ChatController internal constructor(
     val swarmKind = swarmKindElement.asStringOrNull()?.trim()
     if (swarmEvent && (swarmKind == "phase" || swarmKind == "log")) return
     val reason = payload["reason"].asStringOrNull()
+    if (reason == "groups") refreshSessionGroups()
     if (isSessionSettingsMutation(payload)) {
       val session = eventSessionObject(payload)
       val key = payload["sessionKey"].asStringOrNull() ?: session?.get("key").asStringOrNull()
@@ -7410,6 +7498,8 @@ class ChatController internal constructor(
   private data class SessionListResult(
     val sessions: List<ChatSessionEntry>,
     val isTruncated: Boolean,
+    val hasMore: Boolean = false,
+    val nextOffset: Int? = null,
   )
 
   private data class SessionSettingsPatchResolution(
@@ -7421,7 +7511,10 @@ class ChatController internal constructor(
     val entry: ChatSessionEntry?,
   )
 
-  private fun parseSessions(jsonString: String): SessionListResult {
+  private fun parseSessions(
+    jsonString: String,
+    requestedOffset: Int = 0,
+  ): SessionListResult {
     val root =
       json.parseToJsonElement(jsonString).asObjectOrNull()
         ?: return SessionListResult(emptyList(), isTruncated = false)
@@ -7431,10 +7524,13 @@ class ChatController internal constructor(
         ?.mapNotNull { item -> parseSessionEntry(item.asObjectOrNull()) }
         .orEmpty()
     val totalCount = root["totalCount"].asLongOrNull()
-    val isTruncated =
-      root["hasMore"].asBooleanOrNull() == true ||
-        (totalCount != null && totalCount > sessions.size)
-    return SessionListResult(sessions, isTruncated)
+    val loadedEnd = requestedOffset + sessions.size
+    val more = root["hasMore"].asBooleanOrNull() ?: (totalCount != null && totalCount > loadedEnd.toLong())
+    val nextOffset =
+      (root["nextOffset"].asLongOrNull()?.toInt() ?: loadedEnd)
+        .takeIf { more && sessions.isNotEmpty() && it > requestedOffset }
+    val isTruncated = more || (totalCount != null && totalCount > loadedEnd.toLong())
+    return SessionListResult(sessions, isTruncated, nextOffset != null, nextOffset)
   }
 
   private fun parseSessionEntry(
@@ -7465,6 +7561,7 @@ class ChatController internal constructor(
       derivedTitle = obj["derivedTitle"].asStringOrNull()?.trim(),
       label = obj["label"].asStringOrNull()?.trim(),
       autoLabel = obj["autoLabel"].asStringOrNull()?.trim(),
+      kind = obj["kind"].asStringOrNull()?.trim(),
       category = obj["category"].asStringOrNull()?.trim(),
       color =
         obj["color"]
@@ -8068,12 +8165,14 @@ private fun sessionListParams(
   limit: Int?,
   archived: Boolean = false,
   search: String? = null,
+  offset: Int? = null,
 ): JsonObject =
   buildJsonObject {
     put("includeGlobal", JsonPrimitive(true))
     put("includeUnknown", JsonPrimitive(false))
     put("agentId", JsonPrimitive(ownerAgentId))
     if (limit != null) put("limit", JsonPrimitive(limit))
+    if (offset != null) put("offset", JsonPrimitive(offset))
     if (search != null) put("search", JsonPrimitive(search))
     if (archived) put("archived", JsonPrimitive(true))
   }

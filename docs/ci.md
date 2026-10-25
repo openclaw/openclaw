@@ -267,6 +267,8 @@ Linux baseline ratchets and native grep tests reuse an existing `rg` or download
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly, on Node and on the pinned Bun fork.
 
+When the public artifact build is already selected, current-target browser extension E2E runs in `checks-ui-browser-extension` and restores that exact checkout's runtime instead of rebuilding it. The producer archives the runtime before mutable built-artifact verifiers run; the consumer checks its digest and source commit. This replaces the extension matrix row without adding a runner. Standalone browser selections and frozen targets retain their local runtime build. Real-Gateway fixtures retain their separate private-QA preparation.
+
 Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports, including the same seven Control UI seed files on Node and the pinned Bun fork in both Linux cache backends; ordinary CI remains restore-only.
 
 In-process Gateway test configs use [exclusive plan admission within existing packed jobs](/ci/capacity#measured-shard-weights).
