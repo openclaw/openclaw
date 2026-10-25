@@ -155,7 +155,7 @@ describe.skipIf(!connection)("PostgreSQL index ordering migration", () => {
           for (const previous of before) {
             const current = after.find((index) => index.name === previous.name);
             if (current?.definition === previous.definition) {
-              expect(current.oid, String(previous.name)).toBe(previous.oid);
+              expect(current?.oid, String(previous.name)).toBe(previous.oid);
             } else {
               expect(current?.oid, String(previous.name)).not.toBe(previous.oid);
             }

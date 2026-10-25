@@ -342,8 +342,9 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
+  // Lazy fragments can be created before Doctor upgrades a predecessor's index ordering.
   // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
-  db.exec(fragment.sql);
+  db.exec(facts.version < 32 ? withLegacyPostgresIndexOrdering(fragment.sql) : fragment.sql);
   admitPostgresPhysicalFacts({
     db,
     namespace: facts.namespace,

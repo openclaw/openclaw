@@ -357,7 +357,7 @@ export async function generatePostgresSchemas(
               item.kind === "index" && item.table === "task_runs" && item.name === indexName,
           );
           assert.ok(
-            index && index.sql?.startsWith("CREATE INDEX "),
+            index?.sql && index.sql.startsWith("CREATE INDEX "),
             `Missing translated shared-state v24 index: ${indexName}`,
           );
           return withLegacyPostgresIndexOrdering(index.sql);
