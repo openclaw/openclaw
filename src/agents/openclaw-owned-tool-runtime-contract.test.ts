@@ -1,4 +1,3 @@
-// Verifies OpenClaw-owned tool hooks preserve adjusted params and telemetry.
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   installOpenClawOwnedToolHooks,
@@ -12,18 +11,7 @@ import { createToolHandlerMocks } from "./agent-tool-handler-state.test-helpers.
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
-import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { prepareToolResult } from "./embedded-agent-tool-results.js";
-
-function createContractTool(name: string, execute: AgentTool["execute"]): AgentTool {
-  return {
-    name,
-    label: name,
-    description: `contract tool: ${name}`,
-    parameters: { type: "object", properties: {} },
-    execute,
-  } as AgentTool;
-}
 
 type ToolExecutionStartEvent = Parameters<typeof handleToolExecutionStart>[1];
 type ToolExecutionEndEvent = Parameters<typeof handleToolExecutionEnd>[1];
@@ -33,11 +21,7 @@ const session = {
   sessionId: "session-1",
   sessionKey: "agent:agent-1:session-1",
 };
-
-function createToolHandlerCtx(runId: string): ToolHandlerContext {
-  // Minimal embedded-agent tool handler context used to drive start/end events.
-  return { params: { ...session, runId }, ...createToolHandlerMocks() };
-}
+const messageTarget = { action: "send", provider: "telegram", to: "chat-1" };
 
 async function startContract(
   toolName: string,
@@ -47,19 +31,28 @@ async function startContract(
 ) {
   const runId = `run-${suffix}`;
   const toolCallId = `call-${suffix}`;
-  const tool = wrapToolWithBeforeToolCallHook(createContractTool(toolName, execute), {
-    ...session,
-    runId,
-  });
+  const tool = wrapToolWithBeforeToolCallHook(
+    {
+      name: toolName,
+      label: toolName,
+      description: `contract tool: ${toolName}`,
+      parameters: { type: "object", properties: {} },
+      execute,
+    } as AgentTool,
+    {
+      ...session,
+      runId,
+    },
+  );
   const definition = toToolDefinitions([tool])[0];
   if (!definition) {
     throw new Error("missing embedded agent tool definition");
   }
-  const ctx = createToolHandlerCtx(runId);
+  const ctx = { params: { ...session, runId }, ...createToolHandlerMocks() };
+  const event = { toolName, toolCallId };
   await handleToolExecutionStart(ctx, {
+    ...event,
     type: "tool_execution_start",
-    toolName,
-    toolCallId,
     args,
   } as ToolExecutionStartEvent);
   const result = await definition.execute(
@@ -81,8 +74,7 @@ async function startContract(
       expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
       // after_tool_call fires asynchronously after the execution-end event.
       return vi.waitFor(() => {
-        expect(hooks.afterToolCall).toHaveBeenCalledTimes(1);
-        expect(hooks.afterToolCall).toHaveBeenCalledWith(
+        expect(hooks.afterToolCall).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ toolName, toolCallId, ...payload }),
           expect.objectContaining({ runId, toolCallId, ...context }),
         );
@@ -93,8 +85,7 @@ async function startContract(
         ctx,
         {
           type: "tool_execution_end",
-          toolName,
-          toolCallId,
+          ...event,
           isError,
           result,
         } as ToolExecutionEndEvent,
@@ -143,13 +134,7 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
   it("commits successful embedded agent messaging text, media, and target telemetry", async () => {
     const hooks = installOpenClawOwnedToolHooks();
     const execute = vi.fn(async () => textToolResult("sent", { deliveryStatus: "sent" }));
-    const originalParams = {
-      action: "send",
-      content: "hello from embedded agent",
-      mediaUrl: "/tmp/openclaw-reply.png",
-      provider: "telegram",
-      to: "chat-1",
-    };
+    const originalParams = { ...messageTarget, content: "hello", mediaUrl: "/tmp/reply.png" };
 
     const { ctx, finish, expectAfter } = await startContract(
       "message",
@@ -159,17 +144,19 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
     );
     await finish();
 
-    expect(ctx.state.messagingToolSentTexts).toEqual(["hello from embedded agent"]);
-    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/openclaw-reply.png"]);
-    expect(ctx.state.messagingToolSentTargets).toEqual([
-      expect.objectContaining({
-        tool: "message",
-        provider: "telegram",
-        to: "chat-1",
-        text: "hello from embedded agent",
-        mediaUrls: ["/tmp/openclaw-reply.png"],
-      }),
-    ]);
+    expect(ctx.state).toMatchObject({
+      messagingToolSentTexts: ["hello"],
+      messagingToolSentMediaUrls: ["/tmp/reply.png"],
+      messagingToolSentTargets: [
+        expect.objectContaining({
+          tool: "message",
+          provider: "telegram",
+          to: "chat-1",
+          text: "hello",
+          mediaUrls: ["/tmp/reply.png"],
+        }),
+      ],
+    });
     await expectAfter(hooks, {
       params: originalParams,
       result: expect.objectContaining({ content: [{ type: "text", text: "sent" }] }),
@@ -179,12 +166,7 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
   it("fails closed when before_tool_call blocks an embedded agent dynamic tool", async () => {
     const hooks = installOpenClawOwnedToolHooks({ blockReason: "blocked by policy" });
     const execute = vi.fn(async () => textToolResult("should not run"));
-    const originalParams = {
-      action: "send",
-      text: "blocked",
-      provider: "telegram",
-      to: "chat-1",
-    };
+    const originalParams = { ...messageTarget, text: "blocked" };
 
     const { result, finish, expectAfter } = await startContract(
       "message",
@@ -192,13 +174,12 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
       originalParams,
       "blocked",
     );
-    const resultDetails = (result as { details?: Record<string, unknown> }).details;
     const blocked = {
       status: "blocked",
       deniedReason: "plugin-before-tool-call",
       reason: "blocked by policy",
     };
-    expect(resultDetails).toMatchObject(blocked);
+    expect(result).toMatchObject({ details: blocked });
     await finish(true);
 
     expect(execute).not.toHaveBeenCalled();
