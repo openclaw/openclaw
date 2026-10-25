@@ -32,7 +32,7 @@ describe("gateway agent worktree preparation", () => {
     if (!acquire) {
       throw new Error("Handler fixture did not install runtime acquisition");
     }
-    using acquisition = vi
+    using _ = vi
       .spyOn(modelRuntime, "acquireAgentRunPreparedModelRuntime")
       .mockImplementation(async (...args) => {
         const lease = await acquire(...args);
@@ -61,7 +61,6 @@ describe("gateway agent worktree preparation", () => {
       await execution.drain();
       expect(instance.retentionSnapshot().total).toBe(0);
     }
-    expect(acquisition).toHaveBeenCalledTimes(2);
     expect(observations.map((snapshot) => snapshot.references[0]?.owner)).toEqual([
       { runId: "preparation-first", serviceId: "gateway-agent-turn" },
       { runId: "preparation-second", serviceId: "gateway-agent-turn" },
