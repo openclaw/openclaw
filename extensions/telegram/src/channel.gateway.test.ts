@@ -418,165 +418,60 @@ describe("telegramPlugin gateway startup", () => {
       resetTelegramAccountThrottlersForTest();
     });
 
-    it("releases the rotated-out token's throttler", async () => {
-      installTelegramRuntime();
-      const oldToken = "123456:bad-token";
-      const first = getOrCreateAccountThrottler(oldToken);
-
-      await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
-        accountId: "ops",
-        prevCfg: createTelegramConfig("ops"),
-        nextCfg: createTelegramConfig("ops", { botToken: "654321:new-token" }),
-        runtime: createRuntimeSpies(),
-      });
-
-      expect(getOrCreateAccountThrottler(oldToken)).not.toBe(first);
-    });
-
-    it("keeps the throttler when the token change keeps it in use elsewhere", async () => {
-      installTelegramRuntime();
-      const sharedToken = "123456:bad-token";
-      const cfg = {
-        channels: {
-          telegram: {
-            accounts: {
-              ops: { botToken: sharedToken },
-              other: { botToken: sharedToken },
-            },
+    const token = "123456:bad-token";
+    const accounts = (ops: string | undefined, other?: string): OpenClawConfig => ({
+      channels: {
+        telegram: {
+          accounts: {
+            ...(ops ? { ops: { botToken: ops } } : {}),
+            ...(other ? { other: { botToken: other } } : {}),
           },
         },
-      } as OpenClawConfig;
-      const first = getOrCreateAccountThrottler(sharedToken);
-
-      await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
-        accountId: "ops",
-        prevCfg: cfg,
-        nextCfg: {
-          channels: {
-            telegram: {
-              accounts: {
-                ops: { botToken: "654321:new-token" },
-                other: { botToken: sharedToken },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        runtime: createRuntimeSpies(),
-      });
-
-      expect(getOrCreateAccountThrottler(sharedToken)).toBe(first);
-      await releaseAccountThrottler(sharedToken);
+      },
     });
-
-    it("releases the removed account's throttler", async () => {
+    it.each([
+      ["rotate", false, false],
+      ["rotate", true, true],
+      ["remove", false, false],
+      ["remove", true, true],
+      ["unrelated", false, true],
+    ] as const)("%s (shared=%s) retains throttler=%s", async (change, shared, retained) => {
       installTelegramRuntime();
-      const token = "123456:bad-token";
+      const prevCfg = accounts(token, shared ? token : undefined);
       const first = getOrCreateAccountThrottler(token);
-
-      await telegramPlugin.lifecycle?.onAccountRemoved?.({
-        accountId: "ops",
-        prevCfg: createTelegramConfig("ops"),
-        runtime: createRuntimeSpies(),
-      });
-
-      expect(getOrCreateAccountThrottler(token)).not.toBe(first);
-    });
-
-    it("keeps a shared-token throttler when one account is removed", async () => {
-      installTelegramRuntime();
-      const sharedToken = "123456:bad-token";
-      const cfg = {
-        channels: {
-          telegram: {
-            accounts: {
-              ops: { botToken: sharedToken },
-              other: { botToken: sharedToken },
-            },
-          },
-        },
-      } as OpenClawConfig;
-      const first = getOrCreateAccountThrottler(sharedToken);
-
-      await telegramPlugin.lifecycle?.onAccountRemoved?.({
-        accountId: "ops",
-        prevCfg: cfg,
-        runtime: createRuntimeSpies(),
-      });
-
-      expect(getOrCreateAccountThrottler(sharedToken)).toBe(first);
-      await releaseAccountThrottler(sharedToken);
-    });
-
-    it("keeps the throttler when an unrelated setting changes", async () => {
-      installTelegramRuntime();
-      const token = "123456:bad-token";
-      const first = getOrCreateAccountThrottler(token);
-
-      await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
-        accountId: "ops",
-        prevCfg: createTelegramConfig("ops"),
-        nextCfg: createTelegramConfig("ops", { timeoutSeconds: 60 }),
-        runtime: createRuntimeSpies(),
-      });
-
-      expect(getOrCreateAccountThrottler(token)).toBe(first);
+      const context = { accountId: "ops", prevCfg, runtime: createRuntimeSpies() };
+      if (change === "remove") {
+        await telegramPlugin.lifecycle?.onAccountRemoved?.(context);
+      } else {
+        await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
+          ...context,
+          nextCfg:
+            change === "rotate"
+              ? accounts("654321:new-token", shared ? token : undefined)
+              : createTelegramConfig("ops", { timeoutSeconds: 60 }),
+        });
+      }
+      expect(getOrCreateAccountThrottler(token) === first).toBe(retained);
       await releaseAccountThrottler(token);
     });
 
-    it("releases the stopped account's throttler when the token leaves the config", async () => {
-      const runtime = installTelegramRuntime();
-      const oldToken = "123456:bad-token";
-      const prevCfg = createTelegramConfig("ops");
-      runtime.config.current = () => createTelegramConfig("ops", { botToken: "654321:new-token" });
-      const first = getOrCreateAccountThrottler(oldToken);
-      const account = telegramPlugin.config.resolveAccount(prevCfg, "ops");
-      const stopAccount = telegramPlugin.gateway?.stopAccount;
-      if (!stopAccount) {
-        throw new Error("expected Telegram stopAccount gateway handler");
-      }
-
-      await stopAccount(createStartAccountContext({ account, cfg: prevCfg }));
-
-      expect(getOrCreateAccountThrottler(oldToken)).not.toBe(first);
-    });
-
-    it("releases the stopped account's throttler when the account is removed", async () => {
-      const runtime = installTelegramRuntime();
-      const oldToken = "123456:bad-token";
-      const prevCfg = createTelegramConfig("ops");
-      runtime.config.current = () =>
-        ({
-          channels: { telegram: { accounts: { other: { botToken: "789:other-token" } } } },
-        }) as OpenClawConfig;
-      const first = getOrCreateAccountThrottler(oldToken);
-      const account = telegramPlugin.config.resolveAccount(prevCfg, "ops");
-      const stopAccount = telegramPlugin.gateway?.stopAccount;
-      if (!stopAccount) {
-        throw new Error("expected Telegram stopAccount gateway handler");
-      }
-
-      await stopAccount(createStartAccountContext({ account, cfg: prevCfg }));
-
-      expect(getOrCreateAccountThrottler(oldToken)).not.toBe(first);
-    });
-
-    it("keeps the stopped account's throttler while the token stays configured", async () => {
-      const runtime = installTelegramRuntime();
-      const token = "123456:bad-token";
-      const cfg = createTelegramConfig("ops");
-      runtime.config.current = () => cfg;
-      const first = getOrCreateAccountThrottler(token);
-      const account = telegramPlugin.config.resolveAccount(cfg, "ops");
-      const stopAccount = telegramPlugin.gateway?.stopAccount;
-      if (!stopAccount) {
-        throw new Error("expected Telegram stopAccount gateway handler");
-      }
-
-      await stopAccount(createStartAccountContext({ account, cfg }));
-
-      expect(getOrCreateAccountThrottler(token)).toBe(first);
-      await releaseAccountThrottler(token);
-    });
+    it.each(["rotated", "removed", "configured"] as const)(
+      "stops an account whose token is %s",
+      async (state) => {
+        const runtime = installTelegramRuntime();
+        const cfg = createTelegramConfig("ops");
+        runtime.config.current = () =>
+          state === "configured"
+            ? cfg
+            : state === "rotated"
+              ? accounts("654321:new-token")
+              : accounts(undefined, "789:other-token");
+        const first = getOrCreateAccountThrottler(token);
+        await telegramPlugin.gateway!.stopAccount!(accountContext(cfg, "ops"));
+        expect(getOrCreateAccountThrottler(token) === first).toBe(state === "configured");
+        await releaseAccountThrottler(token);
+      },
+    );
   });
 
   it("deletes cached startup botInfo when logout clears the account token", async () => {

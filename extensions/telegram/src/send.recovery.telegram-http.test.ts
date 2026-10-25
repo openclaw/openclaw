@@ -20,7 +20,14 @@ import {
 
 describe("Telegram send recovery conformance over HTTP", () => {
   const fixture = useTelegramHttpFixture();
-  const { cfg, requests, rejections, runtime, buttons, sendThrough } = fixture;
+  const { cfg, requests, rejections, runtime, buttons } = fixture;
+  const sendThrough = (
+    entry: Parameters<typeof fixture.sendThrough>[0],
+    text: string,
+    mediaUrl?: string,
+    rich = false,
+    options?: Parameters<typeof fixture.sendThrough>[6],
+  ) => fixture.sendThrough(entry, text, async () => {}, mediaUrl, rich, undefined, options);
   let bot: typeof fixture.bot;
   let photoPath: string;
   let photos: string[];
@@ -82,19 +89,11 @@ describe("Telegram send recovery conformance over HTTP", () => {
     "keeps %s first-reply ownership and final controls on multipart rich fallback",
     async (entry) => {
       rejections.push("Bad Request: RICH_MESSAGE_CONTENT_REQUIRED");
-      const result = await sendThrough(
-        entry,
-        "A".repeat(4500),
-        async () => {},
-        undefined,
-        true,
-        undefined,
-        {
-          firstReply: true,
-          textLimit: 32_768,
-          linkPreview: false,
-        },
-      );
+      const result = await sendThrough(entry, "A".repeat(4500), undefined, true, {
+        firstReply: true,
+        textLimit: 32_768,
+        linkPreview: false,
+      });
       expectMethods("sendRichMessage", "sendMessage", "sendMessage");
       expect(requests[0]!.fields.rich_message).toMatchObject({ skip_entity_detection: true });
       expect(fieldValues("parse_mode", 1)).toEqual([undefined, undefined]);
@@ -124,15 +123,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
     "recovers a rejected caption ($rejection) without duplicating accepted media",
     async ({ rejection, text, captions }) => {
       rejections.push(`Bad Request: ${rejection}`);
-      const result = await sendThrough(
-        "direct",
-        text,
-        async () => {},
-        photoPath,
-        false,
-        undefined,
-        { textMode: "markdown" },
-      );
+      const result = await sendThrough("direct", text, photoPath, false, { textMode: "markdown" });
       expectMethods("sendPhoto", "sendPhoto");
       expect(fieldValues("caption")).toEqual(captions);
       expect(requests[1]!.fields.parse_mode).toBeUndefined();
@@ -151,10 +142,8 @@ describe("Telegram send recovery conformance over HTTP", () => {
         sendThrough(
           "direct",
           "answer",
-          async () => {},
           kind === "photo" ? photoPath : undefined,
           kind === "rich",
-          undefined,
           kind === "rich" ? {} : { threadId: 77 },
         ),
       ).rejects.toThrow(rejection);
@@ -352,9 +341,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
       description: "Bad Request: group chat was upgraded to a supergroup chat",
       parameters: { migrate_to_chat_id: -100123 },
     });
-    const error = await sendThrough("public", "answer", async () => {}).catch(
-      (failure: unknown) => failure,
-    );
+    const error = await sendThrough("public", "answer").catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(error).toMatchObject({
       retryable: false,
