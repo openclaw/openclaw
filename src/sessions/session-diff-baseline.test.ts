@@ -190,7 +190,8 @@ it("does not retroactively capture a legacy existing session", async () => {
   const f = await fixture(false);
   await expect(f.run()).resolves.toEqual(f.entry);
   expect(captureMocks.capture).not.toHaveBeenCalled();
-  expect(f.read()).toEqual(f.entry);
+  expect(f.read()).toMatchObject(f.entry);
+  expect(f.read()).not.toHaveProperty("sessionDiffBaselineCapture");
 });
 
 it("invalidates capture completion after the authoritative row is deleted", async () => {

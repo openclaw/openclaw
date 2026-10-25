@@ -182,11 +182,15 @@ export async function fixture() {
     assignments: (owner = historyOwner()) => store.readNativeSubagentAssignments?.(identity, owner),
     submissions: (owner = historyOwner()) => store.readNativeSubagentSubmissions(identity, owner),
     record: (assignment: CodexNativeSubagentPendingAssignment) =>
-      store.mutate(identity, {
-        kind: "record-native-subagent-assignment",
-        owner: historyOwner(),
-        assignment,
-      }),
+      store.mutate(
+        identity,
+        {
+          kind: "record-native-subagent-assignment",
+          owner: historyOwner(),
+          assignment,
+        },
+        () => {},
+      ),
     rotate: (threadId: string) =>
       store.mutate(identity, {
         kind: "replace-thread",
