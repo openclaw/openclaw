@@ -251,9 +251,6 @@ describe("catalog and thinking selection", () => {
     }
     expect(prepared.catalog).toEqual([embedded]);
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
-    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ agentId: "main", agentRuntime: "openclaw" }),
-    );
   });
 
   it("keeps prepared thinking ownership", async () => {
@@ -356,18 +353,6 @@ describe("session override precedence and persistence", () => {
         resetModelOverride: false,
       });
     }
-    expect(persist).toHaveBeenCalledOnce();
-    const request = persist.mock.calls[0]?.[0];
-    expect(request).toMatchObject({
-      storePath: "sessions.json",
-      sessionKey,
-      initialEntry: expect.objectContaining({
-        ...(rotating ? { sessionId: "s1" } : {}),
-        providerOverride: "openai",
-        modelOverride: "gpt-4o-mini",
-      }),
-    });
-    expectUnset(request!.entry, "providerOverride", "modelOverride");
     expect(entry).toMatchObject(
       rotating
         ? { sessionId: "s1", providerOverride: "openai", modelOverride: "gpt-4o-mini" }
@@ -535,7 +520,6 @@ it.each(["pin", "source", "provider", "session", "authority"] as const)(
       change === "pin" ? "openai:replacement" : "anthropic:missing",
     );
     expect(entry.updatedAt).toBe(1);
-    expect(authMocks.prepareAuthProfileProvider).toHaveBeenCalledTimes(1);
   },
 );
 

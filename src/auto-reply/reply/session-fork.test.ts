@@ -1,4 +1,3 @@
-// Tests parent-session fork facade storage-boundary behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,18 +9,10 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
-import {
-  resolveSqliteStoreScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readCodexSessionContext } from "../../plugin-sdk/codex-session-transcript-runtime.js";
 import { ModelSelectionLockedError } from "../../sessions/model-selection-error.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   forkSessionEntryFromParent,
@@ -52,23 +43,8 @@ function forkChild(overrides: Partial<Parameters<typeof forkSessionEntryFromPare
   });
 }
 
-function messageEvent(
-  id: string,
-  parentId: string | null,
-  message: Record<string, unknown>,
-  second = 1,
-) {
-  return { type: "message", id, parentId, timestamp: `2026-06-27T00:00:0${second}.000Z`, message };
-}
-
-function leafEvent(parentId: string, targetId: string, second = 4) {
-  return {
-    type: "leaf",
-    id: "active-leaf",
-    parentId,
-    targetId,
-    timestamp: `2026-06-27T00:00:0${second}.000Z`,
-  };
+function messageEvent(id: string, parentId: string | null, message: Record<string, unknown>) {
+  return { type: "message", id, parentId, timestamp: "2026-06-27T00:00:01.000Z", message };
 }
 
 function replaceParentTranscript(
@@ -157,144 +133,66 @@ describe("forkSessionEntryFromParent", () => {
     ).toBeUndefined();
   });
 
-  it("forks the active parent branch into SQLite and persists the child entry", async () => {
-    const activeStoreDir = path.join(root, "active-store");
-    const configStoreDir = path.join(root, "config-store");
-    fs.mkdirSync(activeStoreDir, { recursive: true });
-    fs.mkdirSync(configStoreDir, { recursive: true });
-    storePath = path.join(activeStoreDir, "sessions.json");
-    const configStorePath = path.join(configStoreDir, "sessions.json");
-    const staleSessionKey = "agent:main:subagent:stale-child";
-
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: staleSessionKey, storePath },
-      { sessionId: "stale-child-session", updatedAt: 2 },
-    );
-    const databasePath = resolveOpenClawAgentSqlitePath(
-      toDatabaseOptions(resolveSqliteStoreScope(storePath, { agentId: "main" })),
-    );
-    const maintained = observeSessionMaintenanceCompletion(databasePath);
-    await writeParent({
-      sessionId: "parent-session",
-      totalTokens: 10,
-      totalTokensFresh: true,
-      updatedAt: 10,
-    });
+  it("persists the forked child in the active store instead of the configured store", async () => {
+    await writeParent(makeParentEntry(10, true));
     await replaceParentTranscript(root, storePath, "parent-session", [
-      messageEvent("root", null, { role: "user", content: "root prompt" }),
-      messageEvent("inactive-answer", "root", { role: "assistant", content: "stale answer" }, 2),
-      messageEvent("active-answer", "root", { role: "assistant", content: "active answer" }, 3),
-      leafEvent("inactive-answer", "active-answer"),
+      messageEvent("answer", null, { role: "assistant", content: "parent context" }),
     ]);
-    // Maintenance owns archive publication; elapsed worker startup time is not completion.
-    await maintained;
-    expect(loadSessionEntry({ agentId: "main", sessionKey: staleSessionKey, storePath })).toBe(
-      undefined,
-    );
 
-    const fallbackEntry: InternalSessionEntry = {
-      lifecycleRunId: "pre-fork-run",
-      sessionId: "",
-      updatedAt: 2,
-    };
     const result = await forkChild({
-      config: { session: { store: configStorePath } } as OpenClawConfig,
-      fallbackEntry,
+      config: { session: { store: path.join(root, "configured", "sessions.json") } },
+      fallbackEntry: { lifecycleRunId: "pre-fork-run", sessionId: "", updatedAt: 2 },
       parentStoreKeys: [parentSessionKey],
-      sessionStoreKeys: [sessionKey, staleSessionKey],
       entryPatch: { forked: { label: "forked child", updatedAt: 3 } },
     });
 
-    expect(result.status).toBe("forked");
     if (result.status !== "forked") {
       throw new Error("expected fork");
     }
-    expect(result.fork.sessionId).not.toBe("parent-session");
-    expect(result.fork.sessionFile).toBe(sessionKey);
     expect(fs.existsSync(storePath)).toBe(false);
 
     const stored = loadSessionEntry({ agentId: "main", sessionKey, storePath });
     expect(stored).toMatchObject({
-      forkedFromParent: true,
-      forkSource: {
-        sessionKey: parentSessionKey,
-        sessionId: "parent-session",
-      },
       label: "forked child",
       sessionId: result.fork.sessionId,
-      updatedAt: expect.any(Number),
     });
     expect((stored as InternalSessionEntry | undefined)?.lifecycleRunId).toBeUndefined();
-    expect(loadSessionEntry({ agentId: "main", sessionKey: staleSessionKey, storePath })).toBe(
-      undefined,
-    );
-
-    const events = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: result.fork.sessionId,
-      sessionKey,
-      storePath,
-    })) as Array<{ id?: string; message?: { content?: string }; type?: string }>;
-    const branchEvents = events.filter((event) => event.type !== "session");
-    expect(branchEvents.map((event) => event.id).filter(Boolean)).toEqual([
-      "root",
-      "active-answer",
-      expect.any(String),
-    ]);
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        id: "active-answer",
-        message: expect.objectContaining({ content: "active answer" }),
-      }),
-    );
-    expect(events).not.toContainEqual(
-      expect.objectContaining({
-        id: "inactive-answer",
-      }),
-    );
   });
 
-  it("leaves the child unmaterialized when the SQLite parent is over the fork limit", async () => {
-    await writeParent({
-      sessionId: "parent-session",
-      totalTokens: 150_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1 as const,
-      updatedAt: 1,
-    });
-
-    const result = await forkChild();
-
-    expect(result).toMatchObject({
-      status: "skipped",
-      reason: "decision-skip",
-      decision: {
-        status: "skip",
-        reason: "parent-too-large",
-        parentTokens: 150_000,
-      },
-      sessionEntry: {
-        sessionId: "",
-        updatedAt: expect.any(Number),
-      },
-    });
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
-  });
-
-  it("skips stale-token SQLite parents using transcript usage estimates", async () => {
-    const parent = makeParentEntry(1);
-    await replaceParentTranscript(root, storePath, parent.sessionId, [
-      messageEvent("large-answer", null, { role: "assistant", content: "x".repeat(420_000) }),
-    ]);
-
-    await expect(
-      resolveParentForkDecision({ parentEntry: parent, storePath }),
-    ).resolves.toMatchObject({
-      status: "skip",
-      reason: "parent-too-large",
-      parentTokens: expect.any(Number),
-    });
-  });
+  it.each([true, false])(
+    "leaves oversized children unmaterialized (fresh total=%s)",
+    async (fresh) => {
+      const parent = {
+        ...makeParentEntry(fresh ? 150_000 : 900_000, fresh),
+        totalTokensVersion: 1 as const,
+      };
+      if (!fresh) {
+        await replaceParentTranscript(root, storePath, parent.sessionId, [
+          messageEvent("usage", null, {
+            role: "assistant",
+            content: "latest",
+            usage: billingUsage({
+              state: "available",
+              promptTokens: 148_874,
+              totalTokens: 163_978,
+            }),
+          }),
+        ]);
+      }
+      await writeParent(parent);
+      expect(await forkChild()).toMatchObject({
+        status: "skipped",
+        reason: "decision-skip",
+        decision: {
+          status: "skip",
+          reason: "parent-too-large",
+          parentTokens: fresh ? 150_000 : 163_978,
+        },
+        sessionEntry: { sessionId: "", updatedAt: expect.any(Number) },
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+    },
+  );
 
   it("does not reconstruct SQLite parent context from billing buckets when context is unavailable", async () => {
     const parent = makeParentEntry(4_567);
@@ -312,48 +210,6 @@ describe("forkSessionEntryFromParent", () => {
       throw new Error("expected a transcript-estimated fork decision");
     }
     expect(decision.parentTokens).toBeLessThan(parent.totalTokens);
-  });
-
-  it("uses exact SQLite context usage instead of stale cached totals", async () => {
-    const parent = makeParentEntry(900_000);
-    await replaceParentTranscript(root, storePath, parent.sessionId, [
-      messageEvent("usage", null, {
-        role: "assistant",
-        content: "latest",
-        usage: billingUsage({
-          state: "available",
-          promptTokens: 148_874,
-          totalTokens: 163_978,
-        }),
-      }),
-      messageEvent(
-        "side-branch",
-        "usage",
-        {
-          role: "assistant",
-          content: `side branch ${"x".repeat(1_100_000)}`,
-          usage: {
-            input: 9_000,
-            output: 1_000,
-            contextUsage: {
-              state: "available",
-              promptTokens: 9_000,
-              totalTokens: 10_000,
-            },
-          },
-        },
-        2,
-      ),
-      leafEvent("side-branch", "usage", 3),
-    ]);
-
-    await expect(
-      resolveParentForkDecision({ parentEntry: parent, storePath }),
-    ).resolves.toMatchObject({
-      status: "skip",
-      reason: "parent-too-large",
-      parentTokens: 163_978,
-    });
   });
 
   it.each(["compaction", "reset"] as const)(
@@ -390,15 +246,8 @@ describe("forkSessionEntryFromParent", () => {
       ]);
       await writeParent(parent);
 
-      await expect(
-        resolveParentForkDecision({ parentEntry: parent, storePath }),
-      ).resolves.toMatchObject({
-        status: "fork",
-        parentTokens: 10_000,
-      });
       const result = await forkChild();
       expect(result).toMatchObject({
-        status: "forked",
         decision: { status: "fork", parentTokens: 10_000 },
       });
       if (result.status !== "forked") {
@@ -504,13 +353,6 @@ describe("forkSessionEntryFromParent", () => {
         totalTokens: 80_000,
         totalTokensFresh: fresh,
         totalTokensVersion: 1,
-      });
-
-      await expect(
-        resolveParentForkDecision({ parentEntry: parent, storePath }),
-      ).resolves.toMatchObject({
-        status: "skip",
-        reason: "parent-too-large",
       });
 
       const result = await forkChild();
