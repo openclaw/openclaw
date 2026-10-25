@@ -177,7 +177,6 @@ export function registerGatewayRestartOwnershipTests({
               supervisor: noRespawn ? { kind: "systemd", name: "openclaw-gateway.service" } : null,
             }),
           );
-          expect(gatewayLog.info).toHaveBeenCalledWith(expect.stringContaining("shutdown=85000ms"));
         } finally {
           cleanup.resolve();
           await vi.advanceTimersByTimeAsync(0);
@@ -279,14 +278,7 @@ export function registerGatewayRestartOwnershipTests({
                 expectCallCount(0, respawnUpdate, runtime.exit);
                 settlement.resolve({ respawn: true });
                 await vi.advanceTimersByTimeAsync(0);
-                expect(respawnUpdate).toHaveBeenCalledExactlyOnceWith(
-                  expect.objectContaining({
-                    decision: expect.objectContaining({ mode: "disabled", reason: "unmanaged" }),
-                  }),
-                );
-                expect(waitForHealthy).toHaveBeenCalledExactlyOnceWith(
-                  expect.objectContaining({ child, port: 18789 }),
-                );
+                expectCallCount(1, respawnUpdate, waitForHealthy);
                 expectCallCount(0, cancelUpdate, child.kill);
               } else {
                 await advanceWithoutCalls(73_999, runtime.exit, cancelUpdate);

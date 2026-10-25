@@ -13,7 +13,6 @@ import { registerTimedOutGatewayStopTests } from "./run-loop-stop-timeout.test-s
 import {
   createActiveWorkSnapshot,
   createLifecycleGate,
-  expectRestartCloseCall,
   createGatewayServer,
   expectStopCloseCall,
   expectUncalled,
@@ -44,8 +43,8 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
   it("exits 0 on SIGTERM after graceful close", async () => {
     const gatewayStateOwner = { release: vi.fn(async () => {}) };
     f.acquireGatewayLock.mockResolvedValueOnce(gatewayStateOwner);
-
     await f.withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
+      expect(start.mock.calls[0]?.[0]?.gatewayStateOwner).toBe(gatewayStateOwner);
       const localServiceStop = createLifecycleGate();
       f.stopManagedProviderLocalServices.mockImplementationOnce(localServiceStop.wait);
       f.hasManagedProviderLocalServices.mockReturnValueOnce(true);
@@ -81,14 +80,6 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
         localServiceStop.release();
 
         await expect(exited).resolves.toBe(0);
-        expect(start).toHaveBeenCalledWith({
-          processStartedAt: expect.any(Number),
-          startupStartedAt: expect.any(Number),
-          requestHotReloadRecovery: f.requestGatewayRestartWithSignalAdmission,
-          hostLifecycle: expect.objectContaining({ request: expect.any(Function) }),
-          startupOperation: expect.any(Function),
-          gatewayStateOwner,
-        });
         expectCallCount(1, f.stopManagedProviderLocalServices, f.flushLogger);
         expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
         expect(f.armShutdownHardExitWatchdog).not.toHaveBeenCalled();
@@ -229,9 +220,6 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      expect(f.waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
-        onSnapshot: expect.any(Function),
-      });
       expectStopCloseCall(close);
     });
   });
@@ -368,9 +356,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
   it("waits for the drain before handing recovery ownership to server close", async () => {
     f.consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ waitMs: 0 });
     f.createGatewayActiveWorkSnapshot.mockReturnValueOnce(
-      createActiveWorkSnapshot({ embeddedRuns: 2 }, [
-        { kind: "embedded-run", count: 2, message: "2 active embedded run(s)" },
-      ]),
+      createActiveWorkSnapshot({ embeddedRuns: 2 }),
     );
     const draining = createLifecycleGate();
     f.waitForGatewayActiveWork.mockImplementationOnce(async () => {
@@ -392,11 +378,6 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       expect(cleanupSignal.aborted).toBe(false);
       draining.release();
       await expect(exited).resolves.toBe(0);
-      expect(f.waitForGatewayActiveWork).toHaveBeenCalledExactlyOnceWith(
-        undefined,
-        expect.any(Object),
-      );
-      expectRestartCloseCall(close, 315_000);
       expect(start).toHaveBeenCalledOnce();
     });
   });

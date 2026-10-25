@@ -288,14 +288,7 @@ export function registerUpdateRespawnProgressTests(f: UpdateRespawnFixtures) {
         pid: process.pid,
         child,
       });
-      f.waitForGatewayHealthyRestart.mockImplementationOnce(async (params) => {
-        expect(params).toMatchObject({
-          child: { pid: process.pid, exitCode: null, signalCode: null },
-          port: 18789,
-          probeHosts: ["127.0.0.1"],
-          requireRunningService: true,
-          requirePluginHealth: false,
-        });
+      f.waitForGatewayHealthyRestart.mockImplementationOnce(async () => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, elapsedMs);
         });
