@@ -23,13 +23,8 @@ const stringFingerprints = new WeakMap<Message, PromptStringFingerprint>();
 const NESTED_VALUE = Symbol("nested fingerprint value");
 type FingerprintField = [key: string, primitive: unknown, digest: string];
 type RecordFingerprint =
-  | {
-      digest: string;
-      fields: FingerprintField[];
-      immutable: false;
-    }
+  | { digest: string; fields: FingerprintField[]; immutable: false }
   | { digest: string; layout: string; packed: string; immutable: true };
-// Primitive revisions avoid rehashing retained text; nested values remain mutable.
 const recordFingerprints = new WeakMap<object, RecordFingerprint>();
 const immutableValueFingerprints = new WeakMap<object, string>();
 export const messageFingerprints = new WeakMap<Message, PromptHistoryFingerprint>();
@@ -70,7 +65,8 @@ function fingerprintRecord(
       continue;
     }
     const primitive = value === null || typeof value !== "object";
-    const previousField = previous?.fields.find(([name]) => name === key);
+    const index = previous?.fields.findIndex(([name]) => name === key) ?? -1;
+    const previousField = previous?.fields[index];
     const digest =
       primitive && previousField && Object.is(previousField[1], value)
         ? previousField[2]
@@ -79,12 +75,7 @@ function fingerprintRecord(
           : fingerprintValue(value);
     if (!previousField || previousField[2] !== digest) {
       fields ??= previous!.fields.slice();
-      const field: FingerprintField = [key, primitive ? value : NESTED_VALUE, digest];
-      if (previousField) {
-        fields[fields.indexOf(previousField)] = field;
-      } else {
-        fields.push(field);
-      }
+      fields[index < 0 ? fields.length : index] = [key, primitive ? value : NESTED_VALUE, digest];
     } else {
       previousField[1] = primitive ? value : NESTED_VALUE;
     }
