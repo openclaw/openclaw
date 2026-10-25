@@ -188,7 +188,7 @@ function setPhase(next: string) {
     previous.endedAt = now;
   }
   phase = next;
-  phases.push({ phase, startedAt: now, endedAt: now, load1: loadavg()[0] });
+  phases.push({ phase, startedAt: now, endedAt: now, load1: loadavg()[0] ?? 0 });
   writeFileSync(path.join(output, "phase"), phase);
 }
 let child: ChildProcess | undefined;
