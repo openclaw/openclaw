@@ -112,9 +112,7 @@ async function withBuiltGateway(
 
 it(
   "records rate limits and retains authentication recovery through the built Gateway",
-  {
-    timeout: 180_000,
-  },
+  { timeout: 180_000 },
   async (context) => {
     const credentials = {
       rate: "qa-rate-profile-key",
@@ -185,9 +183,7 @@ it(
               models: { [rateModelRef]: configuredModel, [provider.modelRef]: configuredModel },
             },
             entries: {
-              rate: {
-                model: { primary: `${rateModelRef}@${profileIds.rate}`, fallbacks: [] },
-              },
+              rate: { model: { primary: `${rateModelRef}@${profileIds.rate}`, fallbacks: [] } },
               auth: {
                 model: { primary: `${provider.modelRef}@${profileIds.auth}`, fallbacks: [] },
               },
@@ -248,10 +244,7 @@ it(
           expect(accepted.status).toBe("accepted");
           const terminal = await request<{ status: string }>(
             "agent.wait",
-            {
-              runId: accepted.runId,
-              timeoutMs: 60_000,
-            },
+            { runId: accepted.runId, timeoutMs: 60_000 },
             { timeoutMs: 65_000 },
           );
           return { sessionKey, terminal };
@@ -279,11 +272,7 @@ it(
         expect(["auth", "auth_permanent"]).toContain(
           authStats?.cooldownReason ?? authStats?.disabledReason,
         );
-        const saved = await request<{
-          provider: string;
-          profileId: string;
-          warning?: string;
-        }>(
+        const saved = await request<{ provider: string; profileId: string; warning?: string }>(
           "models.authSetApiKey",
           { agentId: "auth", provider: provider.providerId, apiKey: credentials.recovered },
           { timeoutMs: 30_000 },
@@ -335,9 +324,7 @@ it(
   "serves a large authenticated catalog for each agent through the built Gateway",
   { timeout: 180_000 },
   async (context) => {
-    const agentIds = Array.from({ length: 11 }, (_, index) =>
-      index === 0 ? "main" : `catalog-${index}`,
-    );
+    const agentIds = Array.from({ length: 11 }, (_, i) => (i === 0 ? "main" : `catalog-${i}`));
     const credential = "qa-configured-catalog-key";
     const providerServer = createTrackedProvider((_raw, response) => {
       response.writeHead(200, { "content-type": "application/json" });

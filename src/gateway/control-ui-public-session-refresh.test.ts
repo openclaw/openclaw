@@ -18,7 +18,12 @@ const messages = [
   },
   message("last"),
 ];
-function render(overrides: Partial<Parameters<typeof renderPublicSessionDocument>[0]> = {}) {
+type Page = Partial<Parameters<typeof renderPublicSessionDocument>[0]>;
+const widget = { ...message("widget"), content: '[embed ref="cv_first" title="First" /]' };
+const twoWidgets = [
+  { role: "assistant", content: '[embed ref="cv_first" /] [embed ref="cv_second" /]' },
+];
+function render(overrides: Page = {}) {
   return renderPublicSessionDocument({
     messages,
     title: "Shared",
@@ -38,10 +43,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function fixture(
-  overrides: Partial<Parameters<typeof renderPublicSessionDocument>[0]> = {},
-  initialRowHeight = 400,
-) {
+function fixture(overrides: Page = {}, initialRowHeight = 400) {
   vi.useFakeTimers();
   const dom = new JSDOM(render(overrides), { url: "https://example.test/chat/main/topic" });
   dispose.push(() => dom.window.close());
@@ -118,6 +120,16 @@ function fixture(
     response,
     replaceWith,
     event,
+    find: <E extends Element = HTMLElement>(selector: string) =>
+      document.querySelector<E>(selector)!,
+    all: <E extends Element = HTMLElement>(selector: string) =>
+      document.querySelectorAll<E>(selector),
+    text: (selector: string) => document.querySelector(selector)?.textContent,
+    respond: (page: Page) => fetch.mockResolvedValue(new Response(render(page))),
+    refresh: async () => {
+      event("online");
+      await vi.advanceTimersByTimeAsync(0);
+    },
     visibility: (value: boolean) => {
       hidden = value;
       document.dispatchEvent(new dom.window.Event("visibilitychange"));
@@ -134,84 +146,57 @@ function fixture(
 }
 
 it("keeps unchanged widget frames, their state, and measured height on the first refresh", async () => {
-  const f = fixture({
-    messages: [
-      { role: "assistant", content: '[embed ref="cv_first" /] [embed ref="cv_second" /]' },
-    ],
-    widgetUrls,
-  });
-  const frames = f.document.querySelectorAll("iframe");
+  const page = { messages: twoWidgets, widgetUrls };
+  const f = fixture(page);
+  const frames = f.all<HTMLIFrameElement>("iframe");
   const frameWindow = frames[0]!.contentWindow!;
   frameWindow.name = "widget interaction state";
   frames[0]!.style.height = "730px";
   frames[1]!.style.height = "280px";
-  f.fetch.mockResolvedValue(
-    new Response(
-      render({
-        messages: [
-          { role: "assistant", content: '[embed ref="cv_first" /] [embed ref="cv_second" /]' },
-        ],
-        widgetUrls,
-      }),
-    ),
-  );
-  f.event("online");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.document.querySelectorAll("iframe")[0]).toBe(frames[0]);
-  expect(f.document.querySelectorAll("iframe")[1]).toBe(frames[1]);
+  f.respond(page);
+  await f.refresh();
+  expect(f.all("iframe")[0]).toBe(frames[0]);
+  expect(f.all("iframe")[1]).toBe(frames[1]);
   expect(frames[0]!.contentWindow).toBe(frameWindow);
   expect(frameWindow.name).toBe("widget interaction state");
-  expect(Array.from(f.document.querySelectorAll("iframe"), (frame) => frame.style.height)).toEqual([
-    "730px",
-    "280px",
-  ]);
+  expect(Array.from(f.all("iframe"), (frame) => frame.style.height)).toEqual(["730px", "280px"]);
 });
 
 it("appends a new message without detaching an existing widget", async () => {
-  const f = fixture({
-    messages: [{ ...message("widget"), content: '[embed ref="cv_first" title="First" /]' }],
-    widgetUrls,
-  });
-  const frame = f.document.querySelector("iframe")!;
+  const f = fixture({ messages: [widget], widgetUrls });
+  const frame = f.find<HTMLIFrameElement>("iframe");
   const frameWindow = frame.contentWindow;
-  f.event("online");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.document.querySelector("iframe")).toBe(frame);
+  await f.refresh();
+  expect(f.find("iframe")).toBe(frame);
   expect(frame.contentWindow).toBe(frameWindow);
-  expect(f.document.querySelectorAll(".transcript > *")).toHaveLength(2);
-  expect(f.document.querySelector(".transcript")!.textContent).toContain("updated");
+  expect(f.all(".transcript > *")).toHaveLength(2);
+  expect(f.text(".transcript")).toContain("updated");
 });
 
 it("replaces surrounding rows and page content without detaching a kept widget", async () => {
-  const widget = { ...message("widget"), content: '[embed ref="cv_first" title="First" /]' };
   const f = fixture({
     messages: [{ ...message("old"), role: "user" }, widget, message("old tail")],
     widgetUrls,
   });
-  const main = f.document.querySelector("main")!;
-  const frame = f.document.querySelector("iframe")!;
+  const main = f.find("main");
+  const frame = f.find<HTMLIFrameElement>("iframe");
   const frameWindow = frame.contentWindow;
-  f.fetch.mockResolvedValue(
-    new Response(
-      render({
-        messages: [{ ...message("new"), role: "user" }, widget, message("new tail")],
-        title: "Earlier conversation",
-        isLatest: false,
-        olderUrl: "/chat/main/topic?before=earlier",
-        widgetUrls,
-      }),
-    ),
-  );
-  f.event("online");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.document.querySelector("main")).toBe(main);
+  f.respond({
+    messages: [{ ...message("new"), role: "user" }, widget, message("new tail")],
+    title: "Earlier conversation",
+    isLatest: false,
+    olderUrl: "/chat/main/topic?before=earlier",
+    widgetUrls,
+  });
+  await f.refresh();
+  expect(f.find("main")).toBe(main);
   expect(main.dataset.publicRefresh).toBe("false");
-  expect(f.document.querySelector("iframe")).toBe(frame);
+  expect(f.find("iframe")).toBe(frame);
   expect(frame.contentWindow).toBe(frameWindow);
-  expect(f.document.querySelector(".transcript")!.textContent).toContain("new tail");
-  expect(f.document.querySelector(".transcript")!.textContent).not.toContain("old");
-  expect(f.document.querySelector(".article-head h1")!.textContent).toBe("Earlier conversation");
-  expect(f.document.querySelectorAll(".pagination")).toHaveLength(2);
+  expect(f.text(".transcript")).toContain("new tail");
+  expect(f.text(".transcript")).not.toContain("old");
+  expect(f.text(".article-head h1")).toBe("Earlier conversation");
+  expect(f.all(".pagination")).toHaveLength(2);
   expect(f.document.title).toBe("Earlier conversation · OpenClaw");
   await vi.advanceTimersByTimeAsync(60000);
   expect(f.fetch).toHaveBeenCalledTimes(1);
@@ -220,29 +205,20 @@ it("replaces surrounding rows and page content without detaching a kept widget",
 it("replaces a changed widget row and carries its measured height", async () => {
   const first = { ...message("widget"), content: '[embed ref="cv_first" /]' };
   const f = fixture({ messages: [first], widgetUrls });
-  const frame = f.document.querySelector("iframe")!;
+  const frame = f.find<HTMLIFrameElement>("iframe");
   frame.style.height = "730px";
-  f.fetch.mockResolvedValue(
-    new Response(
-      render({
-        messages: [{ ...first, content: 'Changed [embed ref="cv_first" /]' }],
-        widgetUrls,
-      }),
-    ),
-  );
-  f.event("online");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.document.querySelector("iframe")).not.toBe(frame);
-  expect(f.document.querySelector("iframe")!.style.height).toBe("730px");
-  expect(f.document.querySelector(".transcript")!.textContent).toContain("Changed");
+  f.respond({ messages: [{ ...first, content: 'Changed [embed ref="cv_first" /]' }], widgetUrls });
+  await f.refresh();
+  expect(f.find("iframe")).not.toBe(frame);
+  expect(f.find<HTMLIFrameElement>("iframe").style.height).toBe("730px");
+  expect(f.text(".transcript")).toContain("Changed");
 });
 
 it.each(["reorder", "duplicate", "unkeyed"])("replaces the document for %s rows", async (mode) => {
-  const f = fixture({ messages: [message("first"), message("second"), message("third")] });
-  const original = f.document.querySelector("main");
-  const next = new JSDOM(
-    render({ messages: [message("first"), message("second"), message("third")] }),
-  );
+  const page = { messages: ["first", "second", "third"].map(message) };
+  const f = fixture(page);
+  const original = f.find("main");
+  const next = new JSDOM(render(page));
   dispose.push(() => next.window.close());
   const transcript = next.window.document.querySelector(".transcript")!;
   if (mode === "reorder") {
@@ -257,9 +233,8 @@ it.each(["reorder", "duplicate", "unkeyed"])("replaces the document for %s rows"
     transcript.children[1]!.removeAttribute("data-public-item");
   }
   f.fetch.mockResolvedValue(new Response(next.serialize()));
-  f.event("online");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.document.querySelector("main")).not.toBe(original);
+  await f.refresh();
+  expect(f.find("main")).not.toBe(original);
   expect(f.replaceWith).toHaveBeenCalledOnce();
 });
 
@@ -280,7 +255,7 @@ it("jitters conditional reads, retains ETag manually, and catches up only when v
       headers: { "If-None-Match": '"revision-1"' },
     }),
   );
-  expect(f.document.querySelector(".transcript")!.textContent).toContain("updated");
+  expect(f.text(".transcript")).toContain("updated");
   f.visibility(true);
   await vi.advanceTimersByTimeAsync(60000);
   expect(f.fetch).toHaveBeenCalledTimes(2);
@@ -352,8 +327,7 @@ it("keeps the visible message and expanded tools when the latest page rolls forw
   const f = fixture();
   f.scroll(750);
   f.document.querySelector("details")!.open = true;
-  const body = render({ messages: [...messages.slice(1), message("new")] });
-  f.fetch.mockResolvedValue(new Response(body, { status: 200 }));
+  f.respond({ messages: [...messages.slice(1), message("new")] });
   await vi.advanceTimersByTimeAsync(16500);
   expect(f.window.scrollY).toBe(350);
   expect(f.document.querySelector("details")!.open).toBe(true);
@@ -365,12 +339,12 @@ it("offers top/latest controls and refreshes manually without a navigation", asy
   expect(top).not.toBeNull();
   top!.click();
   expect(f.window.scrollY).toBe(0);
-  f.document.querySelector<HTMLButtonElement>("[data-public-latest]")!.click();
+  f.find<HTMLButtonElement>("[data-public-latest]").click();
   expect(f.window.scrollY).toBe(1388);
-  f.document.querySelector<HTMLAnchorElement>("[data-public-refresh-now]")!.click();
+  f.find<HTMLAnchorElement>("[data-public-refresh-now]").click();
   await vi.advanceTimersByTimeAsync(0);
   expect(f.fetch).toHaveBeenCalledTimes(1);
-  expect(f.document.querySelector("[data-public-refresh-status]")?.textContent).toBe("Up to date");
+  expect(f.text("[data-public-refresh-status]")).toBe("Up to date");
 });
 it("refreshes legacy links in place and clears a plain revoked response", async () => {
   const f = fixture({ entryUrl: undefined });
@@ -388,22 +362,17 @@ it("retains readable content and visibly recovers from a failed update", async (
   const f = fixture();
   f.fetch.mockRejectedValueOnce(new Error("offline"));
   await vi.advanceTimersByTimeAsync(16500);
-  expect(f.document.querySelector(".transcript")?.textContent).toContain("first");
-  expect(f.document.querySelector("[data-public-refresh-status]")?.textContent).toContain(
-    "Could not refresh",
-  );
-  f.event("online");
-  await vi.advanceTimersByTimeAsync(0);
+  expect(f.text(".transcript")).toContain("first");
+  expect(f.text("[data-public-refresh-status]")).toContain("Could not refresh");
+  await f.refresh();
   expect(f.document.title).toBe("updated · OpenClaw");
 });
 it("catches up on reconnect without overlapping requests, and keeps older pages still", async () => {
   const f = fixture();
   const pending = createDeferred<Response>();
   f.fetch.mockReturnValue(pending.promise);
-  f.event("online");
-  await vi.advanceTimersByTimeAsync(0);
-  f.event("online");
-  await vi.advanceTimersByTimeAsync(0);
+  await f.refresh();
+  await f.refresh();
   expect(f.fetch).toHaveBeenCalledTimes(1);
   pending.resolve(f.response(200));
   await vi.advanceTimersByTimeAsync(0);
