@@ -404,7 +404,7 @@ describe("asynchronous agent database maintenance admission", () => {
       const reject = async (maintenance: OpenClawStateLeaseContext) => {
         const open = vi.spyOn(sqlite, "openNodeSqliteDatabase");
         await expect(migrateAgentDb(f.options, maintenance)).rejects.toThrow(
-          /stopped-writer maintenance/,
+          "Agent database migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
         );
         expect(open).not.toHaveBeenCalled();
         expect(scan).not.toHaveBeenCalled();
