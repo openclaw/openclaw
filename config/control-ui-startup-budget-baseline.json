@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 273686,
-  "reason": "Route readiness: 20 interleaved pairs against the original base showed 15.8% faster Settings readiness and 8.3% less task CPU. After merging main 2f95e977, same-host builds compare 272893 to 273686 B startup gzip (+793 B); seven JS requests, one CSS request, and total CSS are unchanged. Set the baseline to the measured head.",
+  "startupJsGzipBytes": 273698,
+  "reason": "Shared source subscriptions reduce Outbox observations from 1440 to 6 with script CPU median -4.42% and p95 -3.75%. Repaired SDK observations fall from 320 to 4 without a CPU regression. Same-host builds at 3e579ec1 and daccf9ec measure startup 273582 to 273698 B gzip (+116 B), unchanged 7 JS and 1 CSS requests, and 3787 B less total JS gzip. Accept the small startup tradeoff and set the baseline to the measured head.",
   "updatedAt": "2026-10-25"
 }
