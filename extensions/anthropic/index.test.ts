@@ -11,6 +11,7 @@ const { probeClaudeCliAuthStatusMock } = vi.hoisted(() => ({
   probeClaudeCliAuthStatusMock: vi.fn(),
 }));
 
+// mock-isolation: Provider registration uses synthetic CLI auth status without probing local credentials.
 vi.mock("./cli-auth-seam.js", () => ({ probeClaudeCliAuthStatus: probeClaudeCliAuthStatusMock }));
 
 import { CLAUDE_CLI_NATIVE_AUTH_MARKER } from "./cli-constants.js";

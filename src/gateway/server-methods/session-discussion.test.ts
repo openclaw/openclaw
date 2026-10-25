@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../plugins/session-discussion-registry.js", () => ({
   getSessionDiscussionProvider: mocks.getProvider,
 }));
-// Title persistence has owner and real Gateway integration coverage; this suite owns delegation.
+// mock-isolation: Capture title delegation without starting title generation or persistence workers.
 vi.mock("../dashboard-session-title.js", () => ({
   maybeGenerateSessionTitle: mocks.generateTitle,
 }));

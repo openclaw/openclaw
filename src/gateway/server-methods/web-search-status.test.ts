@@ -49,6 +49,7 @@ vi.doMock("../../agents/model-catalog-decisions.js", () => ({
   prepareModelCatalogDecisions: mocks.decisions,
   resolveCatalogDecisionRuntime: runtimeMocks.runtime,
 }));
+// mock-isolation: Native search routing is synthetic without loading provider catalogs or credentials.
 vi.doMock("../../agents/native-web-search.js", () => ({
   resolveNativeWebSearchRoute: mocks.native,
 }));
