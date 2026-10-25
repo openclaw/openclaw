@@ -65,56 +65,90 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
     expect(controller.errorText).toContain("maximum 4 cards and 8,000 characters");
   });
 
-  it.each(["reject", "resolve"] as const)(
-    "preserves pending new-tab ownership when the previous capture %ss",
-    async (completion) => {
+  it.each(["capture reject", "capture resolve", "same-tab snapshot", "other-tab snapshot"])(
+    "keeps a new tab's ownership over a superseded %s",
+    async (phase) => {
       stubScreenshotMedia();
-      const previousCapture = createDeferred<unknown>();
-      const captureStarted = createDeferred();
-      const openedTab = createDeferred<ReturnType<typeof makeTab>>();
-      const tabs = [makeTab("active-tab", ACTIVE_URL, "Active")];
-      const { controller } = panelScenario("active-tab", ACTIVE_URL, {
-        "/tabs": async () => ({ running: true, tabs: [...tabs] }),
+      const previous = createDeferred<unknown>();
+      const started = createDeferred();
+      const opened = createDeferred<ReturnType<typeof makeTab>>();
+      const active = makeTab("active-tab", ACTIVE_URL, "Active");
+      const tabs = [active];
+      const capture = phase.startsWith("capture");
+      const sameTab = phase === "same-tab snapshot";
+      let snapshots = 0;
+      const { controller, calls } = panelScenario("active-tab", ACTIVE_URL, {
+        "/tabs": async () => {
+          if (++snapshots === 1 && !capture) {
+            started.resolve();
+            return previous.promise;
+          }
+          return { running: true, tabs: sameTab || capture ? [...tabs] : tabs.slice(-1) };
+        },
         "/tabs/open": async () => {
-          const tab = await openedTab.promise;
+          const tab = await opened.promise;
           tabs.push(tab);
           return tab;
         },
-        "/screenshot": async (envelope) => {
-          if (envelope.body?.targetId === "active-tab") {
-            captureStarted.resolve();
-            return await previousCapture.promise;
+        "/screenshot": async ({ body }) => {
+          if (body?.targetId === "active-tab") {
+            if (!capture) {
+              throw new Error("A superseded snapshot cannot capture the active tab");
+            }
+            started.resolve();
+            return previous.promise;
           }
-          return { path: "/fresh.png", targetId: "raw-new", url: NEW_URL };
+          const latest = body?.targetId === "new-tab";
+          return {
+            path: latest ? "/fresh.png" : "/old.png",
+            targetId: latest ? "raw-new" : "raw-previous",
+            url: latest ? NEW_URL : PREVIOUS_URL,
+          };
         },
-        "/act": async () => metrics(NEW_URL, "New"),
+        "/act": async () =>
+          metrics(
+            sameTab || capture ? NEW_URL : tabs.at(-1)!.url,
+            sameTab || capture ? "New" : tabs.at(-1)!.title,
+          ),
       });
-      const previousView = controller.view;
-
-      const capture = controller.refreshAll();
-      await captureStarted.promise;
+      const view = controller.view;
+      const refreshing = controller.refreshAll();
+      await started.promise;
       const opening = controller.openUrl(NEW_URL, { newTab: true });
-      expect(controller.loading).toBe(true);
-      expect(controller.view).toBe(previousView);
-
-      if (completion === "reject") {
-        previousCapture.reject(new Error("Superseded capture failed"));
+      if (phase === "capture reject") {
+        previous.reject(new Error("Superseded capture failed"));
       } else {
-        previousCapture.resolve({ path: "/old.png", targetId: "raw-active", url: ACTIVE_URL });
+        previous.resolve(
+          capture
+            ? { path: "/old.png", targetId: "raw-active", url: ACTIVE_URL }
+            : {
+                running: true,
+                tabs: [sameTab ? active : makeTab("previous-tab", PREVIOUS_URL, "Previous")],
+              },
+        );
       }
-      await capture;
-
+      await refreshing;
       expect(controller.loading).toBe(true);
-      expect(controller.errorText).toBeNull();
-      expect(controller.view).toBe(previousView);
-
-      openedTab.resolve(makeTab("new-tab", NEW_URL, "New"));
+      if (capture || sameTab) {
+        expect(controller.view).toBe(view);
+        expect(controller.errorText).toBeNull();
+      }
+      if (sameTab) {
+        expect(calls("/screenshot").some(({ body }) => body?.targetId === "active-tab")).toBe(
+          false,
+        );
+      }
+      opened.resolve(makeTab("new-tab", NEW_URL, "New"));
       await opening;
-
-      expect(controller.activeTargetId).toBe("new-tab");
-      expect(controller.view?.url).toBe(NEW_URL);
-      expect(controller.loading).toBe(false);
-      expect(controller.errorText).toBeNull();
+      expect(controller).toMatchObject({
+        activeTargetId: "new-tab",
+        loading: false,
+        errorText: null,
+        view: { url: NEW_URL, dataUrl: expect.stringContaining(btoa("fresh screenshot")) },
+      });
+      if (!capture && !sameTab) {
+        expect(controller.tabs.map((tab) => tab.id)).toEqual(["new-tab"]);
+      }
     },
   );
 
@@ -313,18 +347,11 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
             running: true,
             tabs: order === "before" ? visibleTabs.slice(-1) : [...visibleTabs],
           }),
-          "/screenshot": async () => {
-            const tab = visibleTabs.at(-1)!;
-            return {
-              path: tab.tabId === "latest-tab" ? "/fresh.png" : "/old.png",
-              targetId: tab.targetId,
-              url: tab.url,
-            };
-          },
-          "/act": async () => {
-            const tab = visibleTabs.at(-1)!;
-            return metrics(tab.url, tab.title);
-          },
+          "/screenshot": async () => ({
+            ...fresh(visibleTabs.at(-1)!.url, visibleTabs.at(-1)!.targetId),
+            path: visibleTabs.at(-1)!.tabId === "latest-tab" ? "/fresh.png" : "/old.png",
+          }),
+          "/act": async () => metrics(visibleTabs.at(-1)!.url, visibleTabs.at(-1)!.title),
         },
       );
       const previousNavigation = controller.openUrl("https://example.test/previous", {
@@ -359,149 +386,79 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
     },
   );
 
-  it.each([false, true])(
-    "rejects a stale snapshot during new-tab creation (same active tab: %s)",
-    async (sameTab) => {
-      stubScreenshotMedia();
-      const activeTab = makeTab("active-tab", ACTIVE_URL, "Active");
-      const tabs = [activeTab];
-      const snapshot = createDeferred<unknown>();
-      const opened = createDeferred<ReturnType<typeof makeTab>>();
-      let snapshotCount = 0;
-      const { controller, calls } = panelScenario("active-tab", ACTIVE_URL, {
-        "/tabs": async () =>
-          ++snapshotCount === 1
-            ? await snapshot.promise
-            : { running: true, tabs: sameTab ? [...tabs] : tabs.slice(-1) },
-        "/tabs/open": async () => {
-          const next = await opened.promise;
-          tabs.push(next);
-          return next;
-        },
-        "/screenshot": async (envelope) => {
-          if (sameTab && envelope.body?.targetId === "active-tab") {
-            throw new Error("Superseded snapshot capture failed");
-          }
-          const latest = envelope.body?.targetId === "new-tab";
-          return {
-            path: latest ? "/fresh.png" : "/old.png",
-            targetId: latest ? "raw-new" : "raw-previous",
-            url: latest ? NEW_URL : "https://example.test/previous",
-          };
-        },
-        "/act": async () =>
-          metrics(sameTab ? NEW_URL : tabs.at(-1)!.url, sameTab ? "New" : tabs.at(-1)!.title),
+  it.each(["inspection", "wheel"])(
+    "invalidates old-document %s before navigation",
+    async (kind) => {
+      vi.useFakeTimers({ now: 1_000 });
+      const inspection = createDeferred<unknown>();
+      const navigation = createDeferred<unknown>();
+      const { controller, calls } = panelScenario("stable-tab", undefined, {
+        "/act": async () => (kind === "inspection" ? inspection.promise : { result: true }),
+        "/navigate": async () => navigation.promise,
       });
-      const previousView = controller.view;
-      const refresh = controller.refreshAll();
-      if (sameTab) {
-        await flush();
-      }
-      const opening = controller.openUrl(NEW_URL, { newTab: true });
-      snapshot.resolve({
-        running: true,
-        tabs: [
-          sameTab
-            ? activeTab
-            : makeTab("previous-tab", "https://example.test/previous", "Previous"),
-        ],
-      });
-      await refresh;
-      expect(controller.loading).toBe(true);
-      if (sameTab) {
-        expect(controller.errorText).toBeNull();
-        expect(controller.view).toBe(previousView);
-        expect(
-          calls("/screenshot").some((request) => request.body?.targetId === "active-tab"),
-        ).toBe(false);
-      }
-      opened.resolve(makeTab("new-tab", NEW_URL, "New"));
-      await opening;
-      expect(controller).toMatchObject({
-        activeTargetId: "new-tab",
-        loading: false,
-        view: { url: NEW_URL, dataUrl: expect.stringContaining(btoa("fresh screenshot")) },
-      });
-      if (sameTab) {
-        expect(controller.errorText).toBeNull();
+      if (kind === "inspection") {
+        controller.setMode("inspect");
+        controller.handleOverlayPointerMove(createPointer(10, 20));
       } else {
-        expect(controller.tabs.map((entry) => entry.id)).toEqual(["new-tab"]);
+        controller.input.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
+      }
+      void controller.openUrl("https://example.test/destination", { newTab: false });
+      inspection.resolve({ result: createInspectedNode("previous-document") });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(controller.activeTargetId).toBe("stable-tab");
+      expect(calls("/navigate")).toHaveLength(1);
+      if (kind === "inspection") {
+        expect(controller.inspected).toBeNull();
+      } else {
+        expect(calls("/act")).toHaveLength(0);
       }
     },
   );
 
-  it("invalidates old-document inspection and wheel input before same-tab navigation", async () => {
-    vi.useFakeTimers({ now: 1_000 });
-    const previousInspection = createDeferred<unknown>();
-    const firstNavigation = createDeferred<unknown>();
-    const { request, controller: inspectedController } = panelScenario("stable-tab", undefined, {
-      "/act": async () => await previousInspection.promise,
-      "/navigate": async () => await firstNavigation.promise,
-    });
-    inspectedController.setMode("inspect");
-
-    inspectedController.handleOverlayPointerMove(createPointer(10, 20));
-    void inspectedController.openUrl("https://example.test/destination", { newTab: false });
-    previousInspection.resolve({ result: createInspectedNode("previous-document") });
-    await flush();
-
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({
-        method: "POST",
-        path: "/navigate",
-        body: { url: "https://example.test/destination", targetId: "stable-tab" },
-      }),
-    );
-    expect(inspectedController.activeTargetId).toBe("stable-tab");
-    expect(inspectedController.inspected).toBeNull();
-
-    const secondNavigation = createDeferred<unknown>();
-    const { calls, controller: wheeledController } = panelScenario("stable-tab", undefined, {
-      "/navigate": async () => await secondNavigation.promise,
-      "/act": async () => ({ result: true }),
-    });
-    wheeledController.input.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
-
-    void wheeledController.openUrl("https://example.test/destination", { newTab: false });
-    await vi.advanceTimersByTimeAsync(150);
-
-    expect(wheeledController.activeTargetId).toBe("stable-tab");
-    expect(calls("/act")).toHaveLength(0);
-  });
-
-  it("clears loading and rejects an in-flight refresh after disconnection", async () => {
-    const previousCapture = createDeferred<unknown>();
-    const url = "https://example.test/previous";
-    const { host, controller } = panelScenario("stable-tab", url, {
-      "/tabs": async () => ({
-        running: true,
-        tabs: [{ ...stableTab(url), targetId: "raw-tab", title: "Previous" }],
-      }),
-      "/screenshot": async () => await previousCapture.promise,
-    });
-    const previousView = controller.view;
-
-    const pendingRefresh = controller.refreshAll();
-    await flush();
-    expect(controller.loading).toBe(true);
-
-    host.isConnected = false;
-    controller.suspendView();
-    expect(controller.loading).toBe(false);
-
-    host.isConnected = true;
-    previousCapture.resolve({
-      path: "/old.png",
-      targetId: "raw-tab",
-      url: "https://example.test/previous",
-    });
-    await pendingRefresh;
-
-    expect(controller.activeTargetId).toBe("stable-tab");
-    expect(controller.view).toBe(previousView);
-    expect(controller.loading).toBe(false);
-  });
+  it.each(["disconnect", "gateway"])(
+    "rejects in-flight refreshes after %s replacement",
+    async (change) => {
+      const pending = createDeferred<unknown>();
+      const { host, controller } = panelScenario("stable-tab", ACTIVE_URL, {
+        "/tabs": async () =>
+          change === "gateway" ? pending.promise : { running: true, tabs: [stableTab(ACTIVE_URL)] },
+        "/screenshot": async () => {
+          if (change === "gateway") {
+            throw new Error("The retired gateway must not capture a screenshot");
+          }
+          return pending.promise;
+        },
+      });
+      const original = controller.view;
+      const replacement = createBrowserClient(async () => {
+        throw new Error("Unexpected replacement request");
+      });
+      const refreshing = controller.refreshAll();
+      await flush();
+      if (change === "disconnect") {
+        expect(controller.loading).toBe(true);
+        host.isConnected = false;
+        controller.suspendView();
+        expect(controller.loading).toBe(false);
+        host.isConnected = true;
+      } else {
+        host.client = replacement.client;
+      }
+      pending.resolve(
+        change === "gateway"
+          ? { running: true, tabs: [stableTab(ACTIVE_URL)] }
+          : { path: "/old.png", targetId: "raw-stable", url: ACTIVE_URL },
+      );
+      await refreshing;
+      expect(controller.view).toBe(original);
+      if (change === "disconnect") {
+        expect(controller).toMatchObject({ activeTargetId: "stable-tab", loading: false });
+      } else {
+        expect(controller).toMatchObject({ running: null, tabs: [] });
+        expect(replacement.request).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("keeps the latest tab capture when an older focus resolves afterward", async () => {
     stubScreenshotMedia();
@@ -641,39 +598,4 @@ describe("BrowserPanel superseded tab snapshots", () => {
       );
     },
   );
-
-  it("rejects old-gateway snapshots before the replacement client synchronizes", async () => {
-    const snapshot = createDeferred<{
-      running: boolean;
-      tabs: ReturnType<typeof makeTab>[];
-    }>();
-    const old = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs") {
-        return await snapshot.promise;
-      }
-      throw new Error(`Unexpected old browser route: ${envelope.path}`);
-    });
-    const replacement = createBrowserClient(async (envelope) => {
-      throw new Error(`Unexpected replacement browser route: ${envelope.path}`);
-    });
-    const host = new TestBrowserPanelHost(old.client);
-    const controller = host.createPanel();
-    const originalView = createView("active-tab", ACTIVE_URL);
-    controller.activeTargetId = "active-tab";
-    controller.view = originalView;
-
-    const refresh = controller.refreshAll();
-    await flush();
-    host.client = replacement.client;
-    snapshot.resolve({
-      running: true,
-      tabs: [makeTab("active-tab", ACTIVE_URL, "Active")],
-    });
-    await refresh;
-
-    expect(controller.running).toBeNull();
-    expect(controller.tabs).toEqual([]);
-    expect(controller.view).toBe(originalView);
-    expect(replacement.request).not.toHaveBeenCalled();
-  });
 });

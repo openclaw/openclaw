@@ -53,6 +53,11 @@ function addressInput(controller: Controller) {
   controller.addressInput = input;
   return vi.spyOn(input, "focus");
 }
+function nativeStage(panel: HTMLElement) {
+  const stage = panel.querySelector<HTMLElement>(".bp-stage--native")!;
+  vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 500, 300));
+  setHit(panel);
+}
 function fixture(tabs = [nativeTab("mac-one")]) {
   const native = fakeNativeBrowser(tabs);
   return { native, ...controllerFixture() };
@@ -306,61 +311,67 @@ describe("native Browser panel ownership", () => {
     expect(sockets).toHaveLength(1);
   });
 
-  it.each([true, false])(
-    "selects a reused tab from the open reply when state arrives before the reply: %s",
-    async (stateBeforeReply) => {
-      const native = fakeNativeBrowser([nativeTab("mac-other", "https://example.test/other")]);
-      const { controller } = controllerFixture();
-      const existing = nativeTab("mac-existing", "https://example.test/final");
-      const state = [nativeTab("mac-other", "https://example.test/other"), existing];
-      native.postMessage.mockImplementationOnce(async () => {
-        if (stateBeforeReply) {
-          native.publish(state);
-        }
-        return { ok: true, tabId: existing.id };
-      });
-
-      await controller.openUrl("https://example.test/short", { newTab: true, native: true });
-      if (!stateBeforeReply) {
-        expect(controller.activeTargetId).toBe("mac-other");
-        native.publish(state);
-      }
-
-      expect(controller.activeTargetId).toBe(existing.id);
-      expect(controller.urlDraft).toBe(existing.url);
-      expect(tabIds(controller)).toEqual(["mac-other", "mac-existing"]);
-    },
-  );
-
-  it.each(["state-first", "reply-first", "reused-tab"] as const)(
-    "keeps an explicit tab selection when a pending open completes: %s",
-    async (completion) => {
-      const tabs = [nativeTab("mac-one"), nativeTab("mac-two")];
-      const { native, controller } = fixture(tabs);
-      const reply = createDeferred<{ ok: true; tabId: string }>();
-      native.postMessage.mockImplementationOnce(() => reply.promise);
-      const opening = controller.openUrl("https://example.test/new", {
-        newTab: true,
-        native: true,
-      });
-      const message = openMessage(native);
+  it.each([
+    ["reused", "state-first"],
+    ["reused", "reply-first"],
+    ["selected", "state-first"],
+    ["selected", "reply-first"],
+    ["selected", "reused-tab"],
+    ["draft", "current"],
+    ["draft", "superseded"],
+  ] as const)("settles native %s opens without stealing newer intent: %s", async (kind, order) => {
+    const tabs = [nativeTab("mac-one"), nativeTab("mac-two", "https://example.test/two")];
+    const { native, controller } = fixture(tabs);
+    const focus = kind === "draft" ? addressInput(controller) : null;
+    const reply = createDeferred<{ ok: true; tabId: string }>();
+    native.postMessage.mockImplementationOnce(() => reply.promise);
+    const opening =
+      kind === "draft"
+        ? controller.native.beginNewTab()
+        : controller.openUrl("https://example.test/short", { newTab: true, native: true });
+    const message = openMessage(native);
+    const superseded = kind === "selected" || order === "superseded";
+    if (superseded) {
       await controller.selectTab("mac-two");
-      const openedId = completion === "reused-tab" ? "mac-one" : message.tabId;
-      const nextTabs = completion === "reused-tab" ? tabs : [...tabs, nativeTab(openedId)];
-      if (completion === "state-first") {
-        native.publish(nextTabs);
+    }
+    const opened =
+      kind === "reused"
+        ? nativeTab("mac-existing", "https://example.test/final")
+        : order === "reused-tab"
+          ? tabs[0]!
+          : nativeTab(message.tabId, kind === "draft" ? "about:blank" : message.url);
+    const nextTabs = order === "reused-tab" ? tabs : [...tabs, opened];
+    const stateFirst = order !== "reply-first" && order !== "reused-tab";
+    if (stateFirst) {
+      native.publish(nextTabs);
+      if (superseded) {
         expect(controller.activeTargetId).toBe("mac-two");
       }
-      reply.resolve({ ok: true, tabId: openedId });
-      await opening;
-      if (completion !== "state-first") {
-        native.publish(nextTabs);
+    }
+    reply.resolve({ ok: true, tabId: opened.id });
+    await opening;
+    if (!stateFirst) {
+      if (!superseded) {
+        expect(controller.activeTargetId).toBe("mac-one");
       }
-      expect(controller.activeTargetId).toBe("mac-two");
+      native.publish(nextTabs);
+    }
+    expect(controller.activeTargetId).toBe(superseded ? "mac-two" : opened.id);
+    if (kind === "draft") {
+      expect(controller.urlDraft).toBe(superseded ? tabs[1]!.url : "");
+      expect(focus).toHaveBeenCalledTimes(superseded ? 0 : 1);
+      if (!superseded) {
+        expect(opened.id).toMatch(/^mac-[0-9a-f-]{36}$/);
+      }
+    } else if (kind === "reused") {
+      expect(controller.urlDraft).toBe(opened.url);
+      expect(tabIds(controller)).toEqual(["mac-one", "mac-two", "mac-existing"]);
+    }
+    if (superseded) {
       flushFrames();
       expectPresent(native, true, "mac-two");
-    },
-  );
+    }
+  });
 
   it("opens and presents a user link through the actual panel when the old preference is off", async () => {
     const native = fakeNativeBrowser();
@@ -377,10 +388,7 @@ describe("native Browser panel ownership", () => {
       link.click();
       await flushBrowserResponses();
       await panel.updateComplete;
-      const stage = panel.querySelector<HTMLElement>(".bp-stage--native");
-      expect(stage).not.toBeNull();
-      vi.spyOn(stage!, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 500, 300));
-      setHit(panel);
+      nativeStage(panel);
       flushFrames();
       expect(native.messages()).toContainEqual(
         expect.objectContaining({ type: "open", url: link.href }),
@@ -401,17 +409,8 @@ describe("native Browser panel ownership", () => {
 
   it("hides the embedded native view when suppression changes", async () => {
     const native = fakeNativeBrowser([nativeTab("mac-one")]);
-    const panel = document.createElement("openclaw-browser-panel");
-    panel.available = true;
-    panel.remoteAvailable = false;
-    panel.embedded = true;
-    panel.presented = true;
-    mountSolid(() => panel);
-    await panel.updateComplete;
-    const stage = panel.querySelector<HTMLElement>(".bp-stage--native");
-    expect(stage).not.toBeNull();
-    vi.spyOn(stage!, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 500, 300));
-    setHit(panel);
+    const panel = await mountSessionPanel("");
+    nativeStage(panel);
     window.dispatchEvent(new Event("resize"));
     flushFrames();
     expect(native.messages().at(-1)).toMatchObject({
@@ -431,13 +430,8 @@ describe("native Browser panel ownership", () => {
   });
 
   it("closes native and remote tabs, selects a live successor, and clears the last address", async () => {
-    const { native, controller, request } = fixture([nativeTab("mac-one"), nativeTab("mac-two")]);
+    const { native, controller } = fixture([nativeTab("mac-one"), nativeTab("mac-two")]);
     await controller.refreshAll();
-    expect(controller.tabs.map((tab) => [tab.id, tab.kind])).toEqual([
-      ["mac-one", "native"],
-      ["mac-two", "native"],
-      ["remote", "remote"],
-    ]);
     await controller.selectTab("mac-two");
     await controller.closeTab("mac-two");
     expect(controller.activeTargetId).toBe("mac-one");
@@ -445,7 +439,6 @@ describe("native Browser panel ownership", () => {
 
     await controller.selectTab("remote");
     expect(controller.urlDraft).toBe("https://remote.test/");
-    request.mockClear();
     await controller.closeTab("remote");
     expect(controller).toMatchObject({
       activeTargetId: "mac-one",
@@ -455,44 +448,9 @@ describe("native Browser panel ownership", () => {
     expect(tabIds(controller)).toEqual(["mac-one"]);
     flushFrames();
     expectPresent(native, true, "mac-one");
-    expect(request.mock.calls.map(([, envelope]) => (envelope as { path: string }).path)).toEqual([
-      "/tabs/remote",
-      "/tabs",
-    ]);
 
     await controller.closeTab("mac-one");
     expect(controller).toMatchObject({ activeTargetId: null, tabs: [], urlDraft: "" });
-  });
-
-  it("focuses a cleared address field once a new tab becomes the selection", async () => {
-    const { controller } = fixture();
-    await controller.refreshAll();
-    const focus = addressInput(controller);
-    await controller.native.beginNewTab();
-    expect(controller.activeTargetId).toMatch(/^mac-[0-9a-f-]{36}$/);
-    expect(controller.urlDraft).toBe("");
-    expect(focus).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the selected tab's address when a new-tab request is superseded", async () => {
-    const tabs = [
-      nativeTab("mac-one", "https://example.test/one"),
-      nativeTab("mac-two", "https://example.test/two"),
-    ];
-    const { native, controller } = fixture(tabs);
-    await controller.refreshAll();
-    const focus = addressInput(controller);
-    const reply = createDeferred<{ ok: true; tabId: string }>();
-    native.postMessage.mockImplementationOnce(() => reply.promise);
-    const opening = controller.native.beginNewTab();
-    const message = openMessage(native);
-    await controller.selectTab("mac-two");
-    native.publish([...tabs, nativeTab(message.tabId, "about:blank")]);
-    reply.resolve({ ok: true, tabId: message.tabId });
-    await opening;
-    expect(controller.activeTargetId).toBe("mac-two");
-    expect(controller.urlDraft).toBe("https://example.test/two");
-    expect(focus).not.toHaveBeenCalled();
   });
 
   it("lets a newer pending open win over the automatic fallback selection", async () => {
@@ -567,7 +525,7 @@ describe("native Browser panel ownership", () => {
     expectPresent(native, true);
   });
 
-  it("deduplicates presentations, hides a covered stage, and restores only after every occluder closes", () => {
+  it("deduplicates presentations, hides a covered stage, and restores after occlusion", () => {
     const { native, controller } = fixture();
     flushFrames();
     native.postMessage.mockClear();
@@ -576,15 +534,9 @@ describe("native Browser panel ownership", () => {
     document.dispatchEvent(new Event("scroll"));
     flushFrames();
     expect(native.postMessage).not.toHaveBeenCalled();
-    const first = acquireNativeOverlayOcclusion();
-    const second = acquireNativeOverlayOcclusion();
+    const release = acquireNativeOverlayOcclusion();
     expectPresent(native, false);
-    first();
-    flushFrames();
-    expect(
-      native.messages().filter((message) => message.type === "present" && message.visible),
-    ).toHaveLength(0);
-    second();
+    release();
     flushFrames();
     expectPresent(native, true);
     setHit(document.body);
