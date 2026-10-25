@@ -47,13 +47,15 @@ async function withQuestion(
   const previousEmbeddedMode = isEmbeddedMode();
   setEmbeddedMode(true);
   setEmbeddedQuestionBroker(broker);
-  const run = createQueueTestRun({ prompt: "Continue" });
-  Object.assign(run.run, {
-    messageProvider: "whatsapp",
-    senderId: "+1000",
-    agentAccountId: "default",
-    chatType: "direct",
-  });
+  const run = createQueueTestRun(
+    { prompt: "Continue" },
+    {
+      messageProvider: "whatsapp",
+      senderId: "+1000",
+      agentAccountId: "default",
+      chatType: "direct",
+    },
+  );
   try {
     await withQuestionCreator(sessionKey, run, async (operation) => {
       broker.request({
@@ -164,6 +166,7 @@ it.each([
       const deliveries: string[] = [];
       const pending: Promise<unknown>[] = [];
       const dispatch = (messageId: string) => {
+        const isAnswer = messageId === "answer";
         const result = dispatchInboundMessageWithRoutedChannelDispatcher({
           ctx: buildTestCtx({
             SessionKey: sessionKey,
@@ -180,12 +183,9 @@ it.each([
             deliver: async (payload) => {
               deliveries.push(payload.text ?? "");
             },
-            ...(messageId === "answer"
-              ? {
-                  ...(bypassesFence ? { beforeDeliver, onBeforeDeliverCancelled: cancelled } : {}),
-                  onSettled: questionSettled,
-                }
-              : {}),
+            beforeDeliver: isAnswer && bypassesFence ? beforeDeliver : undefined,
+            onBeforeDeliverCancelled: isAnswer && bypassesFence ? cancelled : undefined,
+            onSettled: isAnswer ? questionSettled : undefined,
           },
         });
         pending.push(result);

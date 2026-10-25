@@ -6,6 +6,7 @@ import type {
 import type { AgentsListResult, PresenceEntry } from "../api/types.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import type { BoardSnapshot } from "../lib/board/types.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate-read-fixture.ts";
 import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 import {
@@ -318,15 +319,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     revision: 1,
     tabs: [{ tabId: "main", title: "Overview", position: 0, chatDock: "right" }],
     widgets: [
-      {
+      createBoardWidget({
         name: "team-overview",
-        tabId: "main",
         title: "Team overview",
         sizeW: 12,
         sizeH: 8,
-        position: 0,
-        grantState: "none",
-        revision: 1,
         ...(options.dashboardMcpApp
           ? { contentKind: "mcp-app", instanceId: "team-overview-instance" }
           : {
@@ -337,7 +334,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
               viewGeneration: "0123456789abcdef0123456789abcdef",
               ...sandbox,
             }),
-      },
+      }),
     ],
   };
   const sidebarEntries = [
@@ -467,17 +464,25 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         })),
       },
       "progressCard.get": {
-        card: {
-          sessionKey: selectedSessionKey,
-          revision: 1,
-          updatedAt: now,
-          markdown: "Synthetic project verification is in progress.",
-          steps: [
-            { step: "Review fixture inventory", status: "completed" },
-            { step: "Validate cold-load rendering", status: "in_progress" },
-            { step: "Record performance evidence", status: "pending" },
-          ],
-        },
+        cases: [
+          {
+            match: { sessionKey: selectedSessionKey },
+            response: {
+              card: {
+                sessionKey: selectedSessionKey,
+                revision: 1,
+                updatedAt: now,
+                markdown: "Synthetic project verification is in progress.",
+                steps: [
+                  { step: "Review fixture inventory", status: "completed" },
+                  { step: "Validate cold-load rendering", status: "in_progress" },
+                  { step: "Record performance evidence", status: "pending" },
+                ],
+              },
+            },
+          },
+          { response: { card: null } },
+        ],
       },
     },
   });

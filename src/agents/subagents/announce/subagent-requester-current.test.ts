@@ -1,15 +1,12 @@
 import "../../../config/sessions/session-accessor.sqlite-replacement-publication.test-support.js";
 import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import * as configRuntime from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import {
   captureRequesterSessionEntryCurrent,
   loadRequesterSessionEntry,
@@ -32,9 +29,8 @@ it("keeps requester identity through metadata publication but retires it on life
       .mockReturnValue({ session: { store: storePath } });
     let current: Awaited<ReturnType<typeof captureRequesterSessionEntryCurrent>> | undefined;
     let missing: Awaited<ReturnType<typeof captureRequesterSessionEntryCurrent>> | undefined;
-    const committed = createDeferred();
-    const release = createDeferred();
-    const onAbort = () => release.resolve();
+    const publicationGate = createEnteredGate();
+    const onAbort = () => publicationGate.release();
     signal.addEventListener("abort", onAbort, { once: true });
     let metadata: Promise<unknown> | undefined;
     try {
@@ -48,10 +44,7 @@ it("keeps requester identity through metadata publication but retires it on life
       current = await captureRequesterSessionEntryCurrent(sessionKey, agentId);
       expect(current.readCurrent()?.lifecycleRevision).toBe("first");
       expect(missing.readCurrent()).toBeUndefined();
-      delivery.afterResult = async () => {
-        committed.resolve();
-        await release.promise;
-      };
+      delivery.afterResult = publicationGate.wait;
       metadata = applySessionEntryExactReplacements({
         ...scope,
         sessionKeys: [sessionKey],
@@ -73,7 +66,7 @@ it("keeps requester identity through metadata publication but retires it on life
       });
       await withinTest(
         awaitGateBeforeSettlement(
-          committed.promise,
+          publicationGate.entered,
           metadata,
           "run metadata did not reach publication",
         ),
@@ -83,7 +76,7 @@ it("keeps requester identity through metadata publication but retires it on life
         sessionId: "requester",
         lifecycleRevision: "first",
       });
-      release.resolve();
+      publicationGate.release();
       await withinTest(metadata, signal);
       delivery.afterResult = undefined;
       await replaceSessionEntry(scope, {
@@ -96,7 +89,7 @@ it("keeps requester identity through metadata publication but retires it on life
         "replacement",
       );
     } finally {
-      release.resolve();
+      publicationGate.release();
       delivery.afterResult = undefined;
       await Promise.allSettled([metadata]);
       signal.removeEventListener("abort", onAbort);

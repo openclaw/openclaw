@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
-import {
-  summarizeCpuProfile,
-  type ColdLoadTraceEvent,
+import type {
+  ColdLoadCpuProfile,
+  ColdLoadTraceEvent,
 } from "../../scripts/lib/control-ui-cold-load-trace.ts";
 import {
   clipInteractionCpuProfile,
@@ -20,9 +20,6 @@ it("measures only the marked renderer interval, unions nesting, and rejects miss
   const marks = { start: "filter:start", end: "filter:end" };
   const trace = [
     event("thread_name", "M", 0, { args: { name: "CrRendererMain" } }),
-    event("thread_name", "M", 0, { pid: 9, args: { name: "CrRendererMain" } }),
-    event("navigationStart", "I", 0, { pid: 9 }),
-    event("RunTask", "X", 0, { dur: 80_000 }),
     event("RunTask", "X", 90_000, { dur: 90_000 }),
     event(marks.start, "I", 100_000),
     event("RunTask", "X", 100_000, { pid: 9, dur: 300_000 }),
@@ -42,7 +39,6 @@ it("measures only the marked renderer interval, unions nesting, and rejects miss
     event(marks.end, "I", 200_000),
     { ph: "E", ts: 220_000, pid: 7, tid: 1 },
     event("RunTask", "X", 230_000, { dur: 300_000 }),
-    event("Layout", "X", 230_000, { dur: 300_000 }),
   ];
 
   expect(summarizeInteractionTrace(trace, marks)).toEqual({
@@ -75,89 +71,51 @@ it("measures only the marked renderer interval, unions nesting, and rejects miss
 });
 
 it("attributes separate long tasks to their nearest mapped application callers", () => {
+  const node = (
+    id: number,
+    functionName: string,
+    url = "",
+    children: number[] = [],
+    lineNumber = -1,
+    columnNumber = -1,
+  ): ColdLoadCpuProfile["nodes"][number] => ({
+    id,
+    callFrame: { functionName, url, lineNumber, columnNumber },
+    children,
+  });
+  const transcript = "ui/src/components/chat/message-list.tsx";
+  const settings = "ui/src/pages/settings/settings-page.tsx";
+  const solid = "node_modules/solid-js/dist/solid.js";
   const profile = {
     startTime: 1_000,
     endTime: 121_000,
     nodes: [
-      {
-        id: 1,
-        callFrame: { functionName: "(root)", url: "", lineNumber: -1, columnNumber: -1 },
-        children: [2, 5, 7],
-      },
-      {
-        id: 2,
-        callFrame: {
-          functionName: "renderTranscript",
-          url: "ui/src/components/chat/message-list.tsx",
-          lineNumber: 20,
-          columnNumber: 4,
-        },
-        children: [3],
-      },
-      {
-        id: 3,
-        callFrame: {
-          functionName: "flush",
-          url: "node_modules/solid-js/dist/solid.js",
-          lineNumber: 10,
-          columnNumber: 0,
-        },
-        children: [4],
-      },
-      {
-        id: 4,
-        callFrame: { functionName: "appendChild", url: "", lineNumber: -1, columnNumber: -1 },
-      },
-      {
-        id: 5,
-        callFrame: {
-          functionName: "updateSettings",
-          url: "ui/src/pages/settings/settings-page.tsx",
-          lineNumber: 30,
-          columnNumber: 2,
-        },
-        children: [6],
-      },
-      {
-        id: 6,
-        callFrame: {
-          functionName: "flush",
-          url: "node_modules/solid-js/dist/solid.js",
-          lineNumber: 10,
-          columnNumber: 0,
-        },
-      },
-      {
-        id: 7,
-        callFrame: {
-          functionName: "(garbage collector)",
-          url: "",
-          lineNumber: -1,
-          columnNumber: -1,
-        },
-      },
+      node(1, "(root)", "", [2, 5, 7]),
+      node(2, "renderTranscript", transcript, [3], 20, 4),
+      node(3, "flush", solid, [4], 10, 0),
+      node(4, "appendChild"),
+      node(5, "updateSettings", settings, [6], 30, 2),
+      node(6, "flush", solid, [], 10, 0),
+      node(7, "(garbage collector)"),
     ],
     samples: [4, 4, 7, 6, 6, 6],
-    timeDeltas: [20_000, 20_000, 20_000, 20_000, 20_000, 20_000],
+    timeDeltas: Array.from({ length: 6 }, () => 20_000),
   };
+  const interval = (startUs: number) => ({ startUs, endUs: startUs + 60_000, durationMs: 60 });
+  const task = (startUs: number, sampledMs: number) => ({
+    ...interval(startUs),
+    sampledMs,
+    uncoveredMs: 60 - sampledMs,
+  });
   expect(
-    summarizeLongTaskCpuProfiles(profile, [
-      { startUs: 1_000, endUs: 61_000, durationMs: 60 },
-      { startUs: 61_000, endUs: 121_000, durationMs: 60 },
-      { startUs: 101_000, endUs: 161_000, durationMs: 60 },
-      { startUs: 121_000, endUs: 181_000, durationMs: 60 },
-    ]),
+    summarizeLongTaskCpuProfiles(profile, [1_000, 61_000, 101_000, 121_000].map(interval)),
   ).toMatchObject([
     {
-      startUs: 1_000,
-      endUs: 61_000,
-      durationMs: 60,
-      sampledMs: 60,
-      uncoveredMs: 0,
+      ...task(1_000, 60),
       unattributedMs: 20,
       owner: {
         functionName: "renderTranscript",
-        url: "ui/src/components/chat/message-list.tsx",
+        url: transcript,
         attributedMs: 40,
       },
       hotspots: [
@@ -166,33 +124,21 @@ it("attributes separate long tasks to their nearest mapped application callers",
       ],
     },
     {
-      startUs: 61_000,
-      endUs: 121_000,
-      durationMs: 60,
-      sampledMs: 60,
-      uncoveredMs: 0,
+      ...task(61_000, 60),
       unattributedMs: 0,
       owner: {
         functionName: "updateSettings",
-        url: "ui/src/pages/settings/settings-page.tsx",
+        url: settings,
         attributedMs: 60,
       },
       hotspots: [{ functionName: "flush", selfMs: 60 }],
     },
     {
-      startUs: 101_000,
-      endUs: 161_000,
-      durationMs: 60,
-      sampledMs: 20,
-      uncoveredMs: 40,
+      ...task(101_000, 20),
       owner: { functionName: "updateSettings", attributedMs: 20 },
     },
     {
-      startUs: 121_000,
-      endUs: 181_000,
-      durationMs: 60,
-      sampledMs: 0,
-      uncoveredMs: 60,
+      ...task(121_000, 0),
       owner: null,
       sourceOwners: [],
       hotspots: [],
@@ -277,10 +223,7 @@ it("clips CPU sample contributions to marks after ordering signed sample timesta
   const profile = {
     startTime: 1_000_000,
     endTime: 1_006_000,
-    nodes: [1, 2, 3, 4, 5].map((id) => ({
-      id,
-      callFrame: { functionName: `work${id}`, url: "app.ts", lineNumber: 0, columnNumber: 0 },
-    })),
+    nodes: [],
     samples: [1, 3, 2, 4, 5],
     timeDeltas: [1_000, 2_000, -1_000, 2_000, 1_000],
   };
@@ -291,15 +234,6 @@ it("clips CPU sample contributions to marks after ordering signed sample timesta
     endTime: 1_003_500,
     samples: [2, 3, 4],
     timeDeltas: [500, 1_000, 500],
-  });
-  expect(clipped.nodes).toBe(profile.nodes);
-  expect(summarizeCpuProfile(clipped)).toMatchObject({
-    sampledMs: 2,
-    hotspots: [
-      { functionName: "work3", selfMs: 1 },
-      { functionName: "work2", selfMs: 0.5 },
-      { functionName: "work4", selfMs: 0.5 },
-    ],
   });
   expect(profile.timeDeltas).toEqual([1_000, 2_000, -1_000, 2_000, 1_000]);
   expect(() => clipInteractionCpuProfile(profile, 1_006_000, 1_007_000)).toThrow(

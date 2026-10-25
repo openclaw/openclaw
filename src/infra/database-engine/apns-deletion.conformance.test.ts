@@ -26,6 +26,7 @@ import type { ApnsRegistration } from "../push-apns-store.types.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
+import { createSqlStatementObserver } from "./sql-statement-observer.test-support.js";
 
 function seed(database: OpenClawStateDatabase, nodeId: string, version: number, tombstone: number) {
   const registration: ApnsRegistration = {
@@ -89,17 +90,9 @@ describe.each(engines)("%s APNs deletion transaction", (engine) => {
       ] as const) {
         let statements = 0;
         const observation = channel("openclaw.database.statement");
-        const observe = (event: unknown) => {
-          if (
-            event &&
-            typeof event === "object" &&
-            "sql" in event &&
-            typeof event.sql === "string" &&
-            isApnsSql(event.sql)
-          ) {
-            statements += 1;
-          }
-        };
+        const observe = createSqlStatementObserver(isApnsSql, () => {
+          statements += 1;
+        });
         const native = isPostgresSqlConnection(database.db)
           ? undefined
           : trackSqliteStatementExecutions(database.db, ["apns"], (sql) =>

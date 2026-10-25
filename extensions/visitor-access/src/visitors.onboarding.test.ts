@@ -30,7 +30,7 @@ describe("VisitorAccessService onboarding record", () => {
     const restarted = visitorFixture({ grants: [...fixture.grants.values()] });
     await restarted.service.initialize();
     expect(
-      restarted.service.findActiveInvitation({ emails: [" Visitor@Example.com "] }),
+      restarted.service.findActiveInvitation(fixture.grants.get(EMAIL)!.grantId!),
     ).toMatchObject({
       grantId: fixture.grants.get(EMAIL)?.grantId,
       email: EMAIL,
@@ -57,7 +57,7 @@ describe("VisitorAccessService onboarding record", () => {
     const fixture = visitorFixture({ grants: [legacy], emails: [EMAIL] });
     await fixture.service.initialize();
     expect(() => fixture.authorize([EMAIL]).assertCurrent()).not.toThrow();
-    expect(fixture.service.findActiveInvitation({ emails: [EMAIL] })).toEqual(legacy);
+    expect(fixture.service.findActiveInvitation(legacy.grantId!)).toEqual(legacy);
 
     await fixture.invite({ email: EMAIL, days: 3 });
 
@@ -81,7 +81,7 @@ describe("VisitorAccessService onboarding record", () => {
       { email: EMAIL, note: "Welcome!" },
       { ...fixture.authority, invitedBy: JOSH },
     );
-    const invitation = fixture.service.findActiveInvitation({ emails: [EMAIL] })!;
+    const invitation = fixture.service.findActiveInvitation(fixture.grants.get(EMAIL)!.grantId!)!;
     vi.setSystemTime(NOW + 1000);
     await fixture.service.compareAndSetOnboarding({
       grantId: invitation.grantId,
@@ -178,11 +178,45 @@ describe("VisitorAccessService onboarding record", () => {
     expect(invited.text).not.toContain("inviter note");
   });
 
+  it("lists each invitation's welcome-session progress for staff", async () => {
+    const ready = visitorGrant("a-ready@example.com", {
+      onboarding: { state: "ready", welcomeSessionKey: "agent:main:dashboard:a", updatedAt: NOW },
+    });
+    const failed = visitorGrant("b-failed@example.com", {
+      onboarding: {
+        state: "failed",
+        welcomeSessionKey: "agent:main:dashboard:b",
+        error: "transcript write failed",
+        updatedAt: NOW,
+      },
+    });
+    const pending = visitorGrant("c-pending@example.com", {
+      onboarding: { state: "pending", updatedAt: NOW },
+    });
+    const legacy = visitorGrant("d-legacy@example.com");
+    const grants = [ready, failed, pending, legacy];
+    const fixture = visitorFixture({ grants, emails: grants.map(({ email }) => email) });
+
+    const list = await fixture.list();
+
+    expect(list.details.grants.map((row) => row.welcome)).toEqual([
+      { state: "ready", sessionKey: "agent:main:dashboard:a" },
+      { state: "failed", sessionKey: "agent:main:dashboard:b" },
+      { state: "pending" },
+      undefined,
+    ]);
+    expect(list.text).toContain("| managed | welcome ready agent:main:dashboard:a |");
+    expect(list.text).toContain("| managed | welcome failed agent:main:dashboard:b |");
+    expect(list.text).toContain("| managed | welcome pending |");
+    expect(list.text).toMatch(/d-legacy@example\.com[^\n]*\| managed \| Gateway access:/);
+    expect(list.text).not.toContain("transcript write failed");
+  });
+
   it("lets exactly one concurrent caller advance the same onboarding snapshot", async () => {
     const fixture = visitorFixture();
     await fixture.service.initialize();
     await fixture.invite({ email: EMAIL });
-    const invitation = fixture.service.findActiveInvitation({ emails: [EMAIL] })!;
+    const invitation = fixture.service.findActiveInvitation(fixture.grants.get(EMAIL)!.grantId!)!;
     const claim = (welcomeSessionKey: string) =>
       fixture.service.compareAndSetOnboarding({
         grantId: invitation.grantId,
@@ -196,16 +230,16 @@ describe("VisitorAccessService onboarding record", () => {
     expect(first).toEqual({ applied: true, onboarding: winner });
     expect(second).toEqual({ applied: false, reason: "conflict", onboarding: winner });
     expect(fixture.grants.get(EMAIL)?.onboarding).toEqual(winner);
-    expect(fixture.service.findActiveInvitation({ emails: [EMAIL] })?.onboarding).toEqual(winner);
+    expect(fixture.service.findActiveInvitation(invitation.grantId)?.onboarding).toEqual(winner);
   });
 
-  it("finds an active GitHub invitation past an expired email and rejects input-supplied inviter", async () => {
+  it("finds only an active invitation by grant ID and rejects input-supplied inviter", async () => {
+    const expired = visitorGrant(EMAIL, { expiresAt: NOW });
     const github = visitorGrant(42);
-    const fixture = visitorFixture({ grants: [visitorGrant(EMAIL, { expiresAt: NOW }), github] });
+    const fixture = visitorFixture({ grants: [expired, github] });
     await fixture.service.initialize();
-    expect(
-      fixture.service.findActiveInvitation({ emails: [EMAIL], githubAccountIds: [7, 42] }),
-    ).toEqual(github);
+    expect(fixture.service.findActiveInvitation(github.grantId!)).toEqual(github);
+    expect(fixture.service.findActiveInvitation(expired.grantId!)).toBeUndefined();
     await expect(fixture.invite({ email: EMAIL, invitedBy: JOSH })).rejects.toThrow(
       /Invalid visitor input/,
     );
@@ -239,7 +273,9 @@ describe("VisitorAccessService onboarding record", () => {
     const fixture = visitorFixture();
     await fixture.service.initialize();
     await fixture.invite({ email: EMAIL, days: 1 });
-    const { grantId, onboarding } = fixture.service.findActiveInvitation({ emails: [EMAIL] })!;
+    const { grantId, onboarding } = fixture.service.findActiveInvitation(
+      fixture.grants.get(EMAIL)!.grantId!,
+    )!;
 
     const failed = await fixture.service.compareAndSetOnboarding({
       grantId,
@@ -265,7 +301,7 @@ describe("VisitorAccessService onboarding record", () => {
         next: retry,
       }),
     ).resolves.toEqual({ applied: false, reason: "inactive" });
-    expect(fixture.service.findActiveInvitation({ emails: [EMAIL] })).toBeUndefined();
+    expect(fixture.service.findActiveInvitation(grantId)).toBeUndefined();
     expect(fixture.grants.get(EMAIL)?.onboarding?.state).toBe("failed");
   });
 });

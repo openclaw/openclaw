@@ -45,6 +45,13 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
           }
         }
         state.updateSidebarLayout(explicit);
+        state.updateSidebarLayout(state.sidebarLayout, {
+          persist: false,
+          retireAutomaticResource: "desktop",
+        });
+        expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toContainEqual(
+          expect.objectContaining({ slot: "desktop", environmentId: "manual-desktop" }),
+        );
         const reloaded = createPageState(context, renderLifecycle, host);
         const panels = reloaded.sidebarLayout.columns.flatMap((column) => column.panels);
         expect(panels.find((panel) => panel.slot === "desktop")).toMatchObject({

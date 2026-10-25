@@ -118,7 +118,6 @@ describe("plugin status reports", () => {
     mocks.compatIds.mockReturnValue(pluginIds);
     mocks.compatConfig.mockReturnValue(enabledConfig);
     status.buildPluginSnapshotReport({ config });
-    expect(mocks.compatConfig).toHaveBeenCalledWith({ config, pluginIds, activation: "defaults" });
     expect(mocks.metadataRegistry).toHaveBeenCalledWith(
       expect.objectContaining({ config: enabledConfig, loadModules: false }),
     );

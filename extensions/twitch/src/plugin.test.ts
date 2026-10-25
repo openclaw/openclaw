@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { twitchPlugin } from "./plugin.js";
 import { twitchSetupPlugin } from "./setup-surface.js";
+import { makeTwitchChannelTestConfig } from "./test-fixtures.js";
 
 const monitorTwitchProvider = vi.hoisted(() => vi.fn());
 vi.mock("./monitor.js", async (importOriginal) => ({
@@ -96,17 +97,13 @@ function multiAccountConfig(defaultAccount?: string, selectedToken = "oauth:seco
     clientId: `${name}-client`,
     enabled: true,
   });
-  return {
-    channels: {
-      twitch: {
-        defaultAccount,
-        accounts: {
-          default: account("default", "oauth:default-token"),
-          secondary: account("secondary", selectedToken),
-        },
-      },
+  return makeTwitchChannelTestConfig({
+    defaultAccount,
+    accounts: {
+      default: account("default", "oauth:default-token"),
+      secondary: account("secondary", selectedToken),
     },
-  } as OpenClawConfig;
+  }) as OpenClawConfig;
 }
 
 describe("twitchPlugin", () => {

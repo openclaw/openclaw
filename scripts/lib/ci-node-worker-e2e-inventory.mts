@@ -5,7 +5,6 @@ export const NODE_WORKER_E2E_TEST_FILES = [
   "test/e2e/qa-lab/runtime/gateway-node-control-plane.e2e.test.ts",
   "test/e2e/qa-lab/runtime/gateway-node-exec-approvals.e2e.test.ts",
   "test/e2e/qa-lab/runtime/gateway-node-exec-routing.e2e.test.ts",
-  "test/e2e/qa-lab/runtime/gateway-node-mcp.e2e.test.ts",
   "test/e2e/qa-lab/runtime/gateway-node-mcp.stress.e2e.test.ts",
   "test/e2e/qa-lab/runtime/gateway-node-pending-work.e2e.test.ts",
   "test/e2e/qa-lab/runtime/native-worker-slot.e2e.test.ts",

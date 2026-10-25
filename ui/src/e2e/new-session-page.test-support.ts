@@ -250,7 +250,7 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
   );
   await pollDisabled(page.locator(".agent-chat__composer-combobox textarea")).toBe(false);
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-  expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+  expect(await gateway.getRequests("chat.send")).toHaveLength(0);
   await captureUiProof(owner, page, "02-cloud-startup-chunk-pending.png");
   return startupStatus;
 }

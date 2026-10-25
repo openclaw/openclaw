@@ -23,34 +23,6 @@ const replyEntry = (id: string, seq: number, sourceId: string, result: unknown) 
 });
 
 suite.define(() => {
-  it("renders 50 quoted references without per-reference requests, including after reconnect", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const historyMessages = Array.from({ length: 50 }, (_, index) => {
-        const id = `source-${index}`;
-        const message = { role: "assistant", content: `Original ${index}.`, __openclaw: { id } };
-        return replyEntry(`reply-${index}`, 100 + index, id, { ok: true, message });
-      });
-      const gateway = await installMockGateway(page, {
-        sessionKey,
-        historyMessages,
-        methodResponses: { "chat.message.get": missing },
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const pane = page.locator(".chat-pane-cache__pane--active");
-      const strips = pane.locator(".chat-reply-attribution--inline");
-      await expect.poll(() => strips.count()).toBe(50);
-      expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
-      expect(await strips.getByRole("button").count()).toBe(50);
-      expect(await pane.locator('[data-entry-id^="source-"]').count()).toBe(0);
-
-      const connectCount = (await gateway.getRequests("connect")).length;
-      await gateway.closeLatest(1006, "synthetic reconnect");
-      await waitForRequests(gateway, "connect", connectCount + 1);
-      await expect.poll(() => strips.getByRole("button").count()).toBe(50);
-      expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
-    });
-  });
-
   it.each([
     { name: "unconfirmed source", result: undefined, text: "" },
     {

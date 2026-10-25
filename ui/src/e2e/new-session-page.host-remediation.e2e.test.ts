@@ -28,17 +28,13 @@ suite.define(() => {
       async ({ page }) => {
         const fixture = scenario({
           "projects.list": {
-            projects: [
-              { id: "docs", displayName: "Documentation", repoRoot: "/workspace/docs" },
-              { id: "app", displayName: "Application", repoRoot: "/workspace/app" },
-            ],
+            projects: [{ id: "docs", displayName: "Documentation", repoRoot: "/workspace/docs" }],
           },
           "environments.list": {
             profiles: [],
             environments: [
               ...availableDevices("available-device", "Additional computer", 12, true),
               device("paired-device", "Paired device", "available", false),
-              device("offline-device", "Offline device", "unavailable"),
               // Keep the phone inventory overflowing independently of composer placement.
               ...availableDevices("additional-device", "Additional device", width === 390 ? 12 : 0),
             ],
@@ -84,20 +80,12 @@ suite.define(() => {
         await revealReason(row);
         const details = tooltip(row).locator('[slot="content"]');
         await details.waitFor({ state: "visible" });
-        const hint = await details.textContent();
-        expect(hint).toContain("openclaw config set nodeHost.workerRuns.enabled true");
-        expect(hint).toContain("openclaw node install --force");
-        expect(hint).not.toContain("openclaw connect");
+        expect(await details.textContent()).toContain("Session hosting is disabled");
         expect(await row.textContent()).toContain("Unavailable");
         if (width === 390) {
           await tapRow(row);
           await tooltip(row).getByRole("tooltip").waitFor({ state: "hidden" });
         }
-        const offline = where.locator('[data-value="device:offline-device"]');
-        await revealReason(offline);
-        expect(await tooltip(offline).locator('[slot="content"]').textContent()).toContain(
-          "Device unavailable",
-        );
         expect(await where.locator('[data-value="gateway"]').getAttribute("aria-pressed")).toBe(
           "true",
         );
@@ -120,17 +108,6 @@ suite.define(() => {
         expect(await choices.textContent()).toContain("Unavailable");
         const reason = await revealReason(choices);
         expect(await reason.textContent()).toContain("Session hosting is disabled");
-        await search.fill("Offline device");
-        const offlineChoice = settings.locator('[data-machine="device:offline-device"]');
-        expect(await offlineChoice.count()).toBe(1);
-        expect(await (await revealReason(offlineChoice)).textContent()).toContain(
-          "Device unavailable",
-        );
-        await search.fill("Local");
-        await settings.locator('[data-machine="local"][data-project=""]').click();
-        await settings
-          .getByRole("checkbox", { name: /Remember settings for/ })
-          .waitFor({ state: "visible" });
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       },
     ),

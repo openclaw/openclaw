@@ -2,6 +2,7 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
+import { makeTextToolResult } from "../test-support/message-fixtures.test-support.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import basetenPlugin from "./index.js";
 
@@ -37,13 +38,6 @@ export function toolReplayMessages(name: string): Context["messages"] {
       stopReason: "toolUse",
       timestamp: 1,
     }),
-    {
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: name,
-      content: [{ type: "text", text: "ok" }],
-      isError: false,
-      timestamp: 2,
-    },
+    makeTextToolResult("call_1", name, "ok", false, 2),
   ];
 }

@@ -191,12 +191,8 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
     EXISTING_SESSION_LIMITS.text,
   );
 
-  register("get", "/dialogs", "dialog state", () => async (pw, { cdpUrl, targetId }) => ({
-    browserState: await pw.getObservedBrowserStateViaPlaywright({
-      cdpUrl,
-      targetId,
-      ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-    }),
+  register("get", "/dialogs", "dialog state", () => async (pw, target) => ({
+    browserState: await pw.getObservedBrowserStateViaPlaywright(target),
   }));
 
   register("post", "/trace/start", "trace start", (input) => {

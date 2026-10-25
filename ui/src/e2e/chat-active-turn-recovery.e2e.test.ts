@@ -6,6 +6,7 @@ import {
   type MockGatewayControls as Gateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
 import { composer, newChatPage, sendChat } from "./chat-flow-fixtures.test-support.ts";
 import { requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -176,7 +177,9 @@ async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1]
 }
 
 async function recoverTurn(mode: "navigation" | "reconnect" | "reload") {
-  const { page, gateway } = await openActiveTurn();
+  const { page, gateway } = await openActiveTurn(
+    mode === "navigation" ? { methodResponses: { "sessions.usage": sessionsUsageResponse() } } : {},
+  );
   const title = mode.charAt(0).toUpperCase() + mode.slice(1);
   const prompt = `${mode} active turn`;
   const streamText = `${title} progress is still running.`;
@@ -297,7 +300,7 @@ suite.define(() => {
     async (active) => {
       const { page, gateway } = await openActiveTurn({
         deferredMethods: ["chat.send"],
-        // Terminal events can request ordinary history alongside outbox recovery.
+        // Keep terminal-triggered history behind the held startup recovery.
         heldMethods: ["chat.history"],
       });
       const pane = page.locator("openclaw-chat-pane");
@@ -327,7 +330,7 @@ suite.define(() => {
       await expect.poll(readPane).toMatchObject({
         runId,
         sending: false,
-        queue: [{ sendRunId: runId, sendState: "sending" }],
+        queue: [],
       });
       const oldSubscription = await pane.evaluateHandle(
         (element) =>
@@ -337,7 +340,7 @@ suite.define(() => {
       await expect.poll(readPane).toMatchObject({
         connected: false,
         runId,
-        queue: [{ sendRunId: runId, sendState: "waiting-reconnect" }],
+        queue: [],
       });
       const userIdentity = { id: "reconnect-user", seq: 1, idempotencyKey: `${runId}:user` };
       const user = chatMessage("user", prompt, userIdentity, Date.now());
@@ -353,7 +356,7 @@ suite.define(() => {
         inFlightRun: { runId, text: "", events: [] },
       };
       // Contract fixture: the user is saved and published while disconnected.
-      // Reconnect subscriptions do not replay it; both real recovery RPCs still run.
+      // Reconnect subscriptions do not replay it; startup must restore its history.
       await gateway.setHistoryMessages([user]);
       await gateway.emitGatewayEvent("session.message", {
         sessionKey: selectedSessionKey,
@@ -364,7 +367,6 @@ suite.define(() => {
       });
       await installRecoverySnapshot(gateway, history, { ts: user.timestamp });
       const startupCount = (await gateway.getRequests("chat.startup")).length;
-      const historyCount = (await gateway.getRequests("chat.history")).length;
       const subscriptionCount = (await gateway.getRequests("sessions.messages.subscribe")).length;
       await gateway.deferNext("chat.startup", { sessionKey: selectedSessionKey });
       await gateway.setOnline(true);
@@ -381,19 +383,13 @@ suite.define(() => {
         .toBe(true);
       await oldSubscription.dispose();
       await gateway.waitForRequest("chat.startup", { after: startupCount });
-      const recovery = await gateway.waitForRequest("chat.history", { after: historyCount });
-      expect(recovery.params).toMatchObject({
-        sessionKey: selectedSessionKey,
-        limit: 1000,
-        inputRunIds: [runId],
-      });
       await expect.poll(readPane).toMatchObject({
         connected: true,
         loading: true,
         subscriptionKey: selectedSessionKey,
         runId,
-        queue: [{ sendRunId: runId, sendState: "waiting-reconnect" }],
-        messageCount: initial.messageCount,
+        queue: [],
+        messageCount: initial.messageCount + 1,
       });
 
       const assistantIdentity = { id: "reconnect-assistant", seq: 2, runId };
@@ -419,8 +415,8 @@ suite.define(() => {
       await expect.poll(readPane).toMatchObject({
         loading: true,
         runId: active ? runId : null,
-        queue: [{ sendRunId: runId, sendState: "waiting-reconnect" }],
-        messageCount: initial.messageCount + 1,
+        queue: [],
+        messageCount: initial.messageCount + 2,
       });
       const thread = page.locator(".chat-thread-inner");
       const assertOrder = async () => {
@@ -437,7 +433,6 @@ suite.define(() => {
       await assertOrder();
 
       await gateway.resolveDeferred("chat.startup", completeHistory);
-      await gateway.resolveDeferred("chat.history", completeHistory);
       await expect.poll(readPane).toMatchObject({ loading: false, queue: [] });
       await gateway.emitChatFinal({ runId, sessionKey: selectedSessionKey, text: reply });
       await expect(stopButton(page)).toHaveCount(0);

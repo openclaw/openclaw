@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import http from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -14,13 +13,21 @@ import {
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
 import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
-import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveBundleMcpServerInstructions } from "../agent-bundle-mcp-instructions.js";
+import {
+  readMcpFixtureMessage,
+  replyMcpFixtureResult,
+  startMcpHttpFixture,
+} from "../agent-bundle-mcp-lifecycle.test-support.js";
 import { setSessionMcpRuntimeScheduler } from "../agent-bundle-mcp-manager-api.js";
 import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-tools.js";
-import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
+  createClaudeMcpCliBackend,
+  testing as cliBackendsTesting,
+} from "../cli-backends.test-support.js";
+import {
+  createPersistedCompletionHandoff,
   createCliRunnerPrepareFixture,
   createTestMcpLoopbackClientGrant,
 } from "../cli-runner.test-helpers.js";
@@ -34,93 +41,57 @@ const PROBE_SERVER_INSTRUCTIONS =
   "x".repeat(2_500) +
   "\nPROBE_TAIL: preserve the complete native guidance.";
 
-const claudeBackend: CliBackendPlugin & { pluginId: string } = {
-  id: "claude-cli",
-  pluginId: "anthropic",
-  bundleMcp: true,
-  bundleMcpMode: "claude-config-file",
-  nativeToolMode: "selectable",
-  toolAvailabilityEnforcement: "execution-args",
-  resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
-  config: {
-    command: "claude",
-    args: ["--print"],
-    output: "jsonl",
-    jsonlDialect: "claude-stream-json",
-    input: "stdin",
-    sessionMode: "existing",
-  },
-};
+const claudeBackend = createClaudeMcpCliBackend();
 
 async function startProbeServer() {
   const state = { calls: 0 };
-  const server = http.createServer((request, response) => {
-    void (async () => {
-      if (request.method !== "POST") {
-        response.writeHead(request.method === "DELETE" ? 200 : 405).end();
-        return;
-      }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const message = JSON.parse(Buffer.concat(chunks).toString()) as {
-        id?: number;
-        method: string;
-        params?: { protocolVersion?: string; arguments?: { word?: string } };
-      };
-      if (message.method === "tools/call") {
-        state.calls += 1;
-      }
-      const result =
-        message.method === "initialize"
+  const server = await startMcpHttpFixture(async (request, response) => {
+    if (request.method !== "POST") {
+      response.writeHead(request.method === "DELETE" ? 200 : 405).end();
+      return;
+    }
+    const message = await readMcpFixtureMessage<{
+      protocolVersion?: string;
+      arguments?: { word?: string };
+    }>(request);
+    if (message.method === "tools/call") {
+      state.calls += 1;
+    }
+    const result =
+      message.method === "initialize"
+        ? {
+            protocolVersion: message.params?.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: "probe", version: "1" },
+            instructions: PROBE_SERVER_INSTRUCTIONS,
+          }
+        : message.method === "tools/list"
           ? {
-              protocolVersion: message.params?.protocolVersion,
-              capabilities: { tools: {} },
-              serverInfo: { name: "probe", version: "1" },
-              instructions: PROBE_SERVER_INSTRUCTIONS,
+              tools: [
+                {
+                  name: "echo",
+                  description: "Echo a word.",
+                  inputSchema: { type: "object", properties: { word: { type: "string" } } },
+                },
+              ],
             }
-          : message.method === "tools/list"
+          : message.method === "tools/call"
             ? {
-                tools: [
-                  {
-                    name: "echo",
-                    description: "Echo a word.",
-                    inputSchema: { type: "object", properties: { word: { type: "string" } } },
-                  },
-                ],
+                content: [{ type: "text", text: `probe:${message.params?.arguments?.word}` }],
               }
-            : message.method === "tools/call"
-              ? {
-                  content: [{ type: "text", text: `probe:${message.params?.arguments?.word}` }],
-                }
-              : undefined;
-      if (!result) {
-        response.writeHead(202).end();
-        return;
-      }
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-    })().catch(() => response.writeHead(500).end());
+            : undefined;
+    if (!result) {
+      response.writeHead(202).end();
+      return;
+    }
+    replyMcpFixtureResult(response, message, result);
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("MCP probe server did not acquire a loopback port");
-  }
   return {
-    port: address.port,
+    port: new URL(server.url).port,
     get calls() {
       return state.calls;
     },
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    close: server.close,
   };
 }
 
@@ -271,22 +242,11 @@ describe("configured MCP servers on CLI turns", () => {
             sourceReplyDeliveryMode: "automatic",
             config,
             ...(completion
-              ? {
-                  trustedInternalHandoff: {
-                    kind: "subagent-completion" as const,
-                    sourceSessionKey: childSessionKey,
-                    sourceSessionId: "configured-mcp-child",
-                    targetSessionKey: sessionTarget.sessionKey,
-                    targetSessionId: sessionTarget.sessionId,
-                    provider: "claude-cli",
-                    model: "opus",
-                  },
-                  inputProvenance: {
-                    kind: "inter_session" as const,
-                    sourceTool: "subagent_announce",
-                    sourceSessionKey: childSessionKey,
-                  },
-                }
+              ? createPersistedCompletionHandoff(
+                  childSessionKey,
+                  "configured-mcp-child",
+                  sessionTarget,
+                )
               : {}),
           });
           try {

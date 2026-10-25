@@ -749,6 +749,7 @@ async function normalizeOpenClawTarballModes(
   tarballPath: string,
   sourceDir: string,
   normalizeModes: boolean,
+  bundleOwners: ReadonlyMap<string, string>,
 ) {
   // npm can retain restrictive source read bits. Normalize those for non-root
   // installers while preserving the archive's executable intent.
@@ -761,6 +762,7 @@ async function normalizeOpenClawTarballModes(
       sourceDir,
       path.join(stageDir, "package"),
       resolveTimeoutMs("OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS", DEFAULT_PACKAGE_PACK_TIMEOUT_MS),
+      bundleOwners,
     );
     if (!normalizeModes && !repaired) {
       return;
@@ -773,9 +775,18 @@ async function normalizeOpenClawTarballModes(
           await fs.chmod(entryPath, 0o755);
           await normalizeStagedModes(entryPath);
         } else if (entry.isFile()) {
+          const stats = await fs.stat(entryPath);
+          // npm preserves hardlinked dependency assets; tar must repack each as a regular file.
+          if (stats.nlink > 1) {
+            const copyDir = await fs.mkdtemp(path.join(stageDir, ".regular-file-"));
+            const copyPath = path.join(copyDir, "file");
+            await fs.copyFile(entryPath, copyPath);
+            await fs.rename(copyPath, entryPath);
+            await fs.rm(copyDir, { recursive: true });
+          }
           // Umask masking on extraction only clears group/other bits, so the
           // owner exec bit still says whether the packed entry was executable.
-          const executable = ((await fs.stat(entryPath)).mode & 0o100) !== 0;
+          const executable = (stats.mode & 0o100) !== 0;
           await fs.chmod(entryPath, executable ? 0o755 : 0o644);
           stagedFileCount += 1;
         }
@@ -958,17 +969,20 @@ export async function packOpenClawPackageForDocker(
   try {
     let cleanupBundledAiRuntime = async () => {};
     let cleanupBundledPlugins = async () => {};
+    let bundledPluginOwners: ReadonlyMap<string, string> = new Map();
     const cleanupFailures = new Set<unknown>();
     const onCleanupFailure = (error: unknown) => void cleanupFailures.add(error);
     try {
       await cleanPackedOpenClawTarballs(outputPath);
       if (packageOptions.bundlePlugins?.length) {
         const { preparePackageBundledPlugins } = await import("./lib/package-bundled-plugins.mts");
-        cleanupBundledPlugins = await preparePackageBundledPlugins(
+        const prepared = await preparePackageBundledPlugins(
           sourcePath,
           packageOptions.bundlePlugins,
           onCleanupFailure,
         );
+        cleanupBundledPlugins = prepared.cleanup;
+        bundledPluginOwners = prepared.bundleOwners;
       }
       cleanupBundledAiRuntime = await prepareBundledAiRuntime(
         sourcePath,
@@ -1042,13 +1056,22 @@ export async function packOpenClawPackageForDocker(
       }
     }
     const { hasMissingBundledDependencies } = await import("./lib/package-bundled-links.mts");
-    // Preserve complete pnpm archives exactly. Only npm's source modes or an
-    // omitted declared bundle require rebuilding the private extracted archive.
-    if (!packageOptions.pnpmPack || (await hasMissingBundledDependencies(tarball))) {
+    // Complete selected plugin bundles from their owners, even when the packer
+    // found a same-version root copy. Other complete pnpm archives stay unchanged.
+    if (
+      !packageOptions.pnpmPack ||
+      packageOptions.bundlePlugins?.length ||
+      (await hasMissingBundledDependencies(tarball))
+    ) {
       if (packageOptions.normalizeTarballModes) {
         await packageOptions.normalizeTarballModes(tarball);
       } else {
-        await normalizeOpenClawTarballModes(tarball, sourcePath, !packageOptions.pnpmPack);
+        await normalizeOpenClawTarballModes(
+          tarball,
+          sourcePath,
+          !packageOptions.pnpmPack,
+          bundledPluginOwners,
+        );
       }
     }
     if (packageOptions.packJsonPath) {

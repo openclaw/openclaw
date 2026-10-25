@@ -183,7 +183,14 @@ export function getEmbeddedStandaloneRuntimeRoot() {
   return typeof rootUrl === "string" ? fileURLToPath(rootUrl) : undefined;
 }
 
-function resolveStandaloneSidecarRoot(executable) {
+/** Image membership comes from the compiler's module inventory, never disk contents. */
+export function isEmbeddedStandaloneModule(modulePath) {
+  const filename = modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;
+  // eslint-disable-next-line no-underscore-dangle -- Compiler bootstrap contract.
+  return globalThis.__openclawStandaloneIsEmbeddedModule?.(filename) === true;
+}
+
+export function resolveStandaloneSidecarRoot(executable = process.execPath) {
   if (executable === process.execPath) {
     const embeddedRoot = getEmbeddedStandaloneRuntimeRoot();
     if (embeddedRoot !== undefined) {

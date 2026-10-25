@@ -1,4 +1,5 @@
 import { For, createMemo, createUniqueId, onSettled } from "solid-js";
+import "../../../styles/chat/composer-queue-content.css";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
@@ -140,12 +141,7 @@ function sendStateLabel(
   offline: boolean,
   connected: boolean | undefined,
 ): string | null {
-  if (
-    offline &&
-    item.sendState !== "failed" &&
-    item.sendState !== "unconfirmed" &&
-    item.sendState !== "held"
-  ) {
+  if (offline && item.sendState !== "failed" && item.sendState !== "held") {
     return t("chat.queue.states.waitingForReconnect");
   }
   switch (item.sendState) {
@@ -158,7 +154,6 @@ function sendStateLabel(
       return isChatSendReconnecting(item.sendState, connected)
         ? t("chat.queue.states.waitingForReconnect")
         : null;
-    case "unconfirmed":
     case "held":
       return t("chat.queue.states.needsReview");
     case "failed":
@@ -202,9 +197,8 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
   });
   const globalState = createMemo(() => {
     const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
-    return (head?.sendState === "unconfirmed" || head?.sendState === "held") &&
-      isQueuedSendInlineState(head)
-      ? { label: t("chat.queue.states.blockedByUnconfirmed"), tone: "warn" }
+    return head?.sendState === "held" && isQueuedSendInlineState(head)
+      ? { label: t("chat.queue.states.blockedByReview"), tone: "warn" }
       : visibleQueue().some((item) => item.sendState === "waiting-model") && !props.offline
         ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
         : null;
@@ -294,10 +288,7 @@ function ChatQueueItem(rowProps: {
     const image = images()?.[0];
     return image ? getChatAttachmentPreviewUrl(image) : null;
   });
-  const failed = () =>
-    item().sendState === "failed" ||
-    item().sendState === "unconfirmed" ||
-    item().sendState === "held";
+  const failed = () => item().sendState === "failed" || item().sendState === "held";
   const reconnecting = () =>
     !item().serverQueued &&
     !failed() &&

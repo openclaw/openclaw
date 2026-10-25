@@ -119,9 +119,10 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const inherited = getGatewayToolCallerIdentity();
   const source = inherited?.operationalRunInstance === instance ? inherited : undefined;
   const { sessionId, sessionKey, sessionFile, agentId, runId } = attempt;
+  const operatorAuthority = readAdmittedRunOperatorAuthority(admitted);
   const requesterOrigin = captureRequesterOrigin({
     ...attempt,
-    operatorProfileId: readAdmittedRunOperatorAuthority(admitted)?.profileId,
+    operatorProfileId: operatorAuthority?.profileId,
   });
   const route = { provider: attempt.provider, model: attempt.modelId };
   // Maintenance borrows an operation for cancellation, not its injection snapshot.
@@ -133,7 +134,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
       ? turn
       : undefined;
   const assertHostActive = attempt.hostCapabilities?.assertActive;
-  const operatorAuthority = readAdmittedRunOperatorAuthority(admitted);
   let live = true;
   // Preserve the complete admitted snapshot, but bind its hash and projection
   // only after hooks or native ownership have selected the actual model.
@@ -294,8 +294,14 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
         requesterOrigin,
         receiptAuthority: assertReplyActive,
         embeddedRunToolAuthorityBinding: (registration) => {
-          assertActive();
           const { handle } = registration;
+          const assertRegistered = (assertSource = assertActive) => {
+            assertSource();
+            if (handle.runId !== runId || handle.toolAuthorityFingerprint !== fingerprint) {
+              throw new Error("embedded tool authority handle changed");
+            }
+          };
+          assertRegistered();
           if (
             registration.sessionId !== sessionId ||
             registration.sessionKey !== sessionKey ||
@@ -307,18 +313,11 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           ) {
             throw new Error("embedded tool authority registration does not match its attempt");
           }
-          const assertRegistered = () => {
-            assertActive();
-            if (handle.runId !== runId || handle.toolAuthorityFingerprint !== fingerprint) {
-              throw new Error("embedded tool authority handle changed");
-            }
-          };
           const ownsOperation = () =>
             !operation ||
             (getControllerEmbeddedAttachment(operation)?.handle === handle &&
               operation.toolAuthorityRoute?.provider === route.provider &&
               operation.toolAuthorityRoute.model === route.model);
-          assertRegistered();
           registered = true;
           const project = (caller: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester) => {
             assertRegistered();
@@ -425,10 +424,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
             get requesterPrincipalKey() {
               return operation?.requesterPrincipalKey ?? direct?.requesterPrincipalKey;
             },
-            assertRegistrationActive: () => {
-              assertRegistered();
-              assertReplyActive();
-            },
+            assertRegistrationActive: () => assertRegistered(assertReplyActive),
             assertActive: () => {
               assertRegistered();
               if (!ownsOperation()) {

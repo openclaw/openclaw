@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
-import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
+import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 
-type Schema = Parameters<ReturnType<typeof createBundleMcpJsonSchemaValidator>["getValidator"]>[0];
-const compile = (schema: Schema) => createBundleMcpJsonSchemaValidator().getValidator(schema);
+type Schema = Parameters<ReturnType<typeof createMcpJsonSchemaValidator>["getValidator"]>[0];
+const compile = (schema: Schema) => createMcpJsonSchemaValidator().getValidator(schema);
 const compileDraft = (schema: Schema) =>
   compile({
     $schema: "https://json-schema.org/draft/2020-12/schema",

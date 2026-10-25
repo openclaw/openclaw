@@ -19,6 +19,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import * as allocation from "./allocation.js";
+import { git } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
 import { listGitWorktrees } from "./git.js";
 import * as registryRead from "./registry-read.js";
@@ -29,13 +30,6 @@ import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./ser
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
-    encoding: "utf8",
-  });
-  return stdout.trim();
-}
 
 describe("ManagedWorktreeService canonical paths", () => {
   const initializeRepository = useManagedWorktreeTestRepository();

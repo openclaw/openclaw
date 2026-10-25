@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { extractText } from "../../../../ui/src/lib/chat/message-extract.ts";
 import {
   getEmbeddedRunAttachment,
@@ -380,22 +380,12 @@ describe("native Talk action ownership through public plugin registration", () =
     });
   });
 
-  describe("registration readiness", () => {
-    let fixture: Awaited<ReturnType<typeof prepareMissingRegistrationFixture>> | undefined;
-    beforeEach(async () => {
-      fixture = await prepareMissingRegistrationFixture();
-    });
-    afterEach(async () => {
-      await fixture?.close();
-      fixture = undefined;
-    });
-    it(
-      "releases the provider when registration readiness never publishes",
-      { timeout: 10_000 },
-      async () => {
-        if (!fixture) {
-          throw new Error("Native registration fixture was not prepared");
-        }
+  it(
+    "releases the provider when registration readiness never publishes",
+    { timeout: 10_000 },
+    async () => {
+      const fixture = await prepareMissingRegistrationFixture();
+      try {
         const { session, providerStream, answer, finish, publish, assertions, start } = fixture;
         await expect(start()).rejects.toThrow(
           /registration readiness not observed within 1000 ms; last phase: \S/,
@@ -409,9 +399,11 @@ describe("native Talk action ownership through public plugin registration", () =
         expect(Boolean(getActiveNativeAttempt(SESSION_ID))).toBe(false);
         const runId = upstream.runEmbeddedAgent.mock.calls[0]![0].runId;
         expect(ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.has(runId)).toBe(false);
-      },
-    );
-  });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
 
   it.each([
     ["closed", "closed"],

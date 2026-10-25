@@ -80,6 +80,28 @@ export const visitorListDetailsSchema = Type.Object(
                 "Missing policy membership takes precedence; expired grants await provider cleanup.",
             },
           ),
+          welcome: Type.Optional(
+            Type.Object(
+              {
+                state: Type.Union([
+                  Type.Literal("pending"),
+                  Type.Literal("ready"),
+                  Type.Literal("failed"),
+                ]),
+                sessionKey: Type.Optional(
+                  Type.String({
+                    description:
+                      "This invitation's welcome session, once reserved. A deleted session is not recreated.",
+                  }),
+                ),
+              },
+              {
+                additionalProperties: false,
+                description:
+                  "Welcome-session progress for this invitation; absent on grants recorded before onboarding.",
+              },
+            ),
+          ),
           gatewayAccess: Type.String(),
         },
         {

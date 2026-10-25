@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const runExecMock = vi.hoisted(() => vi.fn());
@@ -35,7 +36,11 @@ describe("live-agent-probes", () => {
     [false, "scripts/run-node.mjs"],
     [true, "openclaw.mjs"],
   ] as const)("selects CLI entry for built=%s", (built, entry) => {
-    expect(resolveOpenClawCliProcessArgs(["cron", "list"], built)).toEqual([entry, "cron", "list"]);
+    expect(resolveOpenClawCliProcessArgs(["cron", "list"], built)).toEqual([
+      path.resolve(entry),
+      "cron",
+      "list",
+    ]);
   });
 
   it("accepts only cat for the shared image probe reply", () => {

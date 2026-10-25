@@ -11,8 +11,6 @@ import type { AgentSelectOption } from "./agent-select-types.ts";
 import type { AgentSelectElement } from "./agent-select.tsx";
 import "./agent-select-registration.ts";
 
-const AGENT_SELECT_TEST_TAG = "openclaw-agent-select";
-
 beforeEach(() => {
   setAvatarGatewayOrigin(globalThis.location.origin);
 });
@@ -21,6 +19,7 @@ afterEach(async () => {
   document.body.replaceChildren();
   setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
@@ -36,22 +35,34 @@ const options: AgentSelectOption[] = agents.map((agent) => ({
   agent,
 }));
 
-function createIdentity(
-  agentId: string,
-  overrides: Partial<AgentIdentityResult>,
-): AgentIdentityResult {
-  return {
-    agentId,
-    name: "",
-    avatar: "",
-    ...overrides,
-  };
+function createIdentity(agentId: string, avatar: string): AgentIdentityResult {
+  return { agentId, name: "", avatar };
+}
+const avatarImage = (element: Element, scope = "avatar") =>
+  element.querySelector<HTMLImageElement>(`.agent-select__${scope} img`);
+const avatarSrc = (element: Element, scope = "avatar") =>
+  avatarImage(element, scope)?.getAttribute("src");
+
+function stubAvatarUrls(url?: string) {
+  const createObjectURL = vi.fn<typeof URL.createObjectURL>();
+  if (url !== undefined) {
+    createObjectURL.mockReturnValue(url);
+  }
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = createObjectURL;
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
+  return { createObjectURL, revokeObjectURL };
 }
 
 async function createAgentSelect(
   overrides: Partial<Omit<AgentSelectElement, keyof HTMLElement>> = {},
 ): Promise<AgentSelectElement> {
-  const element = document.createElement(AGENT_SELECT_TEST_TAG);
+  const element = document.createElement("openclaw-agent-select");
   element.options = options;
   element.value = "alpha";
   Object.assign(element, overrides);
@@ -59,6 +70,8 @@ async function createAgentSelect(
   await element.updateComplete;
   return element;
 }
+const createAvatarSelect = (avatar = "/avatar/alpha") =>
+  createAgentSelect({ identityById: { alpha: createIdentity("alpha", avatar) } });
 
 it("preserves complete grapheme clusters in emoji avatar fallback", async () => {
   const agent = { id: "family", name: "Family", identity: { emoji: "👍🏻" } };
@@ -67,11 +80,7 @@ it("preserves complete grapheme clusters in emoji avatar fallback", async () => 
     value: agent.id,
   });
 
-  try {
-    expect(element.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("👍🏻");
-  } finally {
-    element.remove();
-  }
+  expect(element.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("👍🏻");
 });
 
 it("renders named scope icons and restores the selected agent avatar", async () => {
@@ -98,14 +107,12 @@ it("renders named scope icons and restores the selected agent avatar", async () 
 it("keeps a failed avatar on its fallback until the image changes", async () => {
   const invalidAvatar = "data:image/gif;base64,bm90LWFuLWltYWdl";
   const replacementAvatar = "data:image/png;base64,cmVwbGFjZW1lbnQ=";
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", { avatar: invalidAvatar }) },
-  });
-  const failedImage = element.querySelector<HTMLImageElement>(".agent-select__avatar img");
+  const element = await createAvatarSelect(invalidAvatar);
+  const failedImage = avatarImage(element);
   expect(failedImage).not.toBeNull();
   failedImage?.dispatchEvent(new Event("error"));
   await element.updateComplete;
-  await waitForSolid(() => expect(element.querySelector(".agent-select__avatar img")).toBeNull());
+  await waitForSolid(() => expect(avatarImage(element)).toBeNull());
   await waitForFast(() =>
     expect(
       element.querySelector(".agent-select__avatar .identity-avatar__agent-face"),
@@ -115,58 +122,38 @@ it("keeps a failed avatar on its fallback until the image changes", async () => 
 
   element.accessibleLabel = "Choose another agent";
   await element.updateComplete;
-  expect(element.querySelector(".agent-select__avatar img")).toBeNull();
+  expect(avatarImage(element)).toBeNull();
 
-  element.identityById = { alpha: createIdentity("alpha", { avatar: replacementAvatar }) };
+  element.identityById = { alpha: createIdentity("alpha", replacementAvatar) };
   await element.updateComplete;
-  expect(element.querySelector(".agent-select__avatar img")?.getAttribute("src")).toBe(
-    replacementAvatar,
-  );
+  expect(avatarSrc(element)).toBe(replacementAvatar);
   failedImage?.dispatchEvent(new Event("error"));
   await element.updateComplete;
-  expect(element.querySelector(".agent-select__avatar img")?.getAttribute("src")).toBe(
-    replacementAvatar,
-  );
+  expect(avatarSrc(element)).toBe(replacementAvatar);
 });
 
 it("does not let a removed option's image error poison its replacement lease", async () => {
   const avatar = "data:image/png;base64,cmV0YWluZWQ=";
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", { avatar }) },
-  });
-  const retired = element.querySelector<HTMLImageElement>(".agent-select__trigger img")!;
+  const element = await createAvatarSelect(avatar);
+  const retired = avatarImage(element, "trigger")!;
   expect(retired.getAttribute("src")).toBe(avatar);
   element.options = options.filter((option) => option.value === "beta");
   element.value = "beta";
   await element.updateComplete;
-  await waitForSolid(() => expect(element.querySelector(".agent-select__trigger img")).toBeNull());
+  await waitForSolid(() => expect(avatarImage(element, "trigger")).toBeNull());
 
   element.options = options;
   element.value = "alpha";
   await element.updateComplete;
-  await waitForSolid(() =>
-    expect(element.querySelector(".agent-select__trigger img")?.getAttribute("src")).toBe(avatar),
-  );
+  await waitForSolid(() => expect(avatarSrc(element, "trigger")).toBe(avatar));
   retired.dispatchEvent(new Event("error"));
   await element.updateComplete;
-  await waitForSolid(() =>
-    expect(element.querySelector(".agent-select__trigger img")?.getAttribute("src")).toBe(avatar),
-  );
+  await waitForSolid(() => expect(avatarSrc(element, "trigger")).toBe(avatar));
 });
 
 it("keeps both option routes and the selected avatar with token auth", async () => {
-  const createObjectURL = vi
-    .fn()
-    .mockReturnValueOnce("blob:alpha")
-    .mockReturnValueOnce("blob:beta");
-  const revokeObjectURL = vi.fn();
-  vi.stubGlobal(
-    "URL",
-    class extends URL {
-      static override createObjectURL = createObjectURL;
-      static override revokeObjectURL = revokeObjectURL;
-    },
-  );
+  const { createObjectURL, revokeObjectURL } = stubAvatarUrls();
+  createObjectURL.mockReturnValueOnce("blob:alpha").mockReturnValueOnce("blob:beta");
   const response = createDeferred<Response>();
   const fetchMock = vi.fn<typeof fetch>(async () => (await response.promise).clone());
   vi.stubGlobal("fetch", fetchMock);
@@ -174,8 +161,8 @@ it("keeps both option routes and the selected avatar with token auth", async () 
   setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
   const element = await createAgentSelect({
     identityById: {
-      alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }),
-      beta: createIdentity("beta", { avatar: "/avatar/beta" }),
+      alpha: createIdentity("alpha", "/avatar/alpha"),
+      beta: createIdentity("beta", "/avatar/beta"),
     },
   });
 
@@ -183,23 +170,23 @@ it("keeps both option routes and the selected avatar with token auth", async () 
     const avatar = element.querySelector(".agent-select__trigger .agent-select__avatar");
     expect(avatar?.classList).toContain("is-pending");
     expect(avatar?.classList).not.toContain("is-fallback");
-    expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
-      credentials: "include",
-      headers: { Authorization: "Bearer tok" },
-      signal: expect.any(AbortSignal),
+    await waitForFast(() => {
+      expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
+        credentials: "include",
+        headers: { Authorization: "Bearer tok" },
+        signal: expect.any(AbortSignal),
+      });
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        `${globalThis.location.origin}/avatar/alpha`,
+        `${globalThis.location.origin}/avatar/beta`,
+      ]);
     });
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      `${globalThis.location.origin}/avatar/alpha`,
-      `${globalThis.location.origin}/avatar/beta`,
-    ]);
 
     response.resolve(
       new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
     );
     await waitForFast(() => {
-      expect(
-        element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),
-      ).toBe("blob:alpha");
+      expect(avatarSrc(element)).toBe("blob:alpha");
       expect(element.querySelector('[value="beta"] img')?.getAttribute("src")).toBe("blob:beta");
     });
     expect(avatar?.classList).toContain("is-pending");
@@ -224,13 +211,7 @@ it("keeps both option routes and the selected avatar with token auth", async () 
 });
 
 it("refetches a failed local avatar after the auth credential rotates", async () => {
-  vi.stubGlobal(
-    "URL",
-    class extends URL {
-      static override createObjectURL = vi.fn(() => "blob:rotated-avatar");
-      static override revokeObjectURL = vi.fn();
-    },
-  );
+  stubAvatarUrls("blob:rotated-avatar");
   const fetchMock = vi
     .fn()
     .mockResolvedValueOnce({ ok: false })
@@ -238,41 +219,26 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
   setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
-  });
+  const element = await createAvatarSelect();
 
-  try {
-    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    await waitForFast(() => expect(element.querySelector(".agent-select__avatar img")).toBeNull());
+  await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  await waitForFast(() => expect(avatarImage(element)).toBeNull());
 
-    setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
-    await element.updateComplete;
+  setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
+  await element.updateComplete;
 
-    await waitForFast(() => {
-      expect(fetchMock).toHaveBeenLastCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
-        credentials: "include",
-        headers: { Authorization: "Bearer tok2" },
-        signal: expect.any(AbortSignal),
-      });
-      expect(
-        element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),
-      ).toBe("blob:rotated-avatar");
+  await waitForFast(() => {
+    expect(fetchMock).toHaveBeenLastCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
+      credentials: "include",
+      headers: { Authorization: "Bearer tok2" },
+      signal: expect.any(AbortSignal),
     });
-  } finally {
-    element.remove();
-    vi.unstubAllGlobals();
-  }
+    expect(avatarSrc(element)).toBe("blob:rotated-avatar");
+  });
 });
 
 it("aborts the stale request on auth rotation without duplicating the current fetch", async () => {
-  vi.stubGlobal(
-    "URL",
-    class extends URL {
-      static override createObjectURL = vi.fn(() => "blob:rotated-avatar");
-      static override revokeObjectURL = vi.fn();
-    },
-  );
+  stubAvatarUrls("blob:rotated-avatar");
   const pending: Array<{
     resolve: (response: Response) => void;
     signal: AbortSignal;
@@ -294,41 +260,31 @@ it("aborts the stale request on auth rotation without duplicating the current fe
     fetchMock.mock.calls.filter(([url]) => url === `${globalThis.location.origin}/avatar/alpha`);
 
   setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
-  });
+  const element = await createAvatarSelect();
 
-  try {
-    expect(avatarCalls()).toHaveLength(1);
-    setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
-    await element.updateComplete;
-    await waitForFast(() => expect(avatarCalls()).toHaveLength(2));
+  await waitForFast(() => expect(avatarCalls()).toHaveLength(1));
+  setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
+  await element.updateComplete;
+  await waitForFast(() => expect(avatarCalls()).toHaveLength(2));
 
-    await waitForFast(() => expect(pending[0]?.signal.aborted).toBe(true));
-    expect(
-      avatarCalls().map(([, init]) => new Headers(init?.headers).get("Authorization")),
-    ).toEqual(["Bearer tok", "Bearer tok2"]);
+  await waitForFast(() => expect(pending[0]?.signal.aborted).toBe(true));
+  expect(avatarCalls().map(([, init]) => new Headers(init?.headers).get("Authorization"))).toEqual([
+    "Bearer tok",
+    "Bearer tok2",
+  ]);
 
-    // Let the canceled request's rejection settle, then force another render while
-    // the replacement is pending. It must not clear the replacement's route claim.
-    await Promise.resolve();
-    element.identityById = { ...element.identityById };
-    await element.updateComplete;
-    expect(avatarCalls()).toHaveLength(2);
+  // Let the canceled request's rejection settle, then force another render while
+  // the replacement is pending. It must not clear the replacement's route claim.
+  await Promise.resolve();
+  element.identityById = { ...element.identityById };
+  await element.updateComplete;
+  expect(avatarCalls()).toHaveLength(2);
 
-    pending[1]?.resolve({
-      ok: true,
-      blob: async () => new Blob(["avatar"], { type: "image/png" }),
-    } as Response);
-    await waitForFast(() => {
-      expect(
-        element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),
-      ).toBe("blob:rotated-avatar");
-    });
-  } finally {
-    element.remove();
-    vi.unstubAllGlobals();
-  }
+  pending[1]?.resolve({
+    ok: true,
+    blob: async () => new Blob(["avatar"], { type: "image/png" }),
+  } as Response);
+  await waitForFast(() => expect(avatarSrc(element)).toBe("blob:rotated-avatar"));
 });
 
 it.each(["fetch", "body"] as const)(
@@ -361,14 +317,12 @@ it.each(["fetch", "body"] as const)(
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
-    const element = await createAgentSelect({
-      identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
-    });
+    const element = await createAvatarSelect();
 
     try {
+      await vi.advanceTimersByTimeAsync(0);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       if (stage === "body") {
-        await vi.advanceTimersByTimeAsync(0);
         expect(blob).toHaveBeenCalledTimes(1);
       }
       const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
@@ -380,7 +334,7 @@ it.each(["fetch", "body"] as const)(
       expect(fetchInit?.signal?.aborted).toBe(true);
 
       await waitForFast(() => {
-        expect(element.querySelector(".agent-select__avatar img")).toBeNull();
+        expect(avatarImage(element)).toBeNull();
         expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull();
       });
       expect(vi.getTimerCount()).toBe(0);
@@ -394,36 +348,21 @@ it.each(["fetch", "body"] as const)(
 );
 
 it("fetches a local avatar image without a header when token auth is not active", async () => {
-  vi.stubGlobal(
-    "URL",
-    class extends URL {
-      static override createObjectURL = vi.fn(() => "blob:unauthenticated-avatar");
-      static override revokeObjectURL = vi.fn();
-    },
-  );
+  stubAvatarUrls("blob:unauthenticated-avatar");
   const fetchMock = vi.fn().mockResolvedValue({
     ok: true,
     blob: async () => new Blob(["avatar"], { type: "image/png" }),
   });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
-  });
+  const element = await createAvatarSelect();
 
-  try {
+  await waitForFast(() =>
     expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
       credentials: "include",
       signal: expect.any(AbortSignal),
-    });
-    await waitForFast(() => {
-      expect(
-        element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),
-      ).toBe("blob:unauthenticated-avatar");
-    });
-  } finally {
-    element.remove();
-    vi.unstubAllGlobals();
-  }
+    }),
+  );
+  await waitForFast(() => expect(avatarSrc(element)).toBe("blob:unauthenticated-avatar"));
 });
 
 it("keeps avatar text out of typeahead and announces option metadata", async () => {
@@ -437,22 +376,18 @@ it("keeps avatar text out of typeahead and announces option metadata", async () 
     value: "beta",
   });
 
-  try {
-    const items = Array.from(
-      element.querySelectorAll<HTMLElement & { value: string }>("[data-agent-option]"),
-    );
-    expect(items.find((item) => item.getAttribute("value") === "alpha")?.textContent?.trim()).toBe(
-      "Alpha agent",
-    );
-    expect(
-      items.find((item) => item.getAttribute("value") === "beta")?.getAttribute("aria-label"),
-    ).toBe("Beta agent, Handles research, Default");
-    expect(element.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toBe(
-      "Agent: Beta agent, Default",
-    );
-  } finally {
-    element.remove();
-  }
+  const items = Array.from(
+    element.querySelectorAll<HTMLElement & { value: string }>("[data-agent-option]"),
+  );
+  expect(items.find((item) => item.getAttribute("value") === "alpha")?.textContent?.trim()).toBe(
+    "Alpha agent",
+  );
+  expect(
+    items.find((item) => item.getAttribute("value") === "beta")?.getAttribute("aria-label"),
+  ).toBe("Beta agent, Handles research, Default");
+  expect(element.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toBe(
+    "Agent: Beta agent, Default",
+  );
 });
 
 it("refreshes translated labels when the locale changes while mounted", async () => {

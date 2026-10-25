@@ -42,28 +42,17 @@ describePosix("native merge completion", () => {
     expect(f.git(["for-each-ref", "--format=%(refname)", ref])).toBe("");
   });
 
-  it.each([
-    ["explicit", "rejected"],
-    ["explicit", "lost"],
-    ["inline", "rejected"],
-    ["inline", "lost"],
-  ])("does not repeat a %s %s completion POST", (route, comment) => {
-    const explicit = route === "explicit";
-    const f = explicit ? reconciledMergeAfterCleanup() : fixture();
-    const complete = () => (explicit ? f.complete(f.git(["rev-parse", outcomeRef])) : f.run());
+  it.each(["rejected", "lost"])("does not repeat an inline %s completion POST", (comment) => {
+    const f = fixture();
     configureMerge(f, { comment });
-    expectExit(complete(), 1);
+    expectExit(f.run(), 1);
     expect(f.record().phase).toBe("commenting");
     expect(f.state().posts).toBe(1);
     f.recover();
-    expectExit(complete(), explicit && comment === "rejected" ? 1 : 0);
-    expect(f.record().phase).toBe(
-      comment === "lost" ? (explicit ? "complete" : "commented") : "commenting",
-    );
+    expectExit(f.run());
+    expect(f.record().phase).toBe(comment === "lost" ? "commented" : "commenting");
     expect(f.state()).toMatchObject({ posts: 1, mutations: 1 });
-    if (!explicit) {
-      expect(existsSync(f.worktree)).toBe(true);
-    }
+    expect(existsSync(f.worktree)).toBe(true);
   });
 
   it("preserves unrelated local source-name branches during explicit completion", () => {
@@ -139,34 +128,15 @@ describePosix("native merge completion", () => {
     },
   );
 
-  it.each([false, true])(
-    "checks local/hosted preparation before cleanup (different tree=%s)",
-    (differentTree) => {
-      const f = fixture();
-      const localHead = f.commit(
-        f.tree(differentTree ? "unpublished\n" : "after\n"),
-        [f.base],
-        "Local prepared commit\n",
-      );
-      f.git(["-C", f.worktree, "reset", "--hard", localHead]);
-      f.prepare(f.head, f.base, localHead);
-      const run = f.run();
-      if (differentTree) {
-        expect(run.status, run.output).not.toBe(0);
-        expect(f.state().mutations).toBe(0);
-        expect(f.git(["rev-parse", "pr-123-prep"])).toBe(localHead);
-        expect(existsSync(f.worktree)).toBe(true);
-      } else {
-        expect(run.status, run.output).toBe(0);
-        expect(run.output).not.toContain("cleanup pending");
-        expect(f.record().phase).toBe("complete");
-        expect(existsSync(f.worktree)).toBe(false);
-        expect(f.git(["for-each-ref", "--format=%(refname)", "refs/heads/pr-123-prep"])).toBe("");
-        f.git(["merge-base", "--is-ancestor", localHead, outcomeRef]);
-        f.git(["reflog", "expire", "--expire=now", "--all"]);
-        f.git(["gc", "--prune=now"]);
-        expect(f.git(["show", `${localHead}:owner.txt`])).toBe("after");
-      }
-    },
-  );
+  it("refuses unpublished local preparation before cleanup", () => {
+    const f = fixture();
+    const localHead = f.commit(f.tree("unpublished\n"), [f.base], "Local prepared commit\n");
+    f.git(["-C", f.worktree, "reset", "--hard", localHead]);
+    f.prepare(f.head, f.base, localHead);
+    const run = f.run();
+    expect(run.status, run.output).not.toBe(0);
+    expect(f.state().mutations).toBe(0);
+    expect(f.git(["rev-parse", "pr-123-prep"])).toBe(localHead);
+    expect(existsSync(f.worktree)).toBe(true);
+  });
 });

@@ -6,8 +6,9 @@ import {
   type AiProviderRequestCapabilities,
   type AiProviderRequestPolicyInput,
 } from "../host.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import type { Model } from "../types.js";
-import { createZeroUsage } from "../usage.test-support.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import { encodedModelRequestBodyStream } from "./model-request-body.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import type { processCompletionsStream } from "./openai-completions-stream.js";
@@ -111,19 +112,11 @@ configureAiTransportHost({
 
 export function makeCompletionsModel(overrides: Partial<CompletionsModel> = {}): CompletionsModel {
   const id = overrides.id ?? "test-model";
-  return {
-    id,
-    name: overrides.name ?? id,
-    api: "openai-completions",
-    provider: "openai",
+  return makeProviderModel("openai-completions", "openai", id, {
     baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
-    maxTokens: 8192,
     ...overrides,
-  };
+  });
 }
 function modelFixture(id: string, overrides: Partial<CompletionsModel> = {}) {
   return makeCompletionsModel({ ...overrides, id, name: id });
@@ -151,6 +144,12 @@ export function makeCompletionsChunk(
   } as ChatCompletionChunk;
 }
 
+export function makeCompletionsToolDelta(id: string, name: string, args: string) {
+  return {
+    tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: args } }],
+  };
+}
+
 export function createDeepSeekCompletionsModel(): CompletionsModel {
   return modelFixture("deepseek-v4-pro", {
     ...nativeDeepSeekModel,
@@ -158,18 +157,7 @@ export function createDeepSeekCompletionsModel(): CompletionsModel {
   });
 }
 
-export function createAssistantOutput(model: CompletionsModel): OpenAICompletionsOutput {
-  return {
-    role: "assistant" as const,
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsage(),
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-}
+export { createAssistantOutput };
 
 export function expectedRecoveredTool(name: string, args: Record<string, unknown>) {
   return {

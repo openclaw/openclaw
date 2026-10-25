@@ -6,10 +6,9 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
 import { bindStoreSearch } from "./search.js";
 import type { TextQuery } from "./text-contract.js";
 
@@ -78,18 +77,10 @@ async function fixture(
   const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-search-"), "anchor.sqlite"));
   const connections: PostgresSyncConnection[] = [];
   const open = () => {
-    const db = openEngineStore({
+    const db = openPostgresEngineTestStore({
       anchor,
       schema,
       input: { connection: connection!, schemaPrefix: "search_test" },
-      openSqlite: () => {
-        throw new Error("Unexpected SQLite bootstrap");
-      },
-      prepareAnchor: () => {},
-      inspectSqlite: () => {
-        admitSqliteSchema(anchor);
-        return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-      },
     });
     if (!(db instanceof PostgresSyncConnection)) {
       throw new Error("Expected PostgreSQL");
@@ -216,6 +207,33 @@ const terms = (kind: "any" | "all", ...texts: string[]): TextQuery => ({
 });
 
 describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
+  it("keeps cover-density ranking by default and supports a frequency opt-in", async () => {
+    await fixture(({ db }) => {
+      const { add, search } = searchFixture(db);
+      add("adjacent", 1, "red fox");
+      const fullText = search.fullText!;
+      const index = search.text.notes!;
+      const query = terms("all", "red", "fox");
+      const row = executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<SearchDB>(db)
+          .selectFrom("notes")
+          .select([
+            fullText.rank(index, query).value.as("default_rank"),
+            fullText
+              .rank(index, query, { postgres: { normalization: 0 } })
+              .value.as("cover_density"),
+            fullText
+              .rank(index, query, { postgres: { normalization: 0, rank: "frequency" } })
+              .value.as("frequency"),
+          ]),
+      ).rows[0]!;
+      expect(row.default_rank).toBeCloseTo(0.05, 6);
+      expect(row.cover_density).toBeCloseTo(0.1, 6);
+      expect(row.frequency).toBeCloseTo(0.09910322, 6);
+    });
+  });
+
   it("composes literal terms, phrases, final-lexeme prefixes and OR with bounded ranked snippets", async () => {
     await fixture(({ db }) => {
       const { add, text, ids, search } = searchFixture(db);

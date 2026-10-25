@@ -23,7 +23,9 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../talk/describe-v
 import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/provider-types.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
+import { fixedStoreOwnershipConfig } from "../../server-methods/sessions-fixed-store.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";
+import { gatewayProfile } from "../../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../../test-helpers.rpc-source.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
@@ -2418,14 +2420,7 @@ describe("talk.session unified handlers", () => {
     },
     {
       name: "persisted fixed-store owner",
-      config: {
-        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-        agents: {
-          ownership: "explicit",
-          entries: { ops: {}, research: {} },
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
-      },
+      config: fixedStoreOwnershipConfig("/tmp/shared-sessions.sqlite"),
       sessionKey: "global",
       scope: "operator.admin",
       agentId: "ops",
@@ -2559,12 +2554,7 @@ describe("talk.client.toolCall handler", () => {
     const client: GatewayClient = {
       connId,
       authenticatedUserId: "ada@example.test",
-      authenticatedUserProfile: {
-        profileId: "profile-ada",
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
+      authenticatedUserProfile: gatewayProfile("profile-ada", "Ada"),
       connect: {
         minProtocol: 1,
         maxProtocol: 1,

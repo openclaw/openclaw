@@ -200,7 +200,7 @@ async function dispatchSubagentGateway(
     const response = workerCapability
       ? await workerCapability.run(async (identity) => {
           if (
-            gatewayCaller?.agentId !== identity.agentId ||
+            gatewayCaller.agentId !== identity.agentId ||
             gatewayCaller.sessionKey !== identity.sessionKey ||
             gatewayCaller.operationalRunInstance !== identity.operationalRunInstance ||
             gatewayCaller.executionIdentityToken !== identity.executionIdentityToken ||

@@ -15,6 +15,9 @@ import {
 } from "../provider-model-route.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
+// Routed configless calls recompute enablement rather than using captured index state.
+const emptyRoutedConfig: OpenClawConfig = {};
+
 export type RuntimeRouteModel = {
   provider?: string;
   id?: string;
@@ -87,7 +90,8 @@ export function validatePreparedRuntimeModel<Model extends RuntimeRouteModel>(
     provider: model.provider ?? params.provider,
     id: model.id ?? params.modelId,
     baseUrl: model.baseUrl,
-    config: params.config,
+    api: route?.api,
+    config: params.config ?? (route ? emptyRoutedConfig : undefined),
     workspaceDir: params.workspaceDir,
     metadataSnapshot: params.metadataSnapshot,
   });
@@ -118,10 +122,7 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
   ): Promise<{ model?: Model | null; error?: string }>;
 }): Promise<Model | undefined> {
   const route = params.plan.modelRoute;
-  const config = route
-    ? projectProviderModelRouteConfig({ provider: params.provider, config: params.config, route })
-    : params.config;
-  const target = { ...params, route, config };
+  const target = { ...params, route };
   const validateFinalModel = (model: Model | undefined): Model | undefined =>
     model ? validatePreparedRuntimeModel({ ...target, model }) : undefined;
   if (!route && !params.forceResolve) {
@@ -142,7 +143,9 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
   }
 
   const resolved = await params.resolveModel({
-    config: config ?? {},
+    config: route
+      ? projectProviderModelRouteConfig({ provider: params.provider, config: params.config, route })
+      : (params.config ?? {}),
     authProfileId: params.plan.forwardedAuthProfileId,
     authProfileMode: route
       ? resolveProviderModelRouteMaterializationAuthMode({

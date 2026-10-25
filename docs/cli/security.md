@@ -89,6 +89,8 @@ Settings prefixed with `dangerous`/`dangerously` are explicit break-glass operat
 
 `security audit` resolves supported SecretRefs in read-only mode for its targeted paths. If a SecretRef is unavailable in the current command path, audit continues and reports `secretDiagnostics` instead of crashing. `--token` and `--password` only override deep-check auth for that command invocation; they do not rewrite config or SecretRef mappings.
 
+The stored-secret checks for `gateway.auth.password` and `hooks.token` recognize references that occupy the entire value, such as `${VAR}`, even after config loading resolves them. Literal secrets and escaped literal placeholders such as `$${VAR}` still produce findings.
+
 ## Suppressions
 
 Accept intentional standing findings with `security.audit.suppressions`. Each suppression matches an exact `checkId` and can be narrowed with case-insensitive `titleIncludes` and/or `detailIncludes` substrings:

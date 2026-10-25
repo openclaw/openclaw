@@ -16,6 +16,11 @@ import {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
+  WORKER_EXEC_APPROVAL_METHOD,
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+  validateWorkerExecApprovalParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
   validateWorkerGatewayToolInvokeParams,
@@ -33,6 +38,7 @@ import {
   WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
   validateWorkerTurnAdmissionParams,
 } from "../../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import type { createWorkerTurnRpc } from "../../worker-environments/worker-turn-rpc.js";
 import {
@@ -67,6 +73,7 @@ export type WorkerConnectionService = Pick<
       | "cancelInference"
       | "admitTurn"
       | "refreshGitHubBinding"
+      | "execApproval"
     >
   >;
 
@@ -145,6 +152,28 @@ export async function dispatchWorkerRequest(params: {
     ok: false as const,
     closeReason: "method-not-allowed" as const,
   });
+  if (params.request.method === WORKER_EXEC_APPROVAL_METHOD) {
+    const operation = service.execApproval;
+    try {
+      return await execute(
+        WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+        validateWorkerExecApprovalParams,
+        operation &&
+          ((request) => operation.call(service, params.identity, request, params.signal)),
+        "invalid-frame",
+        () => workerProtocolError("gateway-unavailable"),
+      );
+    } catch (error) {
+      params.respond(
+        false,
+        undefined,
+        workerProtocolError("gateway-unavailable", {
+          message: `Worker exec approval failed: ${formatErrorMessage(error)}`,
+        }),
+      );
+      return;
+    }
+  }
   if (params.request.method === WORKER_TURN_ADMISSION_METHOD) {
     const operation = service.admitTurn;
     return execute(

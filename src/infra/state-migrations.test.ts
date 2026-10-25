@@ -2640,27 +2640,9 @@ describe("state migrations", () => {
         },
       },
     ];
-    const gatewayLock = await native.acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      port: 18_791,
-      timeoutMs: 100,
-    });
-    if (!gatewayLock) {
-      throw new Error("expected test Gateway lock");
-    }
-
-    let result: Awaited<ReturnType<typeof native.autoMigrateLegacyPluginDoctorState>>;
-    try {
-      result = await native.autoMigrateLegacyPluginDoctorState({
-        config: cfg,
-        env,
-        homedir: () => root,
-      });
-    } finally {
-      await gatewayLock.release();
-    }
+    const result = await native.withGatewayLockHeld(env, 18_791, () =>
+      native.autoMigrateLegacyPluginDoctorState({ config: cfg, env, homedir: () => root }),
+    );
 
     expect(result.changes).not.toContain("plugin state migrated");
     expect(result.warnings.join("\n")).toContain("exclusive state ownership is unavailable");

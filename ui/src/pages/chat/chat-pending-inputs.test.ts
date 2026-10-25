@@ -36,7 +36,7 @@ import {
 } from "./chat-pending-inputs.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
 import { loadChatComposerState } from "./composer-draft-storage.ts";
@@ -775,7 +775,7 @@ describe("server-owned pending input display", () => {
   );
 
   it.each(["text", "blob"])(
-    "retains accepted %s input and attachment bytes until consumption, without duplicating display",
+    "transfers accepted %s input to server custody without duplicating display",
     async (kind) => {
       if (kind === "blob") {
         installOutboxBrowserStorage();
@@ -859,17 +859,19 @@ describe("server-owned pending input display", () => {
         loadChatComposerState(host, sessionKey).snapshot?.queue[0]?.attachments?.[0]?.dataUrl,
       ).toBeUndefined();
       await loadChatHistory(host);
-      expect(readChatQueueForScope(host, sessionKey)).toHaveLength(1);
-      expect(listStoredChatOutboxes(host)[0]?.queue).toHaveLength(1);
+      expect(readChatQueueForScope(host, sessionKey)).toEqual([]);
+      expect(listStoredChatOutboxes(host)).toEqual([]);
       expect(host.chatMessages).toEqual(history);
       expect(getChatPendingInputs(host)?.page).toEqual(acceptedPage);
-      expect(cleanup).not.toHaveBeenCalled();
       if (reference && payloadOwner) {
-        const retained = await outboxPayloadStore.readOutboxPayload(payloadOwner, reference);
-        expect(retained.status).toBe("ready");
-        if (retained.status === "ready") {
-          expect(Buffer.from(await retained.value[0]!.blob.arrayBuffer())).toEqual(imageBytes);
-        }
+        await vi.waitFor(async () => {
+          expect(await outboxPayloadStore.readOutboxPayload(payloadOwner, reference)).toEqual({
+            status: "failed",
+            reason: "missing",
+          });
+        });
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(cleanup).toHaveBeenCalledWith([reference]);
       }
       const items = threadItems({
         messages: host.chatMessages,

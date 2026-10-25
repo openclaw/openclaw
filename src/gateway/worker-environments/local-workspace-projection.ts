@@ -143,12 +143,12 @@ export async function withSettledLocalWorkspace<T>(
           }
           await quiescence?.retire();
         }
-        owner.assertCurrent();
+        const current = state.current();
         return await operation(
-          state.current().baseline_ref
+          current.baseline_ref
             ? {
                 worktreeId: worktree.id,
-                projectionPath: state.current().projection_path,
+                projectionPath: current.projection_path,
                 prepareArchive: state.prepareArchive,
                 canonicalPaths: state.canonicalPaths,
                 assertCurrent: state.current,
@@ -410,8 +410,8 @@ export async function resolveLocalWorkspaceOwner(params: {
       throw new Error("Local sandbox managed workspace owner changed");
     }
     const assertSessionCurrent = () => {
-      assertActive();
       if (!metadata) {
+        assertActive();
         if (!retained?.isCurrent()) {
           throw new Error("Local sandbox workspace authority changed");
         }

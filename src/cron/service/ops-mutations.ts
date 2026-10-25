@@ -125,6 +125,7 @@ export async function add(
     source.assertCurrent();
     const mutation: CronJobMutation = {
       kind: "add",
+      createdAtMs: opts?.streamExecApproval?.createdAtMs,
       input: { ...normalizedInput, id: normalizedId ?? crypto.randomUUID() },
       matchingJobIds: opts?.matchesExisting
         ? (state.store?.jobs.filter(opts.matchesExisting).map((job) => job.id) ?? [])
@@ -283,6 +284,7 @@ async function updateLoadedJob(params: {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       toolsAllowExecTarget: opts?.toolsAllowExecTarget,
+      bindSourceConversation: opts?.bindSourceConversation,
       captured: false,
     },
   };

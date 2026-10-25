@@ -18,8 +18,6 @@ type GuestWelcomeEnsureResult =
 
 const POLL_MIN_MS = 500;
 const POLL_MAX_MS = 5_000;
-/** Setup still pending after this long becomes a retryable failure. */
-export const GUEST_WELCOME_PENDING_LIMIT_MS = 3 * 60_000;
 const VISITED_KEY_PREFIX = "openclaw.guestWelcome.visited.v1:";
 
 function parseEnsureResult(value: unknown): GuestWelcomeEnsureResult | null {
@@ -204,7 +202,8 @@ export class GuestWelcome {
       case "pending": {
         const now = Date.now();
         this.pendingSince ??= now;
-        if (now - this.pendingSince >= GUEST_WELCOME_PENDING_LIMIT_MS) {
+        // Stop polling after three minutes; retry starts a fresh window.
+        if (now - this.pendingSince >= 3 * 60_000) {
           this.fail(null);
           return;
         }

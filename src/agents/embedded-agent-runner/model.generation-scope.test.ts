@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import "../../claws/tool-policy-runtime.js";
@@ -594,10 +595,7 @@ describe("model runtime generation scope", () => {
   it("keeps concurrent prepared generations isolated across awaited runtime hooks", async () => {
     const config = {} satisfies OpenClawConfig;
     let arrivals = 0;
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: gate, resolve: release } = createDeferred();
     const prepareDynamicModel = async () => {
       arrivals += 1;
       if (arrivals === 2) {

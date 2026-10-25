@@ -1,23 +1,13 @@
 import { expect, it, vi, type Mock } from "vitest";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
 export async function withCliTty(value: boolean, fn: () => Promise<void>): Promise<void> {
-  const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-  const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value });
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value });
+  const tty = createCliTtyMock();
+  tty.set(value);
   try {
     await fn();
   } finally {
-    if (stdinDescriptor) {
-      Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
-    if (stdoutDescriptor) {
-      Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
-    } else {
-      Reflect.deleteProperty(process.stdout, "isTTY");
-    }
+    tty.restore();
   }
 }
 

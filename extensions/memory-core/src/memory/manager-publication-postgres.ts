@@ -181,6 +181,17 @@ export function bindPostgresMemoryPublication(
       );
     }
   };
+  const writeChangedIndex = (run: () => boolean): MemoryPublicationResult<boolean> =>
+    write(
+      () => {
+        const changed = run();
+        if (changed) {
+          advanceMemoryIndexRevision(db);
+        }
+        return changed;
+      },
+      { publishFacts: true },
+    );
   const ensureSpool = () => {
     if (created) {
       return;
@@ -289,28 +300,22 @@ export function bindPostgresMemoryPublication(
     typeof bindSqliteWorkerDatabase<MemoryPublicationOperations>
   >[1]["execute"] = (command) => {
     if (command.type === "database.reset") {
-      return write(
-        () => {
-          const query =
-            getNodeSqliteKysely<Record<(typeof MEMORY_INDEX_DERIVED_TABLES)[number], unknown>>(db);
-          let changed = false;
-          // Admitted facts include optional vector projections; generated text columns
-          // disappear with their source rows while the index definitions stay admitted.
-          for (const table of MEMORY_INDEX_DERIVED_TABLES) {
-            if (table === MEMORY_INDEX_STATE_TABLE || !tableExists(db, table)) {
-              continue;
-            }
-            const result = executeSqliteQuerySync(db, query.deleteFrom(table));
-            changed ||= (result.numAffectedRows ?? 0n) > 0n;
+      return writeChangedIndex(() => {
+        const query =
+          getNodeSqliteKysely<Record<(typeof MEMORY_INDEX_DERIVED_TABLES)[number], unknown>>(db);
+        let changed = false;
+        // Admitted facts include optional vector projections; generated text columns
+        // disappear with their source rows while the index definitions stay admitted.
+        for (const table of MEMORY_INDEX_DERIVED_TABLES) {
+          if (table === MEMORY_INDEX_STATE_TABLE || !tableExists(db, table)) {
+            continue;
           }
-          cacheSize = { size: 0, exact: true };
-          if (changed) {
-            advanceMemoryIndexRevision(db);
-          }
-          return changed;
-        },
-        { publishFacts: true },
-      );
+          const result = executeSqliteQuerySync(db, query.deleteFrom(table));
+          changed ||= (result.numAffectedRows ?? 0n) > 0n;
+        }
+        cacheSize = { size: 0, exact: true };
+        return changed;
+      });
     }
     if (stageId && !stages.has(stageId) && command.type !== "database.stage.start") {
       throw new Error("Memory reindex connection was lost; retry the full reindex.");
@@ -505,34 +510,13 @@ export function bindPostgresMemoryPublication(
         { publishFacts: true },
       );
     }
-    if (command.type === "source.refresh") {
+    if (command.type === "source.refresh" || command.type === "source.delete") {
       return rebuilding
         ? { ok: true, value: false }
-        : write(
-            () => {
-              const changed = refreshMemorySessionSourceState(db, command.input);
-              if (changed) {
-                advanceMemoryIndexRevision(db);
-              }
-              return changed;
-            },
-            { publishFacts: true },
-          );
-    }
-    if (command.type === "source.delete") {
-      return rebuilding
-        ? { ok: true, value: false }
-        : write(
-            () => {
-              const changed = new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(
-                command.input,
-              );
-              if (changed) {
-                advanceMemoryIndexRevision(db);
-              }
-              return changed;
-            },
-            { publishFacts: true },
+        : writeChangedIndex(() =>
+            command.type === "source.refresh"
+              ? refreshMemorySessionSourceState(db, command.input)
+              : new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
           );
     }
     if (command.type === "cache.clear") {
@@ -548,6 +532,10 @@ export function bindPostgresMemoryPublication(
       return write(() => {
         const size = readCacheSize();
         if (size.size <= command.input.maxEntries) {
+          if (command.input.recount) {
+            cacheSize = { size: countMemoryEmbeddingCache(db), exact: true };
+            return cacheSize.size > command.input.maxEntries;
+          }
           return false;
         }
         cacheSize = pruneMemoryEmbeddingCache(

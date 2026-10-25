@@ -6,22 +6,11 @@ import {
   createMattermostTestConfig,
 } from "./reactions.test-helpers.js";
 
-const fetchFixture = vi.hoisted((): { current: typeof fetch } => ({
-  current: vi.fn<typeof fetch>(),
-}));
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard: async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
-      params.beforeRequest?.();
-      return {
-        response: await fetchFixture.current(params.url, params.init),
-        release: async () => {},
-      };
-    },
-  };
-});
+const fetchFixture = await vi.hoisted(async () =>
+  (await import("./fetch.test-support.js")).createMattermostFetchFixture(),
+);
+// mock-isolation: Preserve real exports while binding fetch to this suite's transport fixture.
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", fetchFixture.mockRuntime);
 
 let cacheKeySequence = 0;
 let cacheKey = "";

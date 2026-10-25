@@ -39,6 +39,14 @@ it("generates identical standalone validators across physical pnpm layouts witho
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.copyFileSync(path.join(repoRoot, input), destination);
     }
+    // Compiler optimizations must preserve code-looking data in canonical schemas.
+    const reactions = path.join(root, "packages/gateway-protocol/src/schema/sessions-reactions.ts");
+    fs.writeFileSync(
+      reactions,
+      fs
+        .readFileSync(reactions, "utf8")
+        .replace('["added", "removed"]', '[".map(Hashing.Hash)", "removed"]'),
+    );
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
     const modules = path.join(root, "node_modules");
     fs.mkdirSync(modules);
@@ -52,7 +60,7 @@ it("generates identical standalone validators across physical pnpm layouts witho
     if (layout !== "hoisted") {
       fs.symlinkSync(physical, path.join(modules, "typebox"), "dir");
     }
-    for (const name of ["esbuild", "oxfmt"]) {
+    for (const name of ["acorn", "esbuild", "oxfmt"]) {
       fs.symlinkSync(
         fs.realpathSync(path.join(repoRoot, "node_modules", name)),
         path.join(modules, name),
@@ -77,6 +85,9 @@ it("generates identical standalone validators across physical pnpm layouts witho
       .map((line) => line.split(" ").at(-1)!);
     const output = Object.fromEntries(
       files.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]),
+    );
+    expect(output["ui/src/lib/protocol-validators.generated/activity.js"]).toContain(
+      ".map(Hashing.Hash)",
     );
     outputs.push(output);
     expect(run("--check").status).toBe(0);

@@ -183,7 +183,7 @@ async function buildGatewayInstallEnvironment(params: {
   const containsConfigSecretRef =
     hasSecretRefCandidate(params.config, params.config?.secrets?.defaults) ||
     collectEnvSecretRefIds(params.config).size > 0;
-  const configEnvKeys = new Set<string>();
+  const secretRefEnvKeys = new Set<string>();
   const configSecretRefEnvironment: Record<string, string> = {};
   {
     const { env, config, warn } = params;
@@ -216,11 +216,11 @@ async function buildGatewayInstallEnvironment(params: {
           const surface =
             gatewayAuthSurfaceStates[target.entry.id as keyof typeof gatewayAuthSurfaceStates];
           if (surface?.active) {
-            configEnvKeys.add(key.toUpperCase());
+            secretRefEnvKeys.add(key.toUpperCase());
           }
           continue;
         }
-        configEnvKeys.add(key.toUpperCase());
+        secretRefEnvKeys.add(key.toUpperCase());
         if (Object.hasOwn(stateDirDotEnvEnvironment, key)) {
           continue;
         }
@@ -232,7 +232,6 @@ async function buildGatewayInstallEnvironment(params: {
       }
     }
   }
-  const configSecretRefKeys = [...configEnvKeys];
   let authStore = params.authStore;
   if (!authStore) {
     // Keep the daemon install cold path cheap when there is no auth store to read.
@@ -355,6 +354,9 @@ async function buildGatewayInstallEnvironment(params: {
         "Auth profile",
       );
       continue;
+    }
+    if (params.platform === "linux") {
+      secretRefEnvKeys.add(key.toUpperCase());
     }
     const value = params.env[key]?.trim();
     if (!value) {
@@ -493,25 +495,19 @@ async function buildGatewayInstallEnvironment(params: {
   addServiceEnvPlanEntries(ambientProviderApiKeyEnvironment, { valueSource: "file" });
   addServiceEnvPlanEntries(stateDirDotEnvEnvironment, {});
   addServiceEnvPlanEntries(configEnvironment, {});
-  addServiceEnvPlanEntries(configSecretRefEnvironment, {});
   addServiceEnvPlanEntries(execSecretRefPassEnvEnvironment, {});
-  addServiceEnvPlanEntries(authProfileEnvironment, {});
-  const configSecretRefKeyEnvironment = Object.fromEntries(
-    configSecretRefKeys.map((key) => [key, "1"]),
+  const secretRefKeyEnvironment = Object.fromEntries(
+    [...secretRefEnvKeys].map((key) => [key, "1"]),
   );
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(
     {
       ...durableEnvironment,
-      ...configSecretRefKeyEnvironment,
-      ...configSecretRefEnvironment,
+      ...secretRefKeyEnvironment,
     },
     { omitKeys: Object.keys(params.serviceEnvironment) },
   );
-  const configSecretRefKeySet = new Set(configSecretRefKeys);
   const existingSecretRefRenderEnvironment = omitEnvironmentEntriesShadowedBy(
-    collectExistingServiceEnvVars(params.existingEnvironment, (key) =>
-      configSecretRefKeySet.has(key),
-    ),
+    collectExistingServiceEnvVars(params.existingEnvironment, (key) => secretRefEnvKeys.has(key)),
     [
       stateDirDotEnvRenderEnvironment,
       configSecretRefEnvironment,
@@ -526,6 +522,10 @@ async function buildGatewayInstallEnvironment(params: {
   if (environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS) {
     environmentValueSources.OPENCLAW_SERVICE_MANAGED_ENV_KEYS = "inline";
   }
+  // Managed-key replacement clears values; publish credentials after that cleanup.
+  addServiceEnvPlanEntries(authProfileEnvironment, {
+    valueSource: platform === "linux" ? "file" : "inline",
+  });
   const managedKeys = readManagedServiceEnvKeysFromEnvironment({
     OPENCLAW_SERVICE_MANAGED_ENV_KEYS: managedServiceEnvKeys,
   });

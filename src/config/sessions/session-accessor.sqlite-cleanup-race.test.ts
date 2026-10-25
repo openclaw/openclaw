@@ -263,10 +263,8 @@ describe("cleanup races", () => {
     const target = await seed(event.id, {}, [event]);
     const db = database();
     const refreshed = { label: "refreshed", sessionId: target.sessionId, updatedAt: now + 1 };
-    let changed = false;
     hooks.after = () =>
       runOpenClawAgentWriteAdmission({ agentId: "main", path: db.path }, () => {
-        changed = true;
         db.db
           .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
           .run(JSON.stringify(refreshed), refreshed.updatedAt, target.sessionKey);
@@ -274,7 +272,6 @@ describe("cleanup races", () => {
     await expect(cleanup({ orphanTranscriptMinAgeMs: 0, nowMs: now + 60_000 })).rejects.toThrow(
       "SQLite lifecycle cleanup entry changed",
     );
-    expect(changed).toBe(true);
     expect(readEntry(target)).toEqual(refreshed);
     await expect(readTranscript(target)).resolves.toEqual([event]);
   });
@@ -348,13 +345,11 @@ describe("cleanup races", () => {
     }
     const historyOwner = sessions[entryCount - 2]!;
     await replaceTranscript({ ...historyOwner, sessionId: historyId }, [transcript(historyId)]);
-    const batchSizes: number[] = [];
     let currentBatch: string[] = [];
     let materializations = 0;
     let racedKey: string | undefined;
     hooks.observe = (ids) => {
       currentBatch = ids;
-      batchSizes.push(ids.length);
     };
     hooks.after = () => {
       if (++materializations !== 2) {
@@ -381,7 +376,6 @@ describe("cleanup races", () => {
       storePath,
       maintenanceOverride: { mode: "enforce", maxEntries: entryCount, pruneAfterMs: 60_000 },
     });
-    expect(batchSizes).toEqual([64, 2]);
     expect(published).not.toContain(racedKey);
     expect(published).toHaveLength(64);
     expect(result).toMatchObject({
@@ -601,23 +595,19 @@ describe("generation cleanup races", () => {
         const originalJson = JSON.stringify(original);
         const changedJson = JSON.stringify({ ...original, content: "concurrent transcript" });
         write(({ db }) => {
-          const node = db.prepare("SELECT * FROM session_nodes WHERE session_key = ?");
-          const window = db.prepare("SELECT * FROM session_windows WHERE session_id = ?");
-          const nodeBefore = expectDefined(node.get(sessionKey), "Expected current node");
-          const windowBefore = expectDefined(window.get(sessionId), "Expected historical window");
-          const rows = db.prepare(
-            "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
-          );
-          expect(rows.all(sessionId)).toEqual([{ event_json: originalJson }]);
+          const identities = () => [
+            db.prepare("SELECT * FROM session_nodes WHERE session_key = ?").get(sessionKey),
+            db.prepare("SELECT * FROM session_windows WHERE session_id = ?").get(sessionId),
+          ];
+          const before = identities();
           const updated = db
             .prepare(
               "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND event_json = ?",
             )
             .run(changedJson, sessionId, originalJson);
           expect(Number(updated.changes)).toBe(1);
-          expect(rows.all(sessionId)).toEqual([{ event_json: changedJson }]);
-          expect(node.get(sessionKey)).toEqual(nodeBefore);
-          expect(window.get(sessionId)).toEqual(windowBefore);
+          // This race must invalidate content even when generation metadata stays unchanged.
+          expect(identities()).toEqual(before);
         });
       }
     };

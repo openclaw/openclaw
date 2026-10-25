@@ -22,6 +22,7 @@ import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import {
   catalogEntry,
   createModelsListTestContext,
@@ -292,12 +293,7 @@ it("projects personal-only models for the authenticated requester without publis
                 client: { id: "cli", version: "test", platform: "test", mode: "cli" },
                 caps: [],
               },
-              authenticatedUserProfile: {
-                profileId,
-                displayName: null,
-                hasAvatar: false,
-                updatedAt: 1,
-              },
+              authenticatedUserProfile: gatewayProfile(profileId),
             }
           : null,
       );

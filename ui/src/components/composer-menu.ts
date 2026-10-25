@@ -17,6 +17,7 @@ export function handleComposerMenuKeydown(
     return true;
   }
   if (
+    (event.key === "Enter" && event.shiftKey) ||
     !["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Tab"].includes(event.key) ||
     (["ArrowDown", "ArrowUp", "Home", "End", "Tab"].includes(event.key) &&
       (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey)) ||

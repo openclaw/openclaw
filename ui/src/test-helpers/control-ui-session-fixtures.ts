@@ -168,6 +168,7 @@ export function createControlUiSessionFixtures(
       "model",
       "thinkingLevel",
       "fastMode",
+      "cyberAccessProgram",
       "permissionMode",
       "label",
       "category",
@@ -179,7 +180,10 @@ export function createControlUiSessionFixtures(
       "toolOverrides",
     ]) {
       if (Object.hasOwn(fields, field)) {
-        set(field, fields[field]);
+        set(
+          field,
+          field === "cyberAccessProgram" && fields[field] === null ? undefined : fields[field],
+        );
       }
     }
     if (Object.hasOwn(fields, "model")) {
@@ -625,20 +629,46 @@ export function createControlUiSessionFixtures(
     resolve,
     sessionInfo,
     readResponse(
-      method: "sessions.resolve" | "sessions.describe" | "session.members.listEvidence",
+      method: string,
       params: unknown,
       scenario: { sessionKey: string; allowedSessionVisibilities: readonly string[] },
     ) {
       if (method === "sessions.resolve") {
         return resolve(isRecord(params) ? params : {});
       }
-      const field = method === "sessions.describe" ? "key" : "sessionKey";
+      if (
+        method !== "sessions.describe" &&
+        method !== "sessions.dispatch" &&
+        method !== "session.members.listEvidence"
+      ) {
+        return undefined;
+      }
+      const field = method === "session.members.listEvidence" ? "sessionKey" : "key";
       const requestedKey = isRecord(params) ? params[field] : undefined;
       const key = typeof requestedKey === "string" ? requestedKey : scenario.sessionKey;
       if (method === "sessions.describe") {
         return { session: sessionInfo(key) ?? null };
       }
       const row = read(key);
+      if (method === "sessions.dispatch") {
+        return {
+          ok: true,
+          key,
+          sessionId: row.sessionId,
+          placement: {
+            state: "active",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 2,
+            stateChangedAtMs: 2,
+            environmentId: "mock-worker",
+            activeOwnerEpoch: 1,
+            workerBundleHash: "a".repeat(64),
+            workspaceBaseManifestRef: "mock-manifest",
+            remoteWorkspaceDir: "/mock/workspace",
+          },
+        };
+      }
       return {
         sessionKey: row.key,
         members: [],

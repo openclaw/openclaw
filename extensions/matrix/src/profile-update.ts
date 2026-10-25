@@ -1,17 +1,8 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import { updateMatrixAccountConfig, resolveMatrixConfigPath } from "./matrix/config-update.js";
-import type { MatrixProfileSyncResult } from "./matrix/profile.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
-
-export type MatrixProfileUpdateResult = {
-  accountId: string;
-  displayName: string | null;
-  avatarUrl: string | null;
-  profile: MatrixProfileSyncResult;
-  configPath: string;
-};
 
 export async function applyMatrixProfileUpdate(params: {
   cfg?: CoreConfig;
@@ -20,7 +11,7 @@ export async function applyMatrixProfileUpdate(params: {
   avatarUrl?: string;
   avatarPath?: string;
   mediaLocalRoots?: readonly string[];
-}): Promise<MatrixProfileUpdateResult> {
+}) {
   const runtime = getMatrixRuntime();
   const persistedCfg = runtime.config.current() as CoreConfig;
   const accountId = normalizeAccountId(params.account);

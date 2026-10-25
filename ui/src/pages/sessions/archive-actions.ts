@@ -16,7 +16,9 @@ import type { SessionsPageRequestScope } from "./request-scope.ts";
 registerSessionOrganizationEnglish();
 
 type SessionPageArchiveHost = {
-  captureScope: () => SessionsPageRequestScope | null;
+  captureScope: (
+    options?: Pick<SessionsPageRequestScope, "allowDeferred">,
+  ) => SessionsPageRequestScope | null;
   clearError: () => void;
   isCurrent: (scope: SessionsPageRequestScope) => boolean;
   publishError: (scope: SessionsPageRequestScope, error: unknown) => SessionsPageMutationResult;
@@ -37,7 +39,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
     row: GatewaySessionRow,
     hasDescendants = false,
   ): Promise<SessionsPageMutationResult | void> {
-    const scope = host.captureScope();
+    const scope = host.captureScope({ allowDeferred: true });
     if (!scope) {
       return;
     }
@@ -71,7 +73,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
       if (!choice) {
         return;
       }
-      if (choice.kind === "tree") {
+      if (choice.kind === "tree" || scope.gateway.snapshot.phase !== "connected") {
         return await operations.archiveConfirmedSessionsWithUndo(
           {
             sessionData: {
@@ -100,7 +102,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
             },
             sidebarSessionStatusFilter: () => "all",
           },
-          choice.rows,
+          choice.kind === "tree" ? choice.rows : [session],
           mutationScope,
         );
       }
@@ -132,20 +134,30 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
             if (!archiveSessions.isConnectionScopeCurrent(connection)) {
               return;
             }
-            void undoPins(async () => {
-              const restored = await archiveSessions.patch(
-                key,
-                { archived: false, ...(pinned === true ? { pinned: true } : {}) },
-                { agentId: archiveAgentId, expectedSessionId: sessionId },
-              );
-              return restored && !("queued" in restored) && restored.entry.sessionId === sessionId
-                ? [key]
-                : [];
-            }).catch((error: unknown) => {
-              if (archiveSessions.isConnectionScopeCurrent(connection)) {
-                showToast({ message: formatUiError(error) });
-              }
-            });
+            void undoPins
+              .restore(async () => {
+                const receipt = Promise.withResolvers<readonly string[]>();
+                const restored = await archiveSessions.patch(
+                  key,
+                  { archived: false, ...(pinned === true ? { pinned: true } : {}) },
+                  {
+                    agentId: archiveAgentId,
+                    expectedSessionId: sessionId,
+                    onConfirmed: (confirmed) =>
+                      receipt.resolve(confirmed.entry.sessionId === sessionId ? [key] : []),
+                    onDeferredSettled: () => receipt.resolve([]),
+                  },
+                );
+                if (restored && "queued" in restored) {
+                  return receipt.promise;
+                }
+                return restored?.entry.sessionId === sessionId ? [key] : [];
+              })
+              .catch((error: unknown) => {
+                if (archiveSessions.isConnectionScopeCurrent(connection)) {
+                  showToast({ message: formatUiError(error) });
+                }
+              });
           },
         });
       };

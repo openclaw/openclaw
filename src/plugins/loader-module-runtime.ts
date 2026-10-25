@@ -120,7 +120,6 @@ export function createPluginModuleLoader(options: {
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
   expectedSourceDigests?: Readonly<Record<string, string>>;
-  replacePluginIds?: readonly string[];
 }) {
   const cache = getPluginCache();
   const captured = {
@@ -174,7 +173,6 @@ export function createPluginModuleLoader(options: {
     source: modulePath,
     rootDir: owner.rootDir,
     standalone: owner.standalone,
-    reloadBundledCode: captured.replacePluginIds?.includes(owner.record.id),
     expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
     ...inspection(owner),
     devSourceRoot: captured.devSourceRoot,
@@ -214,8 +212,7 @@ export function createPluginModuleLoader(options: {
         });
       if (
         !isMainThread ||
-        (owner.record.origin === "bundled" &&
-          !captured.replacePluginIds?.includes(owner.record.id)) ||
+        owner.record.origin === "bundled" ||
         getPluginInstance(owner.record) ||
         retained()
       ) {
@@ -227,7 +224,6 @@ export function createPluginModuleLoader(options: {
           rootDir: owner.rootDir,
           source: modulePath,
           standalone: owner.standalone,
-          bundledReload: owner.record.origin === "bundled",
         });
         if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
           await preparedArtifact.artifact.disposeAsync();

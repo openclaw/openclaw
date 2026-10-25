@@ -90,6 +90,7 @@ describe("detached subagent restart recovery", () => {
     { verified: true, transcript: false, sourceKind: "operator" },
     { verified: true, transcript: true, sourceKind: "session-operator" },
     { verified: true, transcript: true, sourceKind: "channel" },
+    { verified: true, transcript: true, sourceKind: "channel-cross-agent-drain" },
     { verified: true, transcript: true, sourceKind: "channel-reset" },
     { verified: true, transcript: true, sourceKind: "channel-collector" },
     { verified: true, transcript: true, sourceKind: "operator-collector" },
@@ -108,6 +109,11 @@ describe("detached subagent restart recovery", () => {
       });
       const recoveryWarnings = vi.spyOn(subagentRegistryLog, "warn");
       const channelSource = sourceKind.includes("channel");
+      const drain = sourceKind.endsWith("-drain");
+      const requesterAgentId = sourceKind === "channel-cross-agent-drain" ? "requester" : "main";
+      const requesterSessionKey = channelSource
+        ? `agent:${requesterAgentId}:discord:channel:original-requester`
+        : "agent:main:main";
       const collect = sourceKind.endsWith("-collector");
       const mismatchedFollowup = sourceKind === "operator-followup-mismatched";
       const missingSource =
@@ -118,7 +124,7 @@ describe("detached subagent restart recovery", () => {
         sourceKind === "session-operator" ? "operator.sessions.write" : "operator.write",
       ];
       const requesterOrigin = {
-        sessionKey: "agent:main:discord:channel:original-requester",
+        sessionKey: requesterSessionKey,
         messageProvider: "discord",
         senderId: "original-channel-requester",
       };
@@ -133,12 +139,11 @@ describe("detached subagent restart recovery", () => {
       const now = Date.now();
       let runId = "warm-restart-child";
       const humanFollowup = sourceKind.startsWith("operator-followup");
-      const childSessionKey = `agent:main:${humanFollowup || sourceKind === "channel" || sourceKind === "operator-drain" || missingSource ? "dashboard" : "subagent"}:warm-restart-child`;
-      const requesterSessionKey = "agent:main:main";
+      const childSessionKey = `agent:main:${humanFollowup || sourceKind === "channel" || drain || missingSource ? "dashboard" : "subagent"}:warm-restart-child`;
       const requesterSessionId = "warm-restart-parent-session";
       const requesterLifecycleRevision = "warm-restart-parent-lifecycle";
       await replaceSessionEntry(
-        { agentId: "main", sessionKey: requesterSessionKey },
+        { agentId: requesterAgentId, sessionKey: requesterSessionKey },
         {
           sessionId: requesterSessionId,
           lifecycleRevision: requesterLifecycleRevision,
@@ -245,7 +250,8 @@ describe("detached subagent restart recovery", () => {
           ...(verified ? { lifecycleRevision: "child-revision" } : {}),
         },
         requesterSessionKey,
-        requesterAgentId: "main",
+        requesterAgentId,
+        requesterStorePath: resolveSessionStorePathCore(undefined, { agentId: requesterAgentId }),
         completionTarget: "parent",
         completionRequesterSessionId: requesterSessionId,
         completionRequesterLifecycleRevision: requesterLifecycleRevision,
@@ -418,7 +424,7 @@ describe("detached subagent restart recovery", () => {
       expect(() =>
         subagentRuns.runWithCompletionAuthority(registeredPredecessor, () => {}),
       ).not.toThrow();
-      if (verified && sourceKind !== "operator-drain") {
+      if (verified && !drain) {
         expect(
           await preserveSubagentRunForRestart({
             entry: registeredPredecessor,
@@ -427,9 +433,7 @@ describe("detached subagent restart recovery", () => {
           }),
         ).toMatchObject({ preserved: true });
       }
-      expect(subagentRuns.get(runId)?.execution.status).toBe(
-        sourceKind === "operator-drain" ? "running" : "interrupted",
-      );
+      expect(subagentRuns.get(runId)?.execution.status).toBe(drain ? "running" : "interrupted");
       previousOpen = false;
       if (source) {
         expect(source.authority.assertCurrent).toThrow();

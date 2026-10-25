@@ -13,7 +13,6 @@ import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane
 import { EmbeddedPluginPanel } from "./chat-pane-plugin-panel.tsx";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
-import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatDetailSlot } from "./components/chat-detail-slot-view.tsx";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
@@ -45,8 +44,11 @@ const Terminal = lazy(() => import("../../components/terminal/terminal-panel-reg
 const Browser = lazy(() => import("../../components/browser/browser-panel.ts"), {
   export: "BrowserPanelHost",
 });
+const Context = lazy(() => import("./components/chat-context-panel.tsx"), {
+  export: "ChatContextPanel",
+});
 const Companion = lazy(() => import("./components/chat-session-rail.tsx"), {
-  export: "ChatSessionRail",
+  export: "ChatSessionRailPanel",
 });
 const Desktop = lazy(() => import("../../components/desktop/desktop-panel-solid.tsx"), {
   export: "DesktopPanel",
@@ -110,38 +112,6 @@ function BrowserPanel(props: Props) {
       sessionTabs={props.sessionBrowserTabs ?? []}
       resourceBasePath={props.state.resourceBasePath}
       authToken={resolveControlUiAuthToken(props.state)}
-    />
-  );
-}
-
-function CompanionPanel(props: Props) {
-  const presented = usePanePresentation(() => props.companionPresented);
-  return (
-    <Companion
-      presentation={props.presentation}
-      data-sidebar-panel-host
-      ref={[elementRef(props.registerPanelHost)]}
-      presented={presented()}
-      focusRequest={props.companionFocusRequest}
-      sessionKey={props.state.sessionKey}
-      agentId={props.agentId}
-      assistantName={props.state.assistantName}
-      digest={props.digest}
-      running={Boolean(props.activeRunId)}
-      activeRunId={props.activeRunId}
-      pullRequests={props.pullRequests}
-      companion={props.companion}
-      modelControls={props.companionModelControls}
-      client={props.state.connected ? props.state.client : null}
-      connected={props.state.connected}
-      sendShortcut={props.state.settings.chatSendShortcut ?? "enter"}
-      inputDeviceId={props.state.settings.realtimeTalkInputDeviceId}
-      onSubmit={props.onCompanionSubmit}
-      onDraftChange={props.onCompanionDraftChange}
-      onAttachmentsChange={props.onCompanionAttachmentsChange}
-      onOpenImage={props.state.handleOpenImage}
-      uploadConfig={props.state.uploadConfig}
-      attachmentLimits={resolveChatAttachmentLimits(props.state.hello?.policy)}
     />
   );
 }
@@ -321,10 +291,25 @@ function SubagentsPanel(props: Props) {
   );
 }
 
+function ContextPanel(props: Props) {
+  const presented = usePanePresentation(() => props.contextPresented ?? false);
+  return (
+    <Context
+      data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
+      details={props.contextDetails}
+      presented={presented()}
+      onScrollPortRef={props.onScrollPortRef}
+    />
+  );
+}
+
 function ProcessesPanel(props: Props) {
   const presented = usePanePresentation(() => props.processesPresented ?? false);
   return (
     <Processes
+      showRequest={props.processesShowRequest}
+      onBackToDetails={props.onBackToProcessDetails}
       onScrollPortRef={props.onScrollPortRef}
       mobile={props.presentation === "mobile"}
       data-sidebar-panel-host
@@ -377,12 +362,13 @@ const embeddedPanels: Partial<
 > = {
   terminal: TerminalPanel,
   browser: BrowserPanel,
-  companion: CompanionPanel,
+  companion: Companion,
   desktop: DesktopPanel,
   discussion: DiscussionPanel,
   portal: PortalPanel,
   subagents: SubagentsPanel,
   processes: ProcessesPanel,
+  context: ContextPanel,
   "link-reader": LinkReaderPanel,
   workspace: WorkspacePanel,
   detail: DetailPanel,
@@ -397,7 +383,10 @@ export function SidebarPanel(
   const [activated] = createSignal(
     (previous = false) =>
       previous ||
-      (props.definition.slot !== "dashboard" && props.definition.slot !== "workspace") ||
+      (props.definition.slot !== "dashboard" &&
+        props.definition.slot !== "workspace" &&
+        props.definition.slot !== "context" &&
+        props.definition.slot !== "companion") ||
       props.visible !== false,
   );
   return (
@@ -440,6 +429,9 @@ declare module "@solidjs/web" {
       >;
       "openclaw-chat-subagents-panel": EmbeddedAttributes<
         HTMLElementTagNameMap["openclaw-chat-subagents-panel"]
+      >;
+      "openclaw-chat-context-panel": EmbeddedAttributes<
+        HTMLElementTagNameMap["openclaw-chat-context-panel"]
       >;
       "openclaw-chat-processes-panel": EmbeddedAttributes<
         HTMLElementTagNameMap["openclaw-chat-processes-panel"]

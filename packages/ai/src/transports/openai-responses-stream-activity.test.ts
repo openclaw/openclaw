@@ -1,7 +1,8 @@
 // Every physical event keeps the connection alive, while advancing output alone
 // resets the independent model-progress deadline.
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, Model } from "../types.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
+import type { AssistantMessage } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
@@ -9,18 +10,11 @@ import {
   type OpenAIResponsesStreamEvent,
 } from "./openai-responses-stream-internal.js";
 
-const model = {
-  id: "gpt-5.6-luna",
+const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 
 function createOutput(): AssistantMessage {
   return {

@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { prepareSkillLibraryBundle, readSkillBundleTree, readSkillLibraryTree } from "./bundle.js";
+import {
+  prepareSkillBundle,
+  prepareSkillLibraryBundle,
+  readSkillBundleTree,
+  readSkillLibraryTree,
+} from "./bundle.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const posix = process.platform !== "win32";
@@ -35,6 +40,41 @@ it("hashes paths, exact bytes, and executability independently of order", () => 
   ]) {
     expect(prepareSkillLibraryBundle([markdown, changed]).revision).not.toBe(original.revision);
   }
+});
+
+it("avoids expanding retained text without enlarging escaped or binary resources", async () => {
+  const directory = await makeTree();
+  const inputs = new Map([
+    ["plain.txt", Buffer.from('Read the guide.\nRun "check.sh".\n'.repeat(100))],
+    ["unicode.txt", Buffer.from(`${"a".repeat(3000)}🦞`)],
+    ["binary.dat", Buffer.from([0, 255, 128, 192])],
+    ["controls.dat", Buffer.alloc(3000)],
+    ["sparse-nul.dat", Buffer.from(`${"a".repeat(3000)}\0`)],
+    ["controls.txt", Buffer.concat([Buffer.from("a".repeat(3000)), Buffer.from([1, 8, 12, 127])])],
+    ["escaped.txt", Buffer.from('"\\\t\n\r'.repeat(600))],
+    ["empty.txt", Buffer.alloc(0)],
+  ]);
+  for (const [name, bytes] of inputs) {
+    await fs.writeFile(path.join(directory, name), bytes);
+  }
+  const delivery = await readSkillBundleTree(directory);
+  const serialized = JSON.stringify(delivery);
+  const received = prepareSkillBundle(JSON.parse(serialized));
+  for (const [name, bytes] of inputs) {
+    expect(received.files.find((entry) => entry.path === name)?.bytes).toEqual(bytes);
+    const delivered = delivery.find((entry) => entry.path === name)!;
+    const base64 = { ...delivered, content: bytes.toString("base64"), encoding: "base64" };
+    expect(Buffer.byteLength(JSON.stringify(delivered))).toBeLessThanOrEqual(
+      Buffer.byteLength(JSON.stringify(base64)),
+    );
+  }
+  expect(delivery.find((entry) => entry.path === "plain.txt")?.content.length).toBe(
+    inputs.get("plain.txt")!.length,
+  );
+  // Mixed Unicode must not turn a mostly ASCII payload into a two-byte JS string.
+  expect(delivery.find((entry) => entry.path === "unicode.txt")?.encoding).toBe("base64");
+  // Keep NUL payloads classified as binary even when UTF-8 would be smaller.
+  expect(delivery.find((entry) => entry.path === "sparse-nul.dat")?.encoding).toBe("base64");
 });
 
 it.each([

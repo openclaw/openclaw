@@ -625,6 +625,7 @@ export function startDiagnosticRunActivityTracking(): void {
       }
     },
     {
+      includePromptStats: false,
       include: [
         "tool.execution.started",
         "tool.execution.completed",

@@ -57,11 +57,6 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.contextWindowReferenceTokens
       ? { contextWindowReferenceTokens: params.contextWindowReferenceTokens }
       : {}),
-    ...buildAgentHookContextIdentityFields({
-      trigger: params.trigger,
-      senderId: params.senderId,
-      chatId: params.chatId,
-      channelContext: params.channelContext,
-    }),
+    ...buildAgentHookContextIdentityFields(params),
   };
 }

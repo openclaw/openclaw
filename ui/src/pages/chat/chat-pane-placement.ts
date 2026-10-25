@@ -6,15 +6,16 @@ import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop
 import {
   repositorySessionNeedsWorker,
   sessionPlacementActionReason,
+  sessionPlacementRetry,
 } from "../../components/session-placement-action.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
 
-registerSessionOrganizationEnglish();
+registerSessionOrganizationSharedEnglish();
 
 registerNewSessionRuntimeEnglish();
 
@@ -25,6 +26,7 @@ type ChatPanePlacementComposerState =
   | { kind: "setup"; startup: ApplicationPlacementStartupStatus }
   | { kind: "busy"; message: string }
   | { kind: "dispatch-required" }
+  | { kind: "move-failed"; message: string }
   | { kind: "failed"; recoveryAction?: "restart" | "stop-first" };
 
 function resolvePlacementComposerState(params: {
@@ -71,7 +73,9 @@ function resolvePlacementComposerState(params: {
       };
     case "draining":
     case "reconciling":
-      return { kind: "busy", message: t("sessionsView.finishingSessionMove") };
+      return params.row.placementMove?.error
+        ? { kind: "move-failed", message: params.row.placementMove.error }
+        : { kind: "busy", message: t("sessionsView.finishingSessionMove") };
     case "failed":
       return {
         kind: "failed",
@@ -98,6 +102,7 @@ export function resolvePlacementComposer(params: {
   workspaceResultReconciling: boolean;
   onRecover: () => void;
   onReclaim: () => void;
+  onRetryMove: () => void;
 }) {
   const controls = resolveChatPanePlacement(params);
   // Sync status does not reopen admission closed by Stop, Restart, or a local/durable Move.
@@ -155,6 +160,26 @@ export function resolvePlacementComposer(params: {
   };
   if (params.startupPending || !params.row || canRecoverOnSend) {
     return { ...common, disabledBanner: undefined };
+  }
+  if (state.kind === "move-failed") {
+    const banner: ChatComposerDisabledBanner = {
+      kind: "above-composer",
+      title: t("sessionsView.moveSessionFailed"),
+      text: state.message,
+      icon: "warning",
+    };
+    return {
+      ...common,
+      disabledBanner: sessionPlacementRetry(params.row)
+        ? ({
+            ...banner,
+            actionLabel: t("sessionsView.retrySessionMove"),
+            actionStyle: "primary",
+            disabledReason: controls.moveDisabledReason,
+            onAction: params.onRetryMove,
+          } satisfies ChatComposerDisabledBanner)
+        : banner,
+    };
   }
   const dispatchRequired = state.kind === "dispatch-required";
   if (!dispatchRequired && (state.kind !== "failed" || !state.recoveryAction)) {

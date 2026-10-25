@@ -540,7 +540,6 @@ ${withLiveOwnership("  }\n")}${
     }
     const unmatchedPrevious = [...captionState.visible];
     const nextVisible = [];
-    const now = Date.now();
     let captionChanged = false;
     for (const row of parsedRows) {
       const priorIndex = unmatchedPrevious.findIndex((candidate) => sameCaptionRow(candidate, row));
@@ -557,7 +556,6 @@ ${withLiveOwnership("  }\n")}${
         prior.text = row.text;
         prior.node = row.node;
         prior.rowIdentity = row.rowIdentity || prior.rowIdentity;
-        prior.seenAt = now;
         nextVisible.push(prior);
       } else {
         captionChanged = true;
@@ -565,7 +563,6 @@ ${withLiveOwnership("  }\n")}${
           at: new Date().toISOString(),
           node: row.node,
           rowIdentity: row.rowIdentity,
-          seenAt: now,
           speaker: row.speaker,
           text: row.text,
         });

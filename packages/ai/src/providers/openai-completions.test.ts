@@ -63,6 +63,7 @@ vi.mock("openai", () => {
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
+import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   streamOpenAICompletions,
@@ -138,10 +139,7 @@ async function collect(
   options: OpenAICompletionsOptions = {},
 ) {
   const stream = request(requestModel, context, options);
-  const eventTypes: string[] = [];
-  for await (const event of stream) {
-    eventTypes.push(event.type);
-  }
+  const eventTypes = await collectEventTypes(stream);
   return { result: await stream.result(), eventTypes };
 }
 

@@ -7,6 +7,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import * as uiErrors from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -29,6 +30,7 @@ import {
   getRenderedModalDialog,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import {
   openSubmenu,
   selectMenuValue,
@@ -326,15 +328,11 @@ describe("sessions page lifecycle", () => {
         "main",
       );
       const assignOwner = vi.spyOn(sessions, "assignOwner");
-      context.agents.state.agentsList = {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [
-          { id: "main", name: "Main" },
-          { id: "reviewer", name: "Reviewer" },
-        ],
-      };
+      context.agents.state.agentsList = agentRoster(
+        { main: "Main", reviewer: "Reviewer" },
+        "main",
+        "per-sender",
+      );
       const page = await createRenderedPage(context, sessionsResult([row], 1));
       await waitForFast(() => expect(page.loading).toBe(false));
       const menu = await openRowMenu(page, row);
@@ -364,7 +362,7 @@ describe("sessions page lifecycle", () => {
   );
 
   it.each(["startup", "same-client reconnect"])(
-    "retains the current query when a route started before %s completes late",
+    "loads the current query before config settles on %s",
     async (ordering) => {
       const config = createDeferred();
       const sidebar = createDeferred<SessionsListResult>();
@@ -382,17 +380,24 @@ describe("sessions page lifecycle", () => {
         ordering === "startup" ? "connecting" : undefined,
       );
       context.runtimeConfig.ensureLoaded = () => config.promise;
-      const pendingRoute = sessionsRoute.loader!(context, {
-        signal: new AbortController().signal,
-        shouldRun: () => true,
-        revalidating: false,
-        location: { pathname: "/sessions", search: "", hash: "" },
-        deps: "",
-        cause: "navigation",
+      let routeData: SessionsRouteData | undefined;
+      const pendingRoute = Promise.resolve(
+        sessionsRoute.loader!(
+          context,
+          createRouteLoaderOptions({ pathname: "/sessions", search: "", hash: "" }),
+        ),
+      ).then((data) => {
+        routeData = data as SessionsRouteData;
+        return routeData;
       });
       connection.emit({ phase: "connected" });
-      const page = await createPage(context);
+      let mountedPage: Awaited<ReturnType<typeof createPage>> | undefined;
       try {
+        await waitForFast(() =>
+          expect(routeData).toEqual({ expandedSessionKey: null, statusFilter: "active" }),
+        );
+        const page = await createPage(context, routeData);
+        mountedPage = page;
         await waitForFast(() => expect(page.result?.sessions[0]?.key).toBe("agent:main:current-1"));
         if (ordering === "same-client reconnect") {
           connection.emit({ phase: "reconnecting" });
@@ -421,7 +426,7 @@ describe("sessions page lifecycle", () => {
       } finally {
         config.resolve();
         sidebar.resolve(result("agent:main:sidebar"));
-        page.remove();
+        mountedPage?.remove();
         sessions.dispose();
       }
     },

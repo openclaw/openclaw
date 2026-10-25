@@ -376,13 +376,12 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     }
   });
 
-  it("uses unaccented full text with source filtering and the unchanged 0.7/0.3 hybrid merge", async () => {
+  it("uses unaccented full text with source filtering and calibrated 0.7/0.3 hybrid scores", async () => {
     const keyword = await regular.keyword(keywordQuery("cafe", { limit: 1 }));
     expect(keyword.body.error).toBeUndefined();
     expect(keyword.path.error).toBeUndefined();
     expect(keyword.body.rows.map((row) => row.path)).toEqual(["memory/lexical.md"]);
-    expect(keyword.body.rows[0]!.textScore).toBeGreaterThan(0.6);
-    expect(keyword.body.rows[0]!.textScore).toBeLessThan(0.75);
+    expect(keyword.body.rows[0]!.textScore).toBeCloseTo(0.965688529, 6);
     const vector = await regular.vector();
     const merged = await mergeHybridResults({
       vector: vector.rows.map((row) => Object.assign({}, row, { vectorScore: row.score })),
@@ -397,7 +396,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       "memory/semantic.md",
       "memory/orthogonal.md",
     ]);
-    expect(merged[0]!.score).toBeCloseTo(0.62, 6);
+    expect(merged[0]!.score).toBeCloseTo(0.66, 6);
     expect(merged[1]!.score).toBeCloseTo(0.56, 6);
     const exact = await regular.keyword(keywordQuery("semantic"));
     expect(exact.path.rows).toMatchObject([
@@ -405,14 +404,57 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     ]);
   });
 
+  it("retains rare fallback hits without letting weak lexical evidence outrank vector neighbors", async () => {
+    const fixture = admitted(() => createFixture(root, "rare-hybrid", connection!));
+    try {
+      admitted(() => {
+        fixture.ensureVector();
+        fixture.publish("rare-target", "rareanchor", [-0.04, Math.sqrt(1 - 0.04 ** 2), 0]);
+        fixture.publish("vector-neighbor", "unrelated", [0.1, Math.sqrt(1 - 0.1 ** 2), 0]);
+      });
+      const keyword = await fixture.keyword(keywordQuery("rareanchor absentword", { limit: 200 }));
+      expect(keyword.body.rows.map((row) => row.path)).toEqual(["memory/rare-target.md"]);
+      const vector = await fixture.vector(vectorQuery({ limit: 200 }));
+      expect(vector.rows.find((row) => row.path === "memory/rare-target.md")!.score).toBeLessThan(
+        0,
+      );
+      const merged = await mergeHybridResults({
+        vector: vector.rows.map((row) => Object.assign({}, row, { vectorScore: row.score })),
+        keyword: keyword.body.rows,
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        mmr: { enabled: true, lambda: 0.7 },
+        temporalDecay: { enabled: false, halfLifeDays: 30 },
+      });
+      expect(merged.map((row) => row.path)).toEqual([
+        "memory/vector-neighbor.md",
+        "memory/rare-target.md",
+      ]);
+      expect(merged[0]!.score).toBeCloseTo(0.07, 6);
+      expect(merged[1]!.score).toBeCloseTo(0.002, 6);
+    } finally {
+      admitted(() => fixture.close());
+    }
+  });
+
   it.each([
     { query: "cafe", trips: 1, body: ["memory/lexical.md"], paths: [] },
     { query: "semantic", trips: 1, body: [], paths: ["memory/semantic.md"] },
-    { query: "cafe absentword", trips: 2, body: ["memory/lexical.md"], paths: [] },
-    { query: "absentword", trips: 2, body: [], paths: [] },
+    { query: "cafe absentword", trips: 1, body: ["memory/lexical.md"], paths: [] },
+    { query: "absentword", trips: 1, body: [], paths: [] },
+    {
+      query: "cafe absentword",
+      pathQuery: "semantic",
+      trips: 1,
+      body: [],
+      paths: ["memory/semantic.md"],
+    },
     { query: "cafe", trips: 0, body: [], paths: [], disabled: true },
   ])("bounds keyword round trips for $query (disabled=$disabled)", async (testCase) => {
     const query = keywordQuery(testCase.query);
+    if (testCase.pathQuery) {
+      query.path.query = testCase.pathQuery;
+    }
     if (testCase.disabled) {
       query.body.limit = 0;
       query.path.limit = 0;
@@ -427,6 +469,89 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       expect(capture).toHaveBeenCalledTimes(testCase.trips);
     } finally {
       capture.mockRestore();
+    }
+  });
+
+  it("ranks each body match once and projects only retained keyword snippets", async () => {
+    const fixture = admitted(() => createFixture(root, "rank-work", connection!));
+    const db = fixture.pg();
+    try {
+      admitted(() => {
+        for (let index = 0; index < 12; index++) {
+          fixture.publish(`item-${index}`, `rankprobe ${"launch ".repeat(1 + (index % 3))}`, []);
+        }
+        db.exec(`
+          CREATE FUNCTION pg_temp.pglive_rank(tsvector, tsquery, integer) RETURNS real
+          LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE COST 1 AS $$
+          BEGIN RETURN pg_catalog.ts_rank($1, $2, $3); END $$;
+          CREATE FUNCTION pg_temp.pglive_prefix(text, integer) RETURNS text
+          LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE COST 1 AS $$
+          BEGIN RETURN pg_catalog.left($1, $2); END $$;
+        `);
+      });
+      const allCalls: number[] = [];
+      const snippetCalls: number[] = [];
+      for (const queryText of ["rankprobe launch", "rankprobe absentword"]) {
+        const query = keywordQuery(queryText, { limit: 3 });
+        const observed = admitted(() =>
+          db.runTransaction(() => {
+            db.exec("SET LOCAL track_functions = 'all'");
+            const countCalls = (name: "pglive_rank" | "pglive_prefix") =>
+              Number(
+                db
+                  .prepare(`
+              SELECT coalesce(sum(calls), 0) AS calls FROM pg_stat_xact_user_functions
+              WHERE funcname = ?
+            `)
+                  .get(name)?.calls ?? 0,
+              );
+            const before = countCalls("pglive_rank");
+            const beforeSnippets = countCalls("pglive_prefix");
+            const execute = db.query.bind(db);
+            const capture = vi.spyOn(db, "query").mockImplementation((statement, bindings) => {
+              return execute(
+                statement
+                  .replaceAll("ts_rank(", "pg_temp.pglive_rank(")
+                  .replaceAll("left(", "pg_temp.pglive_prefix("),
+                bindings,
+              );
+            });
+            try {
+              const pending = fixture.keyword(query);
+              return {
+                pending,
+                calls: countCalls("pglive_rank") - before,
+                snippets: countCalls("pglive_prefix") - beforeSnippets,
+              };
+            } finally {
+              capture.mockRestore();
+            }
+          }),
+        );
+        const result = await observed.pending;
+        expect(result.body.error).toBeUndefined();
+        expect(result.body.rows).toHaveLength(3);
+        const terms =
+          queryText === "rankprobe launch" ? "rankprobe & launch" : "rankprobe | absentword";
+        const expected = admitted(() =>
+          db
+            .prepare(`
+          SELECT id, ts_rank(openclaw_search, to_tsquery('simple', ?), 0) /
+            (ts_rank(openclaw_search, to_tsquery('simple', ?), 0) + 0.0027) AS score
+          FROM memory_index_chunks
+          WHERE openclaw_search @@ to_tsquery('simple', ?)
+          ORDER BY score DESC, id LIMIT 3
+        `)
+            .all(terms, terms, terms),
+        );
+        expect(result.body.rows.map(({ id, score }) => ({ id, score }))).toEqual(expected);
+        allCalls.push(observed.calls);
+        snippetCalls.push(observed.snippets);
+      }
+      expect(allCalls).toEqual([12, 12]);
+      expect(snippetCalls).toEqual([3, 3]);
+    } finally {
+      admitted(() => fixture.close());
     }
   });
 
@@ -452,8 +577,8 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       expect(result.body.rows).toMatchObject([
         {
           path: "body-hit.md",
-          score: expect.closeTo(2 / 3, 6),
-          textScore: expect.closeTo(2 / 3, 6),
+          score: expect.closeTo(0.965688529, 6),
+          textScore: expect.closeTo(0.965688529, 6),
         },
       ]);
       expect(result.path.rows.map((row) => [row.path, row.exactPathSpecificity])).toEqual([
@@ -463,15 +588,15 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       ]);
       expect(result.path.rows).toMatchObject([
         {
-          score: expect.closeTo(0.5, 6),
-          pathScore: expect.closeTo(0.5, 6),
+          score: expect.closeTo(0.957475433, 6),
+          pathScore: expect.closeTo(0.957475433, 6),
           textScore: 0,
           hasBodyMatch: false,
         },
         { score: 0, pathScore: 0, textScore: 0, hasBodyMatch: false },
         {
-          score: expect.closeTo(0.5, 6),
-          pathScore: expect.closeTo(0.5, 6),
+          score: expect.closeTo(0.957475433, 6),
+          pathScore: expect.closeTo(0.957475433, 6),
           textScore: 0,
           hasBodyMatch: false,
         },

@@ -9,6 +9,7 @@ import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const inspect = vi.hoisted(() => vi.fn());
@@ -121,12 +122,7 @@ it.each([undefined, 1, 2] as const)(
     let response: unknown;
     await withPluginRuntimeRegistryScope(builder.registry, () =>
       pluginsHandlers["plugins.inspect"]!({
-        req: {
-          type: "req",
-          id: "inspect",
-          method: "plugins.inspect",
-          params: { pluginId: record.id },
-        },
+        req: gatewayRequest("inspect", "plugins.inspect", { pluginId: record.id }),
         params: { pluginId: record.id },
         client: null,
         isWebchatConnect: () => false,

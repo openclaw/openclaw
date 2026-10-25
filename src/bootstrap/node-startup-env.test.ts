@@ -1,17 +1,10 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveNodeStartupTlsEnvironment } from "./node-startup-env.js";
+import { allowOnly } from "./node-startup-env.test-support.js";
 
 const FEDORA_CA_BUNDLE_PATH = "/etc/pki/tls/certs/ca-bundle.crt";
 afterEach(() => vi.restoreAllMocks());
-
-function allowOnly(path: string) {
-  return (candidate: Parameters<typeof fs.accessSync>[0]) => {
-    if (candidate !== path) {
-      throw new Error("ENOENT");
-    }
-  };
-}
 
 describe("resolveNodeStartupTlsEnvironment", () => {
   it("keeps user-provided env values byte-for-byte", () => {

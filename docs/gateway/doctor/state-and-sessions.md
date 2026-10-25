@@ -9,6 +9,12 @@ read_when:
 Checks 3-7b cover legacy on-disk state migrations, session integrity, model
 auth health, sandbox images, and plugin installs.
 
+If a shared-state or agent database migration refuses to continue, Doctor reports
+the cause before the database location so path redaction preserves the diagnosis.
+Native SQLite failures include their error codes. Stop the Gateway, preserve the
+database and its SQLite sidecars, resolve the reported cause, then rerun
+`openclaw doctor --fix` against the same state and configuration.
+
 ## Legacy data and PostgreSQL
 
 Run `openclaw doctor --fix` before porting SQLite stores to PostgreSQL. Port
@@ -27,6 +33,10 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 <AccordionGroup>
   <Accordion title="3. Legacy state migrations (disk layout)">
     Supported upgrade sources are state shapes written by releases shipped on or after July 1, 2026. The July Doctor importer could still leave `provider` and `lastProvider` aliases on session rows. Session reads refuse those rows with a migration-required error until `openclaw doctor --fix` runs; Doctor backs up the affected SQLite databases, then rewrites the aliases into the current `delivery` state and its query projections together. Rows that still need the retired `room` → `groupChannel` conversion are refused without changing the original store: preserve the state, install OpenClaw `2026.9.5`, run `openclaw doctor --fix`, then upgrade again. Rows with current fields remain supported even when obsolete metadata remains alongside them. July-era `sessions.json` and JSONL transcript imports remain supported.
+
+    Relative `session.store` paths resolve against the active state directory. Older versions resolved them against the Gateway's working directory, which could create a second store under `~/agents/` in a systemd installation. Doctor backs up the affected stores and shared state, copies sessions and retained history into the state-relative store, and retires the old registrations after verification. The original database and its backup remain available for recovery. Completed repairs do not replay that retained source or restore conversations deleted later.
+
+    Conflicting conversations with distinct session IDs are preserved under recovered session keys, with their original sharing state. Doctor preserves the canonical session's membership and existing delivery receipts. If the same session ID has conflicting history or membership, repair stops with a data-at-risk message and retains both originals and backups. Pending durable work, unexpired Goal operation receipts, or retained transcript archives without a safe transfer also prevent retirement of the original store. Resolve the named pending work or recover its history before retrying Doctor or update. Update rehearsals only repair copied stores. If an old store was not included in the rehearsal, run standalone `openclaw doctor --fix` against the original state before updating.
 
     Doctor can migrate supported on-disk layouts into the current structure:
 

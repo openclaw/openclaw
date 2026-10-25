@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { valid } from "semver";
 import * as tar from "tar";
+import { listBundleDependencies } from "../../../scripts/lib/package-bundle-dependencies.mts";
 import {
   collectPatchedMcpArtifactErrors,
   PATCHED_MCP_NAME,
@@ -16,6 +17,11 @@ import {
   collectPackageDistImports,
   type PackageDistImport,
 } from "../../../scripts/lib/package-dist-imports.mjs";
+import {
+  hasInstalledPackageAncestor,
+  installedPackageDependencies,
+  installedPackagePath,
+} from "../../../scripts/lib/package-installed-dependencies.mts";
 import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
@@ -82,8 +88,6 @@ const METADATA_KEYS = [
 type NodePackageManifest = DistributionPackageManifest & {
   scripts?: Record<string, string>;
   devDependencies?: Record<string, string>;
-  bundleDependencies?: string[];
-  bundledDependencies?: string[];
   openclaw?: { extensions?: string[]; runtimeExtensions?: string[] };
 };
 
@@ -160,10 +164,11 @@ type BootstrapEntry = {
 
 async function collectBootstrapFiles(root: string, plugin = false): Promise<string[]> {
   // Published plugins alone use dist/.setup; private descendants remain excluded.
+  // Registry packages can ship implementation modules below src/node_modules.
   const included = ({ name, relativePath }: { name: string; relativePath: string }) =>
     (plugin && relativePath.split(path.sep).join("/") === PLUGIN_DIST_SHARED_CHUNK_PREFIX) ||
     (!name.startsWith(".") &&
-      !(plugin ? IGNORED_PLUGIN_DIRECTORIES.has(name) : name === "node_modules"));
+      !(plugin ? IGNORED_PLUGIN_DIRECTORIES.has(name) : relativePath === "node_modules"));
   const { entries, failedDirs, truncated } = await walkDirectory(root, {
     maxEntries: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS.maxEntries,
     symlinks: "include",
@@ -234,7 +239,13 @@ async function resolvePlugins(options: NodeBootstrapArtifactOptions, packageRoot
         const relative = bootstrapPath(entry.replace(/^\.\//u, "").replace(/\.ts$/u, ".js"));
         await fs.access(path.join(builtRoot, relative));
       }
-      return { id, root: builtRoot, packageJson, bundled: builtRoot === bundledRoot };
+      return {
+        id,
+        root: builtRoot,
+        installationRoot: requestedRoot,
+        packageJson,
+        bundled: builtRoot === bundledRoot,
+      };
     }),
   );
 }
@@ -376,62 +387,116 @@ export async function prepareNodeBootstrapArtifact(
     addFiles(plugin.root, pluginFiles, `dist/extensions/${plugin.id}/`);
   }
 
-  // Only declared bundled/workspace packages cross as JavaScript artifacts. Native dependencies
-  // remain exact npm pins, so the destination chooses its own OS/CPU optional packages.
-  const bundledNames = new Set([
-    ...(packageJson.bundleDependencies ?? packageJson.bundledDependencies ?? []),
-    ...Object.entries(packageJson.dependencies ?? {})
-      .filter(([, spec]) => spec.startsWith("workspace:"))
-      .map(([name]) => name),
-  ]);
-  for (const name of [...bundledNames].toSorted()) {
-    bootstrapPath(name);
-    const root = await fs.realpath(path.join(packageRoot, "node_modules", name));
-    const bundled = await readPackageManifest(root);
-    if (bundled.name !== name) {
-      throw new Error(`Bundled node distribution dependency identity does not match ${name}`);
-    }
-    const dependencies = validateBundledPackageDependencyAlignment({
-      bundledDependencies: bundled.dependencies,
-      bundledPackageLabel: `bundled ${name}`,
-      rootDependencies: packageJson.dependencies,
-    });
-    for (const [dependency, version] of dependencies) {
-      packageJson.dependencies![dependency] = version;
-    }
-    // Linked workspaces can carry source and private files; installed npm bundles already
-    // own their published layout, including compiled directories and non-JavaScript assets.
-    const workspace =
-      sourcePackage.dependencies?.[name]?.startsWith("workspace:") ||
-      !root.endsWith(`${path.sep}node_modules${path.sep}${name.split("/").join(path.sep)}`);
+  // Workspace bundles share root dependencies. Registry bundles carry their installed closure;
+  // unbundled native packages remain npm pins for the destination's OS/CPU.
+  const addBundledPackage = async (
+    root: string,
+    bundled: NodePackageManifest,
+    prefix: string,
+    workspace = false,
+  ) => {
     const bundledFiles = workspace
       ? await collectPackageDistInventory(root)
       : await collectBootstrapFiles(root);
     if (bundledFiles.length === 0) {
       throw new Error(
-        `Bundled node dependency ${name} needs its compiled distribution; rebuild the Gateway`,
+        `Bundled node dependency ${bundled.name} needs its compiled distribution; rebuild the Gateway`,
       );
     }
     const scope: BootstrapImportScope = {
-      label: name,
-      prefix: `node_modules/${name}/`,
+      label: bundled.name,
+      prefix,
       files: [],
       imports: [],
       packageJsons: new Map(),
-      ...(name === PATCHED_MCP_NAME
+      ...(bundled.name === PATCHED_MCP_NAME
         ? { patchedMcp: { manifest: bundled, hashes: new Map<string, string>() } }
         : {}),
     };
     scopes.push(scope);
-    addFiles(root, bundledFiles, scope.prefix, scope);
-    delete bundled.dependencies;
+    addFiles(root, bundledFiles, prefix, scope);
     delete bundled.devDependencies;
     delete bundled.scripts;
-    addGeneratedFile(
-      `node_modules/${name}/package.json`,
-      `${JSON.stringify(bundled, null, 2)}\n`,
-      scope,
-    );
+    addGeneratedFile(`${prefix}package.json`, `${JSON.stringify(bundled, null, 2)}\n`, scope);
+  };
+  const addRegistryClosure = async (
+    root: string,
+    bundled: NodePackageManifest,
+    prefix: string,
+    ancestors: ReadonlyMap<string, string>,
+  ): Promise<void> => {
+    if (prefix.split("/").length > 64) {
+      throw new Error("Node bootstrap dependency exceeds its directory depth limit");
+    }
+    await addBundledPackage(root, bundled, prefix);
+    const destination = path.resolve(temporaryRoot, "package", prefix);
+    const staged = new Map(ancestors).set(destination, root);
+    for (const dependency of await installedPackageDependencies(root, bundled)) {
+      if (hasInstalledPackageAncestor(destination, dependency, staged)) {
+        continue;
+      }
+      await addRegistryClosure(
+        dependency.root,
+        await readPackageManifest(dependency.root),
+        `${prefix}node_modules/${dependency.name}/`,
+        staged,
+      );
+    }
+  };
+
+  const coreBundles = new Set([
+    ...listBundleDependencies(sourcePackage),
+    ...Object.entries(sourcePackage.dependencies ?? {})
+      .filter(([, spec]) => spec.startsWith("workspace:"))
+      .map(([name]) => name),
+  ]);
+  const bundledNames = new Set([...coreBundles, ...listBundleDependencies(packageJson)]);
+  for (const name of [...bundledNames].toSorted()) {
+    bootstrapPath(name);
+    const owner = coreBundles.has(name)
+      ? undefined
+      : (plugins.find(({ packageJson: pluginJson }) =>
+          listBundleDependencies(pluginJson).includes(name),
+        ) ??
+        plugins.find(
+          ({ packageJson: pluginJson }) =>
+            Object.hasOwn(pluginJson.dependencies ?? {}, name) ||
+            Object.hasOwn(pluginJson.optionalDependencies ?? {}, name),
+        ));
+    // Source plugins execute built files but retain their source installation's dependencies.
+    const installationRoot = owner?.installationRoot ?? packageRoot;
+    const installed = await installedPackagePath(installationRoot, name);
+    if (!installed) {
+      throw new Error(
+        `Bundled node dependency ${name} is missing from ${installationRoot}; install its dependencies and rebuild the Gateway`,
+      );
+    }
+    const root = await fs.realpath(installed);
+    const bundled = await readPackageManifest(root);
+    if (bundled.name !== name) {
+      throw new Error(`Bundled node distribution dependency identity does not match ${name}`);
+    }
+    // Linked workspaces share the root dependency graph.
+    const workspace =
+      sourcePackage.dependencies?.[name]?.startsWith("workspace:") ||
+      !root.endsWith(`${path.sep}node_modules${path.sep}${name.split("/").join(path.sep)}`);
+    if (workspace) {
+      const dependencies = validateBundledPackageDependencyAlignment({
+        bundledDependencies: bundled.dependencies,
+        bundledPackageLabel: `bundled ${name}`,
+        rootDependencies: packageJson.dependencies,
+      });
+      for (const [dependency, version] of dependencies) {
+        packageJson.dependencies![dependency] = version;
+      }
+      delete bundled.dependencies;
+    }
+    const prefix = `node_modules/${name}/`;
+    if (workspace) {
+      await addBundledPackage(root, bundled, prefix, true);
+    } else {
+      await addRegistryClosure(root, bundled, prefix, new Map());
+    }
     packageJson.dependencies![name] = bundled.version;
   }
   packageJson.bundleDependencies = [...bundledNames].toSorted();

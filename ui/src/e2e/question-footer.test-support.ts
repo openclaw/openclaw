@@ -1,7 +1,12 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Question, QuestionRecord, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  recordControlUiE2eFailureFacts,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
@@ -121,7 +126,36 @@ export function defineQuestionFooterTests({
       await pullRequest.click({ trial: true });
       await page.keyboard.press("Escape");
       await expand.tap();
-      await expect.poll(() => composer.count()).toBe(0);
+      try {
+        await expect.poll(() => composer.count()).toBe(0);
+      } catch (error) {
+        recordControlUiE2eFailureFacts(page, { questionFooterLandscape: width > height });
+        await withTimeout(
+          page.evaluate(() => {
+            const details = document.querySelector<HTMLElement>(".chat-mobile-host");
+            return {
+              questionFooterComposerCount: document.querySelectorAll(".agent-chat__input").length,
+              questionFooterCollapsedCount: document.querySelectorAll(
+                ".chat-question-panel--collapsed",
+              ).length,
+              questionFooterExpandCount: document.querySelectorAll(
+                ".chat-question-panel__collapsed-button",
+              ).length,
+              questionFooterDetailsHidden: details?.hidden ?? null,
+              questionFooterDetailsVisible:
+                details?.checkVisibility({ visibilityProperty: true }) ?? false,
+            };
+          }),
+          1_000,
+        )
+          .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+          .catch(() => undefined);
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: error instanceof Error ? error : new Error(String(error)),
+          label: "question footer expansion",
+        });
+        throw error;
+      }
       await panel.getByRole("radio", { name: /Concise/ }).tap();
       const answers = { answers: { progress_note: ["Concise"] } };
       await gateway.setMethodResponse("question.resolve", {
