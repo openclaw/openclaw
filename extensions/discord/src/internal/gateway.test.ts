@@ -84,8 +84,7 @@ class TestGatewayPlugin extends GatewayPlugin {
 }
 
 function timedGateway(random?: number) {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
+  vi.useFakeTimers({ now: 0 });
   if (random !== undefined) {
     vi.spyOn(Math, "random").mockReturnValue(random);
   }
@@ -93,8 +92,7 @@ function timedGateway(random?: number) {
 }
 
 function outboundGateway() {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
+  vi.useFakeTimers({ now: 0 });
   const gateway = new GatewayPlugin({});
   return { gateway, send: attachOpenSocket(gateway) };
 }
@@ -105,36 +103,13 @@ function fillOutboundQueue(gateway: GatewayPlugin, count: number) {
   }
 }
 
-type GatewayInternals = {
-  sessionId: string | null;
-  resumeGatewayUrl: string | null;
-  sequence: number | null;
-};
-
-function gatewayInternals(gateway: GatewayPlugin): GatewayInternals {
-  return gateway as unknown as GatewayInternals;
-}
-
-function createDispatchGateway(withGateway = false) {
-  const gateway = new GatewayPlugin({});
-  const client = {
-    dispatchGatewayEvent: vi.fn(async () => {}),
-    getPlugin: vi.fn((id: string) => (withGateway && id === "gateway" ? gateway : undefined)),
-  };
-  const internal = gateway as unknown as {
-    client: unknown;
-    handleDispatch(payload: { t: string; d: unknown }): Promise<void>;
-  };
-  internal.client = client;
-  return {
-    gateway,
-    client,
-    dispatch: (t: string, d: unknown) => internal.handleDispatch({ t, d }),
-  };
+function createDispatchGateway(gateway = new TestGatewayPlugin()) {
+  const client = new Client({ clientId: "app1", token: "token" }, {}, [gateway]);
+  return { gateway, client, dispatch: gateway.socket.dispatch.bind(gateway.socket) };
 }
 
 function expectClearedSession(gateway: GatewayPlugin) {
-  expect(gatewayInternals(gateway)).toMatchObject({
+  expect(gateway).toMatchObject({
     sessionId: null,
     resumeGatewayUrl: null,
     sequence: null,
@@ -333,7 +308,7 @@ describe("GatewayPlugin", () => {
   });
 
   it("keeps newly memberless voice updates unknown through the voice listener", async () => {
-    const { gateway, client, dispatch } = createDispatchGateway(true);
+    const { gateway, client, dispatch } = createDispatchGateway();
     await dispatch(GatewayDispatchEvents.GuildCreate, { ...guildSnapshot(), members: [] });
     const memberlessState = voiceState("unknown-user", "c1");
     await dispatch(GatewayDispatchEvents.VoiceStateUpdate, memberlessState);
@@ -342,7 +317,7 @@ describe("GatewayPlugin", () => {
       handleVoiceStateUpdate,
     } as unknown as ConstructorParameters<typeof DiscordVoiceStateUpdateListener>[0]);
 
-    await listener.handle(memberlessState as never, client as never);
+    await listener.handle(memberlessState as never, client);
 
     expect(handleVoiceStateUpdate).toHaveBeenCalledWith(memberlessState, null);
     expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([
@@ -477,13 +452,9 @@ describe("GatewayPlugin", () => {
   });
 
   it("clears resume state after invalid session false", async () => {
-    const gateway = timedGateway(0);
-    const sessionState = gatewayInternals(gateway);
-    sessionState.sessionId = "session1";
-    sessionState.resumeGatewayUrl = "wss://resume.example.test";
-    sessionState.sequence = 123;
-
-    gateway.openSocket().payload(GatewayOpcodes.InvalidSession, false);
+    const { gateway, dispatch } = createDispatchGateway(timedGateway(0));
+    dispatch(GatewayDispatchEvents.Ready, ready, 123);
+    gateway.socket.payload(GatewayOpcodes.InvalidSession, false);
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(gateway.sockets).toHaveLength(2);
@@ -509,23 +480,14 @@ describe("GatewayPlugin", () => {
   });
 
   it("bounds an oversized HELLO interval before scheduling the first heartbeat", async () => {
-    // Pin the start jitter to the top of its window so the scheduled delay is
-    // exactly the resolved interval; a storm shows up as a heartbeat at t=0.
     const gateway = timedGateway(1);
     gateway.emitter.on("error", () => {});
     const socket = gateway.openSocket();
-
-    expect(() => socket.hello(Number.MAX_SAFE_INTEGER)).not.toThrow();
-
-    let firstHeartbeatMs: number | undefined;
-    for (let tick = 0; tick < 4 && firstHeartbeatMs === undefined; tick += 1) {
-      await vi.advanceTimersToNextTimerAsync();
-      if (sentGatewayOpcodes(socket.send).includes(GatewayOpcodes.Heartbeat)) {
-        firstHeartbeatMs = Date.now();
-      }
-    }
-
-    expect(firstHeartbeatMs).toBe(45_000);
+    socket.hello(Number.MAX_SAFE_INTEGER);
+    await vi.advanceTimersByTimeAsync(44_999);
+    expectOpcode(socket, GatewayOpcodes.Heartbeat, false);
+    await vi.advanceTimersByTimeAsync(1);
+    expectOpcode(socket, GatewayOpcodes.Heartbeat);
   });
 
   it.each([0, 50])(
