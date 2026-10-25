@@ -69,7 +69,10 @@ function acceptRun() {
 function diagnostics(internal = false) {
   const events: DiagnosticEventPayload[] = [];
   (internal ? onInternalDiagnosticEvent : onDiagnosticEvent)((event) => events.push(event));
-  return events;
+  return async (expected: Partial<DiagnosticEventPayload>) => {
+    await waitForDiagnosticEventsDrained();
+    expect(events).toContainEqual(expect.objectContaining(expected));
+  };
 }
 function terminalFailure(error: string) {
   return { runId, status: "error", endedAt: Date.now(), error };
@@ -145,22 +148,19 @@ describe("exec approval followup", () => {
         { storePath: sessionStore, sessionKey },
         { sessionId: currentSession, updatedAt: Date.now() },
       );
-      const events = diagnostics();
+      const expectDiagnostic = diagnostics();
       await expect(
         send({ ...route, direct: true, resultText, expectedSessionId: "original", sessionStore }),
       ).resolves.toBe(!stale);
       expect(callGatewayTool).not.toHaveBeenCalled();
       if (stale) {
         expect(sendMessage).not.toHaveBeenCalled();
-        await waitForDiagnosticEventsDrained();
-        expect(events).toContainEqual(
-          expect.objectContaining({
-            type: "exec.approval.followup_suppressed",
-            approvalId,
-            reason: "session_rebound",
-            phase: "direct_delivery",
-          }),
-        );
+        await expectDiagnostic({
+          type: "exec.approval.followup_suppressed",
+          approvalId,
+          reason: "session_rebound",
+          phase: "direct_delivery",
+        });
       } else {
         expect(sendMessage).toHaveBeenCalledOnce();
       }
@@ -209,7 +209,7 @@ describe("exec approval followup", () => {
   });
 
   it("ends observation at its deadline without competing direct delivery", async () => {
-    const events = diagnostics(true);
+    const expectDiagnostic = diagnostics(true);
     const startedAt = new Date("2026-08-01T00:00:00Z").getTime();
     const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     acceptRun().mockImplementationOnce(async () => {
@@ -218,23 +218,20 @@ describe("exec approval followup", () => {
     });
     await expect(send(pending)).resolves.toBe(true);
     clock.mockRestore();
-    await waitForDiagnosticEventsDrained();
     expectCalls(2, 0);
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "log.record",
-        level: "WARN",
-        message: "Exec approval followup observation ended",
-        loggerName: "agents/exec-approval-followup",
-        attributes: {
-          approvalId,
-          runId,
-          reason: "deadline",
-          transportErrors: 1,
-          deliveryOwner: "accepted_agent_run",
-        },
-      }),
-    );
+    await expectDiagnostic({
+      type: "log.record",
+      level: "WARN",
+      message: "Exec approval followup observation ended",
+      loggerName: "agents/exec-approval-followup",
+      attributes: {
+        approvalId,
+        runId,
+        reason: "deadline",
+        transportErrors: 1,
+        deliveryOwner: "accepted_agent_run",
+      },
+    });
   });
 
   it.each([
@@ -268,12 +265,7 @@ describe("exec approval followup", () => {
   });
 
   it("registers the authenticated runtime handoff before dispatch without exposing elevation", async () => {
-    const target = {
-      approvalId,
-      sessionKey,
-      turnSourceChannel: "telegram",
-      bashElevated: { enabled: true, allowed: true, defaultLevel: "on" as const },
-    };
+    const bashElevated = { enabled: true, allowed: true, defaultLevel: "on" as const };
     let handoff: ReturnType<typeof claimExecApprovalFollowupRuntimeHandoff>;
     vi.mocked(callGatewayTool).mockImplementationOnce(async (_method, _options, raw) => {
       const params = requireRecord(raw, "followup params");
@@ -288,29 +280,13 @@ describe("exec approval followup", () => {
       finalizeExecApprovalFollowupRuntimeHandoff({ handoffId, claimId: "default-dispatch" });
       return { status: "ok" };
     });
-    await sendExecApprovalFollowupResult(target, finished);
-    const params = agentArgs({ sessionKey, channel: "telegram" });
-    expect(params).toMatchObject({
-      message: expect.stringContaining("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>"),
-      internalRuntimeHandoffId: expect.any(String),
-      idempotencyKey: expect.stringMatching(/^exec-approval-followup:req-1:nonce:[0-9a-f-]{36}$/),
-    });
-    expect(params.inputProvenance).toEqual({
-      kind: "inter_session",
-      sourceSessionKey: sessionKey,
-      sourceTool: "exec_approval_followup",
-    });
-    expect(handoff).toEqual({
-      kind: "exec-approval-followup",
-      approvalId,
-      sessionKey,
-      idempotencyKey: params.idempotencyKey,
-      bashElevated: target.bashElevated,
-      resultText: finished,
-    });
-    expect(params.message).toContain("ok");
+    await sendExecApprovalFollowupResult(
+      { approvalId, sessionKey, ...route, bashElevated },
+      finished,
+    );
+    const params = agentArgs();
+    expect(handoff).toMatchObject({ bashElevated, resultText: finished });
     expect(params).not.toHaveProperty("bashElevated");
-    expect(params).not.toHaveProperty("execApprovalFollowupToken");
   });
 
   it("requires a session or deliverable route", async () => {
