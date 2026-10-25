@@ -178,6 +178,11 @@ private inspection state has no Workboard engine anchor.
 
 `openclaw doctor --post-upgrade` runs plugin compatibility checks for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
 
+Standalone builds validate compiled plugin entries against the running image's
+module inventory. Those entries do not need a second copy on disk. Plugin package
+boundaries still apply, and entries outside the image must have their runtime
+files installed.
+
 The checks also warn with `plugin.version_drift` when an enabled official plugin
 in the installed index belongs to a different release cohort than the upgraded
 OpenClaw CLI. Follow the reported plugin update command, then restart the
