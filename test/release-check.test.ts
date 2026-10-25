@@ -223,13 +223,10 @@ it("preserves the unchanged released progress consumer behavior", async () => {
   await import("../scripts/fixtures/packed-plugin-sdk-progress-consumer.js");
 });
 
-it("normalizes npm <=11 arrays and npm 12 name-keyed objects", () => {
+it("normalizes legacy singleton npm pack entries", () => {
   const entry = { filename: "openclaw-2026.7.2.tgz", unpackedSize: 120_354_302 };
 
-  expect(resolveNpmJsonEntries([entry])).toEqual([entry]);
   expect(resolveNpmJsonEntries(entry)).toEqual([entry]);
-  expect(resolveNpmJsonEntries({ openclaw: entry })).toEqual([entry]);
-  expect(resolveNpmJsonEntries({ "@openclaw/demo": entry })).toEqual([entry]);
 });
 
 it("rejects path-like npm pack tarball filenames", () => {

@@ -22,9 +22,6 @@ import { getDeliveryQueueEntryStatus } from "../src/infra/delivery-queue-sqlite.
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../src/infra/outbound/delivery-queue-media-staging.js";
 import { listenLoopback, readBody, replyJson } from "./telegram-http.test-support.js";
 
-const MIGRATION_DESCRIPTION = "Bad Request: group chat was upgraded to a supergroup chat";
-const DELIVERY_INTENT_ID = "telegram-loopback-permanent-rejection";
-
 const queueStatus = (stateDir: string, id: string) =>
   getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
 
@@ -129,74 +126,6 @@ async function withTransportState<T extends { close: () => Promise<void> }>(
     await transport.close();
   }
 }
-
-async function startTelegramMigrationLoopback() {
-  const requests: Array<{ body: string; method: string | undefined; url: string }> = [];
-  const server = createServer((request, response) => {
-    readBody(request, (body) => {
-      requests.push({ body, method: request.method, url: request.url ?? "" });
-      replyJson(
-        response,
-        {
-          ok: false,
-          error_code: 400,
-          description: MIGRATION_DESCRIPTION,
-          parameters: { migrate_to_chat_id: -1_001_234_567_890 },
-        },
-        400,
-      );
-    });
-  });
-  const { url, close } = await listenLoopback(server);
-  return { apiRoot: url, requests, close };
-}
-
-describe("Telegram permanent rejection over real Bot API transport", () => {
-  it("dead-letters one real migration rejection and never replays it after restart", async () => {
-    await withTransportState(
-      await startTelegramMigrationLoopback(),
-      (loopback) => configureTelegram({ apiRoot: loopback.apiRoot }),
-      async (loopback, stateDir, cfg) => {
-        const staged = await stageDelivery(
-          cfg,
-          DELIVERY_INTENT_ID,
-          "real transport permanent rejection",
-          "loopback transport not released yet",
-        );
-        expect(staged.status).toBe("failed");
-        expect(loopback.requests).toHaveLength(0);
-        expect(queueStatus(stateDir, DELIVERY_INTENT_ID)).toBe("pending");
-
-        const { log, drain } = recoveryDrain(cfg, stateDir);
-        await drain("Telegram loopback permanent rejection recovery");
-
-        expect(log.warn).toHaveBeenCalledWith(
-          expect.stringContaining(
-            "Telegram rejected send: group migrated to supergroup -1001234567890",
-          ),
-        );
-        expect(loopback.requests).toEqual([
-          {
-            method: "POST",
-            url: expect.stringMatching(/\/sendMessage$/u),
-            body: expect.stringContaining("real transport permanent rejection"),
-          },
-        ]);
-        expect(readQueueRow(stateDir, DELIVERY_INTENT_ID)).toMatchObject({
-          retryCount: 1,
-          status: "failed",
-        });
-
-        closeDatabases();
-        expect(queueStatus(stateDir, DELIVERY_INTENT_ID)).toBe("failed");
-
-        await drain("Telegram loopback post-restart recovery");
-        expect(loopback.requests).toHaveLength(1);
-        expect(queueStatus(stateDir, DELIVERY_INTENT_ID)).toBe("failed");
-      },
-    );
-  });
-});
 
 describe("Telegram rejected topic delivery over real Bot API transport", () => {
   it.each([

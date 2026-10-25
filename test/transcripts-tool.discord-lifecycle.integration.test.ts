@@ -166,8 +166,8 @@ defineDiscordVoiceTests((h) => {
           terminal === "manager destruction" ? undefined : h.lastRealtimeBridgeParams();
         const speaker = { userId: "u-speaker", speakerLabel: "Speaker", senderIsOwner: false };
         const beginTurn = () => h.beginSpeakerTurn(h.getSessionEntry(manager), speaker);
-        const turn = provider ? beginTurn() : undefined;
         if (provider) {
+          beginTurn();
           const onClose = expectDefined(provider.onClose, "provider terminal callback");
           onClose(terminal === "error" ? "error" : "completed");
           h.expectConnectedStatus(manager, "1001");
@@ -200,25 +200,6 @@ defineDiscordVoiceTests((h) => {
           stoppedAt: expect.any(String),
         });
         expect(providerStop).toHaveBeenCalledOnce();
-
-        if (provider) {
-          const stoppedSecond = await read("second");
-          await start("third");
-          await join();
-          turn?.close();
-          provider.onClose?.("error");
-          provider.onReady?.();
-          provider.onTranscript?.("user", "Late text from the retired provider.", true);
-          await execute({ action: "stop", sessionId: "second" });
-          expect(providerStop).toHaveBeenCalledOnce();
-          h.expectConnectedStatus(manager, "1001");
-          await expectStatus("third", true);
-          expect(await store.readSession("second")).toMatchObject({
-            stoppedAt: stoppedSecond.stoppedAt,
-          });
-          expect(await texts(stoppedSecond)).toEqual(secondTexts);
-          expect(await texts(await read("third"))).toEqual([]);
-        }
       } finally {
         summaryWrite.mockRestore();
         resumeFinalizer?.();

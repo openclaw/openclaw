@@ -3161,7 +3161,6 @@
       "test/skill-usage.codex.integration.test.ts": 1,
       "test/slack-download-read-authority.integration.test.ts": 3,
       "test/subagent-announce-origin.integration.test.ts": 5,
-      "test/talk-browser-defaults.test.ts": 1,
       "test/telegram-question-gateway.test.ts": 1,
       "test/telegram-reply-conversation.test.ts": 1,
       "test/test-env.state-lifetime.test.ts": 1,

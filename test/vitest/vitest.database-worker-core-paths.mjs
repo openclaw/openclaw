@@ -23,7 +23,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/local-request-context.session-rename.test.ts",
   "src/plugin-sdk/provider-catalog-runtime.test.ts",
   "src/plugin-sdk/memory-core-bundled-runtime.recall.test.ts",
-  "test/talk-browser-defaults.test.ts",
   "src/acp/event-ledger.prepared.test.ts",
   "src/acp/event-ledger.test.ts",
   "src/acp/translator.cancel-scoping.test.ts",
