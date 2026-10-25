@@ -219,12 +219,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         sentinel: { payload: { stats: { requiresRestart: false } } },
       });
       await expect.poll(async () => (await settledProbe("cold-chat")).captured?.label).toBe(label);
-      expect(await settledProbe("cold-chat")).toMatchObject({
-        starts: 1,
-        stops: 0,
-        pid: cold.pid,
-      });
-      expect((await settledProbe("cold-chat")).instance).not.toBe(cold.instance);
+      const replacement = await settledProbe("cold-chat");
+      expect(replacement).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
+      expect(replacement.instance).not.toBe(cold.instance);
       expect(await settledProbe("sibling-chat")).toEqual(sibling);
     }
     // Installing another plugin can rebuild metadata through a different producer.
