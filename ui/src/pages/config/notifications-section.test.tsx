@@ -107,6 +107,9 @@ it.each([
   const { container } = renderSection({ nativeNotifications: { permission: "granted", test } });
   const announcement = expectDefined(container.querySelector(`[role="${role}"]`), role);
   expect(announcement.textContent).toContain(message);
+  if (state === "error") {
+    expect(container.querySelector('.sr-only[role="status"]')?.textContent).toBe("");
+  }
 });
 
 it("establishes the polite live region before announcing a successful test", async () => {
