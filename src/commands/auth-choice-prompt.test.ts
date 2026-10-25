@@ -146,7 +146,7 @@ describe("promptAuthChoiceGrouped", () => {
     ]);
     const { prompter, prompts } = scriptedPrompter([
       ["Model/auth provider", "__more"],
-      ["Model/auth provider", "minimax"],
+      "minimax",
       ["MiniMax auth method", "minimax-cn-api"],
     ]);
 
@@ -175,10 +175,7 @@ describe("promptAuthChoiceGrouped", () => {
       authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API key"]], true),
       authChoiceGroup("minimax", "MiniMax", [["minimax-api", "MiniMax API key"]]),
     ]);
-    const { prompter, prompts } = scriptedPrompter([
-      ["Model/auth provider", "__more"],
-      ["Model/auth provider", "minimax"],
-    ]);
+    const { prompter, prompts } = scriptedPrompter([["Model/auth provider", "__more"], "minimax"]);
 
     const result = await promptAuthChoiceGrouped({
       prompter,
