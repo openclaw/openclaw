@@ -296,8 +296,8 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const serializedDocumentGuard = JSON.stringify(
     buildSandboxDocumentGuardHtml(blockDescendantFrames) +
       buildSandboxShortcutBridgeHtml() +
-      WIDGET_SIZE_CONFIRMATION_HTML +
-      buildSandboxWidgetScrollBridgeHtml(),
+      buildSandboxWidgetScrollBridgeHtml() +
+      WIDGET_SIZE_CONFIRMATION_HTML,
   ).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <meta charset="utf-8" />
