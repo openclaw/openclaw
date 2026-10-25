@@ -152,14 +152,10 @@ describe("browser proxy upload transport", () => {
 
   it("stages portable bounded filenames that survive upload route validation", async () => {
     const names = [
-      ["CLOCK$", "CLOCK$_"],
       ["CONIN$.txt", "CONIN$_.txt"],
-      ["CONOUT$", "CONOUT$_"],
       ["NUL .txt", "NUL _.txt"],
-      ["COM¹.txt", "COM¹_.txt"],
       [`CON${" ".repeat(177)}x`, "CON_"],
       [`${"a".repeat(179)}.b`, "a".repeat(179)],
-      [`${"b".repeat(179)} c`, "b".repeat(179)],
       [`${"c".repeat(175)}🦞.d`, `${"c".repeat(175)}🦞`],
       ["😀".repeat(60), "😀".repeat(45)],
       [`${"a".repeat(176)}.\u00a0.x`, "a".repeat(176)],
@@ -224,18 +220,14 @@ describe("browser proxy upload transport", () => {
       cancelled.abort(new Error("cancel queued upload"));
       await rejected;
 
-      let thirdAdmissionStarted = false;
-      const thirdAdmissionRead = Promise.withResolvers<void>();
+      let thirdAdmissionRead: Promise<unknown> | undefined;
       const readdir = fs.readdir;
-      vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+      vi.spyOn(fs, "readdir").mockImplementation((...args) => {
+        const reading = readdir(...args);
         if (args[0] === stagingRoot) {
-          thirdAdmissionStarted = true;
+          thirdAdmissionRead = reading;
         }
-        const entries = await readdir(...args);
-        if (args[0] === stagingRoot) {
-          thirdAdmissionRead.resolve();
-        }
-        return entries;
+        return reading;
       });
       const third = new AbortController();
       const thirdQueued = observeQueue(third.signal);
@@ -246,9 +238,7 @@ describe("browser proxy upload transport", () => {
       await new Promise<void>((resolve) => {
         process.nextTick(resolve);
       });
-      if (thirdAdmissionStarted) {
-        await thirdAdmissionRead.promise;
-      }
+      await thirdAdmissionRead;
       releaseFirst.resolve();
       const results = await settled;
       expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);

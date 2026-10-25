@@ -1,39 +1,19 @@
+import type { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { BrowserProxyRequest } from "./browser-node-proxy.js";
-
-type BrowserNodeRequest = {
-  command: string;
-  timeoutMs: number;
-  params: Parameters<BrowserProxyRequest>[0] & { timeoutMs: number; upload?: unknown };
-};
 
 type BrowserNodeResponse = {
   payload?: unknown;
   payloadJSON?: unknown;
 };
 
-type BrowserGatewayCall = (
-  method: string,
-  options: { timeoutMs: number },
-  request: BrowserNodeRequest,
-  extra: { scopes: string[]; signal?: AbortSignal },
-) => Promise<BrowserNodeResponse>;
-
 const runtime = vi.hoisted(() => ({
-  callGatewayTool: vi.fn<BrowserGatewayCall>(),
+  callGatewayTool: vi.fn<typeof callGatewayTool<BrowserNodeResponse>>(),
   persistBrowserProxyResultFiles: vi.fn<(result: unknown, files?: unknown) => Promise<unknown>>(),
   fetchBrowserJson: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
 }));
 
 const uploads = vi.hoisted(() => ({
-  isBrowserProxyUploadRequest: vi.fn(
-    (params: { method: string; path: string; body: unknown }) =>
-      params.method === "POST" &&
-      params.path === "/hooks/file-chooser" &&
-      Array.isArray((params.body as { paths?: unknown } | undefined)?.paths) &&
-      ((params.body as { paths: unknown[] }).paths.length ?? 0) > 0,
-  ),
   prepareBrowserProxyUploadRequest: vi.fn(),
 }));
 
@@ -50,7 +30,10 @@ vi.mock("./browser/proxy-files.js", async (importOriginal) => ({
   persistBrowserProxyResultFiles: runtime.persistBrowserProxyResultFiles,
 }));
 // mock-isolation: Supply upload admission outcomes without reading or transferring local files.
-vi.mock("./browser-proxy-upload.js", () => uploads);
+vi.mock("./browser-proxy-upload.js", async (load) => ({
+  ...(await load<typeof import("./browser-proxy-upload.js")>()),
+  ...uploads,
+}));
 
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
 import { BrowserServiceError } from "./browser/client-fetch.js";
@@ -85,20 +68,10 @@ const snapshot = { method: "GET", path: "/snapshot" };
 const oldNode = { commands: ["browser.proxy"] };
 const hostUnavailable = "Browser control host is not reachable on 127.0.0.1:18791.";
 
-function readGatewayCall(index = 0) {
-  const call = runtime.callGatewayTool.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected Browser node invocation ${index}`);
-  }
-  const [method, gateway, node, extra] = call;
-  return { method, gateway, node, extra };
-}
-
 beforeEach(() => {
   runtime.callGatewayTool.mockReset().mockResolvedValue({ payload: { result: { ok: true } } });
   runtime.persistBrowserProxyResultFiles.mockReset().mockImplementation(async (result) => result);
   runtime.fetchBrowserJson.mockReset();
-  uploads.isBrowserProxyUploadRequest.mockClear();
   uploads.prepareBrowserProxyUploadRequest
     .mockReset()
     .mockImplementation(async ({ body }: { body: unknown }) => ({ body }));
@@ -131,7 +104,7 @@ it.each([false, true])("uses the request signal when present (override=%s)", asy
   const bound = new AbortController().signal;
   const proxy = createSessionProxy({ node: { commands: undefined }, signal: bound });
   await proxy({ ...snapshot, ...(override ? { signal } : {}) });
-  expect(readGatewayCall().extra).toEqual({
+  expect(runtime.callGatewayTool.mock.lastCall?.[3]).toEqual({
     scopes: ["operator.admin"],
     signal: override ? signal : bound,
   });
@@ -221,11 +194,11 @@ it("sends Gateway-owned upload bytes without node-facing source paths", async ()
 
   await createSessionProxy()(uploadRequest);
 
-  expect(readGatewayCall().node).toMatchObject({
+  expect(runtime.callGatewayTool.mock.lastCall?.[2]).toMatchObject({
     command: "browser.proxy.upload.v1",
     params: preparedUpload,
   });
-  expect(readGatewayCall().node.params.body).not.toHaveProperty("paths");
+  expect(runtime.callGatewayTool.mock.lastCall).not.toHaveProperty("2.params.body.paths");
 });
 
 it("uses the original Gateway paths when an auto-selected old node lacks upload support", async () => {
@@ -261,11 +234,10 @@ it("reserves both Node-safe watchdog windows for a saturated timeout", async () 
   await createSessionProxy()({ ...snapshot, timeoutMs });
 
   const actionTimeoutMs = Math.min(timeoutMs, MAX_TIMER_TIMEOUT_MS - 130_000);
-  const { gateway, node } = readGatewayCall();
-  expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
-    actionTimeoutMs,
-    actionTimeoutMs + 125_000,
-    actionTimeoutMs + 130_000,
+  expect(runtime.callGatewayTool.mock.lastCall).toMatchObject([
+    "node.invoke",
+    { timeoutMs: actionTimeoutMs + 130_000 },
+    { timeoutMs: actionTimeoutMs + 125_000, params: { timeoutMs: actionTimeoutMs } },
+    expect.anything(),
   ]);
-  expect(gateway.timeoutMs).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
 });

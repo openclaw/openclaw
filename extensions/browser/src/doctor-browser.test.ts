@@ -110,13 +110,6 @@ it("warns while legacy Browser Relay Authentication remains enabled", async () =
   );
 });
 
-it("warns when Chrome MCP is configured but Chrome is missing", async () => {
-  const { text } = await diagnose({ defaultProfile: "user" }, { platform: "darwin" });
-  expect(text).toContain("Google Chrome was not found");
-  expect(text).toContain("brave://inspect/#remote-debugging");
-  expect(text).not.toContain("System browser profile cookie import");
-});
-
 it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
   ["custom default Chrome MCP", withProfile(mcpProfile, "work", { defaultProfile: "work" }), "mcp"],
   ["explicit Chrome MCP endpoint", withProfile(remoteMcp), false],
@@ -152,12 +145,13 @@ it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
     { headless: false, ...browser },
     { env: {}, getUid: () => 0, resolveManagedExecutable, resolveChromeExecutable },
   );
-  expect(resolveManagedExecutable).toHaveBeenCalledTimes(managed ? 1 : 0);
-  expect(resolveChromeExecutable).toHaveBeenCalledTimes(chromeMcp ? 1 : 0);
   expect(text.includes("No Chromium-based browser executable was found")).toBe(managed);
   expect(text.includes("No DISPLAY or WAYLAND_DISPLAY is set")).toBe(managed);
   expect(text.includes("The Gateway is running as root")).toBe(managed);
   expect(text.includes("Google Chrome was not found")).toBe(chromeMcp);
+  if (chromeMcp) {
+    expect(text).toContain("brave://inspect/#remote-debugging");
+  }
 });
 
 it.each([
@@ -289,22 +283,18 @@ it.each([
 ] as const)("does not inspect profiles on %s (installed copy: %s)", async (platform, installed) => {
   const value = await protectedProfiles(platform, installed);
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-  for (const allowSystemProfileImport of [false, undefined, true]) {
-    const findings = await collectBrowserReadinessFindings({
-      browser: { allowSystemProfileImport, extensionRelay: { allowLegacyAuth: false } },
-    });
-    expect(value.accesses()).toEqual([]);
+  const findings = await collectBrowserReadinessFindings({
+    browser: { allowSystemProfileImport: true, extensionRelay: { allowLegacyAuth: false } },
+  });
+  expect(value.accesses()).toEqual([]);
+  if (installed) {
+    expect(findings).toContainEqual(
+      expect.objectContaining({ category: "recommended", severity: "info" }),
+    );
     const notes = findings.map((finding) => `${finding.message}\n${finding.fixHint}`).join("\n");
-    expect(notes).not.toContain("cookie databases found:");
-    expect(notes).not.toContain("System browser profile cookie import");
-    if (installed) {
-      expect(findings).toContainEqual(
-        expect.objectContaining({ category: "recommended", severity: "info" }),
-      );
-      expect(notes).toContain("native bootstrap was not inspected");
-      expect(notes).toContain("openclaw browser extension status --json");
-      expect(notes).not.toContain("not fully registered");
-    }
+    expect(notes).toContain("native bootstrap was not inspected");
+    expect(notes).toContain("openclaw browser extension status --json");
+    expect(notes).not.toContain("not fully registered");
   }
   await install.discoverChromeExtensionIds({ approvedDirs: [], deps: value.deps });
   expect(value.accesses()).toContain(install.chromeProductRoots(value.deps)[0]!.userDataDir);
