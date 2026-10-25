@@ -1,6 +1,8 @@
 // Add --list-filter-churn to --scenario memory-soak --mixed-rpc to rotate sidebar/search filters.
 // --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
+// Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
+// foreground session its own managed worktree, read/grep its README, and cycle list searches.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -91,6 +93,7 @@ const { values } = parseArgs({
     "worker-baseline-dir": { type: "string" },
     "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
+    "worktree-tool-churn": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
     "stress-session-store": { type: "boolean", default: false },
@@ -557,6 +560,14 @@ if (values["stress-session-store"] && !values["stress-tools"]) {
   throw new Error("--stress-session-store requires --stress-tools");
 }
 if (
+  values["worktree-tool-churn"] &&
+  (!soakScenario || !values["stress-tools"] || !values["mixed-rpc"] || historyTurns > 0)
+) {
+  throw new Error(
+    "--worktree-tool-churn requires memory-soak --stress-tools --mixed-rpc without seeded history",
+  );
+}
+if (
   values["operator-access-policy"] &&
   (scenario !== "chat.send" || !values["stress-tools"] || runCount !== 1 || listIntervalMs !== 0)
 ) {
@@ -971,6 +982,8 @@ if (values["mixed-rpc"] && fixtureSessionCount < 1) {
   throw new Error("--mixed-rpc requires retained fixture sessions for chat.history");
 }
 let stressWorktree: string | undefined;
+const worktreeToolRoots = new Map<number, string>();
+const worktreeToolSearches = new Map<string, number>();
 let diffControlOriginal: string | undefined;
 if (values["stress-tools"] || values["mixed-rpc"] || values["attempt-setup-image"]) {
   if (!isRecord(project) || typeof project.path !== "string") {
@@ -2046,7 +2059,7 @@ const mock = createServer((req, res) => {
           (toolResult) =>
             typeof toolResult.output !== "string" ||
             !toolResult.output.includes(
-              values["attempt-setup-image"]
+              values["attempt-setup-image"] || values["worktree-tool-churn"]
                 ? "# Synthetic project "
                 : "Synthetic allocation benchmark tool result.",
             ) ||
@@ -2152,6 +2165,12 @@ const mock = createServer((req, res) => {
       let reasoningReplayKey = toolOutput?.call_id;
       if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
+        const toolWorktree = values["worktree-tool-churn"]
+          ? worktreeToolRoots.get(index)
+          : stressWorktree;
+        if (values["worktree-tool-churn"] && !toolWorktree) {
+          throw new Error("Synthetic foreground turn has no owned worktree");
+        }
         const items = toolPaths.map((toolPath, toolIndex) => {
           const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}`;
           currentCohort.toolCallIds.add(callId);
@@ -2176,9 +2195,13 @@ const mock = createServer((req, res) => {
                     awaitResults: true,
                     code:
                       storeCode +
-                      `json(await read({ path: ${JSON.stringify(toolPath)} }));\n` +
-                      `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(stressWorktree)} });\n` +
-                      `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(stressWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
+                      `json(await read({ path: ${JSON.stringify(values["worktree-tool-churn"] && toolWorktree ? path.join(toolWorktree, "README.md") : toolPath)} }));\n` +
+                      `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(toolWorktree)} });\n` +
+                      `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(toolWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
+                      (values["worktree-tool-churn"]
+                        ? `const match = await exec({ command: "grep -n 'Synthetic project' README.md", workdir: ${JSON.stringify(toolWorktree)} });\n` +
+                          'if (match.exitCode !== 0 || !match.aggregated.includes("Synthetic project")) throw new Error("Synthetic worktree grep failed");\n'
+                        : "") +
                       'return "synthetic-code-exec-verified";',
                   }
                 : { path: toolPath },
@@ -2669,7 +2692,7 @@ if (values["dashboard-rpc"] && Array.isArray(fixture.projectWorktrees)) {
     });
   }
 }
-function bindConnectedOptionsWorktree(target: (typeof diffTargets)[number], created: unknown) {
+function readManagedWorktree(created: unknown): string {
   if (
     !isRecord(created) ||
     !isRecord(created.entry) ||
@@ -2677,15 +2700,19 @@ function bindConnectedOptionsWorktree(target: (typeof diffTargets)[number], crea
     typeof created.entry.worktree.id !== "string" ||
     typeof created.entry.sessionRoot !== "string"
   ) {
-    throw new Error("Connected GitHub options require a session-owned managed worktree");
+    throw new Error("Synthetic session requires a session-owned managed worktree");
   }
   const worktree = realpathSync(created.entry.sessionRoot);
   if (
     !worktree.startsWith(`${realpathSync(root)}${path.sep}`) ||
     !readFileSync(path.join(worktree, ".git"), "utf8").startsWith("gitdir: ")
   ) {
-    throw new Error("Connected GitHub worktree must be linked and inside the synthetic fixture");
+    throw new Error("Managed worktree must be linked and inside the synthetic fixture");
   }
+  return worktree;
+}
+function bindConnectedOptionsWorktree(target: (typeof diffTargets)[number], created: unknown) {
+  const worktree = readManagedWorktree(created);
   target.worktree = worktree;
   target.original = readFileSync(path.join(worktree, "README.md"), "utf8");
 }
@@ -4453,11 +4480,11 @@ try {
           displayName: "Synthetic native subagent parent",
         });
       }
-      for (const key of keys) {
+      for (const [keyIndex, key] of keys.entries()) {
         if (historyTurns) {
           continue;
         }
-        await rpc(client, "sessions.create", {
+        const created = await rpc(client, "sessions.create", {
           key,
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["activity-summaries"] ||
@@ -4466,12 +4493,19 @@ try {
             ? {}
             : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
-          ...(values["attempt-setup-image"]
+          ...(values["attempt-setup-image"] || values["worktree-tool-churn"]
             ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
             : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast child",
         });
+        if (values["worktree-tool-churn"]) {
+          const worktree = readManagedWorktree(created);
+          if ([...worktreeToolRoots.values()].includes(worktree)) {
+            throw new Error("Synthetic foreground sessions must own distinct worktrees");
+          }
+          worktreeToolRoots.set(keyIndex + 1, worktree);
+        }
         await rpc(client, "sessions.reset", { key });
       }
     }
@@ -5469,12 +5503,20 @@ try {
                       target.worktree,
                     );
                   } else {
-                    const listFilter = values["list-filter-churn"]
-                      ? listFilterShapes[
-                          (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
-                            listFilterShapes.length
-                        ]
+                    const search = values["worktree-tool-churn"]
+                      ? Math.floor(poll / mixedRpcMethods.length) % 2 === 0
+                        ? "Synthetic"
+                        : "investigation"
                       : undefined;
+                    // Worktree churn keeps its fixed search fixtures when both presets are selected.
+                    const listFilter = search
+                      ? { archived: "all", search }
+                      : values["list-filter-churn"]
+                        ? listFilterShapes[
+                            (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
+                              listFilterShapes.length
+                          ]
+                        : undefined;
                     const page = await rpc(
                       client,
                       method,
@@ -5496,9 +5538,14 @@ try {
                       page.sessions.length !== page.count ||
                       (page.count === 0 &&
                         !values["list-profile-reference"] &&
-                        (!listFilter || Object.keys(listFilter).length === 0))
+                        (search !== undefined ||
+                          !listFilter ||
+                          Object.keys(listFilter).length === 0))
                     ) {
                       throw new Error("concurrent sessions.list did not return the requested page");
+                    }
+                    if (search) {
+                      worktreeToolSearches.set(search, (worktreeToolSearches.get(search) ?? 0) + 1);
                     }
                   }
                   const ended = performance.now();
@@ -6397,6 +6444,18 @@ try {
         }
       : {}),
     stressTools: values["stress-tools"],
+    worktreeToolChurn: values["worktree-tool-churn"],
+    ...(values["worktree-tool-churn"]
+      ? {
+          worktreeTools: {
+            sessions: [...worktreeToolRoots].map(([index, worktree]) => ({
+              sessionKey: keys[index - 1],
+              worktree,
+            })),
+            successfulListSearches: Object.fromEntries(worktreeToolSearches),
+          },
+        }
+      : {}),
     stressSessionStore: values["stress-session-store"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
