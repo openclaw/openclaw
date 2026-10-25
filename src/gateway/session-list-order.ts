@@ -8,6 +8,24 @@ import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 
 export type SessionEntryPair = [string, SessionEntry];
 
+export function sessionEntryInsertionIndex(
+  entries: SessionEntryPair[],
+  pair: SessionEntryPair,
+  sortBy: SessionsListParams["sortBy"],
+): number {
+  let lo = 0,
+    hi = entries.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (compareSessionEntryPairs(entries[mid]!, pair, sortBy) < 0) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
 export function compareSessionEntryPairs(
   a: SessionEntryPair,
   b: SessionEntryPair,
