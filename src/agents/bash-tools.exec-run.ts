@@ -193,6 +193,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     get description() {
       return describeExecTool({
         hasCronTool: defaults?.hasCronTool === true,
+        fileWriteTools: defaults?.fileWriteToolAvailabilityRef?.value,
         autoReview: defaults?.mode === "auto",
       });
     },

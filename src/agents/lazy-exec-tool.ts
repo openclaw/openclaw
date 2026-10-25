@@ -11,7 +11,7 @@ import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
-import { describeExecTool } from "./bash-tools.descriptions.js";
+import { dedicatedFileWriteTools, describeExecTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import {
   createExecCompletionSchema,
@@ -45,6 +45,7 @@ export function createLazyExecTool(
     sessionId: defaults?.sessionId,
   });
   const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
+  const fileWriteToolAvailabilityRef = defaults?.fileWriteToolAvailabilityRef ?? {};
   const execSchema = createExecSchema(defaults);
   const execCompletionSchema = createExecCompletionSchema(defaults);
   let loadedTool: LoadedExecTool | undefined;
@@ -53,7 +54,10 @@ export function createLazyExecTool(
     loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
       loadedTool = withInstallationTarget(installationTarget, () =>
         createExecTool(
-          withExecRequestOwners({ ...defaults, processToolAvailabilityRef }, requestOwners),
+          withExecRequestOwners(
+            { ...defaults, processToolAvailabilityRef, fileWriteToolAvailabilityRef },
+            requestOwners,
+          ),
         ),
       );
       return loadedTool;
@@ -73,6 +77,7 @@ export function createLazyExecTool(
           describeExecTool({
             hasCronTool: defaults?.hasCronTool === true,
             hasProcessTool: processToolAvailabilityRef.value,
+            fileWriteTools: fileWriteToolAvailabilityRef.value,
             autoReview: defaults?.mode === "auto",
           })
         );
@@ -99,6 +104,7 @@ export function createLazyExecTool(
       prepareBeforeNormalization: true,
       prepare: (_tool, callableTools) => {
         processToolAvailabilityRef.value = callableTools.has("process");
+        fileWriteToolAvailabilityRef.value = dedicatedFileWriteTools(callableTools);
       },
       executionSchema: presentation?.parameters ? undefined : () => execExecutionSchema,
     },
