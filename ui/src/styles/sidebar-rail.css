@@ -26,7 +26,7 @@
   min-height: 0;
   padding: 8px 4px;
   gap: 8px;
-  border-inline-end: var(--shell-divider-size) solid var(--resize-handle-rest-color);
+  border-inline-end: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
 }
 
 .sidebar-rail__views,
