@@ -51,7 +51,7 @@ function buildPlan(overrides: Partial<Parameters<typeof buildAgentRuntimePlan>[0
 
 type PreparedHandle = ProviderRuntimePluginHandle & { modelId: string; prepared: true };
 function preparedHandle(
-  plugin: PreparedHandle["plugin"],
+  prepareExtraParams?: NonNullable<PreparedHandle["plugin"]>["prepareExtraParams"],
   overrides: Partial<PreparedHandle> = {},
 ): PreparedHandle {
   return {
@@ -59,7 +59,9 @@ function preparedHandle(
     modelId: "gpt-5.4",
     prepared: true,
     workspaceDir: "/tmp/openclaw-runtime-plan",
-    plugin,
+    plugin: prepareExtraParams
+      ? { id: overrides.provider ?? "openai", label: "Fixture", auth: [], prepareExtraParams }
+      : undefined,
     ...overrides,
   };
 }
@@ -68,15 +70,9 @@ describe("AgentRuntimePlan", () => {
   afterEach(() => resetConfigRuntimeState());
 
   it("defers default transport extra params until they are read", () => {
-    const prepareProviderExtraParamsMock = vi.fn(() => undefined);
-    const providerRuntimeHandle = preparedHandle({
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
-      prepareExtraParams: prepareProviderExtraParamsMock,
-    });
+    const prepareExtraParams = vi.fn(() => undefined);
     const plan = buildPlan({
-      providerRuntimeHandle,
+      providerRuntimeHandle: preparedHandle(prepareExtraParams),
       preparedAuthPlan: {
         providerForAuth: "openai",
         authProfileProviderForAuth: "openai",
@@ -85,38 +81,32 @@ describe("AgentRuntimePlan", () => {
       },
     });
 
-    expect(prepareProviderExtraParamsMock).not.toHaveBeenCalled();
+    expect(prepareExtraParams).not.toHaveBeenCalled();
     expect(plan.transport.extraParams).toMatchObject({
       parallel_tool_calls: true,
       text_verbosity: "low",
     });
-    expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
-    expect(prepareProviderExtraParamsMock).toHaveBeenCalledWith(
+    expect(prepareExtraParams).toHaveBeenCalledTimes(1);
+    expect(prepareExtraParams).toHaveBeenCalledWith(
       expect.objectContaining({ auth: { mode: "oauth", authFlow: "test-subscription" } }),
     );
     void plan.transport.extraParams;
-    expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
+    expect(prepareExtraParams).toHaveBeenCalledTimes(1);
   });
 
   it("keeps prepared extra params within their provider generation and attempt", () => {
     const config = { agents: { defaults: { params: { temperature: 0.1 } } } };
-    const buildOwnedPlan = (owner: string) => {
-      const providerRuntimeHandle = preparedHandle(
-        {
-          id: "fixture-provider",
-          label: "Fixture",
-          auth: [],
-          prepareExtraParams: ({ extraParams }) => ({ ...extraParams, owner }),
-        },
-        { provider: "fixture-provider", modelId: "fixture-model", workspaceDir: undefined },
-      );
-      return buildAgentRuntimePlan({
+    const buildOwnedPlan = (owner: string) =>
+      buildAgentRuntimePlan({
         config,
         provider: "fixture-provider",
         modelId: "fixture-model",
-        providerRuntimeHandle,
+        providerRuntimeHandle: preparedHandle(({ extraParams }) => ({ ...extraParams, owner }), {
+          provider: "fixture-provider",
+          modelId: "fixture-model",
+          workspaceDir: undefined,
+        }),
       });
-    };
     const first = buildOwnedPlan("first");
     expect(first.transport.extraParams).toEqual({ temperature: 0.1, owner: "first" });
     const replacement = buildOwnedPlan("replacement");
@@ -166,8 +156,7 @@ describe("AgentRuntimePlan", () => {
   it("keeps OpenClaw-owned tool-schema normalization reachable from the plan", () => {
     const plan = buildPlan({ model: apiModel });
     const normalized = plan.tools.normalize([createParameterFreeTool()] as never);
-    expect(normalized).toHaveLength(1);
-    expect(normalized[0]?.name).toBe("ping");
+    expect(normalized).toMatchObject([{ name: "ping" }]);
     expect(normalized[0]?.parameters).toStrictEqual({});
   });
 

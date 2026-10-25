@@ -29,13 +29,27 @@ import {
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
   preparedAgentRuntimeProfileAttemptHasCandidate,
+  type PreparedAgentRuntimeAuthAttempt,
 } from "./prepare-auth.js";
 import { prepareAuthFixture } from "./prepare-auth.test-support.js";
+import type { AgentRuntimeAuthPlan } from "./types.js";
 
 const { prepare, preparePlan, expectAuthError } = createPreparationFixture(prepareAuthFixture);
 type Params = Parameters<typeof prepare>[0];
 const xaiKey = (key: string) => createApiKeyCredential("xai", key);
 const pair = () => ({ "openai:platform": apiKey(), "openai:chatgpt": oauth() });
+const directSource = (evidence: "synthetic" | "environment" | "provider-config") =>
+  ({ kind: "direct", evidence, authorization: "declared" }) as const;
+const expectedDirectAttempt = (
+  plan: AgentRuntimeAuthPlan,
+  requiresPriorProfileAttempt: boolean,
+): PreparedAgentRuntimeAuthAttempt => ({
+  kind: "direct",
+  plan,
+  allowAuthProfileFallback: false,
+  requiresPriorProfileAttempt,
+});
+const codexLogin = { ...platform, ...codexHarness, harnessAuthBootstrap: "harness" } as const;
 
 // Provider-hook behavior is covered by its owner suites.
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -120,7 +134,7 @@ it.each([
         baseUrl: "http://192.168.178.122:11434",
       }),
     }),
-    { credentialSource: { kind: "direct", evidence: "synthetic", authorization: "declared" } },
+    { credentialSource: directSource("synthetic") },
   ],
 ] satisfies [string, () => Params, object][])("%s", (_name, fixture, expected) => {
   expect(preparePlan(fixture())).toMatchObject(expected);
@@ -159,9 +173,7 @@ it.each([
   [
     "official authored routes reject unvalidated native auth",
     () => ({
-      ...platform,
-      ...codexHarness,
-      harnessAuthBootstrap: "harness",
+      ...codexLogin,
       allowHarnessAuthProfileForwarding: false,
       config: openAIConfig({
         auth: "api-key",
@@ -226,9 +238,7 @@ it.each([
 it("does not defer identity-only login to native Codex", () => {
   expect(() =>
     prepareAgentRuntimeAuth({
-      ...platform,
-      ...codexHarness,
-      harnessAuthBootstrap: "harness",
+      ...codexLogin,
       authProfileStore: authStore(
         oneProfile("openai:identity", oauth({ authFlow: "chatgpt-identity" })),
       ),
@@ -342,13 +352,8 @@ it("keeps a pinned pending OAuth fence ahead of siblings", () => {
 });
 
 it("defers ambiguous routes to native Codex auth", () => {
-  const plan = preparePlan({ ...subscription, ...codexHarness, harnessAuthBootstrap: "harness" });
-  expect({
-    harnessAuthProvider: plan.harnessAuthProvider,
-    modelRoute: plan.modelRoute,
-    credentialSource: plan.credentialSource,
-    deferredRouteSupport: plan.deferredRouteSupport,
-  }).toEqual({
+  const plan = preparePlan({ ...codexLogin, ...subscription });
+  expect(plan).toMatchObject({
     harnessAuthProvider: "openai",
     modelRoute: undefined,
     credentialSource: undefined,
@@ -454,38 +459,22 @@ it.each(["profile", "secret-ref"] as const)(
       });
       expect(attempts).toEqual([
         { kind: "profile", profileId: id, plan },
-        {
-          kind: "direct",
-          allowAuthProfileFallback: false,
-          requiresPriorProfileAttempt: true,
-          plan: expect.objectContaining({
+        expectedDirectAttempt(
+          expect.objectContaining({
             forwardedAuthProfileId: undefined,
             selectedAuthMode: "api-key",
             modelRoute: expect.objectContaining(apiRoute),
-            credentialSource: {
-              kind: "direct",
-              evidence: "provider-config",
-              authorization: "declared",
-            },
+            credentialSource: directSource("provider-config"),
           }),
-        },
+          true,
+        ),
       ]);
-      expect(attempts.map((a) => a.plan.credentialSource)).toEqual([
-        { kind: "profile" },
-        { kind: "direct", evidence: "provider-config", authorization: "declared" },
-      ]);
+      expect(plan.credentialSource).toEqual({ kind: "profile" });
     } else {
-      expect(attempts).toEqual([
-        {
-          kind: "direct",
-          plan,
-          allowAuthProfileFallback: false,
-          requiresPriorProfileAttempt: false,
-        },
-      ]);
+      expect(attempts).toEqual([expectedDirectAttempt(plan, false)]);
       expect(plan).toMatchObject({
         forwardedAuthProfileId: undefined,
-        credentialSource: { kind: "direct", evidence: "environment", authorization: "declared" },
+        credentialSource: directSource("environment"),
         modelRoute: { baseUrl: "https://api.openai.com/v1" },
       });
       const serialized = JSON.stringify(plan.credentialSource);

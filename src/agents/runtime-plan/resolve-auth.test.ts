@@ -68,7 +68,7 @@ function resolveModelAuth(
   return resolvePreparedRuntimeModelAuth({ model: platformModel, cfg: {}, ...params });
 }
 function expectAuth(params: Parameters<typeof resolveModelAuth>[0]) {
-  return expect(resolveModelAuth(params));
+  return expect(resolveModelAuth({ secretSentinels: true, ...params }));
 }
 type AttemptParams = Parameters<typeof resolvePreparedRuntimeAuthAttempts<Model, string>>[0];
 function resolveAttempts(
@@ -87,6 +87,19 @@ function resolveAttempts(
 const firstId = "openai:first";
 const backupId = "openai:backup";
 const candidates = [firstId, backupId];
+const candidateStore = (
+  first: AuthProfileStore["profiles"][string],
+  backup: AuthProfileStore["profiles"][string] = apiKey("backup-key"),
+) => authStore({ [firstId]: first, [backupId]: backup });
+const selectedPlan = (
+  subscription: boolean,
+  overrides: Partial<AgentRuntimeAuthPlan> = {},
+): AgentRuntimeAuthPlan => ({
+  ...authProvider,
+  selectedAuthMode: subscription ? "token" : "api_key",
+  modelRoute: subscription ? subscriptionRoute : platformRoute,
+  ...overrides,
+});
 const candidatePlan = (overrides: Partial<AgentRuntimeAuthPlan> = {}) =>
   makeProfilePlan(firstId, { forwardedAuthProfileCandidateIds: candidates, ...overrides });
 const backupResult = {
@@ -189,7 +202,6 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     await expectAuth({
       plan: makeProfilePlan(firstId, { forwardedAuthProfileSource: "user" }),
       store: authStore({ [firstId]: apiKey("codex-app-server") }),
-      secretSentinels: true,
     }).resolves.toMatchObject({
       auth: { profileId: firstId },
       plan: {
@@ -201,26 +213,19 @@ describe("resolvePreparedRuntimeModelAuth", () => {
   });
 
   it("keeps a failed explicit SecretRef terminal across prepared profile candidates", async () => {
-    const store = authStore({
-      [firstId]: {
-        type: "api_key",
-        provider: "openai",
-        keyRef: {
-          source: "env",
-          provider: "default",
-          id: "OPENCLAW_TEST_MISSING_PREPARED_AUTH",
-        },
+    const store = candidateStore({
+      type: "api_key",
+      provider: "openai",
+      keyRef: {
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_TEST_MISSING_PREPARED_AUTH",
       },
-      [backupId]: apiKey("backup-key"),
     });
 
     await expectAuth({
-      plan: candidatePlan({
-        selectedAuthMode: "api_key",
-        modelRoute: platformRoute,
-      }),
+      plan: candidatePlan(selectedPlan(false)),
       store,
-      secretSentinels: true,
     }).rejects.toMatchObject({
       code: "SECRET_SURFACE_UNAVAILABLE",
       ownerKind: "account",
@@ -233,7 +238,6 @@ describe("resolvePreparedRuntimeModelAuth", () => {
       plan: { ...authProvider, selectedAuthMode: "token", modelRoute: subscriptionRoute },
       model: subscriptionModel,
       store: authStore({ [firstId]: apiKey() }),
-      secretSentinels: true,
     }).rejects.toThrow('No API key found for provider "openai"');
   });
 
@@ -252,11 +256,7 @@ describe("resolvePreparedRuntimeModelAuth", () => {
           : "configured-platform-key";
     vi.stubEnv("OPENAI_API_KEY", source === "env" ? key : "");
     const result = expectAuth({
-      plan: {
-        ...authProvider,
-        selectedAuthMode: mode,
-        modelRoute: subscription ? subscriptionRoute : platformRoute,
-      },
+      plan: selectedPlan(subscription, { selectedAuthMode: mode }),
       model,
       cfg:
         source === "config"
@@ -272,7 +272,6 @@ describe("resolvePreparedRuntimeModelAuth", () => {
             ? oauth({ access: "subscription-token", refresh: "refresh-token" })
             : token(),
       }),
-      secretSentinels: true,
     });
     await result.resolves.toMatchObject({
       auth: {
@@ -293,26 +292,20 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     async (kind) => {
       const changed = kind === "changed-class";
       const mode = changed ? "token" : "api-key";
-      const store = authStore({
-        [firstId]: changed
+      const store = candidateStore(
+        changed
           ? apiKey("platform-key")
           : oauth({
               access: "expired-access",
               refresh: "expired-refresh",
               expires: Date.now() - 60_000,
             }),
-        [backupId]: changed
-          ? token("subscription-token", Date.now() + 60_000)
-          : apiKey("backup-key"),
-      });
+        changed ? token("subscription-token", Date.now() + 60_000) : apiKey("backup-key"),
+      );
       await expectAuth({
-        plan: candidatePlan({
-          selectedAuthMode: changed ? "token" : "api_key",
-          modelRoute: changed ? subscriptionRoute : platformRoute,
-        }),
+        plan: candidatePlan(selectedPlan(changed)),
         model: changed ? subscriptionModel : platformModel,
         store,
-        secretSentinels: true,
       }).resolves.toMatchObject({
         auth: { ...backupResult.auth, mode },
         plan: { ...backupResult.plan, selectedAuthMode: mode },
@@ -321,10 +314,7 @@ describe("resolvePreparedRuntimeModelAuth", () => {
   );
 
   it.each([false, true])("rechecks prepared candidates after cooldown (all: %s)", async (all) => {
-    const store = authStore({
-      [firstId]: apiKey("first-key"),
-      [backupId]: apiKey("backup-key"),
-    });
+    const store = candidateStore(apiKey("first-key"));
     const plan = candidatePlan(
       all ? {} : { selectedAuthMode: "api_key", modelRoute: platformRoute },
     );
@@ -338,7 +328,7 @@ describe("resolvePreparedRuntimeModelAuth", () => {
         },
       ]),
     );
-    const resolution = expectAuth({ plan, store, secretSentinels: true });
+    const resolution = expectAuth({ plan, store });
     if (all) {
       await resolution.rejects.toThrow("temporarily unavailable");
     } else {

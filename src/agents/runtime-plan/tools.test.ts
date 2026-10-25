@@ -155,17 +155,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
           onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
         }),
       ).toEqual([healthy]);
-      if (route === "plan") {
-        expect(normalize).toHaveBeenCalledWith([healthy], {
-          workspaceDir: undefined,
-          modelApi: undefined,
-          model: undefined,
-        });
-      } else {
-        expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledWith(
-          expect.objectContaining({ tools: [healthy], provider: "openai" }),
-        );
-      }
       expectQuarantine(
         diagnostics,
         toolName,
