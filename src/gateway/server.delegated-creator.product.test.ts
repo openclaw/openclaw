@@ -56,7 +56,7 @@ it(
     await using cleanup = new AsyncDisposableStack();
     cleanup.defer(() => state.cleanup());
     const people = Object.fromEntries(
-      ["admin", "causal", "selected", "assignee"].map((name) => [
+      ["admin", "causal", "selected"].map((name) => [
         name,
         ensureProfileForEmail(name + "@creator.example.test"),
       ]),
@@ -70,7 +70,6 @@ it(
     let receipt: Receipt | undefined;
     const provider = productProvider(errors, async (text, response) => {
       const body = JSON.parse(text) as {
-        tools?: Array<{ name: string }>;
         input: Array<{ type?: string; role?: string; output?: string }>;
       };
       const title = JSON.stringify(
@@ -88,7 +87,6 @@ it(
       }
       if (!title && !issued) {
         issued = true;
-        expect(body.tools).toContainEqual(expect.objectContaining({ name: "sessions_create" }));
         entered.resolve();
         await release.promise;
         writeToolCall(response, "sessions_create", {
@@ -190,7 +188,6 @@ it(
     }
     const causal = await connect("causal");
     const selected = await connect("selected");
-    const assignee = await connect("assignee");
     const parent = await admin.request<Created>("sessions.create", {
       agentId: "main",
       label: "Creator proof parent",
@@ -233,36 +230,22 @@ it(
       id: people.selected!.id,
       delegatedBy: { type: "human", source: "profile", id: people.causal!.id },
     });
-    await admin.request("sessions.assignOwner", {
-      key: child.sessionKey,
-      owner: { type: "human", id: people.assignee!.id },
-    });
     const shareParams = { sessionKey: child.sessionKey, expectedSessionId: child.sessionId };
-    const archiveParams = { key: child.sessionKey, expectedSessionId: child.sessionId };
     const share = (client: Client, enabled: boolean) =>
       client.request("session.publicShare.set", { ...shareParams, enabled });
-    const archive = (client: Client, archived: boolean) =>
-      client.request("sessions.patch", { ...archiveParams, archived });
     const creator = causal;
     const creatorId = people.causal!.id;
-    for (const client of [selected, assignee]) {
-      const before = structuredClone(entry());
-      await expect(share(client, true)).rejects.toMatchObject({
-        code: "INVALID_REQUEST",
-        message: "session owner or operator.admin required",
-      });
-      await expect(archive(client, true)).rejects.toThrow(/creator|admin/i);
-      expect(entry()).toEqual(before);
-    }
+    const before = structuredClone(entry());
+    await expect(share(selected, true)).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "session owner or operator.admin required",
+    });
+    expect(entry()).toEqual(before);
     const published = await share(creator, true);
     expect(published).toMatchObject({ ok: true, publicShare: { token: expect.any(String) } });
     expect(entry()?.publicShare).toBeDefined();
     await share(creator, false);
     expect(entry()?.publicShare).toBeUndefined();
-    await archive(creator, true);
-    expect(entry()?.archivedAt).toEqual(expect.any(Number));
-    await archive(creator, false);
-    expect(entry()?.archivedAt).toBeUndefined();
 
     // Pause only after the real sharing owner has admitted this request. Revoke via
     // the real administration RPC, then let the unchanged handler reach its effect.

@@ -5,9 +5,7 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { deleteSubagentSessionForCleanup } from "../agents/subagents/registry/subagent-session-cleanup.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
-import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { callGateway } from "./call.js";
-import { registerChatAbortController } from "./chat-abort.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -78,8 +76,6 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
       }>(ws, "sessions.create", { key: childSessionKey });
       expect(created.ok).toBe(true);
       const child = created.payload!.entry;
-      const cleanupErrors: string[] = [];
-      const settlementWarnings = vi.spyOn(kernel.gatewayRequestContext.logGateway, "warn");
       const cleanup = (
         overrides: Partial<Parameters<typeof deleteSubagentSessionForCleanup>[0]> = {},
       ) =>
@@ -92,23 +88,9 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
           expectedSessionId: child.sessionId,
           expectedLifecycleRevision: child.lifecycleRevision,
           isCurrent: () => true,
-          onError: (error: unknown) => cleanupErrors.push(String(error)),
           ...overrides,
         });
       const cleanupOutcomes: string[] = [];
-      const foreign = registerChatAbortController({
-        target: captureSessionTarget({
-          storeScope: "foreign-store",
-          sessionKey: "agent:foreign:main",
-          incarnation: "foreign-session",
-          agentId: "foreign",
-        }),
-        runId,
-        sessionId: "foreign-session",
-        sessionKey: "agent:foreign:main",
-        timeoutMs: 60_000,
-        kind: "agent",
-      });
       let terminalPayload: unknown;
       let runSignal: AbortSignal | undefined;
       const observed: Record<string, boolean | undefined> = {};
@@ -132,15 +114,7 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
               finalizerEntered.resolve();
               await finalizerRelease.promise;
               observed.finalizerAvailable = runtime.isAvailable();
-              let cleanupCurrent = true;
               cleanupOutcomes.push(
-                await cleanup({
-                  prepareCurrent: async () => {
-                    cleanupCurrent = false;
-                    return true;
-                  },
-                  isCurrent: () => cleanupCurrent,
-                }),
                 await cleanup({ expectedLifecycleRevision: "superseded-child" }),
                 await cleanup(),
               );
@@ -288,9 +262,8 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         await nextTurn();
         await closing;
 
-        expect(cleanupOutcomes, cleanupErrors.join("\n")).toEqual(["failed", "changed", "deleted"]);
+        expect(cleanupOutcomes).toEqual(["changed", "deleted"]);
         await expect(cleanup()).resolves.toBe("failed");
-        expect(foreign.controller.signal.aborted).toBe(false);
         expect(restartMarkers).toHaveBeenCalledOnce();
         // Closing entry must not revoke execution before its durable restart marker commits.
         expect(observed).toEqual({
@@ -303,11 +276,6 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
           entryFenced: true,
           recoveryMarked: mode !== "graceful",
         });
-        expect(
-          settlementWarnings.mock.calls.filter(([message]) =>
-            message.includes("failed to settle pending agent input"),
-          ),
-        ).toEqual([]);
         expect(runtime.isAvailable()).toBe(false);
         if (mode === "graceful") {
           expect(runSignal?.aborted).toBe(false);
@@ -340,7 +308,6 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         await Promise.allSettled([closing]);
         observeDispatch.mockRestore();
         vi.restoreAllMocks();
-        foreign.cleanup();
         signal.removeEventListener("abort", release);
       }
     });

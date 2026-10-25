@@ -1,17 +1,12 @@
 // Exercise notification ownership through real Gateway reload/replacement and provider HTTP.
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
 import path from "node:path";
-import { json } from "node:stream/consumers";
 import { describe, expect, it, vi } from "vitest";
 import {
   listenLoopback,
   closeHttpServer,
 } from "../../test/helpers/gateway-integration-fixtures.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -23,12 +18,14 @@ import { decodeSessionStateNoticeContextKey } from "../sessions/session-state-no
 import { createDeferredCore } from "../shared/deferred.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { writeToolCallResponse } from "./gateway-provider-fixture.test-support.js";
 import {
   createGatewayConfigPath,
   removeGatewayTempHome,
   resetGatewayTestState,
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
+import { productProvider } from "./server.chat-product.test-support.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -46,73 +43,45 @@ async function startProvider() {
   let notice = createDeferredCore<ProviderRequest>();
   let spawn: Receipt | undefined;
   let spawnRequested = false;
-  const server = createServer((request, response) => {
-    void (async () => {
-      const body = (await json(request)) as ProviderRequest;
-      requests.push(body);
-      const input = JSON.stringify(body.input);
-      const title = input.includes("Generate a concise session title");
-      const isNotice = Boolean(
-        spawn &&
-        input.includes(spawn.childSessionKey) &&
-        input.includes("Reconcile before acting:"),
-      );
-      const output = body.input.find(
-        (item) => item.type === "function_call_output" && item.call_id === "call_spawn",
-      )?.output;
-      if (output) {
-        spawn = JSON.parse(output) as Receipt;
-      }
-      if (!title && !isNotice && !spawnRequested) {
-        spawnRequested = true;
-        const item = {
-          type: "function_call",
-          id: "fc_spawn",
-          call_id: "call_spawn",
-          name: "sessions_spawn",
-          arguments: JSON.stringify({
-            task: `Return CHILD-DONE. ${WORKER}`,
-            visible: true,
-            mode: "run",
-            expectsCompletionMessage: false,
-          }),
-        };
-        writeOpenAiResponsesSse(response, [
-          { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-          {
-            type: "response.function_call_arguments.delta",
-            item_id: item.id,
-            output_index: 0,
-            delta: item.arguments,
-          },
-          { type: "response.output_item.done", output_index: 0, item },
-          {
-            type: "response.completed",
-            response: {
-              id: "resp_spawn",
-              status: "completed",
-              output: [item],
-              usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-            },
-          },
-        ]);
-      } else {
-        writeOpenAiResponsesText(response, {
-          text: title ? "Store lifecycle proof" : isNotice ? "NOTICE-RECEIVED" : "CHILD-DONE",
-          messageId: `msg_${requests.length}`,
-          responseId: `resp_${requests.length}`,
-        });
-      }
-      if (isNotice) {
-        notice.resolve(body);
-      }
-    })().catch((error: unknown) => {
-      errors.push(error);
-      if (!response.headersSent) {
-        response.writeHead(500);
-      }
-      response.end();
-    });
+  const server = productProvider(errors, (raw, response) => {
+    const body = JSON.parse(raw) as ProviderRequest;
+    requests.push(body);
+    const input = JSON.stringify(body.input);
+    const title = input.includes("Generate a concise session title");
+    const isNotice = Boolean(
+      spawn && input.includes(spawn.childSessionKey) && input.includes("Reconcile before acting:"),
+    );
+    const output = body.input.find(
+      (item) => item.type === "function_call_output" && item.call_id === "call_spawn",
+    )?.output;
+    if (output) {
+      spawn = JSON.parse(output) as Receipt;
+    }
+    if (!title && !isNotice && !spawnRequested) {
+      spawnRequested = true;
+      const item = {
+        type: "function_call",
+        id: "fc_spawn",
+        call_id: "call_spawn",
+        name: "sessions_spawn",
+        arguments: JSON.stringify({
+          task: `Return CHILD-DONE. ${WORKER}`,
+          visible: true,
+          mode: "run",
+          expectsCompletionMessage: false,
+        }),
+      };
+      writeToolCallResponse(response, item, "resp_spawn", 1, 1);
+    } else {
+      writeOpenAiResponsesText(response, {
+        text: title ? "Store lifecycle proof" : isNotice ? "NOTICE-RECEIVED" : "CHILD-DONE",
+        messageId: `msg_${requests.length}`,
+        responseId: `resp_${requests.length}`,
+      });
+    }
+    if (isNotice) {
+      notice.resolve(body);
+    }
   });
   const origin = await listenLoopback(server);
   return {
