@@ -27,10 +27,7 @@ import { isSessionRunActiveForKey } from "../../sessions/session-controller.quer
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { stopSubagentsForRequester } from "./abort-operation.js";
 import { getAbortMemory, setAbortMemory } from "./abort-primitives.js";
-import {
-  addSubagentFixture,
-  type SubagentRunFixture,
-} from "./abort-subagent-registry.test-support.js";
+import { addSubagentFixture } from "./abort-subagent-registry.test-support.js";
 import { registerAbortAcpCases } from "./abort.acp.cases.js";
 import { registerAbortDetectionCases } from "./abort.detection.cases.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
@@ -190,9 +187,11 @@ describe("abort handling", () => {
     storePath: string,
     requesterSessionKey: string,
     childSessionKey: string,
-    overrides: Partial<SubagentRunFixture> & Pick<SubagentRunFixture, "runId">,
+    runId: string,
+    createdAt = Date.now(),
   ) {
     return addSubagentFixture({
+      runId,
       childSessionKey,
       childAgentId: "main",
       sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
@@ -200,8 +199,7 @@ describe("abort handling", () => {
       requesterDisplayKey: requesterSessionKey,
       task: "stop child",
       cleanup: "keep",
-      createdAt: Date.now(),
-      ...overrides,
+      createdAt,
     });
   }
 
@@ -283,7 +281,7 @@ describe("abort handling", () => {
     });
     cfg.commands = { ownerAllowFrom: ["telegram:123"] };
     queue();
-    await addChild(storePath, sessionKey, childKey, { runId: "bare-stop-child-run" });
+    await addChild(storePath, sessionKey, childKey, "bare-stop-child-run");
     const hook = vi.fn();
     registerInternalHook("command:stop", hook);
     onTestFinished(() => unregisterInternalHook("command:stop", hook));
@@ -393,7 +391,7 @@ describe("abort handling", () => {
       return persistence.promise;
     });
     queue();
-    await addChild(storePath, sessionKey, childKey, { runId: "slow-child-run" });
+    await addChild(storePath, sessionKey, childKey, "slow-child-run");
     const child = createActiveAbortOperation(cfg, childKey, childKey, "slow-child-run");
     const resultPromise = stop();
     await persistenceStarted.promise;
@@ -499,25 +497,16 @@ describe("abort handling", () => {
     const sessionKey = "telegram:persistence-failure-parent";
     const firstChildKey = "agent:main:subagent:persistence-failure-first";
     const secondChildKey = "agent:main:subagent:persistence-failure-second";
-    const { root, storePath, cfg } = await createAbortConfig({
-      sessionIdsByKey: {
-        [sessionKey]: "persistence-failure-parent",
-        [firstChildKey]: "run-persistence-failure-first",
-        [secondChildKey]: "run-persistence-failure-second",
-      },
-    });
+    const childSessions = {
+      [firstChildKey]: "run-persistence-failure-first",
+      [secondChildKey]: "run-persistence-failure-second",
+    };
+    const { root, storePath, cfg } = await storedSession(sessionKey, childSessions);
     const createdAt = Date.now();
-    for (const [runId, childKey] of [
-      ["run-persistence-failure-first", firstChildKey],
-      ["run-persistence-failure-second", secondChildKey],
-    ] as const) {
-      await addChild(storePath, sessionKey, childKey, {
-        runId,
-        createdAt,
-      });
+    for (const [childKey, runId] of Object.entries(childSessions)) {
+      await addChild(storePath, sessionKey, childKey, runId, createdAt);
     }
-    const children = [firstChildKey, secondChildKey].map((childSessionKey) => {
-      const sessionId = loadSessionEntry({ storePath, sessionKey: childSessionKey })!.sessionId;
+    const children = Object.entries(childSessions).map(([childSessionKey, sessionId]) => {
       const child = createActiveAbortOperation(cfg, childSessionKey, sessionId, sessionId);
       enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey: childSessionKey });
       return child;

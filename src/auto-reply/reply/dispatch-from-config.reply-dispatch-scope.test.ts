@@ -213,35 +213,23 @@ let runAfterReplyOperationClear: typeof import("../../sessions/session-controlle
 let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
 
 const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
-type PendingFinal = Extract<
-  NonNullable<Parameters<typeof createDispatchMemorySession>[0]["pendingFinalDelivery"]>,
-  { kind: "replayable" }
->;
-
-function pendingFinalDelivery(
-  text: string,
-  overrides: Partial<Pick<PendingFinal, "createdAt" | "context" | "deliveries" | "intentId">> = {},
-) {
+function pendingFinalDelivery(text: string, state: "prepared" | "delivered" = "prepared") {
   return {
     kind: "replayable" as const,
     text,
     createdAt: 1,
     intentId: "intent-1",
-    deliveries: [{ id: "delivery-1", state: "prepared" as const }],
-    ...overrides,
+    deliveries: [{ id: "delivery-1", state }],
   };
 }
 
-function pendingFinalReply(
-  text: string,
-  overrides: { deliveryId?: string; intentId?: string } = {},
-): ReplyPayload {
+function pendingFinalReply(text: string): ReplyPayload {
   return setReplyPayloadMetadata(
     { text },
     {
       pendingFinalDeliveryCompletion: {
-        deliveryId: overrides.deliveryId ?? "delivery-1",
-        intentId: overrides.intentId ?? "intent-1",
+        deliveryId: "delivery-1",
+        intentId: "intent-1",
         sessionId: "session-1",
         ...dispatchMemorySessionScope,
       },
@@ -420,48 +408,37 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(replyResolver).toHaveBeenCalledOnce();
   });
 
-  async function dispatchPastStalledHook(params: {
-    pending: ReturnType<typeof pendingFinalDelivery>;
-    replies: ReplyPayload[];
-    stalledIndex: number;
-  }) {
+  it("clears pending final delivery when a later queued final succeeds", async () => {
     vi.useFakeTimers();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    const memory = await createPendingSession(params.pending);
+    const memory = await createPendingSession(pendingFinalDelivery("durable reply"));
     const hookStarted = createDeferred();
     const deliver = vi.fn().mockResolvedValue(undefined);
     let hookCalls = 0;
     const dispatcher = createReplyDispatcher({
       deliver,
       beforeDeliver: (payload) => {
-        if (++hookCalls === params.stalledIndex) {
+        if (++hookCalls === 1) {
           hookStarted.resolve();
           return new Promise<never>(() => {});
         }
         return payload;
       },
     });
-    const result = dispatchInMemory(memory, dispatcher, params.replies, {
-      ...createHookCtx(),
-      InputProvenance: { kind: "internal_system" },
-    });
+    const result = dispatchInMemory(
+      memory,
+      dispatcher,
+      [{ text: "first" }, pendingFinalReply("durable reply")],
+      { ...createHookCtx(), InputProvenance: { kind: "internal_system" } },
+    );
     await hookStarted.promise;
     await vi.advanceTimersByTimeAsync(15_000);
     await result;
-    return { deliver, entry: memory.read() };
-  }
-
-  it("clears pending final delivery when a later queued final succeeds", async () => {
-    const { deliver, entry } = await dispatchPastStalledHook({
-      pending: pendingFinalDelivery("durable reply"),
-      replies: [{ text: "first" }, pendingFinalReply("durable reply")],
-      stalledIndex: 1,
-    });
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ text: "durable reply" }),
       expect.objectContaining({ kind: "final" }),
     );
-    expect(entry?.pendingFinalDelivery).toBeUndefined();
+    expect(memory.read()?.pendingFinalDelivery).toBeUndefined();
   });
 
   const createNoSendFailure = (retryable = true) =>
@@ -501,9 +478,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     async (state) => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
       const memory = await createPendingSession(
-        pendingFinalDelivery("policy-suppressed reply", {
-          deliveries: [{ id: "delivery-1", state }],
-        }),
+        pendingFinalDelivery("policy-suppressed reply", state),
       );
       const deliver = vi.fn().mockResolvedValue(undefined);
       const dispatcher = createReplyDispatcher({

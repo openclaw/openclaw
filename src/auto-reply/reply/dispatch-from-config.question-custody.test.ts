@@ -364,10 +364,8 @@ describe("question custody", () => {
           expect.objectContaining({ text: expect.stringContaining("still open") }),
         );
         await expectPendingQuestionAnswerClaimable(fixture.operation.key, true);
-        expect(broker.get({ id: questionId }).question).toMatchObject({
-          status: "pending",
-          answers: undefined,
-        });
+        expect(broker.get({ id: questionId }).question).toMatchObject({ status: "pending" });
+        expect(broker.get({ id: questionId }).question.answers).toBeUndefined();
         expect(onResolved).not.toHaveBeenCalled();
         expect(onResumed).not.toHaveBeenCalled();
         expect(fixture.cancel).not.toHaveBeenCalled();
@@ -643,8 +641,9 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     expect(nextDispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(nextReply);
     expect(processedEvents).toMatchObject([
       { messageId: "1", outcome: "skipped", reason: "session-directive-rejected" },
-      { messageId: "2", outcome: "completed", reason: undefined },
+      { messageId: "2", outcome: "completed" },
     ]);
+    expect(processedEvents[1]?.reason).toBeUndefined();
   });
 
   it.each<[string, ReplyPayload[] | undefined, string?, boolean?]>([
@@ -711,7 +710,9 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
         { replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState } },
       );
 
-      expect(processedEvents).toMatchObject([{ outcome, reason, error: undefined }]);
+      expect(processedEvents).toMatchObject([{ outcome }]);
+      expect(processedEvents[0]?.reason).toBe(reason);
+      expect(processedEvents[0]?.error).toBeUndefined();
     },
   );
 });

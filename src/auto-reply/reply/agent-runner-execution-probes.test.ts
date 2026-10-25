@@ -71,6 +71,23 @@ function createFallbackSelection(probe = createProbe()) {
   });
 }
 
+function storedProbe(entry: SessionEntry, followupRun = createProbeRun(), sessionKey = "main") {
+  const store: Record<string, SessionEntry> = { [sessionKey]: entry };
+  return {
+    store,
+    followupRun,
+    execute: (overrides: Partial<AgentTurnParams> = {}) =>
+      execute(
+        { followupRun },
+        { sessionKey, activeSessionStore: store, getActiveSessionEntry: () => entry, ...overrides },
+      ),
+  };
+}
+
+function routeResult(text: string, provider: string, model: string) {
+  return createRunResult(text, { agentMeta: { provider, model } });
+}
+
 function recheck(run: ReturnType<typeof createFollowupRun>["run"], entry: SessionEntry) {
   return resolveRunAfterAutoFallbackPrimaryProbeRecheck({ run, entry, sessionKey: "main" });
 }
@@ -196,26 +213,16 @@ describe("executeAgentTurn: primary probe routing", () => {
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
     });
-    const activeSessionStore = { [sessionKey]: sessionEntry };
     const staleAutoEntry = createFallbackSelection();
-    const followupRun = createProbeRun();
+    const fixture = storedProbe(sessionEntry, createProbeRun(), sessionKey);
     state.runWithModelFallbackMock.mockImplementationOnce(runFallbackCandidate);
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "user model" }],
-      meta: {
-        agentMeta: {
-          provider: "openai",
-          model: "gpt-5.4",
-        },
-      },
-    });
-
-    await execute(
-      { followupRun },
-      { sessionKey, activeSessionStore, getActiveSessionEntry: () => staleAutoEntry },
+    state.runEmbeddedAgentMock.mockResolvedValueOnce(
+      routeResult("user model", "openai", "gpt-5.4"),
     );
 
-    expect(followupRun.run).toMatchObject({
+    await fixture.execute({ getActiveSessionEntry: () => staleAutoEntry });
+
+    expect(fixture.followupRun.run).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",
       requestedRouteResolution: "raw",
@@ -223,8 +230,8 @@ describe("executeAgentTurn: primary probe routing", () => {
       authProfileIdSource: "user",
       modelOverrideSource: "user",
     });
-    expect(followupRun.run.autoFallbackPrimaryProbe).toBeUndefined();
-    expect(activeSessionStore[sessionKey]).toMatchObject({
+    expect(fixture.followupRun.run.autoFallbackPrimaryProbe).toBeUndefined();
+    expect(fixture.store[sessionKey]).toMatchObject({
       ...selection,
       modelOverrideSource: "user",
     });
@@ -236,13 +243,12 @@ describe("executeAgentTurn: primary probe routing", () => {
       authProfileOverride: "google:fallback",
       authProfileOverrideSource: "user",
     });
-    const run = createFollowupRun().run;
-    run.provider = "anthropic";
-    run.model = "claude-sonnet-4-6";
-    run.hasSessionModelOverride = true;
-    run.modelOverrideSource = "auto";
-    run.hasAutoFallbackProvenance = true;
-    run.autoFallbackPrimaryProbe = probe;
+    const { run } = createProbeRun({
+      hasSessionModelOverride: true,
+      modelOverrideSource: "auto",
+      hasAutoFallbackProvenance: true,
+      autoFallbackPrimaryProbe: probe,
+    });
 
     const rechecked = recheck(run, sessionEntry);
     expect(rechecked).toMatchObject({
@@ -269,7 +275,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       authProfileOverride: probe.fallbackAuthProfileId,
       authProfileOverrideSource: "auto" as const,
     };
-    const activeSessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const fixture = storedProbe(sessionEntry, followupRun, sessionKey);
     const exhaustedResult = {
       payloads: [{ text: "Terminal tool summary", isError: true }],
       meta: {
@@ -311,14 +317,10 @@ describe("executeAgentTurn: primary probe routing", () => {
     }));
     const { replyOperation, failMock } = createMockReplyOperation();
     const completeMock = vi.spyOn(replyOperation, "complete");
-    const result = await execute(
-      { followupRun, replyOperation },
-      {
-        sessionKey,
-        activeSessionStore,
-        getActiveSessionEntry: () => activeSessionStore[sessionKey],
-      },
-    );
+    const result = await fixture.execute({
+      replyOperation,
+      getActiveSessionEntry: () => fixture.store[sessionKey],
+    });
 
     expect(result).toMatchObject({
       kind: "success",
@@ -327,7 +329,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       fallbackModel: probe.model,
       runResult: exhaustedResult,
     });
-    expect(activeSessionStore[sessionKey]).toMatchObject({
+    expect(fixture.store[sessionKey]).toMatchObject({
       providerOverride: probe.fallbackProvider,
       modelOverride: probe.fallbackModel,
       modelOverrideSource: "auto",
@@ -501,15 +503,15 @@ describe("executeAgentTurn: primary probe routing", () => {
     const probe = createProbe();
     const sessionKey = "concurrent-user-switch-during-probe";
     const staleAutoEntry = createFallbackSelection();
-    const activeSessionStore = { [sessionKey]: staleAutoEntry };
     const followupRun = createProbeRun({ sessionKey, autoFallbackPrimaryProbe: probe });
+    const fixture = storedProbe(staleAutoEntry, followupRun, sessionKey);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = await params.run(
         params.provider,
         params.model,
         initialFallbackAttemptOptions(params),
       );
-      activeSessionStore[sessionKey] = {
+      fixture.store[sessionKey] = {
         sessionId: "session",
         updatedAt: 2,
         providerOverride: "openai",
@@ -523,26 +525,13 @@ describe("executeAgentTurn: primary probe routing", () => {
         attempts: [],
       };
     });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "primary recovered" }],
-      meta: {
-        agentMeta: {
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-        },
-      },
-    });
-
-    await execute(
-      { followupRun },
-      {
-        sessionKey,
-        activeSessionStore,
-        getActiveSessionEntry: () => staleAutoEntry,
-      },
+    state.runEmbeddedAgentMock.mockResolvedValueOnce(
+      routeResult("primary recovered", "anthropic", "claude-sonnet-4-6"),
     );
 
-    expect(activeSessionStore[sessionKey]).toMatchObject({
+    await fixture.execute();
+
+    expect(fixture.store[sessionKey]).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       modelOverrideSource: "user",
@@ -566,8 +555,8 @@ describe("executeAgentTurn: primary probe routing", () => {
       modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
     });
     const sessionKey = "live-switch-probe";
-    const activeSessionStore = { [sessionKey]: sessionEntry };
     const followupRun = createProbeRun({ sessionKey, autoFallbackPrimaryProbe: probe });
+    const fixture = storedProbe(sessionEntry, followupRun, sessionKey);
     const attemptedProviders: Array<string | undefined> = [];
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       attemptedProviders.push(params.provider);
@@ -589,24 +578,11 @@ describe("executeAgentTurn: primary probe routing", () => {
           authProfileIdSource: "auto",
         });
       })
-      .mockResolvedValueOnce({
-        payloads: [{ text: "switched" }],
-        meta: {
-          agentMeta: {
-            provider: "openai",
-            model: "gpt-5.4",
-          },
-        },
-      });
+      .mockResolvedValueOnce(routeResult("switched", "openai", "gpt-5.4"));
 
-    const result = await execute(
-      { followupRun },
-      {
-        sessionKey,
-        activeSessionStore,
-        getActiveSessionEntry: () => activeSessionStore[sessionKey],
-      },
-    );
+    const result = await fixture.execute({
+      getActiveSessionEntry: () => fixture.store[sessionKey],
+    });
 
     expect(result.kind).toBe("success");
     expect(attemptedProviders).toEqual(["anthropic", "openai"]);

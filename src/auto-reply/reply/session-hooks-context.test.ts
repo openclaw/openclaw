@@ -516,100 +516,89 @@ describe("session hook context wiring", () => {
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps rollover hooks alive after their requester closes", async ({ signal }) => {
-    const completedHooks: string[] = [];
-    const releases = holdRolloverHooks((name) =>
-      trackAsyncWork(() => {
-        completedHooks.push(name);
-      }),
-    );
-    const sessionKey = "agent:main:telegram:direct:held-rollover";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-held-rollover",
-      sessionKey,
-      sessionId: "old-held-session",
-    });
-    const owner = await import("../../process/gateway-work-admission.js");
-    const continuations = [
-      vi.spyOn(owner, "runWithGatewayIndependentRootWorkContinuation"),
-      vi.spyOn(owner, "runWithGatewayDetachedWorkContinuation"),
-    ];
-    const joinContinuations = () =>
-      Promise.allSettled(
-        continuations.flatMap((spy) =>
-          spy.mock.results
-            .filter((result) => result.type === "return")
-            .map((result) => result.value),
-        ),
+  it.for([false, true])(
+    "keeps rollover hooks alive after their requester closes (restart drain: %s)",
+    async (draining, { signal }) => {
+      const completedHooks: string[] = [];
+      const releases = holdRolloverHooks((name) =>
+        trackAsyncWork(() => {
+          completedHooks.push(name);
+        }),
       );
-    const parent = new AsyncWorkScope();
-    const admission = tryBeginGatewayRootWorkAdmission("test:reply-rollover");
-    if (!admission) {
-      throw new Error("Expected parent root admission");
-    }
-    try {
-      await admission.run(() => parent.run(() => startSession(storePath, sessionKey, "/reset")));
-      expect(releases).toHaveLength(3);
-      expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "reset" });
-      admission.release();
-      await withinTest(parent.drain(), signal);
-      expect(getActiveGatewayRootWorkCount()).toBe(3);
-      expect(completedHooks).toEqual([]);
-      for (const release of releases) {
-        release();
+      const sessionKey = "agent:main:telegram:direct:held-rollover";
+      const sessionId = "old-held-session";
+      const { storePath } = await createStoredSession({
+        prefix: "held-rollover",
+        sessionKey,
+        sessionId,
+      });
+      const owner = await import("../../process/gateway-work-admission.js");
+      const continuations = [
+        vi.spyOn(owner, "runWithGatewayIndependentRootWorkContinuation"),
+        vi.spyOn(owner, "runWithGatewayDetachedWorkContinuation"),
+      ];
+      const joinContinuations = () =>
+        Promise.allSettled(
+          continuations.flatMap((spy) =>
+            spy.mock.results
+              .filter((result) => result.type === "return")
+              .map((result) => result.value),
+          ),
+        );
+      const parent = new AsyncWorkScope();
+      const admission = tryBeginGatewayRootWorkAdmission("test:reply-rollover");
+      if (!admission) {
+        throw new Error("Expected parent root admission");
       }
-      await withinTest(joinContinuations(), signal);
-      expect(completedHooks.toSorted()).toEqual(["end", "start"]);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    } finally {
-      for (const release of releases) {
-        release();
+      try {
+        await admission.run(() =>
+          parent.run(async () => {
+            if (draining) {
+              markGatewayRestartDraining();
+            }
+            await startSession(storePath, sessionKey, draining ? "/new" : "/reset");
+            await vi.waitFor(() => expect(releases).toHaveLength(3));
+            expect(getActiveGatewayRootWorkCount()).toBe(4);
+          }),
+        );
+        expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledOnce();
+        expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledOnce();
+        const [ended, endContext] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+        expectFields(ended, {
+          sessionKey,
+          reason: draining ? "new" : "reset",
+          nextSessionId: sessionId,
+        });
+        expectFields(endContext, { sessionKey, agentId: "main", sessionId: ended.sessionId });
+        const [started, startContext] = requireHookCall(
+          hookRunnerMocks.runSessionStart,
+          "session_start",
+        );
+        expectFields(started, { sessionId, resumedFrom: sessionId });
+        expectFields(startContext, { sessionId: started.sessionId });
+        admission.release();
+        await withinTest(parent.drain(), signal);
+        expect(getActiveGatewayRootWorkCount()).toBe(3);
+        expect(completedHooks).toEqual([]);
+        for (const release of releases) {
+          release();
+        }
+        await withinTest(joinContinuations(), signal);
+        expect(completedHooks.toSorted()).toEqual(["end", "start"]);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        for (const release of releases) {
+          release();
+        }
+        admission.release();
+        await parent.drain();
+        await joinContinuations();
+        for (const spy of continuations) {
+          spy.mockRestore();
+        }
       }
-      admission.release();
-      await parent.drain();
-      await joinContinuations();
-      for (const spy of continuations) {
-        spy.mockRestore();
-      }
-    }
-  });
-
-  it("hands rollover hooks off after restart drain closes admission", async () => {
-    const releases = holdRolloverHooks();
-    const sessionKey = "agent:main:telegram:direct:restart-handoff";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-restart-handoff",
-      sessionKey,
-      sessionId: "old-restart-session",
-    });
-    const admission = tryBeginGatewayRootWorkAdmission();
-    expect(admission).not.toBeNull();
-
-    await admission?.run(async () => {
-      markGatewayRestartDraining();
-      await startSession(storePath, sessionKey, "/new");
-      await vi.waitFor(() => expect(releases).toHaveLength(3));
-      expect(getActiveGatewayRootWorkCount()).toBe(4);
-    });
-
-    admission?.release();
-    expect(getActiveGatewayRootWorkCount()).toBe(3);
-    for (const release of releases) {
-      release();
-    }
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [ended, endContext] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-    expectFields(ended, { sessionKey, reason: "new", nextSessionId: "old-restart-session" });
-    expectFields(endContext, { sessionKey, agentId: "main", sessionId: ended.sessionId });
-    const [started, startContext] = requireHookCall(
-      hookRunnerMocks.runSessionStart,
-      "session_start",
-    );
-    expectFields(started, { sessionId: "old-restart-session", resumedFrom: "old-restart-session" });
-    expectFields(startContext, { sessionId: started.sessionId });
-  });
+    },
+  );
 
   it.each([
     { reason: "daily", reset: { mode: "daily" }, overlap: false },
