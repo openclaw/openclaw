@@ -4,9 +4,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionRequest as sessionRpc } from "./hydration-family.test-support.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 import { ownRoster } from "./session-roster-refresh.test-support.ts";
-import { sessionRpc, patchReceipt, sessionChanged } from "./session-rpc.test-support.ts";
+import { patchReceipt, sessionChanged } from "./session-rpc.test-support.ts";
 
 function bareRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return { key, sessionId: `${key}:session`, kind: "direct", updatedAt: 10, ...fields };
