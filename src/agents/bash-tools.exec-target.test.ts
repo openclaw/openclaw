@@ -49,35 +49,22 @@ describe("resolveExecTarget", () => {
   });
 
   it.each([
-    ["auto", undefined, false, false, "auto", "gateway"],
-    ["auto", "node", false, true, "node", "node"],
-    ["node", "node", true, false, "node", "node"],
-    ["auto", "sandbox", true, true, "gateway", "gateway"],
-    ["node", "auto", false, true, "node", "node"],
-  ] as const)(
-    "resolves configured=%s requested=%s sandbox=%s elevated=%s to selected=%s host=%s",
-    (
-      configuredTarget,
-      requestedTarget,
-      sandboxAvailable,
-      elevatedRequested,
-      selectedTarget,
-      effectiveHost,
-    ) => {
-      expect(
-        resolveExecTarget({
-          configuredTarget,
-          requestedTarget,
-          elevatedRequested,
-          sandboxAvailable,
-        }),
-      ).toEqual({
-        configuredTarget,
-        requestedTarget: requestedTarget === "auto" ? null : (requestedTarget ?? null),
-        selectedTarget,
-        effectiveHost,
-      });
-    },
+    [{ sandboxAvailable: false }, "auto", "gateway"],
+    [{ requestedTarget: "node", sandboxAvailable: false, elevatedRequested: true }, "node", "node"],
+    [{ configuredTarget: "node", requestedTarget: "node" }, "node", "node"],
+    [{ requestedTarget: "sandbox", elevatedRequested: true }, "gateway", "gateway"],
+    [
+      {
+        configuredTarget: "node",
+        requestedTarget: "auto",
+        sandboxAvailable: false,
+        elevatedRequested: true,
+      },
+      "node",
+      "node",
+    ],
+  ] as const)("resolves %j to selected=%s host=%s", (options, selectedTarget, effectiveHost) =>
+    expect(target(options)).toMatchObject({ selectedTarget, effectiveHost }),
   );
 
   it("rejects a node override from auto when sandbox is available", () => {

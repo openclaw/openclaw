@@ -103,15 +103,7 @@ function requestApproval(timeoutMs: number, signal?: AbortSignal) {
       // Like the real client, the wait rejects as soon as the run's signal aborts.
       const waitSignal = (extra as { signal?: AbortSignal } | undefined)?.signal;
       return await new Promise((resolve, reject) => {
-        waitSignal?.addEventListener(
-          "abort",
-          () => {
-            // Keep the signal's own reason: the hook recognizes cancellation by identity.
-            const reason: unknown = waitSignal.reason;
-            reject(reason instanceof Error ? reason : new Error(String(reason)));
-          },
-          { once: true },
-        );
+        waitSignal?.addEventListener("abort", () => reject(waitSignal.reason), { once: true });
         void decision.promise.then(resolve);
       });
     }
@@ -129,13 +121,7 @@ function requestApproval(timeoutMs: number, signal?: AbortSignal) {
     },
     toolName: "cron",
     toolCallId: "cron-call",
-    ctx: {
-      agentId: "main",
-      sessionKey: ref.sessionKey,
-      sessionId: ref.sessionId,
-      runId: ref.runId,
-      watchdogAttempt,
-    },
+    ctx: { ...ref, agentId: "main", watchdogAttempt },
     ...(signal ? { signal } : {}),
     baseParams: { action: "add" },
   });

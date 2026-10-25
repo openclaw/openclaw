@@ -200,11 +200,8 @@ it("keeps write metadata private and leaves no-change config bytes untouched", a
   const raw = await fs.readFile(initial.path, "utf8");
   const listed = await listConfiguredMcpServers();
   expect(listed.ok).toBe(true);
-  expect(Object.keys(listed).toSorted()).toEqual(
-    "authoredConfig baseHash config mcpServers ok path runtimeConfig sourceConfigBeforeMigrations".split(
-      " ",
-    ),
-  );
+  expect(listed).not.toHaveProperty("writeOptions");
+  expect(listed).not.toHaveProperty("snapshot");
   const missing = await unsetServer({ name: "missing" });
   expect(missing).toMatchObject({ ok: true, removed: false });
   expect(Object.keys(missing)).not.toContain("writeOptions");

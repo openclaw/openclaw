@@ -125,16 +125,11 @@ it("loads session-worktree images with workspaceOnly=true", async () => {
 });
 
 it("keeps sandbox media on its bridge despite a different host session root", async () => {
-  const workspaceDir = tempDirs.make("openclaw-media-canonical-");
-  const hostRoot = tempDirs.make("openclaw-media-host-");
+  const { imagePath: hostImage, options } = await sessionFiles("host.png");
   const sandboxRoot = tempDirs.make("openclaw-media-sandbox-");
   await fs.writeFile(path.join(sandboxRoot, "screenshot.png"), png);
-  const hostImage = path.join(hostRoot, "host.png");
-  await fs.writeFile(hostImage, png);
   const tool = createMediaTool("view_image", {
-    workspaceDir,
-    cwd: hostRoot,
-    fsPolicy: { workspaceOnly: true, root: hostRoot },
+    ...options,
     sandboxRoot,
     sandboxFsBridge: createHostSandboxFsBridge(sandboxRoot),
   });
