@@ -68,6 +68,18 @@ describe("buildIMessageInboundContext presentation", () => {
 });
 
 describe("resolveIMessageInboundDecision command auth", () => {
+  it("treats a failed pairing read as an empty allowlist", async () => {
+    await expect(
+      resolveDecision({
+        allowFrom: [],
+        dmPolicy: "pairing",
+        readStoreAllowFrom: async () => {
+          throw new Error("pairing store unavailable");
+        },
+      }),
+    ).resolves.toEqual({ kind: "pairing", senderId: "+15555550123" });
+  });
+
   it("does not auto-authorize DM commands in open mode without allowlists", async () => {
     const decision = await resolveDecision({
       message: { id: 100, text: "/status" },

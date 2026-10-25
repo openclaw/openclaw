@@ -1,8 +1,25 @@
 import { DatabaseSync } from "node:sqlite";
 import type { IMessagePayload } from "./monitor/types.js";
-import { setCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+import {
+  getCachedIMessagePrivateApiStatus,
+  setCachedIMessagePrivateApiStatus,
+} from "./private-api-status.js";
 
 export const DEFAULT_SENDER = "+15550001111";
+
+export async function settleNotifications(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+export function expireCachedPrivateApiStatus(): void {
+  setCachedIMessagePrivateApiStatus(
+    "imsg",
+    { available: false, v2Ready: false, selectors: {}, rpcMethods: [] },
+    1,
+  );
+  getCachedIMessagePrivateApiStatus("imsg");
+}
 
 export function setAvailablePrivateApiMethods(rpcMethods: string[]): void {
   setCachedIMessagePrivateApiStatus("imsg", {

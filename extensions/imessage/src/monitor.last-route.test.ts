@@ -26,9 +26,11 @@ import {
   createInboundMessage,
   DEFAULT_SENDER,
   EMPTY_DISPATCH_RESULT,
+  expireCachedPrivateApiStatus,
   insertChatDbMessage,
   readChatDbMessagesAfter,
   setAvailablePrivateApiMethods,
+  settleNotifications,
   withChatDb,
   createIMessageTestRequest,
   type IMessageTestRequestResult,
@@ -41,10 +43,7 @@ import {
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./monitor/recovery-cursor.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./monitor/types.js";
-import {
-  getCachedIMessagePrivateApiStatus,
-  setCachedIMessagePrivateApiStatus,
-} from "./private-api-status.js";
+import { getCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 import type { probeIMessagePrivateApi } from "./probe.js";
 import { installIMessageConfiguredBindingRegistryForTest } from "./test-support/configured-binding.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
@@ -70,20 +69,6 @@ type WatchClientParams = {
   onClose?: (notify: (message: IMessagePayload) => void) => Promise<void>;
   afterNotify?: () => Promise<void>;
 };
-
-async function settleNotifications(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
-function expireCachedPrivateApiStatus(): void {
-  setCachedIMessagePrivateApiStatus(
-    "imsg",
-    { available: false, v2Ready: false, selectors: {}, rpcMethods: [] },
-    1,
-  );
-  getCachedIMessagePrivateApiStatus("imsg");
-}
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -1258,7 +1243,9 @@ describe("iMessage monitor last-route updates", () => {
     expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
-  it("reads current pairing state once per DM and observes the next owner write", async () => {
+  it("reads current pairing state once per DM and observes the next owner write", async ({
+    signal,
+  }) => {
     const state = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-imsg-pairing-freshness-",
@@ -1280,13 +1267,19 @@ describe("iMessage monitor last-route updates", () => {
     readChannelAllowFromStoreMock.mockImplementation(() =>
       readChannelAllowFromStore("imessage", state.env, "default"),
     );
+    const firstDispatch = createDeferred<void>();
+    const secondDispatch = createDeferred<void>();
+    for (const dispatched of [firstDispatch, secondDispatch]) {
+      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async () => {
+        dispatched.resolve();
+        return EMPTY_DISPATCH_RESULT;
+      });
+    }
     const nextSender = "+15550002222";
     await runMessageCase({
       onClose: async (notify) => {
         notify(createInboundMessage({ id: 9601, guid: "paired-first", text: "first" }));
-        await vi.waitFor(() =>
-          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1),
-        );
+        await withinTest(firstDispatch.promise, signal);
         await addSender(nextSender);
         notify(
           createInboundMessage({
@@ -1296,16 +1289,16 @@ describe("iMessage monitor last-route updates", () => {
             text: "second",
           }),
         );
-        await vi.waitFor(() =>
-          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(2),
-        );
+        await withinTest(secondDispatch.promise, signal);
       },
       monitor: { allowlist: false, imessage: { dmPolicy: "pairing", allowFrom: [] } },
     });
     expect(readChannelAllowFromStoreMock).toHaveBeenCalledTimes(2);
     expect(
-      dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.map(([params]) => params.ctx.From),
-    ).toEqual([`imessage:${DEFAULT_SENDER}`, `imessage:${nextSender}`]);
+      dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.map(
+        ([params]) => params.ctx.SenderId,
+      ),
+    ).toEqual([DEFAULT_SENDER, nextSender]);
   });
 
   it("does not stage local attachments for messages dropped by inbound policy", async () => {
