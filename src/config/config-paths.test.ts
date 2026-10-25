@@ -50,27 +50,19 @@ describe("config path own-property traversal", () => {
     ["agents.entries.worker.tools.exec.reviewer.model", "fallbacks", ["openai/gpt-4o"]],
     ["agents.defaults.pdfModel", "timeoutMs", 5000],
     ["agents.defaults.mediaModels.video", "timeoutMs", 5000],
-  ] as const)("keeps a shorthand primary when setting %s.%s", (path, member, value) => {
-    const parent = path.split(".");
-    const root: Record<string, unknown> = {};
-    setConfigValueAtPath(root, parent, "openai/gpt-4o-mini");
-    setConfigValueAtPath(root, [...parent, member], value);
-    expect(getConfigValueAtPath(root, parent)).toEqual({
-      primary: "openai/gpt-4o-mini",
-      [member]: value,
-    });
-  });
-
-  it.each(["agents.defaults.utilityModel", "agents.entries.worker.utilityModel"])(
-    "keeps utility routing disabled when adding fallbacks at %s",
-    (path) => {
+    ["agents.defaults.utilityModel", "fallbacks", ["local/backup"], ""],
+    ["agents.entries.worker.utilityModel", "fallbacks", ["local/backup"], ""],
+  ] as const)(
+    "keeps the authored primary when setting %s.%s",
+    (path, member, value, configuredPrimary) => {
+      const primary = configuredPrimary ?? "openai/gpt-4o-mini";
       const parent = path.split(".");
       const root: Record<string, unknown> = {};
-      setConfigValueAtPath(root, parent, "");
-      setConfigValueAtPath(root, [...parent, "fallbacks"], ["local/backup"]);
+      setConfigValueAtPath(root, parent, primary);
+      setConfigValueAtPath(root, [...parent, member], value);
       expect(getConfigValueAtPath(root, parent)).toEqual({
-        primary: "",
-        fallbacks: ["local/backup"],
+        primary,
+        [member]: value,
       });
     },
   );

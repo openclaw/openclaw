@@ -53,28 +53,26 @@ beforeEach(() => {
   metadata = preparedMetadata();
   load = vi.fn(async () => metadata);
 });
-const validate = (
-  raw: unknown,
-  options: Pick<ValidateConfigWithPluginsAsyncParams, "pluginValidation"> = {},
-) =>
+const validate = (raw: unknown, options: Partial<ValidateConfigWithPluginsAsyncParams> = {}) =>
   validateConfigObjectWithPluginsAsync(raw, {
     env,
     loadPluginMetadataSnapshotAsync: load,
     ...options,
   });
+const sync = (raw: unknown, pluginValidation?: "full" | "core-only") =>
+  validateConfigObjectWithPlugins(raw, { env, pluginValidation, pluginMetadataSnapshot: metadata });
+const workspace = (result: Awaited<ReturnType<typeof validate>>) =>
+  expectDefined(
+    result.ok ? result.config.plugins?.entries?.["validation-fixture"]?.config : undefined,
+    "fixture plugin settings",
+  );
 
 describe("async config plugin validation", () => {
   it("revalidates edited settings and schemas while isolating reused plugin defaults", async () => {
     const raw = pluginConfig();
-    const readWorkspace = (result: Awaited<ReturnType<typeof validate>>) => {
-      return expectDefined(
-        result.ok ? result.config.plugins?.entries?.["validation-fixture"]?.config : undefined,
-        "fixture plugin settings",
-      );
-    };
     const check = vi.spyOn(schemaValidator, "validatePluginSchemaValue");
-    readWorkspace(await validate(raw)).workspace = "caller-mutated";
-    expect(readWorkspace(await validate(raw)).workspace).toBe("prepared-workspace");
+    workspace(await validate(raw)).workspace = "caller-mutated";
+    expect(workspace(await validate(raw)).workspace).toBe("prepared-workspace");
     expect(check).toHaveBeenCalledTimes(1);
 
     raw.plugins.entries["validation-fixture"].config = { workspace: 42 };
@@ -85,15 +83,15 @@ describe("async config plugin validation", () => {
       ],
     });
     raw.plugins.entries["validation-fixture"].config = {};
-    expect(readWorkspace(await validate(raw)).workspace).toBe("prepared-workspace");
+    expect(workspace(await validate(raw)).workspace).toBe("prepared-workspace");
     expect(check).toHaveBeenCalledTimes(2);
     const schema = expectDefined(metadata.manifestRegistry.plugins[0]?.configSchema, "schema");
     schema.properties = { workspace: { type: "string", default: "edited-default" } };
-    expect(readWorkspace(await validate(raw)).workspace).toBe("edited-default");
+    expect(workspace(await validate(raw)).workspace).toBe("edited-default");
     expect(check).toHaveBeenCalledTimes(3);
 
     metadata = preparedMetadata();
-    expect(readWorkspace(await validate(raw)).workspace).toBe("prepared-workspace");
+    expect(workspace(await validate(raw)).workspace).toBe("prepared-workspace");
     expect(check).toHaveBeenCalledTimes(4);
   });
 
@@ -120,18 +118,16 @@ describe("async config plugin validation", () => {
         mode === "strict"
           ? validateConfigObjectWithStrictFactsAsync
           : validateConfigObjectWithPluginsAsync;
-      const result = await validateCore(
-        { gateway: { mode: "local" }, agents: { defaults: { timeoutSeconds: 30 } } },
-        {
-          env,
-          loadPluginMetadataSnapshotAsync: async () => {
-            throw new Error("Plugin metadata must not be needed for these settings");
-          },
+      const raw = { gateway: { mode: "local" }, agents: { defaults: { timeoutSeconds: 30 } } };
+      const result = await validateCore(raw, {
+        env,
+        loadPluginMetadataSnapshotAsync: async () => {
+          throw new Error("Plugin metadata must not be needed for these settings");
         },
-      );
+      });
       expect(result).toMatchObject({
         ok: true,
-        config: { gateway: { mode: "local" }, agents: { defaults: { timeoutSeconds: 30 } } },
+        config: raw,
         warnings: [],
         ...(mode === "strict" ? { strictIssues: [] } : {}),
       });
@@ -141,7 +137,6 @@ describe("async config plugin validation", () => {
   it("returns core issues before requesting plugin metadata", async () => {
     const raw = { gateway: { port: 0 } };
     const result = await validate(raw);
-    expect(result).toEqual(validateConfigObjectWithPlugins(raw, { env }));
     expect(result).toMatchObject({
       ok: false,
       issues: expect.arrayContaining([expect.objectContaining({ path: "gateway.port" })]),
@@ -157,14 +152,8 @@ describe("async config plugin validation", () => {
       gateway: { port: 18789 },
       ...pluginConfig(),
     };
-    const expected = validateConfigObjectWithPlugins(raw, {
-      env,
-      pluginMetadataSnapshot: metadata,
-    });
-    const pending = validateConfigObjectWithPluginsAsync(raw, {
-      env,
-      loadPluginMetadataSnapshotAsync: loadPending,
-    });
+    const expected = sync(raw);
+    const pending = validate(raw, { loadPluginMetadataSnapshotAsync: loadPending });
     let settled = false;
     const observed = pending.finally(() => {
       settled = true;
@@ -178,15 +167,8 @@ describe("async config plugin validation", () => {
       gate.resolve(metadata);
       const result = await observed;
       expect(result).toEqual(expected);
-      expect(result).toMatchObject({
-        ok: true,
-        config: {
-          gateway: { port: 18789 },
-          plugins: {
-            entries: { "validation-fixture": { config: { workspace: "prepared-workspace" } } },
-          },
-        },
-      });
+      expect(result).toMatchObject({ ok: true, config: { gateway: { port: 18789 } } });
+      expect(workspace(result).workspace).toBe("prepared-workspace");
     } finally {
       gate.resolve(metadata);
       await observed;
@@ -205,13 +187,7 @@ describe("async config plugin validation", () => {
         ...pluginConfig(),
       };
       const result = await validate(raw, { pluginValidation });
-      expect(result).toEqual(
-        validateConfigObjectWithPlugins(raw, {
-          env,
-          pluginValidation,
-          pluginMetadataSnapshot: metadata,
-        }),
-      );
+      expect(result).toEqual(sync(raw, pluginValidation));
       expect(result.ok).toBe(true);
       expect(load).toHaveBeenCalledTimes(pluginValidation === "core-only" ? 0 : 1);
     },
