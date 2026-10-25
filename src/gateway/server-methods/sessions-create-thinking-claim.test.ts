@@ -11,7 +11,10 @@ import { getReplyFromConfig } from "../../auto-reply/reply/get-reply.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { settleWorkspaceRuns } from "../server.sessions.create.projects.test-support.js";
+import {
+  settleWorkspaceRuns,
+  successfulSessionRequest,
+} from "../server.sessions.create.projects.test-support.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import {
   agentDiscoveryMock,
@@ -21,7 +24,6 @@ import {
   testState,
 } from "../test-helpers.js";
 import {
-  directSessionReq,
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
@@ -117,10 +119,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       ) {
         throw new Error(`Unexpected request: ${method}`);
       }
-      const response = await directSessionReq(method, params, requestOptions());
-      if (!response.ok) {
-        throw new Error(response.error?.message ?? `${method} failed`);
-      }
+      const payload = await successfulSessionRequest(method, params, requestOptions());
       if (method === "sessions.create") {
         order.push("create-ack");
       }
@@ -132,7 +131,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
           await releaseFirstList.promise;
         }
       }
-      return response.payload;
+      return payload;
     });
     const requests = vi.spyOn(gatewayClient, "request");
     const { gateway, emitEvent } = createGatewayHarness(gatewayClient);
@@ -180,12 +179,11 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       expect(deliveredEvents.filter(({ event }) => event === "sessions.changed")).toEqual([]);
       if (mode === "delivered-event") {
         subscribers.add("created-thinking-proof");
-        const changed = await directSessionReq(
+        await successfulSessionRequest(
           "sessions.patch",
           { key, agentId: "main", thinkingLevel: "low" },
           requestOptions(),
         );
-        expect(changed.ok).toBe(true);
         await flushPendingSessionsChangedEvents();
         expect(deliveredEvents).toContainEqual({
           event: "sessions.changed",

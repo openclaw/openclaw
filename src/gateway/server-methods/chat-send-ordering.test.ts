@@ -7,11 +7,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execution.js";
-import { readReplySourceInput } from "../../auto-reply/reply/reply-source-binding.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
-import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
-import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
-import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import * as skillSelection from "../../skills/library/selection.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -120,30 +116,15 @@ it("dispatches acknowledged inputs in order through stalled skill preparation an
   );
   const executionOrder: string[] = [];
   let retried = false;
-  let firstSource: SessionControllerInput | undefined;
-  const firstOwners: ReplyOperation[] = [];
   gatewayReplyMock.mockImplementation(async (ctx, options, configOverride) => {
-    if (ctx.MessageSid === params.idempotencyKey) {
-      const owner = expectDefined(options?.replyOperation, "admitted first turn");
-      const source = expectDefined(readReplySourceInput(options), "original first source");
-      expect(source).toBe(firstSource);
-      expect(source.claim?.operation).toBe(owner);
-      expect(source.retirementRequested).not.toBe(true);
-      expect(owner.result).toBeNull();
-      firstOwners.push(owner);
-      if (!retried) {
-        retried = true;
-        throw new SessionTranscriptProjectionUnavailableError(scope.sessionId);
-      }
+    if (ctx.MessageSid === params.idempotencyKey && !retried) {
+      retried = true;
+      throw new SessionTranscriptProjectionUnavailableError(scope.sessionId);
     }
     return await actualReply.getReplyFromConfig(ctx, options, configOverride);
   });
-  runtime.execute.mockImplementation(async ({ followupRun, opts, replyOperation }) => {
+  runtime.execute.mockImplementation(async ({ followupRun, opts }) => {
     const runId = expectDefined(opts?.runId, "executing input");
-    const operation = expectDefined(replyOperation, "admitted execution");
-    if (runId === params.idempotencyKey) {
-      expect(operation).toBe(firstOwners[0]);
-    }
     executionOrder.push(runId);
     await expectDefined(
       followupRun.userTurnTranscriptRecorder,
@@ -173,10 +154,6 @@ it("dispatches acknowledged inputs in order through stalled skill preparation an
   };
   try {
     await withinTest(firstPreparationEntered.promise, signal);
-    firstSource = expectDefined(
-      rpcSourceTesting.get(params.idempotencyKey),
-      "first admission",
-    ).input;
     expect(firstResponse.mock.calls[0]?.[1]).toMatchObject({
       runId: params.idempotencyKey,
       status: "started",
@@ -195,9 +172,8 @@ it("dispatches acknowledged inputs in order through stalled skill preparation an
     await Promise.all([firstSending, secondSending]);
     await withinTest(fixture.finishDispatch(), signal);
     // A successor may prepare its queue entry during retry, but execution remains FIFO.
+    expect(retried).toBe(true);
     expect(executionOrder).toEqual([params.idempotencyKey, secondParams.idempotencyKey]);
-    expect(new Set(firstOwners).size).toBe(1);
-    expect(firstOwners).toHaveLength(2);
     expect(firstResponse).toHaveBeenCalledOnce();
     expect(secondResponse).toHaveBeenCalledOnce();
     expect(

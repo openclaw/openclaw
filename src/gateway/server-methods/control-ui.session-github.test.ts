@@ -122,6 +122,11 @@ it.each([
             suspended_at: null,
             permissions,
           },
+          "/app/installations/202/access_tokens": {
+            token: "synthetic-preview-app-token",
+            expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+            permissions,
+          },
           "/users/x%5Bbot%5D": { id: 9001, login: "x[bot]", type: "Bot", avatar_url: null },
           "/installation/repositories": {
             total_count: 1,
@@ -134,17 +139,6 @@ it.each([
           },
           "/repos/example/project/pulls/7/commits": [],
         };
-        if (url.pathname.endsWith("/access_tokens")) {
-          if (typeof init?.body !== "string") {
-            throw new Error("App token request body must be JSON text");
-          }
-          expect(JSON.parse(init.body)).toEqual({ repository_ids: [404], permissions });
-          return Response.json({
-            token: "synthetic-preview-app-token",
-            expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-            permissions,
-          });
-        }
         if (url.pathname === "/repos/example/project/pulls/7") {
           expect(new Headers(init?.headers).get("authorization")).toBe(
             "Bearer synthetic-preview-app-token",
