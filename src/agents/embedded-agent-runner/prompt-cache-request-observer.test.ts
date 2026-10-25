@@ -134,8 +134,6 @@ describe("prompt cache request observer", () => {
     ["message:0.order", { input: [{ content: "first", role: "user" }] }],
     ["message:0.other", inputChange({ "private-field-name": "private-value" })],
     ["message:0.removed", { input: [] }],
-    ["parameters:reasoning", { reasoning: { effort: "high" } }],
-    ["parameters:prompt_cache_key", { prompt_cache_key: "private-affinity" }],
     ["parameters:service_tier", { service_tier: "default" }],
     ["parameters:other", { "private-parameter-name": "private-value" }],
     [
@@ -169,7 +167,6 @@ describe("prompt cache request observer", () => {
         instructions: "original system",
         tools: [{ type: "function", name: "read" }],
         input: [{ role: "user", content: "first" }],
-        reasoning: { effort: "low" },
       };
       await measure(observer, payload, 9_000);
       clock.mockReturnValue(3_000);

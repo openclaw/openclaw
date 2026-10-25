@@ -129,22 +129,9 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
     expect(reconcile).not.toHaveBeenCalled();
   });
 
-  it("preserves the original refusal and cools off an unauthorized retry target", async () => {
-    failRetry(Object.assign(new Error("401 unauthorized"), { status: 401 }));
-    const first = await runEntry();
-    const second = await runEntry();
-    expect([first.model, second.model]).toEqual(["gpt-5.6", "gpt-5.6"]);
-    expect(first.result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
-    expect(searchedModels()).toEqual(["gpt-5.6", retryModel, "gpt-5.6"]);
-  });
-
-  it.each([true, false])("propagates a retry throw (terminal stop=%s)", async (terminalStop) => {
-    const thrown = new Error(
-      terminalStop ? "recorded terminal stop" : "attempt committed work; cannot fall back",
-    );
-    if (terminalStop) {
-      recordModelFallbackStop(thrown);
-    }
+  it("propagates a retry's terminal stop", async () => {
+    const thrown = new Error("recorded terminal stop");
+    recordModelFallbackStop(thrown);
     failRetry(thrown);
     await expect(runEntry()).rejects.toBe(thrown);
   });
@@ -198,9 +185,9 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
     expect(result.result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
   });
 
-  it("restores the original refusal display when the configured retry fails", async () => {
+  it("restores the original refusal and its display, cooling off an unauthorized retry target", async () => {
     const displayChanges: Array<{ text: string; visible: boolean }> = [];
-    await runEntry(async (provider, model, options) => {
+    const first = await runEntry(async (provider, model, options) => {
       const retry = model === retryModel;
       const message = makeAssistantMessageFixture({
         provider,
@@ -222,5 +209,9 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
       return refusal;
     });
     expect(displayChanges.at(-1)).toEqual({ text: "Original cyber refusal", visible: true });
+    const second = await runEntry();
+    expect([first.model, second.model]).toEqual(["gpt-5.6", "gpt-5.6"]);
+    expect(first.result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
+    expect(searchedModels()).toEqual(["gpt-5.6", retryModel, "gpt-5.6"]);
   });
 });

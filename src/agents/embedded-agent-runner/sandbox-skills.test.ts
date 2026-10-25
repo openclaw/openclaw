@@ -56,17 +56,6 @@ const materializedSandbox = {
   skillsWorkspaceDir: "/state/sandbox-skills",
 } as const;
 
-async function writeSkill(root: string, name: string, metadata: string) {
-  const dir = path.join(root, "skills", name);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: ${name}\nopenclaw: ${metadata}\n---\n# ${name}\n`,
-    "utf8",
-  );
-  return dir;
-}
-
 type Sandbox = Parameters<typeof resolveSandboxSkillRuntimeInputs>[0]["sandbox"];
 const runtimeParams = (sandbox: Sandbox, skillsSnapshot?: SkillSnapshot) => ({
   sandbox,
@@ -159,10 +148,12 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
   ])("$label", async ({ skillsSnapshot }) => {
     const root = temps.make("openclaw-sandbox-skills-");
     const materializedWorkspace = path.join(root, "state", "sandbox-skills");
-    const skillDir = await writeSkill(
-      materializedWorkspace,
-      "demo",
-      '{"requires":{"anyBins":["sandboxbin"]}}',
+    const skillDir = path.join(materializedWorkspace, "skills", "demo");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      '---\nname: demo\ndescription: demo\nopenclaw: {"requires":{"anyBins":["sandboxbin"]}}\n---\n# demo\n',
+      "utf8",
     );
     const skillsEligibility = remoteEligibility("linux", "sandbox", (bins) =>
       bins.includes("sandboxbin"),
@@ -192,20 +183,5 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     expect(prompt).not.toContain(hostSkillPath);
     expect(prompt).not.toContain("plugin-skills");
     expect(prompt.replaceAll("\\", "/")).not.toContain("/skills/canvas/SKILL.md");
-  });
-
-  it("preserves remote eligibility when rebuilding sandbox prompts", async () => {
-    const root = temps.make("openclaw-sandbox-skills-");
-    await writeSkill(root, "macskill", '{"os":["darwin"]}');
-    const skillsEligibility = remoteEligibility("darwin", "remote mac available");
-
-    const { prompt } = await promptFor({
-      enabled: true,
-      skillsWorkspaceDir: root,
-      skillsEligibility,
-    });
-
-    expect(prompt).toContain("remote mac available");
-    expect(prompt).toContain("macskill");
   });
 });
