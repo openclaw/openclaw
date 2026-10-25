@@ -60,6 +60,7 @@ async function createMultiRootFixture() {
   const { snapshot } = await resolveSnapshot({
     workspaceDir: agentWorkspaceDir,
     executionWorkspaceDir,
+    skillFilter: ["middle", "project-only"],
     snapshotVersion: 1,
   });
   return { agentWorkspaceDir, executionWorkspaceDir, snapshot };
