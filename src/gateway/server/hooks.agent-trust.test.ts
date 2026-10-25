@@ -1,7 +1,6 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DeferredHookWake } from "../../cron/service/wake.js";
 import {
   captureGatewayRootWorkReleaseObserver,
   getActiveGatewayRootWorkCount,
@@ -12,8 +11,8 @@ import {
 import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-support.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import type { HookAgentDispatchPayload } from "../hooks.js";
 
-const deferHookWakeMock = vi.fn<DeferredHookWake>();
 const captureSessionEventTargetMock = vi.fn(async (agentId: string, sessionKey: string) => ({
   agentId,
   sessionKey,
@@ -30,9 +29,7 @@ const resolveAgentMainSessionKeyMock = vi.fn(
   (params: { cfg?: { session?: { mainKey?: string } }; agentId: string }) =>
     `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
 );
-const mainRosterConfig = (): OpenClawConfig => ({
-  agents: { entries: { main: {} } },
-});
+const mainRosterConfig = (): OpenClawConfig => ({ agents: { entries: { main: {} } } });
 const loadConfigMock = vi.fn(mainRosterConfig);
 const logHooksInfoMock = vi.fn();
 const logHooksWarnMock = vi.fn();
@@ -83,7 +80,6 @@ const createBroker = useSpawnBrokerTestFixture(afterEach);
 function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
   return {
     deps: {} as never,
-    deferHookWake: deferHookWakeMock,
     logHooks: {
       warn: logHooksWarnMock,
       debug: vi.fn(),
@@ -94,15 +90,11 @@ function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number }
   };
 }
 
-function buildAgentPayload(
-  name: string,
-  agentId?: string,
-): Parameters<typeof dispatcher.dispatchAgentHook>[0] {
+function buildAgentPayload(name: string): HookAgentDispatchPayload {
   return {
     message: "test message",
     name,
-    agentId,
-    effectiveAgentId: agentId ?? "main",
+    effectiveAgentId: "main",
     wakeMode: "now" as const,
     sessionKey: "session-1",
     sessionMode: "isolated" as const,
@@ -113,10 +105,7 @@ function buildAgentPayload(
   };
 }
 
-function deliveryPayload(
-  name: string,
-  accountId?: string,
-): Parameters<typeof dispatcher.dispatchAgentHook>[0] {
+function deliveryPayload(name: string, accountId?: string): HookAgentDispatchPayload {
   return {
     ...buildAgentPayload(name),
     deliver: true,
@@ -149,7 +138,7 @@ function expectFailureNotice(text: string) {
   );
 }
 
-function dispatchAgentHook(payload: Parameters<typeof dispatcher.dispatchAgentHook>[0]) {
+function dispatchAgentHook(payload: HookAgentDispatchPayload) {
   return dispatcher.dispatchAgentHook(payload);
 }
 
@@ -157,10 +146,6 @@ describe("dispatchAgentHook trust handling", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
     vi.clearAllMocks();
-    deferHookWakeMock.mockImplementation(async ({ commitGuard }) => {
-      commitGuard();
-      return { ok: true, eventOutcome: "queued" };
-    });
     loadConfigMock.mockImplementation(mainRosterConfig);
     validateExplicitMessageAccountSelectionMock.mockImplementation(
       ({ accountId }: { accountId?: unknown }) => accountId as string | undefined,

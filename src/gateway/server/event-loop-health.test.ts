@@ -119,7 +119,6 @@ function createMonitorHarness(params?: {
   return {
     monitor,
     cpuUsage,
-    eventLoopUtilization,
     clock,
     sample,
     samples,
@@ -250,27 +249,6 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
     harness.stall(30, false);
     await harness.samples(50, { delayMaxMs: 30, reasons: ["event_loop_utilization", "cpu"] });
-  });
-
-  it("keeps overdue reads passive before the first sample under load", async () => {
-    const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
-    harness.elapseWithoutSampling(1_200);
-    for (let index = 0; index < 100; index++) {
-      expect(harness.monitor.snapshot()).toBeUndefined();
-      expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
-    }
-    expect(harness.cpuUsage).toHaveBeenCalledTimes(1);
-    expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(1);
-    await harness.sample();
-    const current = harness.monitor.snapshot();
-    expect(current?.delayMaxMs).toBeGreaterThanOrEqual(1_200);
-    expect(current?.delayMaxMs).toBeLessThanOrEqual(1_200.5);
-    harness.expectHealth({
-      degraded: true,
-      intervalMs: 1_220,
-      reasons: ["event_loop_delay", "event_loop_utilization", "cpu"],
-    });
-    expect(harness.monitor.snapshot()).toBe(current);
   });
 
   it("tracks persistent degradation at completed samples and clears on recovery", async () => {

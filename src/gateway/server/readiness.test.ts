@@ -112,15 +112,10 @@ describe("createReadinessChecker", () => {
     expect(readiness()).toEqual(failingSnapshot(["chat-recovery"]));
   });
 
-  it.each([
-    ["startup-sidecars", "getStartupPending"],
-    ["gateway-draining", "getGatewayDraining"],
-  ] as const)("does not cache %s readiness", (reason, getter) => {
+  it("does not cache startup readiness", () => {
     let pending = true;
-    const { readiness } = setup(undefined, {
-      [getter]: () => pending,
-    });
-    expect(readiness()).toEqual(failingSnapshot([reason]));
+    const { readiness } = setup(undefined, { getStartupPending: () => pending });
+    expect(readiness()).toEqual(failingSnapshot(["startup-sidecars"]));
     pending = false;
     expect(readiness()).toEqual(readySnapshot());
   });

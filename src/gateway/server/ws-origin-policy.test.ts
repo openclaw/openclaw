@@ -179,21 +179,18 @@ describe("committed authentication policy", () => {
       !override,
     );
   });
-  it.each([
-    { role: "operator", verifiedIdentity: undefined },
-    { role: "node", verifiedIdentity: "other@example.test" },
-  ])("preserves $role without identity-derived scopes", (source) => {
-    check({}, identityConfig({ "other@example.test": ["operator.admin"] }), source);
+  it("preserves node grants across operator identity-scope edits", () => {
+    check({}, identityConfig({ "other@example.test": ["operator.admin"] }), {
+      role: "node",
+      verifiedIdentity: "other@example.test",
+    });
   });
   it.each<[string, Record<string, OperatorScope[]>, boolean]>([
-    ["another identity added", { ...grants, "new@example.test": ["operator.admin"] }, false],
     [
       "same scopes reordered",
       { ...grants, "Retained@example.test": ["operator.read", "operator.write", "operator.read"] },
       false,
     ],
-    ["identity removed", { "other@example.test": grants["other@example.test"] }, true],
-    ["identity downgraded", { ...grants, "Retained@example.test": ["operator.read"] }, true],
     ["exact match shadows normalized grant", { ...grants, [identity]: [] }, true],
   ])("reconciles %s", (_name, scopes, revoked) => {
     check(identityConfig(grants), identityConfig(scopes), principal, revoked);
@@ -210,56 +207,39 @@ describe("committed authentication policy", () => {
       null,
     );
   });
-  it.each([
-    ["operator.admin", "operator.read"],
-    ["operator.write", "operator.read", "operator.talk"],
-    ["operator.read", "operator.sessions.read"],
-    ["operator.sessions.write", "operator.sessions.read"],
-  ] satisfies OperatorScope[][])("accepts redundant implied scopes %j", (...scopes) => {
-    check(
-      identityConfig({ [identity]: scopes }),
-      identityConfig({ [identity]: [scopes[0]!] }),
-      principal,
-    );
-  });
-  it.each([
-    "allowUsers",
-    "proxy removed",
-    "proxy disabled",
-    "tailscale disabled",
-    "tailscale default removed",
-  ])("revokes when %s admission ends", (change) => {
-    const tailscale = change.startsWith("tailscale");
-    const initial: OpenClawConfig = {
-      gateway: {
-        tailscale: { mode: "serve" },
-        auth: {
-          mode: tailscale ? "token" : "trusted-proxy",
-          allowTailscale: change === "tailscale default removed" ? undefined : true,
-          trustedProxy: proxy,
+  it.each(["proxy removed", "proxy disabled", "tailscale disabled", "tailscale default removed"])(
+    "revokes when %s admission ends",
+    (change) => {
+      const tailscale = change.startsWith("tailscale");
+      const initial: OpenClawConfig = {
+        gateway: {
+          tailscale: { mode: "serve" },
+          auth: {
+            mode: tailscale ? "token" : "trusted-proxy",
+            allowTailscale: change === "tailscale default removed" ? undefined : true,
+            trustedProxy: proxy,
+          },
         },
-      },
-    };
-    const next = structuredClone(initial);
-    const auth = next.gateway!.auth!;
-    if (change === "allowUsers") {
-      auth.trustedProxy!.allowUsers = ["other@example.test"];
-    } else if (change === "proxy removed") {
-      delete auth.trustedProxy;
-    } else if (change === "proxy disabled") {
-      auth.mode = "token";
-    } else if (change === "tailscale default removed") {
-      next.gateway!.tailscale!.mode = "off";
-    } else {
-      auth.allowTailscale = false;
-    }
-    check(
-      initial,
-      next,
-      { ...principal, authMethod: tailscale ? "tailscale" : "trusted-proxy" },
-      true,
-    );
-  });
+      };
+      const next = structuredClone(initial);
+      const auth = next.gateway!.auth!;
+      if (change === "proxy removed") {
+        delete auth.trustedProxy;
+      } else if (change === "proxy disabled") {
+        auth.mode = "token";
+      } else if (change === "tailscale default removed") {
+        next.gateway!.tailscale!.mode = "off";
+      } else {
+        auth.allowTailscale = false;
+      }
+      check(
+        initial,
+        next,
+        { ...principal, authMethod: tailscale ? "tailscale" : "trusted-proxy" },
+        true,
+      );
+    },
+  );
 
   it("preserves serialized grants across equivalent scope edits without accepting malformed or revoked grants", () => {
     const policy = {

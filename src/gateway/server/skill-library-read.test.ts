@@ -4,20 +4,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { text as readText } from "node:stream/consumers";
 import { isDeepStrictEqual } from "node:util";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expect, it } from "vitest";
-import { WebSocket } from "ws";
-import { buildDeviceAuthPayloadV3 } from "../../../packages/gateway-client/src/device-auth.js";
 import {
   PROTOCOL_VERSION,
   type SkillsLibraryReceipt,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.js";
 import { waitForGatewayStartup } from "../../../test/helpers/gateway-startup.js";
-import {
-  acquireGatewayTestWebSocket,
-  closeGatewayTestWebSocket,
-} from "../../../test/helpers/gateway-websocket.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { prepareDirectCompactionAttempt } from "../../agents/embedded-agent-runner/direct-compaction-preparation.js";
 import {
   buildPreparedCompactionRuntime,
@@ -34,7 +29,6 @@ import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
-  signDevicePayload,
 } from "../../infra/device-identity.js";
 import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import { requestDevicePairing } from "../../infra/device-pairing.js";
@@ -55,122 +49,67 @@ import { startGatewayServer } from "../server.js";
 import { startClaimedGateway } from "../test-helpers.listener.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
 
-type Frame = {
-  type?: string;
-  id?: string;
-  event?: string;
-  ok?: boolean;
-  payload?: unknown;
-  error?: { message?: string };
-};
 const scopes = ["operator.read", "operator.write"];
 const revisionInstructions = ({ entry }: SkillsLibraryReceipt) =>
   path.join(skillLibraryRevisionDir(entry.skillId, entry.revision), "SKILL.md");
 
-function waitForFrame(ws: WebSocket, matches: (frame: Frame) => boolean): Promise<Frame> {
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timer);
-      ws.off("message", onMessage);
-      ws.off("close", onClose);
-      ws.off("error", onError);
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onClose = () => onError(new Error("Gateway closed before its RPC response"));
-    const onMessage = (data: WebSocket.RawData) => {
-      const frame = JSON.parse(rawDataToString(data)) as Frame;
-      if (matches(frame)) {
-        cleanup();
-        resolve(frame);
-      }
-    };
-    const timer = setTimeout(() => onError(new Error("Gateway fixture RPC timed out")), 45_000);
-    ws.on("message", onMessage);
-    ws.once("close", onClose);
-    ws.once("error", onError);
+// The shared client owns challenge signing, RPC correlation, and socket cleanup.
+async function connectProfile(
+  port: number,
+  email: string,
+  identityPath: string,
+  observer: Pick<Parameters<typeof acquireGatewayTestClient>[0], "onEvent" | "onClose"> = {},
+) {
+  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+  const clientName = GATEWAY_CLIENT_NAMES.CONTROL_UI;
+  const mode = GATEWAY_CLIENT_MODES.WEBCHAT;
+  const origin = "https://control.example.test";
+  const pairing = await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    role: "operator",
+    scopes,
+    clientId: clientName,
+    clientMode: mode,
+    platform: "test",
+    browserOrigin: origin,
+    silent: false,
   });
-}
-async function rpc(ws: WebSocket, method: string, params: unknown): Promise<unknown> {
-  const id = randomUUID();
-  const response = waitForFrame(ws, (frame) => frame.type === "res" && frame.id === id);
-  ws.send(JSON.stringify({ type: "req", id, method, params }));
-  const frame = await response;
-  if (!frame.ok) {
-    throw new Error(`${method}: ${JSON.stringify(frame.error)}`);
-  }
-  return frame.payload;
-}
-
-// Synthetic trusted-proxy headers stand in for human authentication. No production OAuth is used.
-async function connectProfile(port: number, email: string, identityPath: string) {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
-    headers: {
-      origin: "https://control.example.test",
-      "x-forwarded-for": "203.0.113.50",
-      "x-forwarded-proto": "https",
-      "x-forwarded-user": email,
-    },
-  });
-  const challenge = waitForFrame(ws, (frame) => frame.event === "connect.challenge");
-  void challenge.catch(() => {});
-  return await acquireGatewayTestWebSocket(ws, 10_000, async () => {
-    const frame = await challenge;
-    const nonce = (frame.payload as { nonce: string }).nonce;
-    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
-    const client = {
-      id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      version: "test",
+  expect(
+    (await approveDevicePairing(pairing.request.requestId, { callerScopes: scopes }))?.status,
+  ).toBe("approved");
+  return acquireGatewayTestClient(
+    {
+      url: `ws://127.0.0.1:${port}`,
+      origin,
+      edgeAuthHeaders: {
+        "x-forwarded-for": "203.0.113.50",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": email,
+      },
+      deviceIdentity: identity,
+      clientName,
+      mode,
+      clientVersion: "test",
       platform: "test",
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-    };
-    // Same test-only pre-pairing contract as server.auth.presence-audience.test.ts.
-    // Approval is scoped to this disposable state, not a production sign-in.
-    const pairing = await requestDevicePairing({
-      deviceId: identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-      role: "operator",
-      scopes,
-      clientId: client.id,
-      clientMode: client.mode,
-      platform: client.platform,
-      browserOrigin: "https://control.example.test",
-      silent: false,
-    });
-    expect(
-      (await approveDevicePairing(pairing.request.requestId, { callerScopes: scopes }))?.status,
-    ).toBe("approved");
-    const signedAtMs = Date.now();
-    const payload = buildDeviceAuthPayloadV3({
-      deviceId: identity.deviceId,
-      clientId: client.id,
-      clientMode: client.mode,
-      role: "operator",
-      scopes,
-      signedAtMs,
-      token: null,
-      nonce,
-      platform: client.platform,
-    });
-    await rpc(ws, "connect", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client,
       role: "operator",
       scopes,
       caps: [],
-      device: {
-        id: identity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-        signature: signDevicePayload(identity.privateKeyPem, payload),
-        signedAt: signedAtMs,
-        nonce,
-      },
-    });
-  });
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      requestTimeoutMs: 45_000,
+      ...observer,
+    },
+    {
+      timeoutMs: 10_000,
+      timeoutMessage: "Gateway fixture connect timed out",
+      closeMessage: "Gateway closed during connect",
+    },
+  );
 }
+type Client = Awaited<ReturnType<typeof connectProfile>>;
+const rpc = (client: Client, method: string, params: unknown) =>
+  client.request<unknown>(method, params, { timeoutMs: 45_000 });
 
 type PlannedCall = { id: string; name: string; args: Record<string, unknown> };
 const readCall = (
@@ -222,7 +161,10 @@ async function runProof(proof: "prepared compaction" | "chat.send") {
   // Keep repository discovery inside this synthetic workspace, not its enclosing test checkout.
   execFileSync("git", ["init", "--quiet", state.workspaceDir]);
   let gateway: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-  const sockets: WebSocket[] = [];
+  const clients: Client[] = [];
+  const settled = createDeferred();
+  void settled.promise.catch(() => {});
+  let runId: string | undefined;
   const requests: ProviderRequest[] = [];
   const outputs = new Map<string, unknown>();
   const wireCalls = new Map<string, string>();
@@ -341,14 +283,24 @@ async function runProof(proof: "prepared compaction" | "chat.send") {
         port,
         `${name}@example.test`,
         state.path(`${name}-device`, "client", "credentials.sqlite"),
+        name === "alice"
+          ? {
+              onEvent: (frame) => {
+                if (frame.event === "sessions.changed" && runId && !getAgentRunContext(runId)) {
+                  settled.resolve();
+                }
+              },
+              onClose: () => settled.reject(new Error("Gateway closed before settlement")),
+            }
+          : {},
       );
-      sockets.push(ws);
+      clients.push(ws);
       return ws;
     };
     const alice = await connect("alice");
     const bob = await connect("bob");
     const save = async (
-      ws: WebSocket,
+      ws: Client,
       slug: string,
       previous?: SkillsLibraryReceipt,
     ): Promise<SkillsLibraryReceipt> =>
@@ -379,9 +331,11 @@ async function runProof(proof: "prepared compaction" | "chat.send") {
     });
     const newer = await save(alice, "manual-guide", saved);
     const other = await save(bob, "other-guide");
-    await expect(rpc(bob, "skills.library.read", { skillId: saved.entry.skillId })).rejects.toThrow(
-      /SKILL_LIBRARY_NOT_FOUND/,
-    );
+    await expect(
+      rpc(bob, "skills.library.read", { skillId: saved.entry.skillId }),
+    ).rejects.toMatchObject({
+      details: { code: "SKILL_LIBRARY_NOT_FOUND" },
+    });
     const skillRoot = skillLibraryRevisionDir(saved.entry.skillId, saved.entry.revision);
     const instructionPath = path.join(skillRoot, "SKILL.md");
     const outside = state.path("unrelated.txt");
@@ -476,16 +430,13 @@ async function runProof(proof: "prepared compaction" | "chat.send") {
     expect(started.status).toBe("started");
     // Session settlement publishes after releasing the live run context. A completed
     // run must remain visible to its current session owner, but not another profile.
-    const settled = getAgentRunContext(started.runId)
-      ? waitForFrame(
-          alice,
-          (frame) =>
-            frame.event === "sessions.changed" && getAgentRunContext(started.runId) === undefined,
-        )
-      : Promise.resolve();
+    runId = started.runId;
+    if (!getAgentRunContext(runId)) {
+      settled.resolve();
+    }
     const [immediate, settlement] = await Promise.allSettled([
       rpc(alice, "agent.wait", { runId: started.runId, timeoutMs: 40_000 }),
-      settled,
+      withTestTimeout(settled.promise, 45_000, "Gateway settlement event timed out"),
     ]);
     expect(settlement.status).toBe("fulfilled");
     const completed = await rpc(alice, "agent.wait", {
@@ -553,8 +504,8 @@ async function runProof(proof: "prepared compaction" | "chat.send") {
   try {
     await withServer(handleProvider, run);
   } finally {
-    for (const ws of sockets) {
-      await closeGatewayTestWebSocket(ws);
+    for (const client of clients) {
+      await client.stopAndWait();
     }
     await gateway?.close({ reason: "manual library proof complete" });
     await state.cleanup();
