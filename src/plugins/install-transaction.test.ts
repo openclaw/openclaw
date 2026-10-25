@@ -29,12 +29,15 @@ function install(
 ) {
   return withPluginInstallTransactions(params, assertOwned, run);
 }
+function refuse(reason: unknown): never {
+  throw reason;
+}
 function authority(refusal: unknown = 0) {
   return {
     active: true,
     assertCurrent() {
       if (!this.active) {
-        throw refusal;
+        refuse(refusal);
       }
     },
   };
@@ -157,9 +160,7 @@ it.each(["planning", "commit", "operation"] as const)(
         return { ok: false };
       },
       {
-        beforePersistentEffect: async () => {
-          throw refusal;
-        },
+        beforePersistentEffect: async () => refuse(refusal),
       },
       () => owner.assertCurrent(),
     );
