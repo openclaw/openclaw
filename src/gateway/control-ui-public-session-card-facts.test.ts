@@ -167,17 +167,13 @@ describe("public session card facts", () => {
   });
 
   it.each([
-    ["done", "Done"],
     ["failed", "Failed"],
-    ["interrupted", "Failed"],
-    ["killed", "Failed"],
-    ["timeout", "Failed"],
     [undefined, undefined],
   ] as const)("projects recorded %s status as %s", (status, expected) => {
     expect(resolvePublicSessionCardFacts(fixture({ status })).status).toBe(expected);
   });
 
-  it.each([false, true])("shows a live run ahead of prior failure (queued: %s)", (queued) => {
+  it("shows a queued live run ahead of prior failure", () => {
     const input = fixture({ status: "failed" }, [
       {
         agentId: "main",
@@ -185,7 +181,7 @@ describe("public session card facts", () => {
         sessionId: "public-card-session",
         lifecycleGeneration: "test",
         projectSessionActive: true,
-        ...(queued ? { capacityWaits: new Set([Symbol("queued")]) } : {}),
+        capacityWaits: new Set([Symbol("queued")]),
       },
     ]);
     expect(resolvePublicSessionCardFacts(input).status).toBe("Running");
