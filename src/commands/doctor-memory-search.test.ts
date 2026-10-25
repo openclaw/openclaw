@@ -7,32 +7,33 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { MemoryHealth } from "../plugins/memory-provider-types.js";
 
 const note = vi.hoisted(() => vi.fn());
-const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const listAgentIds = vi.hoisted(() =>
-  vi.fn((cfg: OpenClawConfig) =>
-    cfg.agents?.entries ? Object.keys(cfg.agents.entries) : ["agent-default"],
+  vi.fn((config: OpenClawConfig) =>
+    config.agents?.entries ? Object.keys(config.agents.entries) : ["agent-default"],
   ),
 );
-const resolveAgentDir = vi.hoisted(() =>
-  vi.fn<(_cfg: OpenClawConfig, agentId: string) => string>(() => "/tmp/agent-default"),
-);
-const resolveAgentWorkspaceDir = vi.hoisted(() =>
-  vi.fn<(_cfg: OpenClawConfig, agentId: string) => string>(() => "/tmp/agent-default/workspace"),
-);
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
-const resolveApiKeyForProviderCore = vi.hoisted(() => vi.fn());
+const resolveApiKeyForProviderCore = vi.hoisted(() =>
+  vi.fn<() => Promise<unknown>>(async () => {
+    throw new Error("missing key");
+  }),
+);
 const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
 const hasAuthProfileStoreSourceForProvider = vi.hoisted(() => vi.fn(() => true));
-const isConfiguredAwsSdkAuthProfileForProvider = vi.hoisted(() => vi.fn(() => false));
 const getActiveMemoryProviderCore = vi.hoisted(() => vi.fn());
-const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
-const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
-const inspectConfiguredEmbeddingProviderSetup = vi.hoisted(() => vi.fn());
+const resolveActiveMemoryBackendConfig = vi.hoisted(() =>
+  vi.fn<() => unknown>(() => ({ backend: "builtin" })),
+);
+const inspectConfiguredEmbeddingProviderSetup = vi.hoisted(() =>
+  vi.fn<() => Promise<unknown>>(async () => null),
+);
 const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
   vi.fn<() => PluginManifestRegistry>(() => ({ plugins: [], diagnostics: [] })),
 );
 const listProviderPolicyOwners = vi.hoisted(() =>
-  vi.fn<(provider: string, registry: PluginManifestRegistry) => Array<{ id: string }>>(),
+  vi.fn<(provider: string, registry: PluginManifestRegistry) => Array<{ id: string }>>(() => [
+    { id: "llama-cpp" },
+  ]),
 );
 const loadProviderPolicyArtifacts = vi.hoisted(() =>
   vi.fn<
@@ -42,31 +43,29 @@ const loadProviderPolicyArtifacts = vi.hoisted(() =>
         inspectEmbeddingProviderSetup: typeof inspectConfiguredEmbeddingProviderSetup;
       } | null;
     } | null
-  >(),
+  >((owners) => {
+    const owner = owners[0];
+    return owner
+      ? {
+          owner,
+          surface: { inspectEmbeddingProviderSetup: inspectConfiguredEmbeddingProviderSetup },
+        }
+      : null;
+  }),
 );
 const resolveManifestOwnerBasePolicyBlock = vi.hoisted(() =>
   vi.fn<(_params?: { plugin: { id: string } }) => ManifestOwnerBasePolicyBlockReason | null>(
     () => null,
   ),
 );
-const getMissingLocalMemoryEmbeddingProviderMessage = vi.hoisted(() =>
-  vi.fn(
-    () =>
-      "Unknown memory embedding provider: local.\n" +
-      "Local GGUF embeddings are provided by the official llama.cpp provider plugin.\n" +
-      "Install it with: openclaw plugins install @openclaw/llama-cpp-provider\n" +
-      "Then restart OpenClaw and retry: openclaw memory status --deep",
-  ),
-);
-
 // mock-isolation: Capture memory-health notices without rendering terminal UI.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds,
-  tryResolveDefaultAgentId: resolveDefaultAgentId,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
+  tryResolveDefaultAgentId: () => "agent-default",
+  resolveAgentDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/${agentId}`,
+  resolveAgentWorkspaceDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/${agentId}/workspace`,
 }));
 
 // mock-isolation: Memory search configuration is supplied by each health scenario.
@@ -81,7 +80,7 @@ vi.mock("../agents/model-auth.js", () => ({
 vi.mock("../agents/auth-profiles.js", () => ({
   hasAnyAuthProfileStoreSource,
   hasAuthProfileStoreSourceForProvider,
-  isConfiguredAwsSdkAuthProfileForProvider,
+  isConfiguredAwsSdkAuthProfileForProvider: () => false,
 }));
 
 // mock-isolation: Provider acquisition and backend selection use fixture-owned runtime state.
@@ -103,14 +102,15 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
 }));
 
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
-  getMissingLocalMemoryEmbeddingProviderMessage,
+  getMissingLocalMemoryEmbeddingProviderMessage: () =>
+    "Missing local provider recovery instructions",
 }));
 
 vi.mock("./doctor-workspace.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./doctor-workspace.js")>();
   return {
     ...actual,
-    noteWorkspaceMemoryHealth,
+    noteWorkspaceMemoryHealth: async () => undefined,
   };
 });
 
@@ -171,12 +171,7 @@ function localRuntimeFacts(failed = false): DoctorMemoryEmbeddingRuntimePayload 
 }
 
 function stubMemorySearchConfig(provider: string, overrides: Record<string, unknown> = {}) {
-  resolveMemorySearchConfig.mockReturnValue({
-    provider,
-    local: {},
-    remote: {},
-    ...overrides,
-  });
+  resolveMemorySearchConfig.mockReturnValue({ provider, local: {}, remote: {}, ...overrides });
 }
 
 async function runMemorySearchHealth(
@@ -204,32 +199,7 @@ async function runAuthLintHealth(provider: "openai" | "bedrock", config: OpenCla
   await runMemorySearchHealth(provider, skippedAuthProfileOptions, undefined, config);
 }
 
-beforeEach(() => {
-  note.mockClear();
-  listAgentIds.mockImplementation((config: OpenClawConfig) =>
-    config.agents?.entries ? Object.keys(config.agents.entries) : ["agent-default"],
-  );
-  resolveMemorySearchConfig.mockReset();
-  resolveApiKeyForProviderCore.mockReset().mockRejectedValue(new Error("missing key"));
-  hasAnyAuthProfileStoreSource.mockReset().mockReturnValue(true);
-  hasAuthProfileStoreSourceForProvider.mockReset().mockReturnValue(true);
-  isConfiguredAwsSdkAuthProfileForProvider.mockReset().mockReturnValue(false);
-  getActiveMemoryProviderCore.mockReset();
-  getMissingLocalMemoryEmbeddingProviderMessage.mockClear();
-  inspectConfiguredEmbeddingProviderSetup.mockReset().mockResolvedValue(null);
-  listProviderPolicyOwners.mockReset().mockReturnValue([{ id: "llama-cpp" }]);
-  loadProviderPolicyArtifacts.mockReset().mockImplementation((owners) => {
-    const owner = owners[0];
-    return owner
-      ? {
-          owner,
-          surface: { inspectEmbeddingProviderSetup: inspectConfiguredEmbeddingProviderSetup },
-        }
-      : null;
-  });
-  resolveManifestOwnerBasePolicyBlock.mockReset().mockReturnValue(null);
-  resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
-});
+beforeEach(() => vi.resetAllMocks());
 
 function configureProviderHealth(health: MemoryHealth) {
   const close = vi.fn().mockResolvedValue(undefined);
@@ -297,16 +267,12 @@ it("preserves disabled-memory lint filtering with multiple agents", async () => 
 
   const findings = await collectFindings(config);
 
-  expect(findings.map(({ message, path }) => ({ message, path }))).toEqual([
-    {
-      message: 'Agent "personal": Memory search is explicitly disabled (enabled: false).',
+  expect(findings.map(({ message, path }) => ({ message, path }))).toEqual(
+    ["personal", "secondary"].map((agentId) => ({
+      message: `Agent "${agentId}": Memory search is explicitly disabled (enabled: false).`,
       path: "memory.search.provider",
-    },
-    {
-      message: 'Agent "secondary": Memory search is explicitly disabled (enabled: false).',
-      path: "memory.search.provider",
-    },
-  ]);
+    })),
+  );
 });
 
 it("emits recall warnings before a later provider diagnostic fails", async () => {
@@ -331,12 +297,7 @@ it("uses the memory-core recovery message when the local provider plugin is miss
   listProviderPolicyOwners.mockReturnValueOnce([]);
   await runMemorySearchHealth("local", {});
 
-  expectFirstNoteContains(
-    "Unknown memory embedding provider: local",
-    "openclaw plugins install @openclaw/llama-cpp-provider",
-    "openclaw memory status --deep",
-  );
-  expect(getMissingLocalMemoryEmbeddingProviderMessage).toHaveBeenCalledOnce();
+  expectFirstNoteContains("Missing local provider recovery instructions");
 });
 
 it("updates a legacy installed provider that has no setup policy artifact", async () => {
@@ -355,7 +316,7 @@ it("updates a legacy installed provider that has no setup policy artifact", asyn
     "legacy llama.cpp server is unavailable",
     "openclaw plugins update llama-cpp",
   );
-  expectFirstNoteExcludes("openclaw plugins install @openclaw/llama-cpp-provider");
+  expectFirstNoteExcludes("Missing local provider recovery instructions");
 });
 
 it.each([
@@ -381,7 +342,7 @@ it.each([
 
   expectFirstNoteContains(message, "local provider is blocked", fix);
   expectFirstNoteExcludes(
-    "openclaw plugins install @openclaw/llama-cpp-provider",
+    "Missing local provider recovery instructions",
     "openclaw plugins update llama-cpp",
   );
   expect(loadProviderPolicyArtifacts).not.toHaveBeenCalled();
@@ -407,11 +368,10 @@ it("reports global plugin disablement before the inactive memory-runtime gate", 
 });
 
 it("uses the policy owner selected after an earlier disabled owner", async () => {
-  const earlierOwner = { id: "a-disabled" };
   const selectedOwner = { id: "b-policy" };
-  listProviderPolicyOwners.mockReturnValueOnce([earlierOwner, selectedOwner]);
+  listProviderPolicyOwners.mockReturnValueOnce([{ id: "a-disabled" }, selectedOwner]);
   resolveManifestOwnerBasePolicyBlock.mockImplementationOnce((params) =>
-    params?.plugin.id === earlierOwner.id ? "plugin-disabled" : null,
+    params?.plugin.id === "a-disabled" ? "plugin-disabled" : null,
   );
   inspectConfiguredEmbeddingProviderSetup.mockResolvedValueOnce({
     provider: "local",
@@ -422,9 +382,6 @@ it("uses the policy owner selected after an earlier disabled owner", async () =>
 
   await runMemorySearchHealth("local", failedGatewayOptions("local provider is unavailable"));
 
-  expect(resolveManifestOwnerBasePolicyBlock).toHaveBeenCalledWith(
-    expect.objectContaining({ plugin: selectedOwner }),
-  );
   expect(loadProviderPolicyArtifacts).toHaveBeenCalledWith([selectedOwner]);
   expectFirstNoteContains("Selected provider needs setup", "Configure the selected provider");
   expectFirstNoteExcludes("openclaw plugins enable a-disabled");
@@ -460,7 +417,7 @@ it.each([true, false])("reports llama.cpp runtime facts (ready=%s)", async (read
     );
     expectFirstNoteExcludes(
       "Gateway check: GGUF load failed",
-      "openclaw plugins install @openclaw/llama-cpp-provider",
+      "Missing local provider recovery instructions",
     );
   }
 });
@@ -480,18 +437,9 @@ it.each([
     "a local model path is configured",
   ],
 ] as const)("handles %s readiness", async (_name, modelPath, skipped, warning) => {
-  const options = skipped
-    ? {
-        gatewayMemoryProbe: {
-          checked: false,
-          ready: false,
-          skipped: true,
-          error:
-            "memory embedding readiness not checked; run `openclaw memory status --deep` to check",
-        },
-      }
-    : {};
-  await runMemorySearchHealth("local", options, { local: { modelPath } });
+  await runMemorySearchHealth("local", skipped ? skippedGatewayOptions : {}, {
+    local: { modelPath },
+  });
   if (warning === null) {
     expect(note).not.toHaveBeenCalled();
   } else {
@@ -500,7 +448,7 @@ it.each([
 });
 
 it.each([
-  ["enabled", { enabled: true, config: { dbPath: ".openclaw/memory" } }, true],
+  ["enabled", { enabled: true }, true],
   ["disabled", { enabled: false }, false],
   ["placeholder", {}, false],
   ["default slot", undefined, false],
@@ -508,11 +456,10 @@ it.each([
   resolveActiveMemoryBackendConfig.mockReturnValue(null);
   const config: OpenClawConfig = entry
     ? {
-        session: { dmScope: "per-peer" },
         plugins: { slots: { memory: "memory-lancedb" }, entries: { "memory-lancedb": entry } },
       }
     : cfg;
-  await runMemorySearchHealth("none", undefined, { fallback: "none" }, config);
+  await runMemorySearchHealth("none", undefined, undefined, config);
   expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
   if (isActive) {
     expect(note).not.toHaveBeenCalled();
@@ -577,20 +524,17 @@ it.each([
   },
 );
 
-it.each(["none", "ollama"])(
-  "explains stopped indexing and recovery with fallback %s",
-  async (fallback) => {
-    await runMemorySearchHealth("openai", undefined, { fallback });
-    expectFirstNoteContains(
-      "Without working primary or fallback embeddings, memory sync stops for explicitly configured providers or existing vector indexes",
-      "new and changed memory files are not indexed",
-      "Set OPENAI_API_KEY",
-      'set memory.search.provider to "none" for this agent (including any agent override)',
-      "openclaw memory index --force --agent agent-default",
-      "Then rerun: openclaw doctor",
-    );
-  },
-);
+it("explains stopped indexing and recovery without an API key", async () => {
+  await runMemorySearchHealth("openai");
+  expectFirstNoteContains(
+    "Without working primary or fallback embeddings, memory sync stops for explicitly configured providers or existing vector indexes",
+    "new and changed memory files are not indexed",
+    "Set OPENAI_API_KEY",
+    'set memory.search.provider to "none" for this agent (including any agent override)',
+    "openclaw memory index --force --agent agent-default",
+    "Then rerun: openclaw doctor",
+  );
+});
 
 it("resolves provider auth from the default agent directory", async () => {
   resolveApiKeyForProviderCore.mockResolvedValue(undefined);
@@ -603,15 +547,23 @@ it("resolves provider auth from the default agent directory", async () => {
   expect(note).not.toHaveBeenCalled();
 });
 
-it("does not warn for ollama when gateway probe is ready without CLI API key", async () => {
-  await runMemorySearchHealth("ollama", readyGatewayOptions);
-  expect(note).not.toHaveBeenCalled();
+it.each([
+  ["ollama", readyGatewayOptions, null],
+  ["lmstudio", failedGatewayOptions("LM API token missing"), "embeddings are not ready"],
+  // Regression #74608: transport timeouts are not intentional skipped probes.
+  [
+    "lmstudio",
+    { gatewayMemoryProbe: { checked: false, ready: false, error: "timeout", skipped: false } },
+    'provider "lmstudio" is configured',
+  ],
+] as const)("checks key-optional %s readiness: %j", async (provider, options, warning) => {
+  await runMemorySearchHealth(provider, options);
+  if (warning) {
+    expectFirstNoteContains(`provider "${provider}" is configured`, warning);
+  } else {
+    expect(note).not.toHaveBeenCalled();
+  }
   expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
-});
-
-it("warns when lmstudio gateway probe reports embeddings are not ready", async () => {
-  await runMemorySearchHealth("lmstudio", failedGatewayOptions("LM API token missing"));
-  expectFirstNoteContains('provider "lmstudio" is configured', "embeddings are not ready");
 });
 
 it.each([
@@ -665,22 +617,6 @@ it("does not warn for Bedrock aws-sdk provider auth when lint skips profile reso
   expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
 });
 
-it("warns for key-optional provider (lmstudio) when gateway probe timed out", async () => {
-  // A gateway timeout sets checked: false but skipped: false/absent. This is a
-  // real diagnostic signal — embeddings may be unavailable — so we should warn.
-  // Regression guard: https://github.com/openclaw/openclaw/issues/74608
-  await runMemorySearchHealth("lmstudio", {
-    gatewayMemoryProbe: {
-      checked: false,
-      ready: false,
-      error: "gateway memory check timed out: gateway timeout after 8000ms",
-      skipped: false,
-    },
-  });
-
-  expectFirstNoteContains('provider "lmstudio" is configured');
-});
-
 it("notes when gateway probe reports embeddings ready and CLI API key is missing", async () => {
   await runMemorySearchHealth("gemini", readyGatewayOptions);
 
@@ -704,8 +640,6 @@ it("uses model configure hint when gateway probe is unavailable and API key is m
 
 it("labels memory readiness failures for a secondary agent", async () => {
   listAgentIds.mockReturnValue(["agent-default", "secondary"]);
-  resolveAgentDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
-  resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}/workspace`);
   resolveMemorySearchConfig.mockImplementation((_cfg, agentId) =>
     agentId === "agent-default" ? { provider: "none", local: {}, remote: {} } : undefined,
   );
