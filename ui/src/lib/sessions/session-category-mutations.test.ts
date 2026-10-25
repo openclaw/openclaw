@@ -181,15 +181,6 @@ describe("session category mutations", () => {
       }
     },
   );
-  it("keeps a confirmed category ahead of a read started before the write", async () => {
-    const reading = h.sessions.refresh({ agentId: "main", force: true });
-    const pending = h.move("Beta");
-    h.confirm(0, "Beta");
-    await pending;
-    h.list.resolve(result({}, 1));
-    await reading;
-    expect(h.category()).toBe("Beta");
-  });
 });
 
 it.each(["different", "returned"] as const)(

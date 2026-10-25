@@ -147,28 +147,7 @@ it("does not replace saved groups from an invalidated legacy import", async () =
   expect(sessions.state.groupSettings).toEqual(expectedClient);
 });
 
-it("clears cached cwd when a defaults update omits the removed value", async () => {
-  const request = groupRequests({
-    "sessions.groups.list": () => ({ groups: [clientGroup] }),
-    "sessions.groups.defaults": () => ({ defaults: [clientDefaults] }),
-    "sessions.groups.update": () => ({ defaults: [{ name: "Client", worktree: false }] }),
-  });
-  const sessions = createSessions(request, undefined, [
-    "sessions.groups.list",
-    "sessions.groups.defaults",
-    "sessions.groups.update",
-  ]);
-
-  await sessions.groupsLoad();
-  expect(sessions.state.groupSettings).toEqual(expectedClient);
-
-  await expect(sessions.groupsUpdate("Client", { cwd: null, worktree: false })).resolves.toBe(
-    "completed",
-  );
-  expect(sessions.state.groupSettings).toEqual([{ name: "Client", position: 0, worktree: false }]);
-});
-
-it("keeps path-free mutations pending until fresh defaults arrive", async () => {
+it("reloads path-free mutations and clears removed defaults on update", async () => {
   const refreshedDefaults = createDeferred<Defaults>();
   let defaultsCalls = 0;
   const request = groupRequests({
@@ -181,8 +160,14 @@ it("keeps path-free mutations pending until fresh defaults arrive", async () => 
       return refreshedDefaults.promise;
     },
     "sessions.groups.put": () => ({ groups: [clientGroup] }),
+    "sessions.groups.update": () => ({ defaults: [{ name: "Client", worktree: false }] }),
   });
-  const sessions = createSessions(request);
+  const sessions = createSessions(request, undefined, [
+    "sessions.groups.list",
+    "sessions.groups.defaults",
+    "sessions.groups.put",
+    "sessions.groups.update",
+  ]);
 
   await expect(sessions.groupsLoad()).resolves.toBeNull();
   expect(sessions.groupsStatus()).toBe("unavailable");
@@ -195,28 +180,10 @@ it("keeps path-free mutations pending until fresh defaults arrive", async () => 
   refreshedDefaults.resolve({ defaults: [clientDefaults] });
   await vi.waitFor(() => expect(sessions.groupsStatus()).toBe("ready"));
   expect(sessions.state.groupSettings).toEqual(expectedClient);
-});
-
-it("joins an in-flight load so route consumers see current defaults", async () => {
-  const defaults = createDeferred<Defaults>();
-  const request = groupRequests({
-    "sessions.groups.list": () => ({ groups: [clientGroup] }),
-    "sessions.groups.defaults": () => defaults.promise,
-  });
-  const sessions = createSessions(request);
-
-  const backgroundLoad = sessions.groupsLoad();
-  await vi.waitFor(() => expect(request).toHaveBeenCalledWith("sessions.groups.defaults", {}));
-  let joined = false;
-  const routeLoad = sessions.groupsLoad().then(() => {
-    joined = true;
-  });
-  await Promise.resolve();
-  expect(joined).toBe(false);
-
-  defaults.resolve({ defaults: [clientDefaults] });
-  await Promise.all([backgroundLoad, routeLoad]);
-  expect(sessions.state.groupSettings).toEqual(expectedClient);
+  await expect(sessions.groupsUpdate("Client", { cwd: null, worktree: false })).resolves.toBe(
+    "completed",
+  );
+  expect(sessions.state.groupSettings).toEqual([{ name: "Client", position: 0, worktree: false }]);
 });
 
 it("returns only defaults owned by the current same-client connection", async () => {
@@ -238,6 +205,13 @@ it("returns only defaults owned by the current same-client connection", async ()
   harness.publish(true);
   const currentLoad = sessions.groupsLoad();
   await vi.waitFor(() => expect(calls).toBe(2));
+  let joined = false;
+  const routeLoad = sessions.groupsLoad().then((settings) => {
+    joined = true;
+    return settings;
+  });
+  await Promise.resolve();
+  expect(joined).toBe(false);
 
   stale.resolve({ defaults: [{ name: "Client", cwd: "/gateway-a", worktree: true }] });
   await expect(staleLoad).resolves.toBeNull();
@@ -245,5 +219,6 @@ it("returns only defaults owned by the current same-client connection", async ()
   current.resolve({ defaults: [currentDefaults] });
   const expected = [{ ...clientGroup, ...currentDefaults }];
   await expect(currentLoad).resolves.toEqual(expected);
+  await expect(routeLoad).resolves.toEqual(expected);
   expect(sessions.state.groupSettings).toEqual(expected);
 });

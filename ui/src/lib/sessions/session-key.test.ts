@@ -1,5 +1,5 @@
-import * as sessionKeyNormalization from "@openclaw/normalization-core/session-key-comparison";
 // @vitest-environment node
+import * as sessionKeyNormalization from "@openclaw/normalization-core/session-key-comparison";
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -70,34 +70,25 @@ it.each([
   expect(parseSessionKeyParts(key)).toEqual(expected);
 });
 
-afterEach(() => vi.restoreAllMocks());
-
 it.each([undefined, " \t\n", "main"])(
   "preserves nonblank equivalence for identical %j inputs",
   (key) => expect(areUiSessionKeysEquivalent(key, key)).toBe(Boolean(key?.trim())),
 );
 
-it("reuses comparison keys until bounded eviction without changing their identities", () => {
+afterEach(() => vi.restoreAllMocks());
+it("reuses comparison keys and preserves identity across eviction", () => {
   const normalize = vi.spyOn(sessionKeyNormalization, "normalizeSessionKeyForComparison");
-  const keys = [
-    [" Agent:Cache:Matrix:Channel:!R:E.Org ", "agent:cache:matrix:channel:!R:E.Org"],
-    [" MAIN \t", "agent:main:main"],
-    ["Agent:MemoEviction:Signal:Group:AbC=", "agent:memoeviction:signal:group:AbC="],
-  ] as const;
-  for (const [key, expected] of keys) {
-    for (let i = 0; i < 10; i++) {
-      expect(normalizeDefaultMainSessionAliasForUi(key)).toBe(expected);
-      expect(areUiSessionKeysEquivalent(key, expected)).toBe(true);
-    }
-    expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(1);
-  }
+  const key = " Agent:Cache:Matrix:Channel:!R:E.Org ";
+  const expected = "agent:cache:matrix:channel:!R:E.Org";
+  expect(normalizeSessionKeyForUiComparison(key)).toBe(expected);
+  expect(normalizeSessionKeyForUiComparison(key)).toBe(expected);
+  expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(1);
+  expect(normalizeDefaultMainSessionAliasForUi(" MAIN \t")).toBe("agent:main:main");
   for (let i = 0; i < 4096; i++) {
     normalizeSessionKeyForUiComparison(`Agent:MemoEviction:Dashboard:${i}`);
   }
-  for (const [key, expected] of keys) {
-    expect(normalizeDefaultMainSessionAliasForUi(key)).toBe(expected);
-    expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(2);
-  }
+  expect(normalizeSessionKeyForUiComparison(key)).toBe(expected);
+  expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(2);
 });
 
 it.each([

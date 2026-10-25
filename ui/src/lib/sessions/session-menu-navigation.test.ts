@@ -126,41 +126,36 @@ it("reports popup blocking", async () => {
   expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.openWindowBlocked") });
 });
 
-it("copies every history page chronologically without duplicating replayed records", async () => {
-  const first = message(1, "First response");
-  const middle = message(2, "Middle response");
-  const last = message(3, "Last response");
-  request.mockResolvedValueOnce(page([middle, last], { hasMore: true, nextOffset: 1 }));
-  request.mockResolvedValueOnce(page([first, middle]));
-  request.mockResolvedValueOnce(page([last]));
-
-  await copy();
-
-  const historyQuery = { sessionKey: session.key, agentId: "research", maxChars: 500_000 };
-  expect(request.mock.calls.map((call) => call[1])).toEqual([
-    { ...historyQuery, limit: 1000, offset: 0 },
-    { ...historyQuery, limit: 1000, offset: 1 },
-    { ...historyQuery, limit: 1, offset: 0 },
-  ]);
-  const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
-  expect(copied).toContain("# Chat with Research");
-  expect(copied.match(/Middle response/g)).toHaveLength(1);
-  expect(copied.indexOf("First response")).toBeLessThan(copied.indexOf("Middle response"));
-  expect(copied.indexOf("Middle response")).toBeLessThan(copied.indexOf("Last response"));
-});
-
 it.each([null, "leaf-3"])(
-  "copies paged history when only the tail carries leaf %s",
+  "copies coherent history chronologically with tail leaf %s",
   async (activeLeafEntryId) => {
-    const tail = tailPage({ sessionInfo: leaf(activeLeafEntryId) });
-    request.mockResolvedValueOnce(tail);
-    request.mockResolvedValueOnce(page([message(1, "Oldest"), message(2, "Middle")]));
-    request.mockResolvedValueOnce(tail);
+    const first = message(1, "First response");
+    const middle = message(2, "Middle response");
+    const last = message(3, "Last response");
+    const sessionInfo = leaf(activeLeafEntryId);
+    request.mockResolvedValueOnce(
+      page([middle, last], { hasMore: true, nextOffset: 1, sessionInfo }),
+    );
+    request.mockResolvedValueOnce(page([first, middle]));
+    request.mockResolvedValueOnce(page([last], { sessionInfo }));
+
     await copy();
+
+    const historyQuery = { sessionKey: session.key, agentId: "research", maxChars: 500_000 };
+    expect(request.mock.calls.map((call) => call[1])).toEqual([
+      { ...historyQuery, limit: 1000, offset: 0 },
+      { ...historyQuery, limit: 1000, offset: 1 },
+      { ...historyQuery, limit: 1, offset: 0 },
+    ]);
+    const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
     expect(copyToClipboard).toHaveBeenCalledWith(
-      expect.stringContaining("Oldest"),
+      expect.stringContaining("First response"),
       expect.any(Function),
     );
+    expect(copied).toContain("# Chat with Research");
+    expect(copied.match(/Middle response/g)).toHaveLength(1);
+    expect(copied.indexOf("First response")).toBeLessThan(copied.indexOf("Middle response"));
+    expect(copied.indexOf("Middle response")).toBeLessThan(copied.indexOf("Last response"));
     expect(showToast).toHaveBeenCalledWith({ message: t("common.copied") });
   },
 );
@@ -206,29 +201,27 @@ it.each([
   await rejectCopy();
 });
 
-it("retires a pending transcript copy when its source view changes", async () => {
-  let current = true;
-  params.isCurrent = () => current;
-  request.mockImplementationOnce(async () => {
-    current = false;
-    return page([message(1, "Wrong view")]);
-  });
-  await rejectCopy();
-});
-
-it.each(["view", "connection"])(
-  "retires a deferred transcript copy on %s change",
+it.each(["view", "connection", "pending"])(
+  "fences transcript copies on %s changes",
   async (owner) => {
     let current = true;
     params.isCurrent = () => current;
+    if (owner === "pending") {
+      request.mockImplementationOnce(async () => {
+        current = false;
+        return page([message(1, "Wrong view")]);
+      });
+    }
     const pending = copy();
     if (owner === "view") {
       current = false;
-    } else {
+    } else if (owner === "connection") {
       params.context.gateway.snapshot.client = null;
     }
     await pending;
-    expect(request).not.toHaveBeenCalled();
+    if (owner !== "pending") {
+      expect(request).not.toHaveBeenCalled();
+    }
     expect(copyToClipboard).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.copyTranscriptChanged") });
   },
@@ -253,16 +246,14 @@ it("uses the mounted chat owner's split capability and requires its handling rec
   expect(canSplitSessionView()).toBe(true);
   const received = vi.fn((event: Event) => event.preventDefault());
   window.addEventListener(UI_COMMAND_EVENT, received);
-  try {
-    await run("split-below");
-    const event = received.mock.calls[0]?.[0] as CustomEvent;
-    expect(event.detail).toEqual({
-      command: { kind: "split", direction: "down", sessionKey: session.key },
-    });
-    expect(showToast).not.toHaveBeenCalled();
-  } finally {
-    window.removeEventListener(UI_COMMAND_EVENT, received);
-  }
+  onTestFinished(() => window.removeEventListener(UI_COMMAND_EVENT, received));
+  await run("split-below");
+  const event = received.mock.calls[0]?.[0] as CustomEvent;
+  expect(event.detail).toEqual({
+    command: { kind: "split", direction: "down", sessionKey: session.key },
+  });
+  expect(showToast).not.toHaveBeenCalled();
+  window.removeEventListener(UI_COMMAND_EVENT, received);
   await run("split-right");
   expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.splitUnavailable") });
 });
