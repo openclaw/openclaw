@@ -28,19 +28,10 @@ function fixture(t) {
   const root = join(directory, "serving");
   const config = join(directory, "runtime", "openclaw.json");
   const database = join(directory, "runtime", "openclaw.sqlite");
-  for (const path of [
-    root,
-    join(root, "journal"),
-    join(root, "staging"),
-    join(root, "releases", sha),
-    dirname(config),
-  ]) {
+  for (const path of [root, ...["journal", "staging", `releases/${sha}`].map(p => join(root, p)), dirname(config)]) {
     mkdirSync(path, { recursive: true, mode: 0o700 });
   }
-  writeFileSync(
-    join(root, "releases", sha, "package.json"),
-    JSON.stringify({ version: "2026.9.3" }),
-  );
+  writeFileSync(join(root, "releases", sha, "package.json"), JSON.stringify({ version: "2026.9.3" }));
   symlinkSync(join(root, "releases", sha), join(root, "current"));
   const original = {
     meta: { lastTouchedVersion: "2026.9.3", migrations: { modelPolicyAllowlist: true } },
@@ -61,43 +52,23 @@ function fixture(t) {
   writeFileSync(config, JSON.stringify(original) + "\n", { mode: 0o600 });
   writeFileSync(database, "synthetic-database-identity", { mode: 0o600 });
   const originalBytes = readFileSync(config);
-  function call(action, args = [], input) {
-    const result = spawnSync(
-      process.execPath,
-      ["--no-warnings", library, "worker-config", action, root, ...args],
-      {
-        encoding: "utf8",
-        input,
-        env: {
-          ...process.env,
-          OPENCLAW_TEAM_ROOT_UID: String(process.getuid()),
-          OPENCLAW_TEAM_ROOT_GID: String(process.getgid()),
-          OPENCLAW_TEAM_ANCESTOR_BOUNDARY: directory,
-        },
-      },
-    );
+  function call(action, args = [], input = undefined) {
+    const result = spawnSync(process.execPath,
+      ["--no-warnings", library, "worker-config", action, root, ...args], {
+        encoding: "utf8", input,
+        env: { ...process.env, OPENCLAW_TEAM_ROOT_UID: String(process.getuid()),
+          OPENCLAW_TEAM_ROOT_GID: String(process.getgid()), OPENCLAW_TEAM_ANCESTOR_BOUNDARY: directory },
+      });
     assert.ifError(result.error);
     return result;
   }
   function prepare(configHash = hash(originalBytes), setupHash = hash(oldSetup)) {
-    return call(
-      "prepare",
-      [
-        config,
-        database,
-        sha,
-        configHash,
-        setupHash,
-        String(process.getuid()),
-        String(process.getgid()),
-      ],
-      replacement,
-    );
+    return call("prepare",
+      [config, database, sha, configHash, setupHash, String(process.getuid()), String(process.getgid())],
+      replacement);
   }
   function begin() {
-    const prepared = prepare();
-    assert.equal(prepared.status, 0, prepared.stderr);
-    const token = JSON.parse(prepared.stdout);
+    const token = JSON.parse(pass(prepare()));
     const result = call(
       "begin",
       [JSON.stringify(token)],
@@ -109,21 +80,11 @@ function fixture(t) {
           status: "ready",
           terminalPolicy: "preserve",
         },
-        witness: [
-          JSON.stringify([
-            "controller-test-agent",
-            "synthetic-agent-db",
-            1,
-            2,
-            "agent:controller-test-agent:existing",
-            "synthetic-session",
-            null,
-            null,
-          ]),
-        ],
+        witness: [JSON.stringify(["controller-test-agent", "synthetic-agent-db", 1, 2,
+          "agent:controller-test-agent:existing", "synthetic-session", null, null])],
       }),
     );
-    assert.equal(result.status, 0, result.stderr);
+    pass(result);
     return token;
   }
   function publish(value = structuredClone(original), setup = replacement) {
@@ -137,19 +98,8 @@ function fixture(t) {
     chmodSync(root, 0o700);
     rmSync(directory, { recursive: true, force: true });
   });
-  return {
-    directory,
-    root,
-    config,
-    database,
-    original,
-    originalBytes,
-    journal,
-    call,
-    prepare,
-    begin,
-    publish,
-  };
+  return { directory, root, config, database, original, originalBytes, journal,
+    call, prepare, begin, publish };
 }
 
 test("prepares only a bound AWS setup operation and retains exact original bytes", (t) => {
@@ -220,32 +170,23 @@ test("preserves a concurrent unrelated change rather than accepting or restoring
   assert.equal(existsSync(join(f.root, "journal/gateway-start-permit")), false);
 });
 
-test("rollback preparation never writes config outside native writer serialization", (t) => {
-  const f = fixture(t);
-  f.begin();
-  pass(f.call("writing"));
-  const current = f.publish();
-  const prepared = f.call("restore");
-  assert.equal(
-    hash(readFileSync(f.config)),
-    hash(current),
-    "proof helper bypassed native config writer serialization",
-  );
-  assert.equal(pass(prepared), "CONFIG_RESTORING");
-});
-
 test("restores only the original config before acceptance, retaining native backups and database bytes", (t) => {
   const f = fixture(t);
   const token = f.begin();
   pass(f.call("writing"));
-  f.publish();
+  const current = f.publish();
   writeFileSync(`${f.config}.bak`, "native-writer-backup-evidence", { mode: 0o600 });
   const database = readFileSync(f.database);
   assert.equal(pass(f.call("restore")), "CONFIG_RESTORING");
+  assert.deepEqual(readFileSync(f.config), current, "preparation must not bypass the native writer");
   assert.equal(JSON.parse(pass(f.call("expected-value", [JSON.stringify(token)]))), oldSetup);
   assert.equal(JSON.parse(pass(f.call("replacement-value", [JSON.stringify(token)]))), replacement);
-  f.publish(structuredClone(f.original), oldSetup); // The native writer owns this conditional inverse.
+  // Model the native inverse committing before its journal receipt.
+  const restored = f.publish(structuredClone(f.original), oldSetup);
+  assert.equal(JSON.parse(readFileSync(f.journal)).phase, "CONFIG_RESTORING");
   assert.equal(pass(f.call("restore")), "CONFIG_RESTORED");
+  assert.deepEqual(readFileSync(f.config), restored, "recovery must not perform another config write");
+  pass(f.call("check"));
   assert.deepEqual(JSON.parse(readFileSync(f.config, "utf8")), f.original);
   assert.equal(readFileSync(`${f.config}.bak`, "utf8"), "native-writer-backup-evidence");
   assert.deepEqual(readFileSync(f.database), database);
@@ -255,23 +196,6 @@ test("restores only the original config before acceptance, retaining native back
   );
   pass(f.call("permit"));
   assert.equal(pass(f.call("finish")), "RESTORED");
-});
-
-test("recovers after the native inverse committed but its journal update was interrupted", (t) => {
-  const f = fixture(t);
-  f.begin();
-  pass(f.call("writing"));
-  f.publish();
-  pass(f.call("restore"));
-  const restoredBytes = f.publish(structuredClone(f.original), oldSetup);
-  assert.equal(JSON.parse(readFileSync(f.journal)).phase, "CONFIG_RESTORING");
-  assert.equal(pass(f.call("restore")), "CONFIG_RESTORED");
-  assert.deepEqual(
-    readFileSync(f.config),
-    restoredBytes,
-    "recovery must not perform another config write",
-  );
-  pass(f.call("check"));
 });
 
 test("refuses changed original witnesses and accepted-file drift", (t) => {
