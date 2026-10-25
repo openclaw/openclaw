@@ -192,23 +192,16 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
         expect(window.scrollY).toBe(scrollY);
       }
 
-      const last = renderedTabs(container).find((entry) => entry.dataset.tabValue === "8");
-      last?.click();
-      await vi.waitFor(() => expect(activeId).toBe("8"));
-      const lastActive = await expectControlledSelection(container, activeId);
-      await expectOverflowTabVisible(container, lastActive);
-      expect(document.activeElement).toBe(keyboardActive);
-      expect(scrollPort.scrollTop).toBe(ancestorScrollTop);
-      expect(window.scrollY).toBe(scrollY);
-
-      renderedTabs(container)
-        .find((entry) => entry.dataset.tabValue === "1")
-        ?.click();
-      await vi.waitFor(() => expect(activeId).toBe("1"));
-      await expectOverflowTabVisible(container, await expectControlledSelection(container, "1"));
-      expect(document.activeElement).toBe(keyboardActive);
-      expect(scrollPort.scrollTop).toBe(ancestorScrollTop);
-      expect(window.scrollY).toBe(scrollY);
+      for (const id of ["8", "1"]) {
+        renderedTabs(container)
+          .find((entry) => entry.dataset.tabValue === id)
+          ?.click();
+        await vi.waitFor(() => expect(activeId).toBe(id));
+        await expectOverflowTabVisible(container, await expectControlledSelection(container, id));
+        expect(document.activeElement).toBe(keyboardActive);
+        expect(scrollPort.scrollTop).toBe(ancestorScrollTop);
+        expect(window.scrollY).toBe(scrollY);
+      }
     },
   );
 

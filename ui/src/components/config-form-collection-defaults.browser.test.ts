@@ -14,16 +14,33 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
   return element;
 }
 
+function fixture(render: typeof renderNodeFixture, options: Parameters<typeof render>[1]) {
+  const container = document.createElement("div");
+  const update = (value: typeof options.value) => render(container, { ...options, value });
+  update(options.value);
+  return { container, update };
+}
+const input = (root: ParentNode, label = "input") =>
+  expectElement(root.querySelector<HTMLInputElement>("input"), label);
+const findText = (root: ParentNode, selector: string, text: string) =>
+  expectElement(
+    [...root.querySelectorAll(selector)].find((node) => node.textContent?.includes(text)),
+    text,
+  );
+function edit(element: HTMLInputElement, value: string, composed = true) {
+  element.value = value;
+  element.dispatchEvent(new Event("input", { bubbles: true, composed }));
+}
+
 describe("config form collection defaults", () => {
   it("shows and clears optional JSON defaults without authoring the inherited value", () => {
-    const container = document.createElement("div");
     const onPatch = vi.fn();
     const schema = {
       anyOf: [{ type: "object" as const }, { type: "array" as const }],
       default: { mode: "balanced" },
     };
 
-    renderNodeFixture(container, {
+    const { container, update } = fixture(renderNodeFixture, {
       schema,
       value: { mode: "custom" },
       path: ["payload"],
@@ -41,12 +58,7 @@ describe("config form collection defaults", () => {
     expect(onPatch).toHaveBeenCalledWith(["payload"], undefined);
 
     onPatch.mockClear();
-    renderNodeFixture(container, {
-      schema,
-      value: undefined,
-      path: ["payload"],
-      onPatch,
-    });
+    update(undefined);
 
     expect(container.textContent).not.toContain("Using default:");
     expect(container.querySelector(".settings-row__desc")).toBeNull();
@@ -58,7 +70,6 @@ describe("config form collection defaults", () => {
   });
 
   it("shows optional array defaults and authors inherited items without dropping siblings", () => {
-    const container = document.createElement("div");
     const onPatch = vi.fn(() => false);
     const schema = {
       type: "array" as const,
@@ -66,7 +77,7 @@ describe("config form collection defaults", () => {
       default: ["a", "b"],
     };
 
-    renderArrayFixture(container, {
+    const { container, update } = fixture(renderArrayFixture, {
       schema,
       value: ["custom"],
       path: ["values"],
@@ -75,29 +86,20 @@ describe("config form collection defaults", () => {
 
     expect(container.textContent).toContain('Default: ["a","b"]');
     expect(container.textContent).toContain("1 item");
-    expect(
-      expectElement(container.querySelector<HTMLInputElement>("input"), "explicit array item")
-        .value,
-    ).toBe("custom");
+    expect(input(container).value).toBe("custom");
 
     onPatch.mockClear();
-    renderArrayFixture(container, {
-      schema,
-      value: undefined,
-      path: ["values"],
-      onPatch,
-    });
+    update(undefined);
 
     expect(container.textContent).not.toContain("Using default:");
     expect(container.querySelector(".settings-row__desc")).toBeNull();
     expect(container.textContent).toContain("2 items");
     const inheritedInputs = Array.from(container.querySelectorAll<HTMLInputElement>("input"));
-    expect(inheritedInputs.map((input) => input.value)).toEqual(["", ""]);
-    expect(inheritedInputs.map((input) => input.placeholder)).toEqual(["Default: a", "Default: b"]);
+    expect(inheritedInputs.map((field) => field.value)).toEqual(["", ""]);
+    expect(inheritedInputs.map((field) => field.placeholder)).toEqual(["Default: a", "Default: b"]);
     expect(onPatch).not.toHaveBeenCalled();
 
-    inheritedInputs[1]!.value = "custom";
-    inheritedInputs[1]!.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    edit(inheritedInputs[1]!, "custom");
     expect(onPatch).toHaveBeenCalledWith(["values"], ["a", "custom"]);
   });
 
@@ -137,8 +139,7 @@ describe("config form collection defaults", () => {
       container.querySelectorAll<HTMLInputElement>("input[aria-label='Label']"),
     );
     expect(labels).toHaveLength(2);
-    labels[0]!.value = "changed";
-    labels[0]!.dispatchEvent(new Event("input", { bubbles: true }));
+    edit(labels[0]!, "changed", false);
 
     expect(onPatch).toHaveBeenCalledExactlyOnceWith(
       ["entries"],
@@ -191,7 +192,6 @@ describe("config form collection defaults", () => {
   });
 
   it("keeps optional object children inherited until edited", () => {
-    const container = document.createElement("div");
     const onPatch = vi.fn();
     const onRemove = vi.fn();
     const schema = {
@@ -210,7 +210,7 @@ describe("config form collection defaults", () => {
       },
     };
 
-    renderObjectFixture(container, {
+    const { container, update } = fixture(renderObjectFixture, {
       schema,
       value: {
         profile: { enabled: false, mode: "custom" },
@@ -221,57 +221,23 @@ describe("config form collection defaults", () => {
       onRemove,
     });
 
-    const profile = expectElement(
-      Array.from(container.querySelectorAll("details")).find((details) =>
-        details.textContent?.includes("Profile"),
-      ),
-      "explicit profile object",
-    );
+    const profile = findText(container, "details", "Profile");
     expect(profile.textContent).not.toContain('{"enabled":true,"mode":"balanced"}');
     expect(onPatch).not.toHaveBeenCalled();
 
     onRemove.mockClear();
-    renderObjectFixture(container, {
-      schema,
-      value: { sibling: "preserved" },
-      path: ["settings"],
-      onPatch,
-      onRemove,
-    });
+    update({ sibling: "preserved" });
 
-    const inheritedProfile = expectElement(
-      Array.from(container.querySelectorAll("details")).find((details) =>
-        details.textContent?.includes("Profile"),
-      ),
-      "inherited profile object",
-    );
+    const inheritedProfile = findText(container, "details", "Profile");
     expect(inheritedProfile.textContent).not.toContain('{"enabled":true,"mode":"balanced"}');
-    const enabledRow = expectElement(
-      Array.from(inheritedProfile.querySelectorAll(".settings-row")).find((row) =>
-        row.textContent?.includes("Enabled"),
-      ),
-      "inherited enabled row",
-    );
-    const modeRow = expectElement(
-      Array.from(inheritedProfile.querySelectorAll(".settings-row")).find((row) =>
-        row.textContent?.includes("Mode"),
-      ),
-      "inherited mode row",
-    );
+    const enabledRow = findText(inheritedProfile, ".settings-row", "Enabled");
+    const modeRow = findText(inheritedProfile, ".settings-row", "Mode");
     expect(enabledRow.textContent).not.toContain("Using default:");
     expect(modeRow.textContent).not.toContain("Using default:");
-    expect(
-      expectElement(modeRow.querySelector<HTMLInputElement>("input"), "inherited mode input")
-        .placeholder,
-    ).toBe("Default: balanced");
+    expect(input(modeRow).placeholder).toBe("Default: balanced");
     expect(onRemove).not.toHaveBeenCalled();
 
-    const modeInput = expectElement(
-      modeRow.querySelector<HTMLInputElement>("input"),
-      "inherited mode input",
-    );
-    modeInput.value = "custom";
-    modeInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    edit(input(modeRow), "custom");
     expect(onPatch).toHaveBeenCalledWith(["settings", "profile"], {
       enabled: true,
       mode: "custom",

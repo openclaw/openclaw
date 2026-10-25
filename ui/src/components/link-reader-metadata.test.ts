@@ -38,7 +38,8 @@ const merged: ControlUiLinkReaderDocument = {
   badge: { label: "Merged", tone: "accent" },
   metadata: [{ label: "Additions", value: "42" }],
 };
-function makeProvider() {
+function makeProvider(request: Parameters<typeof createTestGatewayClient>[0]) {
+  const client = createTestGatewayClient(request);
   const host = document.createElement(tag);
   if (!(host instanceof LinkReaderHovercardProvider)) {
     throw new Error("Missing reader bridge");
@@ -50,7 +51,8 @@ function makeProvider() {
   anchor.textContent = "PR #99816";
   host.append(anchor);
   document.body.append(host);
-  return { host, anchor };
+  host.client = client;
+  return { host, anchor, client };
 }
 async function hover(anchor: HTMLAnchorElement) {
   await Promise.resolve();
@@ -81,6 +83,12 @@ async function openPanel(props: Partial<HTMLElementTagNameMap["openclaw-link-rea
   return panel;
 }
 const badge = () => document.querySelector(".link-reader-hovercard__state")?.textContent?.trim();
+const metadata = () => document.querySelector(".link-reader-hovercard__metadata")?.textContent;
+const cached = () => document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached;
+const previews = (request: ReturnType<typeof vi.fn>) =>
+  request.mock.calls.filter(([method]) => method === "github.preview");
+const panelMerged = (panel: HTMLElement) =>
+  waitForSolid(() => expect(panel.querySelector(".lr-state")?.textContent).toContain("Merged"));
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("localStorage", createStorageMock());
@@ -104,9 +112,7 @@ it.each([
     const request = vi.fn((method: string) =>
       Promise.resolve(method === "github.detail" ? merged : open),
     );
-    const client = createTestGatewayClient(request);
-    const { host, anchor } = makeProvider();
-    host.client = client;
+    const { host, anchor, client } = makeProvider(request);
     host.agentId = "main";
     host.sessionKey = "agent:main:pane-one";
     if (late) {
@@ -120,9 +126,7 @@ it.each([
       agentId: scope === "other-agent" ? "other" : "main",
       sessionKey: scope === "other-session" ? "agent:main:pane-two" : "agent:main:pane-one",
     });
-    await waitForSolid(() =>
-      expect(panel.querySelector(".lr-state")?.textContent).toContain("Merged"),
-    );
+    await panelMerged(panel);
     if (late) {
       if (scope === "replaced-client") {
         const replacement = createTestGatewayClient((method) =>
@@ -137,10 +141,8 @@ it.each([
     }
     await rehover(anchor);
     expect(badge()).toBe(scope === "same" ? "Merged" : "Open");
-    expect(document.querySelector(".link-reader-hovercard__metadata")?.textContent).toBe("+42");
-    expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(
-      scope === "replaced-client" ? 0 : 1,
-    );
+    expect(metadata()).toBe("+42");
+    expect(previews(request)).toHaveLength(scope === "replaced-client" ? 0 : 1);
   },
 );
 
@@ -151,23 +153,18 @@ it.each([false, true])(
       .fn()
       .mockResolvedValueOnce({ ...open, stale: true })
       .mockResolvedValue(merged);
-    const { host, anchor } = makeProvider();
-    host.client = createTestGatewayClient(request);
+    const { host, anchor } = makeProvider(request);
     host.sessionKey = "agent:main:pane-one";
     host.readers = [{ ...reader, linkReader: { ...reader.linkReader, sessionScoped } }];
     await hover(anchor);
     expect(badge()).toBe("Open");
-    expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
-      "true",
-    );
+    expect(cached()).toBe("true");
     expect(request).toHaveBeenCalledTimes(1);
     await rehover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
     await rehover(anchor, 30_000);
     expect(badge()).toBe("Merged");
-    expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
-      "false",
-    );
+    expect(cached()).toBe("false");
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[1]?.[1]).toEqual({
       url,
@@ -178,13 +175,10 @@ it.each([false, true])(
 
 it("labels still-stale metadata and retries only after short backoff", async () => {
   const request = vi.fn().mockResolvedValue({ ...open, stale: true });
-  const { host, anchor } = makeProvider();
-  host.client = createTestGatewayClient(request);
+  const { anchor } = makeProvider(request);
   await hover(anchor);
   expect(badge()).toBe("Open");
-  expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
-    "true",
-  );
+  expect(cached()).toBe("true");
   expect(request).toHaveBeenCalledTimes(1);
   await rehover(anchor);
   expect(request).toHaveBeenCalledTimes(1);
@@ -197,9 +191,7 @@ it("does not let an older pending preview overwrite committed reader details", a
   const request = vi.fn((method: string) =>
     method === "github.detail" ? Promise.resolve(merged) : pending.promise,
   );
-  const client = createTestGatewayClient(request);
-  const { host, anchor } = makeProvider();
-  host.client = client;
+  const { anchor, client } = makeProvider(request);
   await hover(anchor);
   await openPanel({ client });
   await waitForSolid(() => expect(badge()).toBe("Merged"));
@@ -221,20 +213,16 @@ it.each([false, true])(
       previewReads += 1;
       return pendingPreview && previewReads === 1 ? pending.promise : Promise.resolve(open);
     });
-    const client = createTestGatewayClient(request);
-    const { host, anchor } = makeProvider();
-    host.client = client;
+    const { anchor, client } = makeProvider(request);
     if (pendingPreview) {
       await hover(anchor);
     }
     const panel = await openPanel({ client });
-    await waitForSolid(() =>
-      expect(panel.querySelector(".lr-state")?.textContent).toContain("Merged"),
-    );
+    await panelMerged(panel);
     pending.resolve(open);
     await rehover(anchor);
     expect(badge()).toBe("Merged");
-    expect(document.querySelector(".link-reader-hovercard__metadata")?.textContent).toBe("+42");
+    expect(metadata()).toBe("+42");
     expect(previewReads).toBe(pendingPreview ? 2 : 1);
   },
 );
@@ -245,9 +233,7 @@ it("keeps reader facts visible when compact preview enrichment fails", async () 
   const request = vi.fn((method: string) =>
     method === "github.detail" ? Promise.resolve(merged) : previewResponse,
   );
-  const client = createTestGatewayClient(request);
-  const { host, anchor } = makeProvider();
-  host.client = client;
+  const { anchor, client } = makeProvider(request);
   await openPanel({ client });
   await waitForSolid(() => expect(anchor.getAttribute("aria-description")).toBe("Merged"));
   await hover(anchor);
@@ -255,19 +241,17 @@ it("keeps reader facts visible when compact preview enrichment fails", async () 
   pending.reject(new Error("Preview rate limited"));
   await vi.advanceTimersByTimeAsync(0);
   expect(badge()).toBe("Merged");
-  expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
-    "true",
-  );
+  expect(cached()).toBe("true");
   await rehover(anchor);
   expect(badge()).toBe("Merged");
-  expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(1);
+  expect(previews(request)).toHaveLength(1);
   await rehover(anchor, 30_000);
   expect(badge()).toBe("Merged");
   expect(anchor.getAttribute("aria-description")).toBe("Merged");
-  expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(2);
+  expect(previews(request)).toHaveLength(2);
   previewResponse = Promise.resolve(open);
   await rehover(anchor, 30_000);
   expect(badge()).toBe("Merged");
-  expect(document.querySelector(".link-reader-hovercard__metadata")?.textContent).toBe("+42");
-  expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(3);
+  expect(metadata()).toBe("+42");
+  expect(previews(request)).toHaveLength(3);
 });
