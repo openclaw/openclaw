@@ -182,6 +182,15 @@ const repositoryScriptEntries = [
   "scripts/perf/ws-event-diagnostics-measure.ts!",
   // scripts/perf/README.md invokes this database-path allocation probe by path.
   "scripts/perf/state-path-resolution-measure.ts!",
+  // Maintained benchmark guides and source headers retain these executable roots by path.
+  "scripts/perf/archive-worker-retention-measure.ts!",
+  "scripts/perf/codex-catalog-preview-retention.ts!",
+  "scripts/perf/config-validate-measure.mjs!",
+  "scripts/perf/native-allocation-profile.mjs!",
+  "scripts/perf/session-initial-context-fixture.ts!",
+  "scripts/perf/session-initial-context-measure.ts!",
+  "scripts/perf/sql-probe-measure.ts!",
+  "scripts/perf/workspace-manifest-retention.ts!",
   // Maintained guides and source headers invoke these proof commands by exact path.
   "scripts/bench-control-ui-media.ts!",
   "scripts/bench-control-ui-rich-boot.ts!",
