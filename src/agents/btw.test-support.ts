@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
+import type { AssistantMessageEvent } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createOpenClawTestState,
@@ -70,15 +70,13 @@ export function createSessionEntry(overrides: Partial<SessionEntry> = {}) {
   };
 }
 
-function createAssistantDoneEvent(
-  content: AssistantMessage["content"],
-): Extract<AssistantMessageEvent, { type: "done" }> {
+export function createDoneEvent(text: string): Extract<AssistantMessageEvent, { type: "done" }> {
   return {
     type: "done",
     reason: "stop",
     message: {
       role: "assistant",
-      content,
+      content: [{ type: "text", text }],
       provider: DEFAULT_PROVIDER,
       api: "anthropic-messages",
       model: DEFAULT_MODEL,
@@ -87,10 +85,6 @@ function createAssistantDoneEvent(
       timestamp: Date.now(),
     },
   };
-}
-
-export function createDoneEvent(text: string) {
-  return createAssistantDoneEvent([{ type: "text", text }]);
 }
 
 export function mockDoneAnswer(text: string) {
@@ -292,8 +286,7 @@ export function expectPreparedAuthSupport(
 export async function runMathSideQuestionAndCaptureContext() {
   mockDoneAnswer(MATH_ANSWER);
   await runMathSideQuestion();
-  const context = mockArg(mocks.streamSimpleMock, 0, 1);
-  return context;
+  return mockArg(mocks.streamSimpleMock, 0, 1);
 }
 
 export function expectRecordFields(
@@ -393,8 +386,7 @@ export function setupBtwTestHooks() {
     mocks.snapshotResources.acquire = undefined;
     mocks.discoverAuthStorageMock.mockReset();
     mocks.discoverModelsMock.mockReset();
-    mocks.getModelRegistryRuntimeMock.mockReset();
-    mocks.getModelRegistryRuntimeMock.mockReturnValue({
+    mocks.getModelRegistryRuntimeMock.mockReset().mockReturnValue({
       apiRegistry: {},
       llmRuntime: { streamSimple: mocks.streamSimpleMock },
     });
@@ -419,17 +411,14 @@ export function setupBtwTestHooks() {
     mocks.ensureSelectedAgentHarnessPluginMock.mockReset();
     mocks.createAgentHarnessHostCapabilitiesMock.mockReset();
     mocks.closeAgentHarnessHostCapabilitiesMock.mockReset();
-    mocks.listSessionEntriesCoreMock.mockReset();
-    mocks.listSessionEntriesCoreMock.mockReturnValue([]);
-    mocks.loadSessionEntryMock.mockReset();
-    mocks.loadSessionEntryMock.mockReturnValue(undefined);
+    mocks.listSessionEntriesCoreMock.mockReset().mockReturnValue([]);
+    mocks.loadSessionEntryMock.mockReset().mockReturnValue(undefined);
     mocks.loadTranscriptEventsMock.mockReset();
-    mocks.shouldPreferExplicitConfigApiKeyAuthMock.mockReset();
-    mocks.shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
-    mocks.hasUsableCustomProviderApiKeyMock.mockReset();
-    mocks.hasUsableCustomProviderApiKeyMock.mockReturnValue(false);
-    mocks.resolveProviderEntryApiKeyProfileReferenceMock.mockReset();
-    mocks.resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "none" });
+    mocks.shouldPreferExplicitConfigApiKeyAuthMock.mockReset().mockReturnValue(false);
+    mocks.hasUsableCustomProviderApiKeyMock.mockReset().mockReturnValue(false);
+    mocks.resolveProviderEntryApiKeyProfileReferenceMock
+      .mockReset()
+      .mockReturnValue({ kind: "none" });
     clearAgentHarnesses();
     if (!defaultPluginMetadataSnapshot) {
       defaultPluginMetadataSnapshot = resolvePluginMetadataSnapshot({

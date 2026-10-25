@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CliOutput } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { extractCliErrorMessage, formatCliOutputError, parseCliOutput } from "./cli-output.js";
 import {
@@ -13,6 +14,18 @@ type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
 
 function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], providerId: string) {
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
+}
+
+function parseClaude(...frames: unknown[]) {
+  return parseCliJsonl(
+    joinJsonlFrames(...frames),
+    { command: "claude", output: "jsonl", sessionIdFields: ["session_id"] },
+    "claude-cli",
+  );
+}
+
+function expectOutput(actual: CliOutput | null, expected: Partial<CliOutput>) {
+  expect(actual).toEqual({ text: "", sessionId: undefined, usage: undefined, ...expected });
 }
 
 function hasDanglingSurrogate(value: string): boolean {
@@ -93,10 +106,8 @@ describe("parseCliJsonl errors", () => {
       "claude-cli",
     );
 
-    expect(result).toEqual({
-      text: "",
+    expectOutput(result, {
       sessionId: "claude-execution-error",
-      usage: undefined,
       errorText: "API Error: 529 Overloaded",
     });
   });
@@ -106,12 +117,10 @@ describe("parseCliJsonl errors", () => {
       joinJsonlFrames(
         {
           type: "error",
-          timestamp: "2026-06-16T19:36:48.000Z",
           severity: "error",
         },
         {
           type: "result",
-          timestamp: "2026-06-16T19:36:49.000Z",
           status: "error",
           error: { message: "Final Gemini failure" },
         },
@@ -128,20 +137,17 @@ describe("parseCliJsonl errors", () => {
       joinJsonlFrames(
         {
           type: "error",
-          timestamp: "2026-06-16T19:36:46.000Z",
           severity: "warning",
           message: "Loop detected, stopping execution",
         },
         {
           type: "message",
-          timestamp: "2026-06-16T19:36:47.000Z",
           role: "assistant",
           content: "final output",
           delta: true,
         },
         {
           type: "result",
-          timestamp: "2026-06-16T19:36:49.000Z",
           status: "success",
         },
       ),
@@ -149,11 +155,7 @@ describe("parseCliJsonl errors", () => {
       "google-gemini-cli",
     );
 
-    expect(result).toEqual({
-      text: "final output",
-      sessionId: undefined,
-      usage: undefined,
-    });
+    expectOutput(result, { text: "final output" });
   });
 
   it("extracts nested Claude API errors from failed stream-json output", () => {
@@ -165,47 +167,27 @@ describe("parseCliJsonl errors", () => {
 
   it("classifies Claude is_error stream-json results as provider errors", () => {
     const { message, jsonl } = createClaudeApiErrorFixture();
-    const result = parseCliJsonl(
-      jsonl,
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
-      "claude-cli",
-    );
+    const result = parseClaude(jsonl);
 
-    expect(result).toEqual({
-      text: "",
+    expectOutput(result, {
       sessionId: "session-api-error",
-      usage: undefined,
       errorText: message,
     });
   });
 
   it("preserves Claude max-turn terminal context for actionable run errors", () => {
-    const result = parseCliJsonl(
-      JSON.stringify({
-        type: "result",
-        subtype: "error_max_turns",
-        session_id: "session-max-turns",
-        num_turns: 2,
-        stop_reason: "tool_use",
-        terminal_reason: "max_turns",
-        errors: ["Reached maximum number of turns (1)"],
-      }),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
-      "claude-cli",
-    );
+    const result = parseClaude({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "session-max-turns",
+      num_turns: 2,
+      stop_reason: "tool_use",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (1)"],
+    });
 
-    expect(result).toEqual({
-      text: "",
+    expectOutput(result, {
       sessionId: "session-max-turns",
-      usage: undefined,
       errorText: "Reached maximum number of turns (1)",
       terminalFailure: {
         reason: "max_turns",
@@ -226,24 +208,14 @@ describe("parseCliJsonl errors", () => {
   });
 
   it("warns that terminal_reason-only max-turn results may have run tools", () => {
-    const result = parseCliJsonl(
-      JSON.stringify({
-        type: "result",
-        session_id: "session-terminal-reason-only",
-        terminal_reason: "max_turns",
-      }),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
-      "claude-cli",
-    );
+    const result = parseClaude({
+      type: "result",
+      session_id: "session-terminal-reason-only",
+      terminal_reason: "max_turns",
+    });
 
-    expect(result).toEqual({
-      text: "",
+    expectOutput(result, {
       sessionId: "session-terminal-reason-only",
-      usage: undefined,
       errorText: "Reached maximum number of turns.",
       terminalFailure: { reason: "max_turns" },
     });
@@ -288,14 +260,12 @@ describe("createCliJsonlStreamingParser errors", () => {
       joinJsonlFrames(
         {
           type: "message",
-          timestamp: "2026-06-16T19:36:47.000Z",
           role: "assistant",
           content: "partial output",
           delta: true,
         },
         {
           type: "result",
-          timestamp: "2026-06-16T19:36:49.000Z",
           status: "error",
           error: { message: "Gemini stream failed" },
         },
@@ -311,10 +281,7 @@ describe("createCliJsonlStreamingParser errors", () => {
         usage: undefined,
       },
     ]);
-    expect(parser.getOutput()).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
+    expectOutput(parser.getOutput(), {
       errorText: "Gemini stream failed",
     });
   });
@@ -335,10 +302,7 @@ describe("createCliJsonlStreamingParser errors", () => {
     parser.finish();
 
     expect(calls).toBe(1);
-    expect(parser.getOutput()).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
+    expectOutput(parser.getOutput(), {
       errorText: "CLI backend acme-cli JSONL parser failed: invalid custom event",
     });
   });
@@ -363,7 +327,7 @@ describe("createCliJsonlStreamingParser errors", () => {
       parser.push("failed\nsummary\n");
       parser.finish();
 
-      expect(parser.getOutput()).toEqual({
+      expectOutput(parser.getOutput(), {
         text,
         sessionId: "late-successor",
         usage: { input: 2, output: 1, total: 3 },
@@ -387,10 +351,8 @@ describe("createCliJsonlStreamingParser errors", () => {
     parser.finish();
 
     expect(sessionIds).toEqual(["late-successor"]);
-    expect(parser.getOutput()).toEqual({
-      text: "",
+    expectOutput(parser.getOutput(), {
       sessionId: "late-successor",
-      usage: undefined,
       errorText: "provider failed",
     });
   });
@@ -406,11 +368,7 @@ describe("createCliJsonlStreamingParser errors", () => {
     parser.push("delta\nresult\n");
     parser.finish();
 
-    expect(parser.getOutput()).toEqual({
-      text: "streamed answer",
-      sessionId: undefined,
-      usage: undefined,
-    });
+    expectOutput(parser.getOutput(), { text: "streamed answer" });
   });
 
   it("preserves earlier plugin result text when a later result only adds metadata", () => {
@@ -428,7 +386,7 @@ describe("createCliJsonlStreamingParser errors", () => {
     parser.push("result\nsummary\n");
     parser.finish();
 
-    expect(parser.getOutput()).toEqual({
+    expectOutput(parser.getOutput(), {
       text: "completed answer",
       sessionId: "summary-session",
       usage: { input: 5, output: 3, total: 8 },
@@ -469,10 +427,9 @@ describe("createCliJsonlStreamingParser errors", () => {
     );
     parser.finish();
 
-    expect(parser.getOutput()).toEqual({
+    expectOutput(parser.getOutput(), {
       text: expectedText,
       sessionId: "custom-session",
-      usage: undefined,
     });
   });
 });

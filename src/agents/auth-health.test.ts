@@ -1,8 +1,3 @@
-/**
- * Tests auth health rollups.
- * Covers OAuth/API-key status classification, external CLI bootstrap, provider
- * auth ordering, and prompt-free credential checks.
- */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,7 +6,7 @@ import {
   createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { parseLegacyCredentialEntry } from "./auth-profiles/legacy-flat-credential.js";
-import type { OAuthCredential } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, OAuthCredential } from "./auth-profiles/types.js";
 import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 
 const { readCodexCliCredentialsCachedMock, resolveProviderIdForAuthMock } = vi.hoisted(() => ({
@@ -44,27 +39,29 @@ describe("buildAuthHealthSummary", () => {
   const profileReasonCodes = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
     Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.reasonCode]));
 
-  function mockFreshCodexCliCredentials() {
-    readCodexCliCredentialsCachedMock.mockReturnValue({
-      type: "oauth",
-      provider: "openai",
-      access: "fresh-cli-access",
-      refresh: "fresh-cli-refresh",
-      expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
-      accountId: "acct-cli",
-    });
+  const oauth = (expires: number, provider = "openai", refresh = "refresh") =>
+    createOAuthRefreshCredential({ expires, provider, refresh });
+  function mockFreshCodexCliCredentials(expires = now + DEFAULT_OAUTH_WARN_MS + 60_000) {
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createOAuthRefreshCredential({
+        expires,
+        access: "fresh-cli-access",
+        refresh: "fresh-cli-refresh",
+        accountId: "acct-cli",
+      }),
+    );
   }
-
-  function buildOpenAiCodexOAuthStore(params: {
-    access: string;
-    refresh: string;
-    expires: number;
-    accountId?: string;
-  }) {
-    return createAuthProfileStoreFixture({
-      "openai:default": createOAuthRefreshCredential(params),
+  const buildOpenAiCodexOAuthStore = (expires: number) =>
+    createAuthProfileStoreFixture({
+      "openai:default": createOAuthRefreshCredential({
+        expires,
+        access: "canonical-access",
+        refresh: "canonical-refresh",
+        accountId: "acct-cli",
+      }),
     });
-  }
+  const summarizeProfile = (profileId: string, credential: AuthProfileCredential) =>
+    buildAuthHealthSummary({ store: createAuthProfileStoreFixture({ [profileId]: credential }) });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -85,27 +82,9 @@ describe("buildAuthHealthSummary", () => {
     },
   ])("classifies OAuth and API key profiles with $name", ({ warnAfterMs, shortLivedStatus }) => {
     const store = createAuthProfileStoreFixture({
-      "anthropic:ok": {
-        type: "oauth" as const,
-        provider: "anthropic",
-        access: "access",
-        refresh: "refresh",
-        expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
-      },
-      "anthropic:expiring": {
-        type: "oauth" as const,
-        provider: "anthropic",
-        access: "access",
-        refresh: "refresh",
-        expires: now + 10_000,
-      },
-      "anthropic:short-lived": {
-        type: "oauth" as const,
-        provider: "anthropic",
-        access: "access",
-        refresh: "refresh",
-        expires: now + 60 * 60_000,
-      },
+      "anthropic:ok": oauth(now + DEFAULT_OAUTH_WARN_MS + 60_000, "anthropic"),
+      "anthropic:expiring": oauth(now + 10_000, "anthropic"),
+      "anthropic:short-lived": oauth(now + 60 * 60_000, "anthropic"),
       "anthropic:manual-renewal": parseLegacyCredentialEntry({
         type: "oauth",
         provider: "anthropic",
@@ -113,13 +92,7 @@ describe("buildAuthHealthSummary", () => {
         refresh: "",
         expires: now + 60 * 60_000,
       })!,
-      "anthropic:expired": {
-        type: "oauth" as const,
-        provider: "anthropic",
-        access: "access",
-        refresh: "refresh",
-        expires: now - 10_000,
-      },
+      "anthropic:expired": oauth(now - 10_000, "anthropic"),
       "anthropic:api": createApiKeyCredential("anthropic", "sk-ant-api"),
     });
 
@@ -128,14 +101,14 @@ describe("buildAuthHealthSummary", () => {
       warnAfterMs,
     });
 
-    const statuses = profileStatuses(summary);
-
-    expect(statuses["anthropic:ok"]).toBe("ok");
-    expect(statuses["anthropic:expiring"]).toBe("expiring");
-    expect(statuses["anthropic:short-lived"]).toBe(shortLivedStatus);
-    expect(statuses["anthropic:manual-renewal"]).toBe("expiring");
-    expect(statuses["anthropic:expired"]).toBe("expired");
-    expect(statuses["anthropic:api"]).toBe("static");
+    expect(profileStatuses(summary)).toEqual({
+      "anthropic:ok": "ok",
+      "anthropic:expiring": "expiring",
+      "anthropic:short-lived": shortLivedStatus,
+      "anthropic:manual-renewal": "expiring",
+      "anthropic:expired": "expired",
+      "anthropic:api": "static",
+    });
 
     const provider = summary.providers.find((entry) => entry.provider === "anthropic");
     expect(provider?.status).toBe("expired");
@@ -187,42 +160,12 @@ describe("buildAuthHealthSummary", () => {
     expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
-  it("does not open Codex credentials during prompt-free health checks", () => {
-    mockFreshCodexCliCredentials();
-    const store = createAuthProfileStoreFixture({
-      "openai:default": {
-        type: "oauth" as const,
-        provider: "openai",
-      } as unknown as OAuthCredential,
-    });
-
-    const summary = buildAuthHealthSummary({
-      store,
-      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-    });
-
-    expect(profileStatuses(summary)["openai:default"]).toBe("missing");
-    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
-  });
-
   it("uses ordered usable profiles for provider health while keeping stale inventory visible", () => {
     const store = {
       version: 1,
       profiles: {
-        "openai:default": {
-          type: "oauth" as const,
-          provider: "openai",
-          access: "stale-access",
-          refresh: "stale-refresh",
-          expires: now - 10_000,
-        },
-        "openai:named": {
-          type: "oauth" as const,
-          provider: "openai",
-          access: "fresh-access",
-          refresh: "fresh-refresh",
-          expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
-        },
+        "openai:default": oauth(now - 10_000),
+        "openai:named": oauth(now + DEFAULT_OAUTH_WARN_MS + 60_000),
       },
       order: {
         openai: ["openai:named"],
@@ -251,13 +194,7 @@ describe("buildAuthHealthSummary", () => {
     const store = {
       version: 1,
       profiles: {
-        "codex-cli:legacy": {
-          type: "oauth" as const,
-          provider: "codex-cli",
-          access: "fresh-access",
-          refresh: "fresh-refresh",
-          expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
-        },
+        "codex-cli:legacy": oauth(now + DEFAULT_OAUTH_WARN_MS + 60_000, "codex-cli"),
       },
       order: {
         openai: [],
@@ -273,33 +210,18 @@ describe("buildAuthHealthSummary", () => {
   });
 
   it("reports expired for OAuth without a refresh token", () => {
-    const store = createAuthProfileStoreFixture({
-      "google:no-refresh": {
-        type: "oauth" as const,
-        provider: "google-antigravity",
-        access: "access",
-        refresh: "",
-        expires: now - 10_000,
-      },
-    });
-
-    const summary = buildAuthHealthSummary({ store });
-
-    const statuses = profileStatuses(summary);
-
-    expect(statuses["google:no-refresh"]).toBe("expired");
+    const summary = summarizeProfile(
+      "google:no-refresh",
+      oauth(now - 10_000, "google-antigravity", ""),
+    );
+    expect(profileStatuses(summary)["google:no-refresh"]).toBe("expired");
   });
 
   it("reports command-shaped API-key profiles as missing malformed auth", () => {
-    const store = createAuthProfileStoreFixture({
-      "zai:default": createApiKeyCredential(
-        "zai",
-        "openclaw onboard --auth-choice zai-coding-global",
-      ),
-    });
-
-    const summary = buildAuthHealthSummary({ store });
-
+    const summary = summarizeProfile(
+      "zai:default",
+      createApiKeyCredential("zai", "openclaw onboard --auth-choice zai-coding-global"),
+    );
     expect(profileStatuses(summary)["zai:default"]).toBe("missing");
     expect(profileReasonCodes(summary)["zai:default"]).toBe("malformed_api_key");
     expect(summary.providers.find((entry) => entry.provider === "zai")?.status).toBe("missing");
@@ -307,13 +229,7 @@ describe("buildAuthHealthSummary", () => {
 
   it("uses runtime provider credentials for profile health", () => {
     const store = createAuthProfileStoreFixture({
-      "anthropic:claude-cli": {
-        type: "oauth" as const,
-        provider: "claude-cli",
-        access: "stale-access",
-        refresh: "stale-refresh",
-        expires: now - 10_000,
-      },
+      "anthropic:claude-cli": oauth(now - 10_000, "claude-cli"),
     });
 
     const summary = buildAuthHealthSummary({
@@ -337,74 +253,33 @@ describe("buildAuthHealthSummary", () => {
     expect(profile?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
   });
 
-  it("does not let fresh .codex state override expired canonical health", () => {
-    mockFreshCodexCliCredentials();
-    const store = buildOpenAiCodexOAuthStore({
-      access: "expired-access",
-      refresh: "expired-refresh",
-      expires: now - 10_000,
-      accountId: "acct-cli",
-    });
-
-    const summary = buildAuthHealthSummary({ store });
-
-    const statuses = profileStatuses(summary);
-    expect(statuses["openai:default"]).toBe("expired");
-  });
-
-  it("keeps healthy local oauth over fresher imported Codex CLI credentials in health status", () => {
-    readCodexCliCredentialsCachedMock.mockReturnValue({
-      type: "oauth",
-      provider: "openai",
-      access: "fresh-cli-access",
-      refresh: "fresh-cli-refresh",
-      expires: now + 7 * DEFAULT_OAUTH_WARN_MS,
-      accountId: "acct-cli",
-    });
-    const store = createAuthProfileStoreFixture({
-      "openai:default": createOAuthRefreshCredential({
-        access: "healthy-local-access",
-        refresh: "healthy-local-refresh",
-        expires: now + DEFAULT_OAUTH_WARN_MS + 10_000,
-      }),
-    });
-
-    const summary = buildAuthHealthSummary({ store });
-
-    const profile = summary.profiles.find((entry) => entry.profileId === "openai:default");
-    expect(profile?.status).toBe("ok");
-    expect(profile?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 10_000);
-  });
-
-  it("does not let fresh .codex state override near-expiry canonical health", () => {
-    mockFreshCodexCliCredentials();
-    const store = buildOpenAiCodexOAuthStore({
-      access: "near-expiry-local-access",
-      refresh: "near-expiry-local-refresh",
-      expires: now + 2 * 60_000,
-    });
-
-    const summary = buildAuthHealthSummary({
-      store,
-      warnAfterMs: 60_000,
-    });
-
-    const profile = summary.profiles.find((entry) => entry.profileId === "openai:default");
-    expect(profile?.status).toBe("expiring");
-    expect(profile?.expiresAt).toBe(now + 2 * 60_000);
-  });
+  it.each([
+    ["expired", -10_000, undefined],
+    ["ok", DEFAULT_OAUTH_WARN_MS + 10_000, undefined],
+    ["expiring", 2 * 60_000, 60_000],
+  ] as const)(
+    "keeps canonical %s health over fresh Codex CLI state",
+    (status, delta, warnAfterMs) => {
+      mockFreshCodexCliCredentials(now + 7 * DEFAULT_OAUTH_WARN_MS);
+      const summary = buildAuthHealthSummary({
+        store: buildOpenAiCodexOAuthStore(now + delta),
+        warnAfterMs,
+      });
+      const profile = summary.profiles.find((entry) => entry.profileId === "openai:default");
+      expect(profile?.status).toBe(status);
+      if (status !== "expired") {
+        expect(profile?.expiresAt).toBe(now + delta);
+      }
+    },
+  );
 
   it("marks token profiles with invalid expires as missing with reason code", () => {
-    const store = createAuthProfileStoreFixture({
-      "github-copilot:invalid-expires": {
-        type: "token" as const,
-        provider: "github-copilot",
-        token: "gh-token",
-        expires: 0,
-      },
+    const summary = summarizeProfile("github-copilot:invalid-expires", {
+      type: "token",
+      provider: "github-copilot",
+      token: "gh-token",
+      expires: 0,
     });
-
-    const summary = buildAuthHealthSummary({ store });
     const statuses = profileStatuses(summary);
     const reasonCodes = profileReasonCodes(summary);
 
@@ -413,16 +288,7 @@ describe("buildAuthHealthSummary", () => {
   });
 
   it("does not expose out-of-range oauth expiry values in health rollups", () => {
-    const store = createAuthProfileStoreFixture({
-      "openai:bad-expiry": createOAuthRefreshCredential({
-        access: "oauth-access",
-        refresh: "oauth-refresh",
-        expires: MAX_DATE_TIMESTAMP_MS + 1,
-      }),
-    });
-
-    const summary = buildAuthHealthSummary({ store });
-
+    const summary = summarizeProfile("openai:bad-expiry", oauth(MAX_DATE_TIMESTAMP_MS + 1));
     const profile = summary.profiles.find((entry) => entry.profileId === "openai:bad-expiry");
     const provider = summary.providers.find((entry) => entry.provider === "openai");
 
