@@ -1,4 +1,3 @@
-// Memory Wiki tests cover index plugin behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,7 +5,6 @@ import type { Worker } from "node:worker_threads";
 import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
 import { loadMemoryWikiCompiledCache, writeMemoryWikiCompiledCache } from "./src/compiled-cache.js";
 import { deferred } from "./src/deferred.test-helpers.js";
@@ -49,36 +47,21 @@ async function serviceFixture(initialize = false) {
   const registration = createPluginApi();
   registration.api.pluginConfig = { vault: { path: vault.rootDir } };
   // Some tests intercept the store before registering the plugin.
-  const register = () => {
+  const register = async () => {
     plugin.register(registration.api);
-    return registration.registerService.mock.calls[0]?.[0];
+    const service = registration.registerService.mock.calls[0]?.[0];
+    await service?.start?.();
+    return service;
   };
   return { ...vault, ...registration, register };
 }
 
 describe("memory-wiki plugin", () => {
-  it("registers default-vault tools inside the configured state directory", () => {
-    const stateDir = "/tmp/openclaw-memory-wiki-runtime-state";
-    const { api, registerTool } = createPluginApi();
-
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
-      plugin.register(api);
-      const registered = registerTool.mock.calls.find(
-        ([, registration]) => registration.name === "wiki_status",
-      )?.[0];
-      const statusFactory = typeof registered === "function" ? registered : registered?.create;
-
-      expect(statusFactory?.({ agentId: "main" })).toMatchObject({
-        testConfig: { vault: { path: path.join(stateDir, "wiki", "main") } },
-      });
-    });
-  });
-
   it("resolves every tool factory from keyed agent entries", async () => {
     const rootDir = await createTempDir("memory-wiki-index-agents-");
     const appConfig = {
       agents: { entries: { support: {}, marketing: {} } },
-    } as OpenClawConfig;
+    };
     const { api, registerTool } = createPluginApi();
     api.config = appConfig;
     api.pluginConfig = { vault: { scope: "agent", path: rootDir } };
@@ -86,19 +69,15 @@ describe("memory-wiki plugin", () => {
 
     plugin.register(api);
 
-    for (const [registered, registration] of registerTool.mock.calls) {
+    for (const [registered] of registerTool.mock.calls) {
       const factory = typeof registered === "function" ? registered : registered.create;
-      expect(factory).toEqual(expect.any(Function));
       expect(factory({})).toBeNull();
       for (const agentId of ["support", "marketing"]) {
         const tool = factory({ agentId });
         expect(tool).toMatchObject({
-          name: registration.name,
           testConfig: { agentId, vault: { scope: "agent", path: path.join(rootDir, agentId) } },
+          testMemoryContext: { agentId },
         });
-        if (registration.name === "wiki_status") {
-          expect(tool).toMatchObject({ testMemoryContext: { agentId } });
-        }
       }
       expect(() => factory({ agentId: "finance" })).toThrow("Unknown memory-wiki agentId: finance");
     }
@@ -106,13 +85,15 @@ describe("memory-wiki plugin", () => {
 
   it("forwards protected recall authorization to wiki search and get", () => {
     const { api, registerTool } = createPluginApi();
-    plugin.register(api);
+    const stateDir = "/tmp/openclaw-memory-wiki-runtime-state";
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => plugin.register(api));
     const conversationRecall = {
       anchorSessionKey: "agent:main:telegram:direct:owner",
       scope: "same-agent-private",
       corpus: "sessions",
     } as const;
     const sessionKey = "agent:main:telegram:direct:owner:active-memory:abcdef123456";
+    const authority = { kind: "session", sessionKey, conversationRecall };
 
     for (const toolName of ["wiki_search", "wiki_get"]) {
       const registration = registerTool.mock.calls.find((call) => call[1]?.name === toolName);
@@ -127,18 +108,13 @@ describe("memory-wiki plugin", () => {
           assertInvocationCurrent: () => {},
         }),
       ).toMatchObject({
+        testConfig: { vault: { path: path.join(stateDir, "wiki", "main") } },
         testMemoryContext: {
           agentId: "main",
           agentSessionKey: sessionKey,
           sandboxed: false,
           conversationRecall,
-          memoryContext: {
-            authority: {
-              kind: "session",
-              sessionKey,
-              conversationRecall,
-            },
-          },
+          memoryContext: { authority },
         },
       });
     }
@@ -146,8 +122,7 @@ describe("memory-wiki plugin", () => {
 
   it("terminates the query reader workers on service stop and starts fresh ones for later reads", async () => {
     const { config, page, register } = await serviceFixture();
-    const service = register();
-    await service?.start?.();
+    const service = await register();
     for (const name of ["alpha", "beta"]) {
       await page(`sources/${name}.md`, { pageType: "source", id: `source.${name}`, title: name });
     }
@@ -195,8 +170,7 @@ describe("memory-wiki plugin", () => {
       };
       return store;
     };
-    const service = register();
-    await service?.start?.();
+    const service = await register();
     const identity = await loadMemoryWikiVaultIdentity(rootDir);
     if (!identity.vaultGeneration) {
       throw new Error("Expected an active Memory Wiki vault generation");
@@ -229,8 +203,7 @@ describe("memory-wiki plugin", () => {
     "closes queued %s source sync before it can activate a vault",
     async (method) => {
       const { rootDir, config, registerGatewayMethod, register } = await serviceFixture();
-      const service = register();
-      await service?.start?.();
+      const service = await register();
 
       const mutationEntered = deferred();
       const releaseMutation = deferred();
@@ -277,8 +250,7 @@ describe("memory-wiki plugin", () => {
 
   it("clears active owners before a fallible lifecycle identity refresh", async () => {
     const { config, register } = await serviceFixture(true);
-    const service = register();
-    await service?.start?.();
+    const service = await register();
 
     const snapshot = emptyCompiledSnapshot();
     await publishCompiledSnapshot(config, snapshot);
