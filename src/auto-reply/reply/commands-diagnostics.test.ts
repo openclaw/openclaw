@@ -1,6 +1,6 @@
-// Tests diagnostics command output and runtime diagnostic toggles.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExecToolDefaults } from "../../agents/bash-tools.exec-types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
@@ -56,33 +56,9 @@ type ExecCall = {
   params: unknown;
 };
 
-type ExecDefaults = {
-  accountId?: string;
-  approvalReviewerDeviceId?: string;
-  approvalFollowup?: () => Promise<string | undefined>;
-  approvalFollowupMode?: string;
-  approvalFollowupText?: string;
-  approvalWarningText?: string;
-  ask?: string;
-  currentChannelId?: string;
-  host?: string;
-  messageProvider?: string;
-  security?: string;
-  trigger?: string;
-};
-
 type ExecParams = {
   ask?: string;
   command?: string;
-};
-
-type DiagnosticsSession = {
-  accountId?: string;
-  agentHarnessId?: string;
-  channel?: string;
-  sessionFile?: string;
-  sessionId?: string;
-  sessionKey?: string;
 };
 
 type PrivateDiagnosticsReply = {
@@ -96,13 +72,13 @@ function requireExecCall(execCalls: ExecCall[], index = 0) {
     throw new Error(`expected exec call #${index + 1}`);
   }
   return {
-    defaults: call.defaults as ExecDefaults,
+    defaults: call.defaults as ExecToolDefaults,
     params: call.params as ExecParams,
   };
 }
 
 function requireDiagnosticsSessions(call: PluginCommandContext | undefined) {
-  const sessions = call?.diagnosticsSessions as DiagnosticsSession[] | undefined;
+  const sessions = call?.diagnosticsSessions;
   if (!sessions) {
     throw new Error("expected diagnostics sessions");
   }
@@ -181,71 +157,22 @@ function createCodexDiagnosticsSessionEntry() {
   };
 }
 
-function registerCodexDiagnosticsCommandForTest(
-  handler: (ctx: PluginCommandContext) => Promise<unknown>,
-) {
+function registerCodexDiagnosticsCommandForTest() {
   const calls: PluginCommandContext[] = [];
   const commandHandler = vi.fn<PluginCommandHandler>(async (ctx) => {
     calls.push(ctx);
-    await handler(ctx);
     if (ctx.diagnosticsPreviewOnly) {
       return {
         text: [
           "Codex runtime thread detected.",
           "Approving diagnostics will also send this thread's feedback bundle to OpenAI servers.",
-          "The completed diagnostics reply will list the OpenClaw session ids and Codex thread ids that were sent.",
-          "Included: Codex logs and spawned Codex subthreads when available.",
         ].join("\n"),
       };
     }
     if (ctx.diagnosticsUploadApproved) {
-      return {
-        text: [
-          "Codex diagnostics sent to OpenAI servers:",
-          "Session 1",
-          "Channel: whatsapp",
-          "OpenClaw session id: `session-1`",
-          "Codex thread id: `codex-thread-1`",
-          "Inspect locally: `codex resume codex-thread-1`",
-          "Included Codex logs and spawned Codex subthreads when available.",
-        ].join("\n"),
-      };
+      return { text: "Codex diagnostics sent to OpenAI servers:" };
     }
-    return {
-      text: [
-        "Codex runtime thread detected.",
-        "Thread: codex-thread-1",
-        "To send: /codex diagnostics confirm abc123def456",
-        "To cancel: /codex diagnostics cancel abc123def456",
-      ].join("\n"),
-      interactive: {
-        blocks: [
-          {
-            type: "buttons" as const,
-            buttons: [
-              {
-                label: "Send diagnostics",
-                action: {
-                  type: "command",
-                  command: "/codex diagnostics confirm abc123def456",
-                },
-                value: "/codex diagnostics confirm abc123def456",
-                style: "danger" as const,
-              },
-              {
-                label: "Cancel",
-                action: {
-                  type: "command",
-                  command: "/codex diagnostics cancel abc123def456",
-                },
-                value: "/codex diagnostics cancel abc123def456",
-                style: "secondary" as const,
-              },
-            ],
-          },
-        ],
-      },
-    };
+    throw new Error("expected diagnostics preview or approved upload");
   });
   registerCodexCommandForTest(commandHandler);
   return { calls, commandHandler };
@@ -385,7 +312,7 @@ describe("diagnostics command", () => {
   });
 
   it("wraps Codex feedback upload into the Gateway diagnostics approval", async () => {
-    const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+    const { calls } = registerCodexDiagnosticsCommandForTest();
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const params = buildDiagnosticsParams("/diagnostics flaky tool call", {
       sessionEntry: createCodexDiagnosticsSessionEntry(),
@@ -435,7 +362,7 @@ describe("diagnostics command", () => {
   });
 
   it("passes canonical session identities to Codex diagnostics when harness metadata is stale", async () => {
-    const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+    const { calls } = registerCodexDiagnosticsCommandForTest();
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
@@ -497,7 +424,7 @@ describe("diagnostics command", () => {
           skillsSnapshot: { prompt: "unrelated diagnostics prompt ".repeat(4096), skills: [] },
         },
       );
-      const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+      const { calls } = registerCodexDiagnosticsCommandForTest();
       const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
       const params = buildDiagnosticsParams("/diagnostics", {
         agentId: "main",
@@ -558,7 +485,7 @@ describe("diagnostics command", () => {
   });
 
   it("reports private owner approval as pending before starting collection", async () => {
-    const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+    const { calls } = registerCodexDiagnosticsCommandForTest();
     const { execCalls, privateReplies, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest(
       {
         privateTargets: [
@@ -595,7 +522,7 @@ describe("diagnostics command", () => {
   });
 
   it("fails closed in groups when no private diagnostics route is available", async () => {
-    registerCodexDiagnosticsCommandForTest(async () => null);
+    registerCodexDiagnosticsCommandForTest();
     const { execCalls, privateReplies, handleDiagnosticsCommand } =
       createDiagnosticsHandlerForTest();
 
