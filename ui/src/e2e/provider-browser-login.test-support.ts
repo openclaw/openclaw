@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:https";
 import { createServer as createTcpServer } from "node:net";
 import path from "node:path";
+import { json as readJson } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.ts";
 import {
@@ -94,11 +95,7 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
             return response.writeHead(302, { Location: callback.href }).end();
           }
           if (url.pathname === "/token") {
-            let body = "";
-            for await (const chunk of request) {
-              body += chunk.toString();
-            }
-            const { code, state } = JSON.parse(body);
+            const { code, state } = await readJson(request);
             if (
               typeof code !== "string" ||
               typeof state !== "string" ||
