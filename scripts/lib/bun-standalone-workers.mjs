@@ -128,6 +128,21 @@ module.exports = { ...native, Worker };
     workerMap,
     workerThreadsShim,
     rewriteWorkerImports,
+    /** @param {string[]} outputPaths */
+    validateOutputs(outputPaths) {
+      const emitted = new Set(
+        outputPaths.map(
+          (filename) =>
+            `file:///$bunfs/root/${path.relative(path.join(outputRoot, "modules"), filename).split(path.sep).join("/")}`,
+        ),
+      );
+      const missing = Object.entries(workerMap)
+        .filter(([, target]) => !emitted.has(target))
+        .map(([entry]) => entry);
+      if (missing.length) {
+        throw new Error(`Missing embedded standalone worker outputs: ${missing.join(", ")}`);
+      }
+    },
     updateSourceWorkerAliases(aliases) {
       sourceWorkerAliases = aliases;
       writeWorkerShim();

@@ -376,7 +376,8 @@ state before upgrading; see [Updating](/install/updating).
 Worker and child-process targets come from the shared runtime-process manifest.
 The same declarations resolve source workers, installed Node/Bun workers, and
 selected plugin workers. The standalone builder requires every declared output
-before compiling; a filename ending in `.worker.js` does not
+before bundling and verifies that each declared worker or child entry maps to an
+emitted module before compiling the executable; a filename ending in `.worker.js` does not
 declare an entry. Doctor database inspection, database discovery and backup,
 update helpers, workspace leases, certificate warmup, directory watching, hashing,
 the shutdown watchdog, update gates, retired-worktree cleanup, and file-transfer
