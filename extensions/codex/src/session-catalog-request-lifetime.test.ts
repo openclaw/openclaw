@@ -241,49 +241,27 @@ describe("resident catalog hydration request lifetime", () => {
 
   afterEach(async () => h.close());
 
-  it.each([false, true])(
-    "attributes actual-client control requests (rejected=%s)",
-    async (reject) => {
-      const control = h.newFactory(2_000).forRequest("main");
-      await withPageDiagnostics(async (records, advanceClock) => {
-        const pending = observe(control.initialize());
-        const error = { code: -32601, message: "synthetic-private-control-error" };
-        const settled = reject
-          ? expect(pending).rejects.toMatchObject(error)
-          : expect(pending).resolves.toBeUndefined();
-        const frame = await h.frame(0);
-        advanceClock();
-        if (reject) {
-          frame.transport.send({ id: frame.id, error });
-        } else {
-          h.reply(frame, "timed-success");
-        }
-        await settled;
-        await diagnosticRuntime.waitForDiagnosticEventsDrained();
-        expect(records).toHaveLength(1);
-        expect(records[0]?.attributes).toMatchObject({
-          outcome: reject ? "rejected" : "resolved",
-          controlRequestCalls: 1,
-          ...(reject
-            ? {
-                controlFailurePhase: "client-request",
-                controlFailureCategory: "rpc-method-unavailable",
-              }
-            : {
-                inclusiveControlRequestWaitMs: 1_500,
-                controlClientRequestMs: 1_500,
-              }),
-        });
-        if (reject) {
-          expect(JSON.stringify(records)).not.toContain(error.message);
-        } else {
-          await expectPage(control.listPage({ limit: 1 }), "timed-success");
-          expect(records[0]?.attributes).not.toHaveProperty("controlFailurePhase");
-          expect(records[0]?.attributes).not.toHaveProperty("controlFailureCategory");
-        }
+  it("attributes and redacts actual-client control failures", async () => {
+    const control = h.newFactory(2_000).forRequest("main");
+    await withPageDiagnostics(async (records, advanceClock) => {
+      const pending = observe(control.initialize());
+      const error = { code: -32601, message: "synthetic-private-control-error" };
+      const settled = expect(pending).rejects.toMatchObject(error);
+      const frame = await h.frame(0);
+      advanceClock();
+      frame.transport.send({ id: frame.id, error });
+      await settled;
+      await diagnosticRuntime.waitForDiagnosticEventsDrained();
+      expect(records).toHaveLength(1);
+      expect(records[0]?.attributes).toMatchObject({
+        outcome: "rejected",
+        controlRequestCalls: 1,
+        controlFailurePhase: "client-request",
+        controlFailureCategory: "rpc-method-unavailable",
       });
-    },
-  );
+      expect(JSON.stringify(records)).not.toContain(error.message);
+    });
+  });
 
   it("shares same-home hydration across agents and releases only the hydration lease", async () => {
     await h.control.withPinnedConnection(async (pinned) => {

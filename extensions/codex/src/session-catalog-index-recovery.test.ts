@@ -8,24 +8,21 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread } from "./app-server/protocol.js";
 import { createClientHarness } from "./app-server/test-support.js";
+import { catalogIndex } from "./session-catalog-client.test-support.js";
 import {
   codexCatalogResidentHomeKey,
   observeCodexCatalogClient,
 } from "./session-catalog-events.js";
 import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
 import { CodexCatalogPersistence, type CodexCatalogState } from "./session-catalog-index-state.js";
-import { CodexCatalogIndex } from "./session-catalog-index.js";
+import type { CodexCatalogIndex } from "./session-catalog-index.js";
 import { CodexCatalogProjections } from "./session-catalog-projection.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import { writeCatalogRollout } from "./session-catalog-resident.test-support.js";
 import { idleThread } from "./session-catalog.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const indexes: CodexCatalogIndex[] = [];
-afterEach(async () => {
-  for (const index of indexes.splice(0)) {
-    await index.close();
-  }
+afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -40,14 +37,11 @@ function catalog(
   readNative: CodexCatalogIndexOptions["readNative"],
   options: { homeId?: string; local?: boolean } = {},
 ) {
-  const index = new CodexCatalogIndex({
+  return catalogIndex({
     homeId: options.homeId ?? root,
     ...(options.local === false ? {} : { localSessionsRoot: root }),
     readNative,
-    assertCurrent: () => {},
   });
-  indexes.push(index);
-  return index;
 }
 
 async function rollout(id: string, fields: Partial<CodexThread> = {}) {

@@ -4,10 +4,10 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
-import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
+import { catalogIndex as catalog } from "./session-catalog-client.test-support.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import { CodexCatalogPersistence } from "./session-catalog-index-state.js";
-import { CodexCatalogIndex } from "./session-catalog-index.js";
+import type { CodexCatalogIndex } from "./session-catalog-index.js";
 import {
   catalogRow,
   completeCatalogState as completeState,
@@ -17,16 +17,7 @@ import { projectCodexCatalogNativeThread } from "./session-catalog-native-projec
 import { projectCodexCatalogPage } from "./session-catalog-projection.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const indexes: CodexCatalogIndex[] = [];
-function catalog(options: Omit<CodexCatalogIndexOptions, "assertCurrent">) {
-  const index = new CodexCatalogIndex({ ...options, assertCurrent: () => {} });
-  indexes.push(index);
-  return index;
-}
-afterEach(async () => {
-  for (const index of indexes.splice(0)) {
-    await index.close();
-  }
+afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -366,39 +357,31 @@ describe("projectCodexCatalogNativeThread string bounds", () => {
   );
 
   it("carries bounded native fields into the displayed catalog", async () => {
-    const thread = projectCodexCatalogNativeThread(
-      {
-        id: " thread-1 ",
-        sessionId: " native-session ",
-        name: " Title ",
-        preview: "\u001b[31mFirst\nrequest\u001b[0m",
-        cwd: " /workspace/project ",
-        modelProvider: "p".repeat(501),
-        cliVersion: " 0.155.0 ",
-        gitInfo: { branch: " main " },
-        createdAt: 100,
-        updatedAt: Number.NaN,
-        recencyAt: null,
-        source: "cli",
-        status: { type: "active", activeFlags: [" waitingOnApproval ", "", 42] },
-      },
-      sanitizeTerminalText,
-    );
+    const fields = [
+      ["id", " thread-1 ", "threadId", "thread-1"],
+      ["sessionId", " native-session ", "sessionId", "native-session"],
+      ["name", " Title ", "name", "Title"],
+      ["cwd", " /workspace/project ", "cwd", "/workspace/project"],
+      ["modelProvider", "p".repeat(501), "modelProvider", "p".repeat(500)],
+      ["cliVersion", " 0.155.0 ", "cliVersion", "0.155.0"],
+      ["gitInfo", { branch: " main " }, "gitBranch", "main"],
+      ["createdAt", 100, "createdAt", 100],
+      ["recencyAt", null, "recencyAt", null],
+      ["source", "cli", "source", "cli"],
+    ] as const;
+    const native = {
+      ...Object.fromEntries(fields.map(([input, value]) => [input, value])),
+      preview: "\u001b[31mFirst\nrequest\u001b[0m",
+      updatedAt: Number.NaN,
+      status: { type: "active", activeFlags: [" waitingOnApproval ", "", 42] },
+    };
+    const thread = projectCodexCatalogNativeThread(native, sanitizeTerminalText);
     const page = await projectCodexCatalogPage({ data: [thread] });
     expect(page.rows[0]?.page.sessions).toEqual([
       {
-        threadId: "thread-1",
-        sessionId: "native-session",
-        name: "Title",
-        cwd: "/workspace/project",
-        source: "cli",
+        ...Object.fromEntries(fields.map((field) => [field[2], field[3]])),
         status: "active",
         activeFlags: ["waitingOnApproval"],
-        createdAt: 100,
-        recencyAt: null,
-        modelProvider: "p".repeat(500),
-        cliVersion: "0.155.0",
-        gitBranch: "main",
         archived: false,
       },
     ]);

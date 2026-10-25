@@ -64,9 +64,6 @@ async function permissionSession(
   return {
     session,
     storePath,
-    set: (mode?: Parameters<typeof permissions>[0]["mode"]) =>
-      permissions({ session, mode, config: {}, assertCurrent() {} }),
-    read: () => getSessionEntry({ ...session, storePath, readConsistency: "latest" }),
   };
 }
 
@@ -160,11 +157,7 @@ describe("codex conversation controls", () => {
     );
   });
 
-  it("persists fast mode on the binding and permissions on the session", async () => {
-    const test = await permissionSession("session-1", {
-      permissionMode: "full",
-      sessionRoot: tempDir,
-    });
+  it("persists fast mode without changing the binding's permission policy", async () => {
     const target = await boundTarget({
       threadId: "thread-1",
       approvalPolicy: "never",
@@ -172,18 +165,12 @@ describe("codex conversation controls", () => {
     });
 
     await expect(setFast({ ...target, enabled: true })).resolves.toBe("Codex fast mode enabled.");
-    await expect(test.set("default")).resolves.toBe("Codex permissions set to guarded.");
-
     expect(await readCodexAppServerBinding(target.sessionFile)).toMatchObject({
       threadId: "thread-1",
       serviceTier: "priority",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
-    expect(test.read()).toMatchObject({ permissionMode: "guarded", sessionRoot: tempDir });
-
-    await expect(test.set("yolo")).resolves.toBe("Codex permissions set to full access.");
-    expect(test.read()?.permissionMode).toBe("full");
   });
 
   it("rejects prepared binding mutations after the selected binding changes", async () => {

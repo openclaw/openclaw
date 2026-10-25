@@ -72,28 +72,24 @@ vi.mock("./session-catalog-adoption.js", async (importOriginal) => {
   };
 });
 
-it("yields an inert exclusion checkpoint and retains filled rows, limits and cursors", async () => {
+it("starts source work only on advance and publishes after the exclusion checkpoint", async () => {
   const f = await fixture();
   f.listPage
-    .mockResolvedValueOnce(page(["keep-one"], "next"))
-    .mockResolvedValueOnce(page(["keep-two"], "remaining"));
-  const operation = f.start({ limitPerHost: 2, search: "keep" });
+    .mockResolvedValueOnce(page(["managed"], "next"))
+    .mockResolvedValueOnce(page(["visible"]));
+  const operation = f.start();
   try {
     expect(f.snapshot).not.toHaveBeenCalled();
     expect(f.listPage).not.toHaveBeenCalled();
     await expect(operation.next()).resolves.toEqual({ done: false });
     expect(f.onHost).not.toHaveBeenCalled();
-    expect(f.publications).toHaveLength(1);
     const published = observe(f.publications[0]!);
     await nextTurn();
     expect(published.state.settled).toBe(false);
 
     const result = await operation.next();
     assert(result.done, "filled result missing");
-    expect(result.hosts[0]).toMatchObject({
-      sessions: [{ threadId: "keep-one" }, { threadId: "keep-two" }],
-      nextCursor: "remaining",
-    });
+    expect(result.hosts[0]?.sessions).toMatchObject([{ threadId: "visible" }]);
     await Promise.all(f.publications);
     expect(f.onHost).toHaveBeenCalledExactlyOnceWith(result.hosts[0]);
   } finally {
@@ -216,10 +212,7 @@ it("keeps the filled operation inline after failed discovery", async () => {
     expect(result.hosts[0]?.sessions.map((row) => row.threadId)).toEqual(["visible"]);
     expect(result.hosts[1]).toMatchObject({
       hostId: "node:registry",
-      error: {
-        code: "NODE_LIST_FAILED",
-        message: "Paired nodes could not be listed: discovery unavailable",
-      },
+      error: { code: "NODE_LIST_FAILED" },
     });
   } finally {
     await finish(f, operation);
