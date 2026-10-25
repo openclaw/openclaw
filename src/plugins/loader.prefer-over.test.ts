@@ -1,4 +1,3 @@
-// Verifies plugin loader prefer-over selection behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,41 +16,37 @@ function makePluginLoaderTempDir(): string {
 function writeChannelToolPlugin(params: {
   rootDir: string;
   id: string;
-  channelId: string;
   enabledByDefault?: boolean;
   preferOver?: string[];
   canonicalAliasesRequireOwnField?: string;
 }): string {
+  const channelId = "qqbot";
   const pluginDir = path.join(params.rootDir, params.id);
   mkdirSafeDir(pluginDir);
   fs.writeFileSync(
     path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        channels: [params.channelId],
-        ...(params.canonicalAliasesRequireOwnField
-          ? {
-              channelAccountKeyPolicies: {
-                [params.channelId]: {
-                  canonicalAliasesRequireOwnField: params.canonicalAliasesRequireOwnField,
-                },
+    JSON.stringify({
+      id: params.id,
+      channels: [channelId],
+      ...(params.canonicalAliasesRequireOwnField
+        ? {
+            channelAccountKeyPolicies: {
+              [channelId]: {
+                canonicalAliasesRequireOwnField: params.canonicalAliasesRequireOwnField,
               },
-            }
-          : {}),
-        contracts: { tools: ["qqbot_remind"] },
-        ...(params.enabledByDefault ? { enabledByDefault: true } : {}),
-        channelConfigs: {
-          [params.channelId]: {
-            schema: { type: "object" },
-            ...(params.preferOver ? { preferOver: params.preferOver } : {}),
-          },
+            },
+          }
+        : {}),
+      contracts: { tools: ["qqbot_remind"] },
+      ...(params.enabledByDefault ? { enabledByDefault: true } : {}),
+      channelConfigs: {
+        [channelId]: {
+          schema: { type: "object" },
+          ...(params.preferOver ? { preferOver: params.preferOver } : {}),
         },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
       },
-      null,
-      2,
-    ),
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
     "utf-8",
   );
   fs.writeFileSync(
@@ -61,12 +56,12 @@ function writeChannelToolPlugin(params: {
       register(api) {
         api.registerChannel({
           plugin: {
-            id: ${JSON.stringify(params.channelId)},
+            id: "qqbot",
             meta: {
-              id: ${JSON.stringify(params.channelId)},
-              label: ${JSON.stringify(params.channelId)},
-              selectionLabel: ${JSON.stringify(params.channelId)},
-              docsPath: ${JSON.stringify(`/channels/${params.channelId}`)},
+              id: "qqbot",
+              label: "qqbot",
+              selectionLabel: "qqbot",
+              docsPath: "/channels/qqbot",
               blurb: "fixture channel",
             },
             capabilities: { chatTypes: ["direct"] },
@@ -98,34 +93,36 @@ afterEach(() => {
   }
 });
 
+function fixture(preferred = false, canonicalAliasesRequireOwnField?: string) {
+  const bundledRoot = makePluginLoaderTempDir();
+  writeChannelToolPlugin({
+    rootDir: bundledRoot,
+    id: "qqbot",
+    enabledByDefault: true,
+    canonicalAliasesRequireOwnField: preferred ? "retired" : undefined,
+  });
+  const externalPluginDir = writeChannelToolPlugin({
+    rootDir: makePluginLoaderTempDir(),
+    id: "openclaw-qqbot",
+    preferOver: preferred ? ["qqbot"] : undefined,
+    canonicalAliasesRequireOwnField,
+  });
+  const env = {
+    OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+  };
+  const config = {
+    channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+    plugins: { load: { paths: [externalPluginDir] } },
+  };
+  return { env, config };
+}
+
 describe("plugin loader preferOver activation", () => {
   it.each([undefined, "replacement"])(
     "loadPluginMetadataSnapshot and loadOpenClawPlugins select the preferred channel policy (%s)",
     (canonicalAliasesRequireOwnField) => {
-      const bundledRoot = makePluginLoaderTempDir();
-      writeChannelToolPlugin({
-        rootDir: bundledRoot,
-        id: "qqbot",
-        channelId: "qqbot",
-        enabledByDefault: true,
-        canonicalAliasesRequireOwnField: "retired",
-      });
-      const externalRoot = makePluginLoaderTempDir();
-      const externalPluginDir = writeChannelToolPlugin({
-        rootDir: externalRoot,
-        id: "openclaw-qqbot",
-        channelId: "qqbot",
-        preferOver: ["qqbot"],
-        canonicalAliasesRequireOwnField,
-      });
-      const env = {
-        OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-      };
-      const rawConfig = {
-        channels: { qqbot: { appId: "app", clientSecret: "secret" } },
-        plugins: { load: { paths: [externalPluginDir] } },
-      };
+      const { env, config: rawConfig } = fixture(true, canonicalAliasesRequireOwnField);
       const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
       const metadata = loadPluginMetadataSnapshot({ config: autoEnabled.config, env });
       expect(metadata.owners.channelAccountKeyPolicies?.get("qqbot")).toEqual(
@@ -154,30 +151,14 @@ describe("plugin loader preferOver activation", () => {
   );
 
   it("blocks tools from a plugin that loses a duplicate channel registration", () => {
-    const bundledRoot = makePluginLoaderTempDir();
-    writeChannelToolPlugin({
-      rootDir: bundledRoot,
-      id: "qqbot",
-      channelId: "qqbot",
-      enabledByDefault: true,
-    });
-    const externalRoot = makePluginLoaderTempDir();
-    const externalPluginDir = writeChannelToolPlugin({
-      rootDir: externalRoot,
-      id: "openclaw-qqbot",
-      channelId: "qqbot",
-    });
-    const env = {
-      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-    };
+    const { env, config } = fixture();
 
     const registry = loadOpenClawPlugins({
       cache: false,
       config: {
-        channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+        ...config,
         plugins: {
-          load: { paths: [externalPluginDir] },
+          ...config.plugins,
           entries: {
             qqbot: { enabled: true },
             "openclaw-qqbot": { enabled: true },
