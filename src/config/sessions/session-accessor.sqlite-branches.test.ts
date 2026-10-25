@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -112,6 +113,11 @@ function expectActiveBranch(
   });
 }
 
+function requireBranches(result: Awaited<ReturnType<typeof listSessionBranches>>) {
+  assert(result.status === "ok", "expected branch list result");
+  return result.branches;
+}
+
 describe("SQLite session branches", () => {
   it("retains a cold branch reader across concurrent viewers and transcript writes", async () => {
     const { env, scope } = await createSession();
@@ -159,9 +165,7 @@ describe("SQLite session branches", () => {
     expect(results[1]).toEqual(results[0]);
     expect(results[2]).toEqual(results[0]);
     const second = results[1];
-    if (second?.status !== "ok" || !second.branches[0]) {
-      throw new Error("expected shared branch summaries");
-    }
+    assert(second?.status === "ok" && second.branches[0], "expected shared branch summaries");
     second.branches[0].headline = "caller mutation";
     expect(results[2]).toEqual(results[0]);
     await expect(listSessionBranches(scope)).resolves.toEqual(results[0]);
@@ -208,9 +212,7 @@ describe("SQLite session branches", () => {
     const rawLoads = () => counters.reduce((total, counter) => total + counter.loads, 0);
     const first = readSessionBranchSummariesInWorker(request);
     expectActiveBranch(first, "assistant-2", "second answer", 4);
-    if (first.status !== "ok" || !first.branches[0]) {
-      throw new Error("expected worker branch summaries");
-    }
+    assert(first.status === "ok" && first.branches[0], "expected worker branch summaries");
     request.previous = structuredClone(first);
     // A replacement worker has no isolate-local summary cache.
     invalidateSessionBranchCache(database.path, [scope.sessionId]);
@@ -350,11 +352,7 @@ describe("SQLite session branches", () => {
     expect(nativeOpen).not.toHaveBeenCalled();
     expect(branchReads()).toBe(2);
     expect(after).not.toEqual(before);
-    expect(after.status).toBe("ok");
-    if (after.status !== "ok") {
-      throw new Error("expected branch list result");
-    }
-    expect(after.branches.find((branch) => branch.active)).toMatchObject({
+    expect(requireBranches(after).find((branch) => branch.active)).toMatchObject({
       leafEntryId: "assistant-3",
       headline: "third answer",
     });
@@ -402,11 +400,7 @@ describe("SQLite session branches", () => {
         env,
         sessionKey: mode === "fork" ? targetKey : sessionKey,
       });
-      expect(listed.status).toBe("ok");
-      if (listed.status !== "ok") {
-        throw new Error("expected branch list result");
-      }
-      expect(listed.branches.find((branch) => branch.active)).toMatchObject({
+      expect(requireBranches(listed).find((branch) => branch.active)).toMatchObject({
         leafEntryId: mode === "switch" ? "off-path-user" : "assistant-1",
       });
     },
@@ -598,13 +592,10 @@ describe("SQLite session branches", () => {
     const startedAt = performance.now();
     const result = await listSessionBranches({ agentId, env, sessionKey });
     const elapsedMs = performance.now() - startedAt;
-    expect(result.status).toBe("ok");
-    if (result.status !== "ok") {
-      throw new Error("expected branch list result");
-    }
+    const listed = requireBranches(result);
     expect(elapsedMs).toBeLessThan(1_000);
-    expect(result.branches).toHaveLength(1_362);
-    expect(result.branches.find((branch) => branch.leafEntryId === "orphan-assistant")).toEqual(
+    expect(listed).toHaveLength(1_362);
+    expect(listed.find((branch) => branch.leafEntryId === "orphan-assistant")).toEqual(
       summary("orphan-assistant", "orphan answer", 2, false, "2026-08-30T00:00:02.000Z"),
     );
   }, 15_000);
