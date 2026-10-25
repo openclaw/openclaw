@@ -91,6 +91,58 @@ async function fixture(name: string, create = true) {
   };
 }
 
+it("retains its selected owner for ordered writes and reads current transcript state without SQLite", async () => {
+  const { target, run, read, owner, manager } = await fixture("ordered");
+  const messages = [userMessage("first", 1), userMessage("second", 2)];
+  const [firstId, secondId] = await Promise.all(
+    messages.map((message) => manager.appendMessageAsync(message)),
+  );
+  assert(firstId && secondId, "Missing fixture message entries");
+  expect(manager.getBranch()).toMatchObject([
+    { type: "message", id: firstId },
+    { type: "message", id: secondId, parentId: firstId },
+  ]);
+  await manager.appendThinkingLevelChange("high");
+  const reopened = await run(() => SessionManager.openAsync(target));
+  expect(reopened.buildSessionContext()).toMatchObject({ messages, thinkingLevel: "high" });
+  expect(await read()).toEqual(messages);
+  expect(
+    (await readSessionManagerModelContextAsync(target, {}, (context) => context, manager)).events,
+  ).toMatchObject(reopened.getPersistedEntries());
+  owner.close();
+  await expect(manager.appendMessageAsync(userMessage("closed", 3))).rejects.toThrow(/closed/);
+});
+
+it("opens an empty selected actor and initializes it on the first message", async () => {
+  const { target, storage, manager } = await fixture("empty", false);
+  expect(manager.getEntries()).toEqual([]);
+  const messageId = await manager.appendMessageAsync(userMessage("first input", 1));
+  expect(await storage.read({ type: "session.entry.read", input: {} }, authority)).toMatchObject({
+    sessionId: target.sessionId,
+    incognito: true,
+  });
+  expect(manager.getBranch()).toMatchObject([{ id: messageId, type: "message" }]);
+});
+
+it("adopts its branch's new actor window and keeps subsequent writes on that owner", async () => {
+  const { target, storage, manager } = await fixture("branch");
+  const first = await manager.appendMessageAsync(userMessage("retained", 1));
+  assert(first, "Missing fixture branch entry");
+  await manager.appendMessageAsync(userMessage("omitted", 2));
+  await manager.createBranchedSession(first);
+  const nextTarget = manager.getSessionTarget()!;
+  expect(nextTarget.sessionId).not.toBe(target.sessionId);
+  const next = await manager.appendMessageAsync(userMessage("new branch", 3));
+  expect(manager.getBranch().map((entry) => entry.id)).toEqual([first, next]);
+  const current = await storage.acquire(target.sessionKey);
+  expect(
+    await current.storage!.read({ type: "session.history.context-messages", input: {} }, authority),
+  ).toMatchObject({
+    messages: [userMessage("retained", 1), userMessage("new branch", 3)],
+  });
+  await current.release();
+});
+
 it("keeps a detached context snapshot while an in-process append becomes visible on the next read", async () => {
   const { target, run, read, manager } = await fixture("snapshot");
   const first = userMessage("captured", 1);
@@ -109,15 +161,12 @@ it("keeps a detached context snapshot while an in-process append becomes visible
 });
 
 it("cancels context reads without preventing the next read", async () => {
-  const { target, context: readContext, manager } = await fixture("context-abort");
+  const { context: readContext, manager } = await fixture("context-abort");
   await manager.appendMessageAsync(userMessage("retained context", 1));
   await expectCancelledReads((signal) => readContext({ signal }));
   const context = await readContext();
   expect(context.isPersisted()).toBe(false);
   expect(context.buildSessionContext()).toEqual(manager.buildSessionContext());
-  expect(
-    (await readSessionManagerModelContextAsync(target, {}, (snapshot) => snapshot, manager)).events,
-  ).toMatchObject(manager.getPersistedEntries());
 });
 
 it("keeps a completed-turn snapshot while a later rewrite invalidates its anchor for new reads", async () => {
