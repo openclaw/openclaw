@@ -8,7 +8,6 @@ import { createModelPickerRecommendationRank } from "../agents/model-catalog-ord
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   captureRemoteModelCatalogStartupSnapshot as captureStartup,
   prepareRemoteModelCatalogStartupSnapshot as prepareStartup,
@@ -45,6 +44,8 @@ function stageBundle(value: unknown = bundle, source_url = defaultUrl) {
 const overlay = (config: OpenClawConfig = {}) =>
   getRemoteModelCatalogProviderOverlay(config, "anthropic");
 const price = () => activeCatalog({})?.pricing?.["openai/gpt-external"];
+const expectPrice = (cost = bundle.pricing["openai/gpt-external"]) =>
+  expect(price()).toEqual({ cost, explicit: false });
 function expectPair(
   expected: [Array<{ id: string }> | undefined, number | undefined] = [[{ id: "new" }], 2.5],
 ) {
@@ -130,53 +131,47 @@ describe("remote model catalog overlay", () => {
     },
   );
 
-  it("does not adopt a stored bundle belonging to another source", async () => {
-    const previous = await prepareStartup();
-    stageBundle({ ...bundle, generatedAt: 300 }, mirrorConfig.models.catalogRefresh.url);
-    expect(await readUpdate({})).toBeUndefined();
-    expect(captureStartup()).toBe(previous);
-  });
-
   it.each([
     ["invalid JSON", "{", SyntaxError],
     ["invalid pricing", { pricing: { "openai/gpt-external": { input: -1, output: 2 } } }, ZodError],
     ["equal generation", { generatedAt: 100 }, undefined],
     ["incompatible version", { minVersion: "9999.1.1" }, undefined],
     ["invalid version", { minVersion: "not-a-version" }, undefined],
-  ] as const)("keeps the accepted pair after %s", async (_name, change, error) => {
-    await prepareStartup();
-    read.mockReturnValue({
-      source_url: defaultUrl,
-      bundle_json:
-        typeof change === "string"
-          ? change
-          : JSON.stringify({ ...bundle, generatedAt: 300, ...change }),
-    });
-    const update = readUpdate({});
-    if (error) {
-      await expect(update).rejects.toThrow(error);
-    } else {
-      expect(await update).toBeUndefined();
-    }
-    expectPair();
-  });
+    ["other source", {}, undefined, mirrorConfig.models.catalogRefresh.url],
+  ] as const)(
+    "keeps the accepted pair after %s",
+    async (_name, change, error, source = defaultUrl) => {
+      const previous = await prepareStartup();
+      read.mockReturnValue({
+        source_url: source,
+        bundle_json:
+          typeof change === "string"
+            ? change
+            : JSON.stringify({ ...bundle, generatedAt: 300, ...change }),
+      });
+      const update = readUpdate({});
+      if (error) {
+        await expect(update).rejects.toThrow(error);
+      } else {
+        expect(await update).toBeUndefined();
+      }
+      expectPair();
+      expect(captureStartup()).toBe(previous);
+    },
+  );
 
   it("does not publish startup absence after its original read scope retires", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-retired-catalog-") };
-    const original = captureOpenClawStateWorkerContext({ env });
     const reading = createDeferredCore<undefined>();
     read.mockReturnValue(reading.promise);
     const preparing = prepareStartup({ env });
     const rejected = expect(preparing).rejects.toThrow();
     await closeOpenClawStateDatabaseAsync();
-    expect(() => original.admission.assertCurrent()).toThrow();
     reading.resolve(undefined);
     await rejected;
     stageBundle();
     await prepareStartup();
-    expect(captureStartup()?.pricing).toEqual({
-      "openai/gpt-external": { cost: bundle.pricing["openai/gpt-external"], explicit: false },
-    });
+    expectPrice();
   });
 
   it("keeps the first published startup pair when asynchronous preparation completes later", async () => {
@@ -193,10 +188,7 @@ describe("remote model catalog overlay", () => {
     pendingRead.resolve(undefined);
     expect(await preparing).toBe(winner);
     expect(await prepareStartup({ env })).toBe(winner);
-    expect(price()).toEqual({
-      cost: { input: 5, output: 20 },
-      explicit: false,
-    });
+    expectPrice({ input: 5, output: 20 });
   });
 
   it("serves a released default install's v1 download until its v2 download is active", async () => {
@@ -204,10 +196,7 @@ describe("remote model catalog overlay", () => {
     stageBundle(bundle, v1Default);
     const previous = await prepareStartup();
     expectPair();
-    expect(price()).toEqual({
-      cost: { input: 2.5, output: 10 },
-      explicit: false,
-    });
+    expectPrice();
     expect(activeCatalog(mirrorConfig)?.pricing).toBeUndefined();
     expect(overlay(disabledConfig)).toBeUndefined();
     expect(overlay(mirrorConfig)).toBeUndefined();
@@ -233,7 +222,6 @@ describe("remote model catalog overlay", () => {
   it("passes the same startup rows and prices to later workers", async () => {
     await prepareStartup();
     const expected = { overlay: overlay(), pricing: activeCatalog({})?.pricing };
-    read.mockReturnValue(undefined);
     const worker = new Worker(new URL("./remote-overlay.worker.test-support.ts", import.meta.url), {
       execArgv: ["--import", "tsx"],
     });

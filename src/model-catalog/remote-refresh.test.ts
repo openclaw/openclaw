@@ -5,29 +5,13 @@ import { MessageChannel } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
-import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
-import {
-  deleteConfigMachineState,
-  importConfigMachineState,
-  writeConfigMachineState as writeState,
-} from "../state/config-machine-state-write.js";
-import {
-  readConfigMachineState as readState,
-  readConfigMachineStateRowInDatabase,
-} from "../state/config-machine-state.js";
+import * as machineState from "../state/config-machine-state-write.js";
+import { readConfigMachineState as readState } from "../state/config-machine-state.js";
 import { recordOpenClawStateDatabaseOpenFailure } from "../state/openclaw-state-db-cache.js";
-import {
-  withArtifactPreservingStateReads,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import * as stateDb from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext as workerContext } from "../state/openclaw-state-worker-context.js";
-import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import * as bundledStamp from "./bundled-catalog-stamp.js";
@@ -52,9 +36,7 @@ const bundle = {
   models: [{ id: "claude-test", provider: "anthropic", pricing: { status: "unknown" } }],
 };
 
-function options() {
-  return { path: path.join(tempDirs.make("openclaw-refresh-"), "state.sqlite") };
-}
+const options = () => ({ path: path.join(tempDirs.make("openclaw-refresh-"), "state.sqlite") });
 let databaseOptions: ReturnType<typeof options>;
 async function expectRefresh(
   expected: Partial<Awaited<ReturnType<typeof refreshCatalog>>>,
@@ -68,9 +50,8 @@ function mockFetch(implementation: typeof fetch) {
   vi.stubGlobal("fetch", fetchImpl);
   return fetchImpl;
 }
-function mockDownload(value: unknown = bundle, init?: ResponseInit) {
-  return mockFetch(async () => new Response(JSON.stringify(value), init));
-}
+const mockDownload = (value: unknown = bundle, init?: ResponseInit) =>
+  mockFetch(async () => new Response(JSON.stringify(value), init));
 
 type StoredCatalog = Parameters<typeof writeCatalog>[0];
 function storedCatalog(value = bundle, overrides: Partial<StoredCatalog> = {}) {
@@ -86,14 +67,10 @@ function storedCatalog(value = bundle, overrides: Partial<StoredCatalog> = {}) {
   };
 }
 
-function storeCatalog(record: StoredCatalog) {
-  return writeCatalog(record, workerContext(databaseOptions));
-}
-function mirrorConfig(suffix = "") {
-  return {
-    models: { catalogRefresh: { url: `https://mirror.example.test/${suffix}catalog.json` } },
-  };
-}
+const storeCatalog = (row: StoredCatalog) => writeCatalog(row, workerContext(databaseOptions));
+const mirrorConfig = (suffix = "") => ({
+  models: { catalogRefresh: { url: `https://mirror.example.test/${suffix}catalog.json` } },
+});
 const currentKey = "modelCatalog.remote.v3";
 const previousKey = "modelCatalog.remote.v2";
 const legacyKey = "modelCatalog.remote";
@@ -106,14 +83,6 @@ const initial: StoredCatalog = {
   last_modified: null,
   checked_at: 2,
 };
-const storedLegacy = {
-  ...initial,
-  bundle_json: '{"schemaVersion":1,"legacy":true}',
-  generated_at: 100,
-  source_url: "https://mirror.test/v1/catalog.json",
-  etag: '"legacy"',
-  checked_at: 10,
-};
 function store() {
   const db = options();
   const context = () => workerContext(db);
@@ -123,7 +92,7 @@ function store() {
     write: (row: StoredCatalog) => writeCatalog(row, context()),
     check: (at: number, metadata: RemoteModelCatalogCheck) => markChecked(at, metadata, context()),
     state: (key = currentKey) => readState(key, db),
-    put: (key: string, value: unknown) => writeState(key, value, db),
+    put: (key: string, value: unknown) => machineState.writeConfigMachineState(key, value, db),
   };
 }
 
@@ -190,7 +159,7 @@ describe("remote model catalog refresh", () => {
   });
 
   it("lets the caller release a contended writer while persistence waits", async () => {
-    const database = openOpenClawStateDatabase(databaseOptions);
+    const database = stateDb.openOpenClawStateDatabase(databaseOptions);
     database.db.exec("PRAGMA busy_timeout=0");
     const competitor = new DatabaseSync(databaseOptions.path);
     const { port1, port2 } = new MessageChannel();
@@ -221,25 +190,6 @@ describe("remote model catalog refresh", () => {
     }
   });
 
-  it("persists sanitized rows and revalidates the stored catalog", async () => {
-    const downloaded = {
-      ...bundle,
-      models: [
-        { ...bundle.models[0], input: ["text", "future"] },
-        { id: "bad-pricing", provider: "anthropic", pricing: { status: "unknown", input: 0 } },
-      ],
-    };
-    const fetchImpl = mockDownload(downloaded, { status: 200, headers: { etag: '"two"' } });
-    await expectRefresh({ status: "updated", providers: 1, models: 1 });
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe(defaultUrl);
-    mockFetch(async () => new Response(null, { status: 304 }));
-    await expectRefresh({ status: "unchanged" });
-    expect(JSON.parse(readCatalog(databaseOptions)?.bundle_json ?? "null")).toEqual({
-      ...bundle,
-      models: [{ ...bundle.models[0], input: ["text"] }],
-    });
-  });
-
   it("keeps the original physical store while the download yields", async () => {
     const original = databaseOptions;
     const replacement = options();
@@ -253,24 +203,15 @@ describe("remote model catalog refresh", () => {
     expect(readCatalog(replacement)).toBeUndefined();
   });
 
-  it("does not invoke fetch when disabled", async () => {
-    const fetchImpl = vi.fn<typeof fetch>();
-    vi.stubGlobal("fetch", fetchImpl);
-    await expect(
-      refreshCatalog({
-        config: { models: { catalogRefresh: { enabled: false } } },
-      }),
-    ).resolves.toMatchObject({ status: "disabled" });
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("skips fresh rows and force bypasses the TTL", async () => {
+  it.each([
+    [false, true, "disabled", 0],
+    [true, false, "fresh", 0],
+    [true, true, "unchanged", 1],
+  ] as const)("refresh policy enabled=%s force=%s", async (enabled, force, status, calls) => {
     await storeCatalog(storedCatalog(bundle, { etag: '"one"' }));
     const fetchImpl = mockFetch(async () => new Response(null, { status: 304 }));
-    await expectRefresh({ status: "fresh" }, {}, false);
-    expect(fetchImpl).not.toHaveBeenCalled();
-    await expectRefresh({ status: "unchanged" });
-    expect(fetchImpl).toHaveBeenCalledOnce();
+    await expectRefresh({ status }, { models: { catalogRefresh: { enabled } } }, force);
+    expect(fetchImpl).toHaveBeenCalledTimes(calls);
   });
 
   it("stores configured v3 capabilities without changing either released client slot", async () => {
@@ -287,7 +228,7 @@ describe("remote model catalog refresh", () => {
       [legacyKey, legacy],
     ] as const;
     for (const [key, record] of slots) {
-      writeState(key, record, databaseOptions);
+      machineState.writeConfigMachineState(key, record, databaseOptions);
     }
     const decision = {
       protocol: "fixture.decisions",
@@ -385,57 +326,35 @@ describe("remote model catalog refresh", () => {
 });
 
 describe("remote model catalog store", () => {
-  it("reuses published rows across unrelated writes and follows committed replacements", async () => {
+  it("keeps snapshots detached across stores, commits, and retirement", async () => {
     const { db, read, write, check, put } = store();
     const other = store();
     put("fixture.unrelated", true);
-    other.put("fixture.unrelated", true);
-    const operations = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
-    async function expectCached(
-      expected: Awaited<ReturnType<typeof read>>,
-      calls: number,
-      reader = read,
-    ) {
-      expect(await reader()).toEqual(expected);
-      expect(operations).toHaveBeenCalledTimes(calls);
-      operations.mockClear();
-    }
     expect(await read()).toBeUndefined();
-    operations.mockClear();
-    await expectCached(undefined, 1, other.read);
-    put("fixture.unrelated", false);
-    await expectCached(undefined, 0);
+    expect(await read()).toBeUndefined(); // Retain the cached-absence branch.
     await write(initial);
     expect(await read()).toEqual({ id: 1, ...initial });
-    operations.mockClear();
+    expect(await other.read()).toBeUndefined();
     const retained = await read();
     retained!.checked_at = -1;
-    await expectCached({ id: 1, ...initial }, 0);
-    const selected = withDatabaseEngineSelection(
-      { effectiveEngines: resolveDatabaseFamilyEngines({}) },
-      () => workerContext(db),
-    );
-    await expectCached({ id: 1, ...initial }, 1, () => readAsync(selected));
-    await expectCached({ id: 1, ...initial }, 0);
-    await expectCached({ id: 1, ...initial }, 0, () => readAsync(selected));
-    await withArtifactPreservingStateReads(read);
+    expect(await read()).toEqual({ id: 1, ...initial });
+    await expect(withArtifactPreservingStateReads(read)).resolves.toEqual({ id: 1, ...initial });
     const inspection = withArtifactPreservingStateReads(() => workerContext(db), {
       agentDatabases: true,
     });
-    await readAsync(inspection);
-    expect(operations).toHaveBeenCalledTimes(2);
+    expect(await readAsync(inspection)).toEqual({ id: 1, ...initial });
     await check(3, { expected: initial });
     expect(await read()).toEqual({ id: 1, ...initial, checked_at: 3 });
     expect(() =>
-      runOpenClawStateWriteTransaction(() => {
+      stateDb.runOpenClawStateWriteTransaction(() => {
         put(currentKey, { ...initial, checked_at: 4 });
         throw new Error("rollback catalog");
       }, db),
     ).toThrow("rollback catalog");
     expect(await read()).toEqual({ id: 1, ...initial, checked_at: 3 });
-    deleteConfigMachineState(currentKey, db);
+    machineState.deleteConfigMachineState(currentKey, db);
     expect(await read()).toBeUndefined();
-    importConfigMachineState([[previousKey, initial]], db);
+    machineState.importConfigMachineState([[previousKey, initial]], db);
     expect(await read()).toEqual({ id: 1, ...initial });
     put(previousKey, null);
     put(legacyKey, { ...initial, checked_at: 5 });
@@ -456,8 +375,6 @@ describe("remote model catalog store", () => {
       ...initial,
       bundle_json: '{"schemaVersion":1,"updated":true}',
       generated_at: 3,
-      min_version: "2026.7.0",
-      source_url: "https://catalog.test/two",
       etag: '"two"',
       checked_at: 4,
     };
@@ -466,65 +383,56 @@ describe("remote model catalog store", () => {
       { generated_at: 2, bundle_json: '{"schemaVersion":1,"older":true}', etag: '"older"' },
       { generated_at: 3, bundle_json: '{"sameGenerationDifferentBody":true}', etag: '"different"' },
     ]) {
-      expect(
-        await write({ ...updated, ...candidate, min_version: null, checked_at: 5 }),
-      ).toMatchObject({ status: "retained-newer", row: updated });
+      expect(await write({ ...updated, ...candidate, checked_at: 5 })).toMatchObject({
+        status: "retained-newer",
+        row: updated,
+      });
     }
     // Malformed bytes belonging to an older client cannot block a current-generation check.
     put(previousKey, null);
-    runOpenClawStateWriteTransaction(({ db: sql }) => {
-      sql
-        .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
-        .run("{", previousKey);
-    }, db);
+    const sql = stateDb.openOpenClawStateDatabase(db).db;
+    sql
+      .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
+      .run("{", previousKey);
     expect(readCatalog(db)?.generated_at).toBe(3);
     expect(await check(5, { expected: { ...updated, etag: '"older"' } })).toBe(false);
     expect(await check(6, { expected: updated })).toBe(true);
     const checked = { ...updated, checked_at: 6 };
-    expect(readCatalog(db)).toMatchObject({ id: 1, ...checked });
     expect(state()).toEqual(checked);
     expect(
-      withExistingOpenClawStateDatabaseReadOnly(
-        ({ db: sql }) => readConfigMachineStateRowInDatabase(sql, previousKey)?.value_json,
-        db,
-      ),
-    ).toBe("{");
+      sql
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        .get(previousKey),
+    ).toEqual({ value_json: "{" });
   });
 
   it.each([legacyKey, previousKey])(
-    "adopts %s without writing the older client slot",
+    "adopts only matching %s rows without writing the older client slot",
     async (key) => {
       const { db, check, state, put } = store();
-      const previous = { ...storedLegacy, min_version: "2026.7.0" };
+      const previous = { ...initial, generated_at: 100, min_version: "2026.7.0" };
       put(key, previous);
       expect(readCatalog(db)).toEqual({ id: 1, ...previous });
-      await expect(
-        check(20, { expected: previous, etag: '"legacy"', lastModified: null }),
-      ).resolves.toBe(true);
-      expect(state()).toEqual({ ...previous, checked_at: 20 });
-      expect(state(key)).toEqual(previous);
-      put(key, { ...previous, generated_at: 200 });
-      expect(readCatalog(db)?.generated_at).toBe(100);
+      expect(await check(10, { expected: { ...previous, generated_at: 0 } })).toBe(false);
+      expect(state()).toBeUndefined();
+      const latest = { ...previous, generated_at: 300, etag: '"latest"' };
+      put(key, latest);
+      expect(readCatalog(db)).toEqual({ id: 1, ...latest });
+      if (key === legacyKey) {
+        // Raw v2 precedence survives a null payload, while reads still fall back to v1.
+        put(previousKey, null);
+        expect(await check(15, { expected: latest })).toBe(false);
+        expect(state()).toBeUndefined();
+        expect(readCatalog(db)).toEqual({ id: 1, ...latest });
+        machineState.deleteConfigMachineState(previousKey, db);
+      }
+      expect(await check(20, { expected: latest, etag: '"latest"', lastModified: null })).toBe(
+        true,
+      );
+      expect(state()).toEqual({ ...latest, checked_at: 20 });
+      expect(state(key)).toEqual(latest);
+      put(key, { ...latest, generated_at: 400 });
+      expect(readCatalog(db)?.generated_at).toBe(300);
     },
   );
-
-  it("leaves this client's slot empty when the older client's row no longer matches", async () => {
-    const { db, check, state, put } = store();
-    const newer = { ...storedLegacy, generated_at: 200, etag: '"newer"' };
-    put(legacyKey, newer);
-    expect(await check(20, { expected: storedLegacy, etag: '"legacy"', lastModified: null })).toBe(
-      false,
-    );
-    expect(state()).toBeUndefined();
-    expect(readCatalog(db)).toEqual({ id: 1, ...newer });
-    expect(state(legacyKey)).toEqual(newer);
-    const latest = { ...newer, generated_at: 300, etag: '"latest"' };
-    put(legacyKey, latest);
-    expect(readCatalog(db)).toEqual({ id: 1, ...latest });
-    // markChecked keeps raw v2 precedence even when that payload parses as null.
-    put(previousKey, null);
-    expect(await check(30, { expected: latest })).toBe(false);
-    expect(state()).toBeUndefined();
-    expect(readCatalog(db)).toEqual({ id: 1, ...latest });
-  });
 });

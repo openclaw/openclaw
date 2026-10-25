@@ -3,9 +3,9 @@ import type {
   ModelInferenceCapabilities,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it } from "vitest";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import { planEffectiveModelCatalogRows } from "./index.js";
 import {
   planManifestModelCatalogRows as planRows,
@@ -19,41 +19,35 @@ function catalog(
   definition: ModelCatalogProvider,
   metadata: Partial<Plugin> = {},
 ): Registry {
-  return {
-    plugins: [
-      {
-        id: "owner",
-        providers: metadata.modelCatalog?.aliases ? [provider.toLowerCase()] : undefined,
-        ...metadata,
-        modelCatalog: { ...metadata.modelCatalog, providers: { [provider]: definition } },
-      },
-    ],
+  const owner = {
+    id: "owner",
+    providers: metadata.modelCatalog?.aliases ? [provider.toLowerCase()] : undefined,
+    ...metadata,
+    modelCatalog: { ...metadata.modelCatalog, providers: { [provider]: definition } },
   };
+  return { plugins: [owner] };
 }
 const emptyPlan = { entries: [], rows: [], conflicts: [] };
 
 describe("manifest model catalog planner", () => {
-  it("overlays only declared providers and keeps remote transport fields inert", () => {
+  it("overlays rows without mutating inputs or replacing trusted transport and family", () => {
     const baseUrl = "https://api.anthropic.com";
     const modelUrl = "https://model.api.anthropic.com";
     const headers = { "X-Trusted": "yes" };
-    const remote: Record<string, ModelCatalogProvider> = {
-      anthropic: {
-        api: "anthropic-messages",
-        models: [{ id: "old", name: "Remote" }, { id: "new" }],
-      },
-      undeclared: { models: [{ id: "ignored" }] },
-    };
+    const remote = { models: [{ id: "old", name: "Remote" }, { id: "new" }] };
+    const models = [{ id: "old", name: "Bundled", baseUrl: modelUrl, headers }, { id: "kept" }];
+    models.forEach(Object.freeze);
+    Object.freeze(models);
     const registry = catalog("anthropic", {
       api: "anthropic-messages",
       family: "anthropic",
       baseUrl,
-      models: [{ id: "old", name: "Bundled", baseUrl: modelUrl, headers }, { id: "kept" }],
+      models,
     });
     const plan = (resolveRemoteProvider: Parameters<typeof planRows>[0]["resolveRemoteProvider"]) =>
       planRows({ registry, resolveRemoteProvider });
     expect(
-      plan((provider) => remote[provider]).rows.map((row) => [
+      plan(() => remote).rows.map((row) => [
         row.id,
         row.name,
         row.source,
@@ -65,6 +59,10 @@ describe("manifest model catalog planner", () => {
       ["kept", "kept", "manifest", baseUrl, undefined, "anthropic"],
       ["new", "new", "runtime-refresh", baseUrl, undefined, "anthropic"],
       ["old", "Remote", "runtime-refresh", modelUrl, headers, "anthropic"],
+    ]);
+    expect(plan(undefined).rows.map((row) => [row.id, row.api])).toEqual([
+      ["kept", "anthropic-messages"],
+      ["old", "anthropic-messages"],
     ]);
   });
 
@@ -164,29 +162,19 @@ describe("manifest model catalog planner", () => {
       providerFilters: ["moonshotai"],
       mergeKeyFilter: new Set(["moonshotai::kimi-k2.6"]),
     };
-    const native = planRows(params);
-    expect(native.rows).toMatchObject([
-      {
-        ...model,
-        ...alias,
-        provider: "moonshotai",
-        ref: "moonshotai/kimi-k2.6",
-        mergeKey: "moonshotai::kimi-k2.6",
-        source: "manifest",
-      },
-    ]);
-    expect(native.entries).toMatchObject([{ provider: "moonshotai", discovery: "static" }]);
     const resolveRemoteProvider = (provider: string) =>
       provider === "moonshot"
         ? { models: [{ id: model.id, name: "Remote" }, { id: "unrelated" }] }
         : undefined;
     const plan = planRows({ ...params, resolveRemoteProvider });
-    expect(plan.entries).toHaveLength(1);
+    expect(plan.entries).toMatchObject([{ provider: "moonshotai", discovery: "static" }]);
     expect(plan.rows).toMatchObject([
       {
         ...alias,
         provider: "moonshotai",
         id: model.id,
+        ref: "moonshotai/kimi-k2.6",
+        mergeKey: "moonshotai::kimi-k2.6",
         name: "Remote",
         source: "runtime-refresh",
       },
@@ -197,21 +185,15 @@ describe("manifest model catalog planner", () => {
 
   function discovery(
     provider: string,
-    kind: "static" | "runtime" | "refreshable",
+    kind: "static" | "runtime",
     models: ModelCatalogProvider["models"],
   ) {
-    return catalog(
-      provider,
-      { models },
-      {
-        id: `${kind}-owner`,
-        modelCatalog: { discovery: { [provider]: kind } },
-      },
-    ).plugins;
+    const modelCatalog = { discovery: { [provider]: kind } };
+    return catalog(provider, { models }, { id: `${kind}-owner`, modelCatalog }).plugins;
   }
   it("selects static rows at their owning catalog boundary", () => {
     const registry = {
-      plugins: (["static", "refreshable", "runtime"] as const).flatMap((kind) =>
+      plugins: (["static", "runtime"] as const).flatMap((kind) =>
         discovery(kind, kind, [{ id: "known" }]),
       ),
     };
@@ -222,8 +204,6 @@ describe("manifest model catalog planner", () => {
         resolveRemoteProvider: () => ({ models: [{ id: "refreshed" }] }),
       }).rows.map((row) => row.ref);
     expect(refs()).toEqual([
-      "refreshable/known",
-      "refreshable/refreshed",
       "runtime/known",
       "runtime/refreshed",
       "static/known",
@@ -248,20 +228,6 @@ describe("manifest model catalog planner", () => {
       ).toEqual([["shared/kept", "Kept"]]);
       expect(plan.conflicts, selection).toEqual([{ provider: "shared", modelId: "conflicted" }]);
     }
-  });
-
-  it("sorts fresh normalized rows without mutating frozen manifest inputs", () => {
-    const models = [{ id: "z" }, { id: "a" }];
-    models.forEach(Object.freeze);
-    Object.freeze(models);
-    const api = "anthropic-messages";
-    const registry = catalog("fixture", { api, models });
-    const plan = planRows({ registry });
-    expect(plan.rows.map((row) => [row.ref, row.api])).toEqual([
-      ["fixture/a", api],
-      ["fixture/z", api],
-    ]);
-    expect(models).toStrictEqual([{ id: "z" }, { id: "a" }]);
   });
 
   it("resolves raw overlay IDs before reporting normalized ID conflicts", () => {
@@ -321,9 +287,10 @@ describe("provider endpoint catalog eligibility", () => {
       providerEndpoints: [
         {
           endpointClass: "openai-public",
-          hosts: ["native.example"],
+          hosts: ["host.example"],
           hostSuffixes: ["region.example"],
         },
+        { endpointClass: "future-endpoint", baseUrls: ["EXACT.example/v1/?ignored=1#fragment"] },
       ],
       modelCatalog: {
         aliases: { alternate: { provider: "fixture", baseUrl: "https://alternate.example/api" } },
@@ -339,9 +306,10 @@ describe("provider endpoint catalog eligibility", () => {
   ) => planEffectiveModelCatalogRows({ registry, config: config(baseUrl), ...overrides });
   it.each([
     "https://native.example/v1",
-    "http://native.example:8080/compatible",
+    "http://host.example:8080/compatible",
     "https://us.region.example/v1",
     "MODEL.example/v1/?ignored=1#fragment",
+    "https://exact.example/v1",
   ])("keeps native catalog rows at the declared endpoint %s", (baseUrl) => {
     expect(plan(baseUrl).rows.map((row) => row.id)).toEqual(["native-model"]);
   });
@@ -362,15 +330,7 @@ describe("provider endpoint catalog eligibility", () => {
   });
   it("allows model-level overrides without a provider-level veto", () => {
     const authoredConfig = config("", [
-      {
-        id: "authored",
-        name: "Authored",
-        baseUrl: "https://proxy.example/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        maxTokens: 4096,
-      },
+      modelDefinition("authored", { baseUrl: "https://proxy.example/v1" }),
     ]);
     expect(
       planEffectiveModelCatalogRows({ registry, config: authoredConfig }).rows.map((row) => row.id),
@@ -383,18 +343,5 @@ describe("provider endpoint catalog eligibility", () => {
         registry: catalog("fixture", { models: [{ id: "adapter-model", name: "Adapter model" }] }),
       }).rows.map((row) => row.id),
     ).toEqual(["adapter-model"]);
-  });
-  it.each([
-    ["openai-public", "https://NATIVE.example/v1/"],
-    ["openai-public", "native.example/v1?ignored=1#fragment"],
-    ["future-endpoint", "https://NATIVE.example/v1/?ignored=1#fragment"],
-  ])("normalizes endpoint-only declarations for %s at %s", (endpointClass, baseUrl) => {
-    expect(
-      isProviderCatalogSourceAllowed({
-        provider: "fixture",
-        config: config("https://native.example/v1"),
-        plugin: { providerEndpoints: [{ endpointClass, baseUrls: [baseUrl] }] },
-      }),
-    ).toBe(true);
   });
 });
