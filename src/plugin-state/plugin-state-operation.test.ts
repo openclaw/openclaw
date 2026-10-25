@@ -2,11 +2,16 @@ import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { useState } from "./plugin-state-fixtures.test-support.js";
 import { PluginStateOperationInvalidatedError } from "./plugin-state-operation-error.js";
@@ -20,6 +25,7 @@ import {
 } from "./plugin-state-store.js";
 import type { PluginStateOperation } from "./plugin-state-store.types.js";
 import * as workerClient from "./plugin-state-worker-client.js";
+import { executePluginStateCommand, preparePluginStateOperation } from "./plugin-state.worker.js";
 
 const invalid = (promise: Promise<unknown>) =>
   expect(promise).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
@@ -130,6 +136,100 @@ it("keeps read-only absent sources noncreating and uses only an explicit missing
     cause: { message: "Plugin state operation source does not exist" },
   });
   expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
+});
+
+it("uses one autocommit read when empty and rereads populated inputs in a snapshot", async () => {
+  const { second } = await pair("empty-count");
+  const input = {
+    module: {
+      modulePath,
+      boundaryRoot: path.dirname(modulePath),
+      origin: "bundled" as const,
+      pluginId: "operation-test",
+    },
+    exportName: "execute",
+    stores: ["empty-count-first", "empty-count-second"].map((namespace) => ({
+      pluginId: "operation-test",
+      namespace,
+      maxEntries: 10,
+      overflowPolicy: "reject-new" as const,
+      defaultTtlMs: undefined,
+    })),
+    writeStores: [],
+    ifEmpty: { store: 1, value: [] },
+    command: { type: "entries", input: undefined },
+    receiptId: "empty-count",
+  };
+  await preparePluginStateOperation(input);
+  const database = openOpenClawStateDatabase({ env: state().env });
+  const run = () =>
+    executePluginStateCommand(
+      { type: "pluginState.executeOperation", input },
+      { path: database.path, env: state().env },
+      () => database,
+      true,
+    );
+  run();
+  const statements: string[] = [];
+  const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype, (sql) => {
+    statements.push(sql);
+  });
+  const exec = database.db.exec.bind(database.db);
+  const transactions = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
+    statements.push(sql);
+    return exec(sql);
+  });
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(run()).toEqual({ ok: true, value: { value: [], validUntil: undefined } });
+      expect(statements.splice(0)).toEqual([expect.stringContaining("plugin_state_entries")]);
+    }
+    await second.register("key", "delivery");
+    statements.length = 0;
+    expect(run()).toMatchObject({ ok: true, value: { value: [[{ value: "delivery" }], [{}]] } });
+    expect(statements).toEqual([
+      expect.stringContaining("plugin_state_entries"),
+      "BEGIN",
+      expect.stringContaining("plugin_state_entries"),
+      expect.stringContaining("plugin_state_entries"),
+      "COMMIT",
+    ]);
+  } finally {
+    transactions.mockRestore();
+    reads.restore();
+  }
+});
+
+it("invalidates empty receipts after either watched namespace changes", async () => {
+  const { first, second, operation } = await pair("empty-watch");
+  const scan = () =>
+    operation.execute(
+      { type: "entries", input: undefined },
+      { writeStores: [], watchStores: [0, 1], ifEmpty: { store: 1, value: [] } },
+    );
+  let receipt = await scan();
+  expect(receipt.value).toEqual([]);
+  await first.register("key", "changed peer");
+  expect(receipt.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
+  receipt = await scan();
+  await second.register("key", "delivery");
+  expect(receipt.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
+  expect((await scan()).value).toMatchObject([
+    [{ value: "delivery" }],
+    [{ value: "changed peer" }],
+  ]);
+  await invalid(
+    operation.execute(
+      { type: "entries", input: undefined },
+      { writeStores: [], ifEmpty: { store: 2, value: [] } },
+    ),
+  );
+  await invalid(
+    operation.execute(
+      { type: "entries", input: undefined },
+      { writeStores: [0], ifEmpty: { store: 1, value: [] } },
+    ),
+  );
 });
 
 it("leaves the writer free during initial grants and preserves replacement revocation", async () => {

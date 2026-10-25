@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractAttachmentsFromPrompt,
   extractTextFromPrompt,
+  extractToolCallContent,
   extractToolCallLocations,
   formatToolTitle,
 } from "./event-mapper.js";
@@ -48,6 +49,13 @@ describe("extractToolCallLocations", () => {
     }
     expect(locations).toEqual([{ path: "/tmp/file-0.txt" }, { path: "/tmp/file-1.txt" }]);
   });
+});
+
+it("stops tool-content aliases at a defined empty string", () => {
+  expect(extractToolCallContent({ text: "", message: "ignored" })).toBeUndefined();
+  expect(extractToolCallContent({ message: "fallback" })).toEqual([
+    { type: "content", content: { type: "text", text: "fallback" } },
+  ]);
 });
 
 describe("formatToolTitle", () => {

@@ -34,7 +34,7 @@ URL to fetch. `http(s)` only.
 <ParamField path="extractMode" type="'markdown' | 'text'" default="markdown">
 Output format after main-content extraction. For Markdown responses, text mode
 normalizes prose whitespace but preserves indentation, repeated spaces, tabs,
-and blank lines inside fenced code blocks.
+and blank lines inside code blocks fenced with backticks or tildes.
 </ParamField>
 
 <ParamField path="maxChars" type="number">
