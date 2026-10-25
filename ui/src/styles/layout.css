@@ -2214,8 +2214,7 @@ openclaw-settings-save-indicator:empty {
   width: 40px;
   height: 40px;
   border: 0;
-  outline: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
-  outline-offset: -1px;
+
   font-size: var(--control-ui-text-sm);
 }
 

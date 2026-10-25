@@ -7,6 +7,13 @@
   height: 100%;
 }
 
+.chat-avatar,
+.chat-author-avatar,
+.viewer-avatar--profile {
+  outline: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  outline-offset: -1px;
+}
+
 .identity-avatar--agent {
   position: relative;
   display: inline-grid;

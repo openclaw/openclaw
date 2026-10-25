@@ -296,8 +296,6 @@
   align-self: flex-start;
   margin-bottom: 4px;
   border: 0;
-  outline: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
-  outline-offset: -1px;
 }
 
 .chat-bubble {

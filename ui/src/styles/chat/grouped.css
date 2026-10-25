@@ -446,8 +446,7 @@
   overflow: hidden;
   border: 0;
   border-radius: 50%;
-  outline: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
-  outline-offset: -1px;
+
   vertical-align: middle;
 }
 
