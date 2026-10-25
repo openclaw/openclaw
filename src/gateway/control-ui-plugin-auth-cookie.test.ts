@@ -47,6 +47,22 @@ const tokenAuth = (token: string, allowTailscale = false) =>
   ({ mode: "token", token, allowTailscale }) as const;
 const cookieRequest = (cookie: string): IncomingMessage =>
   ({ method: "GET", headers: { cookie } }) as IncomingMessage;
+function makeResponse(req?: IncomingMessage) {
+  const res = req ? new ServerResponse(req) : makeMockHttpResponse().res;
+  return Object.assign(res, { [Symbol.dispose]: () => res.destroy() });
+}
+function observeSql() {
+  const sql = observeHostDataSql();
+  return { ...sql, [Symbol.dispose]: sql.restore };
+}
+function cookieHeader(setHeader: ReturnType<typeof makeMockHttpResponse>["setHeader"]) {
+  const value = setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
+  const header = Array.isArray(value) ? value[0] : value;
+  if (typeof header !== "string" || !header) {
+    throw new Error("expected plugin auth cookie");
+  }
+  return header.split(";", 1)[0]!;
+}
 type Admission = Parameters<typeof authorizePluginGatewayHttpRequestOrReply>[0];
 const cookieGeneration = (auth: Admission["auth"], proxies?: string[]) =>
   resolveControlUiPluginAuthCookieGeneration(
@@ -87,12 +103,7 @@ function issueCookie(
     ...(profileId ? { profileId } : {}),
     request,
   });
-  const value = setHeader.mock.calls.at(-1)?.[1];
-  const header = Array.isArray(value) ? value[0] : value;
-  if (typeof header !== "string" || !header) {
-    throw new Error("expected plugin auth cookie");
-  }
-  return header.split(";", 1)[0]!;
+  return cookieHeader(setHeader);
 }
 
 function authorizeCookie(cookie: string, authGeneration = "generation") {
@@ -172,17 +183,13 @@ it("caps a broader signed read cookie on remote native and panel reads without c
         expect(grants(req, generation, remote ? requestPath : cookieRoute.path)).toEqual([
           { ...cookieRoute, scopes: expected, ...(remote ? { profileId: "gateway-owner" } : {}) },
         ]);
-        const res = new ServerResponse(req);
-        try {
-          const admission = await admit({ req, res, auth });
-          expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
-          expect(admission?.requestAuth.revalidate).toBeTypeOf("function");
-          await admission?.requestAuth.revalidate?.();
-          expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
-        } finally {
-          res.destroy();
-          req.destroy();
-        }
+        onTestFinished(() => req.destroy());
+        using res = makeResponse(req);
+        const admission = await admit({ req, res, auth });
+        expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
+        expect(admission?.requestAuth.revalidate).toBeTypeOf("function");
+        await admission?.requestAuth.revalidate?.();
+        expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
       }
     },
   });
@@ -196,31 +203,26 @@ it.each(["admin", "writer"])(
       setUserProfileRole(profile.id, role);
       const auth = tokenAuth("synthetic-cookie-reader");
       const cookie = issueCookie(profile.id, { generation: cookieGeneration(auth) });
-      const { res } = makeMockHttpResponse();
-      const sql = observeHostDataSql();
-      try {
-        const admitted = await admit({ req: cookieRequest(cookie), res, auth });
-        expect(admitted?.requestAuth).toMatchObject({
-          authenticatedUserProfile: { profileId: profile.id },
-          controlUiPluginGrants: [{ pluginId: "example", scopes: ["operator.read"] }],
-        });
-        await expect(admitted?.requestAuth.revalidate?.()).resolves.toBeUndefined();
-        expect(sql.queries).toEqual([]);
-        await setCanonicalUserProfileRole(profile.id, "denied");
-        sql.queries.length = 0;
-        await expect(admitted?.requestAuth.revalidate?.()).rejects.toThrow("Unauthorized");
-        expect(
-          authorizeCookie(cookie, resolveSharedGatewaySessionGeneration(auth))?.requestAuth,
-        ).toMatchObject({
-          authenticatedUserProfile: { profileId: profile.id },
-          controlUiPluginGrants: [{ pluginId: "example", scopes: [] }],
-        });
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-        res.destroy();
-        invalidateOperatorRolePolicy(profile.id);
-      }
+      using res = makeResponse();
+      using sql = observeSql();
+      onTestFinished(() => invalidateOperatorRolePolicy(profile.id));
+      const admitted = await admit({ req: cookieRequest(cookie), res, auth });
+      expect(admitted?.requestAuth).toMatchObject({
+        authenticatedUserProfile: { profileId: profile.id },
+        controlUiPluginGrants: [{ pluginId: "example", scopes: ["operator.read"] }],
+      });
+      await expect(admitted?.requestAuth.revalidate?.()).resolves.toBeUndefined();
+      expect(sql.queries).toEqual([]);
+      await setCanonicalUserProfileRole(profile.id, "denied");
+      sql.queries.length = 0;
+      await expect(admitted?.requestAuth.revalidate?.()).rejects.toThrow("Unauthorized");
+      expect(
+        authorizeCookie(cookie, resolveSharedGatewaySessionGeneration(auth))?.requestAuth,
+      ).toMatchObject({
+        authenticatedUserProfile: { profileId: profile.id },
+        controlUiPluginGrants: [{ pluginId: "example", scopes: [] }],
+      });
+      expect(sql.queries).toEqual([]);
     });
   },
 );
@@ -245,28 +247,23 @@ it("uses an explicit owner credential independently of a revoked ambient visitor
     setActivePluginRegistry(registry.registry);
     const auth = tokenAuth("independent-owner");
     const cookie = issueCookie(profile.id, { generation: cookieGeneration(auth) });
-    const catalog = await prepareUserProfileCatalog();
-    try {
-      for (const authorization of [undefined, "Bearer independent-owner"]) {
-        const { res } = makeMockHttpResponse();
-        const result = await admit({
-          req: createGatewayRequest({ path: requestPath, headers: { cookie }, authorization }),
-          res,
-          auth,
-          resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
-        });
-        if (authorization) {
-          expect(result?.requestAuth.operatorRoleActor).toEqual({ kind: "system" });
-          expect(result?.operatorScopes).toContain("operator.admin");
-          expect(res.writableEnded).toBe(false);
-        } else {
-          expect(result).toBeNull();
-          expect(res.statusCode).toBe(403);
-        }
-        res.destroy();
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const authorization of [undefined, "Bearer independent-owner"]) {
+      using res = makeResponse();
+      const result = await admit({
+        req: createGatewayRequest({ path: requestPath, headers: { cookie }, authorization }),
+        res,
+        auth,
+        resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
+      });
+      if (authorization) {
+        expect(result?.requestAuth.operatorRoleActor).toEqual({ kind: "system" });
+        expect(result?.operatorScopes).toContain("operator.admin");
+        expect(res.writableEnded).toBe(false);
+      } else {
+        expect(result).toBeNull();
+        expect(res.statusCode).toBe(403);
       }
-    } finally {
-      catalog.release();
     }
   });
 });
@@ -311,20 +308,17 @@ it("revokes issued Tailscale cookies on policy changes without rotating shared c
         "Set-Cookie",
         expect.arrayContaining([expect.stringContaining("Path=/plugins/example")]),
       );
-      const value = issued.setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
-      const header = Array.isArray(value) ? value[0] : value;
-      expect(typeof header).toBe("string");
-      const request = { method: "GET", headers: { cookie: header } } as IncomingMessage;
+      const request = cookieRequest(cookieHeader(issued.setHeader));
       const authorize = async (allowTailscale: boolean) => {
-        const response = makeMockHttpResponse();
+        using res = makeResponse();
         const result = await admit({
           req: request,
-          res: response.res,
+          res,
           auth: { ...auth, allowTailscale },
           cfg: getRuntimeConfig(),
           requestPath: "/plugins/example/view",
         });
-        return { result, response };
+        return { result, res };
       };
       expect((await authorize(true)).result?.requestAuth.controlUiPluginGrants).toMatchObject([
         { pluginId: "example", scopes: ["operator.read"] },
@@ -338,7 +332,7 @@ it("revokes issued Tailscale cookies on policy changes without rotating shared c
       );
       const revoked = await authorize(false);
       expect(revoked.result).toBeNull();
-      expect(revoked.response.res.statusCode).toBe(401);
+      expect(revoked.res.statusCode).toBe(401);
     },
     { gateway: { auth: { allowTailscale: true } } },
   );
@@ -365,23 +359,19 @@ it.each([{ trustedProxies: undefined }, { trustedProxies: ["192.0.2.1"] }])(
         } as const;
         const proxies = ["127.0.0.1"];
         const cookie = issueCookie(profile.id, { generation: cookieGeneration(auth, proxies) });
-        const { res } = makeMockHttpResponse();
-        try {
-          const admitted = await admit({
-            req: cookieRequest(cookie),
-            res,
-            auth,
-            trustedProxies: proxies,
-          });
-          expect(admitted?.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
-          expect(admitted?.requestAuth.hasCurrentClientAuthority?.()).toBe(true);
-          await expect(admitted?.requestAuth.revalidate?.()).resolves.toBeUndefined();
-          setRuntimeConfigSnapshot({ gateway: { trustedProxies: ["198.51.100.1"] } });
-          expect(admitted?.requestAuth.hasCurrentClientAuthority?.()).toBe(false);
-          await expect(admitted?.requestAuth.revalidate?.()).rejects.toThrow("Unauthorized");
-        } finally {
-          res.destroy();
-        }
+        using res = makeResponse();
+        const admitted = await admit({
+          req: cookieRequest(cookie),
+          res,
+          auth,
+          trustedProxies: proxies,
+        });
+        expect(admitted?.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
+        expect(admitted?.requestAuth.hasCurrentClientAuthority?.()).toBe(true);
+        await expect(admitted?.requestAuth.revalidate?.()).resolves.toBeUndefined();
+        setRuntimeConfigSnapshot({ gateway: { trustedProxies: ["198.51.100.1"] } });
+        expect(admitted?.requestAuth.hasCurrentClientAuthority?.()).toBe(false);
+        await expect(admitted?.requestAuth.revalidate?.()).rejects.toThrow("Unauthorized");
       },
       { gateway: { trustedProxies } },
     );
@@ -409,7 +399,7 @@ it.each([
       .join("; ");
     const req = cookieRequest(cookie);
     expect(grants(req, generation)).toHaveLength(profiles.length);
-    const { res } = makeMockHttpResponse();
+    using res = makeResponse();
     if (response !== "open") {
       res.statusCode = 204;
       if (response === "ended") {
@@ -419,17 +409,11 @@ it.each([
       }
     }
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    const sql = observeHostDataSql();
-    try {
-      await expect(admit({ req, res, auth })).resolves.toBeNull();
-      expect(res.statusCode).toBe(response === "open" ? 401 : 204);
-      expect(sql.queries).toEqual([]);
-      expect(reads).not.toHaveBeenCalled();
-    } finally {
-      sql.restore();
-      reads.mockRestore();
-      res.destroy();
-    }
+    using sql = observeSql();
+    await expect(admit({ req, res, auth })).resolves.toBeNull();
+    expect(res.statusCode).toBe(response === "open" ? 401 : 204);
+    expect(sql.queries).toEqual([]);
+    expect(reads).not.toHaveBeenCalled();
   });
 });
 

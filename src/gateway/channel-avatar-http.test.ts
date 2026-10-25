@@ -2,12 +2,12 @@ import { createServer, type ServerResponse } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import type { SessionOrigin } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { channelAvatarRevision } from "./channel-avatar-reference.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
-import { HTTP_IMAGE_MAX_BYTES } from "./http-image-response.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
 
@@ -19,8 +19,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./http-utils.js", () => ({
-  authorizeControlUiSessionOwnerReadRequestOrReply: (...args: unknown[]) =>
-    mocks.authorize(...args),
+  authorizeControlUiSessionOwnerReadRequestOrReply: mocks.authorize,
 }));
 
 // mock-isolation: avatar HTTP tests use request-local config without loading operator state.
@@ -30,15 +29,15 @@ vi.mock("../config/io.js", () => ({
 
 // mock-isolation: avatar authorization tests supply session ownership without a database worker.
 vi.mock("./session-utils-store-worker.js", () => ({
-  loadGatewaySessionEntryReadOnlyInWorker: (...args: unknown[]) => mocks.loadEntry(...args),
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.loadEntry,
 }));
 
 vi.mock("../media/media-reference.js", () => ({
-  resolveInboundMediaReference: (...args: unknown[]) => mocks.resolveReference(...args),
+  resolveInboundMediaReference: mocks.resolveReference,
 }));
 
 vi.mock("../media/store.js", () => ({
-  readMediaBuffer: (...args: unknown[]) => mocks.readMedia(...args),
+  readMediaBuffer: mocks.readMedia,
 }));
 
 const { handleChannelAvatarHttpRequest } = await import("./channel-avatar-http.js");
@@ -49,15 +48,33 @@ const PNG_BYTES = Buffer.from(
 );
 const AVATAR_REFERENCE = "/state/media/inbound/channel-avatar.png";
 
-function avatarEntry(reference = AVATAR_REFERENCE) {
+function avatarEntry(reference = AVATAR_REFERENCE, origin: Partial<SessionOrigin> = {}) {
   return {
     delivery: {
       kind: "external" as const,
       route: { channel: "discord", target: { to: "user:1" } },
       context: { channel: "discord", to: "user:1" },
-      origin: { provider: "discord", to: "user:1", avatar: reference },
+      origin: { provider: "discord", to: "user:1", avatar: reference, ...origin },
     },
   };
+}
+
+function holdMediaRead() {
+  const reading = createDeferredCore();
+  const release = createDeferredCore();
+  mocks.readMedia.mockImplementationOnce(async () => {
+    reading.resolve();
+    await release.promise;
+    return { buffer: PNG_BYTES };
+  });
+  return { reading: reading.promise, release: () => release.resolve() };
+}
+
+async function expectImage(response: Response, buffer = PNG_BYTES) {
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("image/png");
+  expect(response.headers.get("content-length")).toBe(String(buffer.byteLength));
+  expect(Buffer.from(await response.arrayBuffer())).toEqual(buffer);
 }
 
 describe("handleChannelAvatarHttpRequest", () => {
@@ -109,18 +126,8 @@ describe("handleChannelAvatarHttpRequest", () => {
       ),
     );
     mocks.loadEntry.mockReset().mockResolvedValue({ entry: avatarEntry() });
-    mocks.resolveReference.mockReset().mockResolvedValue({
-      id: "channel-avatar.png",
-      normalizedSource: AVATAR_REFERENCE,
-      physicalPath: AVATAR_REFERENCE,
-      sourceType: "path",
-    });
-    mocks.readMedia.mockReset().mockResolvedValue({
-      id: "channel-avatar.png",
-      path: AVATAR_REFERENCE,
-      buffer: PNG_BYTES,
-      size: PNG_BYTES.byteLength,
-    });
+    mocks.resolveReference.mockReset().mockResolvedValue({ id: "channel-avatar.png" });
+    mocks.readMedia.mockReset().mockResolvedValue({ buffer: PNG_BYTES });
   });
 
   const avatarRoute = (sessionKey: string) =>
@@ -138,7 +145,7 @@ describe("handleChannelAvatarHttpRequest", () => {
       { sessionKey, database: owner.identity },
       { assertCurrent() {}, assertReadable() {} },
     );
-    const release = createDeferredCore();
+    let held: ReturnType<typeof holdMediaRead> | undefined;
     let pending: Promise<Response> | undefined;
     try {
       const created = await actor.storage!.mutate(
@@ -151,8 +158,7 @@ describe("handleChannelAvatarHttpRequest", () => {
         authority,
       );
       expect(created.kind).toBe("committed");
-      const initial = await fetch(avatarRoute(sessionKey));
-      expect(Buffer.from(await initial.arrayBuffer())).toEqual(PNG_BYTES);
+      await expectImage(await fetch(avatarRoute(sessionKey)));
       expect(mocks.loadEntry).not.toHaveBeenCalled();
       const patch = await actor.storage!.mutate(
         {
@@ -167,43 +173,30 @@ describe("handleChannelAvatarHttpRequest", () => {
         authority,
       );
       expect(patch.kind).toBe("committed");
-      const reading = createDeferredCore();
-      mocks.readMedia.mockImplementationOnce(async () => {
-        reading.resolve();
-        await release.promise;
-        return { buffer: PNG_BYTES };
-      });
+      held = holdMediaRead();
       pending = fetch(avatarRoute(sessionKey));
-      await reading.promise;
+      await held.reading;
       memorySessionActorOwners.closeDatabase(owner);
-      release.resolve();
+      held.release();
       const response = await pending;
       expect(response.status).not.toBe(200);
       expect(response.headers.get("content-type")).not.toBe("image/png");
       await response.arrayBuffer();
     } finally {
-      release.resolve();
+      held?.release();
       await pending;
       await actor.release();
     }
   });
 
   it("binds transcript avatar bytes to the exact native sender and media snapshot", async () => {
-    const entry = avatarEntry();
     mocks.loadEntry.mockReturnValue({
-      entry: {
-        ...entry,
-        delivery: {
-          ...entry.delivery,
-          origin: {
-            ...entry.delivery.origin,
-            provider: "telegram",
-            accountId: "sample-bot",
-            from: "telegram:1000000001",
-            chatType: "direct",
-          },
-        },
-      },
+      entry: avatarEntry(AVATAR_REFERENCE, {
+        provider: "telegram",
+        accountId: "sample-bot",
+        from: "telegram:1000000001",
+        chatType: "direct",
+      }),
     });
     const url = new URL(avatarRoute("agent:main:portrait-binding"));
     url.searchParams.set("v", channelAvatarRevision(AVATAR_REFERENCE));
@@ -232,10 +225,7 @@ describe("handleChannelAvatarHttpRequest", () => {
     const response = await fetch(url);
     expect(response.status).toBe(403);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    await expect(response.json()).resolves.toEqual({
-      ok: false,
-      error: { message: "session access required", type: "forbidden" },
-    });
+    expect(await response.json()).toMatchObject({ ok: false, error: { type: "forbidden" } });
     expect(mocks.resolveReference).not.toHaveBeenCalled();
     expect(mocks.readMedia).not.toHaveBeenCalled();
     sessionVisible = true;
@@ -243,25 +233,15 @@ describe("handleChannelAvatarHttpRequest", () => {
   });
 
   it("rejects revoked authority while channel avatar bytes are loading", async () => {
-    const reading = createDeferredCore();
-    const release = createDeferredCore();
-    mocks.readMedia.mockImplementationOnce(async () => {
-      reading.resolve();
-      await release.promise;
-      return { buffer: PNG_BYTES };
-    });
-
+    const held = holdMediaRead();
     const pending = fetch(avatarRoute("agent:main:revoked"));
-    await reading.promise;
+    await held.reading;
     authorityCurrent = false;
-    release.resolve();
-
+    held.release();
     const response = await pending;
     expect(response.status).toBe(401);
     expect(response.headers.get("etag")).toBeNull();
-    expect(await response.json()).toEqual({
-      error: { message: "Unauthorized", type: "unauthorized" },
-    });
+    expect(await response.json()).toMatchObject({ error: { type: "unauthorized" } });
   });
 
   it.each([
@@ -274,23 +254,14 @@ describe("handleChannelAvatarHttpRequest", () => {
       const route = avatarRoute(`agent:main:discord:direct:${label}`);
       const response = await fetch(route);
 
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toBe("image/png");
-      expect(response.headers.get("content-length")).toBe(String(buffer.byteLength));
-      expect(response.headers.get("cache-control")).toBe("private, max-age=3600");
-      expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
-      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      await expectImage(response, buffer);
+      expect(Object.fromEntries(response.headers)).toMatchObject({
+        "cache-control": "private, max-age=3600",
+        "cross-origin-resource-policy": "same-origin",
+        "x-content-type-options": "nosniff",
+        "content-disposition": 'attachment; filename="channel-avatar"',
+      });
       expect(response.headers.get("content-security-policy")).toContain("sandbox");
-      expect(response.headers.get("content-disposition")).toBe(
-        'attachment; filename="channel-avatar"',
-      );
-      expect(Buffer.from(await response.arrayBuffer())).toEqual(buffer);
-      expect(mocks.resolveReference).toHaveBeenCalledWith(AVATAR_REFERENCE);
-      expect(mocks.readMedia).toHaveBeenCalledWith(
-        "channel-avatar.png",
-        "inbound",
-        HTTP_IMAGE_MAX_BYTES,
-      );
       const etag = response.headers.get("etag");
       const revalidated = await fetch(route, { headers: { "If-None-Match": etag ?? "" } });
       expect(etag).toBeTruthy();

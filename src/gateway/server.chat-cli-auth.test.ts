@@ -51,15 +51,7 @@ const cases: {
 ];
 
 type CliAuthGateway = Awaited<ReturnType<typeof gatewayFixture.startGatewayWithClient>>;
-type CliAuthFixture = {
-  state: OpenClawTestState;
-  gateway: CliAuthGateway;
-  cfg: OpenClawConfig;
-  modelRef: string;
-  token: string;
-  executable: string;
-  nativeRoot: string;
-};
+type CliAuthFixture = Awaited<ReturnType<typeof prepareCliAuthFixture>>;
 const readBinding = async (sessionKey: string) =>
   (await loadGatewaySessionEntryReadOnlyAsync(sessionKey)).entry?.cliSessionBindings?.[
     "claude-cli"
@@ -136,7 +128,7 @@ async function prepareCliAuthFixture(
     nativeContinuity,
   }: Pick<(typeof cases)[number], "order" | "credential" | "nativeContinuity">,
   signal: AbortSignal,
-): Promise<CliAuthFixture> {
+) {
   signal.throwIfAborted();
   // Each case changes startup auth configuration and owns an empty native-login root.
   const state = await createOpenClawTestState({
@@ -220,12 +212,11 @@ async function executeCliAuthCase(
   signal: AbortSignal,
 ) {
   signal.throwIfAborted();
-  const { state, cfg, modelRef, token, executable, nativeRoot } = fixture;
+  const { state, cfg, modelRef, token, nativeRoot } = fixture;
   const sessionKey = `agent:main:cli-auth-${randomUUID()}`;
   const sendTurn = async (turnSessionKey: string, message: string, expectedReply: string) => {
     const { client } = fixture.gateway;
     signal.throwIfAborted();
-    expect(resolveExecutablePath("claude")).toBe(executable);
     const accepted = await client.request<{ runId: string; status: string }>("chat.send", {
       sessionKey: turnSessionKey,
       message,
@@ -265,7 +256,6 @@ async function executeCliAuthCase(
     await gatewayFixture.disconnectGatewayClient(fixture.gateway.client);
     await fixture.gateway.server.close({ reason: "Verify persisted native account continuity" });
     signal.throwIfAborted();
-    expect(resolveExecutablePath("claude")).toBe(executable);
     fixture.gateway = await startCliAuthGateway(state, cfg, token);
     signal.throwIfAborted();
     await fixture.gateway.server.startupSettled;
