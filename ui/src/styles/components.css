@@ -3195,7 +3195,7 @@ td.data-table-key-col {
   }
 
   .exec-approval-header {
-    align-items: baseline;
+    align-items: flex-start;
     gap: 10px;
   }
 
@@ -3210,7 +3210,7 @@ td.data-table-key-col {
     align-items: center;
     gap: 6px 16px;
     font-weight: 400;
-    line-height: 22px;
+    line-height: 24px;
     overflow-wrap: anywhere;
   }
 
@@ -3226,7 +3226,7 @@ td.data-table-key-col {
   .exec-approval-countdown {
     margin: 0;
     font-size: 12px;
-    line-height: 22px;
+    line-height: 24px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -3284,13 +3284,14 @@ td.data-table-key-col {
   vertical-align: baseline;
 }
 
-.exec-approval-identity .exec-approval-agent {
-  align-self: center;
+.exec-approval-identity .exec-approval-agent,
+.exec-approval-request > .exec-approval-fallback-icon {
+  align-self: flex-start;
 }
 
 .exec-approval-request {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   min-width: 0;
   max-width: 100%;
   gap: 6px;
