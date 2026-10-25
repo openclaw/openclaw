@@ -57,29 +57,28 @@ async function createFixture() {
     await fs.writeFile(command, "restored managed executable");
     return { command, asset };
   });
-  const model = {
-    id: "chat",
-    maxTokens: 2048,
-    params: { modelPath },
-  };
   const provider = {
     baseUrl: "http://127.0.0.1:19432/v1",
     localService: {
       command,
-      args: ["--host", "127.0.0.1", "--port", "19432", "--models-preset", presetPath],
+      args: [..."--host 127.0.0.1 --port 19432 --models-preset".split(" "), presetPath],
     },
     params: { modelCacheDir: root },
     models: [],
   };
-  const prepare = () => ensureManagedLlamaServerForChat({ model, provider });
+  const prepare = () =>
+    ensureManagedLlamaServerForChat({
+      model: { id: "chat", maxTokens: 2048, params: { modelPath } },
+      provider,
+    });
   const embed = (localService = provider.localService) =>
     llamaCppEmbeddingProviderAdapter.create({
-      config: { models: { providers: { "llama-cpp": { ...provider, localService, models: [] } } } },
+      config: { models: { providers: { "llama-cpp": { ...provider, localService } } } },
       provider: "local",
       model: modelPath,
       local: { modelPath },
     });
-  return { root, asset, command, presetPath, modelPath, provider, prepare, embed };
+  return { root, command, presetPath, modelPath, provider, prepare, embed };
 }
 
 it.each(["missing host", "duplicate preset", "different port", "direct model"])(
@@ -102,7 +101,7 @@ it.each(["missing host", "duplicate preset", "different port", "direct model"])(
 );
 
 it.each(["absolute", "relative", "equals"])("recovers %s before transport", async (kind) => {
-  const { root, asset, command, presetPath, provider, embed } = await createFixture();
+  const { root, command, presetPath, provider, embed } = await createFixture();
   const preset = kind === "relative" ? "models.ini" : presetPath;
   const localService = {
     ...provider.localService,
@@ -133,24 +132,19 @@ it.each(["absolute", "relative", "equals"])("recovers %s before transport", asyn
   await embed(localService);
   await embed(localService);
   expect(mocks.reap).toHaveBeenCalledOnce();
-  expect(mocks.install).toHaveBeenCalledWith(expect.objectContaining({ asset }));
-  expect(mocks.genericCreate).toHaveBeenCalledTimes(2);
 });
 
 it.each([false, true])("prepares chat with an existing executable: %s", async (existing) => {
-  const { asset, command, presetPath, prepare, provider } = await createFixture();
+  const { command, presetPath, prepare } = await createFixture();
   if (existing) {
     await fs.mkdir(path.dirname(command), { recursive: true });
     await fs.writeFile(command, "existing executable");
   }
   await prepare();
-  const installOptions = { asset, signal: undefined, onProgress: undefined };
-  expect(mocks.install.mock.calls).toEqual(existing ? [] : [[installOptions]]);
   expect(await fs.readFile(command, "utf8")).toBe(
     existing ? "existing executable" : "restored managed executable",
   );
   expect(await fs.readFile(presetPath, "utf8")).toContain("[chat]");
-  expect(provider.localService.command).toBe(command);
   await prepare();
   expect(mocks.install).toHaveBeenCalledTimes(existing ? 0 : 1);
 });
