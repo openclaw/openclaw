@@ -158,11 +158,10 @@ describe("buildOpenAIProvider", () => {
 
   it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {
     const provider = buildOpenAIProvider();
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({
-        data: [{ id: "gpt-5.5", object: "model" }],
-      }),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ data: [{ id: "gpt-5.5", object: "model" }] }))
+      .mockResolvedValueOnce(Response.json({ models: [] }));
 
     try {
       const result = await provider.catalog?.run({
@@ -180,14 +179,15 @@ describe("buildOpenAIProvider", () => {
       }
       expect(Object.keys(result.providers)).toEqual(["openai"]);
       expect(result.providers.openai?.apiKey).toBe("sk-openai");
-      expect(fetchSpy).toHaveBeenCalledOnce();
-      const fetchInit = fetchSpy.mock.calls[0]?.[1];
-      const headers = fetchInit?.headers;
-      expect(headers).toBeInstanceOf(Headers);
-      if (!(headers instanceof Headers)) {
-        throw new Error("expected fetch headers");
+      expect(fetchSpy.mock.calls.map(([input]) => input)).toEqual([
+        "https://api.openai.com/v1/models",
+        expect.stringMatching(
+          /^https:\/\/chatgpt\.com\/backend-api\/codex\/models\?client_version=[^&]+$/u,
+        ),
+      ]);
+      for (const [, init] of fetchSpy.mock.calls) {
+        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer sk-discovery");
       }
-      expect(headers.get("Authorization")).toBe("Bearer sk-discovery");
       expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();

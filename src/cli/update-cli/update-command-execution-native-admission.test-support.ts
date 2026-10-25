@@ -171,34 +171,14 @@ export function registerNativeAdmissionTests() {
     ["stopped shared root", { running: false, refused: false }],
     ["live disjoint root", { shared: false, refused: false }],
     ["selected live + shared sibling", { selectedRunning: true }],
-    [
-      "selected live + disjoint sibling",
-      {
-        shared: false,
-        refused: false,
-        selectedRunning: true,
-      },
-    ],
-    [
-      "sibling starts during selected stop",
-      {
-        selectedRunning: true,
-        startsDuringStop: true,
-      },
-    ],
+    ["selected live + disjoint sibling", { shared: false, refused: false, selectedRunning: true }],
+    ["sibling starts during selected stop", { selectedRunning: true, startsDuringStop: true }],
     ["disjoint roots, shared entrypoint", { shared: false, linkedDist: true }],
     ["sibling starts during staging", { late: true }],
     ["Git shared publication", { route: "git" }],
     ["selected package no-restart", { consumer: "selected", refused: false }],
     ["same-profile other service", { consumer: "same-profile-other-service" }],
-    [
-      "unreadable unrelated definition",
-      {
-        unreadableFirst: true,
-        shared: false,
-        refused: false,
-      },
-    ],
+    ["unreadable unrelated definition", { unreadableFirst: true, shared: false, refused: false }],
     ["live sibling after unreadable definition", { unreadableFirst: true }],
   ];
   it.each(consumerCases)(

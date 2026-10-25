@@ -231,6 +231,13 @@ describe("generated response resources", () => {
       error: { message: "Synthetic error" },
     };
     expect(readCodexErrorNotification(params)).toMatchObject(params);
+    for (const codexErrorInfo of [
+      { httpConnectionFailed: { httpStatusCode: 429 } },
+      { futureNativeError: { detail: "Synthetic future variant" } },
+    ]) {
+      const notification = { ...params, error: { ...params.error, codexErrorInfo } };
+      expect(readCodexErrorNotification(notification)).toMatchObject(notification);
+    }
     expect(
       readCodexErrorNotification({
         ...params,
@@ -240,6 +247,23 @@ describe("generated response resources", () => {
         },
       }),
     ).toBeUndefined();
+    expect(
+      readCodexErrorNotification({
+        ...params,
+        error: { ...params.error, codexErrorInfo: { activeTurnNotSteerable: { turnKind: 12 } } },
+      }),
+    ).toBeUndefined();
+    expect(() =>
+      assertCodexTurnStartResponse({
+        turn: {
+          ...turn(),
+          error: {
+            ...params.error,
+            codexErrorInfo: { httpConnectionFailed: { httpStatusCode: -1 } },
+          },
+        },
+      }),
+    ).toThrow("Invalid Codex app-server");
   });
 
   it("validates turn-start item contents inside the shared resource", () => {

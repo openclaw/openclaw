@@ -9,6 +9,7 @@ import {
   createChatFlowE2eSuite,
   expectDefined,
   installMockGateway,
+  chatMessage,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
@@ -76,10 +77,9 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             sessionKey,
             featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-            historyMessages: Array.from({ length: 40 }, (_, i) => ({
-              role: i % 2 ? "assistant" : "user",
-              content: [{ type: "text", text: "Earlier context " + i + "." }],
-            })),
+            historyMessages: Array.from({ length: 40 }, (_, i) =>
+              chatMessage(i % 2 ? "assistant" : "user", "Earlier context " + i + "."),
+            ),
             inFlightRun: { runId, text: "Reviewing the workspace." },
             sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
             methodResponses: { "progressCard.get": { card: initialCard } },
@@ -98,7 +98,7 @@ suite.define(() => {
           await waitForProgressThreadIdle(thread);
           // Transcript input cannot collapse the adjacent desktop disclosure.
           const bounds = expectDefined(await thread.boundingBox(), "transcript bounds");
-          await page.mouse.move(bounds.x + 8, bounds.y + bounds.height / 2);
+          await page.mouse.move(bounds.x + bounds.width / 4, bounds.y + bounds.height / 2);
           await page.mouse.wheel(0, -640);
           await expect
             .poll(() => thread.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
@@ -147,10 +147,7 @@ suite.define(() => {
             sessionKey,
             runId,
             state: "delta",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "A streaming finding arrived." }],
-            },
+            message: chatMessage("assistant", "A streaming finding arrived."),
           });
           await gateway.setMethodResponse("progressCard.get", {
             card: {
@@ -231,11 +228,11 @@ suite.define(() => {
           "chat.send",
           "progressCard.get",
         ],
-        historyMessages: Array.from({ length: 30 }, (_, i) => ({
-          role: i % 2 ? "assistant" : "user",
-          content: [{ type: "text", text: "Earlier context " + i + "." }],
-          timestamp: i + 1,
-        })),
+        historyMessages: Array.from({ length: 30 }, (_, i) =>
+          chatMessage(i % 2 ? "assistant" : "user", "Earlier context " + i + ".", {
+            timestamp: i + 1,
+          }),
+        ),
         inFlightRun: { runId, text },
         sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
         methodResponses: { "progressCard.get": { card: initialCard } },
@@ -317,7 +314,7 @@ suite.define(() => {
             sessionKey,
             runId,
             state: "delta",
-            message: { role: "assistant", content: [{ type: "text", text }] },
+            message: chatMessage("assistant", text),
           });
         }
         await gateway.setMethodResponse("progressCard.get", {

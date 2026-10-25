@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 272544,
-  "reason": "PR #182993: bounded formatting cadence and no per-delta geometry reads cut standard streaming script CPU 20.8% and burst CPU 16.5% over 20 interleaved base/A-A/head triplets. Coordinator accepted the measured CPU/bytes tradeoff. After merging #183042, same-host builds measure startup 272577 to 272544 B, Chat +702 B (54 B within build variance of the approved +648 B), and New Session +19 B, with unchanged requests and CSS. Ratchet to measured integrated head.",
+  "startupJsGzipBytes": 271935,
+  "reason": "Same-host uncached 8937cb4 to 92174fc builds measure startup 271947 to 271935 B gzip (-12 B), Chat +1451 B and New Session +29 B (within build variance), with unchanged CSS bytes and JS/CSS request counts. The lazy highlighting worker cuts 5000-line code/diff CPU by 18-70%; avoiding leaf-subtree table scans cuts dense-code CPU median/p95 by 65.9%/64.3%. Record the measured integrated startup head.",
   "updatedAt": "2026-10-25"
 }

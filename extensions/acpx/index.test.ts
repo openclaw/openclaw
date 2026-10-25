@@ -334,6 +334,26 @@ export { sendReceipt };`,
     },
   );
 
+  it("applies configured agent env lists to native catalog inspection", async () => {
+    nativePrograms.add("copilot");
+    vi.mocked(inspectAgentModels).mockResolvedValueOnce(undefined);
+    const { api, getHarness } = createHarnessApi({
+      pluginConfig: {
+        agentProcessEnvAllow: ["GH_TOKEN"],
+        agentProcessEnvBlock: ["OPENCLAW_GATEWAY_TOKEN"],
+      },
+      runtime: createPluginRuntimeMock({ config: { current: () => ({}) } }),
+    });
+    plugin.register(api);
+    await getHarness("copilot").loadModelCatalog(catalogInput({}));
+    expect(inspectAgentModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentProcessEnvAllow: ["GH_TOKEN"],
+        agentProcessEnvBlock: ["OPENCLAW_GATEWAY_TOKEN"],
+      }),
+    );
+  });
+
   it.each([
     ["Authentication required: fixture sign-in", "auth-rejected"],
     ["Generic fixture server error", "unavailable"],

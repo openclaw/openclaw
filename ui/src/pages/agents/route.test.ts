@@ -1,10 +1,11 @@
-import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { gateway, settingsSelection, snapshot } from "./agents-page.test-support.ts";
 import { page, type AgentsRouteData } from "./route.ts";
 
@@ -35,18 +36,18 @@ async function loadRoute(url: string, basePath = "") {
   if (!page.loader) {
     throw new Error("agents route has no loader");
   }
-  const result = (await page.loader(context, {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: {
-      pathname: parsed.pathname,
-      search: parsed.search,
-      hash: parsed.hash,
-    },
-    deps: `${parsed.pathname}\u0000${parsed.search}\u0000${parsed.hash}`,
-    cause: "preload",
-  } satisfies RouteLoaderOptions)) as AgentsRouteData;
+  const result = (await page.loader(
+    context,
+    createRouteLoaderOptions(
+      {
+        pathname: parsed.pathname,
+        search: parsed.search,
+        hash: parsed.hash,
+      },
+      `${parsed.pathname}\u0000${parsed.search}\u0000${parsed.hash}`,
+      "preload",
+    ),
+  )) as AgentsRouteData;
   expect(request).toHaveBeenCalledExactlyOnceWith("agents.list", {
     includeSessionPlacement: true,
   });

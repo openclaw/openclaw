@@ -26,6 +26,24 @@ function importedNames(source, specifier) {
   );
 }
 
+function generatesRuntimeScriptAsset(entry) {
+  // Keep this projection aligned with the generator's manifest-driven ASSETS loop.
+  return entry.kind === "data-url" || ("materialize" in entry && entry.materialize);
+}
+
+export function collectRuntimeProcessManifestEntries(scriptEntrypoints, toolingEntrypoints) {
+  const entries = new Set(Object.values(toolingEntrypoints));
+  for (const entry of Object.values(scriptEntrypoints)) {
+    if ("buildSource" in entry) {
+      entries.add(entry.buildSource);
+    }
+    if (generatesRuntimeScriptAsset(entry)) {
+      entries.add(entry.sourceModule);
+    }
+  }
+  return [...entries];
+}
+
 function dynamicImportMemberNames(source, specifier) {
   return [
     ...new Set(
@@ -126,6 +144,55 @@ function emittedNamedImportEdges(source) {
   return edges;
 }
 
+function emittedFileNamedImportEdges(source) {
+  const outputPaths = new Map(
+    [
+      ...source.matchAll(
+        /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*path\.join\(\s*[A-Za-z_$][\w$]*\s*,\s*["']([^"'\r\n]+)["']\s*\)\s*;/gu,
+      ),
+    ].map(([, binding, outputPath]) => [binding, outputPath]),
+  );
+  const edges = new Map();
+  for (const match of source.matchAll(
+    /\b(?:fs\.)?writeFileSync\(\s*([A-Za-z_$][\w$]*)\s*,([\s\S]*?)\n\s*\);/gu,
+  )) {
+    const outputPath = outputPaths.get(match[1]);
+    if (!outputPath) {
+      continue;
+    }
+    for (const imported of match[2].matchAll(
+      /\bimport\s*\{([^}]+)\}\s*from\s*["']([^"'\r\n]+)["']/gu,
+    )) {
+      const targetFile = path.resolve(path.dirname(outputPath), imported[2]);
+      const names = edges.get(targetFile) ?? new Set();
+      for (const binding of imported[1].split(",")) {
+        const name = binding
+          .trim()
+          .replace(/^type\s+/u, "")
+          .split(/\s+as\s+/u)[0];
+        if (name) {
+          names.add(name);
+        }
+      }
+      edges.set(targetFile, names);
+    }
+  }
+  return edges;
+}
+
+function emittedSelfNamedImportNames(source) {
+  return [
+    ...source.matchAll(
+      /\bimport\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(import\.meta\.url\)\};/gu,
+    ),
+  ].flatMap(([, bindings]) =>
+    bindings
+      .split(",")
+      .map((binding) => binding.trim().split(/\s+as\s+/u)[0])
+      .filter(Boolean),
+  );
+}
+
 function namedImport(names, targetFile, consumerFile, index) {
   const bindings = names.map(
     (name, bindingIndex) => `${name} as __dynamic${index}_${bindingIndex}`,
@@ -140,9 +207,10 @@ function namedImport(names, targetFile, consumerFile, index) {
  *
  * @param {string} source
  * @param {string} filePath
+ * @param {Record<string, {kind: string, sourceModule: string, sourceBinding?: string, materialize?: boolean}>} [scriptEntrypoints]
  * @returns {string}
  */
-export function compileDynamicConsumerEdges(source, filePath) {
+export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints = {}) {
   const imports = [];
 
   const tsdownPath = "tsdown.config.ts";
@@ -164,16 +232,7 @@ export function compileDynamicConsumerEdges(source, filePath) {
 
   const benchmarkGeneratorPath = "scripts/lib/gateway-bench-worker-messages.ts";
   const benchmarkGenerator = fs.readFileSync(benchmarkGeneratorPath, "utf8");
-  const generatedNames = [
-    ...benchmarkGenerator.matchAll(
-      /\bimport\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(import\.meta\.url\)\};/gu,
-    ),
-  ].flatMap(([, bindings]) =>
-    bindings
-      .split(",")
-      .map((binding) => binding.trim().split(/\s+as\s+/u)[0])
-      .filter(Boolean),
-  );
+  const generatedNames = emittedSelfNamedImportNames(benchmarkGenerator);
   if (generatedNames.length > 0) {
     imports.push(namedImport(generatedNames, benchmarkGeneratorPath, filePath, imports.length));
   }
@@ -248,6 +307,90 @@ export function compileDynamicConsumerEdges(source, filePath) {
   );
   for (const [targetFile, names] of emittedNamedImportEdges(rowChurnInstrumenter)) {
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
+  }
+
+  const runtimeAssetGeneratorPath = "scripts/generate-runtime-script-assets.mjs";
+  const materializerSpecifier = "./src/infra/runtime-process-script-file.ts";
+  const materializerNames = importedNames(
+    fs.readFileSync(runtimeAssetGeneratorPath, "utf8"),
+    materializerSpecifier,
+  );
+  if (materializerNames.length > 0) {
+    imports.push(
+      namedImport(materializerNames, path.resolve(materializerSpecifier), filePath, imports.length),
+    );
+  }
+
+  const prepareHooksPath = "scripts/prepare-git-hooks.mjs";
+  const bootstrapSpecifier = "../runtime-process-bootstrap.generated.mjs";
+  const bootstrapNames = importedNames(
+    fs.readFileSync(prepareHooksPath, "utf8"),
+    bootstrapSpecifier,
+  );
+  if (bootstrapNames.length > 0) {
+    imports.push(
+      namedImport(
+        bootstrapNames,
+        path.resolve(path.dirname(prepareHooksPath), bootstrapSpecifier),
+        filePath,
+        imports.length,
+      ),
+    );
+  }
+
+  const workerArtifactsPath = "test/scripts/vitest-worker-artifacts.test.ts";
+  const emittedWorkerEdges = emittedFileNamedImportEdges(
+    fs.readFileSync(workerArtifactsPath, "utf8"),
+  );
+  const sqliteFacadePath = path.resolve("node-sqlite.mjs");
+  const sqliteFacadeNames = [...(emittedWorkerEdges.get(sqliteFacadePath) ?? [])];
+  if (sqliteFacadeNames.length > 0) {
+    imports.push(namedImport(sqliteFacadeNames, sqliteFacadePath, filePath, imports.length));
+  }
+
+  for (const entry of Object.values(scriptEntrypoints)) {
+    if (generatesRuntimeScriptAsset(entry) && entry.sourceBinding) {
+      imports.push(
+        namedImport(
+          [entry.sourceBinding],
+          path.resolve(entry.sourceModule),
+          filePath,
+          imports.length,
+        ),
+      );
+    }
+  }
+
+  const trajectoryFlushPreloadPath = "scripts/perf/trajectory-flush-preload.mts";
+  const trajectoryFlushNames = emittedSelfNamedImportNames(
+    fs.readFileSync(trajectoryFlushPreloadPath, "utf8"),
+  );
+  if (trajectoryFlushNames.length > 0) {
+    imports.push(
+      namedImport(trajectoryFlushNames, trajectoryFlushPreloadPath, filePath, imports.length),
+    );
+  }
+
+  const poolLifecyclePath = "scripts/perf/pg-pool-lifecycle.mts";
+  const poolFixtureSpecifier = fs
+    .readFileSync(poolLifecyclePath, "utf8")
+    .match(
+      /\bbroker\.open(?:<[^>]+>)?\(\s*\{\s*moduleUrl:\s*new URL\(\s*["']([^"'\r\n]+)["']\s*,\s*self\s*\)/u,
+    )?.[1];
+  const creationFactory = fs
+    .readFileSync("src/infra/sqlite-store.worker.ts", "utf8")
+    .match(
+      /\bconst factoryName\s*=\s*request\.existingIdentity\s*\?\s*["'][^"'\r\n]+["']\s*:\s*["']([^"'\r\n]+)["']/u,
+    )?.[1];
+  if (poolFixtureSpecifier && creationFactory) {
+    imports.push(
+      namedImport(
+        [creationFactory],
+        path.resolve(path.dirname(poolLifecyclePath), poolFixtureSpecifier),
+        filePath,
+        "PgPool",
+      ),
+    );
   }
 
   return `${source}\n${imports.join("\n")}`;

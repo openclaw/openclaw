@@ -41,6 +41,7 @@ import {
   messageAuditMocks,
   mockPluginBinding,
   mocks,
+  mockSessionStorePath,
   noAbortResult,
   parseGenericThreadSessionInfo,
   placementContextMocks,
@@ -552,7 +553,7 @@ export const describe0BeforeEach0 = () => {
   sessionStoreMocks.loadSessionStoreEntry.mockReset();
   sessionStoreMocks.loadSessionStoreEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
   sessionStoreMocks.resolveSessionStorePathCore.mockReset();
-  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(mockSessionStorePath);
   transcriptMocks.persistAcpDispatchTranscript.mockClear();
   transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
   stageSandboxMediaMocks.stageSandboxMedia.mockReset();

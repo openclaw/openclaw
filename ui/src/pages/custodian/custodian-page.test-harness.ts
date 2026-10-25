@@ -6,16 +6,16 @@ import type {
   GatewayEventListener,
 } from "../../api/gateway.ts";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
-import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { createChannelsState } from "../channels/view.test-support.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
 import "./custodian-page.tsx";
 
@@ -57,7 +57,7 @@ export function createContext(
           ? Promise.resolve({ turns: [] })
           : request(method, ...args),
   } as unknown as GatewayBrowserClient;
-  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
+  const snapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
     hello: {
@@ -74,7 +74,6 @@ export function createContext(
     assistantAgentId: "main",
     sessionKey: "main",
   });
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const connection = {
     gatewayUrl: "ws://gateway.test/control",
@@ -82,45 +81,20 @@ export function createContext(
     bootstrapToken: "",
     password: "",
   };
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
+  const { gateway, publish } = createApplicationGateway(snapshot);
+  Object.assign(gateway, {
     connection,
-    subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
     subscribeEvents: (listener: GatewayEventListener) => {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
     },
-  } as unknown as ApplicationGateway;
+  });
   const agentListeners = new Set<() => void>();
   const channelListeners = new Set<(state: ApplicationContext["channels"]["state"]) => void>();
-  const channelState: ApplicationContext["channels"]["state"] = {
+  const channelState = createChannelsState(options.channelsSnapshot ?? null, null, {
     client,
-    connected: true,
-    channelsLoading: false,
-    channelsLoadingProbe: null,
-    channelsRefreshSeq: 0,
-    channelsSnapshot: options.channelsSnapshot ?? null,
-    channelsRead: null,
-    channelsError: null,
     channelsLastSuccess: options.channelsSnapshot ? Date.now() : null,
-    pairingLoading: false,
-    pairingRefreshSeq: 0,
-    pairingSnapshot: null,
-    pairingRead: null,
-    pairingError: null,
-    pairingLastSuccess: null,
-    pairingBusyRequestId: null,
-    whatsappLoginMessage: null,
-    whatsappLoginQrDataUrl: null,
-    whatsappLoginSessionKey: null,
-    whatsappLoginConnected: null,
-    whatsappBusy: false,
-  };
+  });
   let settleChannels: ((error: string | null) => void) | undefined;
   const refreshChannels = vi.fn(() => {
     settleChannels?.(null);
@@ -223,10 +197,7 @@ export function createContext(
       }
     },
     setGatewaySnapshot: (patch) => {
-      snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      publish({ ...gateway.snapshot, ...patch });
     },
     setGatewayToken: (value) => {
       const credentials = { token: value };

@@ -1,8 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const STALL_MS = 250;
+const UNATTRIBUTED_STALL_MS = 1_000;
+const HEARTBEAT_MS = 20;
 const MAX_PENDING_STALLS = 8;
 
 type TaskObserver = {
@@ -34,8 +37,17 @@ export function runWithMainThreadTask<T>(name: string, run: () => T, phase?: str
 /** Measure explicit synchronous scopes; unscoped stalls rely on best-effort loop sampling. */
 export function createMainThreadStallMonitor(now: () => number = () => performance.now()) {
   taskState.observer?.stop();
-  const pending: { elapsedMs: number; task: string; taskMs: number }[] = [];
+  const pending: {
+    elapsedMs: number;
+    task: string;
+    taskMs: number;
+    startedAt: number;
+    endedAt: number;
+  }[] = [];
+  let heartbeat: NodeJS.Timeout | undefined;
+  let heartbeatAt = now();
   let dropped = 0;
+  let unattributedDropped = 0;
   let delayMaxMs = 0;
   let active = false;
   let startedAt = 0;
@@ -45,6 +57,31 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
   let longestTask = task;
   let longestPhase: string | undefined;
   let longestMs = 0;
+  const observeLoop = () => {
+    const at = now();
+    const from = heartbeatAt;
+    heartbeatAt = at;
+    const elapsedMs = at - from;
+    if (
+      elapsedMs <= UNATTRIBUTED_STALL_MS ||
+      pending.some(
+        (stall) => stall.startedAt <= from + HEARTBEAT_MS && stall.endedAt >= at - HEARTBEAT_MS,
+      )
+    ) {
+      return;
+    }
+    if (pending.length < MAX_PENDING_STALLS) {
+      pending.push({
+        elapsedMs,
+        task: "unattributed",
+        taskMs: elapsedMs,
+        startedAt: from,
+        endedAt: at,
+      });
+    } else {
+      unattributedDropped++;
+    }
+  };
   const segment = (at: number) => {
     const elapsed = at - segmentAt;
     if (elapsed > longestMs) {
@@ -57,12 +94,15 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
   const observer: TaskObserver = {
     currentName: () => (active ? task : undefined),
     stop() {
+      clearInterval(heartbeat);
+      heartbeat = undefined;
       if (taskState.observer === observer) {
         delete taskState.observer;
         taskState.context.disable();
       }
       pending.length = 0;
       dropped = 0;
+      unattributedDropped = 0;
       delayMaxMs = 0;
     },
     run(name, run, taskPhase) {
@@ -98,6 +138,8 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
                 elapsedMs,
                 task: longestPhase ? `${longestTask}:${longestPhase}` : longestTask,
                 taskMs: longestMs,
+                startedAt,
+                endedAt: at,
               });
             } else {
               dropped++;
@@ -109,17 +151,41 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
   };
   taskState.observer = observer;
   return {
+    setEventLoopSampling(enabled: boolean) {
+      if (enabled === Boolean(heartbeat)) {
+        return;
+      }
+      clearInterval(heartbeat);
+      // Use a raw heartbeat: scheduler jobs allocate an async work scope per tick.
+      heartbeatAt = now();
+      heartbeat = enabled
+        ? runInDetachedAsyncContext(() => setInterval(observeLoop, HEARTBEAT_MS).unref())
+        : undefined;
+    },
     drain() {
+      // The health sampler may be the first timer to resume after a blocked loop.
+      if (heartbeat) {
+        observeLoop();
+      }
       const stalls = pending.splice(0);
       const omitted = dropped;
+      const omittedUnattributed = unattributedDropped;
       dropped = 0;
+      unattributedDropped = 0;
       const maximum = delayMaxMs;
       delayMaxMs = 0;
-      return { stalls, dropped: omitted, delayMaxMs: maximum };
+      return {
+        stalls,
+        dropped: omitted,
+        unattributedDropped: omittedUnattributed,
+        delayMaxMs: maximum,
+      };
     },
     reset() {
+      heartbeatAt = now();
       pending.length = 0;
       dropped = 0;
+      unattributedDropped = 0;
       delayMaxMs = 0;
       startedAt = segmentAt = now();
       longestMs = 0;

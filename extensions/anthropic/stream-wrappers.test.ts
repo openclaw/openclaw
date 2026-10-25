@@ -34,15 +34,12 @@ beforeAll(() => {
   });
 });
 
-afterAll(() => {
-  configureAiTransportHost(initialTransportHost);
-});
+afterAll(() => configureAiTransportHost(initialTransportHost));
 
 type Captured = {
   headers?: Record<string, string>;
   model?: Parameters<StreamFn>[0];
   payload?: Record<string, unknown>;
-  options?: Parameters<StreamFn>[2];
 };
 type WrapperFactory = (base: StreamFn) => StreamFn | undefined;
 function captureStream({
@@ -60,16 +57,11 @@ function captureStream({
 } = {}) {
   const captured: Captured = {};
   const base: StreamFn = (target, _context, opts) => {
-    Object.assign(captured, { headers: opts?.headers, options: opts, model: target, payload });
+    Object.assign(captured, { headers: opts?.headers, model: target, payload });
     opts?.onPayload?.(payload as never, target);
     return {} as never;
   };
-  const target = {
-    provider: "anthropic",
-    api: "anthropic-messages",
-    id: "claude-sonnet-4-6",
-    ...model,
-  } as Parameters<StreamFn>[0];
+  const target = { ...makeModel("claude-sonnet-4-6"), ...model };
   const wrapper = wrap
     ? wrap(base)
     : wrapAnthropicProviderStream({
@@ -101,39 +93,7 @@ function runNativeFastModeWrapper(
   });
 }
 
-function runCompactionProviderWrapper(
-  params: {
-    apiKey?: string;
-    modelId?: string;
-    extraParams?: Record<string, unknown>;
-    headers?: Record<string, string>;
-  } = {},
-) {
-  return captureStream({
-    extraParams: params.extraParams,
-    model: {
-      id: params.modelId ?? "claude-sonnet-4-6",
-      baseUrl: "https://api.anthropic.com/v1",
-      contextWindow: 200_000,
-    },
-    options: {
-      apiKey: params.apiKey ?? "sk-ant-api03-test-key",
-      headers: params.headers,
-    },
-  });
-}
-
 describe("anthropic stream wrappers", () => {
-  it("strips legacy context-1m betas for Claude CLI or legacy token auth", () => {
-    const { headers } = captureStream({
-      wrap: (base) => createAnthropicBetaHeadersWrapper(base, [CONTEXT_1M_BETA]),
-      model: { id: "claude-opus-4-6" },
-      options: { apiKey: "sk-ant-oat01-123" },
-    });
-    expect(headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
-    expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
-  });
-
   it("composes the anthropic provider stream chain from extra params", () => {
     const captured = captureStream({
       extraParams: { context1m: true, serviceTier: "auto" },
@@ -144,28 +104,13 @@ describe("anthropic stream wrappers", () => {
   });
 
   it.each([
-    { name: "a documented model by default", modelId: "claude-sonnet-4-6", extraParams: {} },
-    {
-      name: "an explicit opt-in on another Claude model",
-      modelId: "claude-opus-4-5",
-      extraParams: { anthropicServerCompaction: true },
-    },
-  ])("passes server compaction for $name to the direct API-key transport", (params) => {
-    const captured = runCompactionProviderWrapper({
-      ...params,
-      headers: { "Anthropic-Beta": "files-api-2025-04-14" },
-    });
-
-    expect(captured.headers?.["Anthropic-Beta"]).toBe("files-api-2025-04-14,compact-2026-01-12");
-    expect(captured.options).toMatchObject({
-      anthropicServerCompaction: true,
-      anthropicCompactThreshold: 140_000,
-    });
-  });
-
-  it.each([undefined, true, false])(
-    "honors server compaction at the final request with a configured threshold (enabled=%s)",
-    async (anthropicServerCompaction) => {
+    ["claude-sonnet-4-6", undefined, undefined, 200_000],
+    ["claude-sonnet-4-6", true, 150_000, 1_000_000],
+    ["claude-sonnet-4-6", false, 150_000, 1_000_000],
+    ["claude-opus-4-5", true, 150_000, 1_000_000],
+  ] as const)(
+    "honors compaction on %s at the final request (enabled=%s, threshold=%s)",
+    async (modelId, anthropicServerCompaction, anthropicCompactThreshold, contextWindow) => {
       const previousHost = getAiTransportHost();
       const requests: Array<{ headers: Headers; payload: Record<string, unknown> }> = [];
       configureAiTransportHost({
@@ -183,7 +128,7 @@ describe("anthropic stream wrappers", () => {
               type: "message_start",
               message: {
                 id: "msg_compaction",
-                model: "claude-sonnet-4-6",
+                model: modelId,
                 usage: { input_tokens: 1, output_tokens: 0 },
               },
             },
@@ -202,17 +147,12 @@ describe("anthropic stream wrappers", () => {
           );
         },
       });
-      const model = makeModel("claude-sonnet-4-6", {
-        name: "Claude Sonnet 4.6",
-        input: ["text"],
-        contextWindow: 1_000_000,
-        maxTokens: 4096,
-      });
+      const model = makeModel(modelId, { contextWindow });
       const wrapped = expectDefined(
         wrapAnthropicProviderStream({
           streamFn: streamSimple,
           modelId: model.id,
-          extraParams: { anthropicServerCompaction, anthropicCompactThreshold: 150_000 },
+          extraParams: { anthropicServerCompaction, anthropicCompactThreshold },
         } as never),
         "Anthropic provider stream",
       );
@@ -220,7 +160,10 @@ describe("anthropic stream wrappers", () => {
         const stream = await wrapped(
           model,
           { messages: [{ role: "user", content: "Remember this.", timestamp: 1 }] },
-          { apiKey: "sk-ant-api-synthetic" },
+          {
+            apiKey: "sk-ant-api-synthetic",
+            headers: { "Anthropic-Beta": "files-api-2025-04-14" },
+          },
         );
         expect((await stream.result()).stopReason).toBe("stop");
       } finally {
@@ -228,6 +171,7 @@ describe("anthropic stream wrappers", () => {
       }
 
       expect(requests).toHaveLength(1);
+      expect(requests[0]?.headers.get("anthropic-beta")).toContain("files-api-2025-04-14");
       if (anthropicServerCompaction === false) {
         expect(requests[0]?.payload).not.toHaveProperty("context_management");
         expect(requests[0]?.headers.get("anthropic-beta") ?? "").not.toContain(
@@ -235,7 +179,12 @@ describe("anthropic stream wrappers", () => {
         );
       } else {
         expect(requests[0]?.payload.context_management).toMatchObject({
-          edits: [{ type: "compact_20260112", trigger: { type: "input_tokens", value: 150_000 } }],
+          edits: [
+            {
+              type: "compact_20260112",
+              trigger: { type: "input_tokens", value: anthropicCompactThreshold ?? 140_000 },
+            },
+          ],
         });
         expect(requests[0]?.headers.get("anthropic-beta")).toContain("compact-2026-01-12");
       }
@@ -246,7 +195,10 @@ describe("anthropic stream wrappers", () => {
     { name: "the model is not documented for compaction", modelId: "claude-opus-4-5" },
     { name: "OAuth auth is used", apiKey: "sk-ant-oat01-test-token" },
   ])("skips server compaction when $name", (params) => {
-    const captured = runCompactionProviderWrapper(params);
+    const captured = captureStream({
+      model: makeModel(params.modelId ?? "claude-sonnet-4-6"),
+      options: { apiKey: params.apiKey ?? "sk-ant-api03-test-key" },
+    });
 
     expect(captured.headers?.["anthropic-beta"] ?? "").not.toContain("compact-2026-01-12");
     expect(captured.payload).not.toHaveProperty("context_management");
@@ -261,8 +213,12 @@ describe("anthropic stream wrappers", () => {
     ).toEqual(["files-api-2025-04-14"]);
   });
 
-  it("preserves OAuth-required betas when legacy context-1m is the only configured beta", () => {
+  it.each(["provider", "beta"] as const)("preserves OAuth betas in the %s wrapper", (wrapper) => {
     const captured = captureStream({
+      wrap:
+        wrapper === "beta"
+          ? (base) => createAnthropicBetaHeadersWrapper(base, [CONTEXT_1M_BETA])
+          : undefined,
       extraParams: { anthropicBeta: [CONTEXT_1M_BETA] },
       options: { apiKey: "sk-ant-oat01-oauth-token" },
     });
@@ -320,10 +276,7 @@ describe("anthropic stream wrappers", () => {
   it.each([
     { label: "OAuth", params: { apiKey: "sk-ant-oat01-test-token" } },
     { label: "Vertex", params: { baseUrl: "https://us-east5-aiplatform.googleapis.com" } },
-  ])("does not send native fast mode over $label routes", ({ label, params }) => {
-    if (label === "Vertex") {
-      expect(resolveProviderEndpoint(params.baseUrl).endpointClass).toBe("google-vertex");
-    }
+  ])("does not send native fast mode over $label routes", ({ params }) => {
     const captured = runNativeFastModeWrapper(params);
 
     expect([captured.headers, captured.payload, captured.model?.cost.input]).toEqual([
@@ -371,15 +324,13 @@ describe("Anthropic service_tier payload wrappers", () => {
 
   it("fast mode resolves dynamic service_tier for each stream call", () => {
     let enabled = true;
-    const first = captureStream({
-      options: { apiKey: "sk-ant-api03-test-key" },
-      wrap: (base) => createAnthropicFastModeWrapper(base, () => enabled),
-    }).payload;
+    const run = () =>
+      captureStream({
+        options: { apiKey: "sk-ant-api03-test-key" },
+        wrap: (base) => createAnthropicFastModeWrapper(base, () => enabled),
+      }).payload;
+    const first = run();
     enabled = false;
-    const second = captureStream({
-      options: { apiKey: "sk-ant-api03-test-key" },
-      wrap: (base) => createAnthropicFastModeWrapper(base, () => enabled),
-    }).payload;
-    expect([first?.service_tier, second?.service_tier]).toEqual(["auto", "standard_only"]);
+    expect([first?.service_tier, run()?.service_tier]).toEqual(["auto", "standard_only"]);
   });
 });

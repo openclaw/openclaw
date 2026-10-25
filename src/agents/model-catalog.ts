@@ -375,16 +375,30 @@ export async function buildPreparedModelCatalogSnapshot(
   // Only live registry or refreshed rows may publish those provider models.
   const manifestKeyOf = createModelCatalogIdentityKeyResolver();
   const discoveredKeys = new Set(models.map(manifestKeyOf));
+  const discoveredByRoute = new Map(
+    orderedRegistryModels.map((entry) => [
+      catalogRouteVariantKey(entry, manifestKeyOf(entry)),
+      entry,
+    ]),
+  );
   const manifestModels = declaredManifestModels.filter(
     (entry) =>
       (params.includeProviderPluginAugmentation === false ||
         !dynamicManifestKeys.has(buildModelCatalogMergeKey(entry.provider, entry.id))) &&
       (!observedProviders.has(entry.provider) || discoveredKeys.has(manifestKeyOf(entry))),
   );
-  mergeCatalogEntries(routeVariants.entries, manifestModels, {
+  // Static declarations are defaults, not a veto over independently discovered
+  // capabilities. Only the exact physical route may replace their inference contract.
+  const enrichedManifestModels = manifestModels.map((entry) => {
+    const discovered = discoveredByRoute.get(catalogRouteVariantKey(entry, manifestKeyOf(entry)));
+    return discovered?.inference
+      ? Object.assign({}, entry, { inference: discovered.inference })
+      : entry;
+  });
+  mergeCatalogEntries(routeVariants.entries, enrichedManifestModels, {
     routeVariantIndex: routeVariants.indexByKey,
   });
-  mergeCatalogEntries(models, manifestModels);
+  mergeCatalogEntries(models, enrichedManifestModels);
   logStage("manifest-models-merged", `entries=${models.length}`);
   const configuredCatalogParams = {
     cfg,

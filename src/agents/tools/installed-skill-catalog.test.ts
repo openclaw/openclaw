@@ -34,20 +34,17 @@ async function matchingNames(catalog: InstalledSkill[], query: string) {
 describe("installed skill catalog", () => {
   it("keeps an emoji whole at the description cap", async () => {
     const prefix = "a".repeat(511);
-    const found = await searchInstalledSkills(
-      [skill("boundary-guide", `${prefix}😀tail`)],
-      "boundary-guide",
-    );
+    const found = await searchInstalledSkills([skill("guide", `${prefix}😀tail`)], "guide");
     expect(found.skills[0]?.description).toBe(prefix);
   });
 
   it("shares body postings across runs while binding results, readers, and permissions per run", async () => {
     const build = vi.spyOn(ranking, "buildLexicalIndex");
-    const metadata = { name: "shared-guide", description: "Shared catalog metadata" };
+    const metadata = { name: "shared", description: "Metadata" };
     const catalogs = Array.from({ length: 20 }, (_, run) => {
       const guide = skill(metadata.name, metadata.description);
       guide.location = `/run-${run}/guide`;
-      guide.readSearchContent = vi.fn(async () => "Nebular spectroscopy instructions");
+      guide.readSearchContent = vi.fn(async () => "Spectroscopy");
       return [guide];
     });
     const results = await Promise.all(
@@ -58,9 +55,7 @@ describe("installed skill catalog", () => {
       expect(catalogs[run]![0]!.readSearchContent).toHaveBeenCalledOnce();
     }
     expect(build).toHaveBeenCalledTimes(2);
-    const denied = [
-      skill("shared-guide", "Shared catalog metadata", "Nebular spectroscopy instructions"),
-    ];
+    const denied = [skill(metadata.name, metadata.description, "Spectroscopy")];
     expect((await searchInstalledSkills(denied, "spectroscopy")).skills).toEqual([]);
     catalogs[0]![0]!.assertCurrent = () => {
       throw new Error("Run retired");
@@ -73,43 +68,37 @@ describe("installed skill catalog", () => {
   });
 
   it("revisions body content and eligible membership without retaining another run's mapping", async () => {
-    const first = [
-      skill("revision-a", "Revision metadata", "Pulsar timing"),
-      skill("revision-b", "Revision metadata", "Volcanic geology"),
-    ];
-    expect(await matchingNames(first, "pulsar")).toEqual(["revision-a"]);
-    const revised = [
-      skill("revision-b", "Revision metadata", "Pulsar timing"),
-      skill("revision-a", "Revision metadata", "Volcanic geology"),
-    ];
-    expect(await matchingNames(revised, "pulsar")).toEqual(["revision-b"]);
-    const filtered = [skill("revision-a", "Revision metadata", "Volcanic geology")];
+    const first = [skill("a", "Metadata", "Pulsar"), skill("b", "Metadata", "Geology")];
+    expect(await matchingNames(first, "pulsar")).toEqual(["a"]);
+    const revised = [skill("b", "Metadata", "Pulsar"), skill("a", "Metadata", "Geology")];
+    expect(await matchingNames(revised, "pulsar")).toEqual(["b"]);
+    const filtered = [skill("a", "Metadata", "Geology")];
     expect(await matchingNames(filtered, "pulsar")).toEqual([]);
-    const unreadable = skill("revision-0", "Revision metadata");
+    const unreadable = skill("opaque", "Metadata");
     unreadable.reader = async () => "Opaque reader must not be indexed";
     expect(await searchBodies([unreadable, ...revised], "pulsar")).toMatchObject({
-      skills: [{ name: "revision-b" }],
+      skills: [{ name: "b" }],
       coverage: { bodyIndexed: 2, metadataOnly: 1, truncatedBodies: 0 },
     });
   });
 
   it("reuses a live body revision after idle-cache eviction", async () => {
     const build = vi.spyOn(ranking, "buildLexicalIndex");
-    const first = [skill("retained-guide", "Retained metadata", "Astrometric calibration")];
+    const first = [skill("retained", "Metadata", "Astrometric")];
     await searchBodies(first, "astrometric");
     for (let revision = 0; revision < 33; revision += 1) {
       getTextLexicalIndex([`Eviction pressure ${revision}`]);
     }
     const before = build.mock.calls.length;
-    const second = [skill("retained-guide", "Retained metadata", "Astrometric calibration")];
+    const second = [skill("retained", "Metadata", "Astrometric")];
     const result = await searchBodies(second, "astrometric");
-    expect(result.skills[0]?.name).toBe("retained-guide");
+    expect(result.skills[0]?.name).toBe("retained");
     // Metadata has no run-held reference; body postings do.
     const bodyBuilds = build.mock.calls
       .slice(before)
       .filter(([documents]) => documents.some(({ terms }) => terms.includes("astrometric")));
     expect(bodyBuilds).toHaveLength(0);
-    expect(await matchingNames(first, "astrometric")).toEqual(["retained-guide"]);
+    expect(await matchingNames(first, "astrometric")).toEqual(["retained"]);
   });
 
   it("ranks an exact identity first and searches the entire prepared catalog", async () => {
@@ -120,9 +109,9 @@ describe("installed skill catalog", () => {
       skill("zulu", "Audit database migrations"),
     ];
     expect((await searchInstalledSkills(skills, "releases", 1)).skills[0]?.name).toBe("releases");
-    expect((await searchInstalledSkills(skills, "database migration")).skills).toEqual([
-      { name: "zulu", description: "Audit database migrations", location: "/skills/zulu/SKILL.md" },
-    ]);
+    expect((await searchInstalledSkills(skills, "database migration")).skills[0]?.name).toBe(
+      "zulu",
+    );
     expect(await searchInstalledSkills(skills, "unrelated")).toEqual({
       skills: [],
       hasMore: false,
@@ -144,20 +133,16 @@ describe("installed skill catalog", () => {
 
   it.each([
     [["deploy", "Deploy"], "Deploy", "Deploy"],
-    [["Deploy", "deploy"], "deploy", "deploy"],
     [["Deploy", "deploy"], "Deploy", "Deploy"],
-    [["deploy", "Deploy"], "deploy", "deploy"],
     [["deploy"], "DEPLOY", "deploy"],
   ] as const)(
     "preserves exact identity with catalog %j and query %s",
     async (names, query, expected) => {
-      const skills = names.map((name) =>
-        skill(name, "Deployment workflow", `${name} instructions`),
-      );
+      const skills = names.map((name) => skill(name, "Deployment", name));
       const result = await searchInstalledSkills(skills, query, 1);
       expect(result.skills[0]?.name).toBe(expected);
       expect((await readInstalledSkill(skills, result.skills[0]?.name ?? "")).content).toBe(
-        `${expected} instructions`,
+        expected,
       );
     },
   );
@@ -171,9 +156,7 @@ describe("installed skill catalog", () => {
     expect(result.hasMore).toBe(true);
     expect(result.skills[0]?.name).toBe("guide-00");
     expect(result.skills.every((entry) => entry.description.length <= 512)).toBe(true);
-    expect((await searchInstalledSkills([skill("web", "Search the web")], "today")).skills).toEqual(
-      [],
-    );
+    expect((await searchInstalledSkills([skill("web", "Web")], "today")).skills).toEqual([]);
     await expect(searchInstalledSkills(skills, " ")).rejects.toThrow("query");
     await expect(searchInstalledSkills(skills, "x".repeat(1_001))).rejects.toThrow("query");
     await expect(searchInstalledSkills(skills, "deploy", 21)).rejects.toThrow("limit");

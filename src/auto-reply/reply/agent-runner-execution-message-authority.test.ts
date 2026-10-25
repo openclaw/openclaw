@@ -14,6 +14,7 @@ import {
   getExecuteAgentTurnForTest,
   initialFallbackAttemptOptions,
   setupAgentRunnerExecutionTestState,
+  runFallbackCandidate,
   type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
 
@@ -31,17 +32,13 @@ const currentChannelId = "100000000000000003";
 const provider = "claude-cli";
 const model = "claude-sonnet-4-6";
 
-async function cliCandidate(params: FallbackRunnerParams, fallback = false) {
-  return {
-    result: await params.run(
-      provider,
-      model,
-      fallback ? fallbackAttemptOptions(params, "unknown") : initialFallbackAttemptOptions(params),
-    ),
+function cliCandidate(params: FallbackRunnerParams, fallback = false) {
+  return runFallbackCandidate(
+    params,
     provider,
     model,
-    attempts: [],
-  };
+    fallback ? fallbackAttemptOptions(params, "unknown") : initialFallbackAttemptOptions(params),
+  );
 }
 
 beforeEach(() => {

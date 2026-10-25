@@ -65,12 +65,17 @@ it("releases each mobile details mount when its host is replaced or removed", ()
   expect(first().detailsMount).toBeNull();
 });
 
-it("retains loading panel contents when fitting a new layout snapshot", () => {
+it("retains loading contents, primary input and outlet through resize and collapse", () => {
+  const primary = document.createElement("textarea");
+  primary.value = "Draft survives the side panel";
   const layout = openSlot({ columns: [] }, "workspace");
   let resize: (width: number) => void = () => {};
+  let changeOpen: (open: boolean) => void = () => {};
   const mounted = mountSolid(() => {
     const [width, setWidth] = createSignal(1400);
+    const [open, setOpen] = createSignal(true);
     resize = setWidth;
+    changeOpen = setOpen;
     return (
       <SidebarRegionView
         presentationId="loading-layout"
@@ -78,8 +83,9 @@ it("retains loading panel contents when fitting a new layout snapshot", () => {
         availableWidth={width()}
         narrow={false}
         callbacks={createNoopSidebarRegionCallbacks()}
-        layout={fitSidebarLayout(layout, width())!}
+        layout={setSidebarOpen(fitSidebarLayout(layout, width())!, open())}
         panelDefinitions={sidebarPanelDefinitions()}
+        primary={primary}
       />
     );
   });
@@ -97,30 +103,6 @@ it("retains loading panel contents when fitting a new layout snapshot", () => {
       .querySelector<HTMLElement>(".sidebar-region")
       ?.style.getPropertyValue("--side-panel-width"),
   ).toBe("382px");
-});
-
-it("retains the primary input and the region-owned outlet while changing the layout", () => {
-  const primary = document.createElement("textarea");
-  primary.value = "Draft survives the side panel";
-  const layout = openSlot({ columns: [] }, "workspace");
-  let changeOpen: (open: boolean) => void = () => {};
-  const mounted = mountSolid(() => {
-    const [open, setOpen] = createSignal(true);
-    changeOpen = setOpen;
-    return (
-      <SidebarRegionView
-        presentationId="native-layout"
-        panelIdPrefix="chat-panel-native-layout"
-        availableWidth={1400}
-        narrow={false}
-        callbacks={createNoopSidebarRegionCallbacks()}
-        layout={setSidebarOpen(layout, open())}
-        panelDefinitions={sidebarPanelDefinitions()}
-        primary={primary}
-      />
-    );
-  });
-  flush();
   const outlet = mounted.container.querySelector(".sidebar-region__right-runtime")!;
   const retainedPanel = document.createElement("iframe");
   outlet.append(retainedPanel);

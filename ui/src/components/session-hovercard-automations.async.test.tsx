@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it } from "vitest";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import { createCronJob, cronJobsListResponse } from "../lib/cron/cron.test-support.ts";
 import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
@@ -29,6 +29,9 @@ function connect(request: GatewayRequestMock) {
   return source;
 }
 
+const jobPage = (name: string, id = "job") =>
+  cronJobsListResponse([createCronJob(id, name)], { limit: 20 });
+
 function mount(source: ReturnType<typeof connect>) {
   const [automation, setAutomation] = createSignal<SessionHovercardAutomation>({
     gateway: source.gateway,
@@ -38,7 +41,6 @@ function mount(source: ReturnType<typeof connect>) {
     navigate: () => {},
   });
   const view = mountSolid(() => <SessionHovercardAutomations automation={automation()} />);
-  onTestFinished(() => view.unmount());
   return {
     view,
     setAutomation,
@@ -74,9 +76,7 @@ it("shows first-read readiness and retries a failed read through the cron owner"
     expect(ui.text()).not.toContain("Couldn't load automations.");
     expect(ui.retry()).toBeNull();
   });
-  retry.resolve(
-    cronJobsListResponse([createCronJob("recovered", "Recovered automation")], { limit: 20 }),
-  );
+  retry.resolve(jobPage("Recovered automation", "recovered"));
   await waitForSolid(() => {
     expect(ui.name()?.textContent).toBe("Recovered automation");
     expect(ui.panel()?.getAttribute("aria-busy")).toBe("false");
@@ -88,9 +88,7 @@ it("retains detail and stays pending until the owner's queued event reload drain
   const first = Promise.withResolvers<unknown>();
   const queued = Promise.withResolvers<unknown>();
   const request = createGatewayRequestMock()
-    .mockResolvedValueOnce(
-      cronJobsListResponse([createCronJob("job", "Original automation")], { limit: 20 }),
-    )
+    .mockResolvedValueOnce(jobPage("Original automation"))
     .mockImplementationOnce(() => first.promise)
     .mockImplementationOnce(() => queued.promise);
   const source = connect(request);
@@ -106,15 +104,13 @@ it("retains detail and stays pending until the owner's queued event reload drain
   source.publishEvent({ type: "event", event: "cron", payload: {} });
   flush();
   expect(request).toHaveBeenCalledTimes(2);
-  first.resolve(
-    cronJobsListResponse([createCronJob("job", "Intermediate automation")], { limit: 20 }),
-  );
+  first.resolve(jobPage("Intermediate automation"));
   await waitForSolid(() => {
     expect(request).toHaveBeenCalledTimes(3);
     expect(ui.panel()?.getAttribute("aria-busy")).toBe("true");
     expect(ui.name()).toBe(detail);
   });
-  queued.resolve(cronJobsListResponse([createCronJob("job", "Final automation")], { limit: 20 }));
+  queued.resolve(jobPage("Final automation"));
   await waitForSolid(() => {
     expect(ui.name()?.textContent).toBe("Final automation");
     expect(ui.panel()?.getAttribute("aria-busy")).toBe("false");
@@ -124,13 +120,9 @@ it("retains detail and stays pending until the owner's queued event reload drain
 
 it("retains the last good automation after a failed refresh and retries the owner", async () => {
   const request = createGatewayRequestMock()
-    .mockResolvedValueOnce(
-      cronJobsListResponse([createCronJob("job", "Original automation")], { limit: 20 }),
-    )
+    .mockResolvedValueOnce(jobPage("Original automation"))
     .mockRejectedValueOnce(new Error("Synthetic refresh failure"))
-    .mockResolvedValueOnce(
-      cronJobsListResponse([createCronJob("job", "Recovered automation")], { limit: 20 }),
-    );
+    .mockResolvedValueOnce(jobPage("Recovered automation"));
   const source = connect(request);
   const ui = mount(source);
   await waitForSolid(() => expect(ui.name()?.textContent).toBe("Original automation"));
@@ -158,7 +150,7 @@ it("recovers a failed first read when the gateway scope is replaced", async () =
   const ui = mount(connect(request));
   await waitForSolid(() => expect(ui.text()).toContain("Couldn't load automations."));
   const replacementRequest = createGatewayRequestMock().mockResolvedValue(
-    cronJobsListResponse([createCronJob("current", "Current automation")], { limit: 20 }),
+    jobPage("Current automation", "current"),
   );
   const replacement = connect(replacementRequest);
   ui.setAutomation((previous) => ({ ...previous, gateway: replacement.gateway }));
@@ -176,9 +168,7 @@ it.each(["gateway", "session", "reconnect"] as const)(
     const retired = Promise.withResolvers<unknown>();
     const request = createGatewayRequestMock()
       .mockImplementationOnce(() => retired.promise)
-      .mockResolvedValue(
-        cronJobsListResponse([createCronJob("current", "Current automation")], { limit: 20 }),
-      );
+      .mockResolvedValue(jobPage("Current automation", "current"));
     const source = connect(request);
     const ui = mount(source);
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
@@ -203,9 +193,7 @@ it.each(["gateway", "session", "reconnect"] as const)(
       source.publishEvent({ type: "event", event: "cron", payload: {} });
       expect(request).toHaveBeenCalledTimes(2);
     }
-    retired.resolve(
-      cronJobsListResponse([createCronJob("retired", "Retired automation")], { limit: 20 }),
-    );
+    retired.resolve(jobPage("Retired automation", "retired"));
     await retired.promise;
     await waitForSolid(() => {
       expect(ui.name()?.textContent).toBe("Current automation");

@@ -1,3 +1,4 @@
+import type { Route } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionMembersListEvidenceResult } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -9,6 +10,58 @@ const viewer = { type: "profile" as const, id: "alex" };
 const suite = createControlUiE2eSuite({ name: "User avatar alignment" });
 
 suite.define(() => {
+  it("keeps the painted avatar round while loading and preserves its size on failure", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const pending: Route[] = [];
+      await page.route("**/api/users/riley/avatar*", (route) => {
+        pending.push(route);
+      });
+      await installMockGateway(page, {
+        hasMultipleSessionSharingIdentities: true,
+        sessions: [{ key: "agent:main:main", visibility: "shared", sharingRole: "owner" }],
+        presenceUsers: [{ ...viewer, identity: viewer, self: true }],
+        historyMessages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Review this image." }],
+            __openclaw: {
+              senderIdentity: { type: "profile", id: "riley" },
+              senderName: "Riley",
+              senderProfileAvatarUrl: "/api/users/riley/avatar",
+            },
+          },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await expect.poll(() => pending.length).toBeGreaterThan(0);
+      const slot = page.locator(".chat-group.user .chat-avatar-slot");
+      await expect.poll(() => slot.getAttribute("data-avatar-state")).toBe("pending");
+      const loading = await slot.evaluate((element) => {
+        const { width, height } = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const radius = style.borderTopLeftRadius;
+        return {
+          width,
+          height,
+          background: style.backgroundColor,
+          rounded: radius.endsWith("%")
+            ? Number.parseFloat(radius) >= 50
+            : Number.parseFloat(radius) >= width / 2,
+        };
+      });
+      expect.soft(loading.width).toBeGreaterThan(0);
+      expect.soft(loading.height).toBe(loading.width);
+      expect.soft(loading.rounded).toBe(true);
+      expect.soft(loading.background).not.toBe("rgba(0, 0, 0, 0)");
+      await Promise.all(pending.map((route) => route.fulfill({ status: 404, body: "Not found" })));
+      const fallback = slot.locator(".chat-avatar:visible");
+      await expect.poll(() => fallback.textContent()).toBe("R");
+      const bounds = await fallback.boundingBox();
+      expect(bounds?.width).toBe(loading.width);
+      expect(bounds?.height).toBe(loading.height);
+    });
+  });
+
   it.each([
     [true, "Review this image."],
     [false, "Review this image."],

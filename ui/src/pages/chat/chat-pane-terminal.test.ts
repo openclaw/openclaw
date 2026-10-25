@@ -169,7 +169,9 @@ it("offers Desktop in the compact fallback only for observable session targets",
   const snapshot = pane.context.gateway.snapshot;
   snapshot.hello = desktopHello([], ["operator.admin"]);
   paint(localSession);
+  await openPanelMenu(container);
   expect(topButton("Toggle desktop panel")).toBeNull();
+  expect(panelActionIds()).not.toContain("desktop");
 
   snapshot.hello = desktopHello(["desktop.observe"], ["operator.admin"]);
   const onToggleDesktop = vi.fn();
@@ -209,7 +211,9 @@ it("offers Desktop in the compact fallback only for observable session targets",
 
   snapshot.hello = desktopHello(["desktop.observe"], ["operator.read"]);
   renderDesktopHeader(localSession);
+  await openPanelMenu(container);
   expect(topButton("Toggle desktop panel")).toBeNull();
+  expect(panelActionIds()).not.toContain("desktop");
 });
 
 it("keeps Browser reachable through the compact fallback", async () => {

@@ -89,6 +89,10 @@ it.each(
     const doctor = vi
       .spyOn(processRunner, "runCommandWithTimeout")
       .mockResolvedValue(createCommandResult());
+    // Keep the production deadline translation in this route matrix while removing setup time;
+    // deadline-owner tests cover elapsed-budget spending independently.
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
 
     const result = await updateGitInstall({
       root: route === "package-to-git" ? target.packageRoot : gitRoot,

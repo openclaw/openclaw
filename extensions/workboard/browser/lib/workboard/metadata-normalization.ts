@@ -1,4 +1,5 @@
-import { z } from "zod";
+// The exported z alias retains unused APIs and locales; the direct namespace tree-shakes.
+import * as z from "zod";
 import { definedFields } from "../../../record-fields.js";
 import {
   WORKBOARD_ATTEMPT_STATUSES,

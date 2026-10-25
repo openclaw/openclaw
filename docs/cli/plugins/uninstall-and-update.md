@@ -238,6 +238,8 @@ registry generation when available, and up to 64 live reference records. Each
 record has an ID, kind, acquisition reason and time, age, cleanup state, and
 host-attributed agent/session/run/service fields when available. Missing attribution
 is explicitly `unknown`. Derived consumers can name their parent reference.
+Gateway turn preparation attributes its leases to the run ID and the
+`gateway-agent-turn` service, including before embedded execution starts.
 The `omitted` count reports truncation. These are acquisition facts, not proof
 that a holder is currently executing or exclusively owns shared resources.
 

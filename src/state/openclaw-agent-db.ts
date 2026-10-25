@@ -39,21 +39,21 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
-  assertAgentCreationClaimAccess,
-  assertAgentCreationClaimAliases,
   assertAgentCreationClaimCurrent,
   registerAgentCreationClaimHandle,
   reserveAgentCreationClaimAdmission,
 } from "./agent-creation-claim.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import {
-  assertAgentDeletionCleanupAliases,
-  assertAgentDeletionDatabaseCleanupAccess,
   getAgentDeletionDatabaseCleanup,
   registerAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { createOpenClawAgentDatabaseAdmissionOwner } from "./openclaw-agent-db-admission.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  retainAgentDatabase,
+} from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -89,7 +89,6 @@ import {
   closeOpenClawAgentDatabases,
   refreshAgentDatabaseIdleTimer,
   registerAgentDatabaseHandle,
-  retainAgentDatabase,
   retainFailedAgentDatabaseClose,
   revokePendingAgentDatabaseOpen,
   type PendingAgentDatabaseOpen,
@@ -124,19 +123,13 @@ import {
   hasRevokedOpenClawAgentDatabaseValidation,
   setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
-import {
-  isSameOpenClawAgentDatabasePath,
-  resolveOpenClawAgentSqlitePath,
-} from "./openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { registerOpenClawAgentWalMaintenance } from "./openclaw-agent-db.wal.js";
 import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
 } from "./openclaw-quarantine-store.js";
-import {
-  getOpenClawDatabaseMaintenanceScope,
-  observeOpenClawDatabaseMaintenanceResource,
-} from "./openclaw-state-db-async-lifecycle.js";
+import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -662,34 +655,6 @@ export function isOpenClawAgentDatabaseOpen(pathname: string): boolean {
   return cache.databases.get(path.resolve(pathname))?.db.isOpen === true;
 }
 
-/** Return the matching live cache entry without materializing a database. */
-export function getOpenClawAgentDatabaseIfOpen(
-  options: OpenClawAgentDatabaseOptions,
-): OpenClawAgentDatabase | undefined {
-  const agentId = normalizeAgentId(options.agentId);
-  assertAgentDatabaseAdmitted(agentId, { env: options.env });
-  const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
-  const database = cache.databases.get(pathname);
-  if (!database?.db.isOpen) {
-    assertAgentDeletionCleanupAliases(options, isSameOpenClawAgentDatabasePath);
-    assertAgentCreationClaimAliases(options);
-    return undefined;
-  }
-  if (cache.failures.has(pathname)) {
-    throw cache.failures.get(pathname);
-  }
-  if (database.agentId !== agentId) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} is already open for agent ${database.agentId}; requested agent ${agentId}.`,
-    );
-  }
-  assertAgentDeletionDatabaseCleanupAccess(database, options);
-  assertAgentCreationClaimAccess(database, options);
-  observeOpenClawDatabaseMaintenanceResource(database.db);
-  refreshAgentDatabaseIdleTimer(database);
-  return database;
-}
-
 /** Pin only admitted native readers already present in captured discovery families. */
 export function retainOpenClawAgentDatabaseReadCandidates(
   candidates: readonly Pick<OpenClawAgentDatabaseReadCandidateResource, "path" | "scope">[],
@@ -740,6 +705,8 @@ export {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
-  inspectOpenClawAgentDatabaseOwner,
   settleOpenClawAgentDatabaseWorkerClose,
 } from "./openclaw-agent-db-lifecycle.js";
+
+export { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db-borrower.js";
+export { inspectOpenClawAgentDatabaseOwner } from "./openclaw-agent-db-owner-read.js";

@@ -106,6 +106,7 @@ async function openPendingChat(page: Page, gateway: Gateway) {
   await page
     .locator(".chat-pane-cache__pane--active .chat-thread .lazy-view-state--loading")
     .waitFor();
+  expect(await page.getByText(historyText, { exact: true }).count()).toBe(0);
 }
 
 async function expectBulkReadsHeld(gateway: Gateway) {

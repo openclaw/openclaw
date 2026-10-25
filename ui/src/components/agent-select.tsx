@@ -10,6 +10,7 @@ import { generateUUID } from "../lib/uuid.ts";
 import type { AgentSelectOption } from "./agent-select-types.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
+import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentOptionAvatar } from "./solid/identity-avatar.tsx";
 import { Menu, type MenuItem, type MenuHandle } from "./solid/menu.tsx";
 
@@ -39,10 +40,12 @@ defineSolidBridge<AgentSelectProps>(
         : undefined);
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
+    const gateway = useAvatarGatewayContext();
     const loader = createIdentityAvatars();
     onSettled(() => loader.connect());
     const avatarSource = projectOwner(loader, (owner) => owner);
     const avatars = createMemo(() => {
+      gateway();
       const current = triggerOption();
       const candidates = [...props.options, ...(current ? [current] : [])];
       const identities = props.identityById;
