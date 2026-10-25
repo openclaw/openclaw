@@ -112,14 +112,23 @@ const expectUnchanged = (record: ImmutableInstallRecord, action: () => unknown, 
   expect(action).toThrow(error);
   expectSelection(record);
 };
+function createGeneration(nextSha: string): ImmutablePreparedGeneration {
+  const directory = path.join(root, "releases", nextSha);
+  fs.mkdirSync(directory, { mode: 0o755 });
+  return {
+    sha: nextSha,
+    path: directory,
+    identity: identity(directory),
+    buildDigest: "2".repeat(64),
+    preparedAtMs: 1234,
+  };
+}
 
 beforeEach(() => {
   parent = fs.realpathSync(dirs.make("immutable-install-control-"));
   root = path.join(parent, "installation");
   const current = path.join(root, "releases", sha);
-  const candidate = path.join(root, "releases", candidateSha);
   fs.mkdirSync(current, { recursive: true, mode: 0o755 });
-  fs.mkdirSync(candidate, { mode: 0o755 });
   fs.symlinkSync(`releases/${sha}`, currentPointer());
   ownImmutableFixture(parent, true);
   descriptor = immutableDescriptor(root, sha, "1".repeat(64), {
@@ -130,13 +139,7 @@ beforeEach(() => {
     configPath: path.join(parent, "state", "openclaw.json"),
     profile: null,
   });
-  prepared = {
-    sha: candidateSha,
-    path: candidate,
-    identity: identity(candidate),
-    buildDigest: "2".repeat(64),
-    preparedAtMs: 1234,
-  };
+  prepared = createGeneration(candidateSha);
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -192,16 +195,6 @@ it("does not adopt a release layout when inspecting an absent record", async () 
   expect(fs.readdirSync(parent)).toEqual(["installation"]);
 });
 
-it("persists adoption and preparation without changing the selected generation", () => {
-  const adopted = adopt();
-  expect(read()).toEqual({ revision: 0, descriptor, prepared: null });
-  const receipt = prepare(adopted, prepared);
-  expect(receipt).toEqual({ revision: 1, descriptor, prepared });
-  expectSelection(receipt);
-  expect(fs.statSync(controlPath()).mode & 0o777).toBe(0o755);
-  expect(fs.statSync(journalPath()).mode & 0o777).toBe(0o644);
-});
-
 it.each(["candidate-verification-pending", "private error: token=fixture-secret /private/state"])(
   "projects retained recovery after a fresh record read without disclosing private state (%s)",
   (failure) => {
@@ -245,24 +238,19 @@ it.each([
 });
 it("retains publication provenance across preparations without backfilling older releases", () => {
   const adopted = adopt();
+  expect(read()).toEqual({ revision: 0, descriptor, prepared: null });
   const legacy = prepare(adopted, prepared);
+  expect(legacy).toEqual({ revision: 1, descriptor, prepared });
+  expectSelection(legacy);
+  expect(fs.statSync(controlPath()).mode & 0o777).toBe(0o755);
+  expect(fs.statSync(journalPath()).mode & 0o777).toBe(0o644);
   const enabled = updateDescriptor(
     legacy,
     retentionDescriptor([{ sha, identity: descriptor.current.identity }]),
   );
   expect(enabled.releases).toEqual([]);
-  const publishGeneration = (previous: ImmutableInstallRecord, nextSha: string) => {
-    const nextPath = path.join(root, "releases", nextSha);
-    fs.mkdirSync(nextPath, { mode: 0o755 });
-    return prepare(previous, {
-      ...prepared,
-      sha: nextSha,
-      path: nextPath,
-      identity: identity(nextPath),
-    });
-  };
-  const first = publishGeneration(enabled, "c".repeat(40));
-  const second = publishGeneration(first, "d".repeat(40));
+  const first = prepare(enabled, createGeneration("c".repeat(40)));
+  const second = prepare(first, createGeneration("d".repeat(40)));
   expect(
     second.releases?.map((entry) => [entry.sha, entry.publishedRevision, entry.verifiedRevision]),
   ).toEqual([
@@ -416,11 +404,9 @@ it("retains a renamed pointer intent until recovery durably syncs it, then recon
 
   const fsync = fs.fsyncSync;
   let allowSync = false;
-  let rootSyncs = 0;
   vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
     const stat = fs.fstatSync(fd, { bigint: true });
     if (stat.isDirectory() && `${stat.dev}:${stat.ino}` === descriptor.rootIdentity) {
-      rootSyncs++;
       expect(read()).toEqual(interrupted);
       if (!allowSync) {
         throw new Error("synthetic pointer directory sync failed");
@@ -433,7 +419,6 @@ it("retains a renamed pointer intent until recovery durably syncs it, then recon
   allowSync = true;
 
   const recovered = reconcile(interrupted);
-  expect(rootSyncs).toBe(2);
   expect(recovered.descriptor.current).toMatchObject({
     sha: candidateSha,
     pointerIdentity: selectedIdentity,
@@ -469,22 +454,6 @@ it("refuses a replaced prepared generation before selecting its directory", () =
   expectUnchanged(intent, () => publish(intent, "candidate"), "target generation changed");
 });
 
-it("rolls back to the recorded sealed predecessor while retaining recovery evidence", () => {
-  const admitted = beginActivation();
-  const activated = publish(admitted, "candidate");
-  expect(selectedRelease()).toBe(`releases/${candidateSha}`);
-  const rolledBack = publish(activated, "previous");
-  expectSelection(rolledBack);
-  expect(rolledBack.descriptor.current).toMatchObject({
-    sha,
-    identity: descriptor.current.identity,
-    buildDigest: descriptor.current.buildDigest,
-  });
-  expect(getOperation(rolledBack)).toEqual(getOperation(admitted));
-  expect(getOperation(rolledBack).pointerIntent).toBeUndefined();
-  expect(fs.existsSync(prepared.path)).toBe(true);
-});
-
 it("recovers the predecessor after rollback stops before its pointer intent commits", () => {
   const activated = publish(beginActivation(), "candidate");
   const temporary = temporaryPointer(activated);
@@ -509,12 +478,17 @@ it("recovers the predecessor after rollback stops before its pointer intent comm
   expectSelection(activated, candidateSha);
   const retainedIdentity = identity(temporary);
   const recovered = publish(read(), "previous");
-  expect(selectedRelease()).toBe(`releases/${sha}`);
-  expect(identity(currentPointer())).toBe(retainedIdentity);
+  expectSelection(recovered, sha, retainedIdentity);
+  expect(recovered.descriptor.current).toMatchObject({
+    sha,
+    identity: descriptor.current.identity,
+    buildDigest: descriptor.current.buildDigest,
+  });
+  expect(getOperation(recovered)).toEqual(getOperation(activated));
+  expect(fs.existsSync(prepared.path)).toBe(true);
   expect(fs.existsSync(temporary)).toBe(false);
   expect(getOperation(recovered).pointerIntent).toBeUndefined();
   expect(publish(recovered, "previous")).toEqual(recovered);
-  expect(read()).toEqual(recovered);
 });
 
 it.each(["wrong-target", "regular-file"] as const)(

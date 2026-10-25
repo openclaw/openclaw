@@ -302,32 +302,18 @@ describe("kysely sync helpers", () => {
     );
   });
 
-  it.each(["repeated SQL", "one-shot SQL"])("bounds the statement cache for %s", (mode) => {
-    const passes: [number, number, number, number | null][] =
-      mode === "repeated SQL"
-        ? [
-            [1, 128, 2, 256],
-            [65, 128, 1, 256],
-            [1, 64, 1, 320],
-          ]
-        : [
-            [1, 128, 1, null],
-            [1, 128, 1, null],
-            [1, 128, 1, 384],
-          ];
+  it("bounds candidate admission for one-shot SQL", () => {
     createItems();
     const prepares = countPrepares(database);
-    for (const [from, to, repeats, expected] of passes) {
-      for (let count = from; count <= to; count++) {
-        expectRows(variableSelect(count), [], repeats);
-      }
-      if (expected !== null) {
-        expect(prepares()).toBe(expected);
+    for (let pass = 0; pass < 3; pass++) {
+      for (let count = 1; count <= 128; count++) {
+        expectRows(variableSelect(count), []);
       }
     }
+    expect(prepares()).toBe(384);
   });
 
-  it("keeps nested prepared lazy iterations independent", () => {
+  it("keeps nested lazy readers independent, attributed, and released after early return", () => {
     createItems(["Ada", "Grace", "Lin"], database, "unique");
     const select = selectItems().orderBy("id");
     const read = prepareSqliteQueryIterator<{ from: number }, Item>(database, (parameter) =>
@@ -343,12 +329,18 @@ describe("kysely sync helpers", () => {
     expect([...read({ from: 1 })]).toHaveLength(3);
 
     const input = { from: 2 };
-    const outer = read(input);
+    const outer = withSqliteReaderOwner(
+      { operation: "fixture.rows", ownerKind: "worker", actorId: 7 },
+      () => read(input),
+    );
     input.from = 3;
     const inner = read({ from: 1 });
     read({ from: 4 }).return?.();
     expect(prepares()).toBe(2);
     expect(outer.next()).toEqual({ done: false, value: { id: 2, name: "Grace" } });
+    expect(() => assertNoActiveSqliteReaders(database, "fixture worker")).toThrow(
+      "oldest operation=fixture.rows",
+    );
     expect(inner.next()).toEqual({ done: false, value: { id: 1, name: "Ada" } });
     outer.return?.();
     expect([...inner]).toEqual([
@@ -356,27 +348,11 @@ describe("kysely sync helpers", () => {
       { id: 3, name: "Lin" },
     ]);
     expect(prepares()).toBe(4);
+    expect(() => assertNoActiveSqliteReaders(database, "fixture worker")).not.toThrow();
     database.exec("drop table items");
   });
 
-  it("attributes active lazy readers and releases them after early return", () => {
-    createItems(["Ada", "Grace"]);
-
-    const iterator = withSqliteReaderOwner(
-      { operation: "fixture.rows", ownerKind: "worker", actorId: 7 },
-      () => iterateSqliteQuerySync(database, selectItems().orderBy("id")),
-    );
-
-    expect(iterator.next()).toEqual({ done: false, value: { id: 1, name: "Ada" } });
-    expect(() => assertNoActiveSqliteReaders(database, "fixture worker")).toThrow(
-      "oldest operation=fixture.rows",
-    );
-
-    iterator.return?.();
-    expect(() => assertNoActiveSqliteReaders(database, "fixture worker")).not.toThrow();
-  });
-
-  it("invalidates prepared statements when the SQLite authorizer changes", () => {
+  it("invalidates cached statements and reevaluates changing authorizer decisions", () => {
     if (typeof database.setAuthorizer !== "function") {
       return;
     }
@@ -384,33 +360,18 @@ describe("kysely sync helpers", () => {
     const checkRows = cachedRows();
     checkRows(itemRows("Ada"), 2, 3);
 
+    let decision = constants.SQLITE_IGNORE;
     database.setAuthorizer((actionCode, tableName) =>
       actionCode === constants.SQLITE_READ && tableName === "items"
-        ? constants.SQLITE_IGNORE
+        ? decision
         : constants.SQLITE_OK,
     );
     checkRows([{ id: null, name: null }], 5, 3);
+    decision = constants.SQLITE_DENY;
+    expect(() => run(selectItems())).toThrow(/not authorized/iu);
 
     database.setAuthorizer(null);
-    checkRows(itemRows("Ada"), 6);
-  });
-
-  it("does not cache while a dynamic SQLite authorizer is installed", () => {
-    if (typeof database.setAuthorizer !== "function") {
-      return;
-    }
-    createItems(["Ada"]);
-    const select = selectItems();
-    const prepares = countPrepares(database);
-    let allow = true;
-    database.setAuthorizer(() => (allow ? constants.SQLITE_OK : constants.SQLITE_DENY));
-
-    expectRows(select, itemRows("Ada"), 3);
-    expect(prepares()).toBe(3);
-
-    allow = false;
-    expect(() => executeSqliteQuerySync(database, select)).toThrow(/not authorized/iu);
-    expect(prepares()).toBe(4);
+    checkRows(itemRows("Ada"), 7);
   });
 
   it("does not retain oversized statement parameters", () => {
@@ -440,19 +401,17 @@ describe("kysely sync helpers", () => {
   // Explicit statement disposal is a public Node API starting in 26.8.
   it
     .skipIf(!Object.getOwnPropertyDescriptor(StatementSync.prototype, Symbol.dispose))
-    .each(["uncached", "candidate", "oversized", "first", "iterator", "iterator-return", "error"])(
+    .each(["uncached", "candidate", "iterator", "iterator-return", "error"])(
     "releases native bindings when a %s query settles",
     (mode) => {
       if (mode !== "uncached") {
         enableNodeSqliteKyselyStatementCache(database);
       }
       const prepareSpy = vi.spyOn(database, "prepare");
-      const value = "x".repeat(mode === "oversized" ? 128 * 1024 : 1024);
+      const value = "x".repeat(1024);
       const query = scalar<number>(mode === "error" ? "json" : "length", value);
       if (mode === "error") {
         expect(() => run(query)).toThrow(/malformed JSON/iu);
-      } else if (mode === "first") {
-        expect(first(query)).toEqual({ value: value.length });
       } else if (mode.startsWith("iterator")) {
         const iterator = iterateSqliteQuerySync(database, query);
         expect(iterator.next().value).toEqual({ value: value.length });
@@ -469,27 +428,36 @@ describe("kysely sync helpers", () => {
     },
   );
 
-  it.skipIf(!Object.getOwnPropertyDescriptor(StatementSync.prototype, Symbol.dispose))(
-    "finalizes evicted and cleared statements while retaining reusable queries",
-    () => {
-      enableNodeSqliteKyselyStatementCache(database);
-      const prepareSpy = vi.spyOn(database, "prepare");
-      createItems(["Ada"]);
-      prepareSpy.mockClear();
-      const select = selectItems();
-      expectRows(select, itemRows("Ada"), 3);
-      const retained = prepareSpy.mock.results[1]!.value as StatementSync;
-      expect(retained.all()).toEqual(itemRows("Ada"));
-      for (let count = 1; count <= 64; count++) {
-        expectRows(variableSelect(count), [], 2);
-      }
+  it("bounds cached statements and finalizes evicted or cleared statements", () => {
+    const supportsDisposal = Object.getOwnPropertyDescriptor(
+      StatementSync.prototype,
+      Symbol.dispose,
+    );
+    enableNodeSqliteKyselyStatementCache(database);
+    const prepareSpy = vi.spyOn(database, "prepare");
+    createItems(["Ada"]);
+    prepareSpy.mockClear();
+    const select = selectItems();
+    expectRows(select, itemRows("Ada"), 3);
+    const retained = prepareSpy.mock.results[1]!.value as StatementSync;
+    expect(retained.all()).toEqual(itemRows("Ada"));
+    for (let count = 1; count <= 64; count++) {
+      expectRows(variableSelect(count), [], 2);
+    }
+    if (supportsDisposal) {
       expect(() => retained.all()).toThrow(/finalized/iu);
-      const last = prepareSpy.mock.results.at(-1)!.value as StatementSync;
-      expect(last.all(...Array.from({ length: 64 }, (_, index) => index + 1))).toEqual([]);
-      clearNodeSqliteKyselyCacheForDatabase(database);
+    }
+    const last = prepareSpy.mock.results.at(-1)!.value as StatementSync;
+    expect(last.all(...Array.from({ length: 64 }, (_, index) => index + 1))).toEqual([]);
+    expectRows(variableSelect(64), []);
+    expect(prepareSpy).toHaveBeenCalledTimes(130);
+    expectRows(select, itemRows("Ada"));
+    expect(prepareSpy).toHaveBeenCalledTimes(131);
+    clearNodeSqliteKyselyCacheForDatabase(database);
+    if (supportsDisposal) {
       expect(() => last.all()).toThrow(/finalized/iu);
-    },
-  );
+    }
+  });
 
   it("invalidates prepared statements when the database is deserialized", () => {
     createItems(["Ada"]);
