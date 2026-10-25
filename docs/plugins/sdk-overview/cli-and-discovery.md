@@ -78,6 +78,11 @@ If you want a plugin command to stay lazy-loaded in the normal root CLI path,
 provide `descriptors` that cover every top-level command root exposed by that
 registrar.
 
+Declare those roots in the plugin manifest's `cliCommands` as well. Command
+discovery treats that manifest list as complete, so an unclaimed root does not
+load unrelated plugins that declared their CLI roots. Plugins that omit
+`cliCommands` retain runtime discovery for the legacy `commands`-only path.
+
 ```typescript
 api.registerCli(
   async ({ program }) => {
