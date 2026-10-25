@@ -83,8 +83,12 @@ suite.define(() => {
     await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
 
     await picker.getByRole("option", { name: "Demo model B", exact: true }).tap();
-    const dialog = page.getByRole("dialog", { name: "Switch model?", exact: true });
+    const dialog = page.getByRole("dialog", { name: "Switch to Demo model B?", exact: true });
     await dialog.waitFor();
+    await dialog
+      .getByText("This conversation is cached for Demo model A.", { exact: false })
+      .waitFor();
+    await dialog.getByRole("checkbox", { name: "Don’t ask again", exact: true }).check();
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
     expect(await selectedModel(picker)).toBe("openai/demo-a");
@@ -133,6 +137,21 @@ suite.define(() => {
     await attr(picker, "model-select").tap();
     await picker.getByRole("option", { name: "Demo local model", exact: true }).tap();
     await expectPatch(gateway, { key: session.key, model: "openai/demo-local" });
+    expect(await dialog.count()).toBe(0);
+    await attr(picker, "model-select").tap();
+    await picker.getByRole("option", { name: "Demo model A", exact: true }).tap();
+    const optOut = page.getByRole("dialog", { name: "Switch to Demo model A?", exact: true });
+    await optOut.getByRole("checkbox", { name: "Don’t ask again", exact: true }).check();
+    await optOut.getByRole("button", { name: "Switch model", exact: true }).click();
+    await expectPatch(gateway, { key: session.key, model: "openai/demo-a" });
+    await gateway.setSessionsListResponse(
+      roster({ ...session, model: "demo-a" }, defaultsFor("demo-a")),
+    );
+    await page.reload();
+    await expect.poll(() => selectedModel(picker)).toBe("openai/demo-a");
+    await attr(picker, "model-select").tap();
+    await picker.getByRole("option", { name: "Demo model B", exact: true }).tap();
+    await expectPatch(gateway, { key: session.key, model: "openai/demo-b" });
     expect(await dialog.count()).toBe(0);
     await page.setViewportSize({ height: 900, width: 400 });
     await page.locator(".agent-chat__composer-combobox textarea").tap();
@@ -331,7 +350,7 @@ suite.define(() => {
       await model.click();
       await selectChatModelOption(main, "example/example-b");
       await page
-        .getByRole("dialog", { name: "Switch model?", exact: true })
+        .getByRole("dialog", { name: "Switch to Example B?", exact: true })
         .getByRole("button", { name: "Switch model", exact: true })
         .click();
       await expectPatch(gateway, { key, model: "example/example-b" });

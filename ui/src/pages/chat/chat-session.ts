@@ -4,10 +4,13 @@ import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profi
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, ModelCatalogResult, SessionsListResult } from "../../api/types.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import {
+  buildCatalogDisplayLookup,
   buildQualifiedChatModelValue,
+  formatCatalogChatModelDisplayFromLookup,
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
 import {
@@ -542,10 +545,22 @@ export async function switchChatModel(
       });
       if (nextValue && nextValue !== currentValue && nextRuntime?.local !== true && hasHistory) {
         const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
+        const displayLookup = buildCatalogDisplayLookup(host.chatModelCatalog);
         const confirmed = await showConfirmDialog({
-          title: t("chat.modelControls.switchTitle"),
-          message: t("chat.modelControls.switchWarning"),
+          title: t("chat.modelControls.switchTitle", {
+            new: formatCatalogChatModelDisplayFromLookup(nextValue, displayLookup),
+          }),
+          message: t("chat.modelControls.switchWarning", {
+            current: formatCatalogChatModelDisplayFromLookup(currentValue, displayLookup),
+          }),
           confirmLabel: t("chat.modelControls.switchConfirm"),
+          skipPreference: {
+            label: t("chat.modelControls.dontAskAgain"),
+            skipped: loadSettings().chatModelChangeConfirm === false,
+            remember: () => {
+              patchSettings({ chatModelChangeConfirm: false });
+            },
+          },
           signal: selection.owner.signal,
           canConfirm: canDispatch,
         });
