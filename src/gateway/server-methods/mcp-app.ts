@@ -4,6 +4,7 @@ import {
   errorShape,
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { reloadSessionMcpRuntimes } from "../../agents/agent-bundle-mcp-manager-api.js";
 import {
   getMcpAppModelContext,
   removeMcpAppModelContextItem,
@@ -191,6 +192,21 @@ function hostFileHandler(
 }
 
 export const mcpAppHandlers: GatewayRequestHandlers = {
+  "mcp.reloadRuntimes": mcpAppHandler(async (options) => {
+    const { context } = options;
+    // The Gateway's own config-reload path is lease-preserving: admitted calls
+    // keep their runtimes and only stale ones rebuild on the next turn. The
+    // shutdown-grade dispose used here previously aborted in-flight requests
+    // and closed healthy transports (#164642 Rev 3).
+    const authority = readGatewayRequestMutationAuthority(options);
+    const cfg = context.getRuntimeConfig();
+    // Revalidate the caller's mutation authority immediately before the
+    // side effect: the reload waits behind acquisition chains, and a caller
+    // revoked during that wait must not trigger it (#164642 Rev 3).
+    authority.assertCurrent();
+    await reloadSessionMcpRuntimes({ cfg, reloadPlugins: false });
+    return { ok: true, reloaded: true };
+  }),
   "mcp.app.formResource": mcpAppHandler(async (options) => {
     const { executeMcpAppFormResource } = await import("../mcp-app-form-resources.js");
     return executeMcpAppFormResource(options);

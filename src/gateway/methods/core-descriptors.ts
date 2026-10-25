@@ -133,6 +133,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["mcp.app.listTools", "mcp-app", "operator.read", "<=2026.7"],
   ["mcp.app.listResources", "mcp-app", "operator.read", "<=2026.7"],
   ["mcp.app.listResourceTemplates", "mcp-app", "operator.read", "<=2026.7"],
+  ["mcp.reloadRuntimes", "mcp-app", "operator.write", "2026.10"],
   ["mcp.app.readResource", "mcp-app", "operator.read", "<=2026.7"],
   ["mcp.app.callTool", "mcp-app", "operator.write", "<=2026.7"],
   ["mcp.app.updateModelContext", "mcp-app", "operator.write", "<=2026.7"],
