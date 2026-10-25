@@ -4,12 +4,8 @@ import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
-import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
-import {
-  createAttachments,
-  createClientInfo,
-  createUserTurnInputController,
-} from "./chat-send-user-turn.test-support.js";
+import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
+import { createClientInfo } from "./chat-send-user-turn.test-support.js";
 import {
   authenticatedProfileUnavailableError,
   gatewayClientSenderFields,
@@ -223,14 +219,10 @@ describe("chat send command authority", () => {
       connectionSignal: lifetime.signal,
     });
     let current = true;
-    const { controller } = createUserTurnInputController("Change my theme");
-    const { ctx } = prepareChatSendUserTurn({
-      request: {
-        inboundMessage: "Change my theme",
-        clientInfo: client.connect.client,
-        suppressCommandInterpretation: false,
-      },
-      session: { agentId: "main", clientRunId: "owner-turn", sessionKey: "agent:main:main" },
+    const { ctx } = prepareTurn({
+      inputText: "Change my theme",
+      request: { inboundMessage: "Change my theme", clientInfo: client.connect.client },
+      session: { clientRunId: "owner-turn" },
       admission: {
         originatingRoute: {
           originatingChannel: "webchat",
@@ -243,10 +235,8 @@ describe("chat send command authority", () => {
           }
         },
       },
-      attachments: createAttachments({ parsedMessage: "Change my theme" }),
+      attachments: { parsedMessage: "Change my theme" },
       client,
-      logGateway: { warn: vi.fn() } as never,
-      userTurn: controller,
     });
     const render = () => buildInboundUserContextPrefix(finalizeInboundContext({ ...ctx }));
     expect(render()).toContain("requester_profile");

@@ -90,13 +90,14 @@ async function invoke(
   return calls[0];
 }
 
-function mockSession(entry: SessionEntry | undefined): void {
+function mockSession(entry?: SessionEntry, firstUserMessage: string | null = null): void {
   mocks.loadSessionTarget.mockReturnValue({
     canonicalKey: sessionKey,
     entry,
     storePath,
     target: { agentId: "main" },
   });
+  mocks.readSessionTitleFields.mockReturnValue({ firstUserMessage, lastMessagePreview: null });
 }
 
 function provider() {
@@ -113,18 +114,10 @@ function provider() {
 
 describe("session discussion gateway methods", () => {
   beforeEach(() => {
-    mocks.emitSessionTitleChanged.mockReset();
-    mocks.generateConversationLabelWithFallback.mockReset();
-    mocks.getProvider.mockReset();
-    mocks.loadSessionTarget.mockReset();
-    mocks.readSessionTitleFields.mockReset();
-    mocks.resolveUtilityModelRefForAgent.mockReset();
-    mocks.updateSessionEntry.mockReset();
+    for (const mock of Object.values(mocks)) {
+      mock.mockReset();
+    }
     mocks.generateConversationLabelWithFallback.mockResolvedValue("Release Planning");
-    mocks.readSessionTitleFields.mockReturnValue({
-      firstUserMessage: null,
-      lastMessagePreview: null,
-    });
     mocks.resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
     mockSession(undefined);
   });
@@ -164,11 +157,7 @@ describe("session discussion gateway methods", () => {
   it("persists a generated title before opening an untitled session discussion", async () => {
     const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1, systemSent: true };
     let persistedEntry: SessionEntry | undefined;
-    mockSession(entry);
-    mocks.readSessionTitleFields.mockReturnValue({
-      firstUserMessage: "[Mon 2026-07-27 09:00 PDT] Plan the release",
-      lastMessagePreview: null,
-    });
+    mockSession(entry, "[Mon 2026-07-27 09:00 PDT] Plan the release");
     mocks.updateSessionEntry.mockImplementation(async (_scope, update) => {
       const patch = await update({ ...entry });
       persistedEntry = patch ? { ...entry, ...patch } : undefined;
@@ -207,11 +196,7 @@ describe("session discussion gateway methods", () => {
 
   it("opens the discussion when title generation times out", async () => {
     vi.useFakeTimers();
-    mockSession({ sessionId: "session-timeout", updatedAt: 1 });
-    mocks.readSessionTitleFields.mockReturnValue({
-      firstUserMessage: "Plan the release",
-      lastMessagePreview: null,
-    });
+    mockSession({ sessionId: "session-timeout", updatedAt: 1 }, "Plan the release");
     // Settle after timeout to evict the shared single-flight entry.
     const generation = createDeferredCore<string | null>();
     const generationStarted = createDeferredCore();

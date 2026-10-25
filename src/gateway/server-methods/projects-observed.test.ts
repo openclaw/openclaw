@@ -30,8 +30,6 @@ function worktree(
   lastActiveAt: number,
 ): ManagedWorktreeRecord {
   return makeWorktreeRecord(`/repos/${name}`, name, {
-    branch: `openclaw/${name}`,
-    createdAt: lastActiveAt,
     repoFingerprint: name,
     path: `/worktrees/${name}`,
     ownerKind: ownerId ? "session" : "manual",
@@ -108,13 +106,13 @@ async function listObservedProjects(
       Promise.all(roots.map((root) => resolveRepositoryIdentity(root).catch(() => undefined))),
     );
   return await withRestoredMocks([registry, identities], async () => {
-    const responses: Parameters<RespondFn>[] = [];
+    const respond = vi.fn<RespondFn>();
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
     try {
       await projectsHandlers["projects.list"]?.({
         params: { includeObserved: true },
-        respond: (...response: Parameters<RespondFn>) => responses.push(response),
+        respond,
         context: bindSessionRowProjection(
           { getRuntimeConfig: () => cfg },
           () => projection,
@@ -124,8 +122,8 @@ async function listObservedProjects(
     } finally {
       projection.dispose();
     }
-    expect(responses).toHaveLength(1);
-    const [ok, payload] = responses[0]!;
+    expect(respond).toHaveBeenCalledOnce();
+    const [ok, payload] = respond.mock.calls[0]!;
     expect(ok).toBe(true);
     if (!isRecord(payload) || !Array.isArray(payload.observedProjects)) {
       throw new TypeError("projects.list response is missing observedProjects");
@@ -205,22 +203,22 @@ describe("projects.list observed projects", () => {
   });
 
   it("redacts URL and SCP-style userinfo and omits unknown remote forms", async () => {
+    const origins = new Map([
+      ["url", ["https://user", ":placeholder", "@host/repo.git?visible=value#branch"].join("")],
+      ["token-scp", ["placeholder", "@host:org/private.git"].join("")],
+      ["git-scp", "git@host:org/public.git"],
+      ["unknown", "opaque credential-shaped remote"],
+    ]);
     seedSessions(
-      ["url", "token-scp", "git-scp", "unknown"].map((name, index) =>
+      [...origins.keys()].map((name, index) =>
         session(name, 400 - index, { execCwd: `/repos/${name}` }),
       ),
     );
-    const origins: Record<string, string> = {
-      "/repos/url": ["https://user", ":placeholder", "@host/repo.git?visible=value#branch"].join(
-        "",
-      ),
-      "/repos/token-scp": ["placeholder", "@host:org/private.git"].join(""),
-      "/repos/git-scp": "git@host:org/public.git",
-      "/repos/unknown": "opaque credential-shaped remote",
-    };
 
     const projects = (await listObservedProjects(async (checkoutPath) =>
-      identity(checkoutPath, { originUrl: origins[checkoutPath] ?? "" }),
+      identity(checkoutPath, {
+        originUrl: origins.get(checkoutPath.slice("/repos/".length)) ?? "",
+      }),
     )) as Array<{ name: string; originUrl?: string }>;
 
     expect(projects.map(({ name, originUrl }) => ({ name, originUrl }))).toEqual([
@@ -244,9 +242,7 @@ describe("projects.list observed projects", () => {
 
     const projects = (await listObservedProjects(
       async (checkoutPath) =>
-        identity(checkoutPath, {
-          originUrl: "https://github.com/openclaw/alpha.git",
-        }),
+        identity(checkoutPath, { originUrl: "https://github.com/openclaw/alpha.git" }),
       { worktrees, client: authenticatedClient("admin@example.com", ["operator.admin"]) },
     )) as Array<{ checkouts: Array<{ path: string }> }>;
 
