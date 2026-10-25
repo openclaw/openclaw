@@ -10,7 +10,6 @@ import {
   expectTerminal,
   oauth,
   profileId,
-  provider,
   read,
   requireOAuth,
   useOAuthCoordinationFixture,
@@ -145,24 +144,34 @@ describe("OAuth refresh peer settlement", () => {
     }
   });
 
-  it("terminally fences peers instead of exposing a different shared account", async () => {
-    const { ownerAgentDir, peerAgentDir } = await seedAccountConflict();
-    fx.refresh.mockResolvedValue(oauth("rotated-a", { accountId: "acct-a" }));
-
-    await expect(fx.resolve(ownerAgentDir)).resolves.toMatchObject({ apiKey: "rotated-a-access" });
-
-    expect(read(fx.mainDir)).toMatchObject({
-      access: "shared-b-access",
-      accountId: "acct-b",
-    });
-    expect(read(ownerAgentDir)).toMatchObject({
-      access: "rotated-a-access",
-      accountId: "acct-a",
-    });
-    const terminalPeer = read(peerAgentDir);
-    expectTerminal(terminalPeer);
-    await expect(fx.resolve(peerAgentDir)).resolves.toBeNull();
-  });
+  it.each([false, true])(
+    "terminally fences peers instead of exposing a different shared account (relogin: %s)",
+    async (relogin) => {
+      const { ownerAgentDir, peerAgentDir } = await seedAccountConflict(relogin);
+      const replacement = oauth(relogin ? "relogin-a" : "rotated-a", { accountId: "acct-a" });
+      let resolving: ReturnType<typeof fx.resolve>;
+      if (relogin) {
+        const { started, finishRefresh } = fx.blockRefresh(() => undefined);
+        resolving = fx.resolve(ownerAgentDir);
+        await started;
+        await fx.reconnect(ownerAgentDir, replacement);
+        finishRefresh();
+      } else {
+        fx.refresh.mockResolvedValue(replacement);
+        resolving = fx.resolve(ownerAgentDir);
+      }
+      await expect(resolving).resolves.toMatchObject({ apiKey: replacement.access });
+      expect(read(fx.mainDir)).toMatchObject({ access: "shared-b-access", accountId: "acct-b" });
+      expect(read(ownerAgentDir)).toMatchObject({
+        access: replacement.access,
+        accountId: "acct-a",
+      });
+      expectTerminal(read(peerAgentDir));
+      if (!relogin) {
+        await expect(fx.resolve(peerAgentDir)).resolves.toBeNull();
+      }
+    },
+  );
 
   it.each([
     {
@@ -213,8 +222,7 @@ describe("OAuth refresh peer settlement", () => {
         authoritativeSharedCredential: replacement,
         replacement,
       });
-      const settled = read(peerAgentDir, peerProfileId);
-      expectTerminal(settled);
+      expectTerminal(read(peerAgentDir, peerProfileId));
     },
   );
 
@@ -235,44 +243,14 @@ describe("OAuth refresh peer settlement", () => {
         profileId,
         fence: persistedFence,
         claims: [
-          {
-            candidate: candidate("peer-b", healthyAgentDir),
-            original,
-          },
-          {
-            candidate: candidate("peer-a", brokenAgentDir),
-            original,
-          },
+          { candidate: candidate("peer-b", healthyAgentDir), original },
+          { candidate: candidate("peer-a", brokenAgentDir), original },
         ],
       }),
     ).rejects.toThrow(AggregateError);
     expect(authority.readCurrentCredential()).toEqual(read(healthyAgentDir));
-    expect(read(healthyAgentDir)).toMatchObject({
-      type: "oauth",
-      provider,
-      access: original.access,
-      refresh: original.refresh,
-      expires: original.expires,
-    });
-  });
-
-  it("terminally fences superseded peers when shared inheritance is a different account", async () => {
-    const { ownerAgentDir, peerAgentDir } = await seedAccountConflict(true);
-
-    const { started, finishRefresh } = fx.blockRefresh(() => undefined);
-
-    const resolving = fx.resolve(ownerAgentDir);
-    await started;
-    await fx.reconnect(ownerAgentDir, oauth("relogin-a", { accountId: "acct-a" }));
-    finishRefresh();
-
-    await expect(resolving).resolves.toMatchObject({ apiKey: "relogin-a-access" });
-    expect(read(fx.mainDir)).toMatchObject({
-      access: "shared-b-access",
-      accountId: "acct-b",
-    });
-    const terminalPeer = read(peerAgentDir);
-    expectTerminal(terminalPeer);
+    const { type, provider, access, refresh, expires } = original;
+    expect(read(healthyAgentDir)).toMatchObject({ type, provider, access, refresh, expires });
   });
 
   it("reports exact removal owners and preserves a reconnected peer", async () => {

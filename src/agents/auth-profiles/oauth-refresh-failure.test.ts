@@ -175,6 +175,8 @@ const failover = (options: Partial<ConstructorParameters<typeof FailoverError>[1
     provider: "openai",
     ...options,
   });
+const retryPresentation = (message: string, status?: number, retryable = true) =>
+  Object.assign(new Error(message), { oauthRefreshFailure: { status, retryable } });
 
 const typedIdentity = { provider: typedFailure.provider, profileId: typedFailure.profileId };
 it.each(
@@ -217,67 +219,23 @@ it.each(
 });
 
 it.each([
-  [
-    new Error('OAuth refresh call "refreshOAuthCredential(xai)" exceeded hard timeout (120000ms)'),
-    false,
-  ],
-  [new Error("xAI OAuth refresh failed (503): unavailable"), false],
-  [
-    Object.assign(new Error("unavailable"), {
-      oauthRefreshFailure: { status: 502, retryable: true },
-    }),
-    false,
-  ],
-  [
-    Object.assign(new Error("reset before headers"), { oauthRefreshFailure: { retryable: true } }),
-    false,
-  ],
-  [new Error("unclassified upstream failure"), false],
-  [new Error("xAI OAuth token response is missing access_token"), false],
-  [
-    Object.assign(new Error("invalid_grant"), {
-      oauthRefreshFailure: { status: 503, retryable: true },
-    }),
-    false,
-  ],
-  [
-    Object.assign(new Error("unauthorized"), {
-      oauthRefreshFailure: { status: 401, retryable: true },
-    }),
-    false,
-  ],
-  [
-    Object.assign(new Error("forbidden"), {
-      oauthRefreshFailure: { status: 403, retryable: true },
-    }),
-    false,
-  ],
-  [
-    Object.assign(new Error("invalid response"), {
-      oauthRefreshFailure: { status: 200, retryable: true },
-    }),
-    false,
-  ],
-  [
-    Object.assign(new Error("rate limited"), {
-      oauthRefreshFailure: { status: 429, retryable: true },
-    }),
-    false,
-  ],
-  [
-    new Error("wrapped", {
-      cause: Object.assign(new Error("reset"), { oauthRefreshFailure: { retryable: true } }),
-    }),
-    false,
-  ],
-  [Object.assign(new Error("revoked"), { oauthRefreshFailure: { retryable: true } }), false],
-  [Object.assign(new Error("uncertain"), { oauthRefreshFailure: { retryable: false } }), false],
-] as const)(
-  "requires provider-owned retry admission without overriding rejection: %s",
-  (error, expected) => {
-    expect(isTransientOAuthRefreshFailure(error)).toBe(expected);
-  },
-);
+  new Error('OAuth refresh call "refreshOAuthCredential(xai)" exceeded hard timeout (120000ms)'),
+  new Error("xAI OAuth refresh failed (503): unavailable"),
+  retryPresentation("unavailable", 502),
+  retryPresentation("reset before headers"),
+  new Error("unclassified upstream failure"),
+  new Error("xAI OAuth token response is missing access_token"),
+  retryPresentation("invalid_grant", 503),
+  retryPresentation("unauthorized", 401),
+  retryPresentation("forbidden", 403),
+  retryPresentation("invalid response", 200),
+  retryPresentation("rate limited", 429),
+  new Error("wrapped", { cause: retryPresentation("reset") }),
+  retryPresentation("revoked"),
+  retryPresentation("uncertain", undefined, false),
+])("requires provider-owned retry admission without overriding rejection: %s", (error) => {
+  expect(isTransientOAuthRefreshFailure(error)).toBe(false);
+});
 
 const notDispatched = {
   version: 1,
@@ -294,41 +252,27 @@ const documentedUnchanged = {
 };
 const withOutcome = (facts: unknown, cause?: unknown) =>
   Object.assign(new Error("synthetic provider failure", { cause }), { oauthRefreshOutcome: facts });
+const unchanged = (evidence: string, status = 503) => ({
+  ...documentedUnchanged,
+  status,
+  recovery: { kind: "later", evidence },
+});
 it.each([
   ["actual non-dispatch evidence", withOutcome(notDispatched), true],
-  [
-    "documented reusable grant",
-    withOutcome({
-      ...documentedUnchanged,
-      recovery: { kind: "later", evidence: "documented-reusable-grant" },
-    }),
-    true,
-  ],
+  ["documented reusable grant", withOutcome(unchanged("documented-reusable-grant")), true],
   [
     "owner-accepted provider retry",
-    withOutcome({
-      ...documentedUnchanged,
-      status: 429,
-      recovery: { kind: "later", evidence: "owner-accepted-provider-retry" },
-    }),
+    withOutcome(unchanged("owner-accepted-provider-retry", 429)),
     true,
   ],
   [
     "owner-accepted provider retry cannot admit a client rejection",
-    withOutcome({
-      ...documentedUnchanged,
-      status: 401,
-      recovery: { kind: "later", evidence: "owner-accepted-provider-retry" },
-    }),
+    withOutcome(unchanged("owner-accepted-provider-retry", 401)),
     false,
   ],
   [
     "verified intermediary challenge",
-    withOutcome({
-      ...documentedUnchanged,
-      status: 403,
-      recovery: { kind: "later", evidence: "verified-intermediary-challenge" },
-    }),
+    withOutcome(unchanged("verified-intermediary-challenge", 403)),
     true,
   ],
   [
@@ -338,14 +282,7 @@ it.each([
   ],
   [
     "challenge evidence cannot hide a terminal rejection",
-    withOutcome(
-      {
-        ...documentedUnchanged,
-        status: 403,
-        recovery: { kind: "later", evidence: "verified-intermediary-challenge" },
-      },
-      { error: "invalid_grant" },
-    ),
+    withOutcome(unchanged("verified-intermediary-challenge", 403), { error: "invalid_grant" }),
     false,
   ],
   ["documented nonconsuming response", withOutcome(documentedUnchanged), true],

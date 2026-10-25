@@ -9,13 +9,12 @@ import {
   withCanonicalAuthProfileCredentialObserver,
   type CanonicalAuthProfileCredentialObservation,
 } from "./credential-observation.js";
-import { useOAuthCoordinationFixture } from "./oauth-coordination.test-support.js";
-import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
-import { createExpiredOauthStore } from "./oauth-test-utils.js";
+import { expectTerminal, useOAuthCoordinationFixture } from "./oauth-coordination.test-support.js";
+import { storeWith } from "./oauth-test-utils.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
 import { saveAuthProfileStore } from "./store-runtime.js";
-import type { OAuthCredential } from "./types.js";
+import type { AuthProfileStore, OAuthCredential } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const fx = useOAuthCoordinationFixture();
@@ -55,16 +54,19 @@ vi.mock("../../llm/oauth.js", () => ({
 describe("createOAuthManager settlement credential validation", () => {
   const profileId = "openai:default";
   const provider = "openai";
-  const expiredStore = (
-    rotation: string,
-    options: Partial<Parameters<typeof createExpiredOauthStore>[0]> = {},
-  ) =>
-    createExpiredOauthStore({
+  const expiredStore = (rotation: string, options: Partial<OAuthCredential> = {}) =>
+    storeWith(
       profileId,
-      provider,
-      access: createWorkspaceAccessToken("workspace-a", rotation),
-      ...options,
-    });
+      createWorkspaceCredential("workspace-a", rotation, {
+        refresh: "refresh-token",
+        expires: Date.now() - 60_000,
+        ...options,
+      }),
+    );
+  const tokens = (accountId: string, rotation: string, refresh = `${rotation}-refresh`) => ({
+    access: createWorkspaceAccessToken(accountId, rotation),
+    refresh,
+  });
   function createWorkspaceCredential(
     accountId: string,
     rotation: string,
@@ -73,8 +75,7 @@ describe("createOAuthManager settlement credential validation", () => {
     return {
       type: "oauth",
       provider,
-      access: createWorkspaceAccessToken(accountId, rotation),
-      refresh: `${rotation}-refresh`,
+      ...tokens(accountId, rotation),
       expires: Date.now() + 60 * 60 * 1000,
       ...overrides,
     };
@@ -100,7 +101,7 @@ describe("createOAuthManager settlement credential validation", () => {
       }
     };
   }
-  async function createPeers(original: ReturnType<typeof createExpiredOauthStore>) {
+  async function createPeers(original: AuthProfileStore) {
     async function createPeer(index: number) {
       const agentDir = await fx.agentDirectory(`peer-${index}`);
       saveAuthProfileStore(original, agentDir);
@@ -128,16 +129,11 @@ describe("createOAuthManager settlement credential validation", () => {
         email: "same@example.test",
       });
       const shared = expiredStore("shared", {
-        access: createWorkspaceAccessToken("workspace-b", "shared"),
+        ...tokens("workspace-b", "shared", "workspace-b-refresh"),
         accountId: "workspace-b",
         email: "same@example.test",
+        expires: Date.now() + 60 * 60 * 1000,
       });
-      const sharedCredential = shared.profiles[profileId];
-      if (sharedCredential?.type !== "oauth") {
-        throw new Error("expected shared OAuth credential");
-      }
-      sharedCredential.refresh = "workspace-b-refresh";
-      sharedCredential.expires = Date.now() + 60 * 60 * 1000;
       saveAuthProfileStore(local, localAgentDir);
       if (storage === "fresh") {
         saveAuthProfileStore(shared);
@@ -161,6 +157,7 @@ describe("createOAuthManager settlement credential validation", () => {
       );
       const validatedWorkspaceIds: Array<string | undefined> = [];
       const observations: CanonicalAuthProfileCredentialObservation[] = [];
+      const rotated = tokens("workspace-a", "rotated", "workspace-a-rotated-refresh");
 
       await expect(
         withCanonicalAuthProfileCredentialObserver(
@@ -169,26 +166,15 @@ describe("createOAuthManager settlement credential validation", () => {
         ),
       ).resolves.toMatchObject({ apiKey: createWorkspaceAccessToken("workspace-a", "rotated") });
 
-      expect(validatedWorkspaceIds.filter((accountId) => accountId === "workspace-b")).toHaveLength(
-        0,
-      );
+      expect(validatedWorkspaceIds).not.toContain("workspace-b");
       expect(observations).toContainEqual({
         databasePath: resolveAuthProfileDatabasePath(localAgentDir),
         profiles: {
-          [profileId]: expect.objectContaining({
-            access: createWorkspaceAccessToken("workspace-a", "rotated"),
-            refresh: "workspace-a-rotated-refresh",
-          }),
+          [profileId]: expect.objectContaining(rotated),
         },
       });
-      expect(readLocal(localAgentDir)).toMatchObject({
-        access: createWorkspaceAccessToken("workspace-a", "rotated"),
-        refresh: "workspace-a-rotated-refresh",
-      });
-      expect(readShared()).toMatchObject({
-        access: createWorkspaceAccessToken("workspace-b", "shared"),
-        refresh: "workspace-b-refresh",
-      });
+      expect(readLocal(localAgentDir)).toMatchObject(rotated);
+      expect(readShared()).toMatchObject(tokens("workspace-b", "shared", "workspace-b-refresh"));
     },
   );
 
@@ -197,18 +183,12 @@ describe("createOAuthManager settlement credential validation", () => {
       fx.agentDirectory("owner"),
       fx.agentDirectory("peer"),
     ]);
-    const local = expiredStore("original", {
-      accountId: "workspace-a",
-    });
+    const local = expiredStore("original", { accountId: "workspace-a" });
     const olderShared = expiredStore("older-shared", {
       refresh: "older-shared-refresh",
       accountId: "workspace-a",
+      expires: Date.now() - 120_000,
     });
-    const olderSharedCredential = olderShared.profiles[profileId];
-    if (olderSharedCredential?.type !== "oauth") {
-      throw new Error("expected shared OAuth credential");
-    }
-    olderSharedCredential.expires = Date.now() - 120_000;
     saveAuthProfileStore(local, ownerAgentDir);
     saveAuthProfileStore(local, peerAgentDir);
     saveAuthProfileStore(olderShared);
@@ -244,10 +224,7 @@ describe("createOAuthManager settlement credential validation", () => {
     expect(validatedRotations).toContain(createWorkspaceAccessToken("workspace-a", "newer-shared"));
     expect(readShared()).toEqual(newerShared);
     expect(readLocal(peerAgentDir)).toBeUndefined();
-    expect(readLocal(ownerAgentDir)).toMatchObject({
-      access: createWorkspaceAccessToken("workspace-a", "local-rotation"),
-      refresh: "local-rotation-refresh",
-    });
+    expect(readLocal(ownerAgentDir)).toMatchObject(tokens("workspace-a", "local-rotation"));
   });
 
   it("preserves an upgraded local owner and fences its historical peer beside another account", async () => {
@@ -272,17 +249,12 @@ describe("createOAuthManager settlement credential validation", () => {
     expect(validatedWorkspaceIds.filter((accountId) => accountId === "workspace-b")).toHaveLength(
       1,
     );
-    expect(readShared()).toMatchObject({
-      access: createWorkspaceAccessToken("workspace-b", "relogin"),
-      refresh: "relogin-other-workspace-refresh",
-    });
-    expect(readLocal(peers[0])).toMatchObject({
-      access: createWorkspaceAccessToken("workspace-a", "stale-rotation"),
-      refresh: "stale-rotation-refresh",
-    });
+    expect(readShared()).toMatchObject(
+      tokens("workspace-b", "relogin", "relogin-other-workspace-refresh"),
+    );
+    expect(readLocal(peers[0])).toMatchObject(tokens("workspace-a", "stale-rotation"));
     const peer = readLocal(peers[1]);
-    expect(peer?.type === "oauth" && isOAuthRefreshFence(peer)).toBe(true);
-    expect(peer?.type === "oauth" && isPendingOAuthRefreshFence(peer)).toBe(false);
+    expectTerminal(peer);
     expect(peer).not.toMatchObject({
       access: createWorkspaceAccessToken("workspace-b", "relogin"),
     });
@@ -302,8 +274,6 @@ describe("createOAuthManager settlement credential validation", () => {
       1,
     );
     expect(readLocal(peers[0])).toEqual(conflictingOwner);
-    const peer = readLocal(peers[1]);
-    expect(peer?.type === "oauth" && isOAuthRefreshFence(peer)).toBe(true);
-    expect(peer?.type === "oauth" && isPendingOAuthRefreshFence(peer)).toBe(false);
+    expectTerminal(readLocal(peers[1]));
   });
 });

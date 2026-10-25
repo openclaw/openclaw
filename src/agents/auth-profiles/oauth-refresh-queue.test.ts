@@ -6,6 +6,7 @@ import {
   createOAuthRefreshError,
   type OAuthRefreshOutcome,
 } from "../../shared/oauth-refresh-outcome.js";
+import { createOAuthRefreshCredential } from "./credential-fixtures.test-support.js";
 import { useOAuthCoordinationFixture } from "./oauth-coordination.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
 import { mockOAuthProviderOperations } from "./oauth-native-provider.test-support.js";
@@ -21,6 +22,24 @@ import type { OAuthCredential } from "./types.js";
 
 // Real file locks and queue admissions: the cohort case observes native admissions.
 const fx = useOAuthCoordinationFixture();
+const expiredCredential = (prefix: string, overrides: Partial<OAuthCredential> = {}) =>
+  createOAuthRefreshCredential({
+    provider: "xai",
+    access: `synthetic-${prefix}-access`,
+    refresh: `synthetic-${prefix}-refresh`,
+    expires: Date.now() - 60_000,
+    ...overrides,
+  });
+function resolver(profileId: string, credential: OAuthCredential) {
+  const manager = createOAuthManager();
+  return (agentDir: string) =>
+    manager.resolveOAuthAccess({
+      store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
+      profileId,
+      credential,
+      agentDir,
+    });
+}
 
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
@@ -32,35 +51,22 @@ describe("OAuth refresh failure ownership", () => {
     "keeps provider validation and unknown failures terminal: %s",
     async (message) => {
       const profileId = "xai:terminal";
-      const original: OAuthCredential = {
-        type: "oauth",
-        provider: "xai",
-        access: "synthetic-terminal-access",
-        refresh: "synthetic-terminal-refresh",
-        expires: Date.now() - 60_000,
-      };
+      const original = expiredCredential("terminal");
       const refreshCredential = vi.fn().mockRejectedValue(new Error(message));
       mockOAuthProviderOperations({ refreshCredential });
       fx.settle(() => {
         vi.restoreAllMocks();
       });
       const agentDir = fx.mainDir;
-      const manager = createOAuthManager();
       saveAuthProfileStore({ version: 1, profiles: { [profileId]: original } }, agentDir);
-      const resolve = () =>
-        manager.resolveOAuthAccess({
-          store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
-          profileId,
-          credential: original,
-          agentDir,
-        });
-      await expect(resolve()).rejects.toThrow(message);
+      const resolve = resolver(profileId, original);
+      await expect(resolve(agentDir)).rejects.toThrow(message);
       const persisted = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
       expect(isOAuthRefreshFence(persisted?.type === "oauth" ? persisted : undefined)).toBe(true);
       expect(isPendingOAuthRefreshFence(persisted?.type === "oauth" ? persisted : undefined)).toBe(
         false,
       );
-      await expect(resolve()).resolves.toBeNull();
+      await expect(resolve(agentDir)).resolves.toBeNull();
       expect(refreshCredential).toHaveBeenCalledTimes(1);
     },
   );
@@ -70,21 +76,13 @@ describe("OAuth refresh failure ownership", () => {
     const provider = "openai";
     saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), fx.mainDir);
 
-    let callCount = 0;
-    fx.refresh.mockImplementation(async () => {
-      callCount += 1;
-      if (callCount === 1) {
-        throw new Error("simulated upstream failure");
-      }
-      // A failed owner leaves its generation fenced. No peer may replay it.
-      return {
-        type: "oauth",
+    fx.refresh.mockRejectedValueOnce(new Error("simulated upstream failure")).mockResolvedValue(
+      createOAuthRefreshCredential({
         provider,
         access: "second-try-access",
         refresh: "second-try-refresh",
-        expires: Date.now() + 60_000,
-      } as never;
-    });
+      }),
+    );
 
     const results = await Promise.all([
       fx.resolve(fx.mainDir).catch((e: unknown) => e),
@@ -92,7 +90,7 @@ describe("OAuth refresh failure ownership", () => {
     ]);
 
     expect(results.filter((result) => result instanceof Error)).toHaveLength(1);
-    expect(callCount).toBe(1);
+    expect(fx.refresh).toHaveBeenCalledOnce();
     expect(results.filter((result) => result === null)).toHaveLength(1);
   });
 
@@ -120,13 +118,7 @@ describe("OAuth refresh failure ownership", () => {
     "shares a positively safe $phase failure only with queued callers for the same path and generation",
     async (facts) => {
       const profileId = "xai:cohort";
-      const credential: OAuthCredential = {
-        type: "oauth",
-        provider: "xai",
-        access: "synthetic-cohort-access",
-        refresh: "synthetic-cohort-refresh",
-        expires: 1,
-      };
+      const credential = expiredCredential("cohort", { expires: 1 });
       const firstDir = await fx.agentDirectory("first");
       const secondDir = await fx.agentDirectory("second");
       const nextGeneration = { ...credential, access: "new-generation", refresh: "new-refresh" };
@@ -182,14 +174,7 @@ describe("OAuth refresh failure ownership", () => {
         })
         .mockRejectedValueOnce(failure());
       mockOAuthProviderOperations({ refreshCredential });
-      const manager = createOAuthManager();
-      const resolve = (dir: string) =>
-        manager.resolveOAuthAccess({
-          store: ensureAuthProfileStoreWithoutExternalProfiles(dir),
-          profileId,
-          credential,
-          agentDir: dir,
-        });
+      const resolve = resolver(profileId, credential);
       const requests: Promise<unknown>[] = [];
       fx.settle(async () => {
         release.resolve();
@@ -242,14 +227,11 @@ describe("OAuth refresh failure ownership", () => {
 
   it("cancels auth waiters while the canonical refresh owner durably settles for another caller", async () => {
     const profileId = "xai:default";
-    const credential: OAuthCredential = {
-      type: "oauth",
-      provider: "xai",
+    const credential = expiredCredential("cancelled", {
       access: "synthetic-access",
       refresh: "synthetic-refresh",
-      expires: Date.now() - 60_000,
       accountId: "synthetic-account",
-    };
+    });
     const refreshed = {
       ...credential,
       access: "rotated-access",
