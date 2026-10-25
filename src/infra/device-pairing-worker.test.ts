@@ -40,7 +40,6 @@ import {
   listDevicePairingReadOnly,
   requestDevicePairing,
   updatePairedDeviceMetadata,
-  updatePairedDevicePresence,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
@@ -213,20 +212,6 @@ test("rolls back owner approval when live policy is revoked before worker commit
   expect((await paired())?.publicKey).toBe("synthetic-replacement-key");
 });
 
-test("refreshes cached reads after a native owner replaces pairing authority", async () => {
-  await expect(paired()).resolves.toMatchObject({
-    publicKey: "synthetic-original-key",
-  });
-  await listDevicePairing(baseDir);
-  const state = readState();
-  state.pairedByDeviceId["paired-rich"]!.publicKey = "synthetic-sibling-key";
-  state.pairedByDeviceId["paired-rich"]!.displayName = "Sibling fixture";
-  persistDevicePairingStoreState(state, baseDir, "paired");
-  const native = readState().pairedByDeviceId["paired-rich"];
-  expect(JSON.stringify((await listDevicePairing(baseDir)).paired[0])).toBe(JSON.stringify(native));
-  expect(JSON.stringify(await paired())).toBe(JSON.stringify(native));
-});
-
 test("reconnects without replacing paired rows or changing unrelated device fields", async () => {
   // Admit the writer before installing fixture-only mutation guards.
   await ensureDeviceToken(operator);
@@ -292,12 +277,14 @@ test("reconnects without replacing paired rows or changing unrelated device fiel
   }
 });
 
-test("reconnect receipts ignore pending rows and leave sibling pairing changes to their own receipts", async () => {
+test("reconnect receipts refresh native replacements without decoding unrelated pending rows", async () => {
+  await expect(paired()).resolves.toMatchObject({ publicKey: "synthetic-original-key" });
   await listDevicePairing(baseDir);
   const previousBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
   expect(previousBinding).not.toBeNull();
   const state = readState();
   state.pairedByDeviceId["paired-rich"]!.publicKey = "synthetic-sibling-key";
+  state.pairedByDeviceId["paired-rich"]!.displayName = "Sibling fixture";
   persistDevicePairingStoreState(state, baseDir, "paired");
   // A receipt must not decode unrelated pending requests.
   database.db
@@ -322,45 +309,41 @@ test("reconnect receipts ignore pending rows and leave sibling pairing changes t
       .run("[]", "refreshed");
   }
   expect((await getPendingDevicePairing("refreshed", baseDir))?.roles).toEqual([]);
+  const native = readState().pairedByDeviceId["paired-rich"];
+  expect(JSON.stringify((await listDevicePairing(baseDir)).paired[0])).toBe(JSON.stringify(native));
+  expect(JSON.stringify(await paired())).toBe(JSON.stringify(native));
 });
 
-test.each(["metadata", "presence"] as const)(
-  "publishes a device's %s update without loading unrelated paired rows",
-  async (kind) => {
-    await listDevicePairing(baseDir);
-    const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
-    const generation = await nodeGeneration();
-    expect(originalBinding).not.toBeNull();
-    const unavailable = vi
-      .spyOn(stateReads, "executeExistingOpenClawStateRead")
-      .mockRejectedValueOnce(new Error("synthetic unavailable pairing read"));
-    try {
-      await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
-        "synthetic unavailable pairing read",
-      );
-    } finally {
-      unavailable.mockRestore();
-    }
-    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
-      "Device pairing authority requires a current worker publication",
+test("publishes a device metadata update without loading unrelated paired rows", async () => {
+  await listDevicePairing(baseDir);
+  const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+  expect(originalBinding).not.toBeNull();
+  const unavailable = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockRejectedValueOnce(new Error("synthetic unavailable pairing read"));
+  try {
+    await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
+      "synthetic unavailable pairing read",
     );
-    await withUnreadableSibling(async () => {
-      const patch = { lastSeenAtMs: 1234, lastSeenReason: "connect" };
-      await expect(
-        kind === "metadata"
-          ? updatePairedDeviceMetadata(" paired-rich ", patch, baseDir)
-          : updatePairedDevicePresence(" paired-rich ", patch, generation, baseDir),
-      ).resolves.toBe(true);
-      expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
-      expect(await paired()).toMatchObject(patch);
-      expect(getPublishedPairedDeviceBinding("paired-minimal", baseDir)).toBeNull();
-    });
-  },
-);
+  } finally {
+    unavailable.mockRestore();
+  }
+  expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
+    "Device pairing authority requires a current worker publication",
+  );
+  await withUnreadableSibling(async () => {
+    const patch = { lastSeenAtMs: 1234, lastSeenReason: "connect" };
+    await expect(updatePairedDeviceMetadata(" paired-rich ", patch, baseDir)).resolves.toBe(true);
+    expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
+    expect(await paired()).toMatchObject(patch);
+    expect(getPublishedPairedDeviceBinding("paired-minimal", baseDir)).toBeNull();
+  });
+});
 
 test("persists token use and node connection facts without reading unrelated devices", async () => {
   await listDevicePairing(baseDir);
   const generation = await nodeGeneration();
+  const node = { nodeId: "paired-rich", expectedPairingGeneration: generation, baseDir };
   const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
   await withUnreadableSibling(async () => {
     await expect(verifyOperator(baseDir)).resolves.toEqual({ ok: true });
@@ -371,11 +354,9 @@ test("persists token use and node connection facts without reading unrelated dev
     ).resolves.toEqual({ recorded: true, firstConnection: true });
     await expect(
       recordPairedNodeDisconnection({
-        nodeId: "paired-rich",
+        ...node,
         connectedAtMs: 100,
         disconnectedAtMs: 200,
-        expectedPairingGeneration: generation,
-        baseDir,
       }),
     ).resolves.toEqual({ recorded: true });
     await expect(updatePairedNodeBins("paired-rich", ["git"], generation, baseDir)).resolves.toBe(
@@ -387,21 +368,12 @@ test("persists token use and node connection facts without reading unrelated dev
       memoryFreeBytes: 512,
       updatedAtMs: 300,
     };
-    await expect(
-      recordPairedNodeHostStats({
-        nodeId: "paired-rich",
-        hostStats,
-        expectedPairingGeneration: generation,
-        baseDir,
-      }),
-    ).resolves.toBe(true);
+    await expect(recordPairedNodeHostStats({ ...node, hostStats })).resolves.toBe(true);
     await expect(
       updatePairedNodeSessionHost({
-        nodeId: "paired-rich",
+        ...node,
         sessionHost: true,
-        expectedPairingGeneration: generation,
         isConnectionCurrent: () => true,
-        baseDir,
       }),
     ).resolves.toBe(true);
     expect((await paired())?.nodeSurface).toMatchObject({

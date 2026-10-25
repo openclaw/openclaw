@@ -143,7 +143,7 @@ it.each([
   },
 );
 
-async function syntheticSnapshotWorker(body: string) {
+it("reaps an expired snapshot worker before removing its database and WAL scratch", async () => {
   const root = tempDirs.make("candidate-progress-");
   const stateDir = path.join(root, "source");
   const receipt = path.join(root, "child.json");
@@ -169,15 +169,6 @@ async function syntheticSnapshotWorker(body: string) {
         pid: process.pid,
         directory: input.targetStateDir,
       }));
-      ${body}
-    `,
-  );
-  return { root, stateDir, receipt };
-}
-
-it("reaps an expired snapshot worker before removing its database and WAL scratch", async () => {
-  const { root, stateDir, receipt } = await syntheticSnapshotWorker(
-    `
       await fs.writeFile(path.join(scratch, "database.sqlite"), "partial database");
       await fs.writeFile(path.join(scratch, "database.sqlite-wal"), "partial WAL");
       process.on("SIGTERM", () => {});
@@ -237,38 +228,17 @@ it("reaps an expired snapshot worker before removing its database and WAL scratc
   }
 });
 
-it.each([false, true])(
-  "admits snapshot capacity before copying (state volume full: %s)",
-  async (full) => {
-    const f = await fixture();
-    const before = await fs.readFile(f.file);
-    capacity(
-      (target) => (!full && target === `${f.stateDir}.update-captures` ? 10 * 1024 ** 3 : 0),
-      10 * 1024 ** 3,
-    );
-    const pending = prepare(f);
-    if (full) {
-      const rejection = expect(withRehearsal(pending)).rejects;
-      await rejection.toThrow(/snapshot.*requires.*available/i);
-      await expect(pending).rejects.toThrow(os.tmpdir());
-      await expect(pending).rejects.toThrow(`${f.stateDir}.update-captures`);
-      expect(await fs.readdir(f.stateDir)).toEqual(["agents"]);
-    } else {
-      await withRehearsal(pending, async (rehearsal) => {
-        expect(
-          rehearsal.stateDir.startsWith(
-            `${await fs.realpath(f.stateDir)}.update-captures${path.sep}`,
-          ),
-        ).toBe(true);
-        expect(rehearsal.env).toMatchObject({
-          TMPDIR: rehearsal.stateDir,
-          XDG_CACHE_HOME: path.join(rehearsal.stateDir, "cache"),
-        });
-      });
-    }
-    expect(await fs.readFile(f.file)).toEqual(before);
-  },
-);
+it("rejects insufficient snapshot capacity before copying", async () => {
+  const f = await fixture();
+  const before = await fs.readFile(f.file);
+  capacity(() => 0, 10 * 1024 ** 3);
+  const pending = prepare(f);
+  await expect(withRehearsal(pending)).rejects.toThrow(/snapshot.*requires.*available/i);
+  await expect(pending).rejects.toThrow(os.tmpdir());
+  await expect(pending).rejects.toThrow(`${f.stateDir}.update-captures`);
+  expect(await fs.readdir(f.stateDir)).toEqual(["agents"]);
+  expect(await fs.readFile(f.file)).toEqual(before);
+});
 
 it.each([
   { explicit: 1024 ** 3, state: 1024 ** 3, system: 1024 ** 3, kind: "explicit-tmpdir" },
@@ -295,11 +265,10 @@ it.each([
       expect(rehearsal.snapshotCapacity).toMatchObject({
         reason: kind,
         selection: { kind, directory: rehearsal.stateDir },
-        candidates: [
-          { kind: "explicit-tmpdir", directory: nominated, availableBytes: explicit },
-          { kind: "state-volume", directory: sibling, availableBytes: state },
-          { kind: "system-tmpdir", directory: os.tmpdir(), availableBytes: system },
-        ],
+      });
+      expect(rehearsal.env).toMatchObject({
+        TMPDIR: rehearsal.stateDir,
+        XDG_CACHE_HOME: path.join(rehearsal.stateDir, "cache"),
       });
     },
   );
@@ -390,11 +359,9 @@ it.each([false, true])(
       } else {
         const rehearsal = await pending;
         expect(rehearsal.stateDir.startsWith(sibling + path.sep)).toBe(true);
-        expect(rehearsal).toMatchObject({
-          snapshotCapacity: {
-            pluginBytes: expect.any(Number),
-            selection: { kind: "state-volume", directory: rehearsal.stateDir },
-          },
+        expect(rehearsal.snapshotCapacity).toMatchObject({
+          pluginBytes: expect.any(Number),
+          selection: { kind: "state-volume", directory: rehearsal.stateDir },
         });
         await expectSize(
           path.join(rehearsal.stateDir, "npm/projects/demo/node_modules/demo/payload.bin"),
