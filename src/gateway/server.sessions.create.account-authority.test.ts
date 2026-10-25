@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import * as modelCatalogRuntime from "../agents/model-catalog.runtime.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
@@ -391,30 +392,49 @@ test("raw session-write scopes do not replace recorded session-create admission"
   }));
 
 async function createCatalogFixture(withCapturedAuthority = false) {
-  const fixture = await createFixture("operator.write", false);
-  const { client, context } = fixture;
+  const { storePath } = await createSessionStoreDir();
+  const owner = ensureProfileForEmail("catalog-wait@example.test");
   const connection = new AbortController();
   const revocation = new AbortController();
-  client.connectionSignal = connection.signal;
+  const client: GatewayClient & { connId: string } = {
+    ...identifiedClient(owner.id),
+    connId: "catalog-wait",
+    connectionSignal: connection.signal,
+  };
   if (withCapturedAuthority) {
     client.internal = {
       operatorRunAuthority: createAdmittedRunOperatorAuthority({
-        profileId: fixture.owner.id,
+        profileId: owner.id,
         scopes: client.connect.scopes ?? [],
         signal: revocation.signal,
         assertCurrent: () => revocation.signal.throwIfAborted(),
       }),
     };
   }
-  const catalog = await context.loadGatewayModelCatalogSnapshot();
-  context.getClientConnIds = () => new Set(connection.signal.aborted ? [] : [client.connId]);
-  context.readPreparedGatewayModelCatalog = async () => catalog;
-  vi.mocked(context.loadGatewayModelCatalogSnapshot)
-    .mockImplementation(async () => catalog)
-    .mockClear();
+  const config = await getGatewayConfigModule();
+  config.clearRuntimeConfigSnapshot();
+  const cfg = config.getRuntimeConfig();
+  const catalog = {
+    agentId: "main",
+    agentDir: resolveAgentDir(cfg, "main"),
+    workspaceDir: resolveAgentWorkspaceDir(cfg, "main"),
+    config: cfg,
+    catalogComplete: true,
+    entries: catalogEntries(),
+    routeVariants: [],
+  };
+  const context = createDirectChatContext({
+    getRuntimeConfig: () => cfg,
+    getClientConnIds: () => new Set(connection.signal.aborted ? [] : [client.connId]),
+    readPreparedGatewayModelCatalog: async () => catalog,
+    loadGatewayModelCatalogSnapshot: vi.fn(async () => catalog),
+  });
+  await initializeSessionReadContext(context);
+  const key = "agent:main:dashboard:catalog-wait";
+  const request = sessionCreation(client, context, key, storePath, "catalog-wait");
   const create = (selectedModel?: string, idempotencyKey = "catalog-wait") =>
-    fixture.send({ ...(selectedModel ? { model: selectedModel } : {}), idempotencyKey });
-  return { ...fixture, connection, revocation, create };
+    request.create(selectedModel, idempotencyKey);
+  return { storePath, connection, revocation, catalog, context, key, ...request, create };
 }
 
 test.each(["deadline", "disconnect", "authority revocation"])(
@@ -589,19 +609,23 @@ test.each(["human", "agent"] as const)(
           await fixture.create(`${model}@${authProfileId}`);
           fixture.expectRejected();
         }
-        const human = origin === "human";
-        const service = createModelAccountConnectService({
-          getConfig: fixture.context.getRuntimeConfig,
-        });
+        const getConfig = fixture.context.getRuntimeConfig;
+        const service = createModelAccountConnectService({ getConfig });
         try {
-          const profileId = fixture.owner.id;
-          const requests = [
-            ["users.selectModelAccount", { authProfileId, ...(human ? { profileId } : {}) }],
-            human
-              ? ["users.unlinkAuthProfile", { provider: "openai", profileId }]
-              : ["users.authConnect.start", { profileId, provider: "openai", method: "oauth" }],
-          ] as const;
-          const context = human ? directContext(fixture.context) : fixture.context;
+          const requests =
+            origin === "human"
+              ? ([
+                  ["users.selectModelAccount", { authProfileId, profileId: fixture.owner.id }],
+                  ["users.unlinkAuthProfile", { provider: "openai", profileId: fixture.owner.id }],
+                ] as const)
+              : ([
+                  ["users.selectModelAccount", { authProfileId }],
+                  [
+                    "users.authConnect.start",
+                    { profileId: fixture.owner.id, provider: "openai", method: "oauth" },
+                  ],
+                ] as const);
+          const context = origin === "human" ? directContext(fixture.context) : fixture.context;
           for (const [method, params] of requests) {
             const result = await directSessionReq(method, params, {
               client: fixture.client,

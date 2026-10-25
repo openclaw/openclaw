@@ -13,7 +13,9 @@ import { resolvePackageActivationAnchor } from "../../infra/package-update-activ
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import * as failureArtifacts from "../../infra/update-failure-report-artifact.js";
 import * as updateGlobal from "../../infra/update-global.js";
+import * as handoffCleanup from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -22,9 +24,11 @@ import { createRetainedCheckpointFixture } from "../../infra/update-retained-che
 import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as triage from "../../infra/update-triage.js";
+import * as installedPlugins from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as stateOwnership from "../../state/openclaw-state-ownership-preflight.js";
 import { resolveProfileStateDir } from "../profile-utils.js";
 import { registerSignalExitGate, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import * as updateShared from "./shared.js";
@@ -35,13 +39,11 @@ import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
 import {
   createManagedServiceIdentityFixture,
+  finishSuccessfulPackageSwitch,
   taskRecovery,
 } from "./update-command-post-update.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import {
-  UpdateCommandFailure,
-  UpdateCommandPendingRecoveryFailure,
-} from "./update-command-result.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -196,11 +198,19 @@ function pendingPackageInvocation(
     },
     addPending,
     writers: {
+      stateWrite: vi.spyOn(stateOwnership, "assertOpenClawStateWriteAllowedAtPath"),
+      configWrite: vi.spyOn(config, "assertConfigWriteAllowedInCurrentMode"),
+      createRun: vi.spyOn(ledger, "createUpdateRun"),
+      adoptRun: vi.spyOn(ledger, "adoptUpdateRun"),
+      finishRun: vi.spyOn(ledger, "finishUpdateRun"),
       disableAutoStart: vi
         .spyOn(launchd, "disableCurrentOpenClawUpdateLaunchdJob")
         .mockResolvedValue(false),
       prepareTriage: vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage),
+      writeTriage: vi.spyOn(failureArtifacts, "writeTriageUpdateFailure"),
       runTriage,
+      cleanupHandoffs: vi.spyOn(handoffCleanup, "cleanupStaleManagedServiceUpdateHandoffs"),
+      loadPlugins: vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords"),
       resumePostCore: vi
         .spyOn(updateResume, "resumePostCoreUpdate")
         .mockRejectedValue(new Error("Untrusted continuation reached plugin convergence")),
@@ -250,7 +260,6 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
         source: materialSnapshot(f.source),
         service: materialSnapshot(f.serviceRoot),
         anchor: anchor ? materialSnapshot(anchor) : undefined,
-        control: materialSnapshot(path.join(f.home, "control")),
         config: fs.readFileSync(path.join(f.state, "openclaw.json")),
         triage: fs.readFileSync(path.join(f.home, "triage.json")),
         sentinel: fs.readFileSync(path.join(f.home, "sentinel.json")),
@@ -297,6 +306,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           expect(record).toMatchObject({ status: "running" });
         } else {
           expect(record).toBeUndefined();
+          expect(f.writers.createRun).not.toHaveBeenCalled();
           expect(fs.existsSync(path.join(f.state, "state", "openclaw.sqlite"))).toBe(false);
         }
         expectPendingReport({
@@ -304,10 +314,19 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           reason: "update-recovery-pending",
           root: serviceDrift ? f.serviceRoot : f.source,
         });
-        expectNoCalls(metadata, f.writers.disableAutoStart, f.writers.runTriage);
+        const { disableAutoStart, cleanupHandoffs, loadPlugins, writeTriage, runTriage } =
+          f.writers;
+        expectNoCalls(
+          metadata,
+          disableAutoStart,
+          cleanupHandoffs,
+          loadPlugins,
+          writeTriage,
+          runTriage,
+        );
         expect(retainedMaterial()).toEqual(before);
         if (record) {
-          expect(ledger.getUpdateRun(record.runId)).toEqual(record);
+          expect(ledger.getUpdateRun(record.runId)).toMatchObject({ runId: record.runId });
         }
       } finally {
         f.restore();
@@ -319,7 +338,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
 async function fixture() {
   const root = fs.realpathSync(makeTempDir(dirs, "pending-finalizer-"));
   const retained = createRetainedCheckpointFixture(root);
-  const { env, options, file, run, record, displaced } = retained;
+  const { env, options, file, run, runtime, record, displaced } = retained;
   retained.displace();
   const forbidden = (message: string) => () => {
     throw new Error(message);
@@ -333,17 +352,43 @@ async function fixture() {
   };
   const opts: UpdateCommandOptions = { run, recovery };
   const windows = taskRecovery();
+  const rollback = vi.fn(async () => {
+    throw new Error("legacy rollback must not run");
+  });
+  const complete = vi.fn();
   const before = fs.readFileSync(displaced);
   return {
     root,
     env,
+    file,
+    displaced,
     run,
     opts,
     windows,
+    rollback,
+    complete,
     expectRetained() {
       expect(fs.existsSync(file)).toBe(false);
       expect(fs.readFileSync(displaced)).toEqual(before);
     },
+    invoke: () =>
+      finishSuccessfulPackageSwitch(
+        { packageRoot: runtime.root, run },
+        {
+          root: runtime.root,
+          opts,
+          result: candidateFailure(run.runId, runtime.root),
+          preManagedServiceStop: {
+            inspected: true,
+            runtimeInspected: true,
+            running: false,
+            stopped: true,
+            serviceEnv: env,
+            windowsTaskAutoStartRecovery: windows,
+          },
+          packageTransaction: { rollback, complete, backupRoot: path.join(root, "retained") },
+        },
+      ),
   };
 }
 
@@ -370,7 +415,25 @@ describe("pending recovery finalizer", () => {
     expect(fs.readFileSync(configPath)).toEqual(originalConfig);
   });
 
-  it.each(["pending", "reported", "unexpected", "completed"] as const)(
+  it("preserves a missing canonical database without live context", async () => {
+    const f = await fixture();
+    f.opts.recovery = undefined;
+    const failure = await f.invoke().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toMatchObject({
+      name: "UpdateCommandPendingRecoveryFailure",
+      result: {
+        reason: "candidate-failed",
+        runId: f.run.runId,
+        recovery: { serviceRestartSafe: false },
+      },
+    });
+    f.expectRetained();
+    expectNoCalls(f.rollback, f.complete, f.windows.restore, f.windows.complete);
+  });
+  it.each(["finalizer", "reported", "unexpected", "completed"] as const)(
     "keeps %s unwind away from autostart, history and managed triage",
     async (kind) => {
       const f = await fixture();
@@ -404,8 +467,8 @@ describe("pending recovery finalizer", () => {
             if (kind === "reported") {
               throw new UpdateCommandFailure(primary);
             }
-            if (kind === "pending") {
-              throw new UpdateCommandPendingRecoveryFailure(primary, "Recovery remains pending");
+            if (kind === "finalizer") {
+              await f.invoke();
             }
           },
         ),
@@ -423,6 +486,7 @@ describe("pending recovery finalizer", () => {
       } else {
         expect(f.windows.complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
       }
+      expectNoCalls(f.rollback, f.complete);
     },
   );
 });

@@ -1,3 +1,4 @@
+// Qa Lab tests cover confidence report plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,35 +13,6 @@ function lane(id: string, artifact: string, options: Partial<Lane> = {}): Lane {
   return { id, title: id, kind: "qa-suite-summary", artifact, required: true, ...options };
 }
 
-const passedCounts = { total: 1, passed: 1, skipped: 0, failed: 0 };
-const environmentSentinel = {
-  kind: "live-quota-or-subscription",
-  verdict: "environment-blocked",
-  owner: "environment",
-  line: 12,
-  text: "OpenAI quota exceeded",
-};
-type Report = Awaited<ReturnType<typeof buildQaConfidenceReport>>;
-
-function expectUnknown(report: Report, details: string, counts?: Partial<Report["counts"]>) {
-  expect(report).toMatchObject({ pass: false, globalPass: false, zeroUnknowns: false });
-  if (counts) {
-    expect(report.counts).toMatchObject(counts);
-  }
-  expect(report.lanes[0]).toMatchObject({ status: "unknown" });
-  expect(report.lanes[0]?.details).toContain(details);
-}
-
-const scenario = (status: string) => ({ name: status, status });
-const suiteCounts = (total: number, passed: number, skipped = 0, failed = 0) => ({
-  total,
-  passed,
-  skipped,
-  failed,
-});
-const invalid = (artifact: object, detail: string, kind?: Lane["kind"]) =>
-  [artifact, detail, kind] as const;
-
 describe("qa confidence report", () => {
   let tempRoot: string;
 
@@ -52,21 +24,36 @@ describe("qa confidence report", () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
-  async function fixture(id: string, payload: object, options: Partial<Lane> = {}) {
-    const relativePath = `${id}/${options.kind ? "summary.json" : "qa-suite-summary.json"}`;
+  async function writeJson(relativePath: string, payload: unknown) {
     const filePath = path.join(tempRoot, relativePath);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
-    const value = options.kind ? payload : { run: { status: "completed" }, ...payload };
+    const value =
+      relativePath.endsWith("qa-suite-summary.json") &&
+      payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      !("run" in payload)
+        ? { run: { status: "completed" }, ...payload }
+        : payload;
     await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-    return lane(id, relativePath, options);
+    return filePath;
   }
 
-  async function buildReport(
-    lanes: (Lane | Promise<Lane>)[],
+  function buildLiveSuiteReport(
+    laneOptions: Pick<
+      QaConfidenceManifest["lanes"][number],
+      "missingVerdict" | "failureVerdict"
+    > = {},
+  ) {
+    return buildLaneReport(lane("first-hour-live", "live/qa-suite-summary.json", laneOptions));
+  }
+
+  function buildLaneReport(
+    entry: QaConfidenceManifest["lanes"][number],
     options: Omit<Parameters<typeof buildQaConfidenceReport>[0], "manifest" | "artifactRoot"> = {},
   ) {
     return buildQaConfidenceReport({
-      manifest: { version: 1, profile: "codex-100", lanes: await Promise.all(lanes) },
+      manifest: { version: 1, profile: "codex-100", lanes: [entry] },
       artifactRoot: tempRoot,
       strictZeroUnknowns: true,
       generatedAt: "2026-05-13T00:00:00.000Z",
@@ -74,47 +61,66 @@ describe("qa confidence report", () => {
     });
   }
 
-  function evaluate(artifact: object, options: Partial<Lane> = {}, strictGlobalPass = false) {
-    return buildReport([fixture("evidence", artifact, options)], { strictGlobalPass });
-  }
-
   async function buildStrictSuiteReport(payload: Record<string, unknown>, withBackfill = false) {
-    const lanes = [
-      fixture("report-only", payload, withBackfill ? { skipBackfillLane: "backfill" } : {}),
+    await writeJson("report-only/qa-suite-summary.json", payload);
+    const lanes: QaConfidenceManifest["lanes"] = [
+      lane(
+        "report-only",
+        "report-only/qa-suite-summary.json",
+        withBackfill ? { skipBackfillLane: "backfill" } : {},
+      ),
     ];
     if (withBackfill) {
-      lanes.push(fixture("backfill", { counts: passedCounts }));
+      await writeJson("backfill/qa-suite-summary.json", {
+        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+      });
+      lanes.push(lane("backfill", "backfill/qa-suite-summary.json"));
     }
-    return buildReport(lanes, { strictGlobalPass: true });
+    return buildQaConfidenceReport({
+      manifest: { version: 1, profile: "confidence-regression", lanes },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      strictGlobalPass: true,
+    });
   }
 
   it("passes strict zero-unknowns when every lane passes or has an allowed blocked verdict", async () => {
-    const report = await buildReport([
-      fixture("tool-defaults", { counts: suiteCounts(20, 18, 2) }),
-      fixture(
-        "mock-token-efficiency",
-        {
-          status: "estimated",
-          pass: true,
-          rows: [{ usageSource: "mock-estimate" }],
-        },
-        {
+    await writeJson("tool-defaults/qa-suite-summary.json", {
+      counts: { total: 20, passed: 18, skipped: 2, failed: 0 },
+    });
+    await writeJson("token/qa-runtime-token-efficiency-summary.json", {
+      status: "estimated",
+      pass: true,
+      rows: [{ scenarioId: "one", usageSource: "mock-estimate" }],
+    });
+
+    const manifest: QaConfidenceManifest = {
+      version: 1,
+      profile: "codex-100",
+      lanes: [
+        lane("tool-defaults-direct", "tool-defaults/qa-suite-summary.json"),
+        lane("mock-token-efficiency", "token/qa-runtime-token-efficiency-summary.json", {
           kind: "token-efficiency-summary",
           expectedTokenUsageSource: "mock-estimate",
-        },
-      ),
-      lane("live-token-efficiency", "live/qa-runtime-token-efficiency-summary.json", {
-        kind: "token-efficiency-summary",
-        missingVerdict: "environment-blocked",
-        missingReason: "OPENAI OAuth credentials are not available in this runner.",
-      }),
-    ]);
+        }),
+        lane("live-token-efficiency", "live/qa-runtime-token-efficiency-summary.json", {
+          kind: "token-efficiency-summary",
+          missingVerdict: "environment-blocked",
+          missingReason: "OPENAI OAuth credentials are not available in this runner.",
+        }),
+      ],
+    };
 
-    expect(report).toMatchObject({
-      pass: true,
-      globalPass: false,
-      counts: { passed: 2, blocked: 1, unknown: 0, failed: 0 },
+    const report = await buildQaConfidenceReport({
+      manifest,
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      generatedAt: "2026-05-12T00:00:00.000Z",
     });
+
+    expect(report.pass).toBe(true);
+    expect(report.globalPass).toBe(false);
+    expect(report.counts).toMatchObject({ passed: 2, blocked: 1, unknown: 0, failed: 0 });
     expect(report.lanes.map((entry) => entry.verdict)).toEqual([
       "pass",
       "pass",
@@ -127,47 +133,107 @@ describe("qa confidence report", () => {
     expect(renderQaConfidenceMarkdownReport(report)).toContain("Global pass: no");
   });
 
-  it("does not let optional lanes block strict gates", async () => {
-    const report = await buildReport(
-      [
-        fixture("required", { counts: passedCounts }),
-        lane("optional-missing", "optional/qa-suite-summary.json", { required: false }),
-      ],
-      { strictGlobalPass: true },
-    );
+  it("uses suite lifecycle status before terminal outcome counts", async () => {
+    for (const [runStatus, expectedPass, expectedLaneStatus, expectedDetails] of [
+      ["missing", false, "unknown", "missing run.status"],
+      ["running", false, "unknown", "still running"],
+      ["completed", true, "pass", "counts.failed=0"],
+      ["paused", false, "unknown", "unsupported run.status=paused"],
+    ] as const) {
+      await writeJson("suite/qa-suite-summary.json", {
+        run: runStatus === "missing" ? {} : { status: runStatus },
+        counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
+        scenarios: [{ name: "completed prefix", status: "pass" }],
+      });
 
-    expect(report).toMatchObject({
-      pass: true,
-      counts: { total: 1, passed: 1, unknown: 0 },
-      failures: [],
-      lanes: [{ status: "pass" }, { id: "optional-missing", status: "missing" }],
+      const report = await buildLaneReport(lane("suite", "suite/qa-suite-summary.json"), {
+        strictGlobalPass: true,
+      });
+
+      expect(report.pass).toBe(expectedPass);
+      expect(report.lanes[0]).toMatchObject({ status: expectedLaneStatus });
+      expect(report.lanes[0]?.details).toContain(expectedDetails);
+    }
+  });
+
+  it("does not let optional lanes block strict gates", async () => {
+    await writeJson("required/qa-suite-summary.json", {
+      counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
     });
+
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "required",
+            title: "Required",
+            kind: "qa-suite-summary",
+            artifact: "required/qa-suite-summary.json",
+            required: true,
+          },
+          {
+            id: "optional-missing",
+            title: "Optional missing",
+            kind: "qa-suite-summary",
+            artifact: "optional/qa-suite-summary.json",
+            required: false,
+          },
+        ],
+      },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      strictGlobalPass: true,
+      generatedAt: "2026-05-13T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.counts).toMatchObject({ total: 1, passed: 1, unknown: 0 });
+    expect(report.failures).toEqual([]);
+    expect(report.lanes[1]).toMatchObject({ id: "optional-missing", status: "missing" });
   });
 
   it("fails strict global pass when any lane is blocked, missing, unknown, or classified failed", async () => {
-    const failed = { counts: suiteCounts(1, 0, 0, 1), scenarios: [scenario("fail")] };
-    const report = await buildReport(
-      [
-        lane("blocked-live", "live/qa-suite-summary.json", {
-          missingVerdict: "environment-blocked",
-          missingReason: "OPENAI_API_KEY missing.",
-        }),
-        lane("missing-soak", "soak/qa-suite-summary.json"),
-        fixture("classified-fixture", failed, {
-          failureVerdict: "fixture-bug",
-        }),
-        fixture("unknown-failure", failed),
-      ],
-      {
-        strictGlobalPass: true,
-      },
-    );
+    await writeJson("classified/qa-suite-summary.json", {
+      counts: { total: 1, passed: 0, skipped: 0, failed: 1 },
+      scenarios: [{ name: "classified", status: "fail" }],
+    });
+    await writeJson("unknown/qa-suite-summary.json", {
+      counts: { total: 1, passed: 0, skipped: 0, failed: 1 },
+      scenarios: [{ name: "unknown", status: "fail" }],
+    });
 
-    expect(report).toMatchObject({
-      pass: false,
-      zeroUnknowns: false,
-      globalPass: false,
-      counts: { blocked: 1, missing: 1, failed: 1, unknown: 2 },
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          lane("blocked-live", "live/qa-suite-summary.json", {
+            missingVerdict: "environment-blocked",
+            missingReason: "OPENAI_API_KEY missing.",
+          }),
+          lane("missing-soak", "soak/qa-suite-summary.json"),
+          lane("classified-fixture", "classified/qa-suite-summary.json", {
+            failureVerdict: "fixture-bug",
+          }),
+          lane("unknown-failure", "unknown/qa-suite-summary.json"),
+        ],
+      },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      strictGlobalPass: true,
+      generatedAt: "2026-05-12T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.zeroUnknowns).toBe(false);
+    expect(report.globalPass).toBe(false);
+    expect(report.counts).toMatchObject({
+      blocked: 1,
+      missing: 1,
+      failed: 1,
+      unknown: 2,
     });
     expect(report.failures).toEqual([
       "blocked-live is blocked: OPENAI_API_KEY missing.",
@@ -177,52 +243,142 @@ describe("qa confidence report", () => {
     ]);
   });
 
-  it.each([
-    [suiteCounts(1, 0, 1), "skip"],
-    [undefined, "skipped"],
-    [{ passed: 1, failed: 0 }, "skip"],
-  ] as const)("rejects unexecuted evidence %j despite backfill", async (counts, status) => {
-    const report = await buildStrictSuiteReport({ counts, scenarios: [scenario(status)] }, true);
-    expectUnknown(report, "no executed scenarios");
+  it("fails strict global pass for skipped suite rows until a backfill lane passes", async () => {
+    const report = await buildStrictSuiteReport({
+      counts: { total: 3, passed: 2, skipped: 1, failed: 0 },
+    });
+
+    expect(report.zeroUnknowns).toBe(true);
     expect(report.globalPass).toBe(false);
-    expect(report.lanes[1]).toMatchObject({ status: "pass" });
+    expect(report.failures).toEqual([
+      "report-only has 1 skipped row(s) with no passing backfill lane",
+    ]);
   });
 
   it.each([
-    { counts: suiteCounts(3, 2, 1) },
-    { scenarios: [scenario("pass"), scenario("skip")] },
-    { counts: { skipped: 1 }, scenarios: [scenario("pass")] },
-    { counts: { total: 3, passed: 2, failed: 0 } },
-    { counts: { total: 2, passed: 2, failed: 0 }, scenarios: [scenario("pass"), scenario("skip")] },
-  ])("requires backfill for explicit or inferred skips: %j", async (artifact) => {
-    for (const hasBackfill of [false, true]) {
-      const report = await buildStrictSuiteReport(artifact, hasBackfill);
-      expect(report).toMatchObject({
-        pass: hasBackfill,
-        globalPass: hasBackfill,
-        zeroUnknowns: true,
-        lanes: [{ status: "pass", skippedCount: 1 }],
-      });
-      if (hasBackfill) {
-        expect(report.lanes[0]).toMatchObject({ skipBackfilled: true });
-      } else {
-        expect(report.failures).toEqual([
-          "report-only has 1 skipped row(s) with no passing backfill lane",
-        ]);
+    ["count-backed", "skip"],
+    ["legacy", "skipped"],
+    ["unverified-pass-count", "skip"],
+  ] as const)(
+    "rejects %s suites containing only %s scenarios despite a passing backfill",
+    async (format, skippedStatus) => {
+      const report = await buildStrictSuiteReport(
+        {
+          ...(format === "count-backed"
+            ? { counts: { total: 1, passed: 0, failed: 0, skipped: 1 } }
+            : format === "unverified-pass-count"
+              ? { counts: { passed: 1, failed: 0 } }
+              : {}),
+          scenarios: [{ name: "never executed", status: skippedStatus }],
+        },
+        true,
+      );
+
+      expect(report.pass).toBe(false);
+      expect(report.globalPass).toBe(false);
+      expect(report.lanes[0]).toMatchObject({ status: "unknown" });
+      expect(report.lanes[0]?.details).toContain("no executed scenarios");
+      expect(report.lanes[1]).toMatchObject({ status: "pass" });
+    },
+  );
+
+  it.each([
+    ["skip", undefined],
+    ["count-reported skip", 1],
+  ] as const)(
+    "requires a passing backfill for legacy suites containing a pass and %s",
+    async (skippedStatus, explicitSkippedCount) => {
+      const artifact = {
+        ...(explicitSkippedCount === undefined
+          ? {}
+          : { counts: { skipped: explicitSkippedCount } }),
+        scenarios: [
+          { name: "executed", status: "pass" },
+          ...(explicitSkippedCount === undefined
+            ? [{ name: "not executed", status: skippedStatus }]
+            : []),
+        ],
+      };
+
+      for (const hasBackfill of [false, true]) {
+        const report = await buildStrictSuiteReport(artifact, hasBackfill);
+
+        expect(report.pass).toBe(hasBackfill);
+        expect(report.globalPass).toBe(hasBackfill);
+        expect(report.lanes[0]).toMatchObject({ status: "pass", skippedCount: 1 });
+        if (hasBackfill) {
+          expect(report.lanes[0]).toMatchObject({ skipBackfilled: true });
+        } else {
+          expect(report.failures).toEqual([
+            "report-only has 1 skipped row(s) with no passing backfill lane",
+          ]);
+        }
       }
+    },
+  );
+
+  it("distinguishes omitted scenario rows from explicitly empty evidence", async () => {
+    for (const [counts, pass, expectedDetail] of [
+      [{ total: 1, passed: 1, failed: 0, skipped: 0 }, true, "counts.failed=0"],
+      [{ total: 1, passed: 1, failed: 0, skipped: 0 }, false, "count/scenario mismatch"],
+      [{ total: 3, passed: 2, failed: 0 }, false, "no executed scenarios"],
+    ] as const) {
+      const report = await buildStrictSuiteReport({ counts, ...(pass ? {} : { scenarios: [] }) });
+      expect(report).toMatchObject({ pass, globalPass: pass });
+      expect(report.lanes[0]).toMatchObject({ status: pass ? "pass" : "unknown" });
+      expect(report.lanes[0]?.details).toContain(expectedDetail);
     }
   });
 
-  it("distinguishes omitted scenario rows from explicitly empty evidence", async () => {
-    for (const [counts, scenarios, pass, expectedDetail] of [
-      [passedCounts, undefined, true, "counts.failed=0"],
-      [passedCounts, [scenario("pass")], true, "counts.failed=0"],
-      [passedCounts, [], false, "count/scenario mismatch"],
-      [{ total: 3, passed: 2, failed: 0 }, [], false, "no executed scenarios"],
+  it("infers skipped suite rows from totals and scenario status", async () => {
+    for (const [artifact, expectedDetail] of [
+      [{ counts: { total: 3, passed: 2, failed: 0 } }, "counts.skipped=1"],
+      [
+        {
+          counts: { total: 2, passed: 2, failed: 0 },
+          scenarios: [
+            { name: "passing", status: "pass" },
+            { name: "skipped", status: "skip" },
+          ],
+        },
+        "counts.skipped=1",
+      ],
     ] as const) {
-      const report = await buildStrictSuiteReport({ counts, ...(scenarios ? { scenarios } : {}) });
-      expect(report).toMatchObject({ pass, globalPass: pass });
-      expect(report.lanes[0]).toMatchObject({ status: pass ? "pass" : "unknown" });
+      const report = await buildStrictSuiteReport(artifact);
+
+      expect(report.globalPass).toBe(false);
+      expect(report.failures).toEqual([
+        "report-only has 1 skipped row(s) with no passing backfill lane",
+      ]);
+      expect(report.lanes[0]).toMatchObject({ skippedCount: 1 });
+      expect(report.lanes[0]?.details).toContain(expectedDetail);
+    }
+  });
+
+  it("does not pass suite summaries with unsupported non-pass statuses", async () => {
+    for (const [artifact, expectedDetail] of [
+      [
+        {
+          counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+          scenarios: [{ name: "errored", status: "error" }],
+        },
+        "unsupported non-pass status",
+      ],
+      [
+        {
+          scenarios: [{ name: "timed out", status: "timeout" }],
+        },
+        "unsupported non-pass status",
+      ],
+    ] as const) {
+      const report = await buildStrictSuiteReport(artifact);
+
+      expect(report.pass).toBe(false);
+      expect(report.globalPass).toBe(false);
+      expect(report.zeroUnknowns).toBe(false);
+      expect(report.lanes[0]).toMatchObject({
+        status: "unknown",
+      });
       expect(report.lanes[0]?.details).toContain(expectedDetail);
     }
   });
@@ -242,17 +398,18 @@ describe("qa confidence report", () => {
   ] as const)(
     "evaluates %s token evidence",
     async (_name, status, rows, expectedSource, passed, details) => {
-      const report = await evaluate(
-        {
-          status,
-          pass: true,
-          ...(rows ? { rows } : {}),
-        },
-        {
+      await writeJson("live-token/qa-runtime-token-efficiency-summary.json", {
+        status,
+        pass: true,
+        ...(rows ? { rows } : {}),
+      });
+
+      const report = await buildLaneReport(
+        lane("live-token-efficiency", "live-token/qa-runtime-token-efficiency-summary.json", {
           kind: "token-efficiency-summary",
           ...(expectedSource ? { expectedTokenUsageSource: expectedSource } : {}),
-        },
-        true,
+        }),
+        { strictGlobalPass: true },
       );
 
       expect(report.pass).toBe(passed);
@@ -264,97 +421,201 @@ describe("qa confidence report", () => {
     },
   );
 
-  it.each(["environment", "plugin"])(
-    "classifies %s gateway sentinels without unknowns",
-    async (owner) => {
-      const environment = owner === "environment";
-      const verdict = environment ? "environment-blocked" : "qa-harness-bug";
-      const kind = environment ? environmentSentinel.kind : "plugin-hook-failure";
-      const sentinelFindings = [{ ...environmentSentinel, kind, owner, verdict }];
-      const cells = { codex: { sentinelFindings } };
-      const artifact = environment
-        ? { gatewayLogSentinels: sentinelFindings }
-        : { scenarios: [{ ...scenario("pass"), runtimeParity: { cells } }] };
-      const status = environment ? "blocked" : "fail";
-      const report = await evaluate({ counts: passedCounts, ...artifact });
-      expect(report).toMatchObject({
-        pass: true,
-        globalPass: false,
-        counts: { unknown: 0 },
-        lanes: [{ status, verdict }],
-      });
-      expect(status === "blocked" ? report.counts.blocked : report.counts.failed).toBe(1);
-    },
-  );
+  it("classifies environment-blocking gateway sentinels without turning them into unknowns", async () => {
+    await writeJson("live/qa-suite-summary.json", {
+      counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
+      gatewayLogSentinels: [
+        {
+          kind: "live-quota-or-subscription",
+          verdict: "environment-blocked",
+          owner: "environment",
+          productImpact: "P4",
+          qaImpact: "P0",
+          line: 12,
+          text: "OpenAI quota exceeded",
+        },
+      ],
+    });
+
+    const report = await buildLiveSuiteReport();
+
+    expect(report.pass).toBe(true);
+    expect(report.globalPass).toBe(false);
+    expect(report.counts).toMatchObject({ blocked: 1, unknown: 0 });
+    expect(report.lanes[0]).toMatchObject({
+      status: "blocked",
+      verdict: "environment-blocked",
+    });
+  });
+
+  it("does not let environment sentinels hide separate suite failures", async () => {
+    await writeJson("live/qa-suite-summary.json", {
+      counts: { total: 2, passed: 1, skipped: 0, failed: 1 },
+      gatewayLogSentinels: [
+        {
+          kind: "live-quota-or-subscription",
+          verdict: "environment-blocked",
+          owner: "environment",
+          line: 12,
+          text: "OpenAI quota exceeded",
+        },
+      ],
+      scenarios: [
+        { name: "quota", status: "pass" },
+        { name: "unrelated-drift", status: "fail" },
+      ],
+    });
+
+    const report = await buildLiveSuiteReport({ missingVerdict: "environment-blocked" });
+
+    expect(report.pass).toBe(false);
+    expect(report.counts).toMatchObject({ blocked: 0, unknown: 1 });
+    expect(report.lanes[0]).toMatchObject({ status: "unknown" });
+    expect(report.lanes[0]?.details).toContain("suite also reports failures");
+  });
+
+  it("classifies product and plugin gateway sentinels as known failing lanes", async () => {
+    await writeJson("live/qa-suite-summary.json", {
+      counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
+      scenarios: [
+        {
+          name: "plugin hook health sentinel",
+          status: "pass",
+          steps: [],
+          runtimeParity: {
+            scenarioId: "plugin-hook-health-sentinel",
+            drift: "none",
+            cells: {
+              openclaw: { status: "pass", sentinelFindings: [] },
+              codex: {
+                status: "pass",
+                sentinelFindings: [
+                  {
+                    kind: "plugin-hook-failure",
+                    verdict: "qa-harness-bug",
+                    owner: "plugin",
+                    productImpact: "P1",
+                    qaImpact: "P0",
+                    line: 4,
+                    text: "before_prompt_build hook failed",
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const report = await buildLiveSuiteReport();
+
+    expect(report.pass).toBe(true);
+    expect(report.globalPass).toBe(false);
+    expect(report.counts).toMatchObject({ failed: 1, unknown: 0 });
+    expect(report.lanes[0]).toMatchObject({
+      status: "fail",
+      verdict: "qa-harness-bug",
+    });
+  });
 
   it("treats corrupt artifacts as unknown instead of allowed missing lanes", async () => {
     const artifactPath = path.join(tempRoot, "live", "qa-suite-summary.json");
     await fs.mkdir(path.dirname(artifactPath), { recursive: true });
     await fs.writeFile(artifactPath, "{not-json", "utf8");
 
-    const report = await buildReport([
-      lane("corrupt", "live/qa-suite-summary.json", { missingVerdict: "environment-blocked" }),
-    ]);
+    const report = await buildLiveSuiteReport({ missingVerdict: "environment-blocked" });
 
-    expectUnknown(report, "artifact unreadable", { blocked: 0, unknown: 1 });
+    expect(report.pass).toBe(false);
+    expect(report.counts).toMatchObject({ blocked: 0, unknown: 1 });
+    expect(report.lanes[0]).toMatchObject({
+      status: "unknown",
+    });
+    expect(report.lanes[0]?.details).toContain("artifact unreadable");
   });
 
-  it.each([
-    ...(
+  it("treats schema-invalid suite artifacts as unknown", async () => {
+    await writeJson("live/qa-suite-summary.json", {});
+
+    const report = await buildLiveSuiteReport();
+
+    expect(report.pass).toBe(false);
+    expect(report.counts.unknown).toBe(1);
+    expect(report.lanes[0]?.details).toContain("missing counts.failed and scenarios[]");
+  });
+
+  it("treats empty suite artifacts as unknown", async () => {
+    await writeJson("live/qa-suite-summary.json", {
+      counts: { total: 0, passed: 0, skipped: 0, failed: 0 },
+      scenarios: [],
+    });
+
+    const report = await buildLiveSuiteReport({ failureVerdict: "qa-harness-bug" });
+
+    expect(report.pass).toBe(false);
+    expect(report.counts).toMatchObject({ failed: 0, unknown: 1 });
+    expect(report.lanes[0]).toMatchObject({ status: "unknown" });
+    expect(report.lanes[0]?.details).toContain("no executed scenarios");
+  });
+
+  it("treats suite count and scenario mismatches as unknown", async () => {
+    await writeJson("live/qa-suite-summary.json", {
+      counts: { total: 2, passed: 2, skipped: 0, failed: 0 },
+      scenarios: [
+        { name: "passing", status: "pass" },
+        { name: "stale-failure", status: "fail" },
+      ],
+    });
+
+    const report = await buildLiveSuiteReport({ failureVerdict: "qa-harness-bug" });
+
+    expect(report.pass).toBe(false);
+    expect(report.counts).toMatchObject({ failed: 0, unknown: 1 });
+    expect(report.lanes[0]).toMatchObject({ status: "unknown" });
+    expect(report.lanes[0]?.details).toContain("count/scenario mismatch");
+  });
+
+  it("treats impossible suite counts as unknown", async () => {
+    for (const [artifact, expectedDetail] of [
       [
-        [{}, "missing run.status"],
-        [{ status: "running" }, "still running"],
-        [{ status: "paused" }, "unsupported run.status=paused"],
-      ] as const
-    ).map(([run, detail]) =>
-      invalid({ run, counts: passedCounts, scenarios: [scenario("pass")] }, detail),
-    ),
-    invalid({}, "missing counts.failed and scenarios[]"),
-    invalid({ counts: suiteCounts(0, 0), scenarios: [] }, "no executed scenarios"),
-    invalid(
-      {
-        counts: suiteCounts(2, 2),
-        scenarios: [scenario("pass"), scenario("fail")],
-      },
-      "count/scenario mismatch",
-    ),
-    invalid(
-      { counts: passedCounts, scenarios: [scenario("error")] },
-      "unsupported non-pass status",
-    ),
-    invalid({ scenarios: [scenario("timeout")] }, "unsupported non-pass status"),
-    invalid(
-      {
-        counts: suiteCounts(2, 1, 0, 1),
-        gatewayLogSentinels: [environmentSentinel],
-        scenarios: [scenario("pass"), scenario("fail")],
-      },
-      "suite also reports failures",
-    ),
-    invalid({ counts: suiteCounts(1, -1) }, "counts.passed must be a non-negative"),
-    invalid({ counts: { total: 1, passed: 2, failed: 0 } }, "less than provided count sum"),
-    invalid(
-      { counts: suiteCounts(5, 2, 2) },
-      "does not match counts.passed+counts.failed+counts.skipped",
-    ),
-    invalid({}, "explicit pass signal", "runtime-parity-summary"),
-    invalid({ pass: true, canaries: [] }, "no canaries", "self-test-summary"),
-    invalid(
-      { pass: true, canaries: [{ id: "prompt-drift", detected: true }] },
-      "missing expected canaries",
-      "self-test-summary",
-    ),
-  ])("treats artifact %j as unknown: %s", async (artifact, detail, kind) => {
-    const report = await evaluate(
-      artifact,
-      {
-        failureVerdict: "qa-harness-bug",
-        missingVerdict: "environment-blocked",
-        ...(kind ? { kind } : {}),
-      },
-      true,
+        { counts: { total: 1, passed: -1, skipped: 0, failed: 0 } },
+        "counts.passed must be a non-negative safe integer",
+      ],
+      [
+        { counts: { total: 1, passed: 2, failed: 0 } },
+        "counts.total=1 is less than provided count sum=2",
+      ],
+      [
+        { counts: { total: 1, skipped: 2, failed: 0 } },
+        "counts.total=1 is less than provided count sum=2",
+      ],
+      [
+        { counts: { total: 5, passed: 2, skipped: 2, failed: 0 } },
+        "counts.total=5 does not match counts.passed+counts.failed+counts.skipped=4",
+      ],
+    ] as const) {
+      await writeJson("live/qa-suite-summary.json", artifact);
+
+      const report = await buildLiveSuiteReport({ failureVerdict: "qa-harness-bug" });
+
+      expect(report.pass).toBe(false);
+      expect(report.counts).toMatchObject({ failed: 0, unknown: 1 });
+      expect(report.lanes[0]).toMatchObject({ status: "unknown" });
+      expect(report.lanes[0]?.details).toContain(expectedDetail);
+    }
+  });
+
+  it("requires generic summary lanes to expose an explicit pass signal", async () => {
+    await writeJson("runtime/qa-runtime-parity-summary.json", {});
+
+    const report = await buildLaneReport(
+      lane("runtime-parity", "runtime/qa-runtime-parity-summary.json", {
+        kind: "runtime-parity-summary",
+      }),
     );
-    expectUnknown(report, detail, { failed: 0, unknown: 1 });
+
+    expect(report.pass).toBe(false);
+    expect(report.counts.unknown).toBe(1);
+    expect(report.lanes[0]?.details).toContain("explicit pass signal");
   });
 
   it("requires JSONL replay summaries to contain replayed user turns", async () => {
@@ -386,12 +647,13 @@ describe("qa confidence report", () => {
       ),
       [[full, empty], "replay turns=1, drifted transcripts=0", true],
     ] as const) {
-      const report = await evaluate(
-        { transcripts },
-        {
+      await writeJson("jsonl/qa-jsonl-replay-summary.json", { transcripts });
+
+      const report = await buildLaneReport(
+        lane("jsonl-expanded", "jsonl/qa-jsonl-replay-summary.json", {
           kind: "jsonl-replay-summary",
           failureVerdict: "fixture-bug",
-        },
+        }),
       );
 
       expect(report.pass).toBe(expectedPass);
@@ -400,39 +662,65 @@ describe("qa confidence report", () => {
     }
   });
 
+  it("requires confidence self-test summaries to contain every seeded canary", async () => {
+    for (const [artifact, expectedDetail] of [
+      [{ pass: true, canaries: [] }, "no canaries"],
+      [
+        { pass: true, canaries: [{ id: "prompt-drift", detected: true }] },
+        "missing expected canaries",
+      ],
+    ] as const) {
+      await writeJson("confidence-self-test/qa-confidence-self-test-summary.json", artifact);
+
+      const report = await buildLaneReport(
+        lane("confidence-self-test", "confidence-self-test/qa-confidence-self-test-summary.json", {
+          kind: "self-test-summary",
+          failureVerdict: "qa-harness-bug",
+        }),
+      );
+
+      expect(report.pass).toBe(false);
+      expect(report.counts).toMatchObject({ failed: 0, unknown: 1 });
+      expect(report.lanes[0]).toMatchObject({ status: "unknown" });
+      expect(report.lanes[0]?.details).toContain(expectedDetail);
+    }
+  });
+
   it("accepts a classified failing lane without treating it as unknown", async () => {
-    const report = await evaluate(
-      {
-        transcripts: [
-          {
-            transcriptPath: "curated.jsonl",
-            userTurnCount: 2,
-            cells: { openclaw: [{}, {}], codex: [{}, {}] },
-            drift: ["none", "tool-result-shape"],
-            firstDriftAtTurn: 2,
-          },
-        ],
-      },
-      {
+    await writeJson("jsonl/qa-jsonl-replay-summary.json", {
+      transcripts: [
+        {
+          transcriptPath: "curated.jsonl",
+          userTurnCount: 2,
+          cells: { openclaw: [{}, {}], codex: [{}, {}] },
+          drift: ["none", "tool-result-shape"],
+          firstDriftAtTurn: 2,
+        },
+      ],
+    });
+
+    const report = await buildLaneReport(
+      lane("jsonl-expanded", "jsonl/qa-jsonl-replay-summary.json", {
         kind: "jsonl-replay-summary",
         failureVerdict: "fixture-bug",
         productImpact: "P4",
         qaImpact: "P1",
+      }),
+      {
+        strictZeroUnknowns: true,
+        generatedAt: "2026-05-12T00:00:00.000Z",
       },
     );
 
-    expect(report).toMatchObject({
-      pass: true,
-      globalPass: false,
-      counts: { failed: 1, unknown: 0 },
-      lanes: [
-        {
-          status: "fail",
-          verdict: "fixture-bug",
-          productImpact: "P4",
-          qaImpact: "P1",
-        },
-      ],
+    expect(report.pass).toBe(true);
+    expect(report.globalPass).toBe(false);
+    expect(report.counts.failed).toBe(1);
+    expect(report.counts.unknown).toBe(0);
+    expect(report.lanes[0]).toMatchObject({
+      status: "fail",
+      verdict: "fixture-bug",
+      productImpact: "P4",
+      qaImpact: "P1",
     });
   });
 
@@ -443,7 +731,16 @@ describe("qa confidence report", () => {
 
     expect(JSON.parse(await fs.readFile(summaryPath, "utf8"))).toEqual(summary);
     expect(await fs.readFile(reportPath, "utf8")).toContain("- Verdict: pass");
-    const report = await evaluate(summary, { kind: "self-test-summary" }, true);
-    expect(report.pass).toBe(true);
+    expect(summary.pass).toBe(true);
+    expect(summary.canaries.map((canary) => canary.id)).toEqual([
+      "prompt-drift",
+      "tool-description-schema-drift",
+      "runtime-tool-call-drop",
+      "tool-result-mismatch",
+      "failure-mode-drift",
+      "token-efficiency-regression",
+      "jsonl-replay-ordering-drift",
+    ]);
+    expect(summary.canaries.every((canary) => canary.detected)).toBe(true);
   });
 });

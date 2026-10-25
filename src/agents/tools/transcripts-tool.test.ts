@@ -306,6 +306,7 @@ describe("transcripts tool account ownership", () => {
       },
       owner,
     );
+    expect(h.resolveAccountId.mock.calls[0]?.[0].source.accountId).toBe("account-a");
     expect(importTranscript.mock.calls[0]?.[0].session.source.accountId).toBe("account-a");
     const entries = await h.store.listSessionEntries();
     expect(entries).toHaveLength(1);
@@ -323,6 +324,7 @@ describe("transcripts tool account ownership", () => {
       channelId: "channel-b",
     });
     expect(h.start.mock.calls[0]?.[0].session.source.accountId).toBe("account-a");
+    expect(h.resolveAccountId.mock.calls[0]?.[0].source.accountId).toBe("account-a");
     expect(await h.store.readSession("account-bound")).toMatchObject({
       source: { accountId: "account-a" },
       metadata: { agentId: "main" },
@@ -362,6 +364,7 @@ describe("transcripts tool account ownership", () => {
     ).rejects.toThrow(
       'transcripts provider discord-voice could not use trusted account "account-a"',
     );
+    expect(h.resolveAccountId).toHaveBeenCalledOnce();
     expect(h.start).not.toHaveBeenCalled();
     expect(await h.store.readSession("invalid-owner")).toBeUndefined();
   });

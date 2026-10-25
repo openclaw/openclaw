@@ -628,6 +628,11 @@ describe("web_fetch", () => {
         length: first.text?.length,
         rawLength: "OpenClaw-Test-UA-A".length,
       });
+      expect(first.externalContent).toEqual({
+        untrusted: true,
+        source: "web_fetch",
+        wrapped: true,
+      });
       expect(first.externalContent).not.toHaveProperty("provider");
       expect(first.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
       for (const key of ["title", "warning", "spill"]) {

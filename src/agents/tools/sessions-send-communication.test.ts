@@ -98,7 +98,7 @@ function operation(source = endpoint("source"), target = endpoint("target")) {
   const callGateway = vi.mocked(callAgentToolGatewayRequest);
   return { config: state.config, source, target, message: "exact peer message", callGateway };
 }
-function agentRequest(input: ReturnType<typeof operation>, extra: Record<string, unknown> = {}) {
+function agentRequest(input: Input, extra: Record<string, unknown> = {}) {
   return {
     method: "agent" as const,
     params: {

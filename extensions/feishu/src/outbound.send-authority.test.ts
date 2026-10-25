@@ -116,7 +116,7 @@ async function sendMedia(ctx: SendContext) {
 }
 
 const sendRoutes = ["native card", "payload card", "send", "thread-reply"] as const;
-function sendRoute(route: (typeof sendRoutes)[number], ctx: SendContext) {
+async function sendRoute(route: (typeof sendRoutes)[number], ctx: SendContext) {
   if (route === "native card") {
     return preferredTextSend()({ ...ctx, text: CARD });
   }

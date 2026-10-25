@@ -83,7 +83,7 @@ function createCronService(storePath: string) {
   });
 }
 
-function mockGateway(call: ReturnType<typeof vi.fn>) {
+function mockGateway(call: typeof gatewayModule.callGatewayTool) {
   const spy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(call);
   onTestFinished(() => spy.mockRestore());
 }
