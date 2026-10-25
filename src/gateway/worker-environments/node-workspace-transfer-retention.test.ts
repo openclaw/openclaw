@@ -23,8 +23,8 @@ import {
   startNodeWorkspaceTransferTestServer,
   transferOwner,
 } from "./node-workspace-transfer.test-support.js";
+import { memoryWorkspaceJournal } from "./tunnel.test-support.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
-import type { WorkerWorkspaceReconciliationJournal } from "./workspace-manifest.js";
 import { ConcurrentWorkspacePathError } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -101,23 +101,6 @@ async function runtimeFixture(root: string, scope: string, credentialExpiry?: ()
   };
 }
 
-function reconciliationJournal(onCommit: (ref: string) => void) {
-  let pending: WorkerWorkspaceReconciliationJournal | undefined;
-  return {
-    load: async () => pending,
-    begin: async (next: WorkerWorkspaceReconciliationJournal) => {
-      pending = next;
-    },
-    commit: async (ref: string) => {
-      onCommit(ref);
-      pending = undefined;
-    },
-    abort: async () => {
-      pending = undefined;
-    },
-  };
-}
-
 async function expectGit(workspace: string, queries: Array<[string[], string]>) {
   for (const [args, expected] of queries) {
     expect((await requireGit(workspace, args)).trim()).toBe(expected);
@@ -180,7 +163,7 @@ it.each([
       // Keep unowned targets here for the node reconciliation collision boundary.
       await createStagedInputOwnershipFixture(remote);
       let baseManifestRef = synced.manifestRef;
-      const journal = reconciliationJournal((ref) => {
+      const journal = memoryWorkspaceJournal((ref) => {
         baseManifestRef = ref;
       });
       const reconcile = async (claimId: string) => {
@@ -425,7 +408,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
     await restored.validateRestoredWorkspace();
 
     let accepted: string | undefined;
-    const journal = reconciliationJournal((ref) => {
+    const journal = memoryWorkspaceJournal((ref) => {
       accepted = ref;
     });
     const request = {

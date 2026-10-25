@@ -223,32 +223,21 @@ it.each(["connection close", "token release"] as const)(
   async (release) => {
     const { observe, registry, streamed, waitInvoked } = desktopHarness(true);
     const controller = new AbortController();
-    const requester = desktopRequester(controller);
     const closeKeeper = vi.fn();
     const explicitRelease = release === "token release";
     const count = explicitRelease ? 20 : 8;
-    if (explicitRelease) {
-      await registry.activate({ sourceKey: record.environmentId, ownerEpoch: record.ownerEpoch });
-    }
-    const keeper = explicitRelease
-      ? registry.attachObserver(record.environmentId, {
-          ownerEpoch: record.ownerEpoch,
-          control: true,
-          close: closeKeeper,
-        })
-      : undefined;
-    if (explicitRelease) {
-      expect(keeper).toBeDefined();
-    }
+    await registry.activate({ sourceKey: record.environmentId, ownerEpoch: record.ownerEpoch });
+    const keeper = registry.attachObserver(record.environmentId, {
+      ownerEpoch: record.ownerEpoch,
+      control: true,
+      close: closeKeeper,
+    });
+    expect(keeper).toBeDefined();
     try {
       for (let index = 0; index < count; index += 1) {
         const connection = explicitRelease ? controller : new AbortController();
-        const pending = observe({
-          control: explicitRelease,
-          requester: explicitRelease
-            ? requester
-            : { signal: connection.signal, isCurrent: () => !connection.signal.aborted },
-        });
+        const requester = desktopRequester(connection);
+        const pending = observe({ control: explicitRelease, requester });
         await waitInvoked(index + 1);
         const stream = streamed.attachNext();
         const observed = await pending;
@@ -260,23 +249,19 @@ it.each(["connection close", "token release"] as const)(
           expect(await observeBridge.releaseDesktopObserverToken(observed.wsPath, requester)).toBe(
             false,
           );
-          expect(closeKeeper).not.toHaveBeenCalled();
         } else {
           connection.abort();
         }
       }
-      if (explicitRelease) {
-        expect(controller.signal.aborted).toBe(false);
-        expect(streamed.streams.every((stream) => stream.destroyed)).toBe(true);
-      } else {
-        await support.waitForFast(() =>
-          expect(streamed.streams.filter((stream) => !stream.destroyed)).toHaveLength(0),
-        );
-        const reopened = observe();
-        await waitInvoked(9);
-        streamed.attachNext();
-        await expect(reopened).resolves.toMatchObject({ transport: "rfb" });
-      }
+      expect(controller.signal.aborted).toBe(false);
+      await support.waitForFast(() =>
+        expect(streamed.streams.filter((stream) => !stream.destroyed)).toHaveLength(0),
+      );
+      expect(closeKeeper).not.toHaveBeenCalled();
+      const reopened = observe();
+      await waitInvoked(count + 1);
+      streamed.attachNext();
+      await expect(reopened).resolves.toMatchObject({ transport: "rfb" });
     } finally {
       controller.abort();
       keeper?.release();

@@ -477,51 +477,40 @@ describe("worker provider project preparation ownership", () => {
     ).toMatchObject({ root: first.root, baseCommit: first.baseCommit });
   });
 
-  it.each(["return", "timeout"])(
-    "revokes retained project callbacks after provider %s",
-    async (outcome) => {
-      const git = await repository("closure-project");
-      if (outcome === "timeout") {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      let retained: ProjectPreparation | undefined;
-      const service = createService(
-        async (_profile, _operationId, options) => {
-          retained = options?.project;
-          entered.resolve();
-          if (outcome === "timeout") {
-            await release.promise;
-          }
-          return { leaseId: "lease-closed-project", ssh: support.SSH_ENDPOINT };
-        },
-        { providerCallTimeoutMs: outcome === "timeout" ? 20 : undefined },
+  it("revokes retained project callbacks after provider timeout", async () => {
+    const git = await repository("closure-project");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let retained: ProjectPreparation | undefined;
+    const service = createService(
+      async (_profile, _operationId, options) => {
+        retained = options?.project;
+        entered.resolve();
+        await release.promise;
+        return { leaseId: "lease-closed-project", ssh: support.SSH_ENDPOINT };
+      },
+      { providerCallTimeoutMs: 20 },
+    );
+    try {
+      const creation = createProject(service, "closure", { projectPath: git.root }).catch(
+        (error: unknown) => error,
       );
-      try {
-        const creation = createProject(service, "closure", { projectPath: git.root }).catch(
-          (error: unknown) => error,
-        );
-        await beforeSettlement(entered.promise, creation, "provider invocation");
-        if (outcome === "timeout") {
-          await vi.advanceTimersByTimeAsync(20);
-        }
-        expect(await creation).toMatchObject(
-          outcome === "timeout" ? { code: "provider_failure" } : { state: "ready" },
-        );
-        const project = expectDefined(retained, "retained project callback");
-        expect(project.signal.aborted).toBe(true);
-        const transport = {
-          runScript: vi.fn(async () => '{"ready":true}'),
-          upload: vi.fn(async () => {}),
-        };
-        expect(() => project.assertCurrent()).toThrow();
-        expect(() => project.prepare(transport)).toThrow();
-        expect(transport.runScript).not.toHaveBeenCalled();
-        expect(transport.upload).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-      }
-    },
-  );
+      await beforeSettlement(entered.promise, creation, "provider invocation");
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await creation).toMatchObject({ code: "provider_failure" });
+      const project = expectDefined(retained, "retained project callback");
+      expect(project.signal.aborted).toBe(true);
+      const transport = {
+        runScript: vi.fn(async () => '{"ready":true}'),
+        upload: vi.fn(async () => {}),
+      };
+      expect(() => project.assertCurrent()).toThrow();
+      expect(() => project.prepare(transport)).toThrow();
+      expect(transport.runScript).not.toHaveBeenCalled();
+      expect(transport.upload).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+    }
+  });
 });

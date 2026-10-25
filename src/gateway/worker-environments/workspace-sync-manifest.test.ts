@@ -272,7 +272,8 @@ describe("remote workspace manifest script", () => {
     await fs.chmod(path.join(workspace, "parent"), 0o700);
   });
 
-  it.each(["begun", "applied", "committed"] as const)(
+  // The in-flight applied outcome is covered by workspace-accepted-sync.test.ts.
+  it.each(["begun", "committed"] as const)(
     "reports strict settlement for %s transactions",
     async (outcome) => {
       const { root, workspace, runTransaction, begin, stage, ok } = await transactionWorkspace(
@@ -284,9 +285,7 @@ describe("remote workspace manifest script", () => {
       } else {
         await stage(nonce, { "result.txt": `${outcome}\n` });
         await ok("apply", nonce);
-        if (outcome === "committed") {
-          await ok("commit", nonce);
-        }
+        await ok("commit", nonce);
       }
       expect(await runTransaction("settle", nonce)).toMatchObject({
         code: 0,

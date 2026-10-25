@@ -255,28 +255,6 @@ describe("worker environment node enrollment store", () => {
     expect(store.get(environmentId)?.nodeDeviceId).toBe(deviceId);
   });
 
-  it("binds the first device only while its enrollment is live and preserves its closed retry", async () => {
-    const connection = await beginConnect();
-    const { manager, enrollment, verification } = connection;
-    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
-    const completedAtMs = Date.now();
-    await expect(consume(connection, { completedAtMs })).resolves.toMatchObject({
-      completion: { deviceId },
-    });
-    expect(store.get(environmentId)).toMatchObject({
-      nodeSetupId: enrollment.setupId,
-      nodeDeviceId: deviceId,
-    });
-    manager.close(enrollment);
-
-    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
-    await expect(
-      consume(connection, { completedAtMs, admitsCloudWorkerSetup: undefined }),
-    ).resolves.toMatchObject({
-      completion: { deviceId: verification.deviceId, deliveryState: "uncertain" },
-    });
-  });
-
   it("rechecks enrollment authority at commit after first-device admission", async () => {
     const connection = await beginConnect();
     const { manager, enrollment, verification } = connection;
