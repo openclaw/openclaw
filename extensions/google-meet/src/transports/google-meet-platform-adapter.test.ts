@@ -49,7 +49,24 @@ function microphoneSelect(labels: string[]) {
   };
 }
 
-async function runAudioStatus(label: string, inputAvailable = true) {
+function sinkMedia(rejects = false) {
+  const media = {
+    sinkId: "",
+    setSinkId: vi.fn(async (value: string) => {
+      if (rejects) {
+        throw new Error("AbortError: The operation could not be performed");
+      }
+      media.sinkId = value;
+    }),
+  };
+  return media;
+}
+
+async function runAudioStatus(
+  label: string,
+  inputAvailable = true,
+  { extraMedia = [], rejects = false }: { extraMedia?: unknown[]; rejects?: boolean } = {},
+) {
   let muted = inputAvailable;
   const microphone = {
     click: vi.fn(() => {
@@ -61,12 +78,7 @@ async function runAudioStatus(label: string, inputAvailable = true) {
   const select = microphoneSelect(
     inputAvailable ? ["MacBook Microphone", label] : ["MacBook Microphone"],
   );
-  const media = {
-    sinkId: "",
-    setSinkId: vi.fn(async (value: string) => {
-      media.sinkId = value;
-    }),
-  };
+  const media = sinkMedia(rejects);
   const buttons = [microphone, pageNode("Leave call")];
   const document = {
     querySelector(selector: string) {
@@ -74,7 +86,7 @@ async function runAudioStatus(label: string, inputAvailable = true) {
     },
     querySelectorAll(selector: string) {
       return selector === "audio, video"
-        ? [media]
+        ? [...extraMedia, media]
         : selector.includes("button") || selector.includes('[role="')
           ? buttons
           : [];
@@ -154,4 +166,33 @@ it("parses input-route health and retries until both routes are ready", () => {
   expect(adapter.shouldRetryJoinStatus?.(pending)).toBe(true);
   expect(ready({ ...pending, audioOutputRouted: true, manualAction: undefined })).toBe(true);
   expect(ready(pending)).toBe(false);
+});
+
+it("routes the remaining Meet media when one element rejects setSinkId", async () => {
+  const video = sinkMedia(true);
+  const { health, media } = await runAudioStatus("BlackHole 2ch", true, { extraMedia: [video] });
+  expect(video.setSinkId).toHaveBeenCalledWith("output-1");
+  expect(media.sinkId).toBe("output-1");
+  expect(health).toMatchObject({
+    audioOutputRouted: true,
+    audioOutputRouteError: "AbortError: The operation could not be performed",
+  });
+  expect(health.notes).toContain(
+    "1 Meet media element(s) rejected the speaker route: AbortError: The operation could not be performed",
+  );
+  expect(ready(health)).toBe(true);
+});
+
+it("keeps the speaker route blocked when every Meet media element rejects setSinkId", async () => {
+  const video = sinkMedia(true);
+  const { health, media } = await runAudioStatus("BlackHole 2ch", true, {
+    extraMedia: [video],
+    rejects: true,
+  });
+  expect(media.setSinkId).toHaveBeenCalledWith("output-1");
+  expect(health).toMatchObject({ audioOutputRouted: false });
+  expect(health.notes).toContain(
+    "Could not route Meet speaker output to the virtual audio device: AbortError: The operation could not be performed",
+  );
+  expect(ready(health)).toBe(false);
 });
