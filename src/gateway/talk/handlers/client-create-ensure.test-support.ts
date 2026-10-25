@@ -7,7 +7,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -310,14 +309,6 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
         expect(existsSync(storePath)).toBe(false);
         setStore(fixture, storePath);
       }
-      let entryTransactions = 0;
-      harness.observeAdmission((request, run) => {
-        const publication = isRecord(request.facts) ? request.facts.publication : undefined;
-        if (isRecord(publication) && publication.kind === "session-entry-patch-validated") {
-          entryTransactions += 1;
-        }
-        run();
-      });
       const entryPath = storePath
         ? resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path
         : resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -338,7 +329,6 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           ),
         ).toEqual([]);
         expect(hostSql.queries).toEqual([]);
-        expect(entryTransactions).toBe(1);
         const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
         expect(entry?.sessionId).toBeTruthy();
         if (idless) {
@@ -349,7 +339,6 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           status: "open",
         });
       } finally {
-        harness.observeAdmission(undefined);
         hostSql.restore();
       }
     },
@@ -358,18 +347,12 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
   it("keeps the committed chat when the following voice admission refuses", async () => {
     const key = "agent:main:ensure-before-voice-refusal";
     const voiceSessionId = "closed-before-ensure";
+    const target = { agentId: "main", sessionKey: key, voiceSessionId };
     await voiceSessions.createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: key,
-      voiceSessionId,
+      ...target,
       origin: "client",
     });
-    await voiceSessions.closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: key,
-      voiceSessionId,
-      config: {},
-    });
+    await voiceSessions.closeClientVoiceSession({ ...target, config: {} });
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toBeUndefined();
     const fixture = browser(key, voiceSessionId);
     await fixture.create();

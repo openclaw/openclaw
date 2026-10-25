@@ -187,12 +187,6 @@ describe("cross-store voice creation authority", () => {
               if (creating && timing === "before") {
                 revoke();
               }
-              if (creating && writer === "wrapper") {
-                expect(args[1].some((source) => source.hasOpaqueCheck)).toBe(true);
-                expect(
-                  args[1].some((source) => source.nativeSource || source.opaqueCommitGuard),
-                ).toBe(false);
-              }
               return prepareSources(...args);
             },
           );

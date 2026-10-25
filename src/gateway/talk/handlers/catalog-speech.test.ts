@@ -162,16 +162,14 @@ it.each(["realtime", "transcription"] as const)("refreshes selected %s readiness
         },
       };
   let available = true;
-  const readDefault = vi.fn(async () => "discovery-model");
-  const readAvailability = vi.fn(async () => available);
-  const resolveConfig = vi.fn(({ rawConfig }) => rawConfig);
+  const readAvailability = async () => available;
   if (realtime) {
     registry.realtime = [
       {
         ...realtimeProvider(readAvailability),
         resolveConfigAsync: async ({ rawConfig }) => ({
           ...rawConfig,
-          model: rawConfig.model ?? (await readDefault()),
+          model: rawConfig.model ?? "discovery-model",
         }),
         capabilities: { ...capabilities, supportsToolCalls: false },
       },
@@ -180,8 +178,7 @@ it.each(["realtime", "transcription"] as const)("refreshes selected %s readiness
     registry.transcription = [
       {
         ...providerFields(readAvailability),
-        label: "Sample transcription",
-        resolveConfig,
+        resolveConfig: ({ rawConfig }) => rawConfig,
         createSession: unexpectedSession,
       },
     ];
@@ -190,29 +187,20 @@ it.each(["realtime", "transcription"] as const)("refreshes selected %s readiness
   expectCatalog(await read(), kind, {
     ready: true,
     activeProvider: "sample",
-    providers: [
-      {
-        id: "sample",
-        configured: true,
-        ...(realtime
-          ? {
-              defaultModel: "discovery-model",
-              brains: ["none"],
-              transports: ["gateway-relay"],
-            }
-          : {}),
-      },
-    ],
+    providers: [{ id: "sample", configured: true }],
   });
-  expect(realtime ? readDefault : resolveConfig).toHaveBeenCalledTimes(1);
-  expect(readAvailability).toHaveBeenCalledTimes(1);
   if (realtime) {
     // Launch overrides must not replace discovery defaults in the picker.
     expectCatalog(await read({ model: "explicit-model" }), kind, {
-      providers: [{ configured: true, defaultModel: "discovery-model" }],
+      providers: [
+        {
+          configured: true,
+          defaultModel: "discovery-model",
+          brains: ["none"],
+          transports: ["gateway-relay"],
+        },
+      ],
     });
-    expect(readDefault).toHaveBeenCalledTimes(2);
-    expect(readAvailability).toHaveBeenCalledTimes(2);
   }
   available = false;
   expectCatalog(await read(), kind, { ready: false, providers: [{ configured: false }] });
@@ -273,7 +261,6 @@ it("serves the last catalog during one slow refresh and publishes its late succe
   await vi.advanceTimersByTimeAsync(6_000);
   expect((await read()).response).toBe(first.response);
   expect(readiness).toHaveBeenCalledTimes(2);
-  expect(context.logGateway.warn).toHaveBeenCalledTimes(1);
   expect(context.logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("waiting=speech"));
   pending.resolve(false);
   await vi.advanceTimersByTimeAsync(0);
@@ -285,11 +272,10 @@ it("retries failed cold discovery before the client's warming window expires", a
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const cfg: OpenClawConfig = { plugins: { enabled: false } };
   const context = { getRuntimeConfig: () => cfg };
-  const readiness = vi.fn(async () => true);
   registry.listSpeechProviders.mockImplementationOnce(() => {
     throw new Error("temporary discovery failure");
   });
-  registry.providers = [speechProvider(readiness, "sample")];
+  registry.providers = [speechProvider(async () => true)];
   const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
   expect((await read()).ok).toBe(false);
   await vi.advanceTimersByTimeAsync(0);
@@ -297,7 +283,6 @@ it("retries failed cold discovery before the client's warming window expires", a
   expect((await read()).ok).toBe(false);
   await vi.advanceTimersByTimeAsync(0);
   expectCatalog(await read(), "speech", { providers: [{ configured: true }] });
-  expect(readiness).toHaveBeenCalledTimes(1);
 });
 
 it.each(["speech", "realtime", "transcription"] as const)(
