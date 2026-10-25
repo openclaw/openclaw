@@ -533,6 +533,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
       "fails closed when a multi-participant set does not identify the transport actor",
       [voteRecord("+15559999998"), voteRecord("+15559999999", DENY_OPTION)],
       null,
+      undefined,
     ],
     [
       "accepts a complete multi-record set for one participant alias",
@@ -541,11 +542,13 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
         voteRecord("e:active-account-alias@example.com", DENY_OPTION, "removed"),
       ],
       "allow-once",
+      undefined,
     ],
     [
       "fails closed when the actor selected multiple approval decisions",
       [voteRecord(HANDLE), voteRecord(HANDLE, DENY_OPTION)],
       null,
+      undefined,
     ],
   ] as const)("%s", async (_name, votes, decision, vote) => {
     expect(await bind()).toBe(true);
