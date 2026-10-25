@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCatalogListResult } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -163,39 +163,31 @@ describe("sidebar session feedback", () => {
         }
         return {};
       });
-      const gateway = createGatewayHarness(createTestGatewayClient(request));
-      gateway.publish({
+      const { gateway, publish } = createGatewayHarness(createTestGatewayClient(request));
+      publish({
         selfUser: { id: viewer, name: "Ada" },
         hello: {
-          ...gateway.gateway.snapshot.hello!,
+          ...gateway.snapshot.hello!,
           features: {
-            methods: [
-              ...gateway.gateway.snapshot.hello!.features!.methods!,
-              "sessions.groups.list",
-            ],
+            methods: [...gateway.snapshot.hello!.features!.methods!, "sessions.groups.list"],
           },
         },
       });
       patchSettings({
-        gatewayUrl: gateway.gateway.connection.gatewayUrl,
+        gatewayUrl: gateway.connection.gatewayUrl,
         sidebarAgentsMode: "roster",
       });
-      storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, viewer, {
+      storeSidebarSessionOwnerFilter(gateway.connection.gatewayUrl, viewer, {
         ownerId: involvingMe ? null : viewer,
         involvingMe,
       });
-      const sessions = createTestSessionCapability(gateway.gateway);
-      const { sidebar, context, provider } = await mountSidebar(
-        gateway.gateway,
-        sessions,
-        "panel",
-        {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main", name: "Harbor" }],
-        },
-      );
+      const sessions = createTestSessionCapability(gateway);
+      const { sidebar, context } = await mountSidebar(gateway, sessions, "panel", {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main", name: "Harbor" }],
+      });
       const plugin = registerSessionPluginAction(context, {
         id: "review",
         label: "Review session",
@@ -203,6 +195,7 @@ describe("sidebar session feedback", () => {
         resolve: ({ session }) => ({ label: `Review ${session?.label}` }),
         run: async () => {},
       });
+      onTestFinished(() => plugin.lifetime.abort());
       const filteredSidebarReads = () =>
         request.mock.calls.flatMap(([method, raw]) => {
           const params = raw as Record<string, unknown> | undefined;
@@ -221,63 +214,56 @@ describe("sidebar session feedback", () => {
         );
         expect(sessionKeys(sidebar)).toEqual([]);
       };
-      try {
-        sidebar.connected = true;
-        sidebar.setSessionSortMode("updated");
-        await settleLitElement(sidebar);
-        await vi.waitFor(expectRoster);
-        expect.soft(filteredSidebarReads()).toEqual([]);
-        await vi.waitFor(() => expect(sessions.state.groups).toEqual(groups));
-        expect.soft(sidebar.knownSessionGroups()).toEqual(groups);
-        expect.soft(sidebar.knownSectionOrder()).toEqual(sectionOrder);
+      sidebar.connected = true;
+      sidebar.setSessionSortMode("updated");
+      await settleLitElement(sidebar);
+      await vi.waitFor(expectRoster);
+      expect.soft(filteredSidebarReads()).toEqual([]);
+      await vi.waitFor(() => expect(sessions.state.groups).toEqual(groups));
+      expect.soft(sidebar.knownSessionGroups()).toEqual(groups);
+      expect.soft(sidebar.knownSectionOrder()).toEqual(sectionOrder);
 
-        const menuSession = sidebar.findSidebarMenuSessionByKey("agent:main:mine");
-        expect(menuSession).toBeDefined();
-        sidebar.sidebarMenus.openSessionMenu(menuSession!, 0, 0);
-        await settleLitElement(sidebar);
-        const menu = await sessionMenu(sidebar);
-        expect.soft(menuItemLabels(menu)).toContain("Review My project");
-        const groupMenu = await openSubmenu(menu, "Move to group");
-        expect.soft(menuItemLabels(groupMenu)).toEqual(expect.arrayContaining(groups));
-        sidebar.sidebarMenus.closeSessionMenu();
+      const menuSession = sidebar.findSidebarMenuSessionByKey("agent:main:mine");
+      expect(menuSession).toBeDefined();
+      sidebar.sidebarMenus.openSessionMenu(menuSession!, 0, 0);
+      await settleLitElement(sidebar);
+      const menu = await sessionMenu(sidebar);
+      expect.soft(menuItemLabels(menu)).toContain("Review My project");
+      const groupMenu = await openSubmenu(menu, "Move to group");
+      expect.soft(menuItemLabels(groupMenu)).toEqual(expect.arrayContaining(groups));
+      sidebar.sidebarMenus.closeSessionMenu();
 
-        sidebar.sidebarAgentsMode = "chip";
-        await settleLitElement(sidebar);
-        await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual(expectedKeys));
-        expect(filteredSidebarReads().length).toBeGreaterThan(0);
-        request.mockClear();
+      sidebar.sidebarAgentsMode = "chip";
+      await settleLitElement(sidebar);
+      await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual(expectedKeys));
+      expect(filteredSidebarReads().length).toBeGreaterThan(0);
+      request.mockClear();
 
-        sidebar.sidebarAgentsMode = "roster";
-        await settleLitElement(sidebar);
-        await vi.waitFor(expectRoster);
-        expect(sidebar.sidebarSessionOwnerFilter()).toEqual({
-          ownerId: involvingMe ? null : viewer,
-          involvingMe,
-        });
-        expect.soft(filteredSidebarReads()).toEqual([]);
+      sidebar.sidebarAgentsMode = "roster";
+      await settleLitElement(sidebar);
+      await vi.waitFor(expectRoster);
+      expect(sidebar.sidebarSessionOwnerFilter()).toEqual({
+        ownerId: involvingMe ? null : viewer,
+        involvingMe,
+      });
+      expect.soft(filteredSidebarReads()).toEqual([]);
 
-        failRoster = true;
-        await rosterActivityStore(context).refresh();
-        await settleLitElement(sidebar);
-        expect(sidebar.querySelector(".sidebar-agent-roster__link")).not.toBeNull();
-        failRoster = false;
-        await rosterActivityStore(context).refresh();
-        await settleLitElement(sidebar);
-        expect(sidebar.querySelector(".sidebar-agent-roster__link")).toBeNull();
-        expectRoster();
+      failRoster = true;
+      await rosterActivityStore(context).refresh();
+      await settleLitElement(sidebar);
+      expect(sidebar.querySelector(".sidebar-agent-roster__link")).not.toBeNull();
+      failRoster = false;
+      await rosterActivityStore(context).refresh();
+      await settleLitElement(sidebar);
+      expect(sidebar.querySelector(".sidebar-agent-roster__link")).toBeNull();
+      expectRoster();
 
-        sidebar.setSessionOwnerFilter(null);
-        sidebar.sidebarAgentsMode = "chip";
-        await settleLitElement(sidebar);
-        await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual(rows.map((row) => row.key)));
-        expect(sidebar.knownSessionGroups()).toEqual(groups);
-        expect(sidebar.knownSectionOrder()).toEqual(sectionOrder);
-      } finally {
-        plugin.lifetime.abort();
-        provider.remove();
-        context.connectionBootstrap.reset();
-        sessions.dispose();
-      }
+      sidebar.setSessionOwnerFilter(null);
+      sidebar.sidebarAgentsMode = "chip";
+      await settleLitElement(sidebar);
+      await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual(rows.map((row) => row.key)));
+      expect(sidebar.knownSessionGroups()).toEqual(groups);
+      expect(sidebar.knownSectionOrder()).toEqual(sectionOrder);
     },
   );
 
@@ -346,6 +332,7 @@ describe("sidebar session feedback", () => {
 
   it("waits for catalog hydration, refresh, and hidden pages before explaining an empty list", async () => {
     const { sidebar, request, enableCatalog, reply } = await emptyCatalogFixture();
+    const data = sidebar.sessionData;
     let pending = createDeferred<SessionsCatalogListResult>();
     reply(() => pending.promise);
     enableCatalog();
@@ -356,19 +343,19 @@ describe("sidebar session feedback", () => {
     const initialScan = pending;
     pending = createDeferred<SessionsCatalogListResult>();
     initialScan.resolve(catalogPage([], "fixture-next"));
-    await vi.waitFor(() => expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(1));
+    await vi.waitFor(() => expect(data.loadingMoreSessionCatalogIds.size).toBe(1));
     await expectHint(sidebar);
     pending.resolve(catalogPage([]));
     await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
     pending = createDeferred<SessionsCatalogListResult>();
-    const refresh = sidebar.sessionData.refreshSessionCatalogs();
+    const refresh = data.refreshSessionCatalogs();
     await expectHint(sidebar);
     const catalogs = matchingCatalog().catalogs;
     pending.resolve({ catalogs });
     await refresh;
     await vi.waitFor(() => expect(sidebar.textContent).toContain("Catalog conversation"));
     expect(sidebar.textContent).not.toContain(hint);
-    sidebar.sessionData.sessionCatalogs = catalogs.map((catalog) =>
+    data.sessionCatalogs = catalogs.map((catalog) =>
       Object.assign({}, catalog, {
         hosts: catalog.hosts.map((host) =>
           Object.assign({}, host, { sessions: [], nextCursor: "fixture-next" }),
@@ -381,27 +368,26 @@ describe("sidebar session feedback", () => {
 
   it("settles hidden discovery after a catalog-pending page completes empty", async () => {
     const { sidebar, enableCatalog, reply } = await emptyCatalogFixture();
+    const data = sidebar.sessionData;
     const pendingPage = catalogPage([]);
     pendingPage.catalogs[0]!.pending = true;
     pendingPage.catalogs[0]!.hosts = [];
     let page = 0;
     reply(async () => (page++ === 0 ? catalogPage([], "fixture-next") : pendingPage));
     enableCatalog();
-    await vi.waitFor(() => expect(sidebar.sessionData.sessionCatalogs[0]?.pending).toBe(true));
-    await vi.waitFor(() =>
-      expect(sidebar.sessionData.sessionCatalogLive.requestGeneration).toBeNull(),
-    );
-    expect(areSessionCatalogsSettled(sidebar.sessionData)).toBe(false);
-    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("fixture-next");
+    await vi.waitFor(() => expect(data.sessionCatalogs[0]?.pending).toBe(true));
+    await vi.waitFor(() => expect(data.sessionCatalogLive.requestGeneration).toBeNull());
+    expect(areSessionCatalogsSettled(data)).toBe(false);
+    expect(data.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("fixture-next");
     expect(sidebar.textContent).not.toContain(hint);
 
     reply(async () => catalogPage([]));
-    await sidebar.sessionData.loadMoreSessionCatalog("codex");
+    await data.loadMoreSessionCatalog("codex");
     await settleLitElement(sidebar);
-    expect(sidebar.sessionData.sessionCatalogs[0]?.pending).toBeUndefined();
-    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.pending).toBeUndefined();
-    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBeUndefined();
-    expect(areSessionCatalogsSettled(sidebar.sessionData)).toBe(true);
+    expect(data.sessionCatalogs[0]?.pending).toBeUndefined();
+    expect(data.sessionCatalogs[0]?.hosts[0]?.pending).toBeUndefined();
+    expect(data.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBeUndefined();
+    expect(areSessionCatalogsSettled(data)).toBe(true);
     expect(sidebar.textContent).toContain(hint);
   });
 

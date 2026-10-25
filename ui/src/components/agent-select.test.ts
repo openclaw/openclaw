@@ -70,6 +70,8 @@ async function createAgentSelect(
   await element.updateComplete;
   return element;
 }
+const createAvatarSelect = (avatar = "/avatar/alpha") =>
+  createAgentSelect({ identityById: { alpha: createIdentity("alpha", avatar) } });
 
 it("preserves complete grapheme clusters in emoji avatar fallback", async () => {
   const agent = { id: "family", name: "Family", identity: { emoji: "👍🏻" } };
@@ -105,9 +107,7 @@ it("renders named scope icons and restores the selected agent avatar", async () 
 it("keeps a failed avatar on its fallback until the image changes", async () => {
   const invalidAvatar = "data:image/gif;base64,bm90LWFuLWltYWdl";
   const replacementAvatar = "data:image/png;base64,cmVwbGFjZW1lbnQ=";
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", invalidAvatar) },
-  });
+  const element = await createAvatarSelect(invalidAvatar);
   const failedImage = avatarImage(element);
   expect(failedImage).not.toBeNull();
   failedImage?.dispatchEvent(new Event("error"));
@@ -134,9 +134,7 @@ it("keeps a failed avatar on its fallback until the image changes", async () => 
 
 it("does not let a removed option's image error poison its replacement lease", async () => {
   const avatar = "data:image/png;base64,cmV0YWluZWQ=";
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", avatar) },
-  });
+  const element = await createAvatarSelect(avatar);
   const retired = avatarImage(element, "trigger")!;
   expect(retired.getAttribute("src")).toBe(avatar);
   element.options = options.filter((option) => option.value === "beta");
@@ -221,9 +219,7 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
   setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", "/avatar/alpha") },
-  });
+  const element = await createAvatarSelect();
 
   await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
   await waitForFast(() => expect(avatarImage(element)).toBeNull());
@@ -264,9 +260,7 @@ it("aborts the stale request on auth rotation without duplicating the current fe
     fetchMock.mock.calls.filter(([url]) => url === `${globalThis.location.origin}/avatar/alpha`);
 
   setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", "/avatar/alpha") },
-  });
+  const element = await createAvatarSelect();
 
   await waitForFast(() => expect(avatarCalls()).toHaveLength(1));
   setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
@@ -290,9 +284,7 @@ it("aborts the stale request on auth rotation without duplicating the current fe
     ok: true,
     blob: async () => new Blob(["avatar"], { type: "image/png" }),
   } as Response);
-  await waitForFast(() => {
-    expect(avatarSrc(element)).toBe("blob:rotated-avatar");
-  });
+  await waitForFast(() => expect(avatarSrc(element)).toBe("blob:rotated-avatar"));
 });
 
 it.each(["fetch", "body"] as const)(
@@ -325,9 +317,7 @@ it.each(["fetch", "body"] as const)(
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
-    const element = await createAgentSelect({
-      identityById: { alpha: createIdentity("alpha", "/avatar/alpha") },
-    });
+    const element = await createAvatarSelect();
 
     try {
       await vi.advanceTimersByTimeAsync(0);
@@ -364,9 +354,7 @@ it("fetches a local avatar image without a header when token auth is not active"
     blob: async () => new Blob(["avatar"], { type: "image/png" }),
   });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", "/avatar/alpha") },
-  });
+  const element = await createAvatarSelect();
 
   await waitForFast(() =>
     expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
@@ -374,9 +362,7 @@ it("fetches a local avatar image without a header when token auth is not active"
       signal: expect.any(AbortSignal),
     }),
   );
-  await waitForFast(() => {
-    expect(avatarSrc(element)).toBe("blob:unauthenticated-avatar");
-  });
+  await waitForFast(() => expect(avatarSrc(element)).toBe("blob:unauthenticated-avatar"));
 });
 
 it("keeps avatar text out of typeahead and announces option metadata", async () => {

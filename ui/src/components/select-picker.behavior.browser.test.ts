@@ -15,6 +15,10 @@ const options: PickerOption[] = [
     label: `Model ${index}`,
   })),
 ];
+const alphabetOptions: PickerOption[] = [
+  { value: "alpha", label: "Alpha" },
+  { value: "beta", label: "Beta" },
+];
 
 afterEach(() => {
   cleanupSolid();
@@ -250,13 +254,7 @@ describe("Picker", () => {
   });
 
   it("retains the current short-menu choice when typeahead has no match", async () => {
-    const p = await mount({
-      options: [
-        { value: "alpha", label: "Alpha" },
-        { value: "beta", label: "Beta" },
-      ],
-      value: "beta",
-    });
+    const p = await mount({ options: alphabetOptions, value: "beta" });
     await p.open();
     await p.key("z");
     await p.key("Enter");
@@ -291,13 +289,7 @@ describe("Picker", () => {
   );
 
   it("opens a compact menu with a printable key without committing it", async () => {
-    const p = await mount({
-      options: [
-        { value: "alpha", label: "Alpha" },
-        { value: "beta", label: "Beta" },
-      ],
-      value: "beta",
-    });
+    const p = await mount({ options: alphabetOptions, value: "beta" });
     await p.key("a");
     expect(p.trigger.getAttribute("aria-expanded")).toBe("true");
     expect(p.params.onChange).not.toHaveBeenCalled();
