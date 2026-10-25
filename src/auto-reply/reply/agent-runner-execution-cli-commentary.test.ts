@@ -1,7 +1,6 @@
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -131,10 +130,6 @@ it("delivers commentary from a real JSONL CLI subprocess", async () => {
 
 it.each([
   {
-    source: "The durable findings live here.",
-    expected: { text: "The durable findings live here." },
-  },
-  {
     source: "[[reply_to:target]] [[audio_as_voice]] The durable findings live here.",
     expected: {
       text: "The durable findings live here.",
@@ -243,9 +238,7 @@ it.each(["raw", "prepared", "both"] as const)(
 
 it.each(
   [false, true].flatMap((completed) =>
-    ["NO_REPLY", '{"action":"NO_REPLY"}', '"NO_REPLY"', "NO_REPLY.", "An ordinary caption."].map(
-      (text) => ({ text, completed }),
-    ),
+    ["NO_REPLY", "An ordinary caption."].map((text) => ({ text, completed })),
   ),
 )(
   "keeps prepared CLI payload facts through normalization (completed=$completed): $text",

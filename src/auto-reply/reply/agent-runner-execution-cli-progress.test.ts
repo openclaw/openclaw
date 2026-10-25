@@ -316,8 +316,12 @@ describe("executeAgentTurn: CLI progress bridging", () => {
 
     await executeCliTurn(followupRun, { onPartialReply, onReasoningStream });
 
-    expect(onReasoningStream.mock.calls.map(([payload]) => payload.text)).toEqual([
-      "Private analysis.",
+    expect(onReasoningStream.mock.calls.map(([payload]) => payload)).toEqual([
+      {
+        text: "Private analysis.",
+        isReasoningSnapshot: true,
+        requiresReasoningProgressOptIn: true,
+      },
     ]);
     expect(onPartialReply.mock.calls.map(([payload]) => payload.text)).toEqual(["Visible answer."]);
   });
