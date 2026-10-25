@@ -31,8 +31,7 @@ describe("worker placement session admission", () => {
   it.each(["success", "failure", "cancellation"] as const)(
     "counts pending device dispatches through cleanup until %s settles",
     async (outcome) => {
-      const dispatchStarted = createDeferredCore();
-      const finishDispatch = createDeferredCore();
+      const dispatchGate = createOperationGate(undefined);
       const cleanupStarted = createDeferredCore();
       const finishCleanup = createDeferredCore();
       const controller = new AbortController();
@@ -49,9 +48,8 @@ describe("worker placement session admission", () => {
             await finishCleanup.promise;
             return active;
           }
-          dispatchStarted.resolve();
           try {
-            await finishDispatch.promise;
+            await dispatchGate.run();
             signal?.throwIfAborted();
             if (outcome === "failure") {
               throw terminalError;
@@ -65,7 +63,7 @@ describe("worker placement session admission", () => {
       );
       const coordinated = createCoordinatedService({ dispatch });
       const first = coordinated.dispatch(request, undefined, undefined, controller.signal);
-      await dispatchStarted.promise;
+      await dispatchGate.entered;
       const joined = coordinated.dispatch(request);
       const sibling = coordinated.dispatch({ ...request, sessionId: "sibling" });
       const remote = coordinated.dispatch({
@@ -88,11 +86,11 @@ describe("worker placement session admission", () => {
         if (outcome === "cancellation") {
           controller.abort(terminalError);
         }
-        finishDispatch.resolve();
+        dispatchGate.release();
         await cleanupStarted.promise;
         expect(coordinated.getPendingDeviceDispatchCount("node-one")).toBe(2);
       } finally {
-        finishDispatch.resolve();
+        dispatchGate.release();
         finishCleanup.resolve();
         await settled;
       }
@@ -300,15 +298,13 @@ describe("worker placement session admission", () => {
   it.each(["full", "targeted"] as const)(
     "%s recovery admits only result recovery while the session is busy",
     async (kind) => {
-      const dispatchEntered = createDeferredCore();
-      const releaseDispatch = createDeferredCore();
+      const dispatchGate = createOperationGate(undefined);
       const recover = vi.fn(async (_mode?: "results-only") => {});
       const admissionAttempted = createDeferredCore();
       const admitted: boolean[] = [];
       const dispatch = vi.fn(async (request: WorkerPlacementDispatchRequest) => {
         if (request.sessionId === REQUEST.sessionId) {
-          dispatchEntered.resolve();
-          await releaseDispatch.promise;
+          await dispatchGate.run();
         }
         return { ...ACTIVE_PLACEMENT, ...request };
       });
@@ -321,7 +317,7 @@ describe("worker placement session admission", () => {
         },
       });
       const first = coordinated.dispatch(REQUEST);
-      await dispatchEntered.promise;
+      await dispatchGate.entered;
       const sweep = coordinated.reconcileActive(kind === "targeted" ? "worker-active" : undefined);
       await admissionAttempted.promise;
       await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
@@ -332,7 +328,7 @@ describe("worker placement session admission", () => {
       } else {
         expect(recover).toHaveBeenCalledExactlyOnceWith("results-only");
       }
-      releaseDispatch.resolve();
+      dispatchGate.release();
       await Promise.all([first, sweep]);
       if (kind === "full") {
         await coordinated.reconcileActive();

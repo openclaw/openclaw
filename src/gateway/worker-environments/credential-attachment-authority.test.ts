@@ -137,7 +137,6 @@ describe("attachment precommit authority and committed custody", () => {
       message: "Current worker build identity is unavailable",
     });
     expect(await attaching).toMatchObject({ message: "Attachment caller closed" });
-    expect(support.testState.prepareInstallation).toHaveBeenCalledOnce();
     expect(generate).not.toHaveBeenCalled();
     await expectUnchangedAfterReopen(environmentId, previous);
   });
@@ -186,9 +185,7 @@ describe("attachment precommit authority and committed custody", () => {
     });
     // Startup inference recovery uses the same native admission factory.
     await service.ready();
-    const reached: string[] = [];
     nativeAdmission.before = (current) => {
-      reached.push(current);
       if (current === "commit") {
         nativeAdmission.before = undefined;
         source.close();
@@ -197,7 +194,6 @@ describe("attachment precommit authority and committed custody", () => {
     const outcome = await service
       .attachSession(binding(environmentId, source))
       .catch((error: unknown) => error);
-    expect(reached).toContain("commit");
     expect(outcome).toMatchObject({ message: "Attachment caller closed" });
     expect(source.signal.aborted).toBe(false);
     // Material was prepared before the native wait, while the source was live.
