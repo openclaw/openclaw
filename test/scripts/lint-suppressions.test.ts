@@ -261,6 +261,8 @@ describe("production lint suppressions", () => {
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
         // Synchronous acquisition failures reject with the acquiring owner's original value.
         "src/shared/store-writer-acquisitions.ts|typescript/prefer-promise-reject-errors|1",
+        // Usage outputs sort freshly materialized private arrays without another copy.
+        "src/shared/usage-aggregates.ts|unicorn/no-array-sort|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
         // JSON string scanning must detect and reject unescaped control characters.
         "src/state/json-predicate-fields.ts|no-control-regex|1",
