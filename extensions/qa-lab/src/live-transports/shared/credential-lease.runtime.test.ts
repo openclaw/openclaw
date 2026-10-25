@@ -8,10 +8,7 @@ import {
 
 type CredentialPayload = { groupId: string; driverToken: string; sutToken: string };
 const brokerUrl = "https://qa-cred.example.convex.site";
-const ciEnv = {
-  OPENCLAW_QA_CONVEX_SITE_URL: brokerUrl,
-  OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
-};
+const ciEnv = { OPENCLAW_QA_CONVEX_SITE_URL: brokerUrl, OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret" };
 const maintainerEnv = {
   OPENCLAW_QA_CONVEX_SITE_URL: brokerUrl,
   OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
@@ -43,6 +40,10 @@ function acquireMaintainer(
     ...overrides,
     env: { ...maintainerEnv, ...env },
   });
+}
+
+function acquireWithEnv(env: NodeJS.ProcessEnv, fetchImpl: typeof fetch) {
+  return acquireMaintainer({ fetchImpl }, env);
 }
 
 function brokerOperation(url: Parameters<typeof fetch>[0]) {
@@ -112,7 +113,7 @@ describe("credential lease runtime", () => {
     vi.useRealTimers();
   });
 
-  it("releases a credential whose TTL expires while the host monotonic clock is paused", async () => {
+  it("releases leases that expire while the monotonic clock is paused", async () => {
     vi.useFakeTimers();
     vi.spyOn(performance, "now").mockReturnValue(42);
     const operations: string[] = [];
@@ -135,7 +136,7 @@ describe("credential lease runtime", () => {
     expect(operations).toEqual(["acquire", "release"]);
   });
 
-  it("cannot renew an expired lease or retain authority during a pending release", async () => {
+  it("rejects renewal after expiry and revokes authority before release settles", async () => {
     vi.useFakeTimers();
     const heartbeatReply = Promise.withResolvers<Response>();
     const releaseReply = Promise.withResolvers<Response>();
@@ -198,7 +199,7 @@ describe("credential lease runtime", () => {
   });
 
   it("cancels a streaming convex broker failure body after the response cap", async () => {
-    const chunkBytes = 64 * 1024;
+    const chunk = Buffer.alloc(64 * 1024, "x");
     const totalBytes = 4 * 1024 * 1024;
     let bytesWritten = 0;
     let requestCount = 0;
@@ -216,9 +217,8 @@ describe("credential lease runtime", () => {
             }
             return;
           }
-          const nextBytes = Math.min(chunkBytes, totalBytes - bytesWritten);
-          bytesWritten += nextBytes;
-          res.write("x".repeat(nextBytes));
+          bytesWritten += chunk.length;
+          res.write(chunk);
         }, 1);
         res.on("close", () => {
           clearInterval(interval);
@@ -227,12 +227,9 @@ describe("credential lease runtime", () => {
       },
       async (baseUrl) => {
         await expect(
-          acquireMaintainer(
-            {},
-            {
-              OPENCLAW_QA_CONVEX_SITE_URL: baseUrl,
-              OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
-            },
+          acquireWithEnv(
+            { OPENCLAW_QA_CONVEX_SITE_URL: baseUrl, OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1" },
+            fetch,
           ),
         ).rejects.toThrow("Convex credential broker: text response exceeds 1048576 bytes");
 
@@ -269,7 +266,7 @@ describe("credential lease runtime", () => {
     [1, 3, "CHUNKS", "2", "2 chunks"],
     [33, 1, "BYTES", "32", "32 bytes"],
   ] as const)(
-    "rejects chunk markers (%i bytes, %i chunks)",
+    "rejects oversized chunks (%i bytes, %i chunks)",
     async (bytes, chunks, key, cap, error) => {
       const fetchImpl = replies(chunked(bytes, chunks, "capped"), { status: "ok" });
       await expect(
@@ -299,11 +296,7 @@ describe("credential lease runtime", () => {
   it("defaults convex credential role to ci when CI=true", async () => {
     const fetchImpl = replies(acquired(credentials, "cred-ci-default", "lease-ci-default"));
 
-    await acquireQaCredentialLease({
-      ...convexOptions,
-      env: { ...ciEnv, CI: "true" },
-      fetchImpl,
-    });
+    await acquireQaCredentialLease({ ...convexOptions, env: { ...ciEnv, CI: "true" }, fetchImpl });
 
     expectAuthorization(fetchImpl, "ci-secret");
   });
@@ -345,28 +338,25 @@ describe("credential lease runtime", () => {
     await expect(acquireMaintainer({}, env)).rejects.toThrow(error);
   });
 
-  it("allows loopback http URLs when OPENCLAW_QA_ALLOW_INSECURE_HTTP is enabled", async () => {
-    const fetchImpl = replies(acquired(credentials, "cred-local", "lease-local"));
-    await acquireMaintainer(
-      { fetchImpl },
+  it("allows explicitly opted-in loopback HTTP", async () => {
+    const fetchImpl = replies(acquired(credentials));
+    await acquireWithEnv(
       {
         OPENCLAW_QA_CONVEX_SITE_URL: "http://127.0.0.1:3210",
         OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
       },
+      fetchImpl,
     );
-
     expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://127.0.0.1:3210/qa-credentials/v1/acquire");
   });
 
   it("caps oversized convex HTTP timeouts before creating abort signals", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    const fetchImpl = replies(acquired(credentials, "cred-timeout", "lease-timeout"));
-    await acquireMaintainer(
-      { fetchImpl },
-      {
-        OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
-      },
+    const fetchImpl = replies(acquired(credentials));
+    await acquireWithEnv(
+      { OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER) },
+      fetchImpl,
     );
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
@@ -390,16 +380,20 @@ describe("credential lease runtime", () => {
     expectOperations(fetchImpl, "acquire", "release");
   });
 
-  it("captures heartbeat failures for fail-fast checks", async () => {
+  it.each([
+    ["heartbeat-down", 55, 1],
+    ["fetch failed | ETIMEDOUT", 50 + 1_000 + 3_000 + 5_000, 4],
+  ] as const)("fails closed on heartbeat error %s", async (message, elapsed, attempts) => {
     vi.useFakeTimers();
-    const heartbeat = startHeartbeat(async () => {
-      throw new Error("heartbeat-down");
+    const request = vi.fn(async () => {
+      throw new Error(message);
     });
-
-    await vi.advanceTimersByTimeAsync(55);
+    const heartbeat = startHeartbeat(request);
+    await vi.advanceTimersByTimeAsync(elapsed);
+    expect(request).toHaveBeenCalledTimes(attempts);
     expect(heartbeat.getFailure()).toBeInstanceOf(Error);
-    expect(() => heartbeat.throwIfFailed()).toThrow("heartbeat-down");
-    expect((await heartbeat.whenFailed).message).toContain("heartbeat-down");
+    expect(() => heartbeat.throwIfFailed()).toThrow(message);
+    expect((await heartbeat.whenFailed).message).toContain(message);
     await heartbeat.stop();
   });
 
@@ -420,19 +414,6 @@ describe("credential lease runtime", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(heartbeatRequest).toHaveBeenCalledTimes(2);
     expect(heartbeat.getFailure()).toBeNull();
-    await heartbeat.stop();
-  });
-
-  it("fails closed after transient heartbeat retries are exhausted", async () => {
-    vi.useFakeTimers();
-    const heartbeatRequest = vi.fn(async () => {
-      throw new Error("fetch failed | ETIMEDOUT");
-    });
-    const heartbeat = startHeartbeat(heartbeatRequest);
-
-    await vi.advanceTimersByTimeAsync(50 + 1_000 + 3_000 + 5_000);
-    expect(heartbeatRequest).toHaveBeenCalledTimes(4);
-    expect(() => heartbeat.throwIfFailed()).toThrow("ETIMEDOUT");
     await heartbeat.stop();
   });
 });

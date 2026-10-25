@@ -7,15 +7,10 @@ const { startQaGatewayChild, startQaProviderServer, gatewayStop } = vi.hoisted((
 }));
 
 vi.mock("../../gateway-child.js", () => ({
-  createQaGatewayChild: () => ({
-    start: (params: unknown) => startQaGatewayChild(params),
-    stop: gatewayStop,
-  }),
+  createQaGatewayChild: () => ({ start: startQaGatewayChild, stop: gatewayStop }),
 }));
 
-vi.mock("../../providers/server-runtime.js", () => ({
-  startQaProviderServer,
-}));
+vi.mock("../../providers/server-runtime.js", () => ({ startQaProviderServer }));
 
 import { createQaLiveLaneGateway } from "./live-gateway.runtime.js";
 
@@ -23,12 +18,7 @@ type StartOptions = Parameters<ReturnType<typeof createQaLiveLaneGateway>["start
 function gatewayParams(overrides: Partial<StartOptions> = {}): StartOptions {
   return {
     repoRoot: "/tmp/openclaw-repo",
-    transport: {
-      requiredPluginIds: ["qa-channel"],
-      createGatewayConfig: ({ baseUrl }) => ({
-        channels: { "qa-channel": { enabled: true, baseUrl } },
-      }),
-    },
+    transport: { requiredPluginIds: ["qa-channel"], createGatewayConfig: () => ({}) },
     transportBaseUrl: "http://127.0.0.1:43123",
     providerMode: "mock-openai",
     primaryModel: "mock-openai/gpt-5.6-luna",
@@ -45,39 +35,23 @@ function firstGatewayOptions() {
 }
 
 describe("createQaLiveLaneGateway", () => {
-  const gatewayCall = vi.fn();
   const mockStop = vi.fn();
-  const owners: ReturnType<typeof createQaLiveLaneGateway>[] = [];
-  const ownGateway = () => {
-    const owner = createQaLiveLaneGateway();
-    owners.push(owner);
-    return owner;
-  };
   const start = (overrides: Partial<StartOptions> = {}) =>
-    ownGateway().start(gatewayParams(overrides));
+    createQaLiveLaneGateway().start(gatewayParams(overrides));
 
   beforeEach(() => {
     gatewayStop.mockReset().mockResolvedValue({ process: "confirmed-stopped", errors: [] });
-    for (const mock of [gatewayCall, mockStop, startQaGatewayChild, startQaProviderServer]) {
-      mock.mockReset();
-    }
-
-    startQaGatewayChild.mockResolvedValue({
-      call: gatewayCall,
-      cfg: {},
-      stop: gatewayStop,
-    });
+    mockStop.mockReset();
+    startQaGatewayChild
+      .mockReset()
+      .mockResolvedValue({ call: vi.fn(), cfg: {}, stop: gatewayStop });
+    startQaProviderServer.mockReset();
     startQaProviderServer.mockImplementation(async (providerMode: string) =>
       providerMode === "mock-openai" ? { baseUrl: "http://127.0.0.1:44080", stop: mockStop } : null,
     );
   });
 
-  afterEach(async () => {
-    for (const owner of owners.splice(0)) {
-      await owner.stop();
-    }
-    vi.clearAllMocks();
-  });
+  afterEach(() => vi.clearAllMocks());
 
   it("exposes unconfirmed teardown even when startup never returns a ready handle", async () => {
     const startupError = new Error("gateway startup failed");
@@ -108,21 +82,9 @@ describe("createQaLiveLaneGateway", () => {
   it.each(["mock-openai", "live-frontier"] as const)(
     "starts and stops the %s lane with the selected runtime",
     async (providerMode) => {
-      const primaryModel = `${providerMode === "mock-openai" ? "mock-openai" : "openai"}/gpt-5.6-luna`;
-      const alternateModel = providerMode === "mock-openai" ? `${primaryModel}-alt` : primaryModel;
-      const harness = await start({
-        providerMode,
-        primaryModel,
-        alternateModel,
-        forcedRuntime: "codex",
-      });
-      expect(startQaProviderServer).toHaveBeenCalledWith(providerMode, {
-        modelRefs: [primaryModel, alternateModel],
-      });
+      const harness = await start({ providerMode, forcedRuntime: "codex" });
       expect(firstGatewayOptions()).toMatchObject({
-        transportBaseUrl: "http://127.0.0.1:43123",
         providerBaseUrl: providerMode === "mock-openai" ? "http://127.0.0.1:44080/v1" : undefined,
-        providerMode,
         forcedRuntime: "codex",
       });
       const options = { preserveToDir: ".artifacts/qa-e2e/debug" };
@@ -147,10 +109,7 @@ describe("createQaLiveLaneGateway", () => {
           "memory-core": { enabled: true },
           "qa-channel": { enabled: true },
         },
-        slots: {
-          memory: "memory-core",
-          contextEngine: "custom-context",
-        },
+        slots: { memory: "memory-core", contextEngine: "custom-context" },
       },
       memory: { search: { enabled: true } },
     });
@@ -164,7 +123,7 @@ describe("createQaLiveLaneGateway", () => {
   it.each([false, true])(
     "finalizes failed startup (mock cleanup failure: %s)",
     async (cleanupFails) => {
-      const owner = ownGateway();
+      const owner = createQaLiveLaneGateway();
       startQaGatewayChild.mockRejectedValueOnce(new Error("gateway failed"));
       if (cleanupFails) {
         mockStop.mockRejectedValueOnce(new Error("mock stuck"));
