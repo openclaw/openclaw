@@ -4,6 +4,7 @@ import path from "node:path";
 import { readFileDescriptorBoundedSync, readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { escapeRegExp } from "../shared/regexp.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import { isMissingPathError } from "./errors.js";
 import { unquoteGitPath } from "./git-path-quote.js";
 
@@ -507,6 +508,45 @@ export function readGitRefs(refsBase: string, refs: readonly string[]): Map<stri
     }
   }
   return values;
+}
+
+/**
+ * Ref names under `prefix` from loose files and the packed inventory. Both
+ * representations yield the same names, so existence comparisons survive packing.
+ */
+export function readGitRefNames(refsBase: string, prefix: string): string[] {
+  const names = new Set<string>();
+  const looseRoot = path.join(refsBase, prefix);
+  if (fs.lstatSync(looseRoot, { throwIfNoEntry: false })?.isDirectory()) {
+    for (const { relativePath, dirent } of listDirectoryTreeStrictSync(looseRoot)) {
+      if (!dirent.isDirectory()) {
+        names.add(`${prefix}/${relativePath.split(path.sep).join("/")}`);
+      }
+    }
+  }
+  try {
+    const packedRefs = readGitMetadataFile(
+      path.join(refsBase, "packed-refs"),
+      Number.MAX_SAFE_INTEGER,
+    ).toString("utf8");
+    const marker = `${prefix}/`;
+    for (const line of packedRefs.split("\n")) {
+      // Peeled objects (`^<sha>`) and comments carry no ref name of their own.
+      if (!line || line.startsWith("#") || line.startsWith("^")) {
+        continue;
+      }
+      const separator = line.indexOf(" ");
+      const ref = separator > 0 ? line.slice(separator + 1).trim() : "";
+      if (ref.startsWith(marker)) {
+        names.add(ref);
+      }
+    }
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+  }
+  return [...names].toSorted();
 }
 
 /** Safely resolve a Git ref path, rejecting traversal from a crafted HEAD file. */
