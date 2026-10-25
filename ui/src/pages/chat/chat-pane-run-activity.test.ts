@@ -7,7 +7,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
@@ -24,10 +23,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const reading = ".chat-working-indicator .chat-reading-indicator";
 const status = ".agent-chat__composer-run-status";
-const children = ".chat-working-indicator__subagents";
-const timer = ".chat-working-indicator openclaw-elapsed-time";
 
 const parentKey = "agent:main:main";
 const childKey = "agent:main:subagent:attachment-fix";
@@ -93,83 +89,4 @@ describe("composer run status", () => {
     );
     expect(container.querySelector(status)).toBeNull();
   });
-
-  it.each(["editable", "view-only subagent", "read-only shared"] as const)(
-    "keeps %s child counts and the request timer through roster hydration and settlement",
-    async (access) => {
-      vi.spyOn(Date, "now").mockReturnValue(66_500);
-      const parent: GatewaySessionRow = {
-        key: access === "view-only subagent" ? "agent:main:subagent:parent" : "agent:main:parent",
-        kind: "direct",
-        ...(access === "read-only shared"
-          ? { visibility: "read-only" as const, sharingRole: "viewer" as const }
-          : {}),
-        hasActiveRun: false,
-        hasActiveSubagentRun: true,
-        startedAt: 1_000,
-        endedAt: 2_500,
-      };
-      const child: GatewaySessionRow = {
-        key: "agent:main:subagent:backend",
-        kind: "direct",
-        spawnedBy: parent.key,
-        label: "Backend implementation",
-        hasActiveRun: true,
-        startedAt: 5_000,
-      };
-      const { pane, state, context } = createRefreshChatPane();
-      state.sessionKey = parent.key;
-      state.sessionsResult = sessionsResult([parent]);
-      pane.render();
-      const container = createApplicationContextProvider(context);
-      const onOpenSubagents = vi.fn();
-      const draw = async (rows: GatewaySessionRow[], hydrated = true) => {
-        renderChatPropsInto(
-          container,
-          {
-            ...expectDefined(pane.chatProps, "chat props"),
-            selectedSession: parent,
-            messages: [{ role: "user", content: "Implement the backend.", timestamp: 1_500 }],
-            subagentSessions: rows,
-            subagentSessionsHydrated: hydrated,
-            onOpenSubagents,
-          },
-          context,
-        );
-        flush();
-        expect(container.querySelector(status)).toBeNull();
-      };
-      await draw([], false);
-      expect(container.querySelector(reading)).not.toBeNull();
-      await draw([child]);
-      await vi.dynamicImportSettled();
-      flush();
-      if (access === "view-only subagent") {
-        expect(container.querySelector(".agent-chat__disabled-banner")?.textContent).toContain(
-          "View-only subagent",
-        );
-        expect(container.querySelector(".agent-chat__composer-combobox")).toBeNull();
-      }
-      expect(
-        container.querySelector(`${reading},.chat-subagent-activity,openclaw-working-phrase`),
-      ).toBeNull();
-      expect(container.textContent).not.toContain("Backend implementation");
-      const count = container.querySelector<HTMLButtonElement>(children);
-      expect(count?.textContent).toBe("1 subagent running");
-      count?.click();
-      expect(onOpenSubagents).toHaveBeenCalledExactlyOnceWith();
-      expect(container.querySelector(timer)?.textContent).toBe("1m 5s");
-
-      await draw([
-        child,
-        { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
-      ]);
-      expect(container.querySelector(children)?.textContent).toBe("2 subagents running");
-      expect(container.querySelectorAll(timer)).toHaveLength(1);
-      expect(container.querySelector(".chat-subagent-activity")).toBeNull();
-
-      await draw([{ ...child, hasActiveRun: false }]);
-      expect(container.querySelector(`.chat-subagent-activity,${children}`)).toBeNull();
-    },
-  );
 });

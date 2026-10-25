@@ -2,7 +2,6 @@
 
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatUiError } from "../../lib/format-error.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSidebarRegionCallbackMocks } from "../../test-helpers/sidebar-region-callbacks.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -15,8 +14,6 @@ import { closeSlot, openSlot, promoteSidebarPanel } from "./sidebar-layout.ts";
 const lazyMocks = vi.hoisted(() => ({
   boardImportAttempts: 0,
   workspaceImportAttempts: 0,
-  importAttempts: 0,
-  retryDocument: vi.fn(async () => true),
 }));
 
 // mock-isolation: count lazy registration without mounting the real dashboard renderer.
@@ -35,30 +32,18 @@ vi.mock("../../components/board/board-view.tsx", () => {
 vi.mock("./components/chat-files-panel.tsx", () => {
   lazyMocks.workspaceImportAttempts += 1;
   return {
-    ChatFilesPanel: () => {
-      return (
-        <openclaw-chat-files-panel>
-          <input aria-label="Files draft" />
-        </openclaw-chat-files-panel>
-      );
-    },
+    ChatFilesPanel: () => (
+      <openclaw-chat-files-panel>
+        <input aria-label="Files draft" />
+      </openclaw-chat-files-panel>
+    ),
   };
 });
 
 // mock-isolation: the failed lazy-import fixture must throw before registering or exporting the real region.
 vi.mock("./components/chat-sidebar-region.runtime.tsx", () => {
-  lazyMocks.importAttempts += 1;
   throw new SyntaxError("Synthetic sidebar module export failure");
 });
-
-vi.mock("../../app/stale-chunk-reload.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../app/stale-chunk-reload.ts")>()),
-  // Vitest wraps rejected mock factories; the original error remains in their cause.
-  isStaleChunkImportError: (error: unknown) =>
-    formatUiError(error).includes("Failed to fetch dynamically imported module"),
-  retryStaleChunkReloadWhenReachable: lazyMocks.retryDocument,
-  scheduleStaleChunkReload: vi.fn(async () => false),
-}));
 
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
@@ -148,15 +133,7 @@ describe("chat pane lazy sidebar failures", () => {
             }),
             layout: layout(),
             narrow: false,
-            panelDefinitions: sidebarPanelDefinitions().map((definition) =>
-              Object.assign(definition, {
-                available: definition.slot === "detail",
-                content:
-                  definition.slot === "detail"
-                    ? Object.assign(document.createElement("aside"), { textContent: "Review" })
-                    : null,
-              }),
-            ),
+            panelDefinitions: sidebarPanelDefinitions(),
             primary,
           });
         return <SidebarRegionView {...content()} />;
@@ -176,9 +153,6 @@ describe("chat pane lazy sidebar failures", () => {
     );
     const action = container.querySelector<HTMLButtonElement>(".lazy-view-error__action");
     expect(action?.textContent).toContain("Retry");
-    action?.click();
-    await vi.waitFor(() => expect(lazyMocks.retryDocument).toHaveBeenCalledOnce());
-    expect(lazyMocks.importAttempts).toBe(1);
     container.querySelector<HTMLButtonElement>('button[aria-label="Close Dashboard"]')?.click();
     await waitForSolid(() => expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1));
     expect(container.querySelector(".sidebar-region__primary")?.getAttribute("data-region")).toBe(

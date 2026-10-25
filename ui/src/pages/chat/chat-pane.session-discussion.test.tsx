@@ -1,20 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, Show } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createSessionCapabilityFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import {
-  SessionDiscussionPanel,
-  type SessionDiscussionPanelConfig,
-} from "./components/session-discussion-panel.tsx";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { openSlot } from "./sidebar-layout.ts";
 
 type DiscussionTestPane = TestChatPane & {
@@ -31,40 +25,6 @@ type DiscussionTestPane = TestChatPane & {
 };
 
 const SESSION_KEY = "agent:main:current";
-
-function createDiscussionPanelHarness({ pane, state }: ReturnType<typeof createDiscussionPane>) {
-  const [frame, setFrame] = createSignal<{
-    config: SessionDiscussionPanelConfig | null;
-    sourceGeneration: number;
-  }>({ config: null, sourceGeneration: 0 });
-  const view = mountSolid(() => (
-    <section data-panel-slot="discussion">
-      <Show when={frame().config}>
-        {(config) => (
-          <SessionDiscussionPanel
-            sessionKey={config().sessionKey}
-            canOpen={config().canOpen}
-            sourceGeneration={frame().sourceGeneration}
-            loadInfo={config().loadInfo}
-            openDiscussion={config().openDiscussion}
-            onStateChange={config().onStateChange}
-          />
-        )}
-      </Show>
-    </section>
-  ));
-  return {
-    ...view,
-    async render() {
-      setFrame({
-        config: pane.buildSessionDiscussionPanel(state, SESSION_KEY),
-        sourceGeneration: pane.connectionGeneration,
-      });
-      flush();
-      await view.container.querySelector("openclaw-session-discussion")?.updateComplete;
-    },
-  };
-}
 
 function createDiscussionPane(info: SessionDiscussionInfo = { state: "available" }) {
   const request = vi.fn().mockImplementation(async (method: string) => {
@@ -134,22 +94,18 @@ describe("chat pane session discussion", () => {
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
   });
 
-  it("does not load a saved visible Discussion tab after reconnect without operator.read", async () => {
+  it("revokes saved Discussion access on reconnect and rejects captured callbacks", async () => {
     const openUrl = "https://clack.example/channels/previous";
-    const fixture = createDiscussionPane({ state: "open", openUrl });
-    const { pane, state, request } = fixture;
+    const { pane, state, request } = createDiscussionPane({ state: "open", openUrl });
     const initialHello = pane.context.gateway.snapshot.hello!;
     state.sidebarLayout = openSlot({ columns: [] }, "discussion");
-    const view = createDiscussionPanelHarness(fixture);
-    const { container } = view;
-    const disconnect = () =>
+    const reconnect = (scopes: string[]) => {
       pane.applyGatewaySnapshot({
         ...pane.context.gateway.snapshot,
         phase: "reconnecting",
         hello: null,
       });
-    const connect = (scopes: string[]) => {
-      // The fixture supplies only Discussion RPCs; chat startup is already settled.
+      // Chat startup is settled; this fixture owns only the Discussion RPCs.
       pane.connectedClient = state.client;
       pane.applyGatewaySnapshot({
         ...pane.context.gateway.snapshot,
@@ -157,42 +113,18 @@ describe("chat pane session discussion", () => {
         hello: { ...initialHello, auth: { role: "operator", scopes } },
       });
     };
-    const discussionRequests = () =>
-      request.mock.calls.filter(([method]) => method === "session.discussion.info");
-    const expectLoaded = async (requests: number) => {
-      await vi.waitFor(() => expect(discussionRequests()).toHaveLength(requests));
-      await vi.waitFor(() =>
-        expect(container.querySelector<HTMLAnchorElement>("a.session-link")?.href).toBe(openUrl),
-      );
-    };
-
-    const previousConfig = pane.buildSessionDiscussionPanel(state, SESSION_KEY)!;
-    await view.render();
-    await expectLoaded(1);
-    await view.render();
-    expect(discussionRequests()).toHaveLength(1);
-
-    disconnect();
-    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
-    await view.render();
-    connect(["operator.sessions.read", "operator.sessions.write"]);
-    await view.render();
+    const previous = pane.buildSessionDiscussionPanel(state, SESSION_KEY)!;
+    await expect(previous.loadInfo(SESSION_KEY)).resolves.toMatchObject({ openUrl });
+    const requestsBeforeRevocation = request.mock.calls.length;
+    reconnect(["operator.sessions.read", "operator.sessions.write"]);
     await pane.probeSessionDiscussion(SESSION_KEY);
-    await expect(previousConfig.loadInfo(SESSION_KEY)).rejects.toThrow();
-
-    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
-    expect(container.querySelector('[data-panel-slot="discussion"]')).not.toBeNull();
-    expect(discussionRequests()).toHaveLength(1);
-    expect(
-      container.querySelector("openclaw-session-discussion,a.session-link,.callout.danger"),
-    ).toBeNull();
+    await expect(previous.loadInfo(SESSION_KEY)).rejects.toThrow();
+    expect(pane.buildSessionDiscussionPanel(state, SESSION_KEY)).toBeNull();
     expect(pane.resolveSessionDiscussionAction()).toBeNull();
-
-    disconnect();
-    connect(["operator.read"]);
-    await view.render();
-    await expectLoaded(2);
-
-    view.unmount();
+    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
+    expect(request).toHaveBeenCalledTimes(requestsBeforeRevocation);
+    reconnect(["operator.read"]);
+    const restored = pane.buildSessionDiscussionPanel(state, SESSION_KEY)!;
+    await expect(restored.loadInfo(SESSION_KEY)).resolves.toMatchObject({ openUrl });
   });
 });
