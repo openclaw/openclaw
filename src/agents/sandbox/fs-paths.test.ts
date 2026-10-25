@@ -34,6 +34,12 @@ function resolve(sandbox: SandboxContext, filePath: string) {
   });
 }
 
+const readonlyChild = ["/tmp/data:/tmp/data:rw", "/tmp/data/secrets:/tmp/data/secrets:ro"];
+const writableChild = [
+  "/tmp/readonly-parent:/tmp/readonly-parent:ro",
+  "/tmp/readonly-parent/work:/tmp/readonly-parent/work:rw",
+];
+
 describe("sandbox bind mounts", () => {
   it("returns only unique writable bind host roots", () => {
     expect(
@@ -56,14 +62,9 @@ describe("sandbox bind mounts", () => {
   });
 
   it("omits writable bind roots that contain read-only host shadows", () => {
-    expect(
-      resolveWritableSandboxBindHostRoots([
-        "/tmp/data:/tmp/data:rw",
-        "/tmp/data/secrets:/tmp/data/secrets:ro",
-        "/tmp/readonly-parent:/tmp/readonly-parent:ro",
-        "/tmp/readonly-parent/work:/tmp/readonly-parent/work:rw",
-      ]),
-    ).toEqual([path.resolve("/tmp/readonly-parent/work")]);
+    expect(resolveWritableSandboxBindHostRoots([...readonlyChild, ...writableChild])).toEqual([
+      path.resolve("/tmp/readonly-parent/work"),
+    ]);
   });
 
   it("detects bind mounts whose container path differs from the host path", () => {
@@ -75,18 +76,8 @@ describe("sandbox bind mounts", () => {
   });
 
   it("detects read-only bind shadows inside writable host roots", () => {
-    expect(
-      hasSandboxBindReadonlyHostShadows([
-        "/tmp/data:/tmp/data:rw",
-        "/tmp/data/secrets:/tmp/data/secrets:ro",
-      ]),
-    ).toBe(true);
-    expect(
-      hasSandboxBindReadonlyHostShadows([
-        "/tmp/data:/tmp/data:ro",
-        "/tmp/data/work:/tmp/data/work:rw",
-      ]),
-    ).toBe(false);
+    expect(hasSandboxBindReadonlyHostShadows(readonlyChild)).toBe(true);
+    expect(hasSandboxBindReadonlyHostShadows(writableChild)).toBe(false);
   });
 });
 
@@ -108,26 +99,18 @@ describe("resolveSandboxFsPathWithMounts", () => {
     }
   });
 
-  it.each(["@marker", "@/workspace/marker"])(
-    "normalizes %s before selecting container intent",
-    (filePath) => {
-      const sandbox = createSandbox();
-      expect(resolve(sandbox, filePath)).toMatchObject({
-        hostPath: path.resolve(sandbox.workspaceDir, "marker"),
-        containerPath: "/workspace/marker",
-      });
-    },
-  );
-
-  it("normalizes home and @-prefixed host inputs through the selected workspace", () => {
+  it.each([
+    "@marker",
+    "@/workspace/marker",
+    "~/workspace-coder/marker",
+    `@${path.join(os.homedir(), "workspace-coder", "marker")}`,
+  ])("normalizes %s before selecting workspace intent", (filePath) => {
     const workspaceDir = path.join(os.homedir(), "workspace-coder");
     const sandbox = atWorkspace(workspaceDir);
-    for (const filePath of ["~/workspace-coder/marker", `@${path.join(workspaceDir, "marker")}`]) {
-      expect(resolve(sandbox, filePath)).toMatchObject({
-        hostPath: path.join(workspaceDir, "marker"),
-        containerPath: "/workspace/marker",
-      });
-    }
+    expect(resolve(sandbox, filePath)).toMatchObject({
+      hostPath: path.join(workspaceDir, "marker"),
+      containerPath: "/workspace/marker",
+    });
   });
 
   it("rejects Windows absolute paths outside mounted roots on every host platform", () => {

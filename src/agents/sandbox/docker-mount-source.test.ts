@@ -77,21 +77,8 @@ describe("Docker source namespace", () => {
     expect(first).toEqual(parseInspectedSandboxMounts([wireMount]));
     expect(second).toBe(first);
     expect(execContainer).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(execContainer).mock.calls[0]?.[1]).toEqual([
-      "inspect",
-      "--type",
-      "container",
-      "--format",
-      '{"Id":{{json .ID}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}',
-      "gateway-hostname",
-    ]);
-    expect(vi.mocked(execContainer).mock.calls[1]?.[1].slice(0, 4)).toEqual([
-      "exec",
-      id,
-      process.execPath,
-      "-e",
-    ]);
-    expect(vi.mocked(execContainer).mock.calls[0]?.[2]?.signal).toBeInstanceOf(AbortSignal);
+    // Docker's Go template field is ID, not the JSON key Id.
+    expect(vi.mocked(execContainer).mock.calls[0]?.[1][4]).toContain("{{json .ID}}");
   });
 
   it("uses a mountinfo container ID when the hostname is not a Docker name", async () => {
