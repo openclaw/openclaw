@@ -318,6 +318,58 @@ async function prepareSidebarInventory(page: Page, gateway: MockGatewayControls)
   await more.waitFor({ state: "hidden" });
 }
 
+async function settleSidebarBackgroundWork(page: Page) {
+  // The built prefetch owner warms one group per idle window; one quiet network gap is insufficient.
+  const prefetchAssets = await page.evaluate(async () => {
+    const descriptor = document
+      .getElementById("openclaw-navigation-preloads")
+      ?.getAttribute("content");
+    const route = window.openclawControlUi?.snapshot().route?.matches[0]?.routeId;
+    if (!descriptor || !route) {
+      throw new Error("Warm sidebar measurement requires the built navigation prefetch manifest");
+    }
+    // The fixture server mounts resources at /; deep-link entry-script aliases differ.
+    const base = new URL("/", location.origin);
+    const response = await fetch(new URL(descriptor, base));
+    if (!response.ok) {
+      throw new Error("Could not read the built navigation prefetch manifest");
+    }
+    const manifest: Record<string, string[]> = await response.json();
+    return [
+      ...new Set(Object.entries(manifest).flatMap(([key, files]) => (key === route ? [] : files))),
+    ].map((file) => new URL(file, base).href);
+  });
+  try {
+    await page.waitForFunction(
+      (assets) => {
+        const fetched = new Set(
+          performance.getEntriesByType("resource").map((entry) => entry.name),
+        );
+        return assets.every((asset) => fetched.has(asset));
+      },
+      prefetchAssets,
+      { timeout: 60_000, polling: 100 },
+    );
+  } catch (error) {
+    const missing = await page.evaluate((assets) => {
+      const fetched = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
+      return assets.filter((asset) => !fetched.has(asset));
+    }, prefetchAssets);
+    throw new Error(`Warm navigation prefetch did not finish: ${missing.join(", ")}`, {
+      cause: error,
+    });
+  }
+  // Cross the snapshot owner's 500 ms debounce and idle turn, including oversized cache refusals.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => requestIdleCallback(() => resolve(), { timeout: 1000 }), 500);
+      }),
+  );
+  await page.waitForLoadState("networkidle");
+  await frames(page);
+}
+
 async function prepareSidebarResources(page: Page, gateway: MockGatewayControls) {
   await prepareSidebarInventory(page, gateway);
   const showMore = page.locator(
@@ -344,7 +396,7 @@ async function prepareSidebarResources(page: Page, gateway: MockGatewayControls)
   // Leave the pointer away from rows; idle measurements must not include a hovered marquee.
   const viewport = page.viewportSize()!;
   await page.mouse.move(viewport.width - 4, viewport.height - 4);
-  await frames(page);
+  await settleSidebarBackgroundWork(page);
 }
 
 async function routeLink(page: Page, route: "sessions" | "cron") {
@@ -559,6 +611,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       const viewport = page.viewportSize()!;
       await page.mouse.move(viewport.width - 8, viewport.height - 8);
       await page.locator('[role="tooltip"]:visible').first().waitFor({ state: "hidden" });
+      await settleSidebarBackgroundWork(page);
       const label = await page.locator(sidebarClocks).first().textContent();
       if (!label?.trim()) {
         throw new Error("Running sidebar clocks must have an initial elapsed label");

@@ -1,7 +1,14 @@
 export type ControlUiResourceCounts = {
   observers: Record<
     "ResizeObserver" | "IntersectionObserver" | "MutationObserver",
-    { created: number; active: number; targets: number; callbacks: number }
+    {
+      created: number;
+      active: number;
+      targets: number;
+      callbacks: number;
+      observeCalls: number;
+      disconnectCalls: number;
+    }
   >;
   intervals: { created: number; active: number; callbacks: number };
   listeners: { window: number; document: number; mediaQuery: number };
@@ -13,7 +20,14 @@ export function installControlUiResourceCounts() {
   if (window !== window.top) {
     return;
   }
-  const counter = () => ({ created: 0, active: 0, targets: 0, callbacks: 0 });
+  const counter = () => ({
+    created: 0,
+    active: 0,
+    targets: 0,
+    callbacks: 0,
+    observeCalls: 0,
+    disconnectCalls: 0,
+  });
   const counts: ControlUiResourceCounts = {
     observers: {
       ResizeObserver: counter(),
@@ -58,6 +72,7 @@ export function installControlUiResourceCounts() {
           total.created++;
           observer.observe = (target, options) => {
             observe(target, options);
+            total.observeCalls++;
             if (!targets.has(target)) {
               if (targets.size === 0) {
                 total.active++;
@@ -68,6 +83,7 @@ export function installControlUiResourceCounts() {
           };
           observer.disconnect = () => {
             disconnect();
+            total.disconnectCalls++;
             if (targets.size) {
               total.active--;
               total.targets -= targets.size;

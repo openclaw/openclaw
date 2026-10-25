@@ -316,6 +316,7 @@ try {
             page.setDefaultTimeout(15_000);
             // tsx preserves names in serialized fixture callbacks, as in the cold-load runner.
             await page.addInitScript("globalThis.__name = (fn) => fn");
+            await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
             if (values["resource-counts"]) {
               await page.addInitScript(installControlUiResourceCounts);
             }
