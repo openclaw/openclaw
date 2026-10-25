@@ -18,7 +18,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
@@ -1393,9 +1393,17 @@ if (process.env.PR_TEST_INSTALL_GATE) {
     const creators = [start(), start()];
     try {
       await Promise.all(creators.map((creator) => creator.ready));
-      await writeFile(gate, "xx");
+      const gateWriter = await open(gate, "w");
+      try {
+        await gateWriter.writeFile("xx");
+        const results = await Promise.all(creators.map((creator) => creator.result));
+        for (const [index, result] of results.entries()) {
+          expect(result[0], creators[index]!.errors()).toBe(2);
+        }
+      } finally {
+        await gateWriter.close();
+      }
       for (const creator of creators) {
-        expect((await creator.result)[0], creator.errors()).toBe(2);
         expect(creator.errors()).toContain("running wrapper code materialized from");
       }
       const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies");
