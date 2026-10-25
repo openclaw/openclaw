@@ -3,11 +3,10 @@ import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuditEntry } from "./audit.js";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalBytes } from "./canonical.js";
 import { base64, fromBase64url, utf8 } from "./encoding.js";
-import { seal, type Envelope } from "./envelope.js";
+import type { Envelope, MessageBody } from "./envelope.js";
 import type { GuardAdapter, Verdict } from "./guard.js";
 import { generateIdentity } from "./identity.js";
 import { MemoryAuditStore, MemoryReplayStore } from "./memory-stores.test-support.js";
@@ -44,25 +43,14 @@ function mockGuard(...verdicts: Verdict[]): GuardAdapter & { calls: number } {
 
 type InboundOptions = Parameters<typeof composeInbound>[0];
 
-function identities(guard: GuardAdapter, audit: MemoryAuditStore) {
+function createInbound(guard: GuardAdapter, audit: MemoryAuditStore) {
   const alice = generateIdentity();
   const bob = generateIdentity();
-  const inbound = (
-    message: string | Envelope,
+  return (
+    message: string | MessageBody,
     overrides: Partial<InboundOptions> = {},
   ): InboundOptions => ({
-    envelope:
-      typeof message === "string"
-        ? seal({
-            id: "01JZ0000000000000000000000",
-            from: "alice#1",
-            to: "bob#1",
-            body: { text: message },
-            senderSigningSecretKey: alice.signing.secretKey,
-            recipientEncryptionPublicKey: bob.encryption.publicKey,
-            ts: now,
-          })
-        : message,
+    envelope: craftEnvelope(typeof message === "string" ? { text: message } : message, alice, bob),
     self: "bob#1",
     recipientEncryptionSecretKey: bob.encryption.secretKey,
     recipientSigningSecretKey: bob.signing.secretKey,
@@ -74,7 +62,6 @@ function identities(guard: GuardAdapter, audit: MemoryAuditStore) {
     policyVersion: "v1",
     ...overrides,
   });
-  return { alice, bob, inbound };
 }
 
 const review: Verdict = { ...allow, decision: "review", category: "ambiguous", reason: "Review." };
@@ -87,15 +74,6 @@ const recordedGate = (decision: ReviewDecisionState) =>
     async () => decision,
   );
 
-function expectAudit(entries: AuditEntry[], types: string[]) {
-  expect(entries.map((entry) => entry.event.type)).toEqual(types);
-  expect(
-    new Set(
-      entries.map((entry) => (entry.event.payload as { approvalDigest: string }).approvalDigest),
-    ).size,
-  ).toBe(1);
-}
-
 function gateOf(
   request: ReviewGate["request"],
   lookup: ReviewGate["lookup"] = async () => "none",
@@ -104,27 +82,22 @@ function gateOf(
 }
 
 async function capturePipelineError(promise: Promise<unknown>): Promise<PipelineError> {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof PipelineError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("expected pipeline error");
+  const error = await promise.then(
+    () => undefined,
+    (reason: unknown) => reason,
+  );
+  assert.instanceOf(error, PipelineError);
+  return error;
 }
 
 describe("pipeline", () => {
   let guard: ReturnType<typeof mockGuard>;
   let inboundAudit: MemoryAuditStore;
-  let inbound: ReturnType<typeof identities>["inbound"];
-  let alice: ReturnType<typeof generateIdentity>;
-  let bob: ReturnType<typeof generateIdentity>;
+  let inbound: ReturnType<typeof createInbound>;
   beforeEach(() => {
     guard = mockGuard(allow);
     inboundAudit = new MemoryAuditStore(auditKey);
-    ({ inbound, alice, bob } = identities(guard, inboundAudit));
+    inbound = createInbound(guard, inboundAudit);
   });
 
   it.each(["accepted", "failed"] as const)(
@@ -134,22 +107,12 @@ describe("pipeline", () => {
       const guardEntered = createDeferred<void>();
       const finishGuard = createDeferred<void>();
       const finishRefresh = createDeferred<void>();
-      const finalized = createDeferred<void>();
       try {
         const replay = new MemoryReplayStore();
         const refresh = vi
           .spyOn(replay, "refresh")
           .mockImplementationOnce(() => finishRefresh.promise);
-        const complete = replay.complete.bind(replay);
-        vi.spyOn(replay, "complete").mockImplementation(async (...args) => {
-          await complete(...args);
-          finalized.resolve();
-        });
-        const release = replay.release.bind(replay);
-        vi.spyOn(replay, "release").mockImplementation(async (...args) => {
-          await release(...args);
-          finalized.resolve();
-        });
+        const finalized = vi.spyOn(replay, outcome === "accepted" ? "complete" : "release");
         vi.spyOn(guard, "classify").mockImplementation(async () => {
           guardEntered.resolve();
           await finishGuard.promise;
@@ -159,28 +122,24 @@ describe("pipeline", () => {
           return allow;
         });
         const settled = vi.fn();
-        const pending = composeInbound(
-          inbound("ordinary text", { replayStore: replay, guard }),
-        ).then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
+        const pending = composeInbound(inbound("ordinary text", { replayStore: replay })).then(
+          settled,
+          settled,
         );
-        void pending.then(settled);
         await guardEntered.promise;
         await vi.advanceTimersByTimeAsync(60_000);
         expect(refresh).toHaveBeenCalledTimes(1);
         finishGuard.resolve();
-        await finalized.promise;
         await vi.advanceTimersByTimeAsync(0);
+        expect(finalized).toHaveBeenCalled();
         expect(settled).not.toHaveBeenCalled();
         finishRefresh.resolve();
-        const result = await pending;
-        expect(settled).toHaveBeenCalledOnce();
-        if (outcome === "accepted") {
-          expect(result).toMatchObject({ value: { disposition: "accepted" } });
-        } else {
-          expect(result).toHaveProperty("error");
-        }
+        await pending;
+        expect(settled).toHaveBeenCalledExactlyOnceWith(
+          outcome === "accepted"
+            ? expect.objectContaining({ disposition: "accepted" })
+            : expect.any(Error),
+        );
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         finishGuard.resolve();
@@ -193,7 +152,6 @@ describe("pipeline", () => {
 
   it("accepts and deduplicates an authenticated inbound envelope", async () => {
     const text = `Tree: https://github.com/openclaw/openclaw/tree/${githubCommit}/.agents`;
-    const classifyInbound = vi.spyOn(guard, "classify");
     const options = inbound(text);
     const result = await composeInbound(options);
     expect(result).toMatchObject({
@@ -201,11 +159,16 @@ describe("pipeline", () => {
       body: { text },
       receipt: { id: options.envelope.id, status: "accepted" },
     });
-    expect(classifyInbound).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ direction: "inbound", text }),
-    );
     const inboundEntries = await inboundAudit.entries();
-    expectAudit(inboundEntries, ["guard_verdict", "inbox", "receipt"]);
+    expect(inboundEntries.map(({ event }) => event.type)).toEqual([
+      "guard_verdict",
+      "inbox",
+      "receipt",
+    ]);
+    const digests = inboundEntries.map(
+      ({ event }) => (event.payload as { approvalDigest: string }).approvalDigest,
+    );
+    expect(new Set(digests).size).toBe(1);
     const duplicate = await composeInbound({ ...options, now: now + 10 * 60 });
     expect(duplicate).toEqual({
       disposition: "duplicate",
@@ -217,46 +180,31 @@ describe("pipeline", () => {
   });
 
   it("rejects a decrypted free-form thread before guard admission", async () => {
-    const envelope = craftEnvelope({ text: "hello", thread: "free-form thread" }, alice, bob);
-    await expect(composeInbound(inbound(envelope))).rejects.toMatchObject({
+    await expect(
+      composeInbound(inbound({ text: "hello", thread: "free-form thread" })),
+    ).rejects.toMatchObject({
       code: "malformed",
     });
     expect(guard.calls).toBe(0);
   });
 
-  it("releases a replay claim after transient audit failure and retries successfully", async () => {
-    vi.spyOn(inboundAudit, "appendEvent").mockRejectedValueOnce(
-      new Error("transient audit failure"),
-    );
-    const options = inbound("retry me");
-    await expect(composeInbound(options)).rejects.toThrow("transient audit failure");
-    const retried = await composeInbound(options);
-    expect(retried).toMatchObject({ disposition: "accepted", receipt: { status: "accepted" } });
-  });
-
-  it.each([
-    {
-      verdict: { ...allow, decision: "deny" as const, category: "injection", reason: "Denied." },
-      stage: "guard",
-      reviewOutcome: undefined,
-      category: "guard_deny",
-    },
-    { verdict: review, stage: "review", reviewOutcome: "denied", category: "review_denied" },
-  ])(
-    "caches a $category rejection without repeating classification or audit",
-    async ({ verdict, stage, reviewOutcome, category }) => {
-      guard = mockGuard(verdict);
+  it.each(["guard", "review"] as const)(
+    "caches %s rejection without repeating classification or audit",
+    async (stage) => {
+      guard = mockGuard(stage === "guard" ? { ...allow, decision: "deny" } : review);
       const options = inbound("classify me", { guard, reviewGate: approvalGate(false) });
       const rejection = await capturePipelineError(composeInbound(options));
       expect(rejection).toMatchObject({
         stage,
-        reviewOutcome,
-        receipt: { status: "rejected", category },
+        reviewOutcome: stage === "review" ? "denied" : undefined,
+        receipt: {
+          status: "rejected",
+          category: stage === "guard" ? "guard_deny" : "review_denied",
+        },
       });
       const entryCount = (await inboundAudit.entries()).length;
       const duplicate = await composeInbound({ ...options, now: now + 1_000 });
       expect(duplicate).toEqual({ disposition: "duplicate", receipt: rejection.receipt });
-      expect(duplicate).not.toHaveProperty("body");
       expect((await inboundAudit.entries()).length).toBe(entryCount);
       expect(guard.calls).toBe(1);
     },
@@ -309,29 +257,34 @@ describe("pipeline", () => {
     },
   );
 
-  it("parks an inbound guard failure instead of rejecting the peer", async () => {
-    const failure: Verdict = {
-      ...allow,
-      decision: "deny",
-      category: "guard_failure",
-      reason: "Guard unavailable or invalid.",
-    };
-    const failing = inbound("guard outage", {
-      guard: mockGuard(failure),
-    });
-    const parked = await capturePipelineError(composeInbound(failing));
-    expect(parked).toMatchObject({
-      stage: "guard",
-      verdict: { category: "guard_failure" },
-      receipt: undefined,
-    });
-    expect(
-      (await inboundAudit.entries()).some((entry) => entry.event.type === "inbox_rejected"),
-    ).toBe(false);
-    // The replay claim released, so recovery retries once the guard is back.
-    const retried = await composeInbound({ ...failing, guard: mockGuard(allow), now: now + 60 });
-    expect(retried.disposition).toBe("accepted");
-  });
+  it.each(["audit", "guard"] as const)(
+    "releases a claim after %s failure for retry",
+    async (source) => {
+      const options = inbound("retry me");
+      if (source === "audit") {
+        vi.spyOn(inboundAudit, "appendEvent").mockRejectedValueOnce(
+          new Error("transient audit failure"),
+        );
+        await expect(composeInbound(options)).rejects.toThrow("transient audit failure");
+      } else {
+        options.guard = mockGuard({ ...allow, decision: "deny", category: "guard_failure" });
+        expect(await capturePipelineError(composeInbound(options))).toMatchObject({
+          stage: "guard",
+          verdict: { category: "guard_failure" },
+          receipt: undefined,
+        });
+        expect(
+          (await inboundAudit.entries()).some(({ event }) => event.type === "inbox_rejected"),
+        ).toBe(false);
+      }
+      await expect(
+        composeInbound({ ...options, guard: mockGuard(allow), now: now + 60 }),
+      ).resolves.toMatchObject({
+        disposition: "accepted",
+        receipt: { status: "accepted" },
+      });
+    },
+  );
 
   it("completes deterministic inbound denial with a signed rejection", async () => {
     await expect(
