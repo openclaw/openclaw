@@ -8,9 +8,8 @@ import {
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
 import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
-import { textAssistant, toolAssistant } from "./settled-turn-fixtures.test-support.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
-import { expectComplete, makeTerminalInput } from "./terminal-resolution.test-support.js";
+import { makeTerminalInput } from "./terminal-resolution.test-support.js";
 import { createPendingToolMediaCarry } from "./tool-media-payloads.js";
 
 function deliveryAttempt(
@@ -29,6 +28,17 @@ function deliveryAttempt(
 type Observation = "pending" | "observation-failed" | "missing" | "delivered";
 const committedReply = { text: "Earlier committed reply.", sourceReplyFinal: true };
 const committedPayload = expect.objectContaining({ text: "Earlier committed reply." });
+const textAssistant = (text: string) =>
+  buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+
+function observedOutputs<T extends string>(outputs: readonly T[]) {
+  return outputs.flatMap((output) =>
+    (["pending", "observation-failed", "missing"] as const).map((observation) => ({
+      output,
+      observation,
+    })),
+  );
+}
 
 function deliveryInput(
   attempt: EmbeddedRunAttemptWithReceiptEvidence,
@@ -75,76 +85,72 @@ async function resolveCompletion(
       settledTurnFinalizationOutcome: settled.finalizationOutcome,
     }),
   );
-  expectComplete(resolved);
+  if (resolved.action !== "complete") {
+    throw new Error("expected terminal completion");
+  }
   return resolved.result;
 }
 
 describe("terminal preparation delivery custody", () => {
-  it.each([
-    ["text", "pending"],
-    ["error", "pending"],
-    ["media", "pending"],
-    ["timeout", "pending"],
-    ["text", "missing"],
-    ["error", "missing"],
-    ["media", "missing"],
-    ["timeout", "missing"],
-    ["text", "observation-failed"],
-  ] as const)("carries %s output through %s delivery custody", async (output, observation) => {
-    const text = "Current input answer.";
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: output === "error" ? "error" : "stop",
-      content: output === "media" || output === "error" ? [] : [{ type: "text", text }],
-      ...(output === "error" ? { errorMessage: "503 upstream connection refused" } : {}),
-    });
-    const attempt = deliveryAttempt(assistant, {
-      terminal:
-        output === "timeout"
-          ? { kind: "timeout", phase: "prompt", source: "runtime" }
-          : { kind: "ok" },
-      assistantTexts: output === "text" || output === "timeout" ? [text] : [],
-      messagingToolSourceReplyPayloads: [{ ...committedReply }],
-    });
-    attempt.answerSegments = precedingAnswer();
-    const input = deliveryInput(attempt, observation, "user");
-    const carry = createPendingToolMediaCarry();
-    if (output === "media") {
-      carry.capture({ toolMediaUrls: ["/tmp/carried-current.pdf"] });
-      attempt.toolMediaUrls = ["/tmp/current.pdf"];
-    }
-    input.terminalBase.mergeToolMedia = carry.merge;
-    const settled = await prepareTerminalWithSettledTurnFinalization(input);
-    expect(input.terminalBase.runParams.resolveReplyDelivery).toHaveBeenCalledWith(2);
-    expect(input.finalization.harness.finalizeSettledTurn).not.toHaveBeenCalled();
-    expect(settled).toMatchObject({
-      finalizationOutcome: "not-attempted",
-      prepared: { replyDeliveryState: observation === "missing" ? "missing" : "pending" },
-    });
-    const result = await resolveCompletion(input, settled);
-    const payloads = result.payloads ?? [];
-    expect(payloads[0]?.text).toBe("Earlier committed reply.");
-    expect(getReplyPayloadMetadata(payloads[0]!)).toHaveProperty("sourceReplyTranscriptMirror");
-    if (observation !== "missing") {
-      expect(settled.prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout).toBeUndefined();
-      expect(payloads).toEqual([committedPayload]);
-      expect(payloads[0]?.mediaUrls).toBeUndefined();
-      expect(result.sourceReplyDeliveryState).toBe("pending");
+  it.each(observedOutputs(["text", "error", "media", "timeout"] as const))(
+    "carries $observation custody through $output preparation and terminal resolution",
+    async ({ output, observation }) => {
+      const text = "Current input answer.";
+      const assistant = buildEmbeddedRunnerAssistant({
+        stopReason: output === "error" ? "error" : "stop",
+        content: output === "media" || output === "error" ? [] : [{ type: "text", text }],
+        ...(output === "error" ? { errorMessage: "503 upstream connection refused" } : {}),
+      });
+      const attempt = deliveryAttempt(assistant, {
+        terminal:
+          output === "timeout"
+            ? { kind: "timeout", phase: "prompt", source: "runtime" }
+            : { kind: "ok" },
+        assistantTexts: output === "text" || output === "timeout" ? [text] : [],
+        messagingToolSourceReplyPayloads: [{ ...committedReply }],
+      });
+      attempt.answerSegments = precedingAnswer();
+      const input = deliveryInput(attempt, observation, "user");
+      const carry = createPendingToolMediaCarry();
       if (output === "media") {
-        input.terminalBase.runParams.resolveReplyDelivery = async () => "missing";
-        const released = await prepareTerminalWithSettledTurnFinalization(input);
-        expect(
-          released.prepared.payloadsWithToolMedia?.flatMap((payload) => payload.mediaUrls ?? []),
-        ).toEqual(expect.arrayContaining(["/tmp/current.pdf", "/tmp/carried-current.pdf"]));
+        carry.capture({ toolMediaUrls: ["/tmp/carried-current.pdf"] });
+        attempt.toolMediaUrls = ["/tmp/current.pdf"];
       }
-    } else if (output === "media") {
-      expect(payloads.flatMap((payload) => payload.mediaUrls ?? [])).toEqual(
-        expect.arrayContaining(["/tmp/current.pdf", "/tmp/carried-current.pdf"]),
-      );
-    } else {
-      expect(payloads).toHaveLength(2);
-      expect(payloads[1]).toMatchObject(output === "error" ? { isError: true } : { text });
-    }
-  });
+      input.terminalBase.mergeToolMedia = carry.merge;
+      const finalizeSettledTurn = vi.spyOn(input.finalization.harness, "finalizeSettledTurn");
+      const settled = await prepareTerminalWithSettledTurnFinalization(input);
+      expect(input.terminalBase.runParams.resolveReplyDelivery).toHaveBeenCalledWith(2);
+      expect(finalizeSettledTurn).not.toHaveBeenCalled();
+      expect(settled).toMatchObject({
+        finalizationOutcome: "not-attempted",
+        prepared: { replyDeliveryState: observation === "missing" ? "missing" : "pending" },
+      });
+      const result = await resolveCompletion(input, settled);
+      const payloads = result.payloads ?? [];
+      expect(payloads[0]?.text).toBe("Earlier committed reply.");
+      expect(getReplyPayloadMetadata(payloads[0]!)).toHaveProperty("sourceReplyTranscriptMirror");
+      if (observation !== "missing") {
+        expect(settled.prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout).toBeUndefined();
+        expect(payloads).toEqual([committedPayload]);
+        expect(payloads[0]?.mediaUrls).toBeUndefined();
+        expect(result.sourceReplyDeliveryState).toBe("pending");
+        if (output === "media") {
+          input.terminalBase.runParams.resolveReplyDelivery = async () => "missing";
+          const released = await prepareTerminalWithSettledTurnFinalization(input);
+          expect(
+            released.prepared.payloadsWithToolMedia?.flatMap((payload) => payload.mediaUrls ?? []),
+          ).toEqual(expect.arrayContaining(["/tmp/current.pdf", "/tmp/carried-current.pdf"]));
+        }
+      } else if (output === "media") {
+        expect(payloads.flatMap((payload) => payload.mediaUrls ?? [])).toEqual(
+          expect.arrayContaining(["/tmp/current.pdf", "/tmp/carried-current.pdf"]),
+        );
+      } else {
+        expect(payloads).toHaveLength(2);
+        expect(payloads[1]).toMatchObject(output === "error" ? { isError: true } : { text });
+      }
+    },
+  );
 
   it.each([
     ["delivered", "missing"],
@@ -170,7 +176,10 @@ describe("terminal preparation delivery custody", () => {
   );
 
   it("preserves a tool-authored source projection and its owned media while custody is pending", async () => {
-    const assistant = toolAssistant(["reply-tool", "report"]);
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "reply-tool", name: "report", arguments: {} }],
+    });
     const attempt = deliveryAttempt(assistant, {
       toolMediaUrls: ["/tmp/unselected.pdf"],
       messagingToolSourceReplyPayloads: [

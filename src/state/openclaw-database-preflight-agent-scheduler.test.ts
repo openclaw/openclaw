@@ -9,8 +9,10 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: vi.fn(() => 2),
 }));
 
-function fixture<T extends string | number>(targets: readonly T[]) {
-  vi.useFakeTimers();
+function fixture<T>(targets: readonly T[], timed = false) {
+  if (timed) {
+    vi.useFakeTimers();
+  }
   const pending = targets.map(() => createDeferred());
   const tracked: Promise<unknown>[] = [];
   const started: T[] = [];
@@ -32,10 +34,6 @@ function fixture<T extends string | number>(targets: readonly T[]) {
     result,
     defer,
     releaseAll,
-    async inspect(target: T, inspection: OpenClawDatabaseSchemaPreflight) {
-      await pending[targets.indexOf(target)]!.promise;
-      inspection.indeterminate.push({ kind: "agent", path: `agent-${target}`, reason: "fixture" });
-    },
     run(
       inspect: Parameters<typeof preflightAgentDatabasesBounded<T>>[1],
       canDefer?: (target: T) => boolean,
@@ -68,14 +66,26 @@ function fixture<T extends string | number>(targets: readonly T[]) {
       gateway.abort();
       releaseAll();
       await Promise.allSettled(tracked);
-      vi.useRealTimers();
+      if (timed) {
+        vi.useRealTimers();
+      }
     },
   };
 }
 
 it("shares one foreground wait across active and queued agent inspections", async () => {
-  await using f = fixture([0, 1, 2, 3]);
-  void f.run(f.inspect, () => true);
+  await using f = fixture([0, 1, 2, 3], true);
+  void f.run(
+    async (target, inspection) => {
+      await f.pending[target]!.promise;
+      inspection.indeterminate.push({
+        kind: "agent",
+        path: `agent-${target}`,
+        reason: "fixture",
+      });
+    },
+    () => true,
+  );
   await vi.advanceTimersByTimeAsync(4_000);
   f.pending[0]!.resolve();
   await vi.advanceTimersByTimeAsync(0);
@@ -100,36 +110,8 @@ it("shares one foreground wait across active and queued agent inspections", asyn
   ]);
 });
 
-it("bounds active inspections while preserving out-of-order results in input order", async () => {
-  await using f = fixture([0, 1, 2]);
-  let active = 0;
-  let peak = 0;
-  const run = f.run(async (target, inspection) => {
-    peak = Math.max(peak, ++active);
-    try {
-      await f.inspect(target, inspection);
-    } finally {
-      active--;
-    }
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  expect({ started: f.started, active }).toEqual({ started: [0, 1], active: 2 });
-  f.pending[1]!.resolve();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.started).toEqual([0, 1, 2]);
-  f.pending[2]!.resolve();
-  f.pending[0]!.resolve();
-  await run;
-  expect({ active, peak }).toEqual({ active: 0, peak: 2 });
-  expect(f.result.indeterminate.map((entry) => entry.path)).toEqual([
-    "agent-0",
-    "agent-1",
-    "agent-2",
-  ]);
-});
-
 it("keeps unowned custom stores in strict foreground admission", async () => {
-  await using f = fixture(["custom.sqlite"]);
+  await using f = fixture(["custom.sqlite"], true);
   const run = f.run(
     async () => await f.pending[0]!.promise,
     () => false,
@@ -144,7 +126,7 @@ it("keeps unowned custom stores in strict foreground admission", async () => {
 });
 
 it("keeps deferred inspections alive until the Gateway owner stops", async () => {
-  await using f = fixture(["slow.sqlite"]);
+  await using f = fixture(["slow.sqlite"], true);
   let signal: AbortSignal | undefined;
   await sqliteInspection.withSqliteReadOnlyWorkerScope(async () => {
     const foreground = f.run(
@@ -165,7 +147,7 @@ it("keeps deferred inspections alive until the Gateway owner stops", async () =>
 });
 
 it("rejects a deferred failure while a strict store still prevents handoff", async () => {
-  await using f = fixture([0, 1, 2]);
+  await using f = fixture([0, 1, 2], true);
   const failure = new Error("unowned database inspection failed");
   f.defer.mockImplementation(() => {
     throw new Error("An unfinished healthy peer prevents background handoff");
@@ -186,4 +168,52 @@ it("rejects a deferred failure while a strict store still prevents handoff", asy
   await expect(run).rejects.toBe(failure);
   expect(f.defer).not.toHaveBeenCalled();
   expect(f.started).toEqual([0, 1]);
+});
+
+it("bounds active inspections to the host's CPUs", async () => {
+  await using f = fixture([0, 1, 2]);
+  let active = 0;
+  let peak = 0;
+  const run = f.run(async (target) => {
+    active += 1;
+    peak = Math.max(peak, active);
+    try {
+      await f.pending[target]!.promise;
+    } finally {
+      active -= 1;
+    }
+  });
+  await Promise.resolve();
+  expect({ started: f.started, active, peak }).toEqual({ started: [0, 1], active: 2, peak: 2 });
+  f.pending[0]!.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect({ started: f.started, peak }).toEqual({ started: [0, 1, 2], peak: 2 });
+  f.releaseAll();
+  await run;
+  expect({ active, peak }).toEqual({ active: 0, peak: 2 });
+});
+
+it("preserves input result order when inspections finish out of order", async () => {
+  await using f = fixture([0, 1, 2]);
+  const run = f.run(async (target, inspection) => {
+    await f.pending[target]!.promise;
+    inspection.indeterminate.push({
+      kind: "agent",
+      path: `agent-${target}`,
+      reason: `result-${target}`,
+    });
+  });
+  await Promise.resolve();
+  f.pending[1]!.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  f.pending[2]!.resolve();
+  f.pending[0]!.resolve();
+  await run;
+  expect(f.result.indeterminate.map((entry) => entry.path)).toEqual([
+    "agent-0",
+    "agent-1",
+    "agent-2",
+  ]);
 });
