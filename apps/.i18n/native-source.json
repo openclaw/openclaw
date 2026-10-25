@@ -5596,6 +5596,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt","kind":"ui-call","surface":"android","id":"native.android.9bb0d79f7deba6f7","source":"Monitoring · 1 scheduled job"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt","kind":"ui-call","surface":"android","id":"native.android.371847d33fbd7ba3","source":"Monitoring · 1 thread"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt","kind":"ui-call","surface":"android","id":"native.android.b718dfd2918501b5","source":"Needs attention"},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt","kind":"ui-call","surface":"android","id":"native.android.1ae8d964d31e29ab","source":"New Chat"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt","kind":"ui-call","surface":"android","id":"native.android.961c0a565c0382f2","source":"No TLS endpoint"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt","kind":"ui-call","surface":"android","id":"native.android.d8115083618341f7","source":"No channels"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt","kind":"ui-call","surface":"android","id":"native.android.4779609c582d20ac","source":"No devices"},
