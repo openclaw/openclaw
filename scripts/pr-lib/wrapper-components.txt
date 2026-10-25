@@ -1536,7 +1536,6 @@ src/plugins/manifest-config-groups.ts
 src/plugins/manifest-contract-eligibility.ts
 src/plugins/manifest-contract-keys.ts
 src/plugins/manifest-control-ui.ts
-src/plugins/manifest-decision-catalog.ts
 src/plugins/manifest-install-owner.ts
 src/plugins/manifest-metadata-scan.ts
 src/plugins/manifest-model-id-normalization.ts
