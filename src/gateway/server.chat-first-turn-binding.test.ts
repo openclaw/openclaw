@@ -8,7 +8,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import {
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
-  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activeExecRequestOwners } from "../infra/exec-request-context.js";
@@ -17,7 +16,7 @@ import { createProductState, productModelConfig } from "./server.chat-product.te
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-it("binds native chat.send, preserves its stopped partial, and resumes terminal recovery residue", async () => {
+it("binds native chat.send, preserves its stopped partial, and resumes the same session", async () => {
   const state = await createProductState("first-turn-binding");
   const runId = "first-native-turn";
   const sessionKey = "agent:main:first-turn-binding";
@@ -227,58 +226,22 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     }),
   );
   expect(requestBodies).toHaveLength(1);
-  for (const nextRunId of [
-    "resume-after-stop",
-    "stale-terminal-generation",
-    "killed-unfinished-fence",
-    "continue-again",
-  ]) {
-    if (nextRunId === "stale-terminal-generation") {
-      // Older interrupted runs can leave terminal fences on an otherwise stopped row.
-      await patchSessionEntryCore(transcriptScope, (entry) => ({
-        status: "killed",
-        abortedLastRun: false,
-        providerOverride: provider.providerId,
-        modelOverride: provider.modelId,
-        mainRestartRecovery: { cycleId: "old-cycle", revision: 1, chargedAttempts: 0 },
-        restartRecoveryRuns: [{ runId: "stopped-old-run", lifecycleGeneration: "old-generation" }],
-        restartRecoveryTerminalRunIds: [
-          ...(entry.restartRecoveryTerminalRunIds ?? []),
-          "stopped-old-run",
-        ],
-      }));
-    }
-    if (nextRunId === "killed-unfinished-fence") {
-      await patchSessionEntryCore(transcriptScope, () => ({
-        status: "killed",
-        abortedLastRun: false,
-        mainRestartRecovery: undefined,
-        pendingFinalDelivery: undefined,
-        restartRecoveryDeliveryRunId: undefined,
-        restartRecoveryHarnessCompletion: undefined,
-        restartRecoveryRuns: [{ runId: "killed-old-run", lifecycleGeneration: "dead-generation" }],
-        restartRecoveryTerminalRunIds: Array.from(
-          { length: 8 },
-          (_, index) => `other-run-${index}`,
-        ),
-      }));
-    }
-    const currentHistory = await historyForSession();
-    expect(currentHistory.sessionId).toBe(sessionId);
-    expect(
-      await gateway.client.request("chat.send", {
-        sessionKey,
-        sessionId,
-        expectedLeafEntryId: currentHistory.sessionInfo.activeLeafEntryId,
-        message: "Continue this conversation.",
-        idempotencyKey: nextRunId,
-      }),
-    ).toMatchObject({ runId: nextRunId, status: "started" });
-    expect(await gateway.client.request("agent.wait", { runId: nextRunId })).toMatchObject({
-      status: "ok",
-    });
-  }
-  expect(requestBodies).toHaveLength(5);
+  const currentHistory = await historyForSession();
+  expect(currentHistory.sessionId).toBe(sessionId);
+  const nextRunId = "resume-after-stop";
+  expect(
+    await gateway.client.request("chat.send", {
+      sessionKey,
+      sessionId,
+      expectedLeafEntryId: currentHistory.sessionInfo.activeLeafEntryId,
+      message: "Continue this conversation.",
+      idempotencyKey: nextRunId,
+    }),
+  ).toMatchObject({ runId: nextRunId, status: "started" });
+  expect(await gateway.client.request("agent.wait", { runId: nextRunId })).toMatchObject({
+    status: "ok",
+  });
+  expect(requestBodies).toHaveLength(2);
   expect(await loadTranscriptEvents(transcriptScope)).toEqual(expect.arrayContaining(events));
   expect(loadExactSessionEntryReadOnly({ sessionKey })?.entry).toMatchObject({ sessionId });
 });

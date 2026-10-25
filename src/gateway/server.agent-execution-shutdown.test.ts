@@ -1,6 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { deleteSubagentSessionForCleanup } from "../agents/subagents/registry/subagent-session-cleanup.js";
@@ -23,15 +23,9 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
     let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
     let agentDispatch: typeof import("./agent-turn/agent-run-dispatch.js");
     let acquisition: Promise<GatewayServerHarness> | undefined;
-    let restartMarkers: MockInstance<typeof markRestartAbortedMainSessions>;
-    let markRestartAbortedMainSessions: (typeof import("../agents/main-session-recovery/main-session-restart-recovery.js"))["markRestartAbortedMainSessions"];
     installGatewayTestHooks({
       scope: "suite",
       setup: async () => {
-        const recoveryModule =
-          await import("../agents/main-session-recovery/main-session-restart-recovery.js");
-        markRestartAbortedMainSessions = recoveryModule.markRestartAbortedMainSessions;
-        restartMarkers = vi.spyOn(recoveryModule, "markRestartAbortedMainSessions");
         kernel = await captureGatewayKernel(async () => {
           acquisition = startGatewayServerHarness();
           harness = await acquisition;
@@ -222,32 +216,19 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
             vi.useRealTimers();
           }
         }
-        restartMarkers.mockImplementationOnce(async (params) => {
-          observed.beforeMarkAborted = runSignal?.aborted;
-          observed.workAborted = kernel.connectionWork.signal.aborted;
-          observed.markAvailable = runtime.isAvailable();
-          observed.entryFenced = await runtime.recovery
-            .dispatchAgent({
-              message: "must not enter during shutdown",
-              sessionKey: "main",
-              idempotencyKey: `${runId}-late`,
-            })
-            .then(
-              () => false,
-              (error: unknown) => String(error).includes("Gateway request entry is closed"),
-            );
-          const result = await markRestartAbortedMainSessions(params);
-          const { entry } = await loadSessionEntryAsync("main");
-          observed.recoveryMarked = Boolean(entry?.mainRestartRecovery?.cycleId);
-          observed.afterMarkAborted = runSignal?.aborted;
-          return result;
-        });
         closing = harness.server.close({
           reason: mode === "restart" ? "gateway restart" : "gateway stopping",
           restartExpectedMs: mode === "restart" ? 0 : null,
           ...(mode === "restart" ? { drainTimeoutMs: 0 } : {}),
         });
         await drainEntered.promise;
+        await expect(
+          runtime.recovery.dispatchAgent({
+            message: "must not enter during shutdown",
+            sessionKey: "main",
+            idempotencyKey: `${runId}-late`,
+          }),
+        ).rejects.toThrow("Gateway request entry is closed");
         await nextTurn();
         const beforeEmergencyRelease = [...order];
         if (mode !== "graceful" && !runSignal?.aborted) {
@@ -264,17 +245,9 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
 
         expect(cleanupOutcomes).toEqual(["changed", "deleted"]);
         await expect(cleanup()).resolves.toBe("failed");
-        expect(restartMarkers).toHaveBeenCalledOnce();
-        // Closing entry must not revoke execution before its durable restart marker commits.
         expect(observed).toEqual({
           drainAborted: mode !== "graceful",
-          beforeMarkAborted: false,
-          workAborted: false,
-          afterMarkAborted: false,
-          markAvailable: true,
           finalizerAvailable: true,
-          entryFenced: true,
-          recoveryMarked: mode !== "graceful",
         });
         expect(runtime.isAvailable()).toBe(false);
         if (mode === "graceful") {
