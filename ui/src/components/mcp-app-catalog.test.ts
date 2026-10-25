@@ -463,9 +463,11 @@ describe("app launch catalog", () => {
     };
     current.resolve({ servers: [server] });
     await current.promise;
-    await waitForSolid(() => expect(sidebar.textContent).toContain("Library"));
-    expect(thread.querySelector("button")).not.toBeNull();
-    expect(resources.querySelector("button")).not.toBeNull();
+    await waitForSolid(() => {
+      expect(sidebar.textContent).toContain("Library");
+      expect(thread.querySelector("button")).not.toBeNull();
+      expect(resources.querySelector("button")).not.toBeNull();
+    });
 
     thread.querySelector<HTMLButtonElement>("button")!.click();
     await waitForSolid(() =>
@@ -932,6 +934,7 @@ describe("app launch catalog", () => {
     element.addEventListener(MCP_APP_OPEN_EVENT, launch);
     button.click();
     await waitForSolid(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+    expect(launch.mock.calls[0]![0].target).toBe(element);
     expect((launch.mock.calls[0]![0] as CustomEvent<McpAppOpenDetail>).detail).toMatchObject({
       sessionKey: "agent:main:one",
       agentId: "main",

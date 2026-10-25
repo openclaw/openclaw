@@ -50,7 +50,8 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     sessions: createChatPageSessions(),
     runtimeConfig: {
       canPatch: false,
-      ensureLoaded: vi.fn(async () => undefined),
+      ensureDisplayLoaded: vi.fn(async () => undefined),
+      refreshDisplay: vi.fn(async () => undefined),
       runExternalMutation: vi.fn(),
       state: {
         client,

@@ -5,6 +5,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   replayChatDisplay,
   type ChatDisplayFrame,
@@ -13,11 +14,7 @@ import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse
 import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setTestEnvValue } from "../test-utils/env.js";
-import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import {
   createGatewayConfigPath,
   removeGatewayTempHome,
@@ -117,7 +114,7 @@ beforeAll(async () => {
         response.writeHead(404).end();
         return;
       }
-      const payload: Record<string, unknown> = JSON.parse(await readProviderBody(request));
+      const payload: Record<string, unknown> = JSON.parse(await readRequestText(request));
       if (typeof payload.model !== "string") {
         throw new Error("Responses request has no model");
       }

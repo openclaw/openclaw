@@ -449,7 +449,9 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
           once: true,
         });
       }
+      let resolverOperation: ReturnType<typeof createReplyOperation> | undefined;
       const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
+        resolverOperation = options?.replyOperation;
         if (state === "terminal-row") {
           options?.onAgentRunStart?.("successful-run");
         }
@@ -458,7 +460,10 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       const dispatchParams = createVisibleDispatchParams(replyResolver);
       let settled = false;
 
-      const resultPromise = dispatchReplyFromConfig(dispatchParams).then((result) => {
+      const resultPromise = withReplyDispatcher({
+        dispatcher: dispatchParams.dispatcher,
+        run: () => dispatchReplyFromConfig(dispatchParams),
+      }).then((result) => {
         settled = true;
         return result;
       });
@@ -486,6 +491,14 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       }
       expect(replyResolver).toHaveBeenCalledTimes(1);
       expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+      if (!resolverOperation) {
+        throw new Error("dispatch did not expose its reply operation");
+      }
+      await resolverOperation.ownerSettlement;
+      expect(resolverOperation.watchdog.snapshot()).toMatchObject({
+        current: false,
+        phase: "settled",
+      });
     },
   );
 

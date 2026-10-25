@@ -131,7 +131,7 @@ export function parseFeishuMessageEvent(
   return ctx;
 }
 
-export function parseMessageContent(content: string, messageType: string): string {
+function parseMessageContent(content: string, messageType: string): string {
   if (messageType === "post") {
     return parsePostContent(content, {
       renderMediaPlaceholders: false,
@@ -175,7 +175,7 @@ export function parseMessageContent(content: string, messageType: string): strin
 
 const FEISHU_MEDIA_MESSAGE_TYPES = new Set(["image", "file", "audio", "video", "media", "sticker"]);
 
-export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolean {
+function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolean {
   if (!botOpenId) {
     return false;
   }

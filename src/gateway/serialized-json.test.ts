@@ -34,42 +34,56 @@ describe("serialized Gateway response arrays", () => {
     }
   });
 
-  it("forwards worker JSON without materializing its messages", () => {
-    const messages = [{ role: "assistant", content: 'é🦞\\\"\n__RAW_JSON_0__' }, null];
-    const bytes = Buffer.from(`prefix${JSON.stringify(messages)}suffix`);
-    const carrier = new SerializedJsonArray(bytes.subarray(6, -6));
-    const materialize = vi.spyOn(carrier, "materialize");
-    const frame = {
-      type: "res",
-      id: "request",
-      ok: true,
-      payload: {
-        omitted: undefined,
-        messages: carrier,
-        nullable: null,
-        values: [undefined, null],
-        marker: '"messages":__RAW_JSON_0__',
-        custom: { toJSON: (key: string) => key },
-      },
-      error: undefined,
-    };
-    const expected = {
-      type: "res",
-      id: "request",
-      ok: true,
-      payload: {
-        messages,
-        nullable: null,
-        values: [null, null],
-        marker: '"messages":__RAW_JSON_0__',
-        custom: "custom",
-      },
-    };
-    const encoded = serializeGatewayFrame(frame);
-    expect(encoded.toString()).toBe(JSON.stringify(expected));
-    expect(JSON.parse(encoded.toString())).toEqual(expected);
-    expect(materialize).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "forwards worker JSON without materializing its messages (subscription=%s)",
+    (subscription) => {
+      const messages = [{ role: "assistant", content: 'é🦞\\\"\n__RAW_JSON_0__' }, null];
+      const bytes = Buffer.from(`prefix${JSON.stringify(messages)}suffix`);
+      const carrier = new SerializedJsonArray(bytes.subarray(6, -6));
+      const materialize = vi.spyOn(carrier, "materialize");
+      const frame = {
+        type: "res",
+        id: "request",
+        ok: true,
+        payload: {
+          omitted: undefined,
+          messages: carrier,
+          nullable: null,
+          values: [undefined, null],
+          marker: '"messages":__RAW_JSON_0__',
+          custom: { toJSON: (key: string) => key },
+        },
+        error: undefined,
+      };
+      const expected = {
+        type: "res",
+        id: "request",
+        ok: true,
+        payload: {
+          messages,
+          nullable: null,
+          values: [null, null],
+          marker: '"messages":__RAW_JSON_0__',
+          custom: "custom",
+        },
+      };
+      const wireFrame = subscription
+        ? { ...frame, payload: { initialHistory: { ok: true, payload: frame.payload } } }
+        : frame;
+      const wireExpected = subscription
+        ? { ...expected, payload: { initialHistory: { ok: true, payload: expected.payload } } }
+        : expected;
+      const encoded = serializeGatewayFrame(wireFrame);
+      expect(encoded).toBeInstanceOf(SerializedGatewayFrame);
+      if (!(encoded instanceof SerializedGatewayFrame)) {
+        throw new Error("Expected segmented worker response");
+      }
+      expect(encoded.segments).toContain(carrier.bytes);
+      expect(encoded.toString()).toBe(JSON.stringify(wireExpected));
+      expect(JSON.parse(encoded.toString())).toEqual(wireExpected);
+      expect(materialize).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "reuses row bytes in ordinary list arrays (subscription=%s)",

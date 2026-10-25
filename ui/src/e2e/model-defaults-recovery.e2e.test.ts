@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -7,7 +8,6 @@ import {
   configAuth,
   providerPageOptions,
 } from "./model-catalog-fixtures.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 const suite = createControlUiE2eSuite({ name: "Control UI global model defaults recovery" });
@@ -40,7 +40,7 @@ suite.define(() => {
                 { id: "research", name: "QA Research" },
               ],
             },
-            "config.get": configSnapshot(config, "qa-settings-original"),
+            "config.get": sourceConfigSnapshot(config, "qa-settings-original"),
             "models.authStatus": {
               ts: 1,
               providers: [configAuth("openai")],
@@ -80,7 +80,10 @@ suite.define(() => {
           ...config,
           agents: { ...config.agents, defaults: { model: { primary: "openai/gpt-4.1-mini" } } },
         };
-        await gateway.setMethodResponse("config.get", configSnapshot(savedConfig, "qa-retried"));
+        await gateway.setMethodResponse(
+          "config.get",
+          sourceConfigSnapshot(savedConfig, "qa-retried"),
+        );
         await gateway.setMethodResponse("config.patch", {
           ok: true,
           config: savedConfig,
@@ -98,7 +101,7 @@ suite.define(() => {
         await expect.poll(() => retry.count()).toBe(0);
         await expect.poll(() => modelLabel.textContent()).toBe("GPT-4.1 mini");
         const previousReads = (await gateway.getRequests("config.get")).length;
-        await gateway.setMethodResponse("config.get", configSnapshot(config, "qa-external"));
+        await gateway.setMethodResponse("config.get", sourceConfigSnapshot(config, "qa-external"));
         await gateway.emitGatewayEvent("config.changed", {});
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)

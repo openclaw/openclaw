@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281588,
-  "reason": "PR #182993: bounded formatting cadence and no per-delta geometry reads reduce standard streaming script CPU 20.8% (1736.95 to 1375.20 ms) and burst CPU 16.5% in 20 interleaved base/A-A/head triplets. Coordinator approved +648 B chat, +50 B startup, and +49 B New Session under the measured CPU-win allowance; requests and CSS unchanged. Ratchet to measured startup head.",
+  "startupJsGzipBytes": 272544,
+  "reason": "PR #182993: bounded formatting cadence and no per-delta geometry reads cut standard streaming script CPU 20.8% and burst CPU 16.5% over 20 interleaved base/A-A/head triplets. Coordinator accepted the measured CPU/bytes tradeoff. After merging #183042, same-host builds measure startup 272577 to 272544 B, Chat +702 B (54 B within build variance of the approved +648 B), and New Session +19 B, with unchanged requests and CSS. Ratchet to measured integrated head.",
   "updatedAt": "2026-10-25"
 }

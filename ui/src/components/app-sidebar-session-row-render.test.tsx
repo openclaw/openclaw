@@ -20,7 +20,7 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { renderAppSidebarOnline } from "./app-sidebar-online.tsx";
+import { AppSidebarOnline } from "./app-sidebar-online.tsx";
 import { renderSidebarAgentCard } from "./app-sidebar-render.tsx";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { renderRecentSession as RecentSession } from "./app-sidebar-session-row-render.tsx";
@@ -465,7 +465,9 @@ it("keeps Users visible despite a cached legacy collapse preference", () => {
     onlineUsers: [{ id: "ada", name: "Ada", watchedSessions: [] }],
   });
   host.sessionData.presencePayload = { presence: [{ ts: 1, user: { id: "ada", name: "Ada" } }] };
-  const update = mountObservedHost(host, container, renderAppSidebarOnline);
+  const update = mountObservedHost(host, container, (current) => (
+    <AppSidebarOnline host={current} />
+  ));
   expect(dom.text(".sidebar-online__person-name")).toBe("Ada");
   host.releaseSidebarSnapshot();
   update();
@@ -480,7 +482,9 @@ it("shows unavailable counts after a failed live summary instead of retaining sa
     ],
     onlineCounts: [["ada", { open: 2, running: 1 }]],
   });
-  const update = mountObservedHost(host, container, renderAppSidebarOnline);
+  const update = mountObservedHost(host, container, (current) => (
+    <AppSidebarOnline host={current} />
+  ));
   expect(dom.query(".sidebar-online__counts")).not.toBeNull();
   host.releaseSidebarSnapshot();
   host.sessionData.ownerCounts.error = "Synthetic count failure";

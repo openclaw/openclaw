@@ -5,13 +5,16 @@ import {
 // Zalouser tests cover durable socket admission, recovery, and replay semantics.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createZalouserIngressMonitor, type ZalouserIngressLifecycle } from "./ingress.js";
+import { createZalouserIngressMonitor } from "./ingress.js";
 import {
   createRawZalouserMessage,
   observeZalouserIngressVerdict,
   withZalouserIngressTestQueue,
   type ZalouserTestIngressPayload,
 } from "./ingress.test-support.js";
+
+type ZalouserIngressDispatch = Parameters<typeof createZalouserIngressMonitor>[0]["dispatch"];
+type ZalouserIngressLifecycle = Parameters<ZalouserIngressDispatch>[1];
 
 function createIngress(
   params: Omit<

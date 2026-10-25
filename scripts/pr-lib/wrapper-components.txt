@@ -395,6 +395,7 @@ src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/physical-store.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
+src/infra/database-engine/postgres-index-ordering.ts
 src/infra/database-engine/postgres-schema.ts
 src/infra/database-engine/postgres-search-schema.ts
 src/infra/database-engine/postgres-search.ts
@@ -602,6 +603,7 @@ src/config/io.factory.ts
 src/config/io.health-state.kernel.ts
 src/config/io.health-state.ts
 src/config/io.invalid-config.ts
+src/config/io.legacy-issues.runtime.ts
 src/config/io.load.ts
 src/config/io.meta.ts
 src/config/io.observe-promotion.ts
@@ -747,6 +749,7 @@ src/config/sessions/session-store-read-candidates.ts
 src/config/sessions/session-store-target-inventory.ts
 src/config/sessions/session-store-target-runtime.ts
 src/config/sessions/supported-session-store.ts
+src/config/sessions/session-transcript-mutation-projection.ts
 src/config/sessions/session-transcript-projection-error.ts
 src/config/sessions/session-transcript-projection-facts-scope.ts
 src/config/sessions/session-transcript-projection-facts.ts
@@ -1164,6 +1167,7 @@ src/infra/sqlite-table-integrity-cache.ts
 src/infra/sqlite-jsonl-budget-error.ts
 src/infra/sqlite-jsonl-budget.ts
 src/infra/sqlite-live-snapshot.ts
+src/infra/sqlite-live-owner.ts
 src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-maintenance-integrity.ts
@@ -1599,6 +1603,7 @@ src/plugins/plugin-metadata-snapshot-required.ts
 src/plugins/plugin-metadata-snapshot.runtime.ts
 src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-metadata-state-worker.ts
+src/plugins/plugin-metadata-live-read.worker.ts
 src/plugins/plugin-metadata-state.read.worker.ts
 src/plugins/plugin-metadata-state.kernel.ts
 src/plugins/plugin-module-loader-cache.ts

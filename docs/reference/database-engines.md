@@ -132,9 +132,8 @@ The supported PostgreSQL families are:
   need their original agent configuration to rebuild.
   Duplicate-key voice JSON refuses the port with a hashed
   row locator. Cold archive references are retained; user backups embed their blobs.
-  PostgreSQL agent schemas support current-version
-  bootstrap and the schema 27 to 28 forward migration, and reject schema drift
-  before exposing the store.
+  PostgreSQL agent schemas support current-version bootstrap and registered
+  consecutive forward migrations, and reject schema drift before exposing the store.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
   bidirectional database ports; and matched backups. Frame images remain local
@@ -424,14 +423,20 @@ keyword search is wanted.
 Full text uses a named `simple` plus `unaccent` configuration, a stored generated
 `tsvector`, and GIN. Queries bind literal terms and compile conjunctions,
 disjunctions, adjacent phrases, and final-lexeme prefixes. User text is never
-interpreted as PostgreSQL query operators. Ranking uses `ts_rank_cd` with
-normalization 2: scores are engine-local, higher is better, and ordering differs
+interpreted as PostgreSQL query operators. The default full-text capability uses
+`ts_rank_cd` with normalization 2: scores are engine-local, higher is better, and ordering differs
 from SQLite BM25. Tokenization also differs for punctuation, compound words, and
 Unicode. Snippets use `ts_headline` only after a materialized, bounded candidate
 selection, with a word budget of 2–48, a character cap of 500, and empty highlight markers. Trigram
 contains uses its own GIN index and escaped literal `ILIKE`; it is not a universal
 fallback for full-text queries. Trigram matches rank by native `word_similarity`
 before the result limit; multi-term memory queries average their term scores.
+
+Memory full-text search uses frequency ranking (`ts_rank`) with normalization 0
+and maps rank `r` to `r / (r + 0.0027)` before the shared hybrid merge. Body and
+path candidates, including the match-any fallback when every primary branch is
+empty, share one statement. This calibration is engine-local and does not add
+corpus-wide inverse document frequency; ranking may differ from SQLite BM25.
 
 PostgreSQL memory vector search is approximate: a stored binary sketch selects a
 bounded candidate set by Hamming distance, then exact float32 `vector(n)` cosine
@@ -635,9 +640,11 @@ throughput, operators can opt in with
 `ALTER ROLE <openclaw_role> SET synchronous_commit = off` or the equivalent
 `ALTER DATABASE` setting. This can lose recently acknowledged commits on a server
 or operating-system crash, without corruption. Ports and backups always commit
-durably. The adapter sets generous
-lock and statement timeouts once during connection setup; operations do not
-change timeout settings individually.
+durably. Runtime connections set session-level lock and statement timeouts to
+60 and 90 seconds, overriding role, database, and DSN startup settings. Connection
+waits allow 60 seconds and the synchronous bridge has a 120-second deadline.
+Port and restore materialization allow a one-hour statement timeout. See the
+[operator timeout guidance](/gateway/postgresql#updates-and-schema-migrations).
 
 PostgreSQL model-context navigation reads parse each selected transcript row once
 and keep intermediate projections as JSONB until the navigation and byte counts

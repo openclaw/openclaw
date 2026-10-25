@@ -31,7 +31,7 @@ describe("config gateway operations", () => {
         method === "config.get" ? runtimeConfig.refresh() : runtimeConfig.refreshSchema();
       try {
         const loading = refresh();
-        expect(request).toHaveBeenCalledWith(method, {});
+        await vi.waitFor(() => expect(request).toHaveBeenCalledWith(method, {}));
         publish(true, client, gatewayHelloForMethods([method], ["operator.sessions.read"]));
         publish(true, client);
         pending.resolve(response);

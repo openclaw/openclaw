@@ -11,6 +11,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -382,12 +383,7 @@ it("keeps submitted content through reconnect and fences a late acceptance behin
   let attempts = 0;
   const { pane, state, request, container, draw, query, accept } = createRequestPane((method) => {
     if (method === "agents.list") {
-      return Promise.resolve({
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      } satisfies AgentsListResult);
+      return Promise.resolve(makeBootRoster() satisfies AgentsListResult);
     }
     return method === "taskSuggestions.accept"
       ? ++attempts === 1

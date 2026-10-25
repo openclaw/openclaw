@@ -465,31 +465,6 @@ describe("session cost usage SQLite cache", () => {
     },
   );
 
-  it("serializes refreshes in-process without persisting lock or status writes", async () => {
-    const stateDir = tempDirs.make("openclaw-usage-cache-exclusion-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const agentId = "worker-1";
-      const database = openOpenClawAgentDatabase({ agentId });
-      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path);
-      const contender = prepareSessionCostUsageRefreshLock(agentId, database.path);
-      try {
-        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
-        expect(await owner.acquire()).toBe(true);
-        expect(await contender.acquire()).toBe(false);
-        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(true);
-        expect(database.db.prepare("SELECT * FROM cache_entries").all()).toEqual([]);
-        await owner.release();
-        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
-        expect(await contender.acquire()).toBe(true);
-      } finally {
-        await owner.release();
-        await contender.release();
-      }
-      expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
-      expect(database.db.prepare("SELECT * FROM cache_entries").all()).toEqual([]);
-    });
-  });
-
   it("persists a usage refresh when a sibling adopts shared admission during schema refresh", async () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-readmission-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {

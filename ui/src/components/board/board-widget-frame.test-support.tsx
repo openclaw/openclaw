@@ -8,6 +8,24 @@ import {
   type BoardWidgetFrameOwner,
 } from "./board-widget-frame.tsx";
 
+export function grantedFrameWidgetFixture(): BoardWidget {
+  return {
+    name: "weather",
+    revision: 1,
+    tabId: "main",
+    contentKind: "html",
+    sizeW: 6,
+    sizeH: 4,
+    position: 0,
+    grantState: "granted",
+    viewTicket: "ticket",
+    viewGeneration: "generation",
+    sandboxUrl: "/mcp-app-sandbox",
+    sandboxPort: 8444,
+    sandboxOrigin: "https://sandbox.example",
+  };
+}
+
 type FrameHost = Parameters<typeof createBoardWidgetFrame>[0];
 
 export function createFrameOwner(

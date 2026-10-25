@@ -17,6 +17,25 @@ function quiescence(
   });
 }
 
+it("uses a bounded acquire command for legacy Windows workspaces", async () => {
+  const owner = new AbortController();
+  const nonce = "a".repeat(32);
+  const runWorkspaceCommand = vi.fn(async (_command: WorkerWorkspaceCommand) =>
+    result({ stdout: `quiesced ${nonce}\n` }),
+  );
+  const lease = await quiescence(runWorkspaceCommand, { ownerSignal: owner.signal })(
+    String.raw`C:\workspace`,
+  );
+
+  owner.abort();
+  await lease.resume();
+
+  expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+  const [command] = runWorkspaceCommand.mock.calls[0]!;
+  expect(command).toMatchObject({ legacyQuiescence: true, transportRetry: "never" });
+  expect(command.argv.join(" ").length).toBeLessThan(32_767);
+});
+
 it.each(["transport", "acknowledgement", "cleanup", "owner-closed", "legacy"] as const)(
   "recovers only an owned native nonce after failed acquisition (%s)",
   async (failure) => {

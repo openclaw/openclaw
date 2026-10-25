@@ -120,9 +120,10 @@ function createHistoryLane(name: string, maxWorkers?: number) {
   );
 }
 
-export const historyLane = createHistoryLane(
-  "Session history",
-  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
+export const historyLane = registerSessionTranscriptReaderLane("Session history", (closed) =>
+  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS, closed, {
+    prewarmHistory: true,
+  }),
 );
 // Search readiness can await a host writer; it cannot occupy committed-history workers.
 export const transcriptSearchLane = createHistoryLane(

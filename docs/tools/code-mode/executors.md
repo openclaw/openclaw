@@ -113,6 +113,7 @@ Gateway shutdown releases them. Neither survives a Gateway restart.
 `timeoutMs`, output limits, pending-call limits, suspended-run capacity, and
 `snapshotTtlSeconds` apply to both executors. The historical
 `snapshotTtlSeconds` name also controls Node's suspended-context lifetime.
+Suspended runs expire after elapsed time, unaffected by system-clock changes.
 The host enforces Node's execution deadline by terminating an overdue worker,
 including synchronous loops and promise continuations. Output emitted before
 the timeout remains available within the configured output limit.

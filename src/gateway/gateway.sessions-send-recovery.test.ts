@@ -7,6 +7,7 @@ import { expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ChatPendingInputsPage } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "../../test/helpers/gateway-restart-budget.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
@@ -17,7 +18,6 @@ import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js"
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import {
@@ -75,7 +75,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
       };
       const providerServer = createServer((request, response) => {
         void (async () => {
-          const raw = await readProviderBody(request);
+          const raw = await readRequestText(request);
           if (request.method !== "POST") {
             response.writeHead(200).end('{"data":[]}');
             return;

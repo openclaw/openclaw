@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -26,11 +27,7 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
-import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -108,7 +105,7 @@ test.each(["lifecycle", "outstanding"] as const)(
       const requests: string[] = [];
       const providerServer = createServer((request, response) => {
         void (async () => {
-          requests.push(await readProviderBody(request));
+          requests.push(await readRequestText(request));
           writeOpenAiResponsesText(response, {
             text: "ok",
             messageId: randomUUID(),

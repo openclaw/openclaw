@@ -1,10 +1,7 @@
 import { For, onSettled, Show } from "solid-js";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import {
-  type ChatAttachmentInputHandle,
-  handleChatAttachmentFileSelect,
-} from "./chat-attachment-inputs.ts";
+import type { ChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
 import type { OpenClawChatCameraCapture } from "./chat-camera-capture.tsx";
 import "./chat-camera-capture.css";
@@ -57,7 +54,13 @@ export function ChatAttachmentInputs(
                   disabled={props.disabled}
                   onChange={(event) => {
                     if (!props.disabled) {
-                      handleChatAttachmentFileSelect(event, props);
+                      const input = event.target;
+                      if (!(input instanceof HTMLInputElement)) {
+                        return;
+                      }
+                      const files = [...(input.files ?? [])];
+                      input.value = "";
+                      appendChatAttachmentFiles(files, props);
                     }
                   }}
                 />

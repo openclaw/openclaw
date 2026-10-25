@@ -34,6 +34,7 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { mountOpenClawApp } from "./app-root.tsx";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import {
@@ -211,12 +212,7 @@ describe("Control UI Gateway target lineage", () => {
       vi.stubGlobal("cancelAnimationFrame", () => undefined);
       const { gateway, clients, hello: admit, close, recover } = createGatewayHarness();
       const sessionKey = "agent:main:main";
-      const agentsList = {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      } satisfies AgentsListResult;
+      const agentsList = makeBootRoster() satisfies AgentsListResult;
       const hello: GatewayHelloOk = {
         ...HELLO,
         auth: { role: "operator", scopes: ["operator.read", "operator.write"] },

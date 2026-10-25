@@ -4,6 +4,7 @@ import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -30,12 +31,7 @@ async function createHeaderDraftPane(row: GatewaySessionRow) {
       request: async (method) => {
         switch (method) {
           case "agents.list":
-            return {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "per-sender",
-              agents: [{ id: "main" }],
-            };
+            return makeBootRoster();
           case "sessions.list":
             return sessionsResult([row], 1);
           case "sessions.describe":

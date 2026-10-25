@@ -216,6 +216,46 @@ describe("real MCP SDK token HTTP and durable owner", () => {
     });
   });
 
+  it("cancels a stalled token body at the exchange deadline without replaying the grant", async () => {
+    seed();
+    const deadline = new AbortController();
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) => (ms === 30_000 ? deadline.signal : nativeTimeout(ms)));
+    const reading = createDeferred();
+    const cancel = vi.fn();
+    const fetchFn = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          new ReadableStream(
+            {
+              pull() {
+                reading.resolve();
+              },
+              cancel,
+            },
+            { highWaterMark: 0 },
+          ),
+        ),
+    );
+    const refresh = resolveMcpOAuthAccessToken({ identity, fetchFn });
+    const outcome = refresh.catch((error: unknown) => error);
+    try {
+      await awaitGateBeforeSettlement(reading.promise, refresh, "refresh settled before body read");
+      deadline.abort(new DOMException("Exchange deadline expired", "TimeoutError"));
+      expect(await outcome).toMatchObject({ message: expect.stringContaining("uncertain") });
+      expect(cancel).toHaveBeenCalledOnce();
+      await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).rejects.toThrow(/uncertain/);
+      expect(fetchFn).toHaveBeenCalledOnce();
+      expect((await readMcpOAuthStore(identity.storeKey)).refreshClaim).toEqual(expect.any(String));
+    } finally {
+      deadline.abort();
+      await outcome;
+      timeout.mockRestore();
+    }
+  });
+
   it("detaches an aborted caller while the admitted HTTP exchange settles for another caller", async () => {
     seed();
     const entered = createDeferred();

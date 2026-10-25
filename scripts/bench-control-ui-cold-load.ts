@@ -1,6 +1,8 @@
 // Opt-in production-bundle benchmark; real delays model wire delivery, not test synchronization.
 // --cpu-profile: source-mapped reload/live/streaming tables and per-run/median cpu-profile.json.
 // --thread-cpu-time excludes renderer descheduling from CDP duration metrics.
+// Traces report coarse V8 module parse/compile CPU, not exhaustive compiler CPU.
+// javaScriptResources includes completed modulepreloads absent from V8 coverage.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
 // --selector-stats: ranked boot CSS selectors (instrumentation overhead included).
 // --viewport desktop|mobile: 1719×1179 (default) or 390×844 browser viewport.
@@ -66,6 +68,7 @@ import {
   prepareColdLoadTraceEvent,
   summarizeColdLoadTrace,
   summarizeScriptCoverage,
+  summarizeJavaScriptResources,
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
 import {
@@ -2558,6 +2561,7 @@ try {
       ...metrics,
       threadCpu,
       coverage,
+      javaScriptResources: summarizeJavaScriptResources(metrics.http.waterfall, coverage),
       trace: bootTrace,
       selectorStats,
       longTaskDetails:

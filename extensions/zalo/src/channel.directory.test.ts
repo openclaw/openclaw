@@ -9,6 +9,16 @@ import { describe, expect, it } from "vitest";
 import { zaloPlugin } from "./channel.js";
 
 describe("zalo directory", () => {
+  it("does not claim ambiguous bare chat ids as canonical sessions", async () => {
+    const route = await zaloPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target: "123456789",
+    });
+
+    expect(route?.recipientSessionExact).toBe(false);
+  });
+
   it("distinguishes user ids from group ids", () => {
     expect(zaloPlugin.messaging?.inferTargetChatType?.({ to: "user:123" })).toBe("direct");
     expect(zaloPlugin.messaging?.inferTargetChatType?.({ to: "group:456" })).toBe("group");

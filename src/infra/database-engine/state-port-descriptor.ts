@@ -32,6 +32,7 @@ import {
   type PortDescriptor,
   type PortTable,
 } from "./port-descriptor.js";
+import { withLegacyPostgresIndexOrdering } from "./postgres-index-ordering.js";
 
 export async function loadStatePortDescriptor(
   sourceVersion = OPENCLAW_STATE_SCHEMA_VERSION,
@@ -47,8 +48,8 @@ export async function loadStatePortDescriptor(
     // v29 removes credential tables; v30 fences policies; v31 adds per-path workspace baselines.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 31 ||
-      ![24, 25, 26, 27, 28, 29, 30].includes(sourceVersion)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 32 ||
+      ![24, 25, 26, 27, 28, 29, 30, 31].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -87,7 +88,8 @@ export async function loadStatePortDescriptor(
   );
   const sourceSql = (sql: string) => {
     const workspace = legacyWorkspace ? withLegacyLocalWorkspaceManifests(sql) : sql;
-    return historical ? withLegacyPublicationDraft(workspace) : workspace;
+    const publication = historical ? withLegacyPublicationDraft(workspace) : workspace;
+    return sourceVersion < 32 ? withLegacyPostgresIndexOrdering(publication) : publication;
   };
   const schema = (
     entry: Omit<typeof metadata, "fragments" | "sqliteRanges">,
