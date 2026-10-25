@@ -251,51 +251,41 @@ describe("recovered requester receipt safety", () => {
     },
   );
 
-  it.each([
-    "nested-target",
-    "mixed-parts",
-    "receipt-thread",
-    "part-thread",
-    "matching",
-    "normalized",
-    "metadata-omitted",
-  ] as const)("validates physical receipt routing through queue delivery: %s", async (variant) => {
+  // Per-field placement and normalization are covered by delivery-completion.progress-evidence;
+  // keep the final-only aggregate boundary here: one valid part cannot bless a misrouted part.
+  it.each([false, true])("validates mixed physical receipt routing: %s", async (mixed) => {
     const fixture = await prepareDelivery();
     const { scope, context } = fixture;
-    const roomId = variant === "normalized" ? `  ${context.to}  ` : context.to;
     const part = {
       platformMessageId: "first-id",
       kind: "text" as const,
       index: 0,
-      threadId: variant === "part-thread" ? "other-thread" : context.threadId,
-      raw: { roomId },
+      threadId: context.threadId,
+      raw: { roomId: context.to },
     };
-    const parts =
-      variant === "mixed-parts"
-        ? [
-            part,
-            { ...part, platformMessageId: "other-id", index: 1, raw: { roomId: "!other:example" } },
-          ]
-        : [part];
+    const parts = mixed
+      ? [
+          part,
+          { ...part, platformMessageId: "other-id", index: 1, raw: { roomId: "!other:example" } },
+        ]
+      : [part];
     const receipt = {
       primaryPlatformMessageId: "first-id",
       platformMessageIds: parts.map((item) => item.platformMessageId),
       parts,
-      threadId: variant === "receipt-thread" ? "other-thread" : context.threadId,
+      threadId: context.threadId,
       sentAt: 1,
-      raw: [{ roomId: variant === "nested-target" ? "!other:example" : roomId }],
+      raw: [{ roomId: context.to }],
     };
     await enqueue(fixture);
-    const sent = { messageId: "first-id" };
-    const send = vi.fn(async () =>
-      variant === "metadata-omitted"
-        ? sent
-        : { ...sent, target: { kind: "room", id: context.to }, receipt },
-    );
+    const send = vi.fn(async () => ({
+      messageId: "first-id",
+      target: { kind: "room", id: context.to },
+      receipt,
+    }));
     const recover = recovery(send);
     await recover();
-    const valid = ["matching", "normalized", "metadata-omitted"].includes(variant);
-    expectReceipt(scope, valid ? "first-id" : undefined);
+    expectReceipt(scope, mixed ? undefined : "first-id");
     await expectDrained(recover, send, 1);
   });
   it.each([1, 2])("reconciliation cannot imply a complete batch (%s payloads)", async (count) => {
@@ -333,7 +323,6 @@ describe("recovered requester receipt safety", () => {
     const recover = recovery(undefined, deliver);
     await recover();
     expectReceipt(fixture.scope, count === 1 ? "reconciled-id" : undefined);
-    expect(deliver).not.toHaveBeenCalled();
     await expectDrained(recover, reconcile, 1);
     expect(deliver).not.toHaveBeenCalled();
   });
