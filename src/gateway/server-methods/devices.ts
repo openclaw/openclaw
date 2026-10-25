@@ -22,6 +22,7 @@ import {
   summarizeDeviceTokens,
 } from "../../infra/device-pairing-tokens.js";
 import {
+  getExpiredDevicePairingRequest,
   getPairedDevice,
   getPendingDevicePairing,
   listDevicePairing,
@@ -348,6 +349,9 @@ function emitDeviceTokenLifecycleSecurityEvent(params: {
   });
 }
 
+const EXPIRED_REQUEST_MESSAGE =
+  "pairing request expired; reconnect the device to request pairing again";
+
 export const deviceHandlers: GatewayRequestHandlers = {
   ...scopeUpgradeHandlers,
   "device.pair.list": async ({ params, respond, context, client }) => {
@@ -389,13 +393,32 @@ export const deviceHandlers: GatewayRequestHandlers = {
     const authz = resolveDeviceSessionAuthz(client);
     if (!authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
-      if (!authorizePairingDecision("approve", requestId, pending, authz, { respond, context })) {
+      // An expired request gets the same ownership checks as a live one before it is reported.
+      const expired = pending ? null : await getExpiredDevicePairingRequest(requestId);
+      if (
+        !authorizePairingDecision("approve", requestId, pending ?? expired, authz, {
+          respond,
+          context,
+        })
+      ) {
+        return;
+      }
+      if (expired) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, EXPIRED_REQUEST_MESSAGE));
         return;
       }
     }
     const approved = await approveDevicePairing(requestId, { callerScopes: authz.callerScopes });
     if (!approved) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+      const expired = await getExpiredDevicePairingRequest(requestId);
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          expired ? EXPIRED_REQUEST_MESSAGE : "unknown requestId",
+        ),
+      );
       return;
     }
     if (approved.status === "forbidden") {

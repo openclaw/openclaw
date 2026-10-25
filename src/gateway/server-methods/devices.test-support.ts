@@ -10,6 +10,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   pairing: {
+    getExpiredDevicePairingRequest: vi.fn(),
     getPairedDevice: vi.fn(),
     getPendingDevicePairing: vi.fn(),
     listDevicePairing: vi.fn(),
@@ -141,4 +142,5 @@ export function resetDeviceHandlerTestState(): void {
   resetDiagnosticEventsForTest();
   resetNodeWakeStateForTest();
   vi.clearAllMocks();
+  mocks.pairing.getExpiredDevicePairingRequest.mockResolvedValue(null);
 }

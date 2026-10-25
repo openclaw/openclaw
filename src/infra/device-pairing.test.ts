@@ -24,7 +24,9 @@ import {
   verifyDeviceToken,
 } from "./device-pairing-tokens.js";
 import {
+  getExpiredDevicePairingRequest,
   getPairedDevice,
+  getPendingDevicePairing,
   hasPairedCardRenderer,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
@@ -201,6 +203,29 @@ describe("device pairing tokens", () => {
       pending.refreshedAtMs = createdTs;
     });
     expect((await listDevicePairing(baseDir)).pending).toHaveLength(0);
+  });
+
+  test("keeps an expired request readable as expired until the next pending write", async () => {
+    const { request } = await requestOperator(["operator.read"]);
+    const { requestId } = request;
+    expect(await getExpiredDevicePairingRequest(requestId, baseDir)).toBeNull();
+
+    const agedMs = Date.now() - 6 * 60 * 1000;
+    mutatePendingRequest(baseDir, requestId, (pending) => {
+      pending.ts = agedMs;
+      pending.refreshedAtMs = agedMs;
+    });
+    expect(await getPendingDevicePairing(requestId, baseDir)).toBeNull();
+    const expired = await getExpiredDevicePairingRequest(requestId, baseDir);
+    expect(expired).toMatchObject({ requestId, deviceId: "device-1", ts: agedMs });
+    expect(expired && "refreshedAtMs" in expired).toBe(false);
+
+    // A refused approval does not prune, so a retry still reports the same expiry.
+    expect(await approveRequest(request, ["operator.read"])).toBeNull();
+    expect(await getExpiredDevicePairingRequest(requestId, baseDir)).toMatchObject({ requestId });
+
+    await requestPairing({ deviceId: "device-2", publicKey: "public-key-2", role: "operator" });
+    expect(await getExpiredDevicePairingRequest(requestId, baseDir)).toBeNull();
   });
 
   test("supersedes pending requests when requested roles/scopes change", async () => {

@@ -55,11 +55,20 @@ export function executeDevicePairingRead(
   }
   if (command.type === "devicePairing.pending") {
     const record = state.pendingById[command.requestId];
-    const pending =
-      record && command.nowMs - (record.refreshedAtMs ?? record.ts) <= 5 * 60 * 1000
-        ? (({ refreshedAtMs: _refreshedAtMs, ...request }) => request)(record)
-        : null;
-    return { ...common, type: command.type, pending, bindings: [] };
+    const row = record
+      ? (({ refreshedAtMs: _refreshedAtMs, ...request }) => request)(record)
+      : null;
+    // Expired rows stay stored until the next pending write prunes them; reporting them lets an
+    // approval say "expired" instead of "unknown" in that window.
+    const live =
+      record !== undefined && command.nowMs - (record.refreshedAtMs ?? record.ts) <= 5 * 60 * 1000;
+    return {
+      ...common,
+      type: command.type,
+      pending: live ? row : null,
+      expired: live ? null : row,
+      bindings: [],
+    };
   }
   let bindings = bindingsBySnapshot.get(state);
   if (!bindings) {

@@ -134,19 +134,28 @@ export async function readCurrentPairedDevice<T>(
   return read(device);
 }
 
-export async function loadPendingDevicePairingStoreRecordReadOnly(
-  requestId: string,
-  baseDir?: string,
-) {
+async function readPendingDevicePairingRequest(requestId: string, baseDir?: string) {
   const { reply } = await readPairing(
     { type: "devicePairing.pending", requestId, nowMs: Date.now() },
     baseDir,
     true,
   );
-  if (!reply) {
-    return null;
-  }
-  return reply.pending;
+  return reply;
+}
+
+export async function loadPendingDevicePairingStoreRecordReadOnly(
+  requestId: string,
+  baseDir?: string,
+) {
+  return (await readPendingDevicePairingRequest(requestId, baseDir))?.pending ?? null;
+}
+
+/** A request past the pending TTL that no pairing write has pruned yet. */
+export async function loadExpiredPendingDevicePairingStoreRecordReadOnly(
+  requestId: string,
+  baseDir?: string,
+) {
+  return (await readPendingDevicePairingRequest(requestId, baseDir))?.expired ?? null;
 }
 
 export async function loadBoundDeviceBootstrapContextReadOnly(

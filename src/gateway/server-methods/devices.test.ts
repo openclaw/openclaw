@@ -215,6 +215,47 @@ it("denies unknown approvals from non-admin non-device sessions", async () => {
   expectDeviceError(opts, "device pairing approval denied");
 });
 
+it.each([
+  ["own request for a device session", createDeviceClient(), " device-1 "],
+  ["any request for a shared-auth session", createClient(scopes), "device-2"],
+] as const)("reports an expired %s as expired", async (_name, client, deviceId) => {
+  pairing.getPendingDevicePairing.mockResolvedValue(null);
+  pairing.getExpiredDevicePairingRequest.mockResolvedValue({ ...pending[0], deviceId });
+  const opts = createOptions("device.pair.approve", { requestId: "req-1" }, client);
+  await invoke(opts);
+  expect(approval.approveDevicePairing).not.toHaveBeenCalled();
+  expectDeviceError(opts, "pairing request expired; reconnect the device to request pairing again");
+});
+
+it("keeps another device's expired request denied to non-admin device sessions", async () => {
+  pairing.getPendingDevicePairing.mockResolvedValue(null);
+  pairing.getExpiredDevicePairingRequest.mockResolvedValue(pending[1]);
+  const opts = createOptions("device.pair.approve", { requestId: "req-2" }, createDeviceClient());
+  await invoke(opts);
+  expect(approval.approveDevicePairing).not.toHaveBeenCalled();
+  expectDeviceError(opts, "device pairing approval denied");
+});
+
+it.each([
+  [
+    "an expired",
+    pending[1],
+    "pairing request expired; reconnect the device to request pairing again",
+  ],
+  ["an unknown", null, "unknown requestId"],
+] as const)("tells admin sessions when approval finds %s request", async (_name, row, message) => {
+  approval.approveDevicePairing.mockResolvedValue(null);
+  pairing.getExpiredDevicePairingRequest.mockResolvedValue(row);
+  const opts = createOptions(
+    "device.pair.approve",
+    { requestId: "req-2" },
+    createDeviceClient(["operator.admin"]),
+  );
+  await invoke(opts);
+  expect(approval.approveDevicePairing).toHaveBeenCalledOnce();
+  expectDeviceError(opts, message);
+});
+
 it.each(["self", "admin"] as const)(
   "rejects pairing requests within %s authority",
   async (mode) => {
