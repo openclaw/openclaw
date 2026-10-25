@@ -125,23 +125,6 @@ function trackLaunch(
   });
 }
 
-async function callStartRoute(params: {
-  profile?: Record<string, unknown>;
-  query?: Record<string, unknown>;
-  expectedStatus?: number;
-}) {
-  const ensureBrowserAvailable = vi.fn(async () => {});
-  const state = makeState({ headless: false, ...params.profile });
-  const body = await callRoute({
-    state,
-    route: "/start",
-    query: params.query ?? {},
-    expectedStatus: params.expectedStatus,
-    forProfile: () => ({ profile: state.forProfile().profile, ensureBrowserAvailable }),
-  });
-  return { body, ensureBrowserAvailable };
-}
-
 describe("basic browser routes", () => {
   beforeEach(() => {
     graphics.endpoint.mockReset();
@@ -298,37 +281,31 @@ describe("basic browser routes", () => {
     expect(graphics.read).toHaveBeenCalledTimes(2);
   });
 
-  it("passes valid start headless override to local managed profiles", async () => {
-    const { body, ensureBrowserAvailable } = await callStartRoute({
-      query: { headless: "true" },
-    });
-
-    expect(body).toEqual({ ok: true, profile: "openclaw" });
-    expect(ensureBrowserAvailable).toHaveBeenCalledWith({ headless: true });
-  });
-
   it.each([
-    {
-      name: "invalid value",
-      query: { headless: "maybe" },
-      profile: undefined,
-      error: 'Invalid headless value. Use "true" or "false".',
-    },
-    {
-      name: "existing-session override",
-      query: { headless: "true" },
-      profile: { name: "chrome-live", driver: "existing-session", attachOnly: true },
-      error:
-        'Headless start override is only supported for locally launched openclaw profiles. Profile "chrome-live" is attach-only, remote, or existing-session.',
-    },
-  ])("rejects start $name", async ({ query, profile, error }) => {
-    const { body, ensureBrowserAvailable } = await callStartRoute({
-      query,
-      profile,
-      expectedStatus: 400,
+    ["true", {}, undefined],
+    ["maybe", {}, 'Invalid headless value. Use "true" or "false".'],
+    [
+      "true",
+      { name: "chrome-live", driver: "existing-session", attachOnly: true },
+      'Headless start override is only supported for locally launched openclaw profiles. Profile "chrome-live" is attach-only, remote, or existing-session.',
+    ],
+  ] as const)("validates start headless=%s for %j", async (headless, profile, error) => {
+    const ensureBrowserAvailable = vi.fn(async () => {});
+    const state = makeState({ headless: false, ...profile });
+    const body = await callRoute({
+      route: "/start",
+      state,
+      query: { headless },
+      expectedStatus: error ? 400 : 200,
+      forProfile: () => ({ profile: state.forProfile().profile, ensureBrowserAvailable }),
     });
-    expect(body.error).toBe(error);
-    expect(ensureBrowserAvailable).not.toHaveBeenCalled();
+    if (error) {
+      expect(body.error).toBe(error);
+      expect(ensureBrowserAvailable).not.toHaveBeenCalled();
+    } else {
+      expect(body).toEqual({ ok: true, profile: "openclaw" });
+      expect(ensureBrowserAvailable).toHaveBeenCalledWith({ headless: true });
+    }
   });
 
   it("cancels an in-flight Chrome MCP page-readiness probe", async () => {

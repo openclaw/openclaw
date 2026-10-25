@@ -408,7 +408,7 @@ const mutations: Array<[string, Record<string, unknown>?, Preparation?, number?]
   ["/cookies/set", { cookie }],
   ["/cookies/set-many", { cookies: [cookie] }],
   ["/cookies/clear"],
-  ["/storage/:kind/set", { key: "theme", value: "dark" }],
+  ["/storage/:kind/set", { key: " theme ", value: " dark " }],
   ["/storage/:kind/clear"],
   ["/permissions/grant", { origin, permissions: ["audioCapture"] }],
   ["/permissions/grant", { origin, permissions: ["clipboardReadWrite"] }, "permission socket"],
@@ -505,7 +505,7 @@ describe("dashboard state authority", () => {
     browser.closeOwned.mockImplementation(closing.block);
     const beforeFocus = spec.preparation === "focus" ? ready.block : undefined;
     const running = startRoute(stateRoute(tab, spec.route, beforeFocus), {
-      params: { kind: "local" },
+      params: { kind: spec.route === "/storage/:kind/set" ? " session " : " local " },
       body: { ...spec.body, targetId },
       assertCurrent,
     });
@@ -516,6 +516,13 @@ describe("dashboard state authority", () => {
         expectRevoked(response);
       } else {
         expect(response).toMatchObject({ statusCode: 200, body: { ok: true } });
+        if (spec.route === "/storage/:kind/set") {
+          expect(effect).toHaveBeenCalledWith(expect.any(Function), {
+            kind: "session",
+            key: " theme ",
+            value: " dark ",
+          });
+        }
       }
     });
   });

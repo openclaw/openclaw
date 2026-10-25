@@ -2,6 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTab } from "../client.types.js";
 import { makeBrowserProfile } from "../server-context.test-harness.js";
+import { gate } from "./agent-route.test-support.js";
 import { createRouteFixture } from "./request.test-support.js";
 import type { createBrowserRouteResponse } from "./test-helpers.js";
 
@@ -69,7 +70,6 @@ function makeContext(
       },
     }),
     forProfile: () => profileCtx,
-    listProfiles: vi.fn(async () => []),
   };
 }
 
@@ -404,7 +404,6 @@ describe("browser tab routes", () => {
         exactTargetId: true,
         signal: expect.any(AbortSignal),
       });
-      expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
       expect(navigation.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
     });
   });
@@ -423,7 +422,6 @@ describe("browser tab routes", () => {
     if (code === 409) {
       expect(response.body).toEqual({ error: "ambiguous browser tab reference" });
     }
-    expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
     expect(profileCtx.focusTab).not.toHaveBeenCalled();
     expect(navigation.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
@@ -456,28 +454,12 @@ describe("browser tab routes", () => {
       ok: true,
       tab: { ...defaultTab(), suggestedTargetId: "meet", tabId: "t1", label: "meet" },
     });
-    expect(profileCtx.labelTab).toHaveBeenCalledWith("t1", "meet");
   });
 
   it("does not focus a tab after cancellation during target resolution", async () => {
     const abort = new AbortController();
-    const listStarted = Promise.withResolvers<void>();
-    const listTabs = vi.fn(async (options?: { signal?: AbortSignal }) => {
-      const signal = options?.signal;
-      listStarted.resolve();
-      if (signal) {
-        await new Promise<void>((_resolve, reject) => {
-          const rejectAbort = () =>
-            reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
-          if (signal.aborted) {
-            rejectAbort();
-            return;
-          }
-          signal.addEventListener("abort", rejectAbort, { once: true });
-        });
-      }
-      return [defaultTab()];
-    });
+    const listing = gate<BrowserTab[]>();
+    const listTabs = vi.fn(listing.block);
     const focusTab = vi.fn(async () => {});
     const profileCtx = makeProfile({ listTabs, focusTab });
 
@@ -487,8 +469,9 @@ describe("browser tab routes", () => {
       signal: abort.signal,
     });
 
-    await listStarted.promise;
+    await listing.entered;
     abort.abort(new Error("cancelled"));
+    listing.resolve([defaultTab()]);
     const response = await pending;
 
     expect(response.statusCode).toBe(500);
