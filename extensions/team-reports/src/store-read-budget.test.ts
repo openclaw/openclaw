@@ -123,7 +123,12 @@ it("sees committed days in rollups without an explicit read transaction", async 
       });
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       try {
-        const rollup = database.aggregatePeriod({ period, nowMs: period.untilMs });
+        const rollup = database.aggregatePeriod({
+          period,
+          nowMs: period.untilMs,
+          orgs: ["example"],
+          roster: buildRoster([{ github: ["alice"] }]),
+        });
         expect(rollup.totals.github).toMatchObject({ total: index + 1, commits: index + 1 });
         expect(rollup.members.map((member) => [member.login, member.github.commits])).toEqual([
           ["alice", index + 1],
