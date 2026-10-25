@@ -19,6 +19,16 @@ const set = (key: string, value: string) => run(["config", "set", key, value]);
 const loggingRoot = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
 const withLoggingConfig = (body: Parameters<typeof withConfig>[2]) =>
   withConfig("openclaw-config-include-backup-", loggingRoot, body);
+function afterCall<A extends unknown[], R>(
+  call: (...args: A) => R,
+  after: (value: R, ...args: A) => void,
+) {
+  return (...args: A): R => {
+    const value = call(...args);
+    after(value, ...args);
+    return value;
+  };
+}
 async function expectFile(file: string, raw: string, mode?: number) {
   await expect(fs.readFile(file, "utf8")).resolves.toBe(raw);
   if (mode !== undefined) {
@@ -86,8 +96,7 @@ describe("config backup rotation", () => {
 
       await set("logging.level", "debug");
 
-      const saved = JSON.parse(await fs.readFile(target, "utf8"));
-      expect(saved.level).toBe("debug");
+      expect(JSON.parse(await fs.readFile(target, "utf8")).level).toBe("debug");
       await expectFile(`${target}.bak`, original, 0o600);
       await expectFile(`${target}.bak.1`, previousBackup, 0o600);
       await expectFile(configPath, loggingRoot);
@@ -137,19 +146,12 @@ describe("config backup rotation", () => {
           const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
           const readBackups = () =>
             backupPaths.map((backupPath) => {
-              try {
-                return {
-                  raw: fsNode.readFileSync(backupPath, "utf8"),
-                  mode: fsNode.statSync(backupPath).mode,
-                };
-              } catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-                  throw error;
-                }
-                return null;
-              }
+              const stat = fsNode.statSync(backupPath, { throwIfNoEntry: false });
+              return stat
+                ? { raw: fsNode.readFileSync(backupPath, "utf8"), mode: stat.mode }
+                : null;
             });
-          let atRevocation: Awaited<ReturnType<typeof readBackups>> | undefined;
+          let atRevocation: ReturnType<typeof readBackups> | undefined;
           const openBackupPaths = new Map<number, fsNode.PathLike>();
           const mutationsAfterRevocation: string[] = [];
           const afterMutation = (operation: typeof revokeAfter, target: fsNode.PathLike) => {
@@ -170,32 +172,26 @@ describe("config backup rotation", () => {
             pluginValidation: "skip",
             fs: {
               ...fsNode,
-              openSync: (target, flags, mode) => {
-                const fd = fsNode.openSync(target, flags, mode);
+              openSync: afterCall(fsNode.openSync, (fd, target) => {
                 if (backupPaths.includes(String(target))) {
                   openBackupPaths.set(fd, target);
                 }
-                return fd;
-              },
-              closeSync: (fd) => {
-                fsNode.closeSync(fd);
+              }),
+              closeSync: afterCall(fsNode.closeSync, (_, fd) => {
                 openBackupPaths.delete(fd);
-              },
-              unlinkSync: (target) => {
-                fsNode.unlinkSync(target);
-                afterMutation("unlink", target);
-              },
-              renameSync: (source, destination) => {
-                fsNode.renameSync(source, destination);
-                afterMutation("rename", destination);
-              },
-              fchmodSync: (fd, mode) => {
-                fsNode.fchmodSync(fd, mode);
+              }),
+              unlinkSync: afterCall(fsNode.unlinkSync, (_, target) =>
+                afterMutation("unlink", target),
+              ),
+              renameSync: afterCall(fsNode.renameSync, (_, _source, target) =>
+                afterMutation("rename", target),
+              ),
+              fchmodSync: afterCall(fsNode.fchmodSync, (_, fd) => {
                 const target = openBackupPaths.get(fd);
                 if (target !== undefined) {
                   afterMutation("fchmod", target);
                 }
-              },
+              }),
             },
           });
           const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
@@ -219,20 +215,17 @@ describe("config backup rotation", () => {
   it("createPreUpdateConfigSnapshot replaces a preexisting snapshot once per process", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
-      const stale = JSON.stringify({ snapshot: "stale" });
-      const current = JSON.stringify({ snapshot: "current" });
-      const second = JSON.stringify({ snapshot: "second" });
       const snapshotPath = `${configPath}.pre-update`;
-      await fs.writeFile(configPath, current, { mode: 0o600 });
-      await fs.writeFile(snapshotPath, stale, { mode: 0o600 });
+      await fs.writeFile(configPath, "current", { mode: 0o600 });
+      await fs.writeFile(snapshotPath, "stale", { mode: 0o600 });
 
       await createSnapshot(configPath);
-      await expectFile(snapshotPath, current);
+      await expectFile(snapshotPath, "current");
 
       // Later writes in the same update attempt should not replace the first snapshot.
-      await fs.writeFile(configPath, second);
+      await fs.writeFile(configPath, "second");
       await createSnapshot(configPath);
-      await expectFile(snapshotPath, current);
+      await expectFile(snapshotPath, "current");
     });
   });
 
@@ -248,28 +241,23 @@ describe("config backup rotation", () => {
   it("retries snapshot after transient read and write errors (#105431)", async () => {
     await withTempHome(async () => {
       const content = JSON.stringify({ plugins: { installs: ["slack"] } });
-      const rejectingReadFile = (async () => {
-        throw new Error("EIO: transient read error");
-      }) as typeof fs.readFile;
-      const rejectingWriteFile = (async () => {
-        throw new Error("ENOSPC: transient write error");
-      }) as typeof fs.writeFile;
+      const fail = async () => {
+        throw new Error("transient I/O error");
+      };
 
       for (const failingOperation of ["read", "write"] as const) {
         const configPath = `${resolveConfigPathFromTempState()}.${failingOperation}`;
         await fs.writeFile(configPath, content, { mode: 0o600 });
 
         await createSnapshot(configPath, {
-          readFile: failingOperation === "read" ? rejectingReadFile : fs.readFile,
-          writeFile: failingOperation === "write" ? rejectingWriteFile : fs.writeFile,
+          readFile: failingOperation === "read" ? fail : fs.readFile,
+          writeFile: failingOperation === "write" ? fail : fs.writeFile,
         });
         await expectPathMissing(`${configPath}.pre-update`);
 
         await createSnapshot(configPath);
 
-        const snapshotPath = `${configPath}.pre-update`;
-        expect((await fs.stat(snapshotPath)).isFile()).toBe(true);
-        await expectFile(snapshotPath, content);
+        await expectFile(`${configPath}.pre-update`, content);
       }
     });
   });

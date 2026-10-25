@@ -28,11 +28,7 @@ function configCase(name: string, args: string, value = "secret-value", redacted
   return redactionCase(name, `openclaw config ${args}`, value, redacted);
 }
 
-function createAuditRecordBase(
-  configPath: string,
-  argv?: string[],
-  overrides: Partial<Parameters<typeof createConfigWriteAuditRecordBase>[0]> = {},
-) {
+function createAuditRecordBase(configPath: string, argv?: string[]) {
   return createConfigWriteAuditRecordBase({
     configPath,
     env: {},
@@ -50,19 +46,12 @@ function createAuditRecordBase(
     suspicious: [],
     now: "2026-04-07T08:00:00.000Z",
     processInfo: argv ? { pid: 101, ppid: 99, cwd: "/work", argv, execArgv: [] } : undefined,
-    ...overrides,
   });
 }
 
 function createRenameAuditRecord(home: string) {
   return finalizeConfigWriteAuditRecord({
-    base: createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json"), undefined, {
-      env: {
-        OPENCLAW_WATCH_MODE: "1",
-        OPENCLAW_WATCH_SESSION: "watch-session-1",
-        OPENCLAW_WATCH_COMMAND: "gateway --force",
-      },
-    }),
+    base: createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json")),
     result: "rename",
     nextMetadata: { ...metadata, dev: "12", ino: "13" },
   });
@@ -112,7 +101,6 @@ it('ignores literal "undefined" home env values when choosing the audit log path
   const env = { HOME: "undefined", USERPROFILE: "null", OPENCLAW_HOME: "undefined" };
   const auditPath = resolveLegacyConfigAuditLogPath(env, () => home);
   expect(auditPath).toBe(path.join(home, ".openclaw", "logs", "config-audit.jsonl"));
-  expect(auditPath.startsWith(path.resolve("undefined"))).toBe(false);
 });
 
 it("drains queued observations without main-thread SQL and reads the newest audit record", async () => {
@@ -156,6 +144,7 @@ it("redacts structured audit records before persistence", async () => {
     err: Object.assign(new Error("payload contained abcd-efgh-ijkl-mnop"), { code: "EFAIL" }),
   });
 
+  const before = structuredClone(record);
   const sanitized = sanitizeConfigAuditRecord(record);
   assert(sanitized.event === "config.write");
   expect(sanitized.argv).toEqual(["openclaw", "--password", "***"]);
@@ -163,12 +152,7 @@ it("redacts structured audit records before persistence", async () => {
   sanitized.argv.push("changed");
   sanitized.execArgv.push("changed");
   sanitized.suspicious.push("changed");
-  expect(record.argv).toEqual(["openclaw", "--password", "audit-password"]);
-  expect(record.execArgv).toEqual(["--api-key", "audit-api-key"]);
-  expect(record.suspicious).toEqual([
-    "provider returned ya29.fake-access-token-with-enough-length",
-    "plugin returned AIzaSyD-very-real-looking-google-api-key-123",
-  ]);
+  expect(record).toEqual(before);
 
   const deps = { env: {}, homedir: () => home };
   await appendConfigAuditRecord({ ...deps, record });
@@ -291,6 +275,5 @@ it("preserves concurrent appends after the scrub write and cleans up staged outp
   }
   const after = fs.readFileSync(auditPath, "utf-8");
   expect(after).toBe(`${original}${appendedLine}`);
-  expect(after).toContain("xoxb-real-bot-token");
   expect(fs.readdirSync(path.dirname(auditPath))).toEqual(["config-audit.jsonl"]);
 });

@@ -4,11 +4,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import {
@@ -69,11 +65,8 @@ async function withNativeSharingViolation<T>(
   const lines = createInterface({ input: child.stdout });
   lines.once("line", (line) => ready.resolve(Number.parseInt(line, 10)));
   child.stderr.on("data", output.append);
-  let spawnError: Error | undefined;
-  child.once("error", (error) => {
-    spawnError = error;
-  });
-  // Retain the physical close event before synchronous publication can occupy this thread.
+  child.once("error", ready.reject);
+  // Capture close before synchronous publication blocks JS callbacks.
   const completion = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve) => {
       child.once("close", (code, closeSignal) => resolve({ code, signal: closeSignal }));
@@ -82,13 +75,12 @@ async function withNativeSharingViolation<T>(
   let nativeFailures = 0;
   try {
     const pid = await withinTest(
-      awaitGateBeforeSettlement(
+      Promise.race([
         ready.promise,
         completion.then(() => {
-          throw spawnError ?? new Error(`Sharing holder exited before readiness: ${output.text()}`);
+          throw new Error(`Sharing holder exited before readiness: ${output.text()}`);
         }),
-        "Sharing holder exited before readiness",
-      ),
+      ]),
       signal,
     );
     expect(pid).toBe(child.pid);
@@ -101,14 +93,12 @@ async function withNativeSharingViolation<T>(
         try {
           fs.renameSync(from, to);
         } catch (error) {
-          expect(
-            error,
-            "Native rename must produce EPERM or EEXIST to exercise fs-safe's copy fallback; unsupported kernel errors must not be remapped",
-          ).toMatchObject({ code: expect.stringMatching(/^(EPERM|EEXIST)$/u) });
+          expect(error, "Native error must reach the copy fallback").toMatchObject({
+            code: expect.stringMatching(/^(EPERM|EEXIST)$/u),
+          });
           nativeFailures++;
           fs.writeFileSync(release, "release");
-          // publish() is synchronous: wait for the child's persisted handle-close fact,
-          // not a JS callback or a guessed delay, before the real fallback continues.
+          // Synchronous publish must wait for the persisted close, not a JS callback.
           const deadline = Date.now() + handshakeTimeout;
           const sleep = new Int32Array(new SharedArrayBuffer(4));
           while (!fs.existsSync(closed)) {
@@ -117,7 +107,6 @@ async function withNativeSharingViolation<T>(
             }
             Atomics.wait(sleep, 0, 0, 10);
           }
-          // This is the actual kernel error from the attempted product rename.
           throw error;
         }
         throw new Error("The native sharing holder did not prevent rename");
@@ -186,13 +175,13 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
         return guarded.captureRollbackProof(f.assertCurrent);
       });
       expect(fs.readFileSync(f.target, "utf8")).toBe(content);
-      expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
+      expectRecoveryFiles(f);
       expect(acl(f.target)).toBe(beforeAcl);
       await withNativeSharingViolation(f.target, signal, async (io) => {
         await expect(
           f.rollback(io, rollbackProof, {
-            preserveDirectoryMode: true,
             ...rollbackOptions,
+            preserveDirectoryMode: true,
           }),
         ).resolves.toBe(true);
       });
