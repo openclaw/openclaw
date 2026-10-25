@@ -95,6 +95,7 @@ async function prepareProjection(
     prompt: {
       effectivePrompt: prompt,
       effectiveTranscriptPrompt: prompt,
+      routePromptBuildContextThroughRuntimeCarrier: false,
     },
     replaceSessionMessages: () => {},
     sessionAgentId: "main",
