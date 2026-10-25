@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { isAgentToolExecutionAvailable } from "../../agents/agent-tool-availability.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
@@ -25,6 +25,24 @@ import {
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
+// Records every automations Gateway RPC the tool dispatches, then runs it unchanged.
+const gatewayDispatches = vi.hoisted((): string[] => []);
+vi.mock("../../agents/tools/cron-tool-gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/tools/cron-tool-gateway.js")>();
+  return {
+    ...actual,
+    createCronToolGatewayCaller: ((
+      ...args: Parameters<typeof actual.createCronToolGatewayCaller>
+    ) => {
+      const call = actual.createCronToolGatewayCaller(...args);
+      return ((method: string, ...rest: unknown[]) => {
+        gatewayDispatches.push(method);
+        return (call as (method: string, ...rest: unknown[]) => unknown)(method, ...rest);
+      }) as typeof call;
+    }) as typeof actual.createCronToolGatewayCaller,
+  };
+});
+
 // Hook turns (src/gateway/server/hooks.ts) and channel join introductions run
 // through the cron runner with trigger "event". Their automations scope comes
 // from the admitted execution context: their own automation, or none.
@@ -35,6 +53,7 @@ installRequesterCronAuthorityTestHooks();
 beforeEach(() => {
   resetAuthorityRunHarness();
   delete ownerSurface.last;
+  gatewayDispatches.length = 0;
 });
 
 afterEach(() => {
@@ -88,6 +107,8 @@ async function runAndTouchSibling(params: {
   toolsAllow?: string[];
   /** Event turns admit through `admitEventOccurrence` unless set to "unadmitted". */
   ingressBoundary?: "gateway.hooks.agent" | "unadmitted";
+  /** The automations call to make; defaults to removing a sibling job. */
+  call?: Record<string, unknown>;
 }): Promise<AutomationsOutcome> {
   // Admission and the prepared session must name the same physical store.
   const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -116,10 +137,10 @@ async function runAndTouchSibling(params: {
         } else {
           const actions = readActionEnum(automations);
           try {
-            const result = await automations.execute("touch-sibling", {
-              action: "remove",
-              jobId: "sibling-job",
-            });
+            const result = await automations.execute(
+              "touch-sibling",
+              params.call ?? { action: "remove", jobId: "sibling-job" },
+            );
             // A tool the turn may not call returns a gated refusal instead of throwing.
             const gated = (result as { details?: { gated?: unknown } }).details?.gated === true;
             outcome = { offered: true, actions, ...(gated ? { gated: true as const } : {}) };
@@ -172,6 +193,7 @@ it("cron-triggered turns cannot act on another automation", async () => {
     actions: SELF_ACTIONS,
     error: expect.stringContaining(SCOPE_ERROR),
   });
+  expect(gatewayDispatches).toEqual([]);
 });
 
 it("event-triggered hook turns cannot act on another automation", async () => {
@@ -184,11 +206,14 @@ it("event-triggered hook turns cannot act on another automation", async () => {
     actions: SELF_ACTIONS,
     error: expect.stringContaining(SCOPE_ERROR),
   });
+  expect(gatewayDispatches).toEqual([]);
 });
 
 it("event-triggered turns without an admitted context cannot use automations", async () => {
   const outcome = await runAndTouchSibling({ trigger: "event", ingressBoundary: "unadmitted" });
   expect(outcome).toEqual({ offered: true, actions: expect.any(Array), gated: true });
+  // Refused before any automations Gateway RPC, so nothing can be read or removed.
+  expect(gatewayDispatches).toEqual([]);
 });
 
 it("channel join introductions are offered no automations tool", async () => {
@@ -209,4 +234,15 @@ it("hook turns keep their existing owner-only surface", async () => {
   for (const [name, available] of Object.entries(callable)) {
     expect({ name, available }).toEqual({ name, available: name !== "intent" });
   }
+});
+
+// Control for the dispatch assertions above: an allowed call from an admitted
+// hook turn does reach the automations Gateway RPC.
+it("an admitted hook turn's own list call reaches the Gateway", async () => {
+  await runAndTouchSibling({
+    trigger: "event",
+    ingressBoundary: "gateway.hooks.agent",
+    call: { action: "list" },
+  });
+  expect(gatewayDispatches).toContain("cron.list");
 });
