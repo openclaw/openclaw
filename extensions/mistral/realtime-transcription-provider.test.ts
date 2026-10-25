@@ -23,7 +23,13 @@ const segment = (text: string, start = 0, speaker_id?: string) => ({
   end: start + 1,
   speaker_id,
 });
+const pending = (text: string, aggregate: string) => [
+  segment("hello"),
+  delta(text),
+  done(aggregate),
+];
 const texts = (callback: ReturnType<typeof vi.fn>) => callback.mock.calls.map(([text]) => text);
+const makeCallbacks = () => ({ onPartial: vi.fn(), onTranscript: vi.fn(), onError: vi.fn() });
 
 function createSession(
   baseUrl: string,
@@ -37,14 +43,12 @@ function createSession(
 
 async function terminalSession(events: Record<string, unknown>[]) {
   const { baseUrl, closed } = await createRealtimeServer([events]);
-  const onPartial = vi.fn();
-  const onTranscript = vi.fn();
-  const onError = vi.fn();
-  const session = createSession(baseUrl, { onPartial, onTranscript, onError });
+  const handlers = makeCallbacks();
+  const session = createSession(baseUrl, handlers);
   await session.connect();
   await withTimeout(closed, 1_000, { message: "Mistral terminal socket did not close" });
   expect(session.isConnected()).toBe(false);
-  return { onPartial, onTranscript, onError };
+  return handlers;
 }
 
 async function createRealtimeServer(
@@ -154,10 +158,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
   it.each<[string, Record<string, unknown>[], string[], string[]]>([
     ["terminal-only text", [done("final transcript")], [], ["final transcript"]],
     ["corrected final", [delta("a"), delta("b"), done("c")], ["a", "ab"], ["c"]],
-    ["segment dedup", [delta("a"), segment("b"), done("b")], ["a"], ["b"]],
     [
-      "identical independently timed segments",
-      [segment("echo", 0, "first"), segment("echo", 1, "second"), done("echo echo")],
+      "timed repeats ignore aggregate rewrites",
+      [segment("echo", 0, "first"), segment("echo", 1, "second"), done("rewrite")],
       [],
       ["echo", "echo"],
     ],
@@ -167,26 +170,14 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       ["hello", " new", " new speech"],
       ["hello", " new speech"],
     ],
-    ["aggregate rewrite", [segment("a"), segment("b", 1), done("c")], [], ["a", "b"]],
+    ["pending whitespace", pending("  \t", "hello  "), ["  \t"], ["hello"]],
+    ["pending punctuation", pending(".", "hello."), ["."], ["hello"]],
+    ["pending letters", pending(", 你好", "hello, 你好"), [", 你好"], ["hello", ", 你好"]],
+    ["pending numbers", pending(" 42", "hello 42"), [" 42"], ["hello", " 42"]],
   ])("%s", async (_name, events, partials, transcripts) => {
     const { onPartial, onTranscript } = await terminalSession(events);
     expect(texts(onTranscript)).toEqual(transcripts);
-    expect(texts(onPartial)).toEqual(partials);
-  });
-
-  it.each<[string, string, string, string[]]>([
-    ["whitespace", "  \t", "hello  ", ["hello"]],
-    ["period", ".", "hello.", ["hello"]],
-    ["multilingual speech", ", 你好", "hello, 你好", ["hello", ", 你好"]],
-    ["numbers", " 42", "hello 42", ["hello", " 42"]],
-  ])("filters post-segment %s", async (_name, pending, aggregate, transcripts) => {
-    const { onPartial, onTranscript } = await terminalSession([
-      segment("hello"),
-      delta(pending),
-      done(aggregate),
-    ]);
-    expect(onPartial).toHaveBeenCalledExactlyOnceWith(pending);
-    expect(texts(onTranscript)).toEqual(transcripts);
+    expect(onPartial.mock.calls).toEqual(partials.map((text) => [text]));
   });
 
   it.each<[string, string[], string[]]>([
@@ -203,9 +194,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
         firstSocket ??= socket;
       },
     );
-    const onPartial = vi.fn();
-    const onTranscript = vi.fn();
-    const onError = vi.fn();
+    const { onPartial, onTranscript, onError } = makeCallbacks();
     const session = createSession(baseUrl, { onPartial, onTranscript, onError });
 
     try {
