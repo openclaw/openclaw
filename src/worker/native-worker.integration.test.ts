@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { withinTest } from "../../test/helpers/promise.js";
@@ -45,10 +46,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const workers = createWorkerProcessTestHarness((prefix) => tempDirs.make(prefix));
 
 function owner(): ComposedGatewayHarness {
-  if (!gateway) {
-    throw new Error("Gateway fixture was not initialized");
-  }
-  return gateway;
+  return expectDefined(gateway, "Gateway fixture");
 }
 
 function messages() {

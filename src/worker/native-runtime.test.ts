@@ -35,18 +35,6 @@ const selection = { provider: "openai", modelId: "local-model" };
 const turn = { binding, selection };
 const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] };
 
-function trackedEnv(reads: PropertyKey[], value?: string): NodeJS.ProcessEnv {
-  return new Proxy(
-    {},
-    {
-      get: (_target, key) => {
-        reads.push(key);
-        return value;
-      },
-    },
-  );
-}
-
 function configFor(
   workspace = tempDirs.make("native-runtime-"),
   baseUrl = "http://127.0.0.1:1/v1",
@@ -67,11 +55,7 @@ function configFor(
     workspace,
   };
 }
-async function start(
-  config = configFor(),
-  env: NodeJS.ProcessEnv = { NATIVE_TEST_KEY: "fixture-key" },
-) {
-  const credential = env.NATIVE_TEST_KEY!;
+async function start(config = configFor(), credential = "fixture-key") {
   const runtime = await createNativeRuntime(config, {
     "openai/local-model": credential,
     "openai/other-model": credential,
@@ -140,7 +124,7 @@ describe("native runtime startup authority", () => {
   it("filters HTTP-normalized representations of startup credential values", async () => {
     const config = configFor();
     config.models[0]!.headers = { "x-api-key": "  synthetic-header-secret  " };
-    const runtime = await start(config, { NATIVE_TEST_KEY: "synthetic-http-secret  " });
+    const runtime = await start(config, "synthetic-http-secret  ");
     await runtime.withTurn(turn, async (resolved) => {
       const headers = new Headers({
         Authorization: "Bearer synthetic-http-secret  ",
@@ -241,7 +225,7 @@ describe("native runtime startup authority", () => {
       values.map(async (value) => {
         const config = configFor(workspace, provider.baseUrl);
         config.models[0]!.headers = { "x-custom-auth": value };
-        const runtime = await start(config, { NATIVE_TEST_KEY: value });
+        const runtime = await start(config, value);
         await runtime.withTurn(turn, async (resolved) => {
           const stream = await resolved.streamFn(resolved.model, context);
           const response = await stream.result();
@@ -263,19 +247,10 @@ describe("native runtime startup authority", () => {
     expect(() => gatewayHost.resolveSecretSentinel(unknown)).toThrow("not registered");
   });
 
-  it("reads only named env keys once and fails missing credentials before opening workspaces", async () => {
-    const config = configFor("/nonexistent-native-test-workspace");
-    const reads: PropertyKey[] = [];
-    const env = trackedEnv(reads);
+  it("fails missing credentials before opening workspaces", async () => {
     await expect(
-      createNativeRuntime(config, { "openai/local-model": env.NATIVE_TEST_KEY! }),
+      createNativeRuntime(configFor("/nonexistent-native-test-workspace"), {}),
     ).rejects.toThrow("openai/local-model");
-    expect(reads).toEqual(["NATIVE_TEST_KEY"]);
-    config.workspace = tempDirs.make("native-runtime-");
-    config.models.push({ ...config.models[0]!, id: "second-model" });
-    reads.length = 0;
-    await start(config, trackedEnv(reads, "fixture-key"));
-    expect(reads).toEqual(["NATIVE_TEST_KEY"]);
   });
 
   it("rejects extra wire-style startup fields and endpoint interpolation", () => {
