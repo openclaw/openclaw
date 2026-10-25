@@ -28,6 +28,14 @@ const addForCreator = (fixture: Fixture) =>
   fixture.invoke("cron.add", createParams(), creatorClient());
 const updateModel = (fixture: Fixture, id: string, model: string, client?: Caller) =>
   fixture.invoke("cron.update", { id, patch: { payload: { kind: "agentTurn", model } } }, client);
+function modelParams(model?: string, sessionTarget?: string) {
+  const params = createParams();
+  return {
+    ...params,
+    ...(sessionTarget ? { sessionTarget } : {}),
+    payload: { ...params.payload, ...(model ? { model } : {}) },
+  };
+}
 const binding = (profileId: string, source: "user" | "auto", authRequirement: string) => ({
   provider: "openai",
   profileId,
@@ -97,11 +105,7 @@ describe("cron handler inference binding persistence", () => {
     async ([runtime, model, error], { fixture }) => {
       await fixture.useUnstoredCredential("openai");
       fixture.setCodexRuntime(runtime);
-      const params = createParams();
-      if (model) {
-        Object.assign(params.payload, { model });
-      }
-      const failure = await fixture.invoke("cron.add", params, null, {
+      const failure = await fixture.invoke("cron.add", modelParams(model), null, {
         expectedSuccess: false,
       });
       expect(failure).toMatchObject({ message: expect.stringContaining(error) });
@@ -138,16 +142,9 @@ describe("cron handler inference binding persistence", () => {
         fixture.setDefaultProfile(platformId);
       }
       const model = selection === "model" ? "openai/gpt-4.1@" + platformId : "openai/gpt-4.1";
-      const params = createParams();
       const error = await fixture.invoke(
         "cron.add",
-        {
-          ...params,
-          payload: {
-            ...params.payload,
-            ...(selection === "creator" ? {} : { model }),
-          },
-        },
+        modelParams(selection === "creator" ? undefined : model),
         selection === "creator" ? createCronCallerClient("main", undefined, sessionKey) : null,
         { expectedSuccess: false },
       );
@@ -188,13 +185,7 @@ describe("cron handler inference binding persistence", () => {
     fixture,
   }) => {
     const personal = await fixture.personalAccount();
-    const params = {
-      ...createParams(),
-      payload: {
-        ...createParams().payload,
-        model: "openai/gpt-4.1@" + personal.profileId,
-      },
-    };
+    const params = modelParams("openai/gpt-4.1@" + personal.profileId);
     const agent = createCronCallerClient("main", undefined, sessionKey);
     for (const caller of [null, agent, personal.other]) {
       await fixture.invoke("cron.add", params, caller, { expectedSuccess: false });
@@ -378,17 +369,9 @@ describe("cron handler inference binding persistence", () => {
           modelOverride: "gpt-4.1",
         },
       );
-      const params = createParams();
       await fixture.invoke(
         "cron.add",
-        {
-          ...params,
-          sessionTarget: target,
-          payload: {
-            ...params.payload,
-            ...(explicitModel ? { model: "openai/gpt-4o@" + subscriptionId } : {}),
-          },
-        },
+        modelParams(explicitModel ? "openai/gpt-4o@" + subscriptionId : undefined, target),
         createCronCallerClient("main", undefined, sessionKey),
       );
       expect((await fixture.reload()).inferenceBinding).toMatchObject({
