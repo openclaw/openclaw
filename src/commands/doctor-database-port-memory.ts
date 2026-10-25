@@ -5,6 +5,9 @@ import { getMemoryEmbeddingCommandSecretTargetIds } from "../cli/command-secret-
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { createConfigIO } from "../config/io.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
+import { getScopedDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { runDatabasePortTask } from "../infra/database-engine/port-command.worker.js";
+import type { PostgresPlannerStatistics } from "../infra/database-engine/postgres-planner-statistics.js";
 import { readMemorySearchManagerStatus } from "../memory-host-sdk/host/types.js";
 import { getActiveMemorySearchManagerCore } from "../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -20,6 +23,7 @@ type MemoryRebuildResult = MemoryRebuildTarget & {
   files?: number;
   chunks?: number;
   warning?: string;
+  plannerStatistics?: PostgresPlannerStatistics;
 };
 
 function failed(target: MemoryRebuildTarget, reason: string): MemoryRebuildResult {
@@ -149,6 +153,20 @@ export async function rebuildPortedAgentMemory(params: {
               }
             } finally {
               await manager.close?.();
+            }
+            if (getScopedDatabaseEngineSelection()?.effectiveEngines.agent === "postgres") {
+              try {
+                outcome.plannerStatistics = await runDatabasePortTask(
+                  { operation: "analyze", sourcePath: target.path, config },
+                  { assertCurrent },
+                );
+              } catch {
+                outcome.plannerStatistics = {
+                  status: "warning",
+                  warning:
+                    "Post-port memory planner statistics could not be refreshed; autovacuum can refresh them later.",
+                };
+              }
             }
             results.push(outcome);
           } catch {

@@ -346,7 +346,10 @@ export class MarkdownDomReconciler {
       const preview = this.findPreviewText(this.tail!.children)!;
       this.previewText = { ...preview, original: preview.node.data };
     }
-    this.previewText.node.data = this.previewText.original + source.slice(this.source.length);
+    const text = this.previewText.original + source.slice(this.source.length);
+    if (this.previewText.node.data !== text) {
+      this.previewText.node.data = text;
+    }
   }
 
   private clearPreview(): void {

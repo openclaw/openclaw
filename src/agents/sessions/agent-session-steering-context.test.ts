@@ -248,11 +248,7 @@ it.each([false, true])(
     expect(requests[1]?.messages.slice(0, 2)).toEqual(requests[0]?.messages);
     expect(requests[1]?.messages.slice(2)).toMatchObject([
       { role: "assistant", content: [{ type: "toolCall", id: "refresh" }] },
-      {
-        role: "toolResult",
-        toolCallId: "refresh",
-        content: [{ type: "text", text: "Refreshed" }],
-      },
+      { role: "toolResult", toolCallId: "refresh", content: [textBlock("Refreshed")] },
       ...(newUser ? [{ role: "user", content: "Start a different task." }] : []),
       { role: "user", content: [textBlock("First extension context")] },
       { role: "user", content: [textBlock("Second extension context")] },

@@ -339,11 +339,11 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         { container: host },
       );
       await openMenu(host, '[aria-haspopup="menu"]');
-      await expect.poll(() => host.querySelector('[data-value="photo"]')).not.toBeNull();
-      const photo = query(host, '[data-value="photo"]');
+      await expect.poll(() => host.querySelector('[data-value="media"]')).not.toBeNull();
+      const media = query(host, '[data-value="media"]');
       const skills = query(host, '[data-value="open-skills"]');
-      await hoverBackground(photo, highlight);
-      const attachmentHover = getComputedStyle(photo).backgroundColor;
+      await hoverBackground(media, highlight);
+      const attachmentHover = getComputedStyle(media).backgroundColor;
       await hoverBackground(skills, attachmentHover);
     });
 

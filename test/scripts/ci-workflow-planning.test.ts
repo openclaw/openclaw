@@ -296,6 +296,7 @@ function renderCiGateEnvironment(
         .map((key) => [key, "true"]),
     ),
     run_check_plan: "false",
+    reuse_browser_extension_build: "false",
     shared_sdk_declarations: "false",
     compatibility_target: "false",
     release_scope: "full",
@@ -3138,7 +3139,10 @@ describe("ci workflow guards", () => {
           "check-plan": { outputs },
           "build-artifacts": {
             result: "success" as const,
-            outputs: { published_driver_artifact_id: "fixture-package" },
+            outputs: {
+              published_driver_artifact_id: "fixture-package",
+              browser_runtime_artifact_id: "fixture-browser-runtime",
+            },
           },
         },
         ...overrides,
@@ -3357,7 +3361,11 @@ describe("ci workflow guards", () => {
         expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(baseRows);
         expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
         expect(hosted.length).toBe(baseRows <= 40 ? baseRows + 2 : baseRows);
-        for (const name of ["security-fast", "checks-ui-e2e"]) {
+        const browserJob =
+          manifest.outputs.reuse_browser_extension_build === "true"
+            ? "checks-ui-browser-extension"
+            : "checks-ui-e2e";
+        for (const name of ["security-fast", browserJob]) {
           expect(hosted.includes(name), name).toBe(baseRows <= 40);
         }
         for (const name of [
@@ -3373,9 +3381,7 @@ describe("ci workflow guards", () => {
         expect(hosted).toContain("preflight");
         expect(hosted).toContain("ci-gate");
         expect(hosted.filter((name) => name === "checks-ui")).toHaveLength(0);
-        expect(hosted.filter((name) => name === "checks-ui-e2e")).toHaveLength(
-          baseRows <= 40 ? 1 : 0,
-        );
+        expect(hosted.filter((name) => name === browserJob)).toHaveLength(baseRows <= 40 ? 1 : 0);
       }
     });
 
@@ -10433,9 +10439,10 @@ describe("ci workflow guards", () => {
     const expectedUi = scenario.unitOwner ? CI_MANIFEST_FIXTURE_TARGETS.ui : selected.ui;
     expect(plannerOptions.dedicatedUiTests).toBe(expectedUi.length > 0);
     expect(manifest.outputs.run_ui_tests).toBe(String(expectedUi.length > 0));
-    expect(manifest.outputs.run_ui_e2e).toBe(
-      String(selected.mocked.length + selected.browser.length > 0),
-    );
+    expect(
+      manifest.outputs.run_ui_e2e === "true" ||
+        manifest.outputs.reuse_browser_extension_build === "true",
+    ).toBe(selected.mocked.length + selected.browser.length > 0);
     expect(manifest.outputs.run_ui_real_gateway).toBe(String(!isPr && selected.real.length > 0));
     expect(JSON.parse(expectDefined(manifest.outputs.ui_test_matrix, "UI matrix")).include).toEqual(
       expectedUi.map((_, index) => ({ shard: index + 1 })),
@@ -10454,7 +10461,9 @@ describe("ci workflow guards", () => {
     const e2eRows = JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, "E2E matrix")).include;
     expect(e2eRows.map((row: { task: string }) => row.task)).toEqual([
       ...selected.mocked.map(() => "control-ui"),
-      ...selected.browser.map(() => "browser-extension"),
+      ...(manifest.outputs.reuse_browser_extension_build === "true"
+        ? []
+        : selected.browser.map(() => "browser-extension")),
     ]);
     const realRows = JSON.parse(
       expectDefined(manifest.outputs.ui_real_gateway_matrix, "real-Gateway matrix"),
@@ -10551,7 +10560,10 @@ describe("ci workflow guards", () => {
       });
       expect(manifest.status, manifest.output).toBe(0);
       expect(manifest.outputs.run_ui_tests).toBe("false");
-      expect(manifest.outputs.run_ui_e2e).toBe(String(control || browser));
+      expect(
+        manifest.outputs.run_ui_e2e === "true" ||
+          manifest.outputs.reuse_browser_extension_build === "true",
+      ).toBe(control || browser);
       expect(manifest.outputs.run_ui_real_gateway).toBe(String(admittedReal));
       expect(
         resolveSelectedUiIncludes(
@@ -10569,7 +10581,9 @@ describe("ci workflow guards", () => {
       ).include;
       expect(rows.map((row: { shard: number }) => row.shard)).toEqual([
         ...(control ? [1, 2, 3, 4, 5, 6] : []),
-        ...(browser ? [control ? 7 : 1] : []),
+        ...(browser && manifest.outputs.reuse_browser_extension_build !== "true"
+          ? [control ? 7 : 1]
+          : []),
       ]);
       for (const row of rows) {
         expect(row).toMatchObject({
@@ -10586,7 +10600,11 @@ describe("ci workflow guards", () => {
             runAttempt: 1,
             preflightOutputs: manifest.outputs,
           }),
-        ).toBe(name === "checks-ui-e2e" ? control || browser : admittedReal);
+        ).toBe(
+          name === "checks-ui-e2e"
+            ? control || (browser && manifest.outputs.reuse_browser_extension_build !== "true")
+            : admittedReal,
+        );
       }
     },
   );
@@ -10710,10 +10728,66 @@ describe("ci workflow guards", () => {
     },
   );
 
+  it.each([
+    { eventName: "pull_request" as const, buildSelected: true, reuse: true },
+    { eventName: "pull_request" as const, buildSelected: false, reuse: false },
+  ])(
+    "keeps one browser proof with $eventName build=$buildSelected",
+    ({ eventName, buildSelected, reuse }) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        historicalCompatibility: false,
+        eventName,
+        changedPaths: ["extensions/browser/chrome-extension/bootstrap.chromium.test.ts"],
+        selectedTestTargets: [
+          ...CI_MANIFEST_FIXTURE_TARGETS.browser,
+          ...(buildSelected
+            ? ["extensions/browser/src/browser/extension-install.native-host.e2e.test.ts"]
+            : []),
+        ],
+        scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "false" },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.reuse_browser_extension_build).toBe(String(reuse));
+      const rows = JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, "UI E2E matrix"))
+        .include as Array<{ task: string }>;
+      expect(rows.filter((row) => row.task === "browser-extension")).toHaveLength(reuse ? 0 : 1);
+      const workflow = readCiWorkflow();
+      for (const result of ["success", "failure"] as const) {
+        expect(
+          evaluateWorkflowCondition(workflow.jobs["checks-ui-browser-extension"].if, {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: manifest.outputs,
+            additionalNeeds: {
+              "build-artifacts": {
+                result,
+                outputs: { browser_runtime_artifact_id: "fixture-browser-runtime" },
+              },
+            },
+          }),
+        ).toBe(reuse);
+      }
+      expect(
+        evaluateWorkflowCondition(workflow.jobs["checks-ui-browser-extension"].if, {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightOutputs: manifest.outputs,
+          additionalNeeds: {
+            "build-artifacts": { result: "failure", outputs: { browser_runtime_artifact_id: "" } },
+          },
+        }),
+      ).toBe(false);
+    },
+  );
+
   it("gates current Control UI changes on ordinary and real-Gateway Chromium E2E", () => {
     const workflow = readCiWorkflow();
     const ui = workflow.jobs["checks-ui"];
     const uiE2e = workflow.jobs["checks-ui-e2e"];
+    const uiBrowser = workflow.jobs["checks-ui-browser-extension"];
     const uiE2eRealGateway = workflow.jobs["checks-ui-e2e-real-gateway"];
 
     expect(readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")).toContain(
@@ -10767,12 +10841,43 @@ describe("ci workflow guards", () => {
           expect(
             JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, assertionName)),
             assertionName,
-          ).toEqual(expectedUiE2eMatrices[1]);
+          ).toEqual({
+            include: expectDefined(expectedUiE2eMatrices[1], "current UI matrix").include.filter(
+              (row) =>
+                row.task !== "browser-extension" ||
+                manifest.outputs.reuse_browser_extension_build !== "true",
+            ),
+          });
         }
       }
     }
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
+    expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-browser-extension");
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e-real-gateway");
+    expect(uiBrowser.needs).toEqual(["preflight", "build-artifacts"]);
+    expect(uiBrowser.if).toBe(
+      "${{ !cancelled() && needs.preflight.outputs.reuse_browser_extension_build == 'true' && needs.build-artifacts.outputs.browser_runtime_artifact_id != '' }}",
+    );
+    expect(uiBrowser["runs-on"]).toBe(uiE2e["runs-on"]);
+    expect(uiBrowser.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 1,
+      matrix: { task: ["browser-extension"] },
+    });
+    const browserScenario = expectDefined(
+      uiBrowser.steps.find(
+        (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",
+      ),
+      "prebuilt browser extension proof",
+    );
+    expect(browserScenario.run).toContain(
+      "node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+    );
+    expect(browserScenario.run).not.toContain("qaRuntime");
+    const artifactSteps = workflow.jobs["build-artifacts"].steps as WorkflowStep[];
+    expect(artifactSteps.findIndex((step) => step.id === "browser_runtime_package")).toBeLessThan(
+      artifactSteps.findIndex((step) => step.id === "built_artifact_checks"),
+    );
 
     expect(uiE2eRealGateway.permissions).toEqual(uiE2e.permissions);
     expect(uiE2eRealGateway.needs).toEqual(uiE2e.needs);
@@ -10815,7 +10920,28 @@ describe("ci workflow guards", () => {
 
     // Failed-job retries can retain an earlier eight-shard plan while live routing
     // selects hosted runners. Both widths retain the cache and contributor boundaries.
+    const routedRealGatewayJobs = [
+      { shard: 1, shard_count: 2, run_desktop: true },
+      { shard: 2, shard_count: 2, run_desktop: false },
+      { shard: 1, shard_count: 1, run_desktop: true },
+    ].map((matrix) => ({
+      job: uiE2eRealGateway,
+      name:
+        matrix.shard_count === 1
+          ? "checks-ui-e2e-real-gateway"
+          : `checks-ui-e2e-real-gateway (${matrix.shard}/${matrix.shard_count})`,
+      setup: realGatewaySetup,
+      matrix,
+      blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
+    }));
     const routedUiE2eJobs = [
+      {
+        job: uiBrowser,
+        name: "checks-ui-browser-extension",
+        setup: uiBrowser.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+        matrix: { task: "browser-extension" },
+        blacksmithRunner: "blacksmith-8vcpu-ubuntu-2404",
+      },
       ...expectedUiE2eMatrices
         .flatMap(({ include }) => include)
         .map((matrix) => ({
@@ -10828,20 +10954,7 @@ describe("ci workflow guards", () => {
               ? "blacksmith-16vcpu-ubuntu-2404"
               : "blacksmith-8vcpu-ubuntu-2404",
         })),
-      ...[
-        { shard: 1, shard_count: 2, run_desktop: true },
-        { shard: 2, shard_count: 2, run_desktop: false },
-        { shard: 1, shard_count: 1, run_desktop: true },
-      ].map((matrix) => ({
-        job: uiE2eRealGateway,
-        name:
-          matrix.shard_count === 1
-            ? "checks-ui-e2e-real-gateway"
-            : `checks-ui-e2e-real-gateway (${matrix.shard}/${matrix.shard_count})`,
-        setup: realGatewaySetup,
-        matrix,
-        blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
-      })),
+      ...routedRealGatewayJobs,
     ] as const;
     expect(new Set(routedUiE2eJobs.map((job) => job.name)).size).toBe(routedUiE2eJobs.length);
     const routingScenarios = [
@@ -11191,9 +11304,7 @@ describe("ci workflow guards", () => {
     expect(proofUpload.with.name).toBe(
       "control-ui-real-gateway-proof-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}",
     );
-    const realGatewayRows = routedUiE2eJobs.filter(
-      (row) => row.job === uiE2eRealGateway && row.matrix.shard_count === 2,
-    );
+    const realGatewayRows = routedRealGatewayJobs.filter((row) => row.matrix.shard_count === 2);
     for (const step of [desktopProof, desktopUpload]) {
       expect(
         realGatewayRows.filter(({ matrix }) =>
@@ -12276,6 +12387,7 @@ describe("ci workflow guards", () => {
       "native-i18n",
       "checks-ui",
       "checks-ui-e2e",
+      "checks-ui-browser-extension",
       "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
       "checks-baseline-ratchets",
@@ -12380,6 +12492,7 @@ describe("ci workflow guards", () => {
           "",
         )
         .replace(/needs\.build-artifacts\.outputs\.published_driver_artifact_id != ''\s*&&\s*/u, "")
+        .replace(/\s*&&\s*needs\.build-artifacts\.outputs\.browser_runtime_artifact_id != ''/u, "")
         .replace(
           /\s*&&\s*\(needs\.build-artifacts\.result == 'success' \|\| needs\.build-artifacts\.result == 'skipped'\)$/u,
           "",
@@ -12896,6 +13009,7 @@ describe("ci workflow guards", () => {
                 .map((key) => [key, String(selected)]),
             ),
             shared_sdk_declarations: String(selected),
+            reuse_browser_extension_build: String(selected),
             validation_tier: "full",
             checkout_revision: qualificationSha,
           },

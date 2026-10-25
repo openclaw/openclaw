@@ -76,6 +76,10 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/audit-retention.conformance.test.ts",
   "src/infra/database-engine/acp-retention.conformance.test.ts",
   "src/infra/database-engine/row-limit.conformance.test.ts",
+  "src/infra/database-engine/scalar-portability.conformance.test.ts",
+  "src/infra/database-engine/text-comparison.conformance.test.ts",
+  "src/infra/database-engine/migration-sql.conformance.test.ts",
+  "src/infra/database-engine/voice-lookup.conformance.test.ts",
   "src/infra/database-engine/gateway-agent-inspection.conformance.test.ts",
   "src/infra/database-engine/session-group-catalog.conformance.test.ts",
   "src/infra/database-engine/post-ready.conformance.test.ts",
@@ -1403,6 +1407,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/session-archive-alias.conformance.test.ts",
   "src/infra/database-engine/outcome-surfaces.postgres.test.ts",
   "src/node-host/node-worker-launch-claim.test.ts",
+  "src/infra/database-engine/session-participant-capacity.conformance.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

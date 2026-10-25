@@ -5,10 +5,13 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type CDPSession, type Page } from "playwright";
+import { buildSandboxHostPath } from "../src/agents/sandbox-host.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
+import { waitForControlUiInitialRoster } from "../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -16,11 +19,14 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-cold-load-trace.ts";
 import {
   createInteractionFixture,
   interactionScenarios,
+  type InteractionEvidence,
+  type InteractionSandbox,
 } from "./lib/control-ui-interaction-scenarios.ts";
 import {
   clipInteractionCpuProfile,
@@ -43,6 +49,7 @@ const { values } = parseArgs({
     steps: { type: "string" },
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
+    "cpu-throttle": { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     theme: { type: "string", default: "light" },
@@ -50,6 +57,7 @@ const { values } = parseArgs({
     "first-pair-screenshots": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
     "resource-counts": { type: "boolean", default: false },
+    "process-wakeups": { type: "boolean", default: false },
     headed: { type: "boolean", default: false },
   },
 });
@@ -59,6 +67,10 @@ if (values.theme !== "light" && values.theme !== "dark") {
 }
 const theme = values.theme;
 const pairs = Number(values.pairs);
+const cpuThrottle = Number(values["cpu-throttle"]);
+if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
+  throw new Error("cpu-throttle must be at least 1");
+}
 if (!Number.isInteger(pairs) || pairs < 1) {
   throw new Error("pairs must be a positive integer");
 }
@@ -107,6 +119,121 @@ function distribution(numbers: number[]) {
   };
 }
 
+type ProcessWakeupSample = {
+  sampleStartMach: string;
+  sampleEndMach: string;
+  timebase: { numer: number; denom: number };
+  processes: Array<{
+    pid: number;
+    ppid?: number;
+    uid?: number;
+    startAbstime?: string;
+    exitAbstime?: string;
+    interruptWakeups?: string;
+    packageIdleWakeups?: string;
+    error?: string;
+    errno?: number;
+  }>;
+};
+type ProcessWakeupSnapshot = {
+  // CDP supplies cumulative whole-process CPU seconds; rusage CPU units are not assumed.
+  cdpProcesses: Array<{ id: number; type: string; cumulativeCpuSeconds: number }>;
+  rusage: ProcessWakeupSample;
+};
+type ProcessWakeups = {
+  complete: boolean;
+  nativeBrowserPid?: number;
+  reason?: string;
+  before?: ProcessWakeupSnapshot;
+  after?: ProcessWakeupSnapshot;
+  delta?: { interruptWakeups: string; packageIdleWakeups: string };
+};
+
+async function readProcessWakeups(
+  session: CDPSession,
+  reader: string,
+  expectedBrowserPid?: number,
+): Promise<ProcessWakeupSnapshot> {
+  const { processInfo }: { processInfo: Array<{ id: number; type: string; cpuTime: number }> } =
+    await session.send("SystemInfo.getProcessInfo");
+  const browserPids = processInfo.filter((process) => process.type === "browser");
+  const ids = processInfo.map((process) => process.id);
+  if (
+    browserPids.length !== 1 ||
+    (expectedBrowserPid !== undefined && browserPids[0]!.id !== expectedBrowserPid) ||
+    ids.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+    new Set(ids).size !== ids.length
+  ) {
+    throw new Error("The active owned browser did not supply one valid process set");
+  }
+  // No process discovery: only this owned browser's explicit OS PIDs reach libproc.
+  const rusage: ProcessWakeupSample = JSON.parse(
+    execFileSync(reader, ids.map(String), { encoding: "utf8", timeout: 10_000 }),
+  );
+  return {
+    cdpProcesses: processInfo.map(({ id, type, cpuTime }) => ({
+      id,
+      type,
+      cumulativeCpuSeconds: cpuTime,
+    })),
+    rusage,
+  };
+}
+
+function finishProcessWakeups(observation: ProcessWakeups): void {
+  const { before, after } = observation;
+  if (!before || !after) {
+    throw new Error("Both process snapshots are required");
+  }
+  const processSet = (snapshot: ProcessWakeupSnapshot) =>
+    snapshot.cdpProcesses
+      .map(({ id, type }) => `${id}:${type}`)
+      .toSorted()
+      .join(",");
+  if (processSet(before) !== processSet(after)) {
+    throw new Error("Owned Chromium processes changed between snapshots");
+  }
+  let interruptWakeups = 0n;
+  let packageIdleWakeups = 0n;
+  for (const snapshot of [before, after]) {
+    const rows = snapshot.rusage.processes;
+    if (
+      rows.length !== snapshot.cdpProcesses.length ||
+      new Set(rows.map(({ pid }) => pid)).size !== rows.length ||
+      rows.some((row) => row.error || !snapshot.cdpProcesses.some(({ id }) => id === row.pid))
+    ) {
+      throw new Error("Incomplete Darwin rusage process set");
+    }
+  }
+  for (const initial of before.rusage.processes) {
+    const final = after.rusage.processes.find(({ pid }) => pid === initial.pid)!;
+    if (
+      !initial.startAbstime ||
+      initial.startAbstime === "0" ||
+      initial.startAbstime !== final.startAbstime ||
+      initial.uid !== final.uid ||
+      initial.ppid !== final.ppid ||
+      initial.exitAbstime !== "0" ||
+      final.exitAbstime !== "0"
+    ) {
+      throw new Error(`Process ${initial.pid} changed identity or exited`);
+    }
+    const interrupts = BigInt(final.interruptWakeups!) - BigInt(initial.interruptWakeups!);
+    const packageIdle = BigInt(final.packageIdleWakeups!) - BigInt(initial.packageIdleWakeups!);
+    if (interrupts < 0n || packageIdle < 0n) {
+      throw new Error(`Process ${initial.pid} counters moved backwards`);
+    }
+    interruptWakeups += interrupts;
+    packageIdleWakeups += packageIdle;
+  }
+  observation.delta = {
+    interruptWakeups: String(interruptWakeups),
+    packageIdleWakeups: String(packageIdleWakeups),
+  };
+  observation.complete = true;
+  delete observation.reason;
+}
+
 type Result = {
   step: string;
   viewport: string;
@@ -119,12 +246,15 @@ type Result = {
   taskMs?: number;
   layoutMs?: number;
   styleMs?: number;
+  longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
+  scenarioEvidence?: InteractionEvidence;
   domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
   domAfter?: { nodes: number; menuItems: number; namedAnchors: number };
   rowIdentity?: { initial: number; created: number; retained: number; final: number };
   resourcesBefore?: ControlUiResourceCounts;
   resourcesAfter?: ControlUiResourceCounts;
+  processWakeups?: ProcessWakeups;
   skipReason?: string;
   trace?: ReturnType<typeof summarizeInteractionTrace>;
   longTaskDetails?: ReturnType<typeof summarizeLongTaskCpuProfiles>;
@@ -148,6 +278,32 @@ const servers: Array<{
   indexSha256: string;
   server: Awaited<ReturnType<typeof startBuiltControlUiE2eServer>>;
 }> = [];
+let processWakeupReader: string | undefined;
+let processWakeupSetupError: string | undefined;
+let processWakeupBuild: { command: string; argv: string[]; sourceSha256: string } | undefined;
+if (values["process-wakeups"]) {
+  if (process.platform !== "darwin") {
+    processWakeupSetupError = "Darwin proc_pid_rusage is unavailable on this platform";
+  } else {
+    try {
+      const source = fileURLToPath(new URL("./perf/darwin-process-wakeups.c", import.meta.url));
+      const executable = path.join(artifactDir, "darwin-process-wakeups");
+      const argv = ["clang", "-O2", "-Wall", "-Wextra", "-std=c11", source, "-o", executable];
+      processWakeupBuild = {
+        command: "/usr/bin/xcrun",
+        argv,
+        sourceSha256: createHash("sha256")
+          .update(await readFile(source))
+          .digest("hex"),
+      };
+      // Build once before launching Chromium, never during an observation.
+      execFileSync(processWakeupBuild.command, argv, { timeout: 30_000, stdio: "pipe" });
+      processWakeupReader = executable;
+    } catch (error) {
+      processWakeupSetupError = String(error);
+    }
+  }
+}
 const browser = await chromium.launch({
   executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
   headless: !values.headed,
@@ -214,7 +370,7 @@ async function launchNativeVisibilityContext() {
     if (!context) {
       throw new Error("Native Chromium did not expose its default context");
     }
-    return { context, close };
+    return { context, close, processId: child.pid };
   } catch (error) {
     await close();
     throw error;
@@ -222,7 +378,29 @@ async function launchNativeVisibilityContext() {
 }
 
 class ScenarioSkipped extends Error {}
+let sandboxServer: ReturnType<typeof createControlUiSandboxFixtureServer> | undefined;
+let sandbox: InteractionSandbox | undefined;
 try {
+  if (
+    scenarios.some(
+      ({ fixture }) =>
+        fixture?.boardFrameResources || fixture?.canvasFrameRetention || fixture?.mcpAppResources,
+    )
+  ) {
+    sandboxServer = createControlUiSandboxFixtureServer();
+    await new Promise<void>((resolve, reject) => {
+      sandboxServer!.once("error", reject);
+      sandboxServer!.listen(0, "127.0.0.1", resolve);
+    });
+    const address = sandboxServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Interaction sandbox did not bind a TCP port");
+    }
+    sandbox = {
+      sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
+      sandboxPort: address.port,
+    };
+  }
   for (const directory of bundles) {
     const resolved = path.resolve(directory);
     const html = await readFile(path.join(resolved, "index.html"), "utf8");
@@ -256,9 +434,26 @@ try {
           ? "CDP trace + 1ms CPU profiler (overhead included)"
           : "untraced CDP metrics",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+        cpuThrottle,
+        mobileTouchEmulation: true,
         screenshots: values["first-pair-screenshots"] ? "first pair per cell" : "all",
         resourceCounts: values["resource-counts"]
           ? "Instrumented top-frame native registrations, including fixture resources; measure timings separately without this flag."
+          : false,
+        processWakeups: values["process-wakeups"]
+          ? {
+              collector: "Darwin proc_pid_rusage RUSAGE_INFO_V0",
+              scope: "CDP-reported process set of the active owned Chromium browser",
+              supported: Boolean(processWakeupReader),
+              setupError: processWakeupSetupError,
+              build: processWakeupBuild,
+              limitations: [
+                "Interrupt-level wakeups and package-idle subset, not every OS wakeup",
+                "Two sequential endpoint snapshots include control-message and read skew",
+                "Transient processes entirely between endpoints are not observed",
+                "CDP CPU values are cumulative seconds; Chromium may substitute zero on read failure",
+              ],
+            }
           : false,
         preferences: { lobsterPetVisits: false },
         headed: values.headed,
@@ -305,18 +500,27 @@ try {
             nativeVisibility?.context ??
             (await browser.newContext({
               viewport: { width: viewport.width, height: viewport.height },
+              isMobile: viewport.name === "mobile",
+              hasTouch: viewport.name === "mobile",
               serviceWorkers: "block",
               colorScheme: theme,
             }));
           let page: Page;
           try {
+            if (
+              scenario.fixture?.boardFrameResources ||
+              scenario.fixture?.canvasFrameRetention ||
+              scenario.fixture?.mcpAppResources
+            ) {
+              await context.grantPermissions(["local-network-access"]);
+            }
             page = await context.newPage();
             if (nativeVisibility) {
               await page.setViewportSize({ width: viewport.width, height: viewport.height });
               await page.emulateMedia({ colorScheme: theme });
               await page.bringToFront();
             }
-            page.setDefaultTimeout(15_000);
+            page.setDefaultTimeout(15_000 * cpuThrottle);
             // tsx preserves names in serialized fixture callbacks, as in the cold-load runner.
             await page.addInitScript("globalThis.__name = (fn) => fn");
             await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
@@ -351,18 +555,36 @@ try {
             status: "failed",
             hostLoadAverage: os.loadavg(),
             artifactPrefix,
+            ...(values["process-wakeups"]
+              ? {
+                  processWakeups: {
+                    complete: false,
+                    nativeBrowserPid: nativeVisibility?.processId,
+                    reason: processWakeupSetupError ?? "Sampling not reached",
+                  },
+                }
+              : {}),
           };
           let cdp: CDPSession | undefined;
+          let processSession: CDPSession | undefined;
           let tracing = false;
           let profiling = false;
           let minimizedWindow: number | undefined;
           const events: unknown[] = [];
           const styleSheets = new Map<string, InteractionStyleSheet>();
           try {
+            cdp = await context.newCDPSession(page);
+            await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
+            if (nativeVisibility && scenario.fixture?.boardFrameResources) {
+              // Native default contexts allow service workers, which hide fixture fetches from page.route.
+              await cdp.send("Network.enable");
+              await cdp.send("Network.setBypassServiceWorker", { bypass: true });
+            }
             const fixture = createInteractionFixture(
               slot.build.buildId,
               slot.build.version,
               scenario.fixture,
+              sandbox,
             );
             const sessions = createTeamScaleSidebarListOwner({
               rows: fixture.sessions,
@@ -371,18 +593,31 @@ try {
               defaults: { model: "model-0", modelProvider: "example", contextTokens: 128_000 },
               owners: [],
             });
-            const gateway = await installMockGateway(page, fixture, {
-              requestHandlers: {
-                "sessions.list": (params) => {
-                  if (!isRecord(params)) {
-                    throw new Error("Expected sessions.list query parameters");
-                  }
-                  return sessions.list(params).result;
+            // Keep the same readiness contract with a timeout scaled for intentional throttling.
+            const gateway = await installMockGateway(
+              page,
+              { ...fixture, awaitInitialRoster: false },
+              {
+                requestHandlers: {
+                  "sessions.list": (params) => {
+                    if (!isRecord(params)) {
+                      throw new Error("Expected sessions.list query parameters");
+                    }
+                    return sessions.list(params).result;
+                  },
                 },
               },
-            });
+            );
+            await scenario.setup?.(page);
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
+            await waitForControlUiInitialRoster(page, 15_000 * cpuThrottle);
             await scenario.prepare(page, gateway);
+            if (nativeVisibility && scenario.fixture?.boardFrameResources) {
+              await cdp.send("Network.setBypassServiceWorker", { bypass: false });
+              await cdp.send("Network.disable");
+            }
+            // Slow CPUs can still be loading boot modules after the first ready frame.
+            await page.waitForLoadState("networkidle");
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
             await settle(page);
             const activePet = await page.evaluate(
@@ -392,7 +627,6 @@ try {
               throw new Error("Warm interaction fixture must disable unrelated pet visits");
             }
             await page.locator(`html[data-theme-mode="${theme}"]`).waitFor({ state: "attached" });
-            cdp = await context.newCDPSession(page);
             await cdp.send("Performance.enable", {
               timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
             });
@@ -436,9 +670,6 @@ try {
               await cdp.send("Profiler.start");
               profiling = true;
             }
-            if (values["resource-counts"]) {
-              result.resourcesBefore = await readControlUiResourceCounts(page);
-            }
             if (scenario.visibility === "hidden") {
               const { windowId } = await cdp.send("Browser.getWindowForTarget");
               minimizedWindow = windowId;
@@ -462,6 +693,9 @@ try {
                   "Native window minimization did not hide the page; use --headed on a windowed host for hidden-idle proof.",
                 );
               }
+            }
+            if (values["resource-counts"]) {
+              result.resourcesBefore = await readControlUiResourceCounts(page);
             }
             const requestsBefore = (await gateway.getRequests()).length;
             const countDom = () =>
@@ -501,16 +735,69 @@ try {
                   return { state, observer };
                 }, scenario.rowSelector)
               : undefined;
+            if (values["process-wakeups"]) {
+              const observation = result.processWakeups!;
+              observation.reason = processWakeupSetupError ?? "Process observation did not finish";
+              if (processWakeupReader) {
+                try {
+                  if (nativeVisibility && nativeVisibility.processId === undefined) {
+                    throw new Error("Native owned Chromium launch did not retain its PID");
+                  }
+                  const ownedBrowser = context.browser();
+                  if (!ownedBrowser) {
+                    throw new Error("Active context has no owned Chromium browser");
+                  }
+                  processSession = await ownedBrowser.newBrowserCDPSession();
+                  observation.before = await readProcessWakeups(
+                    processSession,
+                    processWakeupReader,
+                    nativeVisibility?.processId,
+                  );
+                } catch (error) {
+                  observation.reason = String(error);
+                }
+              }
+            }
+            const taskProbe = await page.evaluateHandle(() => {
+              const durations: number[] = [];
+              const observer = new PerformanceObserver((list) => {
+                durations.push(...list.getEntries().map((entry) => entry.duration));
+              });
+              observer.observe({ type: "longtask" });
+              return { durations, observer };
+            });
             const before = await metrics(cdp);
             await page.evaluate(() => performance.mark("interaction:start"));
             const start = performance.now();
-            await scenario.run(page, gateway);
+            result.scenarioEvidence = (await scenario.run(page, gateway)) ?? undefined;
             if (scenario.visibility !== "hidden") {
               await settle(page);
             }
             result.wallMs = performance.now() - start;
             await page.evaluate(() => performance.mark("interaction:end"));
             const after = await metrics(cdp);
+            result.longTasks = await taskProbe.evaluate(({ durations, observer }) => {
+              durations.push(...observer.takeRecords().map((entry) => entry.duration));
+              observer.disconnect();
+              return {
+                count: durations.length,
+                totalMs: durations.reduce((sum, duration) => sum + duration, 0),
+                maxMs: Math.max(0, ...durations),
+              };
+            });
+            await taskProbe.dispose();
+            if (processSession && processWakeupReader && result.processWakeups?.before) {
+              try {
+                result.processWakeups.after = await readProcessWakeups(
+                  processSession,
+                  processWakeupReader,
+                  nativeVisibility?.processId,
+                );
+                finishProcessWakeups(result.processWakeups);
+              } catch (error) {
+                result.processWakeups.reason = String(error);
+              }
+            }
             result.domAfter = await countDom();
             if (rowProbe && scenario.rowSelector) {
               result.rowIdentity = await rowProbe.evaluate(({ state, observer }, selector) => {
@@ -663,6 +950,17 @@ try {
                 );
               }
             } finally {
+              if (processSession) {
+                try {
+                  await processSession.detach();
+                } catch (error) {
+                  if (result.processWakeups) {
+                    result.processWakeups.complete = false;
+                    delete result.processWakeups.delta;
+                    result.processWakeups.reason = `Process session cleanup failed: ${String(error)}`;
+                  }
+                }
+              }
               await capture(async () => cdp?.detach());
               await capture(() => (nativeVisibility ? nativeVisibility.close() : context.close()));
             }
@@ -697,6 +995,12 @@ try {
   }
 } finally {
   await browser.close();
+  if (sandboxServer?.listening) {
+    sandboxServer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      sandboxServer!.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
   for (const { server } of servers) {
     await server.close();
   }
@@ -796,6 +1100,9 @@ await writeFile(
       executed: results.length,
       failed: results.filter((row) => row.status === "failed").length,
       skipped: results.filter((row) => row.status === "skipped").length,
+      processWakeupsIncomplete: values["process-wakeups"]
+        ? results.filter((row) => row.processWakeups?.complete !== true).length
+        : undefined,
       summary,
     },
     null,

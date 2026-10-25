@@ -176,9 +176,9 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
       runtime.log(`Git backup committed: ${result.commit}`);
     }
     if (result.pushWarning) {
-      runtime.error(
-        `Warning: Git backup committed, but push failed: ${sanitizeTerminalText(result.pushWarning)}`,
-      );
+      // Keep escaped line breaks outside URL query values during console redaction.
+      const warning = result.pushWarning.split("\n").map(sanitizeTerminalText).join(" \\n ");
+      runtime.error(`Warning: Git backup committed, but push failed: ${warning}`);
     }
     for (const warning of result.warnings) {
       runtime.error(`Warning: ${sanitizeTerminalText(warning)}`);

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websocket-transport.js";
 import {
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
@@ -9,7 +9,7 @@ import {
 import { NODE_WORKER_INFERENCE_SETUP_ERROR } from "../infra/node-runner-inventory.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveRuntimeDeployEntrypointUrl } from "../infra/runtime-process-url.js";
-import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerEnv } from "../infra/runtime-worker-url.js";
 import {
   createChildAdapter,
   type AwaitedStdoutChildAdapter,
@@ -154,7 +154,7 @@ export async function prepareNodeWorkerLaunchTransport(
       ...(secretInput ? [WORKER_NATIVE_INFERENCE_STARTUP_ARG] : []),
     ];
     const workerOptions = {
-      env: workerEnv,
+      env: resolveRuntimeWorkerEnv(pathToFileURL(entry), workerEnv),
       secretInput,
       ownedWorker: true,
       stdinMode: "pipe-open",

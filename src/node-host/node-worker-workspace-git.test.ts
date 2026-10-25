@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   initializeNodeWorkerGitWorkspace,
   prepareNodeWorkerGitResult,
@@ -37,14 +38,9 @@ describe("node workspace Git creation", () => {
     vi.stubEnv("GIT_CONFIG_KEY_1", "core.fsmonitor");
     vi.stubEnv("GIT_CONFIG_VALUE_1", "false");
     const baseCommit = "a".repeat(40);
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => ({
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-      stdout: argv.includes("rev-parse") ? `${baseCommit}\n` : "",
-      stderr: "",
-    }));
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) =>
+      createCommandResult({ stdout: argv.includes("rev-parse") ? `${baseCommit}\n` : "" }),
+    );
     vi.mocked(runExec).mockResolvedValue({ stdout: "pack", stderr: "" });
 
     await initializeNodeWorkerGitWorkspace({
@@ -108,14 +104,9 @@ it("captures Git history through its declared entry and retains the upload frami
     headCommit: "a".repeat(40),
     descendsFromBase: true,
   };
-  vi.mocked(runCommandWithTimeout).mockResolvedValue({
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    stdout: JSON.stringify(history),
-    stderr: "",
-  });
+  vi.mocked(runCommandWithTimeout).mockResolvedValue(
+    createCommandResult({ stdout: JSON.stringify(history) }),
+  );
   const packPath = path.join(root, "history.pack");
   const result = await prepareNodeWorkerGitResult({
     resultVersion: 2,

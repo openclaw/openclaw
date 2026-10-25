@@ -73,6 +73,19 @@ export function createAgentDatabaseMaintenanceOwner(context: {
         databaseOptions: context.databaseOptions,
       });
       preparation = { plan: input, prepared };
+      if (!prepared.requiresWrite) {
+        try {
+          const value = kernel.runSessionMaintenanceMetadataInTransaction(
+            { ...input, kind: "maintenance-plan", databaseOptions: context.databaseOptions },
+            {},
+            prepared,
+          );
+          return { kind: "not-committed" as const, workerThreadId: threadId, value };
+        } finally {
+          releasePreparation();
+        }
+      }
+      return undefined;
     },
     "session.maintenance.metadata": (input: MetadataInput) => {
       const kernel = expectDefined(maintenance, "Session maintenance kernel");
@@ -131,7 +144,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
         },
         selected?.prepared,
       );
-      return value.kind === "maintenance-plan-stale" || selected?.prepared.requiresWrite === false
+      return value.kind === "maintenance-plan-stale"
         ? { kind: "not-committed" as const, workerThreadId: threadId, value }
         : {
             kind: "committed" as const,

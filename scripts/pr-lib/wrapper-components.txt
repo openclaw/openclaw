@@ -407,6 +407,7 @@ src/infra/database-engine/postgres-search.ts
 src/infra/database-engine/postgres-store-metadata.ts
 src/infra/database-engine/postgres-vector.ts
 src/infra/database-engine/registry.ts
+src/infra/database-engine/scalar.ts
 src/infra/database-engine/search-admission.ts
 src/infra/database-engine/search-extension.ts
 src/infra/database-engine/search.ts
@@ -1058,6 +1059,7 @@ src/infra/map-size.ts
 src/infra/mutation-authority.ts
 src/infra/native-error-response-schema.ts
 src/infra/native-error-response.ts
+src/infra/native-module-format.ts
 src/infra/net/configured-local-origin-bypass.ts
 src/infra/net/fetch-guard.ts
 src/infra/net/fetch-request-authority.ts
@@ -2281,6 +2283,7 @@ src/infra/session-cost-usage-worker.types.ts
 src/sessions/session-agent-work-admission.ts
 src/sessions/session-lifecycle-identity.ts
 src/config/sessions/cli-history-boundary.ts
+src/config/sessions/session-accessor.sqlite-archive-worker-lifetime.ts
 src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts

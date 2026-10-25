@@ -12,6 +12,7 @@ import {
   workspacePackageExportAliasEntries,
 } from "../src/plugins/sdk-alias-workspace.ts";
 import { createStandaloneArtifactAdapter } from "./lib/bun-standalone-artifacts.mjs";
+import { bundleStandaloneModules } from "./lib/bun-standalone-bundle.mjs";
 import { createStandaloneCodegenAdapter } from "./lib/bun-standalone-codegen.mjs";
 import {
   assertStandaloneCompiler,
@@ -126,6 +127,9 @@ console.log(`Building ${mode} standalone in ${outputRoot}`);
 
 copyStandaloneRuntime(sourceRoot, runtimeRoot);
 pruneStandalonePluginDirectories(runtimeRoot, plugins);
+// Transfer the canonical portable graph; host workers remain embedded in the image.
+const { preparePackagedWorkerBundle } = await import("./package-worker-bundle.mts");
+await preparePackagedWorkerBundle(runtimeRoot);
 const declaredPluginAssets = new Set(
   listPackagedStaticExtensionAssetOutputs({ rootDir: runtimeRoot }),
 );
@@ -245,8 +249,14 @@ if (sourceEntries?.unmappedWorkers(workerEntries).length) {
 const metadataEntries = [...moduleEntries];
 // Source discovery retains lazy companions; emitted-JS builds keep their full inventory.
 moduleEntries = sourceEntries?.selectRuntimeEntries(moduleEntries) ?? moduleEntries;
+const pluginLoader = await stageStandalonePluginLoader({
+  runtimeRoot,
+  outputRoot,
+  build: Bun.build,
+});
 const native = createStandaloneNativeAdapter({ runtimeRoot, parse });
-native.discover(moduleEntries);
+// Disk loaders still need their builtin imports retained in the compiled host.
+native.discover([...moduleEntries, pluginLoader.modulePath]);
 moduleEntries.push(...native.additionalModuleEntries);
 // Include conditional ESM/CJS entries reached through computed imports.
 for (const packageName of ["@openclaw/fs-safe", "@openclaw/proc-safe", "sqlite-vec", "ws"]) {
@@ -391,10 +401,6 @@ Object.assign(
   ),
 );
 const pluginContract = createStandalonePluginContract({ runtimeRoot, plugins, embeddedPaths });
-const pluginLoader =
-  mode === "aot" && !supportDestination
-    ? undefined
-    : await stageStandalonePluginLoader({ runtimeRoot, outputRoot, build: Bun.build });
 for (const [name, entry] of Object.entries(moduleAliases)) {
   embeddedPaths[name] = embeddedPaths[path.relative(runtimeRoot, entry).split(path.sep).join("/")];
 }
@@ -439,7 +445,7 @@ const initialEmbeddedPathsExpression = standaloneEmbeddedPathsExpression(embedde
 const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, pluginLoader });
 fs.writeFileSync(
   runtimeBootstrap,
-  `import Module, { createRequire } from "node:module";
+  `import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
@@ -784,7 +790,10 @@ do {
   discoveredRoots = sourceEntrypoints().length;
   sourceLoads.clear();
   sourceGraph?.loaded.clear();
-  result = await Bun.build({ ...buildOptions, entrypoints: sourceEntrypoints() });
+  result = await bundleStandaloneModules(
+    { ...buildOptions, entrypoints: sourceEntrypoints() },
+    Bun.build,
+  );
   if (!result.success) {
     throw new AggregateError(result.logs, "Standalone bundle failed");
   }

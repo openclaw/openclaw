@@ -46,6 +46,7 @@ import {
   startProductionControlUiE2eServer,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../ui/src/test-helpers/control-ui-navigation.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
@@ -717,6 +718,8 @@ try {
   });
   const context = await browser.newContext({
     viewport,
+    isMobile: viewportName === "mobile",
+    hasTouch: viewportName === "mobile",
     ...(colorScheme ? { colorScheme } : {}),
     serviceWorkers: "block",
     permissions: ["local-network-access"],
@@ -1355,6 +1358,10 @@ try {
   if (!firstLoad) {
     await page.goto(url);
     try {
+      if (viewportName === "mobile") {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       await page.locator("#sidebar-session-owner-title").click();
       await page
         .locator(
@@ -1378,6 +1385,10 @@ try {
     }
     await settle();
     await expandSidebar();
+    if (viewportName === "mobile") {
+      await page.keyboard.press("Escape");
+      await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+    }
     if (values["chat-dashboard-route"] || (face === "dashboard" && values["dashboard-widget"])) {
       // Save the operator's dashboard-first layout through its normal action.
       if (
@@ -1411,7 +1422,7 @@ try {
       }
       await settle();
     }
-    await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+    await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
     const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
       sessionKey: fixture.selectedSessionKey,
       offRosterSession: values["off-roster-route"],

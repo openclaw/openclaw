@@ -175,6 +175,15 @@ async function runStateLeaseOwnerInScope<T>(
       throw leaseLost.signal.reason;
     }
   };
+  const assertOwnerCurrent = () => {
+    assertActive();
+    // Timer delivery can lag the persisted expiry; never admit an effect in that gap.
+    if (closed || confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {
+      abortLost();
+      throw leaseLost.signal.reason;
+    }
+  };
+  const assertWorkerCurrent = validated.heartbeat === "worker" ? assertActive : assertOwnerCurrent;
   function stopWorker() {
     void workerHeartbeat?.stop().catch(abortLost);
     void startingHeartbeat?.stop().catch(abortLost);
@@ -358,7 +367,7 @@ async function runStateLeaseOwnerInScope<T>(
           }
           return;
         }
-        assertActive();
+        assertWorkerCurrent();
         if (validated.database.schemaPolicy === "existing") {
           throw new Error("This lease mode does not support worker writes");
         }
@@ -369,12 +378,6 @@ async function runStateLeaseOwnerInScope<T>(
           }
           // The worker transaction rechecks durable expiry; host grants only check liveness.
           workerHeartbeat.assertRunning();
-          return;
-        }
-        // A delayed expiry timer must not admit another synchronous effect.
-        if (confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {
-          abortLost();
-          assertActive();
         }
       },
     });
@@ -543,6 +546,11 @@ async function runStateLeaseOwnerInScope<T>(
       await workerOperations?.drain();
     };
 
+    const usesOwnerCurrent =
+      validated.processBound &&
+      validated.heartbeat !== "worker" &&
+      validated.database.schemaPolicy !== "existing";
+    const assertNativeCurrent = usesOwnerCurrent ? assertWorkerCurrent : assertOperationOwned;
     let result: T;
     try {
       const execution = workerOperations;
@@ -598,9 +606,12 @@ async function runStateLeaseOwnerInScope<T>(
         execution.bind(lease);
         result = await invocation.run(lease, identity);
       } else {
-        assertOperationOwned();
+        assertNativeCurrent();
         const lease: OpenClawStateLeaseContext = {
           signal: operationSignal,
+          assertCurrent: usesOwnerCurrent
+            ? assertOwnerCurrent
+            : () => operationSignal.throwIfAborted(),
           renew: renewOperation,
           assertOwned: assertOperationOwned,
           ...(workerHeartbeat
@@ -699,7 +710,7 @@ async function runStateLeaseOwnerInScope<T>(
       await asyncOwnership?.verify();
       assertActive();
     } else {
-      assertOperationOwned();
+      assertNativeCurrent();
     }
     return result;
   };

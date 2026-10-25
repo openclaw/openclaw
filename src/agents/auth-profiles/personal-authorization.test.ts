@@ -11,7 +11,7 @@ import { mergeCanonicalUserProfiles } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { capturePersonalAuthProfileAuthorization } from "./personal-authorization.js";
+import { captureAuthProfileAuthorization } from "./authorization.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
 import { authProfileRuntimeMode } from "./runtime-scope.js";
 import type { OAuthCredential } from "./types.js";
@@ -44,7 +44,7 @@ function fixture() {
 }
 
 async function capture(profileId: string, assertCurrent = () => {}) {
-  const grant = await capturePersonalAuthProfileAuthorization({ profileId, assertCurrent });
+  const grant = await captureAuthProfileAuthorization({ profileId, assertCurrent });
   onTestFinished(() => grant.dispose());
   return grant;
 }

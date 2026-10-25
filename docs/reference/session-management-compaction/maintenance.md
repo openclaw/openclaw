@@ -36,6 +36,16 @@ that export or fail because of it. Retry the deletion after resolving the file
 error to publish the retained archive, even if the deleted session is already
 absent.
 
+Archive admission allows at most 128 outstanding claims. Archive and transcript
+reconciliation tasks request retirement after three minutes. Their FIFO slots,
+database leases, and temporary files remain owned until the worker physically
+exits. If retirement is still pending after five seconds, a Gateway running under
+a verified native service can request a fresh-process restart. A second recovery
+within five minutes is report-only; unmanaged or unsupported deployments are
+always report-only. If archiving reports overload, let pending work finish before
+retrying. If it remains stuck without automatic recovery, restart through the
+service owner before retrying.
+
 Archiving a session changes its visibility and retention metadata while keeping
 its transcript rows in SQLite. Converting reclaimed history to a transcript
 archive replaces those rows with a compressed transcript blob in SQLite's

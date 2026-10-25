@@ -6,7 +6,7 @@ const BUILTIN_MARKER = "__OPENCLAW_STANDALONE_BUILTIN_REQUIRES__";
 /**
  * Capture native filename selection without resolving image-owned JavaScript at runtime.
  * @param {{runtimeRoot: string, embeddedPaths: Record<string, string>,
- *   pluginLoader?: {specifier: string, modulePath: string}}} options
+ *   pluginLoader?: {specifier: string}}} options
  */
 export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, pluginLoader }) {
   const nativeRequire = createRequire(path.join(runtimeRoot, "package.json"));
@@ -112,7 +112,13 @@ export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, plu
           }
         }
         const entry = embedded(specifier) ?? embedded(resolved ?? imageFilename(specifier) ?? target.resolve(specifier));
-        const loaded = Reflect.apply(target, receiver, [entry ?? resolved ?? specifier, ...rest]);
+        const loaded = ${
+          pluginLoader
+            ? `!entry && globalThis.__openclawStandaloneBuildInfo.mode === "aot"
+          ? loadStandalonePluginRuntime().loadModule(parent, resolved ?? specifier)
+          : `
+            : ""
+        }Reflect.apply(target, receiver, [entry ?? resolved ?? specifier, ...rest]);
         return entry && commonJsEntries.has(entry) ? loaded.default ?? loaded : loaded;
       }
     });
@@ -120,24 +126,14 @@ export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, plu
 })();
 ${
   pluginLoader
-    ? `if (globalThis.__openclawStandaloneBuildInfo.mode !== "aot") {
-// Keep the external edge literal: a computed require loses the complete builtin surface.
-globalThis.openclawStandaloneLoadJitiFactory = (() => {
-  let installed = false;
+    ? `const loadStandalonePluginRuntime = (() => {
+  let runtime;
   return () => {
-    if (!installed) {
-      const previous = Module._resolveFilename;
-      Module._resolveFilename = function (specifier, ...args) {
-        return specifier === ${JSON.stringify(pluginLoader.specifier)}
-          ? path.join(root, ${JSON.stringify(pluginLoader.modulePath)})
-          : previous.call(this, specifier, ...args);
-      };
-      installed = true;
-    }
-    return createRequire(import.meta.url)(${JSON.stringify(pluginLoader.specifier)}).createJiti;
+    // The literal external edge admits disk code; the relocated parent owns package lookup.
+    return runtime ??= createRequire(path.join(root, "package.json"))(${JSON.stringify(pluginLoader.specifier)});
   };
 })();
-}\n`
+globalThis.openclawStandaloneLoadJitiFactory = () => loadStandalonePluginRuntime().createJiti;\n`
     : ""
 }`,
   };

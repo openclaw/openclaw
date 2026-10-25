@@ -319,9 +319,14 @@ describe("controller mailbox scheduling", () => {
         drained.resolve();
       }
     };
-    enqueueFollowupRun(key, source("B"), { mode: "followup", debounceMs: 0 }, "none", dispatch);
-    enqueueFollowupRun(key, source("C"), { mode: "followup", debounceMs: 0 }, "none", dispatch);
+    const queued = [source("B"), source("C")];
+    for (const run of queued) {
+      enqueueFollowupRun(key, run, { mode: "followup", debounceMs: 0 }, "none", dispatch);
+    }
+    const older = interruptSource("old");
     const d = interruptSource(" D ");
+    retireSessionControllerInput(older);
+    expect(getExistingSessionControllerMailbox(key)?.priority).toBe(d);
     a.complete();
     expect(order).toEqual([]);
     const run = source("D");
@@ -332,17 +337,8 @@ describe("controller mailbox scheduling", () => {
     releaseSessionControllerClaim(claim);
     await drained.promise;
     expect(order).toEqual(["B", "C"]);
-  });
-  it("canceling an older priority never clears the newest interrupt reservation", async () => {
-    const first = interruptSource("old");
-    const newest = interruptSource("new");
-    retireSessionControllerInput(first);
-    expect(getExistingSessionControllerMailbox(key)?.priority).toBe(newest);
-    const run = source("new");
-    bindSessionControllerSource(newest, run);
-    const claim = await claimSessionControllerInput(run);
-    expect(claim.inputs).toEqual([newest]);
-    await releaseClaim(claim);
+    await queued[1]!.controllerInput!.settlement.promise;
+    await queued[1]!.controllerInput!.claim?.settlement.promise;
     expect(Boolean(findSessionControllerEntry(key))).toBe(false);
   });
   it("preserves exact protocol identities and withdrawal custody before payload exists", () => {

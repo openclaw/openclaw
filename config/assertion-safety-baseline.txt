@@ -1954,7 +1954,7 @@ src/infra/state-migrations.audit-recovery-protocol.ts	3
 src/infra/state-migrations.channel-pairing.ts	5
 src/infra/state-migrations.config-machine-state.ts	1
 src/infra/state-migrations.cron-run-logs.ts	4
-src/infra/state-migrations.debug-proxy.ts	5
+src/infra/state-migrations.debug-proxy.ts	4
 src/infra/state-migrations.doctor.ts	3
 src/infra/state-migrations.exec-approvals.ts	1
 src/infra/state-migrations.fs.ts	1
