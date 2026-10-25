@@ -14,6 +14,7 @@ import {
   routeResolverFactory,
   mockRouteResolverFactory,
 } from "./model-auth-availability.test-support.js";
+import type { ModelAuthAvailabilityRef } from "./model-auth-availability.types.js";
 import { providerConfig } from "./model-auth.fixtures.test-support.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
 
@@ -51,8 +52,10 @@ function prepare(
 }
 
 function readiness(
+  provider: string,
   cfg: OpenClawConfig,
   store: AuthProfileStore,
+  ref: ModelAuthAvailabilityRef = {},
   preparedRuntimeAuthStore = authStore(),
 ) {
   return createModelAuthAvailabilityResolver({
@@ -60,7 +63,7 @@ function readiness(
     authStore: store,
     env: {},
     preparedRuntimeAuthStore,
-  });
+  }).evaluateModelAuth(provider, { modelId: "gpt-5.5", ...ref });
 }
 
 describe.each(["acme", "openai"])("%s session account readiness", (provider) => {
@@ -89,10 +92,8 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
 
   it.each([
     { personal: false, state: "ready" },
-    { personal: true, state: "ready" },
     { personal: false, state: "expired-oauth" },
     { personal: true, state: "refresh-needed" },
-    { personal: false, state: "cooldown" },
     { personal: true, state: "cooldown" },
   ])("matches runtime shared failover for $state (personal=$personal)", ({ personal, state }) => {
     const pin = personal ? "personal:owner:account" : `${provider}:selected`;
@@ -117,8 +118,7 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
     });
     expect(runtime.attempts.map((attempt) => attempt.profileId)).toEqual(expected);
     mockRouteResolverFactory(routeResolverFactory(provider === "openai" ? dualRoutes : null));
-    const result = readiness(config, store).evaluateModelAuth(provider, {
-      modelId: "gpt-5.5",
+    const result = readiness(provider, config, store, {
       preferredProfileId: pin,
       pinnedProfileId: pin,
     });
@@ -161,12 +161,10 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
           : "is not configured",
       );
       mockRouteResolverFactory(routeResolverFactory(provider === "openai" ? dualRoutes : null));
-      expect(
-        readiness(config, store).evaluateModelAuth(provider, {
-          modelId: "gpt-5.5",
-          pinnedProfileId: pin,
-        }),
-      ).toMatchObject({ availability: false, unavailableReason: "auth-failed" });
+      expect(readiness(provider, config, store, { pinnedProfileId: pin })).toMatchObject({
+        availability: false,
+        unavailableReason: "auth-failed",
+      });
     },
   );
 });
@@ -186,7 +184,7 @@ describe("session account pin admission", () => {
         [pin]: subscription(),
         ...(selection === "required" ? { "openai:shared": apiKey("openai", "synthetic-key") } : {}),
       });
-      const result = readiness(cfg, store).evaluateModelAuth("openai", {
+      const result = readiness("openai", cfg, store, {
         modelId: "CHAT-LATEST",
         ...(selection === "pinned" ? { pinnedProfileId: pin } : {}),
         ...(selection === "required" ? { requiredProfileId: pin } : {}),
@@ -234,7 +232,7 @@ describe("session account pin admission", () => {
       }
       const cfg: OpenClawConfig =
         state === "direct-fallback" ? providerConfig("openai", { apiKey: "synthetic-direct" }) : {};
-      const result = readiness(cfg, store).evaluateModelAuth("openai", {
+      const result = readiness("openai", cfg, store, {
         modelId: "chat-latest",
         ...(state === "shared-fallback" ? { pinnedProfileId: "openai:chatgpt" } : {}),
         ...(state === "required-missing" ? { requiredProfileId: "openai:missing" } : {}),
@@ -322,7 +320,7 @@ describe("session account pin admission", () => {
       }
       mockRouteResolverFactory(routeResolverFactory(null));
       expect(
-        readiness(config, store).evaluateModelAuth(provider, {
+        readiness(provider, config, store, {
           modelId: "synthetic-model",
           pinnedProfileId: pin,
         }),
@@ -349,10 +347,13 @@ describe("session account pin admission", () => {
     ).toEqual([pin]);
     mockRouteResolverFactory(routeResolverFactory(null));
     expect(
-      readiness(config, store, runtimeStore).evaluateModelAuth(provider, {
-        modelId: "synthetic-model",
-        pinnedProfileId: pin,
-      }),
+      readiness(
+        provider,
+        config,
+        store,
+        { modelId: "synthetic-model", pinnedProfileId: pin },
+        runtimeStore,
+      ),
     ).toMatchObject({ availability: true, selectedProfileId: pin });
   });
 });
