@@ -15,6 +15,7 @@ import { createSmsWebhookHandler } from "./webhook.js";
 import {
   advanceSmsTestAccountId,
   createSmsTestAccount,
+  createSmsTestForm,
   createSmsTestDeliveryRecorder,
   signSmsTestForm,
 } from "./webhook.test-support.js";
@@ -165,13 +166,10 @@ it("closes overflow uploads and recovers capacity for a signed callback", async 
         const released = await Promise.all(held.map((pending) => pending.result));
         expect(released.every((statusCode) => statusCode === 403)).toBe(true);
 
-        const form: Record<string, string> = {
-          AccountSid: account.accountSid,
-          From: "+15551234567",
-          To: account.fromNumber,
-          Body: "boundary proof",
-          MessageSid: "SM00000000000000000000000000000985",
-        };
+        const form: Record<string, string> = createSmsTestForm(
+          { Body: "boundary proof", MessageSid: "SM00000000000000000000000000000985" },
+          account,
+        );
         const { body, signature } = signSmsTestForm(form, account);
         const admitted = await fetch(`${baseUrl}/webhooks/sms`, {
           method: "POST",

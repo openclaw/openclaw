@@ -11,7 +11,11 @@ import type { SmsChannelRuntime } from "./inbound.js";
 import { createSmsIngressSpool } from "./ingress-spool.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
-import { createSmsTestAccount, signSmsTestForm } from "./webhook.test-support.js";
+import {
+  createSmsTestAccount,
+  createSmsTestForm,
+  signSmsTestForm,
+} from "./webhook.test-support.js";
 
 type SmsIngressPayload = {
   version: 1;
@@ -64,13 +68,7 @@ function createTestSpool(
 }
 
 function form(messageSid: string): Record<string, string> {
-  return {
-    AccountSid: account.accountSid,
-    From: "+15551234567",
-    To: "+15557654321",
-    Body: "hello",
-    MessageSid: messageSid,
-  };
+  return createSmsTestForm({ MessageSid: messageSid }, account);
 }
 
 async function drainSpool(spool: SmsIngressSpool): Promise<void> {
