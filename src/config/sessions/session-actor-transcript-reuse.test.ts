@@ -1,25 +1,17 @@
 import { assert, expect, it, vi } from "vitest";
 import { readSessionTranscriptAccountingAsync } from "../../gateway/session-transcript-readers.js";
-import { capturePersistedModelPromptProjection } from "../../sessions/user-turn-transcript-updates.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
-import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
-import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
-import { rewriteTranscriptEventRowsExact } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import type { SessionTranscriptTurnMessageAppend } from "./session-accessor.types.js";
-import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
+import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import { transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
-import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
@@ -32,15 +24,7 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
-const accountingOptions = { includeByteSize: true, includeUsage: true, includeTurnTaint: true };
 const header = (id: string) => ({ type: "session", id, version: 3, cwd: "/synthetic" });
-const modelEvent = (id: string, parentId: string | null, modelId: string, timestamp: number) => ({
-  type: "custom",
-  id,
-  parentId,
-  customType: "model-snapshot",
-  data: { provider: "synthetic", modelApi: "test-api", modelId, timestamp },
-});
 const eventWithId = (id: string) => expect.objectContaining({ id });
 
 async function acquireActor(
@@ -66,44 +50,21 @@ async function acquireActor(
   return { actor, database };
 }
 
-function appendMessage(
-  actor: SessionActor,
-  scope: { agentId: string; sessionKey: string; sessionId: string },
-  eventId: string,
-  message: SessionTranscriptTurnMessageAppend["message"],
-  now: number,
-  commandId = eventId,
-) {
-  return actor.appendToolResult(
-    transcriptTurnCommand(scope, commandId, [{ eventId, message, now }]),
-    authority,
-  );
-}
-
-it("reuses durable anchors and accounting while refreshing transcript writes and resets", () =>
+it("slides durable context, anchors and accounting within resident bounds and reloads evicted admissions", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    await captureRuntimeConfigAsyncReader()();
     const fixture = createSessionCompoundWorkerFixture();
     const scope = { ...fixture.scope, env };
-    const answer = messageEvent("answer", "initial-runtime", {
-      role: "assistant",
-      content: "Original answer",
-      usage: { input: 200, output: 7 },
-    });
+    const limits = { maxBytes: 4096, maxEvents: 3 };
+    const sessionHeader = header(scope.sessionId);
     const events = [
-      header(scope.sessionId),
-      modelEvent("initial-model", null, "first-model", 1),
-      messageEvent("question", "initial-model", { role: "user", content: "Original question" }),
-      {
-        type: "custom_message",
-        id: "initial-runtime",
-        parentId: "question",
-        customType: "openclaw.runtime-context",
-        content: "Initial runtime",
-        display: false,
-        details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
-      },
-      answer,
+      sessionHeader,
+      ...Array.from({ length: 5 }, (_, index) =>
+        messageEvent(`old-${index}`, index === 0 ? null : `old-${index - 1}`, {
+          role: index % 2 === 0 ? "assistant" : "user",
+          content: `Old message ${index}`,
+          ...(index === 4 ? { usage: { input: 200, output: 7 } } : {}),
+        }),
+      ),
     ];
     await replaceTranscriptEvents(scope, events);
     const { actor, database } = await acquireActor(fixture, env);
@@ -117,321 +78,6 @@ it("reuses durable anchors and accounting while refreshing transcript writes and
       expect(historyReads).not.toHaveBeenCalled();
       expect(discoveryReads).not.toHaveBeenCalled();
     };
-    const readAccounting = () => readSessionTranscriptAccountingAsync(scope, accountingOptions);
-    const readAnchors = (entryIds: string[]) =>
-      readSessionTranscriptAnchorsAsync(scope, { entryIds });
-    const initialAccounting = {
-      byteSize: events
-        .slice(1)
-        .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1, 0),
-      eventCount: 4,
-      turnTainted: false,
-      usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [] },
-    };
-    try {
-      expect(await readAccounting()).toEqual(initialAccounting);
-      expect(historyReads).toHaveBeenCalled();
-      await actor.read(authority);
-      await withOwnedSessionTranscriptWrites(
-        {
-          sessionTarget: scope,
-          sessionActor: { actor, database },
-          withTranscriptWrite: async (write) => write(),
-        },
-        async () => {
-          const hydration = prepareSessionTranscriptHydration(scope, {
-            maxBytes: 1024 * 1024,
-            maxEvents: 100,
-          });
-          assert(hydration.readCohort, "Expected bounded transcript cohort reader");
-          await hydration.readCohort(
-            { sessionKey: scope.sessionKey, entryIds: ["question"] },
-            (prepared) => {
-              assert(prepared.kind === "bounded", "Expected bounded transcript hydration");
-              expect(prepared.snapshot.events).toEqual(events);
-              expect(prepared.transcript?.anchors.map((anchor) => anchor.entryId)).toEqual([
-                "question",
-              ]);
-            },
-          );
-          clearReads();
-          const seeded = await readAnchors(["question"]);
-          expect(seeded.anchors.map((anchor) => anchor.entryId)).toEqual(["question"]);
-          expectResident();
-          const uncovered = await readAnchors(["answer"]);
-          expect(uncovered.anchors.map((anchor) => anchor.entryId)).toEqual(["answer"]);
-          expect(historyReads).toHaveBeenCalled();
-          clearReads();
-          expect(await readAccounting()).toEqual(initialAccounting);
-          expectResident();
-          const previousSeq = actor.snapshot(authority)!.transcript.version.rawSeq!;
-          const metadata = [
-            modelEvent("switched-model", "answer", "second-model", 2),
-            {
-              type: "custom_message",
-              id: "updated-runtime",
-              parentId: "switched-model",
-              customType: "openclaw.system-update",
-              content: "Updated runtime",
-              display: false,
-              details: { kind: "runtime-context", turnScoped: true },
-            },
-          ];
-          for (const event of metadata) {
-            const appendedMetadata = await actor.appendTranscriptEvent(
-              {
-                commandId: event.id,
-                phaseId: "turn",
-                sessionId: scope.sessionId,
-                lifecycleRevision: actor.snapshot(authority)!.entry!.lifecycleRevision ?? null,
-                eventJson: JSON.stringify(event),
-              },
-              authority,
-            );
-            expect(appendedMetadata.kind).toBe("committed");
-          }
-          const userMessage = { role: "user" as const, content: "Next question", timestamp: 4 };
-          const appended = await appendMessage(
-            actor,
-            scope,
-            "next-question",
-            userMessage,
-            4,
-            "next-turn",
-          );
-          expect(appended.kind).toBe("committed");
-          assert(appended.kind === "committed", "Expected a committed user append");
-          const userAnchor = appended.receipt.transcript.appendedMessages.find(
-            (message) => message.messageId === "next-question",
-          )?.anchor;
-          assert(userAnchor, "User append omitted its committed anchor");
-          clearReads();
-          expect((await readAnchors(["next-question"])).anchors).toContainEqual(userAnchor);
-          expectResident();
-          const accounting = await readAccounting();
-          expect(accounting.usage).toEqual({
-            promptTokens: 200,
-            outputTokens: 7,
-            trailingMessages: [userMessage],
-          });
-          const trailing = accounting.usage?.trailingMessages[0];
-          if (trailing?.role === "user") {
-            trailing.content = "caller-owned copy";
-          }
-          expect((await readAccounting()).usage?.trailingMessages).toEqual([userMessage]);
-          expect(
-            await readSessionTranscriptAccountingAsync(scope, {
-              ...accountingOptions,
-              includeByteSize: false,
-              usageEventLimit: 0,
-            }),
-          ).toEqual({ usage: undefined, turnTainted: false });
-          expect(historyReads).not.toHaveBeenCalled();
-          const committed = vi.fn();
-          const captured = await capturePersistedModelPromptProjection({
-            admission: { ...userAnchor, logicalTurnId: "next-turn", role: "user" },
-            message: userMessage,
-            text: "Next question",
-            assertCurrent() {},
-            assertWritable() {},
-            onCommitted: committed,
-          });
-          expect(committed).toHaveBeenCalledWith(
-            expect.objectContaining({ generation: userAnchor.generation }),
-            expect.objectContaining({
-              __openclaw: { modelPromptProjection: { version: 1, text: "Next question" } },
-            }),
-          );
-          clearReads();
-          expect((await readAnchors(["next-question"])).anchors).toContainEqual(userAnchor);
-          expectResident();
-          const reply = await appendMessage(
-            actor,
-            scope,
-            "next-answer",
-            {
-              role: "assistant",
-              content: "Next answer",
-              usage: { input: 500, output: 11 },
-              __openclaw: { turnTainted: true },
-            },
-            5,
-          );
-          expect(reply.kind).toBe("committed");
-          clearReads();
-          const anchors = await readSessionTranscriptAnchorsAsync(scope, {
-            entryIds: ["next-question", "next-answer"],
-            afterSeq: previousSeq,
-            includeWatermark: true,
-          });
-          expect(anchors.anchors.map((anchor) => anchor.entryId)).toEqual([
-            "next-question",
-            "next-answer",
-          ]);
-          expect(anchors.tail?.entries.map((entry) => entry.entryId)).toEqual([
-            "next-question",
-            "next-answer",
-          ]);
-          expectResident();
-          expect((await hydration.read()).snapshot.events).toContainEqual(
-            expect.objectContaining({ id: "next-question", message: captured }),
-          );
-          const completedAccounting = await readAccounting();
-          expect(completedAccounting).toMatchObject({
-            eventCount: 8,
-            turnTainted: true,
-            usage: { promptTokens: 500, outputTokens: 11, trailingMessages: [] },
-          });
-          expectResident();
-          expect(
-            await runWithSessionTranscriptReadFence(
-              { ...userAnchor, logicalTurnId: "next-turn", role: "user" },
-              readAccounting,
-            ),
-          ).toEqual(completedAccounting);
-          expect(historyReads).toHaveBeenCalled();
-          historyReads.mockClear();
-          const updateMetadata = (label: string) =>
-            applySessionEntryLifecycleMutation({
-              ...scope,
-              skipMaintenance: true,
-              upserts: [
-                {
-                  sessionKey: scope.sessionKey,
-                  buildEntry: ({ currentEntry }) => ({ ...currentEntry!, label }),
-                },
-              ],
-            });
-          await updateMetadata("next turn");
-          expect(actor.snapshot(authority)?.entry?.label).toBe("next turn");
-          historyReads.mockClear();
-          const warm = await hydration.read();
-          expect(warm.snapshot.events).toMatchObject([
-            ...events,
-            ...metadata,
-            { id: "next-question", message: { role: "user", content: "Next question" } },
-            { id: "next-answer", message: { role: "assistant", content: "Next answer" } },
-          ]);
-          expect(historyReads).not.toHaveBeenCalled();
-
-          const expectedState = buildRestartRecoveryExpectedState(
-            actor.snapshot(authority)!.entry!,
-          );
-          const recordAndAdopt = async (contributionCount: number) => {
-            await expect(
-              recordSessionParticipantInWorker(scope, {
-                identity: { type: "agent", id: "helper" },
-                sessionAgentId: scope.agentId,
-                promptedAt: 10 + contributionCount,
-              }),
-            ).resolves.toBe(contributionCount === 1 ? "inserted" : "updated");
-            const adopted = await actor.adoptRun(
-              {
-                commandId: `participant-${contributionCount}`,
-                phaseId: "turn",
-                sessionId: scope.sessionId,
-                expectedState,
-                lifecycle: {},
-                runId: `participant-${contributionCount}`,
-              },
-              authority,
-            );
-            expect(adopted.kind).toBe("committed");
-            expect(actor.snapshot(authority)?.participants).toEqual([
-              {
-                identity: { type: "agent", id: "helper" },
-                contributionCount,
-                firstPromptedAt: 11,
-                lastPromptedAt: 10 + contributionCount,
-              },
-            ]);
-          };
-          for (const contributionCount of [1, 2]) {
-            await recordAndAdopt(contributionCount);
-            historyReads.mockClear();
-            expect((await hydration.read()).snapshot.events).toEqual(warm.snapshot.events);
-            expect(historyReads).not.toHaveBeenCalled();
-          }
-
-          const row = readTranscriptEventRows(fixture.database, scope.sessionId).find(
-            (candidate) => JSON.parse(candidate.eventJson).id === answer.id,
-          )!;
-          const rewrittenAnswer = {
-            ...answer,
-            message: { role: "assistant", content: "Corrected answer" },
-          };
-          await expect(
-            rewriteTranscriptEventRowsExact(scope, {
-              expectedGeneration: warm.snapshot.version.generation,
-              rows: [{ seq: row.seq, expectedEventJson: row.eventJson, event: rewrittenAnswer }],
-            }),
-          ).resolves.not.toBeNull();
-          await updateMetadata("after rewrite");
-          expect(actor.snapshot(authority)).toBeUndefined();
-          await recordAndAdopt(3);
-          historyReads.mockClear();
-          const rewrittenAnchors = await readAnchors(["next-question"]);
-          expect(rewrittenAnchors.anchors).toHaveLength(1);
-          expect(rewrittenAnchors.anchors[0]).toMatchObject({ entryId: "next-question" });
-          expect(rewrittenAnchors.anchors[0]?.generation).not.toBe(userAnchor.generation);
-          expect(historyReads).toHaveBeenCalled();
-          historyReads.mockClear();
-          const refreshed = await hydration.read();
-          expect(refreshed.snapshot.events).toContainEqual(rewrittenAnswer);
-          expect(refreshed.snapshot.events).not.toContainEqual(answer);
-          expect(historyReads).toHaveBeenCalled();
-
-          await applySessionEntryLifecycleMutation({
-            ...scope,
-            skipMaintenance: true,
-            upserts: [
-              {
-                sessionKey: scope.sessionKey,
-                buildEntry: ({ currentEntry }) => ({ ...currentEntry!, label: "after reset" }),
-                resetBoundary: {
-                  context: "clear",
-                  reason: "reset",
-                  boundaryId: "reset-boundary",
-                  cwd: "/synthetic",
-                },
-              },
-            ],
-          });
-          expect(actor.snapshot(authority)).toBeUndefined();
-          await actor.read(authority);
-          historyReads.mockClear();
-          const reset = await hydration.read();
-          expect(reset.snapshot.events).toContainEqual(
-            expect.objectContaining({ type: "reset", id: "reset-boundary", reason: "reset" }),
-          );
-          expect(historyReads).toHaveBeenCalled();
-        },
-      );
-    } finally {
-      historyReads.mockRestore();
-      discoveryReads.mockRestore();
-      await actor.release();
-    }
-  }));
-
-it("slides durable context within its bounds and reloads only when an admission outlives resident coverage", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const fixture = createSessionCompoundWorkerFixture();
-    const scope = { ...fixture.scope, env };
-    const limits = { maxBytes: 4096, maxEvents: 3 };
-    const sessionHeader = header(scope.sessionId);
-    const events = [
-      sessionHeader,
-      ...Array.from({ length: 5 }, (_, index) =>
-        messageEvent(`old-${index}`, index === 0 ? null : `old-${index - 1}`, {
-          role: index % 2 === 0 ? "assistant" : "user",
-          content: `Old message ${index}`,
-        }),
-      ),
-    ];
-    await replaceTranscriptEvents(scope, events);
-    const { actor, database } = await acquireActor(fixture, env);
-    const historyReads = vi.spyOn(historyLane.pool, "run");
     try {
       await actor.read(authority);
       await withOwnedSessionTranscriptWrites(
@@ -442,7 +88,12 @@ it("slides durable context within its bounds and reloads only when an admission 
         },
         async () => {
           const append = async (id: string, role: "user" | "assistant", content: string) => {
-            const result = await appendMessage(actor, scope, id, { role, content }, 10);
+            const result = await actor.appendToolResult(
+              transcriptTurnCommand(scope, id, [
+                { eventId: id, message: { role, content }, now: 10 },
+              ]),
+              authority,
+            );
             assert(result.kind === "committed", "Expected a committed transcript append");
             const anchor = result.receipt.transcript.appendedMessages.find(
               (message) => message.messageId === id,
@@ -482,7 +133,62 @@ it("slides durable context within its bounds and reloads only when an admission 
             truncated: true,
           });
           expect(historyReads).toHaveBeenCalled();
-          await append("first-reply", "assistant", "First reply");
+          const hydration = prepareSessionTranscriptHydration(scope, {
+            maxBytes: 1024 * 1024,
+            maxEvents: 100,
+          });
+          assert(hydration.readCohort, "Expected bounded transcript cohort reader");
+          await hydration.readCohort(
+            { sessionKey: scope.sessionKey, entryIds: ["old-4"] },
+            (prepared) => {
+              expect(prepared.transcript?.anchors.map((anchor) => anchor.entryId)).toEqual([
+                "old-4",
+              ]);
+            },
+          );
+          const readAnchors = (entryIds: string[]) =>
+            readSessionTranscriptAnchorsAsync(scope, { entryIds });
+          clearReads();
+          expect((await readAnchors(["old-4"])).anchors.map((anchor) => anchor.entryId)).toEqual([
+            "old-4",
+          ]);
+          expectResident();
+          expect((await readAnchors(["old-0"])).anchors.map((anchor) => anchor.entryId)).toEqual([
+            "old-0",
+          ]);
+          expect(historyReads).toHaveBeenCalled();
+          clearReads();
+          const accountingOptions = {
+            includeByteSize: true,
+            includeUsage: true,
+            includeTurnTaint: true,
+          };
+          const readAccounting = () =>
+            readSessionTranscriptAccountingAsync(scope, accountingOptions);
+          const accounting = await readAccounting();
+          expect(accounting.usage).toMatchObject({
+            promptTokens: 200,
+            outputTokens: 7,
+            trailingMessages: [{ role: "user", content: "First input" }],
+          });
+          const expectedUsage = structuredClone(accounting.usage);
+          const trailing = accounting.usage?.trailingMessages[0];
+          if (trailing?.role === "user") {
+            trailing.content = "caller-owned copy";
+          }
+          expect((await readAccounting()).usage).toEqual(expectedUsage);
+          expect(
+            await readSessionTranscriptAccountingAsync(scope, {
+              ...accountingOptions,
+              includeByteSize: false,
+              usageEventLimit: 0,
+            }),
+          ).toEqual({ usage: undefined, turnTainted: false });
+          expectResident();
+          const replyAnchor = await append("first-reply", "assistant", "First reply");
+          clearReads();
+          expect((await readAnchors(["first-reply"])).anchors).toContainEqual(replyAnchor);
+          expectResident();
           const current = await read();
 
           // An input larger than the read limit must not displace its pre-input history.
@@ -516,6 +222,7 @@ it("slides durable context within its bounds and reloads only when an admission 
       );
     } finally {
       historyReads.mockRestore();
+      discoveryReads.mockRestore();
       await actor.release();
     }
   }));

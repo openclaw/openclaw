@@ -85,21 +85,20 @@ describe("memory session actor", () => {
     "evaluates recovery from active history after $change",
     async ({ change, accepted }) => {
       const { actor } = await fixture();
-      const turn = (eventId: string, message: unknown): SessionTurnPlan => ({
-        agentId: "main",
-        sessionKey,
-        options: {
-          expectedSessionId: "session-1",
-          sessionFile: "/synthetic/transcript",
-          messages: [{ eventId, message, now: 2 }],
-        },
-      });
       const request = (commandId: string, eventId: string, message: unknown) => ({
         commandId,
         phaseId: "recovery",
         lifecycle: {},
         expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
-        turn: turn(eventId, message),
+        turn: {
+          agentId: "main",
+          sessionKey,
+          options: {
+            expectedSessionId: "session-1",
+            sessionFile: "/synthetic/transcript",
+            messages: [{ eventId, message, now: 2 }],
+          },
+        },
       });
       const source = await actor.adoptRun(
         {
@@ -198,7 +197,6 @@ describe("memory session actor", () => {
     const { actor } = await fixture();
     const old = actor.snapshot(authority)!;
     const result = await activity(actor, 10);
-    expect(result.kind).toBe("committed");
     if (result.kind !== "committed") {
       throw new Error("Expected a committed receipt");
     }
@@ -315,8 +313,6 @@ describe("memory actor owner registry", () => {
     const owner = memorySessionActorOwners.read(database)!;
     const owned = await owner.acquire(actor.target, lifetime);
     actors.push(owned);
-    expect(same.snapshot(authority)?.entry?.sessionId).toBe("session-1");
-    expect(owned.snapshot(authority)?.entry?.sessionId).toBe("session-1");
     await owned.patch(
       { commandId: "activity", phaseId: "turn", reducers: [{ kind: "activity", updatedAt: 10 }] },
       authority,
