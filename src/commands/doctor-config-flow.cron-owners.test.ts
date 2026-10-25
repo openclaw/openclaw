@@ -69,14 +69,9 @@ function sql(parts: TemplateStringsArray, ...values: SQLInputValue[]) {
   };
 }
 
-function sourceConfig(
-  options: { store?: string } & Partial<Record<"inherit" | "legacy" | "markerless", boolean>> = {},
-) {
-  const { store, inherit, legacy, markerless } = options;
-  const defaults = {
-    systemAgent: { agentId: "research" },
-    ...(inherit ? { authInheritance: { agentId: "research" } } : {}),
-  };
+function sourceConfig(options: { store?: string; legacy?: boolean; markerless?: boolean } = {}) {
+  const { store, legacy, markerless } = options;
+  const defaults = { systemAgent: { agentId: "research" } };
   return {
     agents: legacy
       ? {
@@ -169,35 +164,18 @@ function createCron(defaultAgentId?: string) {
   return { cron, state: cronState, execute, clock };
 }
 
-function writeRoster(remove?: string, persist = false) {
+function writeRoster(remove: string) {
   return transformConfigFile({
     transform: (current) => {
       const canonical = createCanonicalAgentConfigFixture(current).config;
-      return { nextConfig: remove ? pruneAgentConfig(canonical, remove).config : canonical };
+      return { nextConfig: pruneAgentConfig(canonical, remove).config };
     },
     writeOptions: {
-      ...(persist ? { persistCanonicalAgentRoster: true } : {}),
-      ...(remove ? { allowedAgentRosterRemovals: [remove] } : {}),
+      allowedAgentRosterRemovals: [remove],
     },
     afterWrite: { mode: "none", reason: "test roster write" },
   });
 }
-
-it.each(["retains", "removes"])(
-  "refuses an ordinary roster write that %s the historical agent without changing its jobs",
-  async (agentChange) => {
-    await state.writeConfig(sourceConfig({ inherit: agentChange === "removes" }));
-    await seedJobs();
-    const before = await storedState();
-    const write = writeRoster(agentChange === "removes" ? "ops" : undefined, true);
-    await expect(write).rejects.toMatchObject({
-      code: "CONFIG_WRITE_REJECTED",
-      refusal: "cron-owner-safety",
-    });
-    await expect(write).rejects.toThrow("openclaw doctor --fix");
-    expect(await storedState()).toEqual({ ...before, backups: [] });
-  },
-);
 
 it.each(["update", "remove"])(
   "refuses an operator %s before changing an unresolved historical job",

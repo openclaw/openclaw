@@ -13,6 +13,7 @@ import {
   hookMocks,
   internalHookMocks,
   mocks,
+  mockSessionStorePath,
   noAbortResult,
   resetPluginTtsAndThreadMocks,
   sessionBindingMocks,
@@ -82,7 +83,7 @@ function mockAcpSession(sessionKey: string) {
               lastActivityAt: Date.now(),
             },
           },
-          { sessionKey, storePath: "/tmp/mock-sessions.json" },
+          { sessionKey, storePath: mockSessionStorePath },
         )
       : null,
   );
@@ -190,7 +191,7 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
     for (const load of [store.loadSessionEntry, store.loadSessionStoreEntry]) {
       load.mockReset().mockImplementation(readSessionEntry);
     }
-    store.resolveSessionStorePathCore.mockReset().mockReturnValue("/tmp/mock-sessions.json");
+    store.resolveSessionStorePathCore.mockReset().mockReturnValue(mockSessionStorePath);
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     acpMocks.readAcpSessionEntry.mockReset().mockReturnValue(null);
     acpMocks.upsertAcpSessionMeta.mockReset().mockResolvedValue(null);

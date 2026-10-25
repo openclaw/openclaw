@@ -2,8 +2,6 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { retainGatewayResponsePayload } from "../../../packages/gateway-client/src/protocol-request.js";
-import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { GatewayCredentialsRequiredError } from "../../gateway/call-device-auth.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
@@ -17,6 +15,7 @@ import {
   monotonicClock,
   callGateway,
   gatewayResponseError,
+  gatewayProtocolMismatchError,
   requestReadinessProbe,
   requestStartupProbe,
   resetRestartHealthMocks,
@@ -195,18 +194,7 @@ describe("restart health", () => {
     { build: "old-build", outcome: "build-id-mismatch" },
   ])("settles an RPC protocol mismatch through HTTP identity ($build)", async (scenario) => {
     // The updater runs the previous package, so a protocol bump or revert rejects its handshake.
-    const mismatch = new GatewayClientRequestError({
-      code: "INVALID_REQUEST",
-      message: "protocol mismatch",
-      details: {
-        code: "PROTOCOL_MISMATCH",
-        clientMinProtocol: 5,
-        clientMaxProtocol: 5,
-        expectedProtocol: 4,
-        minimumProbeProtocol: 3,
-      },
-    });
-    retainGatewayResponsePayload(mismatch, undefined);
+    const mismatch = gatewayProtocolMismatchError();
     callGateway.mockRejectedValue(mismatch);
     inspectPortUsage.mockResolvedValue(ownedPortUsage);
     requestStartupProbe.mockResolvedValue({

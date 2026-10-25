@@ -7,6 +7,7 @@ import {
   readMarkdownCodeBlockCopyText,
 } from "../../../components/markdown-code-blocks.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
+import { loadStreamingMarkdown } from "../../../components/markdown-live-loader.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -160,6 +161,7 @@ describe("streaming Markdown DOM", () => {
   });
 
   it("keeps visible plain text in place when deferred formatting catches up", async () => {
+    await loadStreamingMarkdown.preload();
     vi.useFakeTimers();
     const mutations: MutationRecord[] = [];
     const observer = new MutationObserver((records) => mutations.push(...records));

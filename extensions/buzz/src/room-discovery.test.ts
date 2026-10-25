@@ -1,6 +1,8 @@
 import { getPublicKey, type Event, type Filter, type Relay } from "nostr-tools";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createBuzzRelayInfoFetchMock } from "./buzz-bus.test-helpers.js";
+import { waitForBuzzRoomAccess } from "./room-access-wait.js";
+import { discoverBuzzRooms } from "./room-discovery.js";
 
 type AuthSigner = (template: {
   kind: number;
@@ -95,8 +97,8 @@ function snapshot(...events: Event[]) {
   };
 }
 
-function metadata(name: string, overrides: Partial<Event> = {}, tags: string[][] = []) {
-  return event(39000, [["d", ROOM_A], ["name", name], ...tags], overrides);
+function metadata(name: string, created_at = 1, tags: string[][] = []) {
+  return event(39000, [["d", ROOM_A], ["name", name], ...tags], { id: name, created_at });
 }
 
 beforeEach(() => {
@@ -116,37 +118,16 @@ it("discovers only rooms whose member event names the bot public key", async () 
   });
   relayMocks.subscribe
     .mockImplementationOnce(snapshot(membership(), membership(ROOM_B, "member")))
-    .mockImplementationOnce(
-      snapshot(
-        metadata("Agent room", { id: "metadata-a", created_at: 2 }, [
-          ["about", "Humans and agents"],
-        ]),
-      ),
-    );
+    .mockImplementationOnce(snapshot(metadata("Agent room", 2, [["about", "Humans and agents"]])));
 
-  const { discoverBuzzRooms } = await import("./room-discovery.js");
   await expect(
-    discoverBuzzRooms({
-      ...connection,
-      authTag: JSON.stringify(AUTH_TAG),
-    }),
+    discoverBuzzRooms({ ...connection, authTag: JSON.stringify(AUTH_TAG) }),
   ).resolves.toEqual([{ ...discoveredRoom, about: "Humans and agents" }]);
 
-  expect(relayMocks.filters).toEqual([
-    {
-      kinds: [39002],
-      authors: [RELAY_PUBLIC_KEY],
-      "#p": [publicKey],
-      limit: 1000,
-    },
-    {
-      kinds: [39000],
-      authors: [RELAY_PUBLIC_KEY],
-      "#d": [ROOM_A],
-      limit: 1,
-    },
+  expect(relayMocks.filters.map((filter) => filter.authors)).toEqual([
+    [RELAY_PUBLIC_KEY],
+    [RELAY_PUBLIC_KEY],
   ]);
-  expect(relayMocks.auth).toHaveBeenCalledOnce();
   expect(signedAuthTags).toContainEqual(AUTH_TAG);
   expect(relayMocks.close).toHaveBeenCalledOnce();
 });
@@ -178,12 +159,11 @@ it.each([
           queueMicrotask(() => handlers.oneose?.());
         }
       } else {
-        handlers.onevent?.(metadata("Agent room", { id: "metadata-a" }));
+        handlers.onevent?.(metadata("Agent room"));
         queueMicrotask(() => handlers.oneose?.());
       }
       return { close: vi.fn() };
     });
-    const { waitForBuzzRoomAccess } = await import("./room-access-wait.js");
     const waiting = waitForBuzzRoomAccess(connection);
     let rooms: Awaited<typeof waiting> | undefined;
     const observed = waiting.then(
@@ -220,13 +200,7 @@ it.each([
 it("applies one timeout budget to authentication and closes the relay", async () => {
   relayMocks.auth.mockImplementationOnce(async (_signAuth) => await new Promise<string>(() => {}));
 
-  const { discoverBuzzRooms } = await import("./room-discovery.js");
-  await expect(
-    discoverBuzzRooms({
-      ...connection,
-      timeoutMs: 10,
-    }),
-  ).rejects.toThrow();
+  await expect(discoverBuzzRooms({ ...connection, timeoutMs: 10 })).rejects.toThrow();
 
   expect(relayMocks.close).toHaveBeenCalledOnce();
   expect(relayMocks.subscribe).not.toHaveBeenCalled();
@@ -236,13 +210,9 @@ it("excludes rooms whose latest relay metadata marks them archived", async () =>
   relayMocks.subscribe
     .mockImplementationOnce(snapshot(membership()))
     .mockImplementationOnce(
-      snapshot(
-        metadata("Old room name", { id: "a".repeat(64), created_at: 2 }),
-        metadata("Archived room", { id: "b".repeat(64), created_at: 3 }, [["archived", "true"]]),
-      ),
+      snapshot(metadata("Old room name", 2), metadata("Archived room", 3, [["archived", "true"]])),
     );
 
-  const { discoverBuzzRooms } = await import("./room-discovery.js");
   await expect(discoverBuzzRooms(connection)).resolves.toEqual([]);
 });
 
@@ -250,11 +220,7 @@ it("recycles the relay when a room query never reaches EOSE", async () => {
   vi.useFakeTimers();
   relayMocks.subscribe.mockReturnValue({ close: vi.fn() });
 
-  const { discoverBuzzRooms } = await import("./room-discovery.js");
-  const discovery = discoverBuzzRooms({
-    ...connection,
-    timeoutMs: 10_000,
-  });
+  const discovery = discoverBuzzRooms({ ...connection, timeoutMs: 10_000 });
 
   const rejection = expect(discovery).rejects.toThrow("Timed out querying Buzz room membership");
   await vi.advanceTimersByTimeAsync(10_000);

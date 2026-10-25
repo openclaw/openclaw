@@ -13,8 +13,8 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
+import * as nativeWorkerRecovery from "../../infra/gateway-native-worker-recovery.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import * as processRespawn from "../../infra/process-respawn.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import {
@@ -213,7 +213,7 @@ describe("SQLite transcript archive sessions", () => {
       let expire: (() => void) | undefined;
       let retireGrace: (() => void) | undefined;
       using recovery = vi
-        .spyOn(processRespawn, "requestGatewayNativeWorkerRecovery")
+        .spyOn(nativeWorkerRecovery, "requestGatewayNativeWorkerRecovery")
         .mockResolvedValue({
           status: "report-only",
           reason: "Synthetic test has no Gateway process lifecycle.",

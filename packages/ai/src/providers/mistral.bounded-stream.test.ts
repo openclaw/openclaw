@@ -58,13 +58,8 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
         }, 1);
       },
       async (url) => {
-        let captured: unknown;
         const response = await fetcher(url);
-        try {
-          await response.arrayBuffer();
-        } catch (err) {
-          captured = err;
-        }
+        const captured = await response.arrayBuffer().catch((error: unknown) => error);
         assert.instanceOf(captured, Error);
         const match = captured.message.match(
           /mistral: stream body exceeds \d+ bytes \(got (\d+)\)/,
@@ -199,19 +194,11 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
       { type: "text", text: "after" },
     ]);
     expect(textIndexes).toEqual([0, 2]);
-    expect(events).toEqual([
-      "start",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "toolcall_start",
-      "toolcall_delta",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "toolcall_end",
-      "done",
-    ]);
+    expect(events).toEqual(
+      "start text_start text_delta text_end toolcall_start toolcall_delta text_start text_delta text_end toolcall_end done".split(
+        " ",
+      ),
+    );
   });
 
   const partial = { type: "text", text: "Safe partial answer" };

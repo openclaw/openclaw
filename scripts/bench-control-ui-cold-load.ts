@@ -18,6 +18,7 @@
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
+// --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -45,6 +46,7 @@ import {
   startProductionControlUiE2eServer,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../ui/src/test-helpers/control-ui-navigation.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
@@ -268,6 +270,7 @@ const { values } = parseArgs({
     "session-switch": { type: "boolean", default: false },
     "critical-path": { type: "boolean", default: false },
     "critical-path-route": { type: "string", multiple: true, default: [] },
+    "critical-path-intent-ms": { type: "string" },
     "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
@@ -402,6 +405,13 @@ for (const route of values["critical-path-route"]) {
 }
 if (navigationRoutes.length && !values["critical-path"]) {
   throw new Error("critical-path-route requires critical-path");
+}
+const criticalPathIntentMs = Number(values["critical-path-intent-ms"] ?? 0);
+if (!Number.isFinite(criticalPathIntentMs) || criticalPathIntentMs < 0) {
+  throw new Error("critical-path-intent-ms must be a nonnegative number");
+}
+if (values["critical-path-intent-ms"] !== undefined && !values["critical-path"]) {
+  throw new Error("critical-path-intent-ms requires critical-path");
 }
 if (values["critical-path"] && !navigationRoutes.length && bootRoute !== "new") {
   navigationRoutes.push(...criticalPathRoutes);
@@ -708,6 +718,8 @@ try {
   });
   const context = await browser.newContext({
     viewport,
+    isMobile: viewportName === "mobile",
+    hasTouch: viewportName === "mobile",
     ...(colorScheme ? { colorScheme } : {}),
     serviceWorkers: "block",
     permissions: ["local-network-access"],
@@ -1346,6 +1358,10 @@ try {
   if (!firstLoad) {
     await page.goto(url);
     try {
+      if (viewportName === "mobile") {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       await page.locator("#sidebar-session-owner-title").click();
       await page
         .locator(
@@ -1369,6 +1385,10 @@ try {
     }
     await settle();
     await expandSidebar();
+    if (viewportName === "mobile") {
+      await page.keyboard.press("Escape");
+      await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+    }
     if (values["chat-dashboard-route"] || (face === "dashboard" && values["dashboard-widget"])) {
       // Save the operator's dashboard-first layout through its normal action.
       if (
@@ -1402,7 +1422,7 @@ try {
       }
       await settle();
     }
-    await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+    await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
     const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
       sessionKey: fixture.selectedSessionKey,
       offRosterSession: values["off-roster-route"],
@@ -2526,6 +2546,7 @@ try {
                   });
                 }
               : undefined,
+            criticalPathIntentMs,
           ),
         );
         if (cpuProfile) {
@@ -2686,6 +2707,7 @@ try {
         streamingAllocations: values["streaming-allocations"],
         sessionSwitch: values["session-switch"],
         criticalPathRoutes: values["critical-path"] ? navigationRoutes : undefined,
+        criticalPathIntentMs: values["critical-path"] ? criticalPathIntentMs : undefined,
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,
         duplicateBootReads: values["duplicate-boot-reads"],

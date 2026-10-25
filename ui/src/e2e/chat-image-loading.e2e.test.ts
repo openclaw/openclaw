@@ -26,10 +26,7 @@ suite.define(() => {
             canvas.getContext("2d")!.fillRect(0, 0, canvas.width, canvas.height);
             return canvas.toDataURL("image/png").split(",")[1]!;
           });
-          let releaseImage!: () => void;
-          const imageReady = new Promise<void>((resolve) => {
-            releaseImage = resolve;
-          });
+          const { promise: imageReady, resolve: releaseImage } = createDeferred();
           await page.route("**/__openclaw__/assistant-media?**", async (route) => {
             if (new URL(route.request().url()).searchParams.get("meta") === "1") {
               metadataRequested.resolve();

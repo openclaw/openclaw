@@ -18,6 +18,7 @@ import {
   publishStandaloneArtifacts,
   STANDALONE_BUILD_MARKER,
 } from "../../scripts/lib/bun-standalone-support.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -69,26 +70,24 @@ console.log(JSON.stringify({ answer, mode: getStandaloneRuntimeBuild()?.mode ?? 
   const compiler = path.join(root, "compiler");
   fs.writeFileSync(
     compiler,
-    `#!${process.execPath}
+    `#!${resolveTestNodeExecPath()}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-if (require('node:path').basename(args[0]) === 'compile-aot.mjs') {
+if (process.versions.bun) throw new Error('The synthetic compiler must run under Node');
+if (args[0] === 'build') throw new Error('The synthetic compiler accepts only the build API driver');
+if (require('node:path').basename(args[0]) === 'compile-standalone.mjs') {
   const compiler = {build: async (options) => {
-    fs.writeFileSync(options.compile.outfile, JSON.stringify({aot: true, source: fs.readFileSync(options.entrypoints[0], 'utf8')}));
-    fs.writeFileSync(__filename + '.options.json', JSON.stringify(options));
+    if (${failSupport} && !options.compile.aot) process.exit(42);
+    fs.writeFileSync(options.compile.outfile, JSON.stringify({aot: options.compile.aot === true, bytecode: options.bytecode === true, source: fs.readFileSync(options.entrypoints[0], 'utf8')}));
+    fs.writeFileSync(options.compile.outfile + '.options.json', JSON.stringify(options));
     return {success: true, logs: []};
   }};
   const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
   new AsyncFunction('Bun', fs.readFileSync(args[0], 'utf8'))(compiler).catch((error) => {console.error(error); process.exitCode = 1;});
   return;
 }
-if (args[0] !== 'build') {
-  const result = require('node:child_process').spawnSync(process.execPath, args, {stdio:'inherit'});
-  process.exit(result.status ?? 1);
-}
-if (${failSupport} && !args.includes('--aot')) process.exit(42);
-const output = args.find((arg) => arg.startsWith('--outfile=')).slice(10);
-fs.writeFileSync(output, JSON.stringify({aot: args.includes('--aot'), source: fs.readFileSync('main.js', 'utf8')}));
+const result = require('node:child_process').spawnSync(process.execPath, args, {stdio:'inherit'});
+process.exit(result.status ?? 1);
 `,
     { mode: 0o755 },
   );
@@ -158,7 +157,9 @@ describe("matched standalone support artifacts", () => {
         compileFlags: ["--aot", "--trim-allow=run,jit", "--trim-locales=en"],
         aotCompileOptions: { trim: { allow: ["run", "jit"], locales: ["en"] } },
       });
-      const options = JSON.parse(fs.readFileSync(input.compiler + ".options.json", "utf8"));
+      const options = JSON.parse(
+        fs.readFileSync(path.join(input.outputRoot, "openclaw.options.json"), "utf8"),
+      );
       expect(options).toEqual({
         entrypoints: ["main.js", "worker.js"],
         root: input.compileRoot,
@@ -179,7 +180,57 @@ describe("matched standalone support artifacts", () => {
         fs.readFileSync(path.join(input.outputRoot, "support-artifact/openclaw"), "utf8"),
       );
       expect(support.aot).toBe(false);
-      expect(fs.existsSync(path.join(input.outputRoot, "compile-aot.mjs"))).toBe(false);
+      expect(fs.existsSync(path.join(input.outputRoot, "compile-standalone.mjs"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["jit", "bytecode"] as const)(
+    "compiles a large %s module inventory without putting its roots in the process arguments",
+    async (mode) => {
+      const input = fixture();
+      const entries = [input.mainEntry];
+      for (let index = 0; index < 6144; index++) {
+        const entry = path.join(input.compileRoot, `${index}-${"module-".repeat(32)}.js`);
+        fs.writeFileSync(entry, "export {};\n");
+        entries.push(entry);
+      }
+      const artifacts = await compileStandaloneArtifacts(
+        compileOptions(input, {
+          mode,
+          compileFlags: mode === "bytecode" ? ["--bytecode"] : [],
+          supportDestination: undefined,
+          compiledEntries: entries,
+          compileEntries: new Set(entries),
+          external: ["external-package"],
+        }),
+      );
+      const options = JSON.parse(
+        fs.readFileSync(path.join(input.outputRoot, "openclaw.options.json"), "utf8"),
+      );
+      expect(options.entrypoints).toEqual(entries.map((entry) => path.basename(entry)));
+      expect(options).toMatchObject({
+        root: input.compileRoot,
+        target: "bun",
+        splitting: true,
+        format: "esm",
+        external: ["external-package"],
+        compile: {
+          outfile: path.join(input.outputRoot, "openclaw"),
+          autoloadPackageJson: true,
+          autoloadDotenv: false,
+          autoloadBunfig: false,
+        },
+      });
+      expect(options.compile.aot).toBeUndefined();
+      expect(options.bytecode === true).toBe(mode === "bytecode");
+      expect(artifacts.map((artifact) => artifact.mode)).toEqual([mode]);
+      const executable = JSON.parse(
+        fs.readFileSync(path.join(input.outputRoot, "openclaw"), "utf8"),
+      );
+      expect(executable.bytecode).toBe(mode === "bytecode");
+      expect(executable.source).toContain(`"mode":"${mode}"`);
+      expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
+      expect(fs.existsSync(path.join(input.outputRoot, "compile-standalone.mjs"))).toBe(false);
     },
   );
 
@@ -446,6 +497,9 @@ console.log(JSON.stringify([fingerprint(record), fingerprint({ ...record, source
       expect(fs.existsSync(path.join(input.root, "aot"))).toBe(false);
       expect(fs.existsSync(path.join(input.root, "support"))).toBe(false);
       expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
+      expect(
+        fs.existsSync(path.join(input.outputRoot, "support-artifact/compile-standalone.mjs")),
+      ).toBe(false);
     },
   );
 
