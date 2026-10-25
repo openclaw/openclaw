@@ -7,7 +7,31 @@ import { assistantVisibleTextFilters } from "./assistant-visible-text.js";
 import { canReuseMarkdownOwnership, findCodeOwnership } from "./code-regions.js";
 import { createTextProjection } from "./text-projection.js";
 
-const markdownOwnershipWork = vi.hoisted(() => ({ scannedCharacters: 0 }));
+const markdownOwnershipWork = vi.hoisted(() => ({
+  scannedCharacters: 0,
+  reuseChecks: 0,
+  reuseHits: 0,
+}));
+const plainToolCallWork = vi.hoisted(() => ({ projectedCharacters: 0 }));
+
+function projectedCharacters() {
+  return plainToolCallWork.projectedCharacters;
+}
+
+vi.mock("../../../packages/tool-call-repair/src/index.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../packages/tool-call-repair/src/index.js")>();
+  return {
+    ...actual,
+    projectPlainTextToolCallBlocks(
+      text: Parameters<typeof actual.projectPlainTextToolCallBlocks>[0],
+      options?: Parameters<typeof actual.projectPlainTextToolCallBlocks>[1],
+    ) {
+      plainToolCallWork.projectedCharacters += text.length;
+      return actual.projectPlainTextToolCallBlocks(text, options);
+    },
+  };
+});
 
 vi.mock("./code-regions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./code-regions.js")>();
@@ -23,6 +47,18 @@ vi.mock("./code-regions.js", async (importOriginal) => {
     findCodeRegions(text: Parameters<typeof actual.findCodeRegions>[0]) {
       markdownOwnershipWork.scannedCharacters += text.length;
       return actual.findCodeRegions(text);
+    },
+    canReuseMarkdownOwnership(
+      previousText: Parameters<typeof actual.canReuseMarkdownOwnership>[0],
+      nextText: Parameters<typeof actual.canReuseMarkdownOwnership>[1],
+      ownership?: Parameters<typeof actual.canReuseMarkdownOwnership>[2],
+    ) {
+      markdownOwnershipWork.reuseChecks += 1;
+      const reusable = actual.canReuseMarkdownOwnership(previousText, nextText, ownership);
+      if (reusable) {
+        markdownOwnershipWork.reuseHits += 1;
+      }
+      return reusable;
     },
   };
 });
@@ -146,6 +182,124 @@ it("bounds Markdown ownership work for open tool calls and cited answers", () =>
     completedCallStream.append(completedCall.slice(offset, offset + 4));
   }
   expect(completedCallStream.text).toBe("");
+});
+
+it("settles a completed plain tool call before streaming the following paragraph", () => {
+  const paragraph = "Answer paragraph with ordinary prose and no tool markers.\n\n";
+  const source = "[tool:read] {}\n\n" + paragraph.repeat(512) + "Done.";
+  const expected = sanitizeAssistantVisibleStreamText(source, "final_answer");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  plainToolCallWork.projectedCharacters = 0;
+
+  for (let offset = 0; offset < source.length; offset += 4) {
+    stream.append(source.slice(offset, offset + 4));
+  }
+
+  expect(stream.text).toBe(expected);
+  expect(projectedCharacters()).toBeLessThan(source.length * 16);
+}, 20_000);
+
+it.each([
+  ["lf", "\n"],
+  ["crlf", "\r\n"],
+] as const)(
+  "bounds ownership work for nonblank multiline tool-call continuations with %s",
+  (_label, lineEnding) => {
+    const lines = [
+      `  "note": "\`",${lineEnding}`,
+      ...Array.from(
+        { length: 512 },
+        (_, index) => `  "item${index}": "ordinary value",${index === 511 ? "" : lineEnding}`,
+      ),
+    ];
+    const chunks = [`[tool:write]${lineEnding}{"items":[${lineEnding}`, ...lines];
+    const source = chunks.join("");
+    const stream = createTextProjection(assistantVisibleTextFilters("delivery", true));
+    markdownOwnershipWork.scannedCharacters = 0;
+    markdownOwnershipWork.reuseChecks = 0;
+    markdownOwnershipWork.reuseHits = 0;
+
+    for (const chunk of chunks) {
+      stream.append(chunk);
+    }
+
+    expect(stream.text).toBe(source);
+    expect(markdownOwnershipWork.reuseChecks).toBeGreaterThan(512);
+    expect(markdownOwnershipWork.reuseHits).toBeGreaterThanOrEqual(512);
+    expect(markdownOwnershipWork.scannedCharacters).toBeLessThan(source.length * 16);
+  },
+);
+
+it("bounds completed plain-list reprojection work", () => {
+  const items = Array.from({ length: 420 }, (_, index) => `- Step ${index}: verify the result`);
+  const source = `\`\`\`json\n{"enabled":true}\n\`\`\`\n\n${items.join("\n")}\n`;
+  const expected = sanitizeAssistantVisibleStreamText(source, "final_answer");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  plainToolCallWork.projectedCharacters = 0;
+
+  for (let offset = 0; offset < source.length; offset += 4) {
+    stream.append(source.slice(offset, offset + 4));
+  }
+
+  expect(stream.text).toBe(expected);
+  expect(projectedCharacters()).toBeLessThan(source.length * 28);
+}, 20_000);
+
+it("bounds list entry after a cached plain tool-call paragraph", () => {
+  const items = Array.from(
+    { length: 512 },
+    (_, index) => `- Step ${String(index).padStart(4, "0")}: verify the result.`,
+  );
+  const source = `[tool:read] {}\n\n${items.join("\n")}\n`;
+  const expected = sanitizeAssistantVisibleStreamText(source, "final_answer");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  plainToolCallWork.projectedCharacters = 0;
+
+  for (let offset = 0; offset < source.length; offset += 4) {
+    stream.append(source.slice(offset, offset + 4));
+  }
+
+  expect(stream.text).toBe(expected);
+  expect(projectedCharacters()).toBeLessThan(source.length * 28);
+}, 20_000);
+
+it("bounds prefix line searches for an unfinished plain tool call", () => {
+  const source = `[tool:write]\n{"path":"notes.txt","content":"${"x".repeat(16_384)}`;
+  const stream = createTextProjection(assistantVisibleTextFilters("delivery", true));
+  const probe = vi.spyOn(String.prototype, "lastIndexOf");
+  let searchedCharacters = 0;
+  try {
+    for (let offset = 0; offset < source.length; offset += 4) {
+      stream.append(source.slice(offset, offset + 4));
+    }
+    searchedCharacters = probe.mock.calls.reduce((total, [search], index) => {
+      const receiver = probe.mock.contexts[index];
+      return typeof receiver === "string" &&
+        receiver.length >= 4_096 &&
+        (search === "\n" || search === "\r")
+        ? total + receiver.length
+        : total;
+    }, 0);
+  } finally {
+    probe.mockRestore();
+  }
+
+  expect(stream.text).toBe(source);
+  expect(searchedCharacters).toBeLessThan(source.length * 16);
+});
+
+it("streams a CRLF split through the checkpoint path", () => {
+  const chunks = ["[tool:write]\r", '\n{"path":"notes.txt"}\r', "\nDone."];
+  const source = chunks.join("");
+  const stream = createTextProjection(assistantVisibleTextFilters("delivery", true));
+  const expected = createTextProjection(assistantVisibleTextFilters("delivery", true));
+
+  for (const chunk of chunks) {
+    stream.append(chunk);
+  }
+  expected.append(source);
+
+  expect(stream.text).toBe(expected.text);
 });
 
 it("refreshes ownership when streamed link and container syntax changes Markdown ownership", () => {
