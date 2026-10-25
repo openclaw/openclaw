@@ -245,6 +245,37 @@ heap snapshot analyzer for retained-size attribution. All fixtures and mock
 provider responses are synthetic; this workload does not reproduce a private
 production plugin configuration or measure provider-network latency.
 
+For first-use investigations, `--turn-count 50` caps the serial turn loop, while
+`--minutes` still bounds the whole observation window. Each turn records setup,
+chat (`chat.send` through `agent.wait`), and verification/cleanup durations in
+`phaseMs`. Compare matching operation kinds as well as the mixed median.
+`--shell-turns` makes code turns execute and verify a synthetic `printf` command
+through the real shell tool. `--gateway-preload /absolute/probe.mjs` loads a
+diagnostic observer only in the owned Gateway (and its inheriting workers).
+
+`--lazy-import-trace` records calls and awaited durations for the optional MCP,
+config-diagnostic, public-session, and completion-parser imports, plus module
+evaluation counts. Records are separated by process and thread under the run's
+`lazy-import-trace` directory. This source-transforming diagnostic preload is not
+latency evidence; run ordinary timing pairs separately.
+
+Exercise each feature independently in a fresh process with:
+
+```sh
+OPENCLAW_LAZY_IMPORT_TRACE_DIR=/path/to/trace \
+  node --import ./scripts/tsx.mjs --import ./scripts/perf/lazy-import-trace-preload.mjs \
+  scripts/perf/lazy-import-feature-probe.mjs mcp \
+  --output /path/to/mcp.json --expect-single-load
+```
+
+Modes are `mcp`, `config`, `public`, and `parser`. They verify 20 operations per
+primary path using real MCP/public HTTP boundaries, invalid config reads, or
+deterministic completion chunks. MCP covers cached catalogs, calls, and fresh
+session lifecycles (including disposal); public HTTP also checks a conditional GET. They report first-use and subsequent-operation samples; they are source
+feature probes, not complete Gateway turns. The count guard rejects repeated
+imports/evaluations after first use. Omit the preload and count guard for timing;
+use matched baseline/candidate processes and report sample counts and host noise.
+
 ### Summary identity strings
 
 `session-summary-id-retention.ts` prepares 10,000 synthetic sessions with observer
