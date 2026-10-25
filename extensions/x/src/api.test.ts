@@ -90,28 +90,45 @@ describe("X API authentication", () => {
     );
   });
 
-  it.each(["reply", "batch user lookup"])(
-    "never dispatches a %s after authority is revoked while token refresh is pending",
-    async (operation) => {
+  it.each([
+    ["reply", "refresh"],
+    ["batch user lookup", "refresh"],
+    ["reply", "asynchronous preparation"],
+  ])(
+    "preserves the authority rejection and never dispatches a %s after %s",
+    async (operation, stage) => {
       let active = true;
+      const rejected = new PlatformMessageNotDispatchedError("Revoked", {
+        cause: undefined,
+        retryable: false,
+      });
       const fetcher = vi.fn<XFetch>(async (url) => {
         if (url.endsWith("/oauth2/token")) {
-          active = false;
+          active = stage !== "refresh";
           return Response.json({ access_token: "access" });
         }
         throw new Error("unexpected paid request");
       });
       const api = createXApiClient({ fetch: fetcher });
-      const assertActive = () => {
+      const assertCurrent = () => {
         if (!active) {
-          throw new Error("revoked");
+          throw rejected;
         }
+      };
+      const assertActive = async () => {
+        if (stage !== "refresh") {
+          queueMicrotask(() => {
+            active = false;
+          });
+          return assertCurrent;
+        }
+        assertCurrent();
       };
       await expect(
         operation === "reply"
           ? reply(api, assertActive)
           : api.getUsersByUsernames(["alice"], undefined, assertActive),
-      ).rejects.toThrow("revoked");
+      ).rejects.toBe(rejected);
       expect(fetcher).toHaveBeenCalledTimes(1);
     },
   );
@@ -181,45 +198,5 @@ describe("X API authentication", () => {
         expect(error).toMatchObject({ status: 503 });
       }
     }
-  });
-
-  it("preserves an existing permanent no-dispatch marker from authority checks", async () => {
-    const rejected = new PlatformMessageNotDispatchedError("X account authority was revoked", {
-      cause: undefined,
-      retryable: false,
-    });
-    const api = createXApiClient({ fetch: async () => Response.json({ access_token: "access" }) });
-    await expect(
-      reply(api, () => {
-        throw rejected;
-      }),
-    ).rejects.toBe(rejected);
-  });
-
-  it("rechecks authority after asynchronous preparation returns and before the final fetch", async () => {
-    let active = true;
-    const rejected = new PlatformMessageNotDispatchedError("Stored grant revoked", {
-      cause: undefined,
-      retryable: false,
-    });
-    const fetcher = vi.fn<XFetch>(async (url) =>
-      Response.json(
-        url.endsWith("/oauth2/token") ? { access_token: "access" } : { data: { id: "901" } },
-      ),
-    );
-    const api = createXApiClient({ fetch: fetcher });
-    await expect(
-      reply(api, async () => {
-        queueMicrotask(() => {
-          active = false;
-        });
-        return () => {
-          if (!active) {
-            throw rejected;
-          }
-        };
-      }),
-    ).rejects.toBe(rejected);
-    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
