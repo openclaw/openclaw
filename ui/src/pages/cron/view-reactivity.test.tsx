@@ -2,19 +2,8 @@ import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { CronProps } from "./view-types.ts";
 import { createCronViewJob, createCronViewProps, getElement } from "./view.test-support.ts";
 import { CronView } from "./view.tsx";
-
-function mountView(overrides: Partial<CronProps> = {}) {
-  const [props, setProps] = createSignal(createCronViewProps(overrides));
-  const view = mountSolid(() => <CronView {...props()} />);
-  const patch = (changes: Partial<CronProps>) => {
-    setProps((previous) => ({ ...previous, ...changes }));
-    flush();
-  };
-  return { view, patch };
-}
 
 it("keeps the edited input and focus while its form and validation update", async () => {
   const initial = createCronViewProps({ createOpen: true });
@@ -41,9 +30,14 @@ it("keeps the edited input and focus while its form and validation update", asyn
 
 it("updates a keyed job row from a replacement owner snapshot", () => {
   const job = createCronViewJob("job-update");
-  const { view, patch } = mountView({ jobs: [job], jobsTotal: 1 });
+  const [props, setProps] = createSignal(createCronViewProps({ jobs: [job], jobsTotal: 1 }));
+  const view = mountSolid(() => <CronView {...props()} />);
   const row = view.container.querySelector('[data-test-id="cron-row-job-update"]');
-  patch({ jobs: [{ ...job, enabled: false, description: "Paused until tomorrow" }] });
+  setProps((previous) => ({
+    ...previous,
+    jobs: [{ ...job, enabled: false, description: "Paused until tomorrow" }],
+  }));
+  flush();
   expect(view.container.querySelector('[data-test-id="cron-row-job-update"]')).toBe(row);
   expect(row?.textContent).toContain("Paused until tomorrow");
   expect(row?.querySelector(".cron-table__state--paused")?.getAttribute("aria-label")).toBe(
@@ -56,26 +50,19 @@ it("does not reread retained jobs while typing and still dispatches current row 
   const state = job.state;
   const readState = vi.fn(() => state);
   Object.defineProperty(job, "state", { get: readState });
-  const { view, patch } = mountView({ jobs: [job, createCronViewJob("sibling")], jobsTotal: 2 });
+  const [props, setProps] = createSignal(
+    createCronViewProps({ jobs: [job, createCronViewJob("sibling")], jobsTotal: 2 }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
   const row = view.container.querySelector<HTMLElement>('[data-test-id="cron-row-retained"]')!;
-  const run = getElement(row, ".cron-row-run", HTMLButtonElement);
-  const onSelectJob = vi.fn(),
-    onRun = vi.fn();
+  const onSelectJob = vi.fn();
   readState.mockClear();
-  patch({ jobsQuery: "daily", loading: true, onSelectJob, onRun });
+  setProps((previous) => ({ ...previous, jobsQuery: "daily", loading: true, onSelectJob }));
+  flush();
   expect(readState).not.toHaveBeenCalled();
   expect(view.container.querySelector('[data-test-id="cron-row-retained"]')).toBe(row);
   row.click();
   expect(onSelectJob).toHaveBeenCalledExactlyOnceWith(job);
-  expect(row.querySelector(".cron-row-run")).toBe(run);
-  run.click();
-  expect(onRun).toHaveBeenCalledExactlyOnceWith(job, "force");
-  patch({ connected: false });
-  expect(run.disabled).toBe(true);
-  expect(getElement(row, "input.settings-toggle__input", HTMLInputElement).disabled).toBe(true);
-  patch({ canManage: false });
-  expect(view.container.querySelector('[data-test-id="cron-row-retained"]')).toBe(row);
-  expect(row.querySelector(".cron-table__actions")).toBeNull();
 });
 
 it("publishes refreshed runtime facts from the mutable selected job", async () => {
@@ -83,7 +70,10 @@ it("publishes refreshed runtime facts from the mutable selected job", async () =
     trigger: { script: "json({ fire: false })" },
     state: { triggerEvalCount: 1 },
   });
-  const { view, patch } = mountView({ editingJob: job, detailTab: "history" });
+  const [props, setProps] = createSignal(
+    createCronViewProps({ editingJob: job, detailTab: "history" }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
   await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(view.container.querySelector(".cron-condition-activity dd")).not.toBeNull(),
@@ -94,30 +84,36 @@ it("publishes refreshed runtime facts from the mutable selected job", async () =
     );
   expect(counts()[0]).toBe("1");
   job.state = { triggerEvalCount: 2 };
-  patch({});
+  setProps((previous) => ({ ...previous }));
+  flush();
   expect(counts()[0]).toBe("2");
 });
 
 it("keeps pagination current while a query is pending without mounting editor suggestions", () => {
   const onLoadMoreJobs = vi.fn();
-  const { view, patch } = mountView({
-    jobs: [createCronViewJob("first"), createCronViewJob("second")],
-    jobsTotal: 12,
-    jobsHasMore: true,
-    onLoadMoreJobs,
-    timezoneSuggestions: ["UTC", "Europe/Vienna"],
-  });
+  const [props, setProps] = createSignal(
+    createCronViewProps({
+      jobs: [createCronViewJob("first"), createCronViewJob("second")],
+      jobsTotal: 12,
+      jobsHasMore: true,
+      onLoadMoreJobs,
+      timezoneSuggestions: ["UTC", "Europe/Vienna"],
+    }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
   const button = getElement(view.container, ".cron-load-more", HTMLButtonElement);
   expect(view.container.querySelector("datalist")).toBeNull();
   expect(view.container.querySelector(".cron-table__footer")?.textContent).toContain("2 of 12");
   button.click();
   expect(onLoadMoreJobs).toHaveBeenCalledOnce();
-  patch({
+  setProps((previous) => ({
+    ...previous,
     jobsQuery: "i",
     loading: true,
     jobsLoadingMore: true,
-    timezoneSuggestions: ["UTC", "Europe/Vienna"],
-  });
+    timezoneSuggestions: [...previous.timezoneSuggestions],
+  }));
+  flush();
   expect(view.container.querySelector(".cron-load-more")).toBe(button);
   expect(button.disabled).toBe(true);
   expect(button.textContent).toContain("Loading");
@@ -141,7 +137,8 @@ it("retains live suggestions only while the editor is presented", async () => {
   expect(view.container.querySelector("#cron-tz-suggestions")).toBe(timezones);
   expect(timezones.querySelectorAll("option")[0]).toBe(options[0]);
   expect(timezones.querySelectorAll("option")[1]).toBe(options[1]);
-  patch({ timezoneSuggestions: ["Europe/Vienna", "Asia/Tokyo"] });
+  setProps((previous) => ({ ...previous, timezoneSuggestions: ["Europe/Vienna", "Asia/Tokyo"] }));
+  flush();
   expect(view.container.querySelector("#cron-tz-suggestions")).toBe(timezones);
   expect([...timezones.querySelectorAll("option")].map((option) => option.value)).toEqual([
     "Europe/Vienna",
@@ -163,7 +160,10 @@ it("retains history controls and forwards the current transcript target after re
     status: "ok" as const,
     summary: "First summary",
   };
-  const { view, patch } = mountView({ listTab: "activity", runs: [first], onViewRunTranscript });
+  const [props, setProps] = createSignal(
+    createCronViewProps({ listTab: "activity", runs: [first], onViewRunTranscript }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
   const button = getElement(view.container, ".cron-run-entry button", HTMLButtonElement);
   const option = getElement(
     view.container,
@@ -171,7 +171,8 @@ it("retains history controls and forwards the current transcript target after re
     HTMLButtonElement,
   );
   const refreshed = { ...first, summary: "Updated summary" };
-  patch({ runs: [refreshed], runsStatuses: ["ok"] });
+  setProps((previous) => ({ ...previous, runs: [refreshed], runsStatuses: ["ok"] }));
+  flush();
   expect(view.container.querySelector(".cron-run-entry button")).toBe(button);
   expect(view.container.querySelector('[data-filter="status"] [data-value="option:ok"]')).toBe(
     option,
@@ -182,4 +183,54 @@ it("retains history controls and forwards the current transcript target after re
   );
   button.click();
   expect(onViewRunTranscript).toHaveBeenCalledExactlyOnceWith(refreshed, button);
+});
+
+it("keeps retained row controls current across pending queries and access changes", () => {
+  const job = createCronViewJob("retained-actions");
+  const initialRun = vi.fn();
+  const currentRun = vi.fn();
+  const [props, setProps] = createSignal(
+    createCronViewProps({ jobs: [job], jobsTotal: 1, onRun: initialRun }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
+  const row = getElement(view.container, ".cron-table__row", HTMLDivElement);
+  const run = getElement(row, ".cron-row-run", HTMLButtonElement);
+  const toggle = getElement(row, "input.settings-toggle__input", HTMLInputElement);
+
+  setProps((previous) => ({ ...previous, jobsQuery: "retained", loading: true, busy: true }));
+  flush();
+  expect(view.container.querySelector(".cron-table__row")).toBe(row);
+  expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(true);
+
+  setProps((previous) => ({ ...previous, toggleSavingJobId: job.id }));
+  flush();
+  expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(false);
+  expect(toggle.getAttribute("aria-disabled")).toBe("true");
+
+  setProps((previous) => ({ ...previous, connected: false }));
+  flush();
+  expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(true);
+
+  setProps((previous) => ({
+    ...previous,
+    busy: false,
+    connected: true,
+    toggleSavingJobId: null,
+    onRun: currentRun,
+  }));
+  flush();
+  expect(row.querySelector(".cron-row-run")).toBe(run);
+  expect(run.disabled).toBe(false);
+  expect(toggle.getAttribute("aria-disabled")).toBeNull();
+  run.click();
+  expect(currentRun).toHaveBeenCalledExactlyOnceWith(job, "force");
+  expect(initialRun).not.toHaveBeenCalled();
+
+  setProps((previous) => ({ ...previous, canManage: false }));
+  flush();
+  expect(view.container.querySelector(".cron-table__row")).toBe(row);
+  expect(row.querySelector(".cron-table__actions")).toBeNull();
 });

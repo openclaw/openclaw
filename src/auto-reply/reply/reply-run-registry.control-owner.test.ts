@@ -186,7 +186,7 @@ it.each(["required", "optional", "result-required", undefined] as const)(
       queueMessage,
     });
     operation.setPhase("running");
-    const target = captureInjectionTarget(operation.key);
+    const target = captureCurrentReplyMessageInjectionTarget(operation.key);
     if (!target) {
       throw new Error("Expected a live message injection target");
     }
