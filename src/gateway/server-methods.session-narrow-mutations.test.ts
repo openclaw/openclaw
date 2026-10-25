@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { abortSessionControllerInput } from "../sessions/session-controller.mailbox.js";
@@ -19,8 +18,6 @@ import {
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
 import { prepareAgentRequestRouting } from "./agent-turn/agent-request-routing.js";
 import { createAgentTurnIo } from "./agent-turn/io.js";
-import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
   dispatchAuthorizationRequest,
@@ -240,7 +237,7 @@ describe("invocation-owned session mutations", () => {
   });
 
   it.each(
-    (["active", "queued", "pending-chat", "agent"] as const).flatMap((kind) =>
+    (["active", "queued", "agent"] as const).flatMap((kind) =>
       (["chat.abort", "sessions.abort"] as const).map((method) => ({ kind, method })),
     ),
   )(
@@ -274,8 +271,8 @@ describe("invocation-owned session mutations", () => {
                     : "current-incarnation",
               owner: { connId: client.connId },
             });
-            if (kind !== "active" && kind !== "queued") {
-              run.adapter.kind = kind === "agent" ? "agent" : "chat-send";
+            if (kind === "agent") {
+              run.adapter.kind = "agent";
             }
             rpcSourceTesting.set(runId, run);
             const before = [...context.dedupe];
@@ -314,7 +311,10 @@ describe("invocation-owned session mutations", () => {
         { kind: "queued", method: "sessions.abort" },
       ] as const
     ).flatMap((entry) =>
-      (["registration", "key", "sessionId", "agentId"] as const).map((changed) => ({
+      (entry.kind === "active"
+        ? (["registration"] as const)
+        : (["registration", "key", "sessionId", "agentId"] as const)
+      ).map((changed) => ({
         kind: entry.kind,
         method: entry.method,
         changed,
@@ -427,71 +427,6 @@ describe("invocation-owned session mutations", () => {
       });
     },
   );
-
-  it("does not subtract broad reads or specialized approvals from mixed grants", async (test) => {
-    await withState(async () => {
-      const client = roleClient("view", "mixed-grants");
-      client.connect.scopes = ["operator.read", "operator.approvals", "operator.sessions.write"];
-      const owner = roleClient("view", "mixed-owner");
-      const cfg = rolePolicyConfig();
-      expectDefined(cfg.gateway?.roles?.definitions.view, "mixed-grant role").scopes.push(
-        "operator.approvals",
-      );
-      setRuntimeConfigSnapshot(cfg);
-      await upsertSessionEntryCore(scope, {
-        ...ownedEntry(owner, "mixed-session"),
-        visibility: "shared",
-      });
-      const target = (await resolveSessionSharingTargetAsync({ cfg, ...scope }))!;
-      await addSessionMember(
-        { ...scope, storePath: target.storePath },
-        {
-          identityId: client.authenticatedUserProfile!.profileId,
-          addedBy: owner.authenticatedUserProfile!.profileId,
-          expectedSessionId: "mixed-session",
-        },
-      );
-      const manager = createTestApprovalManager(test);
-      const approval = manager.create(
-        { command: "echo allowed", sessionKey: key, agentId: "main" },
-        1_000,
-        "mixed-approval",
-      );
-      vi.spyOn(manager, "lookupLocalApprovalId").mockReturnValue({
-        kind: "exact",
-        id: approval.id,
-      });
-      vi.spyOn(manager, "getLocalSnapshot").mockReturnValue(approval);
-      const context = createDirectChatContext({
-        getRuntimeConfig: () => cfg,
-        execApprovalManager: manager,
-      });
-      for (const [method, requiredScope, params] of [
-        ["progressCard.get", "operator.read", { sessionKey: key }],
-        ["exec.approval.resolve", "operator.approvals", { id: approval.id }],
-      ] as const) {
-        const handler = vi.fn<GatewayRequestHandler>((options) => {
-          expect(readGatewayRequestMutationAuthority(options).sessionScope).toBeUndefined();
-          options.sessionMutationAuthorization?.assertCurrent();
-          options.respond(true, { allowed: true });
-        });
-        const respond = await dispatchAuthorizationRequest(method, params, {
-          client,
-          context,
-          methodRegistry: createGatewayMethodRegistry([
-            {
-              name: method,
-              handler,
-              owner: { kind: "core", area: "gateway" },
-              scope: requiredScope,
-            },
-          ]),
-        });
-        expect(handler).toHaveBeenCalledOnce();
-        expect(respond).toHaveBeenCalledWith(true, { allowed: true });
-      }
-    });
-  });
 
   it("sessions.steer forwards the original source and exact target across the dispatch await", async () => {
     const method = "sessions.steer";

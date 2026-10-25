@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
   afterEach,
   beforeEach,
@@ -21,9 +18,6 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { ExecApprovalManager } from "./exec-approval-manager.js";
 import {
   createTestApprovalFixture,
   createTestApprovalManager,
@@ -87,8 +81,6 @@ function deliveryFixture(test: TestContext, delegated = false) {
   };
 }
 
-const tempDirs: string[] = [];
-
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() =>
   vi.fn(
     (params: { turnSourceChannel?: string | null; approvalKind?: ChannelApprovalKind }) =>
@@ -106,13 +98,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     hasApprovalTurnSourceRouteMock.mockClear();
   });
 
-  afterEach(async () => {
-    resetPluginRuntimeStateForTest();
-    for (const dir of tempDirs.splice(0)) {
-      await closeOpenClawStateDatabaseByPathAsync(path.join(dir, "state.sqlite"));
-      fs.rmSync(dir, { force: true, recursive: true });
-    }
-  });
+  afterEach(() => resetPluginRuntimeStateForTest());
 
   it("preserves one approval and session identity through streaming readiness recovery", async (testContext) => {
     const nodeSession = createNodeSession({ pairingGeneration: "paired-generation-1" });
@@ -624,16 +610,14 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 
-  it("fails closed before routing an unrenderable persistent policy approval", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-policy-approval-"));
-    tempDirs.push(stateDir);
-    const databaseOptions = { path: path.join(stateDir, "state.sqlite") };
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      approvalKind: "plugin",
-      persistence: { runtimeEpoch: "node-policy-test", databaseOptions },
-      resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
-    });
+  it("fails closed before routing an unrenderable persistent policy approval", async (test) => {
+    const { manager, databaseOptions } = createTestApprovalFixture<PluginApprovalRequestPayload>(
+      test,
+      {
+        approvalKind: "plugin",
+        resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
+      },
+    );
     setDangerousDemoCommandRegistry([
       createApprovalRequestPolicy({ title: " \t ", description: "Needs approval" }),
     ]);

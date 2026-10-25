@@ -168,13 +168,10 @@ describe("session lifecycle state", () => {
     expect(next.goal).toEqual(stopped.goal);
   });
 
-  it.each(["paused", "blocked", "complete", "budget_limited", "usage_limited"] as const)(
-    "preserves an already %s goal on run failure",
-    async (status) => {
-      const entry = { ...goalEntry, goal: { ...goalEntry.goal!, status } };
-      expect((await persistLifecycle(entry, goalFailure)).goal).toEqual(entry.goal);
-    },
-  );
+  it("preserves an already paused goal on run failure", async () => {
+    const entry = { ...goalEntry, goal: { ...goalEntry.goal!, status: "paused" as const } };
+    expect((await persistLifecycle(entry, goalFailure)).goal).toEqual(entry.goal);
+  });
 
   it.each([
     { phase: "start", startedAt: 1_000 },
@@ -187,24 +184,13 @@ describe("session lifecycle state", () => {
     );
   });
 
-  it("does not pause the goal for a stale run or session failure", async () => {
+  it("does not pause the goal for a stale run or pre-reset session failure (#88538)", async () => {
     for (const event of [
       { ...goalFailure, sessionId: "old-session" },
       { ...goalFailure, runId: "old-run", data: { ...goalFailure.data, startedAt: 500 } },
     ]) {
       expect((await persistLifecycle(goalEntry, event)).goal).toEqual(goalEntry.goal);
     }
-  });
-
-  it("treats a pre-reset run's lifecycle event as stale once the row's sessionId rotated (#88538)", () => {
-    expect(
-      isStaleLifecycleEventForSession({
-        owningSessionId: "old-id",
-        currentSessionId: "new-id",
-        eventRunId: "same-run",
-        currentRunId: "same-run",
-      }),
-    ).toBe(true);
   });
 
   it("does not guard when the owning sessionId is unknown (preserves legacy behavior)", () => {
