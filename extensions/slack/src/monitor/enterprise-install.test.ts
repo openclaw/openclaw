@@ -82,37 +82,15 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
     }).not.toThrow();
   });
 
-  it.each(["allowIn", "denyIn"] as const)(
-    "rejects unqualified Enterprise mention pattern policy %s",
-    (field) => {
-      expectPolicy({ mentionPatterns: { [field]: ["C123"] } }).toThrow(
-        /stable Slack IDs.*mentionPatterns/,
-      );
-    },
-  );
-
-  it.each<[string, SlackAccountConfig]>([
-    ["channel ID", { channels: { C01234567: {} } }],
-    ["group DM channel ID", { dm: { groupChannels: ["G01234567"] } }],
-  ])("rejects unscoped Enterprise %s", (_label, config) => {
-    expectPolicy(config).toThrow(/Slack Enterprise Grid/);
-  });
-
-  it.each<[string, SlackAccountConfig]>([
-    ["allowFrom", { allowFrom: ["ursula"] }],
-    ["reaction allowlist", { reactionNotifications: "allowlist", reactionAllowlist: ["ursula"] }],
-  ])("rejects lowercase mutable names in %s", (_label, config) => {
-    expectPolicy(config).toThrow(/stable Slack/);
-  });
-
-  it.each<[string, SlackAccountConfig, RegExp]>([
+  it.each<[SlackAccountConfig, RegExp]>([
+    [{ mentionPatterns: { allowIn: ["C123"] } }, /stable Slack IDs.*mentionPatterns/],
+    [{ mentionPatterns: { denyIn: ["C123"] } }, /stable Slack IDs.*mentionPatterns/],
+    [{ channels: { C01234567: {} } }, /Slack Enterprise Grid/],
+    [{ dm: { groupChannels: ["G01234567"] } }, /Slack Enterprise Grid/],
+    [{ allowFrom: ["ursula"] }, /stable Slack/],
+    [{ reactionNotifications: "allowlist", reactionAllowlist: ["ursula"] }, /stable Slack/],
+    [{ dangerouslyAllowNameMatching: true }, /cannot use dangerouslyAllowNameMatching/],
     [
-      "mutable-name matching",
-      { dangerouslyAllowNameMatching: true },
-      /cannot use dangerouslyAllowNameMatching/,
-    ],
-    [
-      "noncanonical toolsBySender keys before wildcard fallback",
       {
         channels: {
           [scopedChannel]: {
@@ -125,13 +103,9 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
       },
       /stable Slack IDs.*toolsBySender/,
     ],
-    [
-      "wildcard groupChannels",
-      { dm: { groupChannels: ["*"] } },
-      /stable Slack IDs.*dm\.groupChannels/,
-    ],
-    ["channel names", { channels: { "#general": {} } }, /stable Slack channel IDs/],
-  ])("rejects %s", (_label, config, error) => {
+    [{ dm: { groupChannels: ["*"] } }, /stable Slack IDs.*dm\.groupChannels/],
+    [{ channels: { "#general": {} } }, /stable Slack channel IDs/],
+  ])("rejects unsupported Enterprise policy %j", (config, error) => {
     expectPolicy(config).toThrow(error);
   });
 });

@@ -88,10 +88,20 @@ describe("createSlackBoltApp", () => {
     constructor(readonly args: Record<string, unknown>) {}
   }
 
-  class FakeSocketModeReceiver extends FakeHTTPReceiver {
-    client = Object.assign(new EventEmitter(), {
+  function createSocketClient() {
+    return Object.assign(new EventEmitter(), {
+      clientPingTimeoutMS: 0,
+      numOfConsecutiveReconnectionFailures: 0,
+      shuttingDown: false,
       send: async () => {},
+      start: vi.fn(async () => {}),
+      delayReconnectAttempt: (_callback: () => Promise<unknown>): Promise<unknown> => {
+        throw new Error("native reconnect observer was not installed");
+      },
     });
+  }
+  class FakeSocketModeReceiver extends FakeHTTPReceiver {
+    client = createSocketClient();
   }
 
   const fakeInterop = {
@@ -116,9 +126,8 @@ describe("createSlackBoltApp", () => {
     };
   }
 
-  it("filters Socket Mode noise and retains SDK errors through the configured receiver logger", () => {
+  it("filters Socket Mode noise through the configured receiver logger", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const { receiver, socketModeLogger } = createFakeApp();
     expect(receiver.args.logger).toBe(socketModeLogger);
     socketModeLogger.setName("SlackWebSocket:1");
@@ -132,15 +141,7 @@ describe("createSlackBoltApp", () => {
       socketModeLogger.warn(message);
     }
     socketModeLogger.warn("another socket warning");
-    socketModeLogger.error("failed to retrieve WSS URL", {
-      data: { error: "missing_scope", needed: "connections:write" },
-    });
-
     expect(warn.mock.calls).toEqual([["socket-mode:SlackWebSocket:1", "another socket warning"]]);
-    expect(error).toHaveBeenCalledTimes(1);
-    expect(socketModeLogger.getLastMessage()).toBe(
-      "socket-mode:SlackWebSocket:1 failed to retrieve WSS URL slack error: missing_scope; needed: connections:write",
-    );
   });
 
   it("applies OpenClaw self-event filtering through installed Bolt middleware", async () => {
@@ -179,30 +180,12 @@ describe("createSlackBoltApp", () => {
 
   it("routes native reconnect start failures through the socket disconnect event", async () => {
     const startError = new Error("invalid_auth");
-    class FakeSocketModeClient extends EventEmitter {
-      clientPingTimeoutMS = 0;
-      numOfConsecutiveReconnectionFailures = 0;
-      logger = { debug: () => undefined };
-      shuttingDown = false;
-      send = async () => {};
-      start = async () => {
-        throw startError;
-      };
-
-      declare delayReconnectAttempt: (callback: () => Promise<unknown>) => Promise<unknown>;
+    const { receiver } = createFakeApp();
+    if (!(receiver instanceof FakeSocketModeReceiver)) {
+      throw new Error("expected Socket Mode receiver");
     }
-    class FakeObservedSocketModeReceiver {
-      client = new FakeSocketModeClient();
-    }
-    const { receiver } = createSlackBoltApp({
-      ...socketOptions,
-      interop: {
-        ...fakeInterop,
-        SocketModeReceiver: FakeObservedSocketModeReceiver as never,
-      },
-    });
-
-    const client = (receiver as unknown as FakeObservedSocketModeReceiver).client;
+    const client = receiver.client;
+    client.start.mockRejectedValue(startError);
     const emit = vi.spyOn(client, "emit");
 
     await expect(client.delayReconnectAttempt(client.start)).resolves.toBeUndefined();

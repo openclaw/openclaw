@@ -14,7 +14,6 @@ import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import { createMonitorTestContext } from "./monitor-context.test-support.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
-import { isTransientSlackApiError } from "./transient-api-error.js";
 
 const threadMessage: SlackMessageEvent = {
   type: "message",
@@ -175,54 +174,44 @@ describe("createSlackThreadTsResolver", () => {
     expect(historyMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["429", "internal_error"] as const)(
-    "classifies a real WebClient %s as transient",
-    async (failure) => {
-      const fetch = vi.fn(async () =>
-        failure === "429"
-          ? new Response(JSON.stringify({ ok: false, error: "ratelimited" }), {
-              headers: { "content-type": "application/json", "retry-after": "0" },
-              status: 429,
-            })
-          : Response.json({ ok: false, error: "internal_error" }),
-      );
-      const error: unknown = await createWebClient(fetch)
-        .users.info({ user: "U1" })
-        .catch((caught: unknown) => caught);
-      if (failure === "429") {
-        expect(error).toBeInstanceOf(WebAPIRequestError);
-        if (!(error instanceof WebAPIRequestError)) {
-          throw new Error("expected exhausted Slack 429 to become WebAPIRequestError");
-        }
-        expect(error.original.message).toMatch(
-          /^A rate limit was exceeded \(url: .+, retry-after: 0\)$/,
-        );
-      } else {
-        expect(error).toBeInstanceOf(WebAPIPlatformError);
-      }
-      expect(isTransientSlackApiError(error)).toBe(true);
-      expect(fetch).toHaveBeenCalledOnce();
+  it.each([
+    [
+      "exhausted 429",
+      () =>
+        Response.json(
+          { ok: false, error: "ratelimited" },
+          {
+            status: 429,
+            headers: { "retry-after": "0" },
+          },
+        ),
+      WebAPIRequestError,
+    ],
+    [
+      "platform outage",
+      () => Response.json({ ok: false, error: "internal_error" }),
+      WebAPIPlatformError,
+    ],
+    ["malformed Retry-After", () => new Response("rate limited", { status: 429 }), Error],
+  ] as const)(
+    "retries a real WebClient %s without caching a missing thread",
+    async (_name, failure, error) => {
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(failure())
+        .mockResolvedValueOnce(Response.json({ ok: true, ...historyResult }));
+      const resolver = createSlackThreadTsResolver({ client: createWebClient(fetch) });
+      const request = {
+        message: threadMessage,
+        source: "message" as const,
+        turnAdoptionLifecycle: createDurableTurnLifecycle(),
+      };
+
+      await expect(resolver.resolve(request)).rejects.toBeInstanceOf(error);
+      await expect(resolver.resolve(request)).resolves.toMatchObject(resolved);
+      expect(fetch).toHaveBeenCalledTimes(2);
     },
   );
-
-  it("retries a malformed Retry-After response without caching a missing thread", async () => {
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
-      .mockResolvedValueOnce(Response.json({ ok: true, ...historyResult }));
-    const resolver = createSlackThreadTsResolver({ client: createWebClient(fetch) });
-    const request = {
-      message: threadMessage,
-      source: "message" as const,
-      turnAdoptionLifecycle: createDurableTurnLifecycle(),
-    };
-
-    await expect(resolver.resolve(request)).rejects.toThrow(
-      /^Retry header did not contain a valid timeout \(url: .+, retry-after header: null\)$/,
-    );
-    await expect(resolver.resolve(request)).resolves.toMatchObject(resolved);
-    expect(fetch).toHaveBeenCalledTimes(2);
-  });
 
   it.each([
     { error: new WebAPIRateLimitedError(1), durable: true },

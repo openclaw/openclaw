@@ -166,23 +166,11 @@ describe("Slack monitor context", () => {
   });
 
   it.each([
-    [
-      "channel",
-      "C_SHARED",
-      "U_ACTOR",
-      "agent:main:slack:channel:team:t111:channel:c_shared",
-      "agent:main:slack:channel:team:t222:channel:c_shared",
-    ],
-    [
-      "im",
-      "D_SHARED",
-      "U_SHARED",
-      "agent:main:main:account:default:team:t111",
-      "agent:main:main:account:default:team:t222",
-    ],
+    ["channel", "C_SHARED", "U_ACTOR", "agent:main:slack:channel:team:", ":channel:c_shared"],
+    ["im", "D_SHARED", "U_SHARED", "agent:main:main:account:default:team:", ""],
   ] as const)(
     "partitions enterprise %s events by workspace",
-    async (channelType, channelId, senderId, first, second) => {
+    async (channelType, channelId, senderId, prefix, suffix) => {
       const ctx = createTestContext({ dmScope: "main" });
       const route = (teamId: string) =>
         ctx.resolveSlackSystemEventRoute({
@@ -191,8 +179,14 @@ describe("Slack monitor context", () => {
           senderId,
           eventScope: createEnterpriseEventScope(teamId),
         });
-      expect(await route("T111")).toEqual({ agentId: "main", sessionKey: first });
-      expect(await route("T222")).toEqual({ agentId: "main", sessionKey: second });
+      expect(await route("T111")).toEqual({
+        agentId: "main",
+        sessionKey: `${prefix}t111${suffix}`,
+      });
+      expect(await route("T222")).toEqual({
+        agentId: "main",
+        sessionKey: `${prefix}t222${suffix}`,
+      });
     },
   );
 

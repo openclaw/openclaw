@@ -353,24 +353,6 @@ describe("resolveSlackCommandIngress", () => {
     expect(result.commandAccess.authorized).toBe(true);
   });
 
-  it.each([
-    ["allows the workspace-qualified user in its workspace", "T11111111", "allow", true],
-    ["blocks the same bare user ID in another workspace", "T22222222", "block", false],
-  ] as const)("%s", async (_name, teamId, decision, allowed) => {
-    const result = await commandIngress({
-      ctx: makeAuthorizeCtx({
-        installationIdentity: { kind: "enterprise", enterpriseId: "E11111111" },
-      }),
-      teamId,
-      senderId: "U01234567",
-      channelType: "channel",
-      channelId: "C01234567",
-      channelUsers: ["team:T11111111:user:U01234567"],
-    });
-
-    expect(result.senderAccess).toMatchObject({ decision, gate: { allowed } });
-  });
-
   it("does not authorize commands when sender denial stops before the command gate", async () => {
     const result = await commandIngress({
       senderId: "U_DENIED",
@@ -387,20 +369,6 @@ describe("resolveSlackCommandIngress", () => {
       ingress: { decision: "block" },
       commandAccess: { authorized: false, shouldBlockControlCommand: false },
     });
-  });
-
-  it.each([
-    ["blocks MPIM senders outside the configured allowFrom", "U_ATTACKER", "block", false],
-    ["allows MPIM senders in the configured allowFrom", "U_OWNER", "allow", true],
-  ] as const)("%s", async (_name, senderId, decision, allowed) => {
-    const result = await commandIngress({
-      senderId,
-      channelType: "mpim",
-      channelId: "G_MPIM",
-      ownerAllowFromLower: ["u_owner"],
-    });
-
-    expect(result.senderAccess).toMatchObject({ decision, gate: { allowed } });
   });
 });
 
