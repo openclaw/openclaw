@@ -102,6 +102,23 @@ beforeEach(() => {
 
 describe("browser device route", () => {
   it.each([
+    ["/set/timezone", { timezoneId: " \t " }, {}, "timezoneId is required"],
+    ["/set/locale", { locale: " \t " }, {}, "locale is required"],
+    ["/set/device", { name: " \t " }, {}, "name is required"],
+    ["/cookies/set-many", { cookies: [] }, {}, "cookies must be a non-empty array"],
+    ["/storage/:kind/set", { key: "key" }, { kind: "invalid" }, "kind must be local|session"],
+    ["/storage/:kind/set", { key: " \t ", value: "value" }, { kind: "local" }, "key is required"],
+  ] as const)(
+    "rejects invalid %s input before acquiring a browser",
+    async (route, body, params, error) => {
+      routeState.storage.local.set("existing", "unchanged");
+      expectResponse(await post(route, body, params), { error }, 400);
+      expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
+      expect(Object.fromEntries(routeState.storage.local)).toEqual({ existing: "unchanged" });
+    },
+  );
+
+  it.each([
     ["timezone", "timezoneId", 0, "0", "setTimezoneViaPlaywright"],
     ["locale", "locale", false, "false", "setLocaleViaPlaywright"],
   ] as const)(
@@ -112,16 +129,6 @@ describe("browser device route", () => {
       expect(routeState[method]).toHaveBeenCalledWith({ ...target, [field]: expected });
     },
   );
-
-  it.each([
-    ["timezone", "timezoneId"],
-    ["locale", "locale"],
-    ["device", "name"],
-  ])("rejects blank %s before acquiring a browser", async (route, field) => {
-    const response = await post(`/set/${route}`, { [field]: " \t " });
-    expectResponse(response, { error: `${field} is required` }, 400);
-    expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
-  });
 
   it.each([
     { route: "/set/media", body: { colorScheme: "dark" } },
@@ -199,13 +206,6 @@ describe("browser cookie batch route", () => {
     });
     expect(response.body).toEqual({ ok: true, targetId: "tab-1", added: 2 });
   });
-
-  it("rejects an empty cookies payload", async () => {
-    const response = await post("/cookies/set-many", { cookies: [] });
-    expect(response.statusCode).toBe(400);
-    expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
-    expect(routeState.cookiesSetManyViaPlaywright).not.toHaveBeenCalled();
-  });
 });
 
 describe("browser storage route boundaries", () => {
@@ -242,30 +242,18 @@ describe("browser storage route boundaries", () => {
     },
   );
 
-  it.each([
-    { key: 0, expected: { "0": "value" } },
-    { key: " \t ", expected: {} },
-  ])("preserves key coercion and blank rejection for $key", async ({ key, expected }) => {
+  it("coerces numeric storage keys without changing existing entries", async () => {
     routeState.storage.local.set("existing", "unchanged");
-    const response = await post("/storage/:kind/set", { key, value: "value" }, { kind: "local" });
-    expect(response.statusCode).toBe(typeof key === "string" ? 400 : 200);
-    expect(Object.fromEntries(routeState.storage.local)).toEqual({
-      existing: "unchanged",
-      ...expected,
-    });
-  });
-
-  it("rejects an invalid storage kind before set dispatch", async () => {
     const response = await post(
       "/storage/:kind/set",
-      { key: "", targetId: " requested-tab " },
-      { kind: "invalid" },
+      { key: 0, value: "value" },
+      { kind: "local" },
     );
-
-    expect(response.statusCode).toBe(400);
-    expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
-    expect(routeState.storageSetViaPlaywright).not.toHaveBeenCalled();
-    expect(routeState.storageClearViaPlaywright).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(200);
+    expect(Object.fromEntries(routeState.storage.local)).toEqual({
+      existing: "unchanged",
+      "0": "value",
+    });
   });
 
   it("keeps cookie reads behind the current-tab URL guard", async () => {
