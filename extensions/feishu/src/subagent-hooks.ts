@@ -43,11 +43,7 @@ export function handleFeishuSubagentDeliveryTarget(event: FeishuSubagentDelivery
 
     const requesterTo = requesterOrigin?.to;
     const requesterThreadId = requesterOrigin?.threadId;
-    const resolveFeishuRequesterConversation = (): {
-      accountId: string;
-      conversationId: string;
-      parentConversationId?: string;
-    } | null => {
+    const resolveFeishuRequesterConversation = () => {
       const rawTo = requesterTo?.trim();
       const withoutProviderPrefix = rawTo ? stripFeishuProviderPrefix(rawTo) : "";
       const normalizedTarget = rawTo ? normalizeFeishuTarget(rawTo) : null;
