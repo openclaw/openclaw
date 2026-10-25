@@ -368,9 +368,7 @@ it.each([
         expect(readyAtPublication?.initializationPending).toBeUndefined();
       }
       expect(linkGrantReads).toBe(0);
-      expect(result).toMatchObject({
-        status: failure === "readiness publication" ? "created" : "failed",
-      });
+      expect(result.status).toBe(failure === "readiness publication" ? "created" : "failed");
       const identity = {
         kind: "session" as const,
         agentId: "main",
@@ -397,9 +395,7 @@ it.each([
         );
         expect(link?.threadId).toBe(flow === "fork" ? forkedThread.id : undefined);
         expect(native.archiveThread).not.toHaveBeenCalled();
-        expect(result).toMatchObject({
-          message: expect.stringContaining("guarded rollback did not complete"),
-        });
+        expect(result.message).toContain("guarded rollback did not complete");
       } else {
         expect(deletion).toHaveBeenCalledOnce();
         expect(child).toBeUndefined();
@@ -418,9 +414,7 @@ it.each([
         }
         if (failure === "native cleanup") {
           expect(native.control.retireConnection).toHaveBeenCalledOnce();
-          expect(result).toMatchObject({
-            message: expect.stringContaining("guarded rollback did not complete"),
-          });
+          expect(result.message).toContain("guarded rollback did not complete");
         }
       }
       for (const method of ["assertCurrent", "assertRollbackCurrent"] as const) {

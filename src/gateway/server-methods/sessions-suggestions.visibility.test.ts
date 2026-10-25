@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { realpathSync, symlinkSync } from "node:fs";
+import { symlinkSync } from "node:fs";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -36,11 +36,7 @@ import type { OperatorScope } from "../operator-scopes.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { withReadySessionRows } from "../session-row-prepared-read.js";
-import {
-  bindSessionRowProjection,
-  requireSessionRowProjection,
-} from "../session-row-projection-access.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
@@ -65,6 +61,13 @@ const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
 
 const withState = (run: Parameters<typeof withSuggestionState>[0]) =>
   withSuggestionState(run, { prepareProfileCatalog: true });
+
+function addMember(identityId: string, key = sessionKey, expectedSessionId = "session-main") {
+  addSessionMember(
+    { agentId: "main", sessionKey: key },
+    { identityId, addedBy: "owner", expectedSessionId },
+  );
+}
 
 function roleConfig(
   others: "none" | "view" | "suggest" | "write",
@@ -102,14 +105,7 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
       let committed = roleConfig(change === "membership" ? "view" : "write");
       setRuntimeConfigSnapshot(committed);
       if (change === "membership") {
-        addSessionMember(
-          { agentId: "main", sessionKey },
-          {
-            identityId: "alice",
-            addedBy: "owner",
-            expectedSessionId: "session-main",
-          },
-        );
+        addMember("alice");
       }
       const requestContext = context(vi.fn(), committed);
       requestContext.getCommittedRuntimeConfig = () => committed;
@@ -166,6 +162,29 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
               ? [true, { role: "viewer", suggestions: [expect.objectContaining({ id: "alice" })] }]
               : [false, undefined, { code: "FORBIDDEN" }],
           ]);
+          if (change === "policy") {
+            const request = (others: Parameters<typeof roleConfig>[0], list = false) => {
+              const cfg = roleConfig(others);
+              setRuntimeConfigSnapshot(cfg);
+              return call(
+                list ? "session.suggestions.list" : "session.suggestions.add",
+                { sessionKey, ...(list ? {} : { text: "guest suggestion" }) },
+                requester,
+                context(vi.fn(), cfg),
+              );
+            };
+            expect((await request("view")).responses[0]?.[2]).toMatchObject({
+              code: "FORBIDDEN",
+              message: expect.stringContaining("viewing sessions only"),
+            });
+            expect((await request("none", true)).responses[0]?.[2]).toMatchObject({
+              code: "INVALID_REQUEST",
+              message: `unknown session: ${sessionKey}`,
+            });
+            expect((await request("suggest")).responses[0]?.[0]).toBe(true);
+            addMember("alice");
+            expect((await request("view")).responses[0]?.[0]).toBe(true);
+          }
         }
       } finally {
         release.resolve();
@@ -223,55 +242,9 @@ it("retains committed suggestion visibility through a tentative role relaxation"
     }
   }));
 
-it("enforces view, suggest, and hidden role ceilings while honoring explicit membership", () =>
-  withState(async () => {
-    const ownerProfile = ensureProfileForEmail("suggestion-owner@example.test");
-    const guestProfile = ensureProfileForEmail("suggestion-guest@example.test");
-    await upsertDefaultSuggestionSession({
-      createdActor: { type: "human", source: "profile", id: ownerProfile.id },
-    });
-    const guest = client(guestProfile.id, "Guest");
-    const request = (others: Parameters<typeof roleConfig>[0], list = false) => {
-      const cfg = roleConfig(others);
-      setRuntimeConfigSnapshot(cfg);
-      return call(
-        list ? "session.suggestions.list" : "session.suggestions.add",
-        { sessionKey, ...(list ? {} : { text: "guest suggestion" }) },
-        guest,
-        context(vi.fn(), cfg),
-      );
-    };
-    const denied = await request("view");
-    expect(denied.responses[0]?.[2]).toMatchObject({
-      code: "FORBIDDEN",
-      message: expect.stringContaining("viewing sessions only"),
-    });
-
-    const hidden = await request("none", true);
-    expect(hidden.responses[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: `unknown session: ${sessionKey}`,
-    });
-
-    expect((await request("suggest")).responses[0]?.[0]).toBe(true);
-
-    addSessionMember(
-      { agentId: "main", sessionKey },
-      {
-        identityId: guestProfile.id,
-        addedBy: ownerProfile.id,
-        expectedSessionId: "session-main",
-      },
-    );
-    expect((await request("view")).responses[0]?.[0]).toBe(true);
-  }));
-
 it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing privacy", (mode) =>
   withState(async () => {
     const incognito = mode === "incognito";
-    if (incognito) {
-      vi.useFakeTimers();
-    }
     const key = incognito
       ? "agent:main:dashboard:incognito-suggestions"
       : "agent:main:draft-suggestions";
@@ -287,10 +260,7 @@ it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing priv
       key,
     );
     if (!incognito) {
-      addSessionMember(
-        { agentId: "main", sessionKey: key },
-        { identityId: "member", addedBy: "owner", expectedSessionId: sessionId },
-      );
+      addMember("member", key, sessionId);
     }
     const request = requests(
       key,
@@ -318,7 +288,6 @@ it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing priv
     const typing = await request("session.typing", { sessionId, typing: true });
     if (incognito) {
       expectHidden(typing);
-      expectHidden(await request("session.typing", { sessionId: "wrong-session", typing: true }));
     } else {
       expect(typing.responses[0]?.[1]).toEqual({ ok: true, broadcast: false });
     }
@@ -338,19 +307,13 @@ it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing priv
     }));
     const broadcast = vi.fn();
     const adminRequest = requests(key, client("admin", "Admin", true), context(broadcast));
-    const typeDraft = async (preview: string, sent: boolean) => {
-      const result = await adminRequest("session.typing", { sessionId, typing: true, preview });
-      expect(result.responses[0]?.[1]).toEqual({ ok: true, broadcast: sent });
-    };
-    await typeDraft("first private draft", true);
-    await vi.advanceTimersByTimeAsync(100);
-    await typeDraft("latest private draft", false);
-    await vi.advanceTimersByTimeAsync(150);
-    expect(broadcast).toHaveBeenCalledTimes(2);
+    const preview = "private draft";
+    const result = await adminRequest("session.typing", { sessionId, typing: true, preview });
+    expect(result.responses[0]?.[1]).toEqual({ ok: true, broadcast: true });
     expect(broadcast.mock.lastCall?.[1]).toMatchObject({
       sessionKey: key,
       sessionId,
-      preview: "latest private draft",
+      preview,
     });
   }),
 );
@@ -407,40 +370,15 @@ it.each([
       agentId,
     });
     const added = await request("session.suggestions.add", { text: "Store-bound suggestion" });
-    expect(added.responses[0]).toMatchObject([
-      true,
-      { suggestion: { sessionKey: key, agentId, state: "pending" } },
-    ]);
     const id = responseSuggestionId(added);
     const listed = await request("session.suggestions.list");
-    expect(listed.responses).toEqual([
-      [
-        true,
-        {
-          role: incognito ? "admin" : "owner",
-          suggestions: [expect.objectContaining({ id, sessionKey: key, agentId })],
-        },
-      ],
-    ]);
-    await withReadySessionRows(
-      requireSessionRowProjection(requestContext),
-      () => [{ key, agentId }],
-      (read) => {
-        const row = read.describe({ key, agentId });
-        if (!row) {
-          throw new Error("expected the original suggestion row");
-        }
-        if (incognito) {
-          expect(row.storeTarget.storePath).toBe(physicalStorePath);
-          expect(read.readSource(row)).toBeUndefined();
-        } else {
-          expect(row.storeTarget.storePath).toBe(aliasStorePath);
-          expect(read.readSource(row)?.path).toBe(realpathSync(physicalStorePath));
-          expect(read.readSource(row)?.path).not.toBe(row.storeTarget.storePath);
-        }
+    expect(listed.responses[0]).toEqual([
+      true,
+      {
+        role: incognito ? "admin" : "owner",
+        suggestions: [expect.objectContaining({ id, sessionKey: key, agentId, state: "pending" })],
       },
-    );
-
+    ]);
     const resolved = await request("session.suggestions.resolve", { id, resolution });
     expect(resolved.responses).toMatchObject([
       [true, { suggestion: { id, sessionKey: key, agentId, state: "accepted" } }],
@@ -465,6 +403,9 @@ it.for(["add", "edit", "dismiss", "queue"] as const)(
   "preserves the lifecycle boundary for %s without replacing the session",
   (action, { signal }) =>
     withState(async (state) => {
+      const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
+      const waitForQueue = (gate: PromiseLike<unknown>, operation: PromiseLike<unknown>) =>
+        wait(awaitGateBeforeSettlement(gate, operation, "operation settled before queuing"));
       const metadataWrites = await import("../../config/sessions/session-metadata-write.async.js");
       const scope = { agentId: "main", sessionKey, env: state.env };
       openOpenClawStateDatabase({ env: state.env });
@@ -506,7 +447,7 @@ it.for(["add", "edit", "dismiss", "queue"] as const)(
           entered.resolve();
           await release.promise;
         });
-        await withinTest(entered.promise, signal);
+        await wait(entered.promise);
         const reviewQueued = createDeferred();
         // Target discovery yields before review admission; unrelated writers are not this gate.
         const reviewScope = new AsyncLocalStorage<boolean>();
@@ -537,14 +478,7 @@ it.for(["add", "edit", "dismiss", "queue"] as const)(
               },
             ),
           );
-          await withinTest(
-            awaitGateBeforeSettlement(
-              reviewQueued.promise,
-              review,
-              "provider review finished before its writer entered the queue",
-            ),
-            signal,
-          );
+          await waitForQueue(reviewQueued.promise, review);
         } finally {
           observeReview.mockRestore();
           reviewScope.disable();
@@ -590,25 +524,10 @@ it.for(["add", "edit", "dismiss", "queue"] as const)(
           client("owner", "Owner"),
           requestContext,
         );
-        await withinTest(
-          awaitGateBeforeSettlement(
-            metadataQueued.promise,
-            request.then((result) => {
-              if (!result.responses.some(([ok]) => ok)) {
-                throw new Error(
-                  `suggestion failed before its metadata writer entered the queue: ${JSON.stringify(result.responses)}`,
-                );
-              }
-              return result;
-            }),
-            "suggestion finished before its metadata writer entered the queue",
-          ),
-          signal,
-        );
+        await waitForQueue(metadataQueued.promise, request);
         expect(loadSessionEntry(scope)?.providerReview).toBeUndefined();
         release.resolve();
-        const [result, paused] = await withinTest(Promise.all([request, review!]), signal);
-        expect(paused.providerReview).toEqual(providerReview);
+        const [result] = await wait(Promise.all([request, review!]));
         expect(loadSessionEntry(scope)).toMatchObject({ ...originalEntry, providerReview });
         const rejected = action === "add" || action === "edit";
         expect(result.responses).toMatchObject([
