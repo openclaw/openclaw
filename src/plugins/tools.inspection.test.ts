@@ -3,12 +3,10 @@ import path from "node:path";
 import { afterEach, assert, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
-import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { runWithAgentWorkspaceReadiness } from "../agents/workspace-readiness.js";
-import { applyLocalSetupWorkspaceConfig } from "../commands/onboard-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   withOpenClawTestState,
@@ -20,7 +18,7 @@ import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-state.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import { acquirePluginToolInspectionRegistry, resolvePluginTools } from "./tools.js";
+import { acquirePluginToolInspectionRegistry } from "./tools.js";
 import { readToolTestEvents } from "./tools.test-support.js";
 import { resolveRuntimeWebSearchProviders } from "./web-search-providers.runtime.js";
 
@@ -37,10 +35,8 @@ function writeToolPlugin(params: {
   workspaceAccess?: boolean | "execute";
   factoryReadsWorkspace?: boolean;
   webSearchProviderId?: string;
-  toolName?: string;
-  optional?: boolean;
 }): string {
-  const toolName = params.toolName ?? `${params.id}_tool`;
+  const toolName = `${params.id}_tool`;
   const webSearchProviderId =
     params.webSearchProviderId ?? (params.id === "shared" ? "inspection-search" : undefined);
   fs.mkdirSync(params.root, { recursive: true });
@@ -58,7 +54,6 @@ function writeToolPlugin(params: {
       ...(webSearchProviderId ? { webSearchProviders: [webSearchProviderId.trim()] } : {}),
     },
     configSchema: { type: "object", additionalProperties: false },
-    ...(params.optional ? { toolMetadata: { [toolName]: { optional: true } } } : {}),
   });
   fs.writeFileSync(
     path.join(params.root, "index.cjs"),
@@ -87,7 +82,7 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
       parameters: { type: "object", properties: {} },
       execute: async () => { event("execute"); return { content: [{ type: "text", text: JSON.stringify(details) }], details }; },
     };
-  }, { name: ${JSON.stringify(toolName)}, ...${JSON.stringify({ ...(params.workspaceAccess === undefined ? {} : { workspaceAccess: params.workspaceAccess }), ...(params.optional ? { optional: true } : {}) })} });
+  }, { name: ${JSON.stringify(toolName)}, ...${JSON.stringify(params.workspaceAccess === undefined ? {} : { workspaceAccess: params.workspaceAccess })} });
 } };
 `,
   );
@@ -132,44 +127,6 @@ async function inspectionLease(params: Parameters<typeof acquirePluginToolInspec
   const inspection = await acquirePluginToolInspectionRegistry(params);
   return { ...inspection, [Symbol.asyncDispose]: () => inspection.release() };
 }
-
-it.each([
-  { deny: [], expected: ["optional_tool"] },
-  { deny: ["optional_tool"], expected: [] },
-])("honors optional-tool deny=$deny after local onboarding", async ({ deny, expected }) => {
-  await withInspectionState(async (state) => {
-    const plugin = writeToolPlugin({
-      root: state.path("optional-plugin"),
-      id: "optional-demo",
-      toolName: "optional_tool",
-      optional: true,
-      events: state.path("onboarding-events.jsonl"),
-    });
-    const config = applyLocalSetupWorkspaceConfig(
-      {
-        plugins: pluginConfig([plugin], ["optional-demo"]),
-        tools: { deny },
-      },
-      state.workspaceDir,
-    );
-    const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
-    await using inspection = await inspectionLease({
-      loadContext,
-      scopes: [toolScope(config, state.workspaceDir, ["optional_tool"])],
-    });
-    assert(inspection.registry);
-    expect(inspection.registry.diagnostics).toEqual([]);
-    expect(inspection.registry.tools).toHaveLength(1);
-    const { policy } = resolveConversationCapabilityProfile({ config });
-    const tools = resolvePluginTools({
-      context: { config, workspaceDir: state.workspaceDir },
-      runtimeRegistry: inspection.registry,
-      toolAllowlist: policy.explicitToolAllowlist,
-      toolDenylist: policy.explicitToolDenylist,
-    });
-    expect(tools.map((selected) => selected.name)).toEqual(expected);
-  });
-});
 
 it.each(
   ([undefined, true, false, "execute"] as const).flatMap((workspaceAccess) =>

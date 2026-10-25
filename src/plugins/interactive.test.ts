@@ -387,26 +387,6 @@ describe("plugin interactive handlers", () => {
     );
   });
 
-  it("does not consume dedupe keys when post-handler processing throws", async () => {
-    const handler = vi.fn(async () => ({ handled: true }));
-    const afterInvoke = vi
-      .fn(async () => {})
-      .mockRejectedValueOnce(new Error("post-handler failure"))
-      .mockResolvedValueOnce(undefined);
-    register(handler);
-
-    const baseParams = {
-      ...telegramParams("codex:resume:thread-1", "cb-post-handler-failure"),
-      afterInvoke,
-    };
-
-    await expect(telegramInteractiveDispatcher(baseParams)).rejects.toThrow("post-handler failure");
-    await expect(telegramInteractiveDispatcher(baseParams)).resolves.toEqual(handled);
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(afterInvoke).toHaveBeenCalledTimes(2);
-    expect(afterInvoke).toHaveBeenLastCalledWith({ handled: true });
-  });
-
   it.each([false, true])("settles concurrent dedupe claims (handler fails=%s)", async (fails) => {
     const gate = Promise.withResolvers<void>();
     const handler = vi

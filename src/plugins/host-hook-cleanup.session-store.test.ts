@@ -77,15 +77,6 @@ describe("plugin host cleanup session stores", () => {
     harness: createOwnershipHarness(id),
   });
 
-  it("leaves entries unchanged when cleanup finds no plugin-owned state", async () => {
-    const { clean, read, write } = store();
-    await write("agent:main:main", "session-id");
-    const before = read("agent:main:main");
-
-    await clean({ pluginId: "noop-plugin" }, 0);
-    expect(read("agent:main:main")).toEqual(before);
-  });
-
   it("cleans healthy agent state without opening a refused agent store", async () => {
     const { storePath, read, write } = store(undefined, "main");
     const refusedStore = path.join(stateDir, "cleaner.sqlite");
@@ -295,18 +286,6 @@ describe("plugin host cleanup session stores", () => {
     },
   );
 
-  it("can defer persistent session-state cleanup to an atomic owner", async () => {
-    const { clean, read, write } = store();
-    const pluginExtensions = { test: { state: { active: true } } };
-    await write("agent:main:main", "session-id", { pluginExtensions });
-
-    await clean(
-      { reason: "reset", sessionKey: "agent:main:main", skipPersistentSessionState: true },
-      0,
-    );
-    expect(read("agent:main:main")?.pluginExtensions).toEqual(pluginExtensions);
-  });
-
   it.each([
     ["matrix:group", "!Room:server", "!room:server", "upper"],
     ["matrix:channel", "!Room:server", "!room:server", "same"],
@@ -393,6 +372,12 @@ describe("plugin host cleanup session stores", () => {
     const work = store(sharedStorePath, "work");
     await main.write("agent:main:main", "shared-session", { pluginExtensions: cleanupState });
     await work.write("agent:work:main", "shared-session", { pluginExtensions: cleanupState });
+    const before = main.read("agent:main:main");
+    await main.clean(
+      { reason: "reset", sessionKey: "agent:main:main", skipPersistentSessionState: true },
+      0,
+    );
+    expect(main.read("agent:main:main")).toEqual(before);
 
     await main.clean(
       {
@@ -454,5 +439,8 @@ describe("plugin host cleanup session stores", () => {
     }
     expect(read("agent:main:other")?.pluginExtensions).toBeUndefined();
     expect(read("agent:main:ordinary")?.pluginExtensions).toBeUndefined();
+    const before = read("agent:main:ordinary");
+    await clean({ registry, pluginId: "fixture" }, 0);
+    expect(read("agent:main:ordinary")).toEqual(before);
   });
 });

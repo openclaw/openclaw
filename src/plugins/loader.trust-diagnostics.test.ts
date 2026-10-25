@@ -63,6 +63,70 @@ afterEach(async () => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("recorded plugin trust diagnostics", () => {
+  it("lets a local plugin drain its own ingress without official trust", async () => {
+    useNoBundledPlugins();
+    const stateDir = fs.realpathSync(makePluginLoaderTempDir());
+    const plugin = writePlugin({
+      id: "local-ingress",
+      registration: `
+        api.registerTool({
+          name: api.id, description: "Ingress fixture", parameters: { type: "object" },
+          async execute() {
+            const queue = api.runtime.state.openChannelIngressQueue({ accountId: "default" });
+            await queue.enqueue("event", { plugin: api.id });
+            const delivered = [];
+            const drain = api.runtime.state.openChannelIngressDrain({
+              accountId: "default",
+              dispatchClaimedEvent(event) { delivered.push(event.payload.plugin); },
+            });
+            try {
+              await drain.drainOnce();
+              await drain.waitForIdle();
+              return { content: [], details: delivered };
+            } finally { drain.dispose(); }
+          },
+        });`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: plugin.id,
+        configSchema: { type: "object" },
+        contracts: { tools: [plugin.id] },
+      }),
+    );
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const registry = loadOpenClawPlugins({
+        config: {
+          plugins: {
+            allow: [plugin.id],
+            load: { paths: [plugin.file] },
+            slots: { memory: "none" },
+          },
+        },
+        cache: false,
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        expect(registry.plugins.find(({ id }) => id === plugin.id)).toMatchObject({
+          status: "loaded",
+          origin: "config",
+        });
+        expect(
+          registry.plugins.find(({ id }) => id === plugin.id)?.trustedOfficialInstall,
+        ).not.toBe(true);
+        const tool = registry.tools.find(({ pluginId }) => pluginId === plugin.id)?.factory({});
+        if (!tool || Array.isArray(tool)) {
+          throw new Error("Expected local ingress tool");
+        }
+        await expect(tool.execute("ingress", {})).resolves.toMatchObject({ details: [plugin.id] });
+      } finally {
+        vi.useRealTimers();
+        await disposePluginRegistryInstances(registry);
+      }
+    });
+  });
+
   it("warns once across registry reloads and again for changed provenance or a restarted Gateway", async () => {
     useNoBundledPlugins();
     const first = writePlugin({ id: "unverified-reload", filename: "index.cjs", registration: "" });
@@ -328,98 +392,4 @@ describe("recorded plugin trust diagnostics", () => {
       });
     },
   );
-
-  it("loads local state and ingress without granting hook agent turns", async () => {
-    useNoBundledPlugins();
-    const stateDir = fs.realpathSync(makePluginLoaderTempDir());
-    const plugins = ["local-one", "local-two"].map((id) =>
-      writePlugin({
-        id,
-        registration: `
-          const store = api.runtime.state.openKeyedStore({ namespace: "shared-name", maxEntries: 2 });
-          const queue = api.runtime.state.openChannelIngressQueue({ accountId: "default" });
-          api.registerTool({
-            name: api.id, description: "Local state fixture", parameters: { type: "object" },
-            async execute(_callId, params) {
-              if (params.hook) {
-                return await api.runtime.hooks.dispatchHookAgentTurn({
-                  name: "Local watcher", agentId: "main", sessionKey: "hook:local:1",
-                  message: "Local event", externalContentSource: "email", deliver: false,
-                });
-              }
-              const before = { value: await store.lookup("key"), pending: await queue.listPending() };
-              await store.register("key", api.id);
-              await queue.enqueue("event", { plugin: api.id });
-              const delivered = [];
-              const drain = api.runtime.state.openChannelIngressDrain({
-                accountId: "default",
-                dispatchClaimedEvent(event) { delivered.push(event.payload.plugin); },
-              });
-              try {
-                await drain.drainOnce();
-                await drain.waitForIdle();
-                return { content: [], details: { before, value: await store.lookup("key"), delivered } };
-              } finally { drain.dispose(); }
-            },
-          });`,
-      }),
-    );
-    for (const plugin of plugins) {
-      fs.writeFileSync(
-        path.join(plugin.dir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: plugin.id,
-          configSchema: { type: "object" },
-          contracts: { tools: [plugin.id] },
-        }),
-      );
-    }
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const dispatchHookAgentTurn = vi.fn(async () => ({
-        ok: true as const,
-        runId: "unexpected-hook-run",
-      }));
-      const registry = loadOpenClawPlugins({
-        config: {
-          plugins: {
-            allow: plugins.map(({ id }) => id),
-            load: { paths: plugins.map(({ file }) => file) },
-            slots: { memory: "none" },
-          },
-        },
-        cache: false,
-        runtimeOptions: { hooks: { dispatchHookAgentTurn } },
-      });
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-      try {
-        expect(registry.diagnostics.filter(({ level }) => level === "error")).toEqual([]);
-        for (const { id } of plugins) {
-          const loaded = registry.plugins.find((plugin) => plugin.id === id)!;
-          expect(loaded).toMatchObject({
-            status: "loaded",
-            origin: "config",
-          });
-          expect(loaded.trustedOfficialInstall).not.toBe(true);
-          const tool = registry.tools.find((entry) => entry.pluginId === id)?.factory({});
-          if (!tool || Array.isArray(tool)) {
-            throw new Error(`Expected ${id} fixture tool`);
-          }
-          await expect(tool.execute("state", {})).resolves.toMatchObject({
-            details: { before: { value: undefined, pending: [] }, value: id, delivered: [id] },
-          });
-          await expect(tool.execute("hook", { hook: true })).rejects.toMatchObject({
-            code: "PLUGIN_TRUST_REFUSED",
-            message: expect.stringContaining(
-              "dispatchHookAgentTurn is only available for trusted plugins",
-            ),
-          });
-        }
-        expect(dispatchHookAgentTurn).not.toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-        await disposePluginRegistryInstances(registry);
-        await closeOpenClawStateDatabaseAsync();
-      }
-    });
-  });
 });

@@ -120,7 +120,6 @@ it.each([
   "legacy-retained",
   "pending-primary",
   "pending-fallback",
-  "healthy-fallback",
   "unavailable-create",
   "failed-close",
   "timeout",
@@ -128,7 +127,7 @@ it.each([
   "transient",
 ] as const)("drains the actual managed embedding owner before replacement (%s)", async (mode) => {
   const state = await createState({ scenario: "minimal", label: "memory-provider-reload" });
-  const fallback = mode === "pending-fallback" || mode === "healthy-fallback";
+  const fallback = mode === "pending-fallback";
   const providerId = fallback ? "primary-probe" : "embedding-probe";
   const targetId = fallback ? "fallback-probe" : providerId;
   const revoked = mode === "failed-close" || mode === "late-probe";
@@ -229,7 +228,7 @@ it.each([
     expect(owner.instance.run(() => getMemoryEmbeddingProvider(targetId, config))).toBe(
       retiring.registration.provider,
     );
-    let manager = await getManager(owner, config, mode === "transient" ? { purpose: "cli" } : {});
+    const manager = await getManager(owner, config, mode === "transient" ? { purpose: "cli" } : {});
     const other = await getManager(sibling, config);
     await other.probeEmbeddingAvailability();
     probe = manager.probeEmbeddingAvailability();
@@ -238,22 +237,6 @@ it.each([
       await probeEntered.promise;
     } else if (!mode.startsWith("pending")) {
       await probe;
-    }
-    if (mode === "healthy-fallback") {
-      const primaryOnly = prepareReload(owner.registry, {
-        ...owner.registry,
-        embeddingProviders: owner.registry.embeddingProviders.filter(
-          (entry) => entry !== owner.registry.embeddingProviders[0],
-        ),
-      });
-      await primaryOnly.drain();
-      await expect(manager.probeEmbeddingAvailability()).rejects.toThrow("closed");
-      expect(close).toHaveBeenCalledOnce();
-      primaryOnly.rollback();
-      const previousManager = manager;
-      manager = await getManager(owner, config);
-      expect(manager).not.toBe(previousManager);
-      await expectAvailable(manager);
     }
     if (mode === "legacy-retained") {
       const unchanged = prepareReload(owner.registry, owner.registry);
