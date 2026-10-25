@@ -15,6 +15,7 @@ vi.mock("@lydell/node-pty", () => ({ spawn: nodePtySpawn }));
 
 type TerminalPtyHandle = Awaited<ReturnType<NonNullable<Parameters<typeof runNodePtyCommand>[2]>>>;
 const command = { file: "/usr/bin/codex", args: [], cols: 80, rows: 24 };
+const resize = { kind: "resize", cols: 100, rows: 30 };
 function createPtyFixture() {
   let onData: ((chunk: string) => void) | undefined;
   let onExit: ((event: { exitCode: number; signal?: number }) => void) | undefined;
@@ -48,6 +49,10 @@ function createPtyFixture() {
     data: (chunk: string) => onData?.(chunk),
     exit: (event: { exitCode: number; signal?: number }) => onExit?.(event),
     input: (payload: object) => onInput?.(JSON.stringify(payload)),
+    sendInputs: () => {
+      onInput?.(JSON.stringify({ kind: "data", data: "keys" }));
+      onInput?.(JSON.stringify(resize));
+    },
     ready: () => vi.waitFor(() => expect(onInput).toBeDefined()),
     run: (
       params: Partial<Parameters<typeof runNodePtyCommand>[0]> = {},
@@ -68,13 +73,10 @@ it("validates closed resume params", () => {
     }
     return value;
   };
-  expect(decodeNodePtyResumeParams('{"threadId":"id","cols":80,"rows":24}', validate)).toEqual({
-    threadId: "id",
-    cols: 80,
-    rows: 24,
-  });
+  const params = { threadId: "id", cols: 80, rows: 24 };
+  expect(decodeNodePtyResumeParams(JSON.stringify(params), validate)).toEqual(params);
   expect(() =>
-    decodeNodePtyResumeParams('{"threadId":"id","cols":80,"rows":24,"argv":["sh"]}', validate),
+    decodeNodePtyResumeParams(JSON.stringify({ ...params, argv: ["sh"] }), validate),
   ).toThrow("unknown terminal resume parameter: argv");
 });
 
@@ -91,10 +93,9 @@ it.each([{ rows: 2001 }, { initialMessage: "x".repeat(16385) }])(
 
 it("refuses a selected node directory removed after decoding instead of falling home", async () => {
   const cwd = tempDirs.make("native-start-");
-  const params = decodeNodePtyStartParams(
-    JSON.stringify({ cwd, initialMessage: "--help", cols: 100, rows: 30 }),
-  );
-  expect(params).toEqual({ cwd, initialMessage: "--help", cols: 100, rows: 30 });
+  const input = { cwd, initialMessage: "--help", cols: 100, rows: 30 };
+  const params = decodeNodePtyStartParams(JSON.stringify(input));
+  expect(params).toEqual(input);
   await fs.rm(cwd, { recursive: true });
   const spawn = vi.fn();
   await expect(
@@ -136,8 +137,8 @@ it.each(["source", "abort"] as const)(
 );
 
 it("relays output, data, resize, abort, and exit", async () => {
-  const { pty, io, controller, data, input, exit, run } = createPtyFixture();
-  const spawn = vi.fn(async () => pty);
+  const { pty, io, controller, data, input, sendInputs, exit, run } = createPtyFixture();
+  const spawn = vi.fn<NonNullable<Parameters<typeof runNodePtyCommand>[2]>>(async () => pty);
   const result = run(
     {
       args: ["resume", "id"],
@@ -149,10 +150,7 @@ it("relays output, data, resize, abort, and exit", async () => {
     spawn,
   );
   await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
-  const spawnCalls = spawn.mock.calls as unknown as Array<
-    [{ cwd?: string; env?: Record<string, string> }]
-  >;
-  expect(spawnCalls[0]?.[0]).toMatchObject({
+  expect(spawn.mock.calls[0]?.[0]).toMatchObject({
     cwd: os.homedir(),
     env: {
       PATH: "/shell/bin:/usr/bin",
@@ -168,15 +166,13 @@ it("relays output, data, resize, abort, and exit", async () => {
   input({ kind: "resize", cols: 0, rows: 30 });
   input({ kind: "resize", cols: 80, rows: 2001 });
   expect(pty.resize).not.toHaveBeenCalled();
-  input({ kind: "data", data: "keys" });
-  input({ kind: "resize", cols: 100, rows: 30 });
+  sendInputs();
   expect(pty.write).toHaveBeenCalledWith("keys");
   expect(pty.resize).toHaveBeenCalledWith(100, 30);
 
   controller.abort();
   expect(pty.kill).toHaveBeenCalledOnce();
-  input({ kind: "data", data: "after abort" });
-  input({ kind: "resize", cols: 120, rows: 40 });
+  sendInputs();
   expect(pty.write).toHaveBeenCalledTimes(1);
   expect(pty.resize).toHaveBeenCalledTimes(1);
   exit({ exitCode: 130, signal: 15 });
@@ -184,30 +180,22 @@ it("relays output, data, resize, abort, and exit", async () => {
 });
 
 it("ignores input after exit without touching a dead PTY", async () => {
-  const { pty, input, exit, ready, run } = createPtyFixture();
-  pty.write.mockImplementation(() => {
-    throw new Error("dead PTY write");
-  });
-  pty.resize.mockImplementation(() => {
-    throw new Error("dead PTY resize");
-  });
-  const result = run(
-    {},
-    vi.fn(async () => pty),
-  );
+  const { pty, sendInputs, exit, ready, run } = createPtyFixture();
+  for (const operation of [pty.write, pty.resize]) {
+    operation.mockImplementation(() => {
+      throw new Error("dead PTY");
+    });
+  }
+  const result = run({}, async () => pty);
   await ready();
-
-  expect(() => input({ kind: "data", data: "racing" })).not.toThrow();
-  expect(() => input({ kind: "resize", cols: 100, rows: 30 })).not.toThrow();
+  expect(sendInputs).not.toThrow();
   expect(pty.write).toHaveBeenCalledOnce();
   expect(pty.resize).toHaveBeenCalledOnce();
   pty.write.mockClear();
   pty.resize.mockClear();
 
   exit({ exitCode: 0 });
-  expect(() => input({ kind: "data", data: "late" })).not.toThrow();
-  expect(() => input({ kind: "resize", cols: 100, rows: 30 })).not.toThrow();
-
+  expect(sendInputs).not.toThrow();
   await expect(result).resolves.toEqual({ exitCode: 0 });
   expect(pty.write).not.toHaveBeenCalled();
   expect(pty.resize).not.toHaveBeenCalled();

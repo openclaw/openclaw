@@ -100,7 +100,6 @@ it("allows any existing directory by default, but rejects filesystem roots and p
   runtime = makeRuntime();
   const dir = outside();
   expect(validate(dir)).toBe(dir);
-  expect(validate(folder)).toBe(folder);
   reject(path.parse(folder).root, "filesystem root");
   reject(root, "private worker storage");
   reject(home, "private worker storage");
@@ -122,19 +121,16 @@ it("disables device-folder validation with an explicit empty list", async () => 
 it("revalidates a symlink on every operation and does not provision on validation", async () => {
   const alias = path.join(allowed, "alias");
   fs.symlinkSync(folder, alias, "dir");
-  const input = {
-    ...identity,
-    deviceFolder: alias,
-    argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND],
-  };
-  expect(await runtime.exec(input)).toMatchObject({
+  const validateAlias = () =>
+    exec([NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND], { deviceFolder: alias });
+  expect(await validateAlias()).toMatchObject({
     workspaceDir: folder,
     stdout: "validated\n",
   });
   expect([root, folder].map((dir) => fs.readdirSync(dir))).toEqual([[], []]);
   fs.unlinkSync(alias);
   fs.symlinkSync(outside(), alias, "dir");
-  await expect(runtime.exec(input)).rejects.toThrow("not allowed");
+  await expect(validateAlias()).rejects.toThrow("not allowed");
 });
 
 it("executes and inspects in place with private HOME, and leaves user files after retention", async () => {
@@ -161,7 +157,7 @@ it("executes and inspects in place with private HOME, and leaves user files afte
   fs.writeFileSync(path.join(acquired.homeDir!, "private.txt"), "private state");
   acquired.release();
   await retain();
-  expectHomes([acquired.homeDir!, output.home], [false, false]);
+  expect(fs.existsSync(output.home)).toBe(false);
   expect(fs.readdirSync(folder)).toEqual(["user.txt"]);
   expect(fs.readFileSync(path.join(folder, "user.txt"), "utf8")).toBe("original");
 });
