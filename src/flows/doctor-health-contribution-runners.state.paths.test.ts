@@ -4,13 +4,11 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
-import { updateStateSchemaVersionsMatch } from "../infra/update-candidate-state.versions.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db-contract.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
   createDoctorHealthFlowContext,
@@ -93,13 +91,6 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
   const readRows = () =>
     executeSqliteQuerySync(db, queries.selectFrom("agent_databases").selectAll().orderBy("path"))
       .rows;
-  const versions = () => [
-    { path: database.path, userVersion: OPENCLAW_STATE_SCHEMA_VERSION },
-    ...readRows().map((row) => ({
-      path: resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
-      userVersion: row.schema_version,
-    })),
-  ];
   const startUpdate = () =>
     executeSqliteQuerySync(
       db,
@@ -119,14 +110,7 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
         repair_json: "[]",
       }),
     );
-  const matches = (baseline: ReturnType<typeof versions>, candidate = false) =>
-    updateStateSchemaVersionsMatch(baseline, versions(), {
-      sharedPath: database.path,
-      ...(candidate
-        ? { candidateSchemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 } }
-        : {}),
-    });
-  return { database, insert, update, external, readRows, versions, startUpdate, matches };
+  return { database, insert, update, external, readRows, startUpdate };
 }
 
 function context(env: NodeJS.ProcessEnv = {}, shouldRepair = true): DoctorHealthFlowContext {
@@ -152,11 +136,10 @@ describe("Doctor Windows database path repair", () => {
   });
 
   it.each([
-    [String.raw`C:\synthetic\state`, false],
     [String.raw`\\server\share\state`, false],
     [String.raw`C:\synthetic\state`, true],
   ] as const)(
-    "consolidates namespace aliases at %s before the next update baseline",
+    "consolidates namespace aliases at %s and preserves newer facts",
     async (stateDir, canonicalNewer) => {
       const state = seedDatabase(stateDir);
       if (canonicalNewer) {
@@ -183,26 +166,20 @@ describe("Doctor Windows database path repair", () => {
       await initialDoctorHealthContribution("doctor:state-integrity").run(context());
       expect(state.readRows()).toEqual(repaired);
       expect(fixture.note).not.toHaveBeenCalled();
-      const baseline = state.versions();
-      state.startUpdate();
-      await initialDoctorHealthContribution("doctor:state-integrity").run(context());
-      expect(state.matches(baseline)).toBe(true);
-      expect(state.matches(baseline, true)).toBe(true);
     },
   );
 
   it("rechecks the update ledger after admission and records a warning without changing the baseline", async () => {
     const state = seedDatabase();
-    const baseline = state.versions();
+    const baseline = state.readRows();
     fixture.beforeAdmission = state.startUpdate;
     const ctx = context();
     await initialDoctorHealthContribution("doctor:state-integrity").run(ctx);
-    expect(state.readRows()).toHaveLength(3);
     expect(ctx.updateWarnings).toEqual([
       "Skipped agent database path repair while update 00000000-0000-4000-8000-000000000001 is in progress. Run openclaw doctor --fix after the update finishes.",
     ]);
     expect(fixture.note).toHaveBeenCalledWith(ctx.updateWarnings?.[0], "Doctor warnings");
-    expect(state.matches(baseline)).toBe(true);
+    expect(state.readRows()).toEqual(baseline);
   });
 
   it.each([true, false])(

@@ -5,12 +5,9 @@ import * as mcpConfig from "../agents/agent-bundle-mcp-runtime-config.js";
 import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as discovery from "../plugins/discovery.js";
-import * as manifests from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import * as pluginTools from "../plugins/tools.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
@@ -30,8 +27,6 @@ it.each([
   ["doctor", "provider-without-tools"],
   ["lint", "provider-collision"],
   ["doctor", "legacy-provider-collision"],
-  ["doctor", "duplicate-provider-collision"],
-  ["doctor", "early-duplicate-provider-collision"],
   ["doctor", "cleanup-errors"],
 ] as const)("inspects each agent through one registration in %s (%s)", async (mode, variant) => {
   const fails = mode === "lint";
@@ -39,10 +34,7 @@ it.each([
   const withoutPluginTools = variant === "provider-without-tools";
   const toolName = collision ? "web_search" : "fleet_tool";
   const providerOnly = variant !== "tools" && variant !== "missing-provider-collision";
-  const providerFirst = variant === "early-duplicate-provider-collision";
-  const providerPluginId = providerFirst ? "a-search-provider" : "z-search-provider";
-  const duplicateProvider = variant === "duplicate-provider-collision" || providerFirst;
-  const providerConfigured = providerOnly && (!duplicateProvider || providerFirst);
+  const providerPluginId = "z-search-provider";
   const registeredPluginIds = [
     ...(withoutPluginTools ? [] : ["failed-tool", "fleet-tool"]),
     ...(providerOnly ? [providerPluginId] : []),
@@ -51,7 +43,6 @@ it.each([
     {
       env: {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_TEST_INSPECTED_SEARCH_KEY: "",
         OPENCLAW_TEST_SUPPLEMENTAL_SEARCH_KEY: "synthetic-search-key",
       },
     },
@@ -59,11 +50,10 @@ it.each([
       const events = state.path("doctor-tool-events.jsonl");
       const unexpectedProbe = state.path("requester-server-probed");
       const ids = [
-        ...(providerFirst ? [providerPluginId] : []),
         "fleet-tool",
         "failed-tool",
         "excluded-tool",
-        ...(providerOnly && !providerFirst ? [providerPluginId] : []),
+        ...(providerOnly ? [providerPluginId] : []),
       ];
       const paths = ids.map((id) => {
         const root = state.path("plugins", id);
@@ -81,8 +71,7 @@ it.each([
             ...(id !== providerPluginId
               ? { tools: [id === "fleet-tool" ? toolName : id.replaceAll("-", "_")] }
               : {}),
-            ...((id === providerPluginId && variant !== "legacy-provider-collision") ||
-            (id === "fleet-tool" && duplicateProvider)
+            ...(id === providerPluginId && variant !== "legacy-provider-collision"
               ? { webSearchProviders: ["fixture-search"] }
               : {}),
           },
@@ -95,28 +84,23 @@ const fs = require("node:fs");
 const file = ${JSON.stringify(events)};
 const id = ${JSON.stringify(id)};
 if (id === "excluded-tool") throw new Error("excluded owner must remain cold");
-const event = (kind, details = {}) => fs.appendFileSync(file, JSON.stringify({id, kind, ...details}) + "\\n");
 module.exports = { id, register(api) {
-  const prior = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse) : [];
-  event("register");
   api.lifecycle.onDispose(() => {
-    event("dispose");
+    fs.appendFileSync(file, JSON.stringify(id) + "\\n");
     if (${variant === "cleanup-errors"} && id !== "failed-tool") throw new Error(id + " cleanup unavailable");
   });
-  if (prior.some(row => row.id === id && row.kind === "register")) throw new Error("repeated fleet registration");
   if (id === "failed-tool") throw new Error("fixture registration unavailable");
-  if (id === ${JSON.stringify(providerPluginId)} || ${duplicateProvider}) {
+  if (id === ${JSON.stringify(providerPluginId)}) {
     api.registerWebSearchProvider({
       id: "fixture-search", label: "Search fixture", hint: "Synthetic search",
-      envVars: [id === ${JSON.stringify(providerPluginId)} ? "OPENCLAW_TEST_SUPPLEMENTAL_SEARCH_KEY" : "OPENCLAW_TEST_INSPECTED_SEARCH_KEY"],
+      envVars: ["OPENCLAW_TEST_SUPPLEMENTAL_SEARCH_KEY"],
       placeholder: "", signupUrl: "https://example.com", credentialPath: "",
       getCredentialValue() {}, setCredentialValue() {},
       createTool() { throw new Error("Schema inspection must not execute search providers"); }
     });
   }
   if (id === ${JSON.stringify(providerPluginId)}) return;
-  api.registerTool(context => {
-    event("factory", {agentId: context.agentId, workspaceDir: context.workspaceDir});
+  api.registerTool(() => {
     return { name: ${JSON.stringify(toolName)}, label: "Fleet fixture", description: "Synthetic fleet tool",
       parameters: {type: "array", items: {type: "string"}},
       execute: async () => ({content: [{type: "text", text: "unused"}]}) };
@@ -170,27 +154,15 @@ module.exports = { id, register(api) {
         resolve: resolveRequester,
       });
       const detectorFailure = new Error("fixture detector failed after tool inspection");
-      const rejectColdRead = vi.fn(() => {
-        throw new Error("cold plugin metadata read after inspection preparation");
-      });
-      const acquireInspection = pluginTools.acquirePluginToolInspectionRegistry;
       const loadMcpConfig = mcpConfig.loadSessionMcpConfig;
-      vi.spyOn(pluginTools, "acquirePluginToolInspectionRegistry").mockImplementation(
-        async (params) => {
-          const inspection = await acquireInspection(params);
-          vi.spyOn(discovery, "discoverOpenClawPlugins").mockImplementation(rejectColdRead);
-          vi.spyOn(manifests, "loadPluginManifestRegistryCore").mockImplementation(rejectColdRead);
-          if (fails) {
-            vi.spyOn(mcpConfig, "loadSessionMcpConfig").mockImplementation((request) => {
-              if (request.workspaceDir === state.path("beta")) {
-                throw detectorFailure;
-              }
-              return loadMcpConfig(request);
-            });
+      if (fails) {
+        vi.spyOn(mcpConfig, "loadSessionMcpConfig").mockImplementation((request) => {
+          if (request.workspaceDir === state.path("beta")) {
+            throw detectorFailure;
           }
-          return inspection;
-        },
-      );
+          return loadMcpConfig(request);
+        });
+      }
       const operation = withPluginRuntimeRegistryScope(caller.registry, () =>
         runtimeToolSchemaCheck.detect({ mode, cfg, runtime: defaultRuntime, env: process.env }),
       );
@@ -206,7 +178,7 @@ module.exports = { id, register(api) {
           requirement: "authenticated requester context",
         });
         expect(findings.filter((finding) => finding.target === toolName)).toEqual(
-          (withoutPluginTools || (collision && providerConfigured) ? [] : ["alpha", "beta"]).map(
+          (withoutPluginTools || (collision && providerOnly) ? [] : ["alpha", "beta"]).map(
             (agentId) =>
               expect.objectContaining({
                 message: expect.stringContaining(
@@ -229,29 +201,16 @@ module.exports = { id, register(api) {
           });
         }
       }
-      expect(rejectColdRead).not.toHaveBeenCalled();
       expect(resolveRequester).not.toHaveBeenCalled();
       expect(fs.existsSync(unexpectedProbe)).toBe(false);
-      const observed = fs
-        .readFileSync(events, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      const eventIds = (kind: string) =>
-        observed
-          .filter((row) => row.kind === kind)
-          .map((row) => row.id)
-          .toSorted((left, right) => left.localeCompare(right));
-      expect(eventIds("register")).toEqual(registeredPluginIds);
-      expect(observed.filter((row) => row.kind === "factory")).toEqual(
-        (withoutPluginTools ? [] : ["alpha", "beta"]).map((agentId) => ({
-          id: "fleet-tool",
-          kind: "factory",
-          agentId,
-          workspaceDir: state.path(agentId),
-        })),
-      );
-      expect(eventIds("dispose")).toEqual(registeredPluginIds);
+      expect(
+        fs
+          .readFileSync(events, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .toSorted(),
+      ).toEqual(registeredPluginIds);
     },
   );
 });

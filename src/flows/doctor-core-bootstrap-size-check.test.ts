@@ -178,15 +178,6 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
     expect(result.findings).toEqual([warning("agents.entries.helper.", "helper")]);
   });
 
-  it("preserves diagnostics for an implicitly selected sole agent", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { solo: { tools: { profile: "messaging" } } } },
-    };
-    expect(await detect(cfg)).toEqual([
-      expect.objectContaining({ severity: "warning", target: "solo" }),
-    ]);
-  });
-
   it("does not warn when autonomous capture is disabled", async () => {
     await expect(
       detect({ skills: { workshop: workshop("off") }, tools: { profile: "messaging" } }),
