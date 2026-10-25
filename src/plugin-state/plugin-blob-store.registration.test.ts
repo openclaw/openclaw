@@ -22,15 +22,16 @@ it.each(["reject-new", "evict-oldest"] as const)(
       let statements = 0;
       for (const method of ["all", "get", "run"] as const) {
         const original = StatementSync.prototype[method];
-        vi.spyOn(StatementSync.prototype, method).mockImplementation(function (
-          this: StatementSync,
-          ...args
-        ) {
-          if (/plugin_blob_entries/iu.test(this.sourceSQL)) {
-            statements++;
-          }
-          return original.apply(this, args);
-        });
+        vi.spyOn(StatementSync.prototype, method).mockImplementation(
+          new Proxy(original, {
+            apply(target, receiver: StatementSync, args) {
+              if (/plugin_blob_entries/iu.test(receiver.sourceSQL)) {
+                statements++;
+              }
+              return Reflect.apply(target, receiver, args);
+            },
+          }),
+        );
       }
       const receipt = await store.registerIfAbsentWithReceipt("new", new Uint8Array([1, 2]), {
         version: 1,
