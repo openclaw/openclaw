@@ -19,13 +19,17 @@ const { note, agentIds, memory, artifacts, workspace } = vi.hoisted(() => ({
   workspace: { maybeRepairWorkspaceMemoryHealth: vi.fn(async () => undefined) },
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
+// mock-isolation: Keep agent discovery and directories inside the synthetic fixture.
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: agentIds,
   resolveAgentDir: (_cfg: OpenClawConfig, id: string) => `/tmp/${id}`,
   resolveAgentWorkspaceDir: (_cfg: OpenClawConfig, id: string) => `/tmp/${id}/workspace`,
 }));
+// mock-isolation: Exercise Doctor backend selection without starting a real memory runtime.
 vi.mock("../plugins/memory-runtime.js", () => memory);
+// mock-isolation: Supply artifact health results without reading or repairing real memory files.
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => artifacts);
+// mock-isolation: Observe repair delegation without mutating a real workspace.
 vi.mock("./doctor-workspace.js", () => workspace);
 import { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } from "./doctor-memory-recall.js";
 

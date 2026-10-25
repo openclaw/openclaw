@@ -55,6 +55,7 @@ function mockHarness(
   connect: () => unknown,
   status: () => unknown = vi.fn(),
 ) {
+  // mock-isolation: Own acquisition and cleanup failures without spawning real Gateway processes.
   vi.doMock("./gateway-e2e-harness.js", () => ({
     spawnGatewayInstance: spawn,
     stopGatewayInstance: (instance: { cleanup: () => Promise<void> }) => instance.cleanup(),

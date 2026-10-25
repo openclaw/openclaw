@@ -59,7 +59,7 @@ export function createNativeSource(
     disposed,
     state,
     read,
-    async close() {
+    close: async () => {
       await fixture.resources.release();
       if (database.isOpen) {
         database.close();
