@@ -55,6 +55,10 @@ function sql(statement: string) {
   return openOpenClawStateDatabase().db.prepare(statement);
 }
 
+function expectAliasCount(count: number) {
+  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({ count });
+}
+
 function observeFacts() {
   const observed = new Map<string, unknown>();
   const unsubscribe = workspaceStatePublication.subscribeFacts((change) => {
@@ -106,18 +110,12 @@ it("registers alias batches once and rolls back conflicts without publishing par
     );
   register([...aliases, aliases[0]!], 1000);
   register(aliases, 2000);
-  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({
-    count: 70,
-  });
-  for (const alias of aliases) {
-    expect(
-      sql("SELECT updated_at_ms FROM workspace_path_aliases WHERE alias_key = ?").get(
-        alias.workspaceKey,
-      ),
-    ).toEqual({
-      updated_at_ms: 1000,
-    });
-  }
+  expectAliasCount(70);
+  expect(sql("SELECT alias_key, updated_at_ms FROM workspace_path_aliases").all()).toEqual(
+    expect.arrayContaining(
+      aliases.map(({ workspaceKey }) => ({ alias_key: workspaceKey, updated_at_ms: 1000 })),
+    ),
+  );
   const missing = Array.from({ length: 65 }, (_, index) =>
     createWorkspaceStateIdentity(testState.path(`rollback-${index}`)),
   );
@@ -130,15 +128,13 @@ it("registers alias batches once and rolls back conflicts without publishing par
     ),
   ).toThrow("workspace path alias conflicts with canonical state");
   expect(observed.size).toBe(0);
-  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({
-    count: 70,
-  });
+  expectAliasCount(70);
 });
 
 it("replaces complete hash sets and removes aliased setup and attestation state", async () => {
   await seed();
   const alias = testState.path("receipt-workspace-link");
-  fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+  link(dir, alias);
   await read(alias);
   await attest(1000, [
     ["AGENTS.md", "a".repeat(64)],
@@ -149,9 +145,9 @@ it("replaces complete hash sets and removes aliased setup and attestation state"
     attestedAtMs: 2000,
     generatedHashes: new Map([["AGENTS.md", "c".repeat(64)]]),
   });
-  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({ count: 2 });
+  expectAliasCount(2);
   await deleteState(alias);
-  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({ count: 0 });
+  expectAliasCount(0);
   const { setupExists, attestation } = await read(dir, { readOnly: true });
   expect([setupExists, attestation]).toEqual([false, undefined]);
 });
@@ -197,11 +193,9 @@ it("registers and retires aliases in the captured caller-selected state database
     ...process.env,
     OPENCLAW_STATE_DIR: testState.path("custom-state"),
   };
-  fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+  link(dir, alias);
   const identity = resolveWorkspaceStateIdentity(dir);
-  await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: seededAt }, 1_000, {
-    env,
-  });
+  await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: seededAt }, 1_000, { env });
 
   expect((await read(alias, { env })).identity).toStrictEqual(identity);
   fs.unlinkSync(alias);
@@ -222,15 +216,14 @@ it("cleans current state and only the stale association for a repointed alias", 
   const alias = testState.path("workspace-link");
   const replacement = testState.path("replacement-workspace");
   fs.mkdirSync(replacement, { recursive: true });
-  fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+  link(dir, alias);
   await mergeWorkspaceSetupState(alias, { bootstrapSeededAt: seededAt }, 1_000);
   await mergeWorkspaceSetupState(
     replacement,
     { bootstrapSeededAt: "2026-07-16T02:00:00.000Z" },
     2_000,
   );
-  fs.unlinkSync(alias);
-  fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+  repoint(alias, replacement);
 
   const deletion = prepareWorkspaceStateDeletion(alias);
   fs.unlinkSync(alias);
