@@ -349,10 +349,7 @@ describe("actor-owned memory storage", () => {
   it("keeps committed results after publication failure and detaches observer and caller values", async () => {
     const { actor, store } = await fixture(true);
     const result = await store.mutate(
-      {
-        type: "session.entry.patch",
-        input: fields({ label: "Saved" }),
-      },
+      { type: "session.entry.patch", input: fields({ label: "Saved" }) },
       authority,
       {
         committed(outcome) {

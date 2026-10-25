@@ -19,7 +19,6 @@ import {
   resolveOpenClawAgentSqlitePath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
@@ -53,51 +52,29 @@ function storedScope(storePath: string, scope: Partial<SessionAccessScope> = {})
   return { agentId: "ops", env: state.env, storePath, sessionKey: "global", ...scope };
 }
 
-function holdExecution(
-  stage: "before-open" | "reply",
-  shouldHold: (execution: OpenClawAgentDatabaseExecution) => boolean = () => true,
-  once = stage === "reply",
-) {
+function holdFirstPreparation(agentId: string) {
   const gate = {
     entered: createDeferredCore(),
     release: createDeferredCore(),
-    armed: stage !== "reply",
     restore: () => intercept.mockRestore(),
   };
-  const hold = async (execution: OpenClawAgentDatabaseExecution) => {
-    if (gate.armed && shouldHold(execution)) {
-      gate.armed = !once;
-      gate.entered.resolve();
-      await gate.release.promise;
-    }
-  };
+  let armed = true;
   const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
   const intercept = vi
     .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
     .mockImplementation((...args) => {
       const execution = capture(...args);
-      const overrides: Partial<OpenClawAgentDatabaseExecution> = {};
-      if (stage === "before-open") {
-        overrides.prepare = async (source) => {
-          await hold(execution);
+      return {
+        ...execution,
+        async prepare(source: Parameters<typeof execution.prepare>[0]) {
+          if (armed && execution.agentId === agentId) {
+            armed = false;
+            gate.entered.resolve();
+            await gate.release.promise;
+          }
           await execution.prepare(source);
-        };
-      } else if (stage === "reply") {
-        overrides.runExisting = (source, operation, options) =>
-          execution.runExisting(
-            source,
-            async (worker) => {
-              const execute: typeof worker.execute = async (command, requestOptions) => {
-                const result = await worker.execute(command, requestOptions);
-                await hold(execution);
-                return result;
-              };
-              return operation({ execute });
-            },
-            options,
-          );
-      }
-      return { ...execution, ...overrides };
+        },
+      };
     });
   return gate;
 }
@@ -125,7 +102,7 @@ it("shares cold database admission across logical session reads", async () => {
     agentId,
     sessionKey: `agent:${agentId}:hook`,
   });
-  const gate = holdExecution("before-open", (execution) => execution.agentId === agentId, true);
+  const gate = holdFirstPreparation(agentId);
   const first = readSessionEntryInWorker(scope);
   let second: ReturnType<typeof readSessionEntryInWorker> | undefined;
   try {
@@ -394,11 +371,7 @@ it.for([
         callerCurrent = false;
       }
       if (registration === "changed") {
-        registerOpenClawAgentDatabase({
-          agentId: "ops",
-          path: databasePath,
-          env: state.env,
-        });
+        registerOpenClawAgentDatabase({ agentId: "ops", path: databasePath, env: state.env });
       }
       releaseWriter.resolve();
       await priorWriter;

@@ -232,10 +232,7 @@ test.each(["ok", "error"] as const)(
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const failure = new Error("synthetic writer failure");
     const message = outcome === "ok" ? "slow SQLite session write" : "SQLite session write failed";
-    const fields = {
-      operation: "session.transcript.batch",
-      ...timing(1_250),
-    };
+    const fields = { operation: "session.transcript.batch", ...timing(1_250) };
     try {
       const { record } = await withFileLog(async (env) => {
         resetDiagnosticEventsForTest();

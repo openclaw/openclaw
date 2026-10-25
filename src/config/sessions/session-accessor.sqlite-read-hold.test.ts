@@ -22,10 +22,8 @@ const transactionLog = vi.hoisted(() => ({
   afterFirst: undefined as (() => void) | undefined,
 }));
 
-vi.mock("./session-transcript-read-bytes.js", async () => {
-  const actual = await vi.importActual<typeof import("./session-transcript-read-bytes.js")>(
-    "./session-transcript-read-bytes.js",
-  );
+vi.mock("./session-transcript-read-bytes.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-transcript-read-bytes.js")>();
   return {
     ...actual,
     get TRANSCRIPT_PAYLOAD_SLICE_BYTES() {
@@ -34,10 +32,8 @@ vi.mock("./session-transcript-read-bytes.js", async () => {
   };
 });
 
-vi.mock("../../infra/sqlite-transaction.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/sqlite-transaction.js")>(
-    "../../infra/sqlite-transaction.js",
-  );
+vi.mock("../../infra/sqlite-transaction.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/sqlite-transaction.js")>();
   const logged = (label: string | undefined) => {
     if (label?.startsWith("session transcript")) {
       transactionLog.entries.push("transaction");
@@ -64,10 +60,9 @@ vi.mock("../../infra/sqlite-transaction.js", async () => {
 
 const statsReads = vi.hoisted(() => ({ count: 0 }));
 
-vi.mock("./session-accessor.sqlite-transcript-stats.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("./session-accessor.sqlite-transcript-stats.js")
-  >("./session-accessor.sqlite-transcript-stats.js");
+vi.mock("./session-accessor.sqlite-transcript-stats.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./session-accessor.sqlite-transcript-stats.js")>();
   return {
     ...actual,
     readTranscriptStatsBatchFromDatabase: ((
@@ -87,10 +82,8 @@ const holdLogger = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
-vi.mock("../../logging/subsystem.js", async () => {
-  const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
-    "../../logging/subsystem.js",
-  );
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
   return {
     ...actual,
     createSubsystemLogger: (subsystem: string) =>

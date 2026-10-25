@@ -243,9 +243,7 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
     }),
   );
   // Completing the writer before releasing the external wait proves no FIFO is held between phases.
-  await patchTarget(readTarget, () => ({ label: "known write" }), {
-    skipMaintenance: true,
-  });
+  await patchTarget(readTarget, () => ({ label: "known write" }), { skipMaintenance: true });
   peer.prepare("DELETE FROM session_members WHERE session_key = ?").run(scope.sessionKey);
   peer
     .prepare(`INSERT INTO session_members (session_key, identity_id, added_by, added_at)
@@ -443,9 +441,7 @@ it("refuses malformed folded candidate state while retaining the healthy request
     foreign.close();
   }
   // The selected row is unchanged; this phase must still refuse its corrupted folded guard.
-  await expect(read()).rejects.toMatchObject({
-    code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
-  });
+  await expect(read()).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
   await expect(Promise.resolve().then(() => loadSessionEntry(scope))).rejects.toMatchObject({
     code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
   });
