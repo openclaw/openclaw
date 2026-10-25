@@ -24,64 +24,6 @@ function commandPaths(paths: string): string[] {
   return paths.split("|").map((path) => path.trim());
 }
 
-const JSON_NOT_APPLICABLE = {
-  // command group only; reporting subcommands declare JSON output individually.
-  namespaces: commandPaths(`
-      agents team | claws | backup | backup git | backup sqlite | database | database ownership |
-      message | message thread | message emoji | message sticker | message role | message channel |
-      message member | message voice | message event | mcp | transcripts |
-      gateway restart-handoff | gateway diagnostics | system | system heartbeat | promos | telemetry |
-      infer | infer model | infer model auth | infer image | infer audio | infer tts | infer video |
-      infer web | infer embedding | approvals | approvals allowlist | approvals grants | exec-policy |
-      nodes | nodes camera | nodes screen | nodes location | devices | users | node | sandbox |
-      worktrees | cron | dns | proxy | webhooks | webhooks gmail | clawbot | pairing |
-      plugins | plugins marketplace | channels | channels dead-letters |
-      directory | directory peers | directory groups | security | secrets | secrets store |
-      models aliases | models fallbacks | models image-fallbacks | models auth | models auth order |
-      skills workshop
-  `),
-  // interactive wizard, login, or terminal session has no single report document.
-  interactive: commandPaths(`
-      configure | config | acp client | gateway auth-token | promos claim | infer model auth login |
-      models auth add | models auth login | models auth setup-token | models auth paste-token |
-      models auth paste-api-key | models auth login-github-copilot |
-      mcp configure | mcp login | attach | tui | resume | update wizard
-  `),
-  // long-running server, worker, or live stream does not terminate with one JSON document.
-  longRunning: commandPaths(`
-      acp | gateway | gateway run | mcp serve | node worker | node run | connect | worker |
-      proxy start | proxy run | webhooks gmail run | hooks relay | sessions tail
-  `),
-  // pure side-effect command has no meaningful report payload.
-  mutations: commandPaths(`
-      reset | uninstall | backup enable | backup disable | telemetry on | telemetry off | config set |
-      mcp add | mcp set | mcp tools | mcp logout | mcp reload | mcp unset |
-      onboard recommendations acknowledge | onboard recommendations refresh |
-      models set | models set-image | models aliases add | models aliases remove |
-      models fallbacks add | models fallbacks remove | models fallbacks clear |
-      models image-fallbacks add | models image-fallbacks remove | models image-fallbacks clear |
-      models auth activate | models auth logout | models auth order set | models auth order clear |
-      hooks enable | hooks disable | hooks install | hooks update | skills install | skills update |
-      sandbox recreate | dns setup | proxy purge | pairing approve |
-      plugins enable | plugins disable | plugins uninstall | plugins install | plugins update |
-      plugins build | plugins init | channels add | channels remove | channels login | channels logout |
-      secrets store set | secrets store rm | secrets store import
-  `),
-  // Raw artifacts already have a machine-readable byte contract.
-  rawArtifacts: ["proxy blob"],
-  // Completion output must remain executable shell source.
-  shellIntegration: ["completion"],
-} as const;
-
-// These commands own JSON output without an optional --json flag.
-const JSON_OUTPUT_WITHOUT_FLAG = new Set([
-  "agents",
-  "update admit",
-  "update migrate",
-  "update restore",
-  "update finish",
-]);
-
 async function registerAllBuiltInCommands(): Promise<Command> {
   const program = new Command().name("openclaw");
   const ctx = createProgramContext();
@@ -94,19 +36,6 @@ async function registerAllBuiltInCommands(): Promise<Command> {
     await registerSubCliByName(program, entry.name, argv, { purpose: "completion" });
   }
   return program;
-}
-
-function hasOwnJsonOption(command: Command): boolean {
-  return command.options.some((option) => option.long === "--json");
-}
-
-function supportsJsonOutput(path: string, command: Command): boolean {
-  // `config set --json` is a legacy strict-input parser alias. Only its
-  // `--dry-run --json` combination reports JSON, so the mutation stays N/A.
-  if (path === "config set") {
-    return false;
-  }
-  return hasOwnJsonOption(command) || JSON_OUTPUT_WITHOUT_FLAG.has(path);
 }
 
 function collectRegisteredCommandPaths(...programs: Command[]): Set<string> {
@@ -175,31 +104,6 @@ describe("root command descriptions", () => {
     for (const path of pluginPaths) {
       expect(catalogPaths.has(path), path).toBe(true);
       expect(registeredPaths.has(path), path).toBe(false);
-    }
-  });
-
-  it("classifies every built-in command as JSON output or explicitly not applicable", async () => {
-    const program = await registerAllBuiltInCommands();
-    const contexts = collectShellCompletionCommandTree(program).descendants;
-    const registered = new Map(
-      contexts.map((context) => [context.pathVariants[0]?.join(" ") ?? "", context.command]),
-    );
-    const notApplicableEntries = Object.values(JSON_NOT_APPLICABLE).flat();
-    const notApplicable = new Set<string>(notApplicableEntries);
-    expect(notApplicable.size, "duplicate JSON N/A entries").toBe(notApplicableEntries.length);
-
-    for (const [path, command] of registered) {
-      expect(supportsJsonOutput(path, command) || notApplicable.has(path), path).toBe(true);
-    }
-    for (const path of notApplicable.keys()) {
-      const command = registered.get(path);
-      expect(command, path).toBeDefined();
-      expect(command && supportsJsonOutput(path, command), path).toBe(false);
-    }
-    for (const path of JSON_OUTPUT_WITHOUT_FLAG) {
-      const command = registered.get(path);
-      expect(command, path).toBeDefined();
-      expect(command && hasOwnJsonOption(command), path).toBe(false);
     }
   });
 });

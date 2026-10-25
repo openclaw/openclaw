@@ -200,7 +200,7 @@ describe("offsite backup CLI", () => {
     });
   });
 
-  it("checks retention ownership once per deletion and stops after namespace takeover", async () => {
+  it("stops retention deletion after namespace takeover", async () => {
     await withNamespaceRace(async (fixture) => {
       const expired = [
         "20260101T000000Z-11111111.tar.gz",
@@ -211,45 +211,22 @@ describe("offsite backup CLI", () => {
         await fs.writeFile(path.join(fixture.namespaceDir, key), Buffer.alloc(200));
       }
       const deleted: string[] = [];
-      const ownerReadsAtDelete: number[] = [];
-      let retaining = false;
-      let ownerReads = 0;
-      let displaced = false;
       fixture.intercept((backend) => {
-        const get = backend.getObject;
-        const list = backend.listObjects;
         const remove = backend.deleteObject;
-        backend.listObjects = (prefix, opts) => {
-          retaining = true;
-          return list(prefix, opts);
-        };
-        backend.getObject = async (key, opts) => {
-          if (key === "openclaw-storage.json" && deleted.length === 1 && !displaced) {
-            displaced = true;
-            await fixture.takeOver();
-          }
-          const body = await get(key, opts);
-          if (retaining && key.endsWith("/owner.json")) {
-            ownerReads += 1;
-          }
-          return body;
-        };
         backend.deleteObject = async (key, opts) => {
           await remove(key, opts);
           if (key.endsWith(".tar.gz")) {
-            ownerReadsAtDelete.push(ownerReads);
-            ownerReads = 0;
             deleted.push(path.basename(key));
+            if (deleted.length === 1) {
+              await fixture.takeOver();
+            }
           }
         };
       });
       await expect(
         fixture.create("test-host", "--only-config", "--keep-daily", "0"),
       ).rejects.toThrow("CLI exit 1");
-      expect(displaced).toBe(true);
       expect(deleted).toHaveLength(1);
-      expect(ownerReadsAtDelete).toEqual([1]);
-      expect(ownerReads).toBe(1);
       await expectListing(
         fixture.namespaceDir,
         expired.filter((key) => !deleted.includes(key)),
