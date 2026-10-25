@@ -8,6 +8,7 @@ import type {
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildOpenAICompletionsParams as buildParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -56,7 +57,6 @@ import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE as CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL as DEFAULT_MODEL,
   LLAMA_CPP_PROVIDER_ID as PROVIDER_ID,
-  buildLlamaCppProviderConfig,
   resolveLegacyLlamaCppModelCacheDir,
 } from "./src/defaults.js";
 import { llamaCppEmbeddingProviderAdapter } from "./src/embedding-provider.js";
@@ -90,19 +90,32 @@ function registerTextProvider() {
 }
 
 function createFixture() {
-  const providerConfig = buildLlamaCppProviderConfig({
-    managed: {
-      baseUrl: "http://127.0.0.1:19432/v1",
+  const definition = {
+    id: "gemma-4-e4b-it-q4_k_m",
+    name: "Gemma 4 E4B",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 2048,
+    params: { modelPath: "/models/chat.gguf" },
+  } satisfies ModelProviderConfig["models"][number];
+  const model: Model = {
+    ...definition,
+    provider: PROVIDER_ID,
+    api: "openai-completions",
+    baseUrl: "http://127.0.0.1:19432/v1",
+  };
+  const providerConfig: ModelProviderConfig = {
+    api: "openai-completions",
+    apiKey: "llama-cpp-local",
+    baseUrl: model.baseUrl,
+    localService: {
       command: "/runtime/llama-server",
       args: ["--models-preset", "/runtime/models.ini"],
       healthUrl: "http://127.0.0.1:19432/health",
     },
-  });
-  const model: Model = {
-    ...expectDefined(providerConfig.models[0], "fixture model"),
-    provider: PROVIDER_ID,
-    api: "openai-completions",
-    baseUrl: providerConfig.baseUrl,
+    models: [definition],
   };
   const config = { models: { providers: { [PROVIDER_ID]: providerConfig } } };
   const options = { config, provider: "local", model: DEFAULT_MODEL };
@@ -253,7 +266,8 @@ describe("llama.cpp provider plugin", () => {
     await expect(provider.embed("query")).resolves.toEqual(expected);
     await expect(provider.embedBatch(["first", "second"])).resolves.toEqual([expected, expected]);
     expect(provider.dimensions).toBe(dimensions);
-    expect(result.runtime?.cacheKeyData.outputDimensionality).toBe(dimensions);
+    const cacheKeyData = expectDefined(result.runtime?.cacheKeyData, "embedding cache key data");
+    expect(cacheKeyData.outputDimensionality).toBe(dimensions);
   });
 
   it("rejects local vectors shorter than the requested dimensions", async () => {

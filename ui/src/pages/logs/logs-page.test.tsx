@@ -37,8 +37,7 @@ function mountPage(initial: TestContext) {
       <LogsRoute />
     </ApplicationProvider>
   ));
-  const query = <E extends Element = HTMLElement>(selector: string) =>
-    container.querySelector<E>(selector);
+  const query = (selector: string) => container.querySelector<HTMLElement>(selector);
   const lines = () =>
     Array.from(container.querySelectorAll(".log-message"), (row) => row.textContent);
   return {
@@ -60,7 +59,7 @@ function mountPage(initial: TestContext) {
     dispose,
     lines,
     async refresh() {
-      query<HTMLButtonElement>(".settings-section__actions button")!.click();
+      query(".settings-section__actions button")!.click();
       await settle();
     },
   };
@@ -296,7 +295,7 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     .mockResolvedValueOnce(tail(2, ["recovered"], undefined, loaded, loaded))
     .mockRejectedValueOnce(missingReadScopeErrorFixture());
   const { context, page } = await setup(request);
-  const input = page.query<HTMLInputElement>(".settings-input")!;
+  const input = page.container.querySelector<HTMLInputElement>(".settings-input")!;
   const stream = page.query(".log-stream");
   const expectRetainedControls = () => {
     expect(page.query(".log-stream")).toBe(stream);
@@ -342,12 +341,12 @@ it("keeps text and level filters active as quiet polls append rows", async () =>
     tail(2, [line("alpha next", "ERROR"), line("beta next", "ERROR")]),
   );
   const { page } = await setup(request);
-  const filter = page.query<HTMLInputElement>(".settings-input")!;
+  const filter = page.container.querySelector<HTMLInputElement>(".settings-input")!;
   filter.value = "alpha";
   filter.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   page.expectRows(["alpha info", "alpha error"]);
-  page.query<HTMLInputElement>(".log-chip.info input")!.click();
+  page.query(".log-chip.info input")!.click();
   flush();
   page.expectRows(["alpha error"]);
   await poll();
@@ -359,7 +358,7 @@ it("forces a scroll when auto-follow is re-enabled away from the bottom", async 
   const { page } = await setup(vi.fn().mockResolvedValue(tail(1, ["one"])));
   const stream = page.query(".log-stream")!;
   Object.defineProperties(stream, { scrollHeight: { value: 500 }, clientHeight: { value: 100 } });
-  const toggle = page.query<HTMLInputElement>(".settings-toggle input, input.settings-toggle")!;
+  const toggle = page.query(".settings-toggle input, input.settings-toggle")!;
   toggle.click();
   flush();
   stream.scrollTop = 0;

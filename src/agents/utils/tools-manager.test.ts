@@ -24,8 +24,14 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawnSync: spawnSyncMock,
 }));
 
-vi.mock("../../infra/archive.js", () => ({ extractArchive: extractArchiveMock }));
-vi.mock("../../infra/file-lock.js", () => ({ withFileLock: withFileLockMock }));
+vi.mock("../../infra/archive.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/archive.js")>()),
+  extractArchive: extractArchiveMock,
+}));
+vi.mock("../../infra/file-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/file-lock.js")>()),
+  withFileLock: withFileLockMock,
+}));
 
 let tempAgentDir: string;
 const binaryName = (tool = "rg") => tool + (process.platform === "win32" ? ".exe" : "");

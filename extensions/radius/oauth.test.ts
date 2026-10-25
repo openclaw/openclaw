@@ -58,7 +58,7 @@ it("pairs with fractional polling intervals and slows subsequent polls after slo
     [1, 2],
     [100, 3],
     [5_099, 3],
-  ]) {
+  ] as const) {
     await vi.advanceTimersByTimeAsync(elapsed);
     expect(guardedFetch).toHaveBeenCalledTimes(calls);
   }
