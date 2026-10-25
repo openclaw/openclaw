@@ -1,5 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
@@ -88,7 +88,7 @@ it.each(["success", "failure"] as const)(
     const failure = new Error("queued launch failed");
     const failures: unknown[] = [];
     let closing: Promise<void> | undefined;
-    let closed = false;
+    const settled = vi.fn();
     try {
       const expected = await activate({
         start: async () => {
@@ -132,11 +132,9 @@ it.each(["success", "failure"] as const)(
         expect(observed).toEqual([expected, expected, expected]);
         expect(isSwarmRunActive("queued")).toBe(true);
       }
-      closing = close().then(() => {
-        closed = true;
-      });
+      closing = close().finally(settled);
       await nextTurn();
-      expect(closed).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       launchTail.resolve();
       failureTail.resolve();
       await closing;
@@ -164,7 +162,7 @@ it.each(["cancelled", "shutdown"] as const)(
     const reasons: string[] = [];
     let started = false;
     let removal: Promise<void> | undefined;
-    let removalSettled = false;
+    const settled = vi.fn();
     try {
       const expected = await activate({
         start: async () => {
@@ -189,17 +187,10 @@ it.each(["cancelled", "shutdown"] as const)(
         }
       });
       expect(removal).toBeDefined();
-      void removal?.then(
-        () => {
-          removalSettled = true;
-        },
-        () => {
-          removalSettled = true;
-        },
-      );
+      void removal?.then(settled, settled);
       await entered.promise;
       await nextTurn();
-      expect(removalSettled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       expect(signals[0]).toBeDefined();
       expect(signals[0]).not.toBe(activation.signal);
       tail.resolve();
