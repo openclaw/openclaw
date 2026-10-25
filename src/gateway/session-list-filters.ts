@@ -75,9 +75,16 @@ export type SessionListFilteredEntries = {
   activityExpiresAt?: number;
   activityPulse?: SessionActivityPulse;
   involvingProfileId?: string;
+  partition?: {
+    version: number;
+    owners: Map<string, SessionOwnerFacetIdentity>;
+  };
 };
 
-export type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntries"> & {
+export type SessionEntrySelection = Omit<
+  SessionListFilteredEntries,
+  "ownerEntries" | "partition"
+> & {
   ownerCount: number;
   limitApplied?: number;
   offset: number;
@@ -174,6 +181,7 @@ function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | u
 export function filterSessionEntries(
   params: SessionListFilterParams,
   window?: { offset: number; limit?: number; ownerLimit: number },
+  ownersByKey?: Map<string, SessionOwnerFacetIdentity>,
 ): SessionListFilteredEntries {
   const { cfg, opts, now, configuredAgentIds } = params;
   let rowContext: SessionListRowContext | undefined;
@@ -474,6 +482,7 @@ export function filterSessionEntries(
     }
     if (effectiveOwner) {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
+      ownersByKey?.set(key, effectiveOwner);
     }
     if (creatorId && resolveSessionCreatorActor(entry.createdActor)?.id !== creatorId) {
       continue;
