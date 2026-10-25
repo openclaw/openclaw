@@ -11,7 +11,6 @@ import {
   runFixtureGit as git,
   isolateGitIdentity,
   writeGitFixtureManifest,
-  writeFixtureTree as writeTree,
   writeFixtureFiles,
   expectHead,
   expectFile,
@@ -251,8 +250,10 @@ describe("reference source candidate preparation", () => {
         path.resolve("scripts/lib/bundled-plugin-dependency-links.mjs"),
       ).href;
       const script = "scripts/copy-bundled-plugin-metadata.mjs";
-      await writeTree(root, {
-        [script]: [
+      await fs.mkdir(path.join(root, "scripts"));
+      await fs.writeFile(
+        path.join(root, script),
+        [
           'import fs from "node:fs";',
           'import path from "node:path";',
           "import { linkSourcePluginDependencies } from " + JSON.stringify(linker) + ";",
@@ -260,8 +261,12 @@ describe("reference source candidate preparation", () => {
           "fs.rmSync(destination, { recursive: true, force: true });",
           'linkSourcePluginDependencies(path.resolve("extensions/x"), destination);',
         ].join("\n"),
-        "extensions/x/package.json": JSON.stringify({ dependencies: { payload: "1" } }),
-      });
+      );
+      await fs.mkdir(path.join(root, "extensions/x"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "extensions/x/package.json"),
+        JSON.stringify({ dependencies: { payload: "1" } }),
+      );
       await git(root, "add", script, "extensions/x/package.json");
       await git(root, "commit", "-m", "candidate metadata entrypoint");
       base = await git(root, "rev-parse", "HEAD");
@@ -273,11 +278,17 @@ describe("reference source candidate preparation", () => {
           if (argv[1] === "build") {
             assert(options.cwd);
             const candidate = options.cwd;
-            await writeTree(candidate, {
+            for (const directory of [
+              "dist/control-ui",
+              "extensions/x/node_modules",
+              "node_modules/first",
+            ]) {
+              await fs.mkdir(path.join(candidate, directory), { recursive: true });
+            }
+            await writeFixtureFiles(candidate, {
               "dist/control-ui/index.html": "ready",
               "node_modules/first/index.js": "module.exports = 'old';",
             });
-            await fs.mkdir(path.join(candidate, "extensions/x/node_modules"), { recursive: true });
             await fs.symlink(
               path.join(candidate, "node_modules/first"),
               path.join(candidate, "extensions/x/node_modules/payload"),
@@ -308,7 +319,8 @@ describe("reference source candidate preparation", () => {
           if (corrupt) {
             await fs.symlink("payload", link);
           } else {
-            await writeTree(candidate, {
+            await fs.mkdir(path.join(candidate, "node_modules/final"), { recursive: true });
+            await writeFixtureFiles(candidate, {
               "node_modules/final/index.js": "module.exports = 'final';",
             });
             await fs.symlink(path.join(candidate, "node_modules/final"), link, "junction");
@@ -381,7 +393,7 @@ describe("reference source candidate preparation", () => {
     },
   );
 
-  it.each(["same-head", "updated", "working", "committed"] as const)(
+  it.each(["same-head", "updated", "working", "index", "committed"] as const)(
     "admits operator inputs only while candidate source stays selected (%s)",
     async (kind) => {
       const accepted = kind === "same-head" || kind === "updated";
@@ -404,7 +416,11 @@ describe("reference source candidate preparation", () => {
               await fs.writeFile(path.join(candidate, "target.txt"), "unpublished change\n");
               if (kind !== "working") {
                 await git(candidate, "add", "target.txt");
-                await git(candidate, "commit", "-m", "unpublished change");
+                if (kind === "index") {
+                  await fs.writeFile(path.join(candidate, "target.txt"), "target\n");
+                } else {
+                  await git(candidate, "commit", "-m", "unpublished change");
+                }
               }
             },
       });
@@ -431,7 +447,7 @@ describe("reference source candidate preparation", () => {
     },
   );
 
-  it.each(["pnpm@latest", "pnpm@12.1.0"])(
+  it.each(["bun@1.2.0", "pnpm@latest", "pnpm@12.1.0"])(
     "refuses unsupported candidate manager %s without provisioning",
     async (packageManager) => {
       const targetRevision = await commitTarget(

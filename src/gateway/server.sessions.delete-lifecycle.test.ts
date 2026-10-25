@@ -216,12 +216,17 @@ test("sessions.delete rejects main and aborts active runs", async () => {
   expect(unbind).toHaveBeenCalledExactlyOnceWith({ targetSessionKey: key, reason });
 });
 
-test("sessions.delete preserves locked archived sessions", async () => {
+test("sessions.delete preserves locked archived sessions and deletes ordinary archived sessions", async () => {
   const lockedKey = "agent:main:harness:codex:supervision:native-thread";
+  const ordinaryKey = "agent:main:ordinary-archived";
   const lockedSessionId = "sess-locked-archived";
+  const ordinarySessionId = "sess-ordinary-archived";
   const archivedAt = Date.now();
   const locked = { agentHarnessId: "codex", archivedAt, modelSelectionLocked: true };
-  const { dir, storePath } = await seedSessions([lockedKey, lockedSessionId, locked]);
+  const { dir, storePath } = await seedSessions(
+    [lockedKey, lockedSessionId, locked],
+    [ordinaryKey, ordinarySessionId, { archivedAt }],
+  );
   const lockedEntryBefore = structuredClone(loadSessionEntry({ storePath, sessionKey: lockedKey }));
   const lockedTranscriptPath = path.join(dir, `${lockedSessionId}.jsonl`);
   const lockedTranscriptBefore = await fs.readFile(lockedTranscriptPath, "utf8");
@@ -233,6 +238,9 @@ test("sessions.delete preserves locked archived sessions", async () => {
   );
   expect(loadSessionEntry({ storePath, sessionKey: lockedKey })).toEqual(lockedEntryBefore);
   expect(await fs.readFile(lockedTranscriptPath, "utf8")).toBe(lockedTranscriptBefore);
+  await expectSessionDeleteSucceeds({ key: ordinaryKey, archivedOnly: true });
+  expect(loadSessionEntry({ storePath, sessionKey: ordinaryKey })).toBeUndefined();
+  expect(loadSessionEntry({ storePath, sessionKey: lockedKey })).toEqual(lockedEntryBefore);
 });
 
 test("sessions.delete removes a locked plugin-owned session from its persisted alias", async () => {
@@ -477,6 +485,31 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
     await Promise.allSettled([deletion, patch]);
     preflight.mockRestore();
   }
+});
+
+test("sessions.patch waits for an in-flight session lifecycle mutation", async () => {
+  const session = await seedSession();
+  const hold = lifecycleHold(undefined);
+  const mutation = runSessionMutation({
+    scope: session.storePath,
+    identities: [session.key, session.id],
+    run: hold.run,
+  });
+  await hold.started;
+  let patchSettled = false;
+  const patch = directSessionReq("sessions.patch", {
+    key: session.key,
+    label: "after lifecycle mutation",
+  }).then((result) => {
+    patchSettled = true;
+    return result;
+  });
+  await Promise.resolve();
+  expect(patchSettled).toBe(false);
+  hold.release();
+  const [patched] = await Promise.all([patch, mutation]);
+  expect(patched.ok).toBe(true);
+  expect(session.read()?.label).toBe("after lifecycle mutation");
 });
 
 test("sessions.delete keeps lifecycle admission blocked through session unbinding", async () => {

@@ -12,7 +12,10 @@ import type {
   SessionHistoryWorkerResult,
   SessionHistoryDelta,
 } from "../config/sessions/session-history-types.js";
-import { SessionHistoryDeltaPreparationError } from "../config/sessions/session-history-worker-errors.js";
+import {
+  SessionHistoryDeltaPreparationError,
+  sessionHistoryCleanupError,
+} from "../config/sessions/session-history-worker-errors.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import * as reconcile from "../config/sessions/session-transcript-reconcile.js";
@@ -426,7 +429,14 @@ it.each(["rpc", "http"] as const)(
   },
 );
 
-it("captures targeted selectors and storage identity before asynchronous dispatch", async () => {
+it.each([
+  "delta",
+  "inline-visibility",
+  "message-lookup",
+  "recent",
+  "message-by-id",
+  "message-count",
+] as const)("captures %s selectors and target before asynchronous dispatch", async (kind) => {
   const target = {
     agentId: "main",
     sessionId: "history-worker",
@@ -435,14 +445,38 @@ it("captures targeted selectors and storage identity before asynchronous dispatc
     sessionEntry: { sessionId: "history-worker" },
     env: { OPENCLAW_STATE_DIR: "/tmp/captured-history-state", UNRELATED_SECRET: "synthetic" },
   };
-  const supplied = {
-    kind: "message-by-id" as const,
-    params: {
-      target,
-      messageId: "original",
-      options: { currentOnly: true as const, maxBytes: 8000, allowResetArchiveFallback: true },
-    },
-  };
+  const supplied =
+    kind === "delta"
+      ? {
+          kind,
+          params: { target, limits: { cursor: "original", maxBytes: 8000, maxEvents: 10 } },
+        }
+      : kind === "inline-visibility"
+        ? {
+            kind,
+            params: { target, lookup: { kind: "run" as const, runId: "original", messageSeq: 7 } },
+          }
+        : kind === "recent"
+          ? {
+              kind,
+              params: { target, maxMessages: 10, maxLines: 220, allowResetArchiveFallback: true },
+            }
+          : kind === "message-count"
+            ? { kind, params: { target } }
+            : kind === "message-by-id"
+              ? {
+                  kind,
+                  params: {
+                    target,
+                    messageId: "original",
+                    options: {
+                      currentOnly: true as const,
+                      maxBytes: 8000,
+                      allowResetArchiveFallback: true,
+                    },
+                  },
+                }
+              : { kind, params: { target, messageId: "original" } };
   const expected = structuredClone(supplied);
   const pending = readSessionHistoryPageInWorker(supplied);
   target.sessionId = "successor";
@@ -467,10 +501,24 @@ it("captures targeted selectors and storage identity before asynchronous dispatc
   }
   await waitForReaderAdmission(1);
   const input = queued[0]!.prepare();
-  queued[0]!.result.resolve({ kind: "message-by-id", result: { found: false, oversized: false } });
+  queued[0]!.result.resolve(
+    kind === "delta"
+      ? {
+          kind,
+          delta: { kind: "reset", cursor: "next", reason: "invalid_cursor" },
+          subagentCoordination: { sessions: [], runMessages: [] },
+        }
+      : kind === "inline-visibility"
+        ? { kind, subagentCoordination: { sessions: [], runMessages: [["original", 7, false]] } }
+        : kind === "message-by-id"
+          ? { kind, result: { found: false, oversized: false } }
+          : kind === "message-count"
+            ? { kind, count: 0 }
+            : { kind, messages: [] },
+  );
   await pending;
-  expect(input.request).toEqual({
-    ...expected,
+  expect(input.request).toMatchObject({
+    kind,
     params: {
       ...expected.params,
       target: {
@@ -479,6 +527,11 @@ it("captures targeted selectors and storage identity before asynchronous dispatc
       },
     },
   });
+  expect(
+    input.request.kind === "rpc" || input.request.kind === "rpc-message"
+      ? undefined
+      : input.request.params.target,
+  ).not.toHaveProperty("env.UNRELATED_SECRET");
 });
 
 it.each([false, true])(
@@ -523,6 +576,23 @@ it.each([false, true])(
     }
   },
 );
+
+it("does not recover partial delta facts when worker retirement fails", async () => {
+  const pending = readSessionHistoryPageInWorker(deltaRequest());
+  const failure = sessionHistoryCleanupError(
+    new SessionHistoryDeltaPreparationError({
+      delta: { kind: "missing" },
+      subagentCoordination: { sessions: [], runMessages: [] },
+    }),
+    new Error("retirement failed"),
+    "worker retirement",
+  );
+  const rejected = expect(pending).rejects.toBe(failure);
+  await waitForReaderAdmission(1);
+  queued[0]!.prepare();
+  queued[0]!.result.reject(failure);
+  await rejected;
+});
 
 it("shares queued equivalent pages but starts a fresh read after dispatch", async () => {
   const first = readSessionHistoryPageInWorker(request());

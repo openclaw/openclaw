@@ -3,7 +3,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
-import { cronTestInput } from "./service.fixture-builders.test-support.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
@@ -24,14 +23,16 @@ function evaluated(fire: boolean, extra: { state?: unknown; message?: string } =
 }
 
 function watcher(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
-  return cronTestInput({
+  return {
     name: "watcher",
+    enabled: true,
     schedule: { kind: "cron", expr: "* * * * * *", staggerMs: 0 },
     trigger: { script: "json({ fire: false })" },
+    sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "base message" },
     ...overrides,
-  });
+  };
 }
 
 function mainWatcher(name: string, overrides: Partial<CronJobCreate> = {}): CronJobCreate {
@@ -57,7 +58,16 @@ function expectUnevaluated(job: ReturnType<CronService["getJob"]>) {
   ]).toEqual([undefined, undefined, undefined]);
 }
 
-async function createHarness(params: Partial<CronServiceDeps> = {}) {
+async function createHarness(
+  params: {
+    evaluateCronTrigger?: Evaluator;
+    runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
+    runScriptJob?: CronServiceDeps["runScriptJob"];
+    sendCronWebhook?: CronServiceDeps["sendCronWebhook"];
+    cronConfig?: CronServiceDeps["cronConfig"];
+    storePath?: string;
+  } = {},
+) {
   const storePath = params.storePath ?? (await makeStorePath()).storePath;
   const events: CronEvent[] = [];
   const eventContexts: Array<CronEventContext | undefined> = [];
@@ -107,13 +117,6 @@ async function createHarness(params: Partial<CronServiceDeps> = {}) {
 }
 
 type Harness = Awaited<ReturnType<typeof createHarness>>;
-async function createWatcher(
-  deps: Partial<CronServiceDeps> = {},
-  overrides: Partial<CronJobCreate> = {},
-) {
-  const h = await createHarness(deps);
-  return { h, job: await h.cron.add(watcher(overrides)) };
-}
 const activeHarnesses = new Set<Harness>();
 function installHarnessCleanup() {
   // Child-suite teardown runs before the root harness deletes stores and restores timers.
@@ -174,6 +177,7 @@ async function expectRejectedWrite(jobId: string, write: () => Promise<unknown>)
 async function finishWatcherRun(
   params: Awaited<ReturnType<typeof pendingWatcher>> & {
     recover: boolean;
+    editAfterTask?: () => Promise<void>;
   },
 ) {
   const { h, jobId } = params;
@@ -235,6 +239,7 @@ async function finishWatcherRun(
   expect((await readStoredJob(h.storePath, jobId))?.state.runningAtMs).toBe(receipt.startedAtMs);
 
   h.cron.stop();
+  await params.editAfterTask?.();
   h.cron = new CronService(h.deps);
   await h.cron.start();
 
@@ -251,18 +256,16 @@ async function finishWatcherRun(
 async function pendingEvaluation(overrides: Partial<CronJobCreate>) {
   const started = createDeferred<AbortSignal>();
   const evaluation = createDeferred<Awaited<ReturnType<Evaluator>>>();
-  const { h, job } = await createWatcher(
-    {
-      evaluateCronTrigger: ({ abortSignal }) => {
-        if (!abortSignal) {
-          throw new Error("expected condition cancellation signal");
-        }
-        started.resolve(abortSignal);
-        return evaluation.promise;
-      },
+  const h = await createHarness({
+    evaluateCronTrigger: ({ abortSignal }) => {
+      if (!abortSignal) {
+        throw new Error("expected condition cancellation signal");
+      }
+      started.resolve(abortSignal);
+      return evaluation.promise;
     },
-    overrides,
-  );
+  });
+  const job = await h.cron.add(watcher(overrides));
   const run = runWhenDue(h.cron, job.id);
   h.beforeStop.push(async () => {
     evaluation.resolve(evaluated(false));
@@ -285,16 +288,18 @@ async function pendingWatcher(overrides: Partial<CronJobCreate>) {
       ? { status: "ok" as const, stateChanged: true, state: { owner: "obsolete payload" } }
       : { status: "ok" as const, summary: "done" };
   });
-  const { h, job } = await createWatcher(
+  const h = await createHarness(
     script
       ? { runScriptJob: runPayload }
       : { evaluateCronTrigger, runIsolatedAgentJob: runPayload },
-    {
+  );
+  const job = await h.cron.add(
+    watcher({
       trigger: { script: "fire", once: true },
       delivery: { mode: "none" },
       state: { triggerState: { owner: "original" } },
       ...overrides,
-    },
+    }),
   );
   const run = runWhenDue(h.cron, job.id);
   h.beforeStop.push(async () => {
@@ -361,7 +366,8 @@ describe("cron trigger evaluation", () => {
         state: { status: "green" },
       }),
     );
-    const { h, job } = await createWatcher({ evaluateCronTrigger });
+    const h = await createHarness({ evaluateCronTrigger });
+    const job = await h.cron.add(watcher());
     const dueAt = job.state.nextRunAtMs!;
     h.events.length = 0;
     expect(await runWhenDue(h.cron, job.id)).toEqual({ ok: true, ran: true });
@@ -390,15 +396,15 @@ describe("cron trigger evaluation", () => {
   });
 
   it("appends the fired trigger message to the main payload and history", async () => {
-    const { h, job } = await createWatcher(
-      {
-        evaluateCronTrigger: async () =>
-          evaluated(true, { message: "CI became red", state: { status: "red" } }),
-      },
-      {
+    const h = await createHarness({
+      evaluateCronTrigger: async () =>
+        evaluated(true, { message: "CI became red", state: { status: "red" } }),
+    });
+    const job = await h.cron.add(
+      watcher({
         sessionTarget: "main",
         payload: { kind: "systemEvent", text: "base message" },
-      },
+      }),
     );
     await runWhenDue(h.cron, job.id);
     expect(h.runSessionEvent).toHaveBeenCalledWith(
@@ -420,16 +426,16 @@ describe("cron trigger evaluation", () => {
 
   it("backs off evaluator errors without reporting webhook delivery or publishing private failure details", async () => {
     const sendCronWebhook = vi.fn();
-    const { h, job } = await createWatcher(
-      {
-        evaluateCronTrigger: async () => ({
-          kind: "error",
-          code: "timeout",
-          error: "deadline exceeded",
-        }),
-        sendCronWebhook,
-      },
-      { delivery: { mode: "webhook", to: "https://example.invalid/hook" } },
+    const h = await createHarness({
+      evaluateCronTrigger: async () => ({
+        kind: "error",
+        code: "timeout",
+        error: "deadline exceeded",
+      }),
+      sendCronWebhook,
+    });
+    const job = await h.cron.add(
+      watcher({ delivery: { mode: "webhook", to: "https://example.invalid/hook" } }),
     );
     const dueAt = job.state.nextRunAtMs!;
     h.events.length = 0;
@@ -443,7 +449,8 @@ describe("cron trigger evaluation", () => {
       lastDeliveryStatus: "not-requested",
     });
     expect(state?.nextRunAtMs).toBeGreaterThan(dueAt);
-    expect([state?.lastDelivered, state?.lastDeliveryError]).toEqual([undefined, undefined]);
+    expect(state?.lastDelivered).toBeUndefined();
+    expect(state?.lastDeliveryError).toBeUndefined();
     expect(sendCronWebhook).not.toHaveBeenCalled();
     expect(h.eventContexts[1]).toEqual({
       failureNotificationDetail: { kind: "script-failure", source: "trigger", code: "timeout" },
@@ -458,7 +465,8 @@ describe("cron trigger evaluation", () => {
         error: expect.stringContaining("deadline exceeded"),
         deliveryStatus: "not-requested",
       });
-      expect([result?.delivered, result?.deliveryError]).toEqual([undefined, undefined]);
+      expect(result?.delivered).toBeUndefined();
+      expect(result?.deliveryError).toBeUndefined();
     }
     const persisted = await readStoredJob(h.storePath, job.id);
     expectScheduled(h, job.id, persisted?.state.nextRunAtMs);
@@ -479,6 +487,33 @@ describe("cron trigger evaluation", () => {
       state: { triggerState: { owner: "completed evaluation" }, triggerEvalCount: 1 },
     });
     expect(h.cron.getJob(jobId)?.state.nextRunAtMs).toBeUndefined();
+  });
+
+  it("preserves a replacement made after a legacy terminal result", async () => {
+    const pending = await pendingWatcher({ agentId: "alpha" });
+    const { h, jobId } = pending;
+    await finishWatcherRun({
+      ...pending,
+      recover: true,
+      editAfterTask: async () => {
+        expect(readHistory(h.storePath, jobId)[0]?.nextRunAtMs).toBeUndefined();
+        const updated = await h.cron.update(jobId, {
+          agentId: "beta",
+          trigger: { script: "replacement", once: true },
+          state: { triggerState: { owner: "later edit" } },
+        });
+        expect(updated.enabled).toBe(true);
+        expect(updated.state.nextRunAtMs).toEqual(expect.any(Number));
+      },
+    });
+    const stored = h.cron.getJob(jobId);
+    expect(stored).toMatchObject({
+      enabled: true,
+      agentId: "beta",
+      trigger: { script: "replacement", once: true },
+      state: { triggerState: { owner: "later edit" }, nextRunAtMs: expect.any(Number) },
+    });
+    expectUnevaluated(stored);
   });
 
   it.each(["trigger", "state", "script"] as const)(
@@ -540,7 +575,8 @@ describe("cron trigger evaluation", () => {
   });
 
   it("reports a missing evaluator as an execution error", async () => {
-    const { h, job } = await createWatcher();
+    const h = await createHarness({});
+    const job = await h.cron.add(watcher());
     await runWhenDue(h.cron, job.id);
     expect(h.cron.getJob(job.id)?.state).toMatchObject({
       consecutiveErrors: 1,
@@ -559,21 +595,21 @@ describe("cron webhook optional output", () => {
     "records $status with empty output without false delivery",
     async ({ status, summary }) => {
       const sendCronWebhook = vi.fn(async () => ({ status: "delivered" as const }));
-      const { h, job } = await createWatcher(
-        {
-          runIsolatedAgentJob: async () => ({
-            status,
-            summary,
-            ...(status === "error" ? { error: "execution failed" } : {}),
-          }),
-          sendCronWebhook,
-        },
-        {
+      const h = await createHarness({
+        runIsolatedAgentJob: async () => ({
+          status,
+          summary,
+          ...(status === "error" ? { error: "execution failed" } : {}),
+        }),
+        sendCronWebhook,
+      });
+      const job = await h.cron.add(
+        watcher({
           trigger: undefined,
           schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
           wakeMode: "next-heartbeat",
           delivery: { mode: "webhook", to: "https://example.invalid/hook" },
-        },
+        }),
       );
       await h.cron.run(job.id, "force");
       const failed = status === "error";

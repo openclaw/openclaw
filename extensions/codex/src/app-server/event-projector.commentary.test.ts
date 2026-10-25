@@ -14,6 +14,7 @@ import {
   turnCompleted,
   THREAD_ID,
   requireRecord,
+  findPlanEventWithSteps,
   type ProjectorNotification,
 } from "./event-projector.test-harness.js";
 import { prepareCodexServerNotification } from "./protocol-validators.js";
@@ -168,17 +169,23 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
         commentaryItem("msg-commentary", commentaryText),
       ]);
 
+      const progressEvents = fixture.events(onAgentEvent, "item", "preamble");
+
       expect(onPartialReply).not.toHaveBeenCalled();
-      const progress = fixture.events(onAgentEvent, "item", "preamble");
-      expect(progress.every((event) => event.data.itemId === "msg-commentary")).toBe(true);
-      expect(progress.map(({ data }) => [data.phase, data.progressText])).toEqual([
+      const preamble = {
+        itemId: "msg-commentary",
+        kind: "preamble",
+        title: "Preamble",
+        source: "codex-app-server",
+      };
+      expect(progressEvents.map((event) => event.data)).toEqual([
         ...(phaseKnownAt === "started"
           ? [
-              ["update", "Checking"],
-              ["update", commentaryText],
+              { ...preamble, phase: "update", progressText: "Checking" },
+              { ...preamble, phase: "update", progressText: commentaryText },
             ]
           : []),
-        ["end", commentaryText],
+        { ...preamble, phase: "end", progressText: commentaryText },
       ]);
 
       const result = fixture.result(projector);
@@ -194,10 +201,32 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
           source: "segment",
           itemId: "msg-commentary",
         },
+        __openclaw: { mirrorIdentity: `${TURN_ID}:commentary:msg-commentary` },
       });
       expect(requireRecord(commentary, "commentary message").phase).toBeUndefined();
     },
   );
+
+  it("omits durable commentary when the operator explicitly disables persistence", async () => {
+    const params = await createParams();
+    params.config = { ui: { prefs: { chatPersistCommentary: false } } };
+    const projector = await createProjector(params);
+
+    await fixture.finish(projector, [
+      commentaryItem("msg-commentary", "Checking the workspace"),
+      finalItem("msg-final", "Done"),
+    ]);
+
+    const result = fixture.result(projector);
+    expect(result.assistantTexts).toEqual(["Done"]);
+    expect(
+      result.messagesSnapshot.some(
+        (message) =>
+          (message as { openclawStreamFallback?: { itemId?: unknown } }).openclawStreamFallback
+            ?.itemId === "msg-commentary",
+      ),
+    ).toBe(false);
+  });
 
   it("mirrors commentary and tool activity in event order when timestamps collide", async () => {
     const projector = await createProjector();
@@ -317,8 +346,12 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
     );
     expect(events("codex_app_server.guardian", "strict_review_required")).toMatchObject([
       {
+        method: "autoApprovalReview/strictReviewRequired",
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
         reviewId: "review-1",
         targetItemId: "cmd-1",
+        command: "printf hello",
         startedAtMs: 1_787_273_600_000,
       },
     ]);
@@ -483,7 +516,7 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
   });
 
   it("projects streamed and structured plans without adding them to history", async () => {
-    const { send, events, projector } = await fixture.observe();
+    const { send, events, projector, onAgentEvent } = await fixture.observe();
     await send(
       forCurrentTurn("item/plan/delta", { itemId: "plan-1", delta: "- inspect\n" }),
       forCurrentTurn("turn/plan/updated", {
@@ -492,10 +525,13 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       }),
       turnCompleted(),
     );
-    expect(events("plan")).toMatchObject([
-      { steps: [{ step: "inspect", status: "pending" }] },
-      { explanation: "next", steps: [{ step: "patch", status: "in_progress" }] },
-    ]);
+    expect(events("plan")).toHaveLength(2);
+    expect(
+      findPlanEventWithSteps(onAgentEvent, [{ step: "inspect", status: "pending" }]).steps,
+    ).toEqual([{ step: "inspect", status: "pending" }]);
+    expect(
+      findPlanEventWithSteps(onAgentEvent, [{ step: "patch", status: "in_progress" }]),
+    ).toMatchObject({ explanation: "next", steps: [{ step: "patch", status: "in_progress" }] });
     expect(JSON.stringify(fixture.result(projector).messagesSnapshot)).not.toContain("Codex plan:");
   });
 

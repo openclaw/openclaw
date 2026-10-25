@@ -5,6 +5,7 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../infra/net/undici-global-dispatcher.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { testing } from "../sessions/session-controller.test-support.js";
@@ -22,13 +23,6 @@ import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recove
 import { logSessionStateChange, startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
-const session = { sessionKey: "agent:main:recovery", sessionId: "recovery-session" };
-const classification = {
-  eventType: "session.stalled",
-  classification: "stalled_agent_run",
-  reason: "active_work_without_progress",
-} as const;
-
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(6_000);
@@ -43,52 +37,50 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function activeOperation(ref: { sessionKey: string; sessionId: string; runId?: string }) {
+it("reports a 54-second stall without requesting recovery from an observing controller", async () => {
+  const ref = {
+    sessionKey: "agent:main:provider-deadline-heartbeat",
+    sessionId: "deadline-session",
+    runId: "deadline-run",
+  };
   const operation = createReplyOperation({ ...ref, resetTriggered: false });
   operation.setPhase("running");
   const cancel = vi.fn(() => operation.complete());
   operation.attachBackend({ kind: "embedded", runId: ref.runId, cancel });
-  return { operation, cancel };
-}
-
-function observedOperation(ref: { sessionKey: string; sessionId: string; runId: string }) {
-  const fixture = activeOperation(ref);
-  const attempt = fixture.operation.watchdog.attachAttempt({ assertCurrent() {} });
+  const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
   const owner = createDiagnosticEmbeddedRunOwner({ ...ref, watchdogAttempt: attempt });
   markDiagnosticEmbeddedRunStarted({ ...ref, owner });
   logSessionStateChange({ ...ref, state: "processing" });
   const events: DiagnosticEventPayload[] = [];
   onDiagnosticEvent((event) => events.push(event));
-  return { ...fixture, attempt, events };
-}
-
-function heartbeat(now: number, shortTimings = true) {
-  vi.setSystemTime(now);
-  const clock = createGatewaySchedulerClock(now);
   const recover = vi.fn(recoverStuckDiagnosticSession);
+  vi.setSystemTime(30_000);
+  const clock = createGatewaySchedulerClock(30_000);
   startGatewayDiagnosticHeartbeat(
     createTestGatewayScheduler(clock.clock),
     { diagnostics: { enabled: true } },
     {
-      ...(shortTimings && {
-        testTimings: { stuckSessionWarnMs: 15_000, stuckSessionAbortMs: 30_000 },
-      }),
+      testTimings: { stuckSessionWarnMs: 15_000, stuckSessionAbortMs: 30_000 },
       recoverStuckSession: recover,
       sampleLiveness: () => null,
     },
   );
-  return {
-    recover,
-    async advance(atMs: number, drain = true) {
-      vi.setSystemTime(atMs);
-      await clock.advanceTo(atMs);
-      await vi.advanceTimersByTimeAsync(0);
-      if (drain) {
-        await waitForDiagnosticEventsDrained();
-      }
-    },
-  };
-}
+  vi.setSystemTime(45_000);
+  attempt.beginRequest({ requestTimeoutMs: 45_000, deadlineAtMs: 90_000 });
+  vi.setSystemTime(60_000);
+  expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(6_000);
+  expect(operation.watchdog.decide().action).toBe("observe");
+  await clock.advanceTo(60_000);
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForDiagnosticEventsDrained();
+  expect(events).toContainEqual(
+    expect.objectContaining({ type: "session.stalled", ageMs: 54_000 }),
+  );
+  expect(events.filter((event) => event.type.startsWith("session.recovery."))).toEqual([]);
+  expect(recover).not.toHaveBeenCalled();
+  expect(cancel).not.toHaveBeenCalled();
+  expect(operation.result).toBeNull();
+});
 
 it.each([
   { kind: "request", deadlineAtMs: 396_000 },
@@ -98,9 +90,33 @@ it.each([
 ] as const)(
   "uses the controller-owned $kind allowance through its exact boundary",
   async ({ kind, deadlineAtMs }) => {
-    const ref = { ...session, runId: "allowance-run" };
-    const { operation, cancel, attempt, events } = observedOperation(ref);
-    const { recover, advance } = heartbeat(306_000);
+    const ref = {
+      sessionKey: "agent:main:heartbeat-allowance",
+      sessionId: "allowance-session",
+      runId: "allowance-run",
+    };
+    const operation = createReplyOperation({ ...ref, resetTriggered: false });
+    operation.setPhase("running");
+    const cancel = vi.fn(() => operation.complete());
+    operation.attachBackend({ kind: "embedded", runId: ref.runId, cancel });
+    const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, watchdogAttempt: attempt });
+    markDiagnosticEmbeddedRunStarted({ ...ref, owner });
+    logSessionStateChange({ ...ref, state: "processing" });
+    const events: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => events.push(event));
+    const recover = vi.fn(recoverStuckDiagnosticSession);
+    vi.setSystemTime(306_000);
+    const clock = createGatewaySchedulerClock(306_000);
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler(clock.clock),
+      { diagnostics: { enabled: true } },
+      {
+        testTimings: { stuckSessionWarnMs: 15_000, stuckSessionAbortMs: 30_000 },
+        recoverStuckSession: recover,
+        sampleLiveness: () => null,
+      },
+    );
     vi.setSystemTime(330_000);
     if (kind === "request") {
       attempt.beginRequest({ requestTimeoutMs: 66_000, deadlineAtMs });
@@ -116,17 +132,14 @@ it.each([
       });
     }
     for (let now = 336_000; now <= deadlineAtMs; now += 30_000) {
-      await advance(now);
+      vi.setSystemTime(now);
+      await clock.advanceTo(now);
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForDiagnosticEventsDrained();
       if (now < deadlineAtMs) {
         expect(recover).not.toHaveBeenCalled();
         expect(cancel).not.toHaveBeenCalled();
         expect(operation.result).toBeNull();
-        if (kind === "request") {
-          expect(events).toContainEqual(
-            expect.objectContaining({ type: "session.stalled", ageMs: 330_000 }),
-          );
-          expect(events.filter((event) => event.type.startsWith("session.recovery."))).toEqual([]);
-        }
       }
     }
     expect(recover).toHaveBeenCalledOnce();
@@ -143,32 +156,90 @@ it.each([
   },
 );
 
-it("does not request recovery from a retired owner or adopt its replacement", () => {
-  const original = createReplyOperation({ ...session, resetTriggered: false });
-  original.complete();
-  const { operation: replacement } = activeOperation(session);
-  vi.setSystemTime(1_000_000);
+it.each(["missing", "retired"] as const)(
+  "does not adopt a replacement after capturing a %s owner",
+  (kind) => {
+    const ref = {
+      sessionKey: "agent:main:heartbeat-replacement",
+      sessionId: "replacement-session",
+    };
+    const original =
+      kind === "retired" ? createReplyOperation({ ...ref, resetTriggered: false }) : undefined;
+    original?.complete();
+    const replacement = createReplyOperation({ ...ref, resetTriggered: false });
+    replacement.setPhase("running");
+    vi.setSystemTime(1_000_000);
+    const recover = vi.fn(recoverStuckDiagnosticSession);
+    requestStuckSessionRecovery({
+      classification: {
+        eventType: "session.stalled",
+        classification: "stalled_agent_run",
+        reason: "active_work_without_progress",
+      },
+      request: { ...ref, operation: original, ageMs: 1_000_000 },
+      recover,
+    });
+    expect(recover).not.toHaveBeenCalled();
+    expect(replacement.result).toBeNull();
+  },
+);
+
+it("retains the finite local request ceiling without a diagnostic timeout policy", async () => {
+  const ref = {
+    sessionKey: "agent:main:heartbeat-local-ceiling",
+    sessionId: "local-ceiling-session",
+  };
+  const operation = createReplyOperation({ ...ref, resetTriggered: false });
+  operation.setPhase("running");
+  const cancel = vi.fn(() => operation.complete());
+  operation.attachBackend({ kind: "embedded", cancel });
+  const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+  const deadlineAtMs = 6_000 + DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
+  attempt.beginRequest({ requestTimeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS, deadlineAtMs });
   const recover = vi.fn(recoverStuckDiagnosticSession);
-  requestStuckSessionRecovery({
-    classification,
-    request: { ...session, operation: original, ageMs: 1_000_000 },
-    recover,
-  });
+  const request = { ...ref, operation, ageMs: 1_000_000 };
+  const classification = {
+    eventType: "session.stalled",
+    classification: "stalled_agent_run",
+    reason: "active_work_without_progress",
+  } as const;
+  vi.setSystemTime(deadlineAtMs - 1);
+  requestStuckSessionRecovery({ classification, request, recover });
   expect(recover).not.toHaveBeenCalled();
-  expect(replacement.result).toBeNull();
+  vi.setSystemTime(deadlineAtMs);
+  requestStuckSessionRecovery({ classification, request, recover });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(recover).toHaveBeenCalledOnce();
+  await recover.mock.results[0]?.value;
+  await waitForDiagnosticEventsDrained();
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
 });
 
 it("defers an overdue heartbeat even when the captured controller is eligible", async () => {
-  const ref = session;
-  const { operation, cancel } = activeOperation(ref);
+  const ref = { sessionKey: "agent:main:overdue-recovery", sessionId: "overdue-session" };
+  const operation = createReplyOperation({ ...ref, resetTriggered: false });
+  operation.setPhase("running");
+  const cancel = vi.fn(() => operation.complete());
+  operation.attachBackend({ kind: "embedded", cancel });
   logSessionStateChange({ ...ref, state: "processing" });
-  const { recover, advance } = heartbeat(306_000, false);
+  const recover = vi.fn(recoverStuckDiagnosticSession);
+  vi.setSystemTime(306_000);
+  const clock = createGatewaySchedulerClock(306_000);
+  startGatewayDiagnosticHeartbeat(
+    createTestGatewayScheduler(clock.clock),
+    { diagnostics: { enabled: true } },
+    { recoverStuckSession: recover, sampleLiveness: () => null },
+  );
   vi.setSystemTime(371_000);
   expect(operation.watchdog.decide().action).toBe("stop");
-  await advance(371_000, false);
+  await clock.advanceTo(371_000);
+  await vi.advanceTimersByTimeAsync(0);
   expect(recover).not.toHaveBeenCalled();
   expect(cancel).not.toHaveBeenCalled();
-  await advance(401_000, false);
+  vi.setSystemTime(401_000);
+  await clock.advanceTo(401_000);
+  await vi.advanceTimersByTimeAsync(0);
   expect(recover).toHaveBeenCalledOnce();
   await recover.mock.results[0]?.value;
   await waitForDiagnosticEventsDrained();
@@ -176,7 +247,7 @@ it("defers an overdue heartbeat even when the captured controller is eligible", 
 });
 
 it("projects cleanup eligibility without releasing queued work before its writer settles", async () => {
-  const ref = session;
+  const ref = { sessionKey: "agent:main:cleanup-recovery", sessionId: "cleanup-session" };
   const operation = createReplyOperation({ ...ref, resetTriggered: false });
   operation.setPhase("running");
   const cancel = vi.fn();
@@ -191,6 +262,11 @@ it("projects cleanup eligibility without releasing queued work before its writer
   const recover = vi.fn(recoverStuckDiagnosticSession);
   const events: DiagnosticEventPayload[] = [];
   onDiagnosticEvent((event) => events.push(event));
+  const classification = {
+    eventType: "session.stalled",
+    classification: "stalled_agent_run",
+    reason: "active_work_without_progress",
+  } as const;
   const request = { ...ref, operation, ageMs: 60_000 };
   vi.setSystemTime(65_999);
   requestStuckSessionRecovery({ request, classification, recover });

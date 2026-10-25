@@ -232,18 +232,6 @@ async function writeEmbeddingConfig(config: Record<string, unknown>) {
   resetConfigRuntimeState();
 }
 
-function configureRemoteSearch(search: Record<string, unknown>) {
-  return writeEmbeddingConfig({
-    memory: {
-      search: {
-        provider: "openai-compatible",
-        remote: { baseUrl: genericEmbeddingServer.baseUrl },
-        ...search,
-      },
-    },
-  });
-}
-
 type EmbeddingsResponse = {
   object?: string;
   data?: Array<{ object?: string; embedding?: number[]; index?: number }>;
@@ -251,17 +239,20 @@ type EmbeddingsResponse = {
 };
 
 async function expectDefaultResponse(res: Response) {
-  const json = await expectEmbeddingData(res, [[0.1, 0.2]]);
+  expect(res.status).toBe(200);
+  const json = (await res.json()) as EmbeddingsResponse;
   expect(json.object).toBe("list");
+  expect(json.data?.[0]).toMatchObject({ object: "embedding", embedding: [0.1, 0.2] });
   expect(json.usage).toEqual(ZERO_USAGE);
 }
 
-async function expectEmbeddingData(res: Response, vectors: number[][]) {
+async function expectEmbeddingData(
+  res: Response,
+  expected: Array<{ object: "embedding"; index: number; embedding: number[] }>,
+) {
   expect(res.status).toBe(200);
   const json = (await res.json()) as EmbeddingsResponse;
-  expect(json.data).toEqual(
-    vectors.map((embedding, index) => ({ object: "embedding", index, embedding })),
-  );
+  expect(json.data).toEqual(expected);
   return json;
 }
 
@@ -278,9 +269,10 @@ async function expectInvalidRequest(res: Response, message?: string) {
 describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   it("embeds string and array inputs", async () => {
     await expectDefaultResponse(await post());
-    await expectEmbeddingData(await post({ input: ["a", "b"] }), [
-      [0.1, 0.2],
-      [1.1, 1.2],
+    const batch = await post({ input: ["a", "b"] });
+    await expectEmbeddingData(batch, [
+      { object: "embedding", index: 0, embedding: [0.1, 0.2] },
+      { object: "embedding", index: 1, embedding: [1.1, 1.2] },
     ]);
     const qualified = await post(
       { input: "hello again" },
@@ -293,6 +285,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       provider: "openai",
       model: "text-embedding-3-small",
     });
+    expect(closeProvider).toHaveBeenCalledTimes(3);
   });
 
   it.each([
@@ -324,7 +317,9 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as { data?: Array<{ embedding?: string }> };
     expect(typeof json.data?.[0]?.embedding).toBe("string");
+    expect(createProvider).toHaveBeenCalled();
     expect(createProvider.mock.lastCall?.[0]).toMatchObject({
+      model: expect.any(String),
       agentDir: resolveAgentDir({}, "beta"),
     });
   });
@@ -379,25 +374,32 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it.each([
+    { model: "nomic-embed-text", override: undefined },
     { model: "library/bge-m3", override: undefined },
     { model: "nomic-embed-text", override: "hf:org/model" },
   ])(
     "routes embedding model $model with override $override through the configured provider",
     async ({ model, override }) => {
-      await configureRemoteSearch({
-        model,
-        inputType: "default",
-        queryInputType: "query",
-        documentInputType: "document",
-        outputDimensionality: 2,
+      await writeEmbeddingConfig({
+        memory: {
+          search: {
+            provider: "openai-compatible",
+            model,
+            inputType: "default",
+            queryInputType: "query",
+            documentInputType: "document",
+            outputDimensionality: 2,
+            remote: { baseUrl: genericEmbeddingServer.baseUrl },
+          },
+        },
       });
       const res = await post(
         { input: ["a", "b"] },
         override ? { "x-openclaw-model": override } : undefined,
       );
       const json = await expectEmbeddingData(res, [
-        [9.1, 9.2],
-        [10.1, 9.2],
+        { object: "embedding", index: 0, embedding: [9.1, 9.2] },
+        { object: "embedding", index: 1, embedding: [10.1, 9.2] },
       ]);
       expect(json.usage).toEqual({ prompt_tokens: 777, total_tokens: 778 });
       expect(genericEmbeddingServer.requests.at(-1)?.body).toMatchObject({
@@ -408,22 +410,37 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     },
   );
 
-  it("reports dimensions the provider ignores without serving vectors", async () => {
-    await configureRemoteSearch({ model: "nomic-embed-text", outputDimensionality: 768 });
-    const res = await post({ input: ["a", "b"], dimensions: 512 });
-    expect(res.status).toBe(400);
-    const json = (await res.json()) as { data?: unknown; error?: unknown };
-    expect(json.data).toBeUndefined();
-    expect(json.error).toEqual({
-      type: "invalid_request_error",
-      code: "embedding_dimensions_mismatch",
-      message:
-        "The embedding provider returned 2 dimensions, but 512 were requested. Omit `dimensions` and `memory.search.outputDimensionality`, or use a model and server that support them.",
-    });
-    expect(genericEmbeddingServer.requests.at(-1)?.body).toMatchObject({
-      dimensions: 512,
-    });
-  });
+  it.each([
+    { name: "configured", body: { input: ["a", "b"] }, requested: 768 },
+    { name: "requested", body: { input: ["a", "b"], dimensions: 512 }, requested: 512 },
+  ])(
+    "reports $name dimensions the provider ignores without serving vectors",
+    async ({ body, requested }) => {
+      await writeEmbeddingConfig({
+        memory: {
+          search: {
+            provider: "openai-compatible",
+            model: "nomic-embed-text",
+            outputDimensionality: 768,
+            remote: { baseUrl: genericEmbeddingServer.baseUrl },
+          },
+        },
+      });
+
+      const res = await post(body);
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { data?: unknown; error?: unknown };
+      expect(json.data).toBeUndefined();
+      expect(json.error).toEqual({
+        type: "invalid_request_error",
+        code: "embedding_dimensions_mismatch",
+        message: `The embedding provider returned 2 dimensions, but ${requested} were requested. Omit \`dimensions\` and \`memory.search.outputDimensionality\`, or use a model and server that support them.`,
+      });
+      expect(genericEmbeddingServer.requests.at(-1)?.body).toMatchObject({
+        dimensions: requested,
+      });
+    },
+  );
 
   it("rejects disallowed x-openclaw-model provider overrides", async () => {
     registerEmbeddingProvider({
@@ -496,6 +513,8 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
             error: { type: "forbidden", message: "missing scope: operator.write" },
           });
           await expectDefaultResponse(await proxyPost("writer"));
+          expect(createProvider).toHaveBeenCalledOnce();
+          expect(embedBatch).toHaveBeenCalledOnce();
           const override = await proxyPost("writer", "openai/text-embedding-3-small");
           expect(override.status).toBe(403);
           expect(await override.json()).toMatchObject({
@@ -654,6 +673,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     );
     cleanup.requests.push(firstPromise);
     await waitForProviderEntry(cleanup.started, firstPromise);
+    expect(closeProvider).toHaveBeenCalledTimes(1);
     const secondEntered = cleanup.watchAdmission();
     const secondPromise = post(
       { input: "second" },
@@ -683,6 +703,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     let secondRequest: ReturnType<typeof httpRequest> | undefined;
     try {
       await waitForProviderEntry(cleanup.started, firstPromise);
+      expect(closeProvider).toHaveBeenCalledTimes(1);
       const queued = cleanup.watchAdmission();
       const { request, body } = rawEmbeddingRequest("second");
       secondRequest = request;
@@ -731,10 +752,12 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     const requests = [firstPromise];
     try {
       await waitForProviderEntry(firstEmbedStarted.promise, firstPromise);
+      expect(firstEmbed).toHaveBeenCalledTimes(1);
       const secondPromise = post({ input: "second" });
       requests.push(secondPromise);
       const second = await secondPromise;
       expect(second.status).toBe(200);
+      expect(secondEmbed).toHaveBeenCalledTimes(1);
       releaseFirstEmbed();
       expect((await firstPromise).status).toBe(200);
     } finally {
