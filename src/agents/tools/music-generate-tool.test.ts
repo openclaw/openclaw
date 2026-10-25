@@ -27,7 +27,6 @@ import type {
 import { mockFirstObjectArg as callArgument } from "../../test-utils/mock-call-assertions.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import {
   defineMediaGenerationDuplicateTests,
   withHeldMediaGenerationResult,
@@ -207,7 +206,6 @@ beforeEach(() => {
     inputs.map(() => ({})),
   );
   mediaActivityMocks.listOperations.mockReturnValue(undefined);
-  resetRecentMediaGenerationDuplicateGuardsForTests();
   resetGeneratedMediaTaskActivityForTests();
   vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mockClear();
   musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue({

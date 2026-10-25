@@ -44,7 +44,7 @@ export async function importStateMigrationFixtureGraph() {
     await import("../test-utils/channel-plugins.js");
   const { closeDatabaseTestCohorts, closeStateDatabaseForTest } =
     await import("../test-utils/database-cleanup.js");
-  const { acquireGatewayLock } = await import("./gateway-lock.js");
+  const { withGatewayLockHeld } = await import("./state-migrations.gateway-lock.test-support.js");
   const { executeSqliteQuerySync, getNodeSqliteKysely } = await import("./kysely-sync.js");
   const { loadApnsRegistration } = await import("./push-apns.js");
   const { acquireStartupMigrationLeaseWithWait } =
@@ -105,7 +105,7 @@ export async function importStateMigrationFixtureGraph() {
     createTestRegistry,
     closeDatabaseTestCohorts,
     closeStateDatabaseForTest,
-    acquireGatewayLock,
+    withGatewayLockHeld,
     executeSqliteQuerySync,
     getNodeSqliteKysely,
     loadApnsRegistration,

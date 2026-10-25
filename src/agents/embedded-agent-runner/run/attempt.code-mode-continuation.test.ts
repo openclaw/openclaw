@@ -1,13 +1,10 @@
 import type { Context } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import {
-  fakeTool,
-  pluginToolWithExecute,
-  resetCodeModeTestState,
-} from "../../code-mode.test-support.js";
+import { pluginToolWithExecute, resetCodeModeTestState } from "../../code-mode.test-support.js";
 import { Agent } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { fakeTool } from "../../test-helpers/fake-tool.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import { jsonResult } from "../../tools/common.js";

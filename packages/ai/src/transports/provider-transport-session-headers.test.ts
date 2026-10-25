@@ -4,6 +4,7 @@ import type {
   StreamFn,
 } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { jsonResponse } from "../../../../src/test-helpers/http.js";
 import { createApiRegistry } from "../api-registry.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamSimpleGoogle } from "../providers/google.js";
@@ -24,10 +25,7 @@ function captureRequests() {
   const requests: Request[] = [];
   const captureFetch: typeof fetch = async (input, init) => {
     requests.push(new Request(input, init));
-    return new Response(JSON.stringify({ error: { message: "request captured" } }), {
-      status: 400,
-      headers: { "content-type": "application/json" },
-    });
+    return jsonResponse({ error: { message: "request captured" } }, 400);
   };
   return { requests, captureFetch };
 }

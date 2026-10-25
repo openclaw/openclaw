@@ -89,7 +89,7 @@ function createSessionPatchHandler(
         request = { many: false, params };
       }
       const inputPatch = request.many ? request.params.patch : request.params;
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      const scopes = client?.connect.scopes ?? [];
       if (
         (inputPatch.permissionMode === "full" ||
           inputPatch.sandboxMode !== undefined ||
@@ -525,8 +525,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       if (!key) {
         return;
       }
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-      if (!scopes.includes(ADMIN_SCOPE)) {
+      if (!client?.connect.scopes?.includes(ADMIN_SCOPE)) {
         respond(
           false,
           undefined,

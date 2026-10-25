@@ -7,7 +7,7 @@ import {
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { createAssistantOutput } from "../../packages/ai/src/transports/assistant-output.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { isAudioPayload } from "../auto-reply/reply/agent-runner-helpers.js";
 import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
@@ -308,12 +308,11 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
     });
     const settled = Promise.all([producing, running]);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         beforeEnd.promise,
-        settled.then(() => {
-          throw new Error("transport ended before the pre-terminal checkpoint");
-        }),
-      ]);
+        settled,
+        "transport ended before the pre-terminal checkpoint",
+      );
       expect(delivered.length).toBeGreaterThan(0);
       const beforeTerminalCount = delivered.length;
       if ("terminalText" in scenario) {

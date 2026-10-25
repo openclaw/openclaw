@@ -6,11 +6,8 @@ import { withSqliteWorkerCleanupFailure } from "../infra/sqlite-worker-broker-re
 import { SqliteWorkerError, type SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { BoardValidationError } from "./board-layout.js";
-import {
-  boardFixture,
-  closeBoardDatabases,
-  htmlWidget,
-} from "./board-store.fixtures.test-support.js";
+import { boardFixture, htmlWidget } from "./board-store.fixtures.test-support.js";
+import { closeBoardDatabases } from "./board-store.test-support.js";
 import type { BoardWriteOperations, BoardWriteOutcome } from "./sqlite-board-operations.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 

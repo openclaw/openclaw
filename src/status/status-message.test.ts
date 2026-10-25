@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { model as catalogModel } from "../agents/model-catalog-fixtures.test-support.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 
@@ -14,15 +15,7 @@ import {
 } from "./status-message.test-support.js";
 
 function statusTestModel(id: string, name: string, contextWindow: number): ModelDefinitionConfig {
-  return {
-    id,
-    name,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens: 8_192,
-  };
+  return catalogModel(id, name, { contextWindow, maxTokens: 8_192 });
 }
 
 const displayParams: Partial<Parameters<typeof buildStatusMessage>[0]> = {

@@ -8,6 +8,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import type {
   AgentHarness,
@@ -61,16 +62,12 @@ export function createDiagnosticTrace(): DiagnosticTraceContext {
   return { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: "01" };
 }
 
-export const createFinalAssistant = (): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> => ({
-  role: "assistant",
-  content: [{ type: "text", text: "done" }],
-  api: "openai-responses",
-  provider: "openai",
-  model: "gpt-5.5",
-  usage: createZeroUsageFixture(),
-  stopReason: "stop",
-  timestamp: 0,
-});
+export const createFinalAssistant = (): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> =>
+  makeAgentAssistantMessage({
+    content: [{ type: "text", text: "done" }],
+    model: "gpt-5.5",
+    usage: createZeroUsageFixture(),
+  });
 
 export const createAttemptResult = (): EmbeddedRunAttemptResult => ({
   terminal: { kind: "ok" },

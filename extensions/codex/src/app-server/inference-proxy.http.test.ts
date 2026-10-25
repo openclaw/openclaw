@@ -9,6 +9,7 @@ import {
 } from "node:http";
 import { createServer } from "node:https";
 import { Socket } from "node:net";
+import { buffer as readBody } from "node:stream/consumers";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "openclaw/plugin-sdk/test-env";
@@ -122,14 +123,6 @@ function post(body = Buffer.from(JSON.stringify(child)), headers: Record<string,
   });
   req.end(body);
   return { req, response: response.promise, closed: closed.promise };
-}
-
-async function readBody(stream: IncomingMessage) {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
 }
 
 async function waitForUpstreamClose() {

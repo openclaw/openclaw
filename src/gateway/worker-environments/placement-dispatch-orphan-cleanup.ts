@@ -15,7 +15,8 @@ import {
 
 /** One startup pass of orphan-ref cleanup: workspace roots resolved once, completed roots remembered. */
 export type PendingWorkspaceResultOrphanCleanup = {
-  placements: readonly WorkerSessionPlacementIdentity[];
+  placements: WorkerSessionPlacementIdentity[];
+  initialDiscoveryPending: boolean;
   /** sessionId → workspace root, or null when the placement has no local root to clean. */
   rootsBySession: Map<string, string | null>;
   completedRoots: Set<string>;
@@ -31,30 +32,33 @@ export async function cleanupPendingWorkspaceResultOrphans(
   }
   const { placements } = deps;
   const { completedRoots, rootsBySession } = pass;
-  let complete = true;
-  // Each sweep admits the startup placements, but a placement's workspace root is resolved
-  // once per pass; a failed resolution stays uncached and is retried on the next sweep.
-  const workspaceSessions = new Map<string, string[]>();
-  for (const placement of pass.placements) {
+  // Discover the startup set once, then rotate failed lookups instead of rescanning
+  // every unavailable workspace each minute. Snapshot the budget before requeueing.
+  const attempts = pass.initialDiscoveryPending
+    ? pass.placements.length
+    : Math.min(pass.placements.length, 8);
+  for (let index = 0; index < attempts; index++) {
     if (deps.isShuttingDown?.()) {
       return false;
     }
-    let root = rootsBySession.get(placement.sessionId);
-    if (root === undefined) {
-      try {
-        const workspace = await deps.resolveWorkspace(placement);
-        root = workspace.kind === "local" ? workspace.path : null;
-        rootsBySession.set(placement.sessionId, root);
-      } catch {
-        complete = false;
-        continue;
-      }
+    const placement = pass.placements.shift()!;
+    try {
+      const workspace = await deps.resolveWorkspace(placement);
+      rootsBySession.set(placement.sessionId, workspace.kind === "local" ? workspace.path : null);
+    } catch {
+      pass.placements.push(placement);
     }
+  }
+  pass.initialDiscoveryPending = false;
+  let complete = pass.placements.length === 0;
+  const workspaceSessions = new Map<string, string[]>();
+  // Admission includes previously resolved siblings, even if only one root was found this sweep.
+  for (const [sessionId, root] of rootsBySession) {
     if (root === null) {
       continue;
     }
     const sessionIds = workspaceSessions.get(root) ?? [];
-    sessionIds.push(placement.sessionId);
+    sessionIds.push(sessionId);
     workspaceSessions.set(root, sessionIds);
   }
   // The existing minute sweep owns continuation; orphan refs carry no live authority.

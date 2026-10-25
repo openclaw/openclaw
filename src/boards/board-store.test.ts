@@ -19,13 +19,16 @@ import { BoardValidationError } from "./board-layout.js";
 import {
   boardFixture,
   boardClient,
-  closeBoardDatabases as closeDatabases,
   htmlWidget,
   mcpContent,
   testBoard,
 } from "./board-store.fixtures.test-support.js";
 import type { BoardStore } from "./board-store.js";
-import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
+import {
+  closeBoardDatabases as closeDatabases,
+  readBoardHtml,
+  createTestBoardStore,
+} from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
 

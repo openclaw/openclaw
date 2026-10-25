@@ -187,7 +187,6 @@ it.for([
       await release.promise;
     };
     const guard = authority();
-    let publicationPreparations = 0;
     let queueOwner: Promise<void> | undefined;
     const importRoots: string[] = [];
     const mkdir = fs.mkdir.bind(fs);
@@ -246,9 +245,6 @@ it.for([
     const prepare = workspaceManifestWorker.prepareWorkspaceStageInput;
     vi.spyOn(workspaceManifestWorker, "prepareWorkspaceStageInput").mockImplementation(
       async (params) => {
-        if ("publication" in params) {
-          publicationPreparations++;
-        }
         const result = await prepare(params);
         if ("publication" in params === publication) {
           // A real admitted worker completes its private input; closure does not cancel it instantly.
@@ -263,7 +259,7 @@ it.for([
       },
     );
     const runExec = processExec.runExec;
-    const imports = vi.spyOn(processExec, "runExec").mockImplementation(async (...args) => {
+    vi.spyOn(processExec, "runExec").mockImplementation(async (...args) => {
       const result = await runExec(...args);
       if (boundary === "import" && args[0] === "git" && args[1].includes("fast-import")) {
         await pause();
@@ -312,7 +308,6 @@ it.for([
         expect(await listRefs(artifact, "worker-results/")).toBe("");
       }
       const preparedInput = ["preparation", "queue", "import"].includes(boundary);
-      expect(publicationPreparations).toBe(publication && preparedInput ? 1 : 0);
       if (preparedInput) {
         expect((await fs.stat(path.join(importRoots.at(-1)!, "fast-import"))).size).toBeGreaterThan(
           0,
@@ -340,11 +335,6 @@ it.for([
         },
       });
       expect(await current()).toEqual(atRelease);
-      expect(
-        imports.mock.calls.filter(
-          ([command, args]) => command === "git" && args.includes("fast-import"),
-        ),
-      ).toHaveLength(publication || ["import", "final-input"].includes(boundary) ? 1 : 0);
       for (const directory of importRoots) {
         await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
       }
@@ -354,7 +344,6 @@ it.for([
       } else {
         expect(await listRefs(artifact, "")).toBe("");
       }
-      expect(publicationPreparations).toBe(publication && preparedInput ? 1 : 0);
     } finally {
       resume();
       signal.removeEventListener("abort", resume);

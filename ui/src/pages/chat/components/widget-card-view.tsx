@@ -42,7 +42,7 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
-import { BrowserTabCardHost } from "./browser-tab-card.tsx";
+import "./browser-tab-card.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   WidgetCardMenu,
@@ -60,6 +60,10 @@ registerMcpAppEnglish();
 
 const YouTubeVideoCard = lazy(() => import("./youtube-video-card.tsx"), {
   export: "YouTubeVideoCard",
+});
+
+const BrowserTabCardHost = lazy(() => import("./browser-tab-card.tsx"), {
+  export: "BrowserTabCardHost",
 });
 
 const CanvasWidgetMount = lazy(() => import("./canvas-widget-mount.tsx"), {
@@ -91,6 +95,7 @@ type WidgetCardOptions = {
   rawText?: string | null;
   toggleRawDetails?: () => boolean;
   canvasPluginSurfaceUrl?: string | null;
+  mediaReadAllowed?: boolean;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   sessionKey?: string;
@@ -393,101 +398,95 @@ function WidgetContent(props: {
 }) {
   const managed = () =>
     props.preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(props.preview);
+  const layoutKey = () =>
+    props.preview.mcpApp
+      ? `mcp:${props.preview.mcpApp.viewId}`
+      : managed()
+        ? `canvas:${props.preview.viewId!.trim()}`
+        : `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`;
+  const height = () =>
+    props.options?.widgetLayout?.read(layoutKey()) ??
+    props.preview.preferredHeight ??
+    (props.preview.mcpApp ? 600 : 420);
   return (
     <Show
-      when={props.preview.mcpApp}
-      fallback={
-        <Show
-          when={managed()}
-          fallback={
-            <PreviewFrame
-              onExportSource={props.onExportSource}
-              params={{
-                title: props.preview.title?.trim() || t("chat.toolCards.canvas"),
-                src: resolveCanvasIframeUrl(
-                  props.preview.url,
-                  props.options?.canvasPluginSurfaceUrl,
-                  props.options?.allowExternalEmbedUrls ?? false,
-                ),
-                frameKey: props.preview.url?.trim() || props.preview.viewId?.trim(),
-                height:
-                  props.options?.widgetLayout?.read(
-                    `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`,
-                  ) ?? props.preview.preferredHeight,
-                onHeightChange: (height) =>
-                  props.options?.widgetLayout?.write(
-                    `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`,
-                    height,
-                  ),
-                sandbox: props.sandbox,
-                promptCapable: isInternalCanvasEntryUrl(props.preview.url),
-              }}
-            />
-          }
-        >
-          {(_managed) => {
-            return (
-              <ChatLazyBoundary
-                fallback={
-                  <div
-                    style={{
-                      display: "block",
-                      "min-height": `${
-                        props.options?.widgetLayout?.read(
-                          `canvas:${props.preview.viewId!.trim()}`,
-                        ) ??
-                        props.preview.preferredHeight ??
-                        420
-                      }px`,
-                    }}
-                  />
-                }
-              >
-                <CanvasWidgetMount
-                  onElement={props.onExportSource}
-                  docId={props.preview.viewId!.trim()}
-                  sessionKey={props.options?.sessionKey ?? ""}
-                  messageTimestamp={props.options?.messageTimestamp}
-                  title={props.preview.title?.trim() || t("chat.toolCards.canvas")}
-                  preferredHeight={
-                    props.options?.widgetLayout?.read(`canvas:${props.preview.viewId!.trim()}`) ??
-                    props.preview.preferredHeight
-                  }
-                  onHeightChange={(height) =>
-                    props.options?.widgetLayout?.write(
-                      `canvas:${props.preview.viewId!.trim()}`,
-                      height,
-                    )
-                  }
-                  allowScripts={props.sandbox.includes("allow-scripts")}
-                  connectionGeneration={getCanvasWidgetFrameConnectionGeneration()}
-                />
-              </ChatLazyBoundary>
-            );
-          }}
-        </Show>
-      }
+      when={props.options?.mediaReadAllowed !== false}
+      fallback={<div style={{ display: "block", "min-height": `${height()}px` }} />}
     >
-      {(app) => {
-        const key = () => `mcp:${app().viewId}`;
-        const height = () =>
-          props.options?.widgetLayout?.read(key()) ?? props.preview.preferredHeight ?? 600;
-        return (
-          <ChatLazyBoundary
-            fallback={<div style={{ display: "block", "min-height": `${height()}px` }} />}
+      <Show
+        when={props.preview.mcpApp}
+        fallback={
+          <Show
+            when={managed()}
+            fallback={
+              <PreviewFrame
+                onExportSource={props.onExportSource}
+                params={{
+                  title: props.preview.title?.trim() || t("chat.toolCards.canvas"),
+                  src: resolveCanvasIframeUrl(
+                    props.preview.url,
+                    props.options?.canvasPluginSurfaceUrl,
+                    props.options?.allowExternalEmbedUrls ?? false,
+                  ),
+                  frameKey: props.preview.url?.trim() || props.preview.viewId?.trim(),
+                  height: height(),
+                  onHeightChange: (nextHeight) =>
+                    props.options?.widgetLayout?.write(layoutKey(), nextHeight),
+                  sandbox: props.sandbox,
+                  promptCapable: isInternalCanvasEntryUrl(props.preview.url),
+                }}
+              />
+            }
           >
-            <McpAppPreview
-              sessionKey={props.options?.sessionKey ?? ""}
-              viewId={app().viewId}
-              height={height()}
-              onHeightChange={(nextHeight: number) =>
-                props.options?.widgetLayout?.write(key(), nextHeight)
-              }
-              title={props.preview.title?.trim() || t("mcpApp.title")}
-            />
-          </ChatLazyBoundary>
-        );
-      }}
+            {(_managed) => {
+              return (
+                <ChatLazyBoundary
+                  fallback={
+                    <div
+                      style={{
+                        display: "block",
+                        "min-height": `${height()}px`,
+                      }}
+                    />
+                  }
+                >
+                  <CanvasWidgetMount
+                    onElement={props.onExportSource}
+                    docId={props.preview.viewId!.trim()}
+                    sessionKey={props.options?.sessionKey ?? ""}
+                    messageTimestamp={props.options?.messageTimestamp}
+                    title={props.preview.title?.trim() || t("chat.toolCards.canvas")}
+                    preferredHeight={height()}
+                    onHeightChange={(nextHeight) =>
+                      props.options?.widgetLayout?.write(layoutKey(), nextHeight)
+                    }
+                    allowScripts={props.sandbox.includes("allow-scripts")}
+                    connectionGeneration={getCanvasWidgetFrameConnectionGeneration()}
+                  />
+                </ChatLazyBoundary>
+              );
+            }}
+          </Show>
+        }
+      >
+        {(app) => {
+          return (
+            <ChatLazyBoundary
+              fallback={<div style={{ display: "block", "min-height": `${height()}px` }} />}
+            >
+              <McpAppPreview
+                sessionKey={props.options?.sessionKey ?? ""}
+                viewId={app().viewId}
+                height={height()}
+                onHeightChange={(nextHeight: number) =>
+                  props.options?.widgetLayout?.write(layoutKey(), nextHeight)
+                }
+                title={props.preview.title?.trim() || t("mcpApp.title")}
+              />
+            </ChatLazyBoundary>
+          );
+        }}
+      </Show>
     </Show>
   );
 }
@@ -586,7 +585,8 @@ function CanvasPreview(props: {
   };
   const canExportImage = () => !props.preview.mcpApp && isInternalCanvasEntryUrl(props.preview.url);
   const hasMenu = () => canExportImage() || Boolean(props.options?.rawText);
-  const hasActions = () => Boolean(canPin() || hasMenu());
+  const hasActions = () =>
+    props.options?.mediaReadAllowed !== false && Boolean(canPin() || hasMenu());
   const pinTarget = createMemo(
     (): WidgetPinTarget | undefined =>
       canPin()
@@ -666,7 +666,7 @@ export function ToolPreview(props: ToolPreviewProps) {
       : undefined;
   return (
     <Show
-      when={browser()}
+      when={props.options?.mediaReadAllowed !== false && browser()}
       fallback={
         <Show when={canvas()}>
           {(preview) => {
@@ -675,7 +675,7 @@ export function ToolPreview(props: ToolPreviewProps) {
             );
             return (
               <Show
-                when={video()}
+                when={props.options?.mediaReadAllowed !== false && video()}
                 fallback={
                   <CanvasPreview
                     preview={preview()}
@@ -718,7 +718,11 @@ export function ToolPreview(props: ToolPreviewProps) {
         </Show>
       }
     >
-      {(preview) => <BrowserTabCardHost preview={preview()} latest={false} />}
+      {(preview) => (
+        <ChatLazyBoundary>
+          <BrowserTabCardHost preview={preview()} latest={false} />
+        </ChatLazyBoundary>
+      )}
     </Show>
   );
 }

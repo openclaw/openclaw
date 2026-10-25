@@ -329,6 +329,7 @@ function AssistantViews(props: ContentProps) {
                     return Boolean(rawToggle && open);
                   },
                   canvasPluginSurfaceUrl: props.options.canvasPluginSurfaceUrl,
+                  mediaReadAllowed: props.options.mediaReadAllowed,
                   boardProvider: props.options.boardProvider,
                   widgetLayout: props.options.widgetLayout,
                   embedSandboxMode: props.options.embedSandboxMode ?? "scripts",
@@ -532,7 +533,7 @@ function BubbleContents(props: ContentProps) {
             block={block()}
             sessionKey={props.options.sessionKey ?? ""}
             agentId={props.options.agentId}
-            presented={props.options.presented}
+            presented={props.options.mediaReadAllowed !== false && props.options.presented}
           />
         )}
       </For>
@@ -660,6 +661,7 @@ function ToolMessage(props: ContentProps) {
                 expanded: props.state().toolMessageExpanded,
               })}
               presented={props.options.presented ?? true}
+              enabled={props.options.mediaReadAllowed !== false}
               renderDefault={() => <ToolMessageFallback {...props} />}
             />
           )}

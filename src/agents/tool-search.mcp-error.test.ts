@@ -4,6 +4,7 @@ import type { Message } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { runAgentLoop, type AgentEvent } from "../plugin-sdk/agent-core.js";
+import { catalogTool } from "./agent-bundle-mcp-fixture.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { isToolResultError } from "./tool-result-error.js";
@@ -32,14 +33,10 @@ function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
       },
     },
     tools: [
-      {
-        serverName: "searchServer",
-        safeServerName: "searchServer",
-        toolName: "query",
+      catalogTool("searchServer", "query", {
         description: "Query the search backend",
         fallbackDescription: "Query the search backend",
-        inputSchema: { type: "object", properties: {} },
-      },
+      }),
     ],
   };
   return {

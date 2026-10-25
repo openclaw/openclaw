@@ -29,6 +29,7 @@ import {
   directSessionReq,
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
+  createRepositoryDeviceHarness,
 } from "./test/server-sessions.test-helpers.js";
 import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.types.js";
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
@@ -99,22 +100,7 @@ test.each([
       { pairingIdentity: "node-host", pairingGeneration: "node-host-generation" },
     );
     const connected = vi.spyOn(registry, "listConnectedForPairingStates").mockReturnValue([node]);
-    registerAgentHarness({
-      id: "repository-device",
-      label: "Repository device",
-      autoSelection: { providerIds: ["repository-provider"] },
-      supports: () => ({ supported: true }),
-      cloudPlacement: {
-        mode: "remote-exec",
-        devicePlacement: {
-          requiredNodeCommands: ["runtime.repository.v1"],
-          consumesWorkerSlot: false,
-        },
-      },
-      runAttempt: async () => {
-        throw new Error("projection must not execute the runtime");
-      },
-    });
+    registerAgentHarness(createRepositoryDeviceHarness("projection must not execute the runtime"));
     try {
       await i18n.setLocale("en");
       updateNodeRunnerInventory({

@@ -29,8 +29,8 @@ export async function waitForStart(started: Promise<unknown>, call: Promise<unkn
   ]);
 }
 
-export function createMcpConnection(server: Server) {
-  const client = new Client({ name: "mcp-test-client", version: "0.0.0" }, { capabilities: {} });
+export function createMcpConnection(server: Server, name = "mcp-test-client") {
+  const client = new Client({ name, version: "0.0.0" }, { capabilities: {} });
   const [outbound, inbound] = InMemoryTransport.createLinkedPair();
   return {
     client,

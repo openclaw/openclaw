@@ -10,7 +10,7 @@ import {
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
-import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
+import { createCanonicalFixtureSkill, makeSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
 import {
   formatSkillsCompactForPrompt as formatSkillsCompact,
@@ -23,16 +23,6 @@ const buildWorkspaceSkillsPrompt = async (
   workspaceDir: string,
   opts?: Parameters<typeof buildSkillSnapshot>[1],
 ): Promise<string> => (await buildSkillSnapshot(workspaceDir, opts)).prompt;
-
-function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
-  return createCanonicalFixtureSkill({
-    name,
-    description: desc,
-    filePath,
-    baseDir: `/skills/${name}`,
-    source: "workspace",
-  });
-}
 
 function makeEntry(skill: Skill): SkillEntry {
   return {

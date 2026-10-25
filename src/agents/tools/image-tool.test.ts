@@ -48,6 +48,7 @@ import {
   expectToolText,
   ONE_PIXEL_PNG_B64,
   readJpegDimensions,
+  replyImageOk,
   resolveConfiguredImageModelForTest,
   testing,
   type ToolTextResult,
@@ -839,10 +840,7 @@ describe("image tool implicit imageModel config", () => {
 
   it("carries the scoped auth store into image provider execution", async () => {
     await withTempAgentDir(async (agentDir) => {
-      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-        text: "ok",
-        model: params.model,
-      }));
+      const describeImage = vi.fn(replyImageOk);
       installImageUnderstandingProviderStubs({
         id: "codex",
         capabilities: ["image"],
@@ -931,10 +929,7 @@ describe("image tool implicit imageModel config", () => {
   ])("uses $name for provider calls", async ({ modelTimeout, expected }) => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       await withTempAgentDir(async (agentDir) => {
-        const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-          text: "ok",
-          model: params.model,
-        }));
+        const describeImage = vi.fn(replyImageOk);
         installFastLocalImageProviderStubs({
           id: "ollama",
           capabilities: ["image"],
@@ -1267,10 +1262,7 @@ describe("image tool implicit imageModel config", () => {
 
   it("allows current iMessage account attachments", async () => {
     await withTempAgentDir(async (agentDir) => {
-      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-        text: "ok",
-        model: params.model,
-      }));
+      const describeImage = vi.fn(replyImageOk);
       installFastLocalImageProviderStubs({
         id: "ollama",
         capabilities: ["image"],

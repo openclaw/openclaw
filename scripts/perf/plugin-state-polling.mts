@@ -40,6 +40,7 @@ const { values } = parseArgs({
     receipts: { type: "string", default: "0" },
     "audit-prefill": { type: "boolean", default: false },
     "expired-peer": { type: "boolean", default: false },
+    "expired-audit-orphan": { type: "boolean", default: false },
     profile: { type: "boolean", default: false },
   },
 });
@@ -304,6 +305,9 @@ try {
       );
       await seed("audit-head", 1).register("head", head);
     }
+    if (values["expired-audit-orphan"]) {
+      await seed("audit", REEF_AUDIT_MAX_ENTRIES + 1).register("expired-orphan", {}, { ttlMs: 1 });
+    }
     if (values["expired-peer"]) {
       await seed("expired", 1, "synthetic-expired-peer", 1).register("expired", {
         synthetic: true,
@@ -391,6 +395,7 @@ try {
       receiptCount,
       auditPrefill: values["audit-prefill"],
       expiredPeer: values["expired-peer"],
+      expiredAuditOrphan: values["expired-audit-orphan"],
       durationMs,
       initialPolls,
       steadyPolls: polls - initialPolls,

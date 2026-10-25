@@ -47,7 +47,8 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     }
     const database = this.database;
     const assertCurrent = () => {
-      if (this.closed || !database.isOpen || this.database !== database) {
+      // Shutdown discards suspended rebuilds before releasing this database owner.
+      if ((this.closed && !this.closing) || !database.isOpen || this.database !== database) {
         throw new Error("Memory database owner closed or changed before write admission");
       }
     };
@@ -254,13 +255,19 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       if (accepted.length === 0) {
         return;
       }
+      const reindex = this.reindexProgress;
+      if (reindex) {
+        reindex.cacheWritesPendingPrune = true;
+      }
       await this.withGeneratedEmbeddingCacheWrite(generation, {
         kind: "upsert",
         header: {
           agentId: this.agentId,
           provider: { id: generation.provider.id, model: generation.provider.model },
           providerKey: generation.providerKey,
-          maxEntries: this.cache.maxEntries,
+          // Later rebuild batches may still need the oldest cached vectors.
+          // The rebuild owner trims after publication or abandonment.
+          maxEntries: reindex ? undefined : this.cache.maxEntries,
           unreferencedFirst: { identities: generation.identities },
         },
         entries: accepted,

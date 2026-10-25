@@ -208,6 +208,11 @@ Unexpected channel exits use automatic restart backoff. Intentional stops cancel
 
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
+Proxies listed in `gateway.trustedProxies` can request aggregate readiness and
+startup checks without forwarded client headers. Diagnostic details still require
+client attribution and authorization. Proxy attribution remains required for
+non-probe routes; untrusted proxy sources do not receive this exception.
+
 ### Shared-state integrity failure
 
 A terminal shared-state admission failure immediately makes `/ready` and `/readyz`

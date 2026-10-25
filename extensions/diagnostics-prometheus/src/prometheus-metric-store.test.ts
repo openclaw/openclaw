@@ -1,11 +1,37 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   PROMETHEUS_FAMILY_RESERVES,
   type PrometheusMetricName,
 } from "./prometheus-family-budget.js";
 import { createPrometheusMetricStore } from "./prometheus-metric-store.js";
+
+it("formats unchanged series only once across interleaved scrapes and updates", () => {
+  const first = createPrometheusMetricStore();
+  const second = createPrometheusMetricStore();
+  first.histogram("openclaw_run_duration_seconds", "Duration.", {}, 0.015, [1]);
+  second.histogram("openclaw_run_duration_seconds", "Duration.", {}, 0.025, [1]);
+  first.gauge("openclaw_worker_queue_depth", "Depth.", {}, 0.125);
+  const format = vi.spyOn(Number.prototype, "toPrecision");
+  try {
+    first.render();
+    second.render();
+    expect(format).toHaveBeenCalledTimes(3);
+    format.mockClear();
+    first.gauge("openclaw_worker_queue_depth", "Depth.", {}, 0.125);
+    first.render();
+    second.render();
+    expect(format).not.toHaveBeenCalled();
+
+    first.histogram("openclaw_run_duration_seconds", "Duration.", {}, 0.02, [1]);
+    expect(first.render().toString()).toContain("openclaw_run_duration_seconds_sum 0.035\n");
+    expect(second.render().toString()).toContain("openclaw_run_duration_seconds_sum 0.025\n");
+    expect(format).toHaveBeenCalledTimes(1);
+  } finally {
+    format.mockRestore();
+  }
+});
 
 it("keeps earlier scrape bytes stable across value changes, gauge removal, and reset", () => {
   const store = createPrometheusMetricStore();
@@ -37,6 +63,18 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
   );
   expect(updated).toContain(
     'openclaw_run_duration_seconds_sum{a="first",le="replaced",z="雪\\"\\\\\\n"} 2.5\n',
+  );
+  for (const value of [12345, -1234, 7]) {
+    store.gauge("openclaw_worker_queue_depth", "Depth.", {}, value);
+    const rendered = store.render();
+    expect(rendered.toString()).toContain(`openclaw_worker_queue_depth ${value}\n`);
+    rendered.buffer.transfer(0);
+  }
+  for (let index = 0; index < 8; index++) {
+    store.histogram("openclaw_run_duration_seconds", "Duration.", labels, 1, [1, 10]);
+  }
+  expect(store.render().toString()).toContain(
+    'openclaw_run_duration_seconds_count{a="first",le="replaced",z="雪\\"\\\\\\n"} 10\n',
   );
   const largeLabel = "雪😀".repeat(1024);
   store.gauge("openclaw_worker_queue_depth", "Depth.", { label: largeLabel }, 7);

@@ -1,8 +1,9 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { collect as collectItems } from "../../test/helpers/async-iterable.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { StorageLocationConfig } from "../config/types.storage.js";
 import { initStorageLocation, openStorageLocation, probeStorageLocation } from "./locations.js";
@@ -27,11 +28,7 @@ async function collect(body: AsyncIterable<Uint8Array> | undefined): Promise<Buf
 }
 
 async function list(body: AsyncIterable<StorageObjectInfo>): Promise<StorageObjectInfo[]> {
-  const objects: StorageObjectInfo[] = [];
-  for await (const object of body) {
-    objects.push(object);
-  }
-  return objects.toSorted((left, right) => left.key.localeCompare(right.key));
+  return (await collectItems(body)).toSorted((left, right) => left.key.localeCompare(right.key));
 }
 
 function objectInfo(key: string, sizeBytes: number, storedBytes = sizeBytes) {

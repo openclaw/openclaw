@@ -5,10 +5,10 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import {
   createCatalogCodeModeHarness,
   codeModeRunner,
-  fakeTool,
   resetCodeModeTestState,
   resultDetails,
 } from "./code-mode.test-support.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { jsonResult } from "./tools/common.js";
 
 function createLoopHarness(maxOutputBytes?: number) {

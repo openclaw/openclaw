@@ -84,15 +84,6 @@ describe("command-startup-policy", () => {
     }
   });
 
-  it("reserves stdout for the browser native-host protocol", () => {
-    expect(resolvePolicy("browser extension native-host")).toMatchObject({
-      skipConfigGuard: true,
-      loadPlugins: false,
-      hideBanner: true,
-      suppressDoctorStdout: true,
-    });
-  });
-
   it("reserves stdout for the node worker protocol", () => {
     expect(resolvePolicy("node worker")).toMatchObject({
       hideBanner: true,
@@ -102,15 +93,6 @@ describe("command-startup-policy", () => {
       skipConfigGuard: false,
     });
     expect(resolvePolicy("node run").validateConfigOnly).toBeUndefined();
-  });
-
-  it("isolates cloud worker startup", () => {
-    expect(resolvePolicy("worker")).toMatchObject({
-      skipConfigGuard: true,
-      hideBanner: true,
-      loadPlugins: false,
-      suppressDoctorStdout: true,
-    });
   });
 
   it.each([

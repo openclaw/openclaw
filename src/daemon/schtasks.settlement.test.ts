@@ -839,14 +839,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       stdout: "",
       stderr: "FEHLER: Die angegebene Datei wurde nicht gefunden.",
     });
-    spawnSync.mockReturnValueOnce({
-      pid: 0,
-      output: [null, "-2147024894", ""],
-      stdout: "-2147024894",
-      stderr: "",
-      status: 1,
-      signal: null,
-    });
+    spawnSync.mockReturnValueOnce(spawnSyncResult("-2147024894", 1));
 
     await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(false);
 

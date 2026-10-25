@@ -1,3 +1,4 @@
+import { createToolLoadContext } from "../plugins/tools.test-support.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
@@ -74,17 +75,14 @@ async function acquireBorrower(
         preferBuiltPluginArtifacts: false,
       }),
     });
-    setPluginRuntimeLoadContext(registry, {
-      rawConfig: config,
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir,
-      env: process.env,
-      metadataSnapshot: metadata,
-      manifestRegistry: metadata.manifestRegistry,
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-    });
+    setPluginRuntimeLoadContext(
+      registry,
+      createToolLoadContext(config, workspaceDir, {
+        metadataSnapshot: metadata,
+        manifestRegistry: metadata.manifestRegistry,
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+      }),
+    );
     setActivePluginRegistry(registry, undefined, "gateway-bindable", workspaceDir);
     resources.defer(() => clearActivePluginRegistry(registry));
     expect(runInScope(() => loadPreparedInboundPluginRegistry(input, metadata))).toBe(registry);

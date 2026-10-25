@@ -11,11 +11,11 @@ import {
   createCatalogCodeModeHarness,
   expectFailure,
   expectCompleted,
-  fakeTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   testing,
 } from "./code-mode.test-support.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { jsonResult, ToolInputError } from "./tools/common.js";
 
 afterEach(resetCodeModeTestState);

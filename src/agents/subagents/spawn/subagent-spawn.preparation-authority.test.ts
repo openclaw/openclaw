@@ -10,7 +10,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-spawn-model.mocks.shared.js";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fork.js";
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
@@ -563,12 +563,11 @@ describe("pending spawn preparation authority", () => {
     );
     try {
       // A rejected spawn never enters preparation; report it instead of waiting for the test timeout.
-      const childSessionKey = await Promise.race([
+      const childSessionKey = await awaitGateBeforeSettlement(
         entered.promise,
-        wrapped.then(() => {
-          throw new Error("Spawn settled before entering context preparation");
-        }),
-      ]);
+        wrapped,
+        "Spawn settled before entering context preparation",
+      );
       expect(subagentRuns.size, "no ownership transfer before preparation resolves").toBe(0);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeDefined();
       if (closure === "native acceptance") {

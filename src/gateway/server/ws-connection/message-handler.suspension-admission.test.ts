@@ -117,7 +117,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     get client() {
       return handler.getClient();
     },
-    sendConnect: () => sendConnect("connect-1", connectParams),
+    sendConnect: (scopes: unknown = []) => sendConnect("connect-1", { ...connectParams, scopes }),
     sendWorkerConnect: () => sendConnect("worker-connect", { role: "worker" }),
     sendStartupNodeConnect: () =>
       sendConnect("startup-node-connect", {
@@ -154,6 +154,25 @@ afterEach(async () => {
 });
 
 describe("WebSocket connect suspension admission", () => {
+  it.each(["operator.admin", "xoperator.adminx"])(
+    "rejects non-array scopes %s before admitting the client",
+    async (scopes) => {
+      const harness = attachHarness();
+      harness.sendConnect(scopes);
+
+      await vi.waitFor(() => expect(harness.close).toHaveBeenCalled());
+      expect(harness.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "connect-1",
+          ok: false,
+          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
+        }),
+      );
+      expect(harness.client).toBeNull();
+      expect(harness.setClient).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects a validated connect while suspension is preparing before session mutations", async () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension).not.toBeNull();

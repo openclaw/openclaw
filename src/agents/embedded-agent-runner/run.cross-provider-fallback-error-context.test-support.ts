@@ -41,6 +41,16 @@ function isCurrentAttemptAssistant(value: unknown): value is CurrentAttemptAssis
   );
 }
 
+function staleQuotaAssistant() {
+  return makeAssistantMessageFixture({
+    stopReason: "error",
+    errorMessage: "You exceeded your current OpenAI quota.",
+    provider: "openai",
+    model: "gpt-5.4",
+    content: [],
+  });
+}
+
 function setupDeepseekFallbackErrorMatchers() {
   // DeepSeek matchers prove failover classification uses the current candidate
   // assistant instead of stale history from the previous provider.
@@ -258,13 +268,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       makeAttemptResult({
         assistantTexts: [],
         terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
-        lastAssistant: makeAssistantMessageFixture({
-          stopReason: "error",
-          errorMessage: "You exceeded your current OpenAI quota.",
-          provider: "openai",
-          model: "gpt-5.4",
-          content: [],
-        }),
+        lastAssistant: staleQuotaAssistant(),
         currentAttemptAssistant: undefined,
       }),
     );
@@ -288,13 +292,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: makeAssistantMessageFixture({
-          stopReason: "error",
-          errorMessage: "You exceeded your current OpenAI quota.",
-          provider: "openai",
-          model: "gpt-5.4",
-          content: [],
-        }),
+        lastAssistant: staleQuotaAssistant(),
         currentAttemptAssistant: undefined,
       }),
     );

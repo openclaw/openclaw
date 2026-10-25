@@ -4,7 +4,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { buildChatMarkdown } from "../../pages/chat/export.ts";
 import { loadCompleteChatHistory } from "../chat/complete-history.ts";
 import { copyToClipboard } from "../clipboard.ts";
@@ -19,7 +19,7 @@ import {
 } from "./route-navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
 
-registerSessionOrganizationEnglish();
+registerSessionOrganizationSharedEnglish();
 
 type SessionNavigationActionKind =
   | "copy-session-id"

@@ -344,6 +344,20 @@ it.each(["unsubscribe", "resolve", "close"] as const)(
   },
 );
 
+it("reads current approval config only while its Gateway instance is open", () => {
+  const initial = { gateway: { publicOrigin: "https://before.example.com" } };
+  const next = { gateway: { publicOrigin: "https://after.example.com" } };
+  let current = initial;
+  const context = { ...createContext(), getRuntimeConfig: () => current };
+  const runtime = createRuntime({ context });
+  const getRuntimeConfig = runtime.nativeApprovals.getRuntimeConfig;
+  expect(getRuntimeConfig()).toBe(initial);
+  current = next;
+  expect(getRuntimeConfig()).toBe(next);
+  runtime.close();
+  expect(() => getRuntimeConfig()).toThrow("Gateway instance approval runtime is closed");
+});
+
 it("rejects methods outside each closed internal principal", async () => {
   const runtime = createRuntime();
 

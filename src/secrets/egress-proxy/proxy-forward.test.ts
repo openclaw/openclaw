@@ -11,6 +11,7 @@ import { Socket } from "node:net";
 import { PassThrough, Writable, type Readable } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveSecretSentinel, sealSecretSentinel } from "../sentinel.js";
 import { createSecretEgressBodyBudget, forwardSecretEgressRequest } from "./proxy-forward.js";
 
@@ -90,10 +91,7 @@ describe("secret egress forwarding resource ownership", () => {
     const resources: Array<Readable | Writable> = [];
     const submitted: Buffer[] = [];
     let completeWrite: (error?: Error | null) => void = () => {};
-    let firstWrite: () => void = () => {};
-    const started = new Promise<void>((resolve) => {
-      firstWrite = resolve;
-    });
+    const started = createDeferredCore();
     // Real Writable backpressure controls transport admission without relying on
     // platform socket buffers or adding a test-only production hook.
     const upstream = new Writable({
@@ -101,7 +99,7 @@ describe("secret egress forwarding resource ownership", () => {
       write(chunk: Buffer, _encoding, callback) {
         submitted.push(Buffer.from(chunk));
         completeWrite = callback;
-        firstWrite();
+        started.resolve();
       },
     });
     vi.mocked(httpsRequest).mockReturnValueOnce(upstream as unknown as ClientRequest);
@@ -131,7 +129,7 @@ describe("secret egress forwarding resource ownership", () => {
       });
       request.push(body);
       request.push(null);
-      await started;
+      await started.promise;
       expect(releaseBody).not.toHaveBeenCalled();
       if (cause === "client disconnect") {
         response.emit("close");

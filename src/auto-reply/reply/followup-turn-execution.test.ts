@@ -592,12 +592,9 @@ describe("executeFollowupTurn lifecycle", () => {
       void params.opts?.onItemEvent?.({ progressText: "working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
-    const result = await executeFollowupTurn({
+    const result = await executeTestTurn({
       turn: createTurn(),
       defaults: {
-        typing: createMockTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
         opts: {
           onItemEvent: async () => {
             await progressBarrier;
@@ -605,8 +602,6 @@ describe("executeFollowupTurn lifecycle", () => {
           },
         },
       },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
     });
     const drain = result.progress.drain().then(() => order.push("drained"));
     await Promise.resolve();
@@ -624,20 +619,15 @@ describe("executeFollowupTurn lifecycle", () => {
       void detachedProgress.catch(() => undefined);
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
-    const result = await executeFollowupTurn({
+    const result = await executeTestTurn({
       turn: createTurn(),
       defaults: {
-        typing: createMockTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
         opts: {
           onItemEvent: async () => {
             throw failure;
           },
         },
       },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
     });
 
     await expect(detachedProgress).resolves.toBe(false);
@@ -769,15 +759,8 @@ describe("executeFollowupTurn lifecycle", () => {
       params.pendingToolTasks.add(slowTask);
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
-    const result = await executeFollowupTurn({
+    const result = await executeTestTurn({
       turn: createTurn(),
-      defaults: {
-        typing: createMockTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-      },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
     });
 
     const drain = result.progress.drain();

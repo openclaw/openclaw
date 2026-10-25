@@ -71,6 +71,25 @@ it("keeps callback values and existing accessor ownership when selecting all fie
   expect(owner.callback()).toBe("replacement");
 });
 
+it("observes current owner values after pre-render writes and a previous reader retires", () => {
+  const owner = root(() => projectChatFields({ value: "initial" }));
+  owner.value = "before render";
+  const first = createRoot((dispose) => ({ dispose, values: observe(() => owner.value) }));
+  flush();
+  expect(first.values).toEqual(["before render"]);
+  first.dispose();
+
+  owner.value = "between readers";
+  const second = root(() => observe(() => owner.value));
+  flush();
+  expect(second).toEqual(["between readers"]);
+  owner.value = "updated";
+  expect(owner.value).toBe("updated");
+  flush();
+  expect(second).toEqual(["between readers", "updated"]);
+  expect(first.values).toEqual(["before render"]);
+});
+
 it("publishes error changes without letting recovery clear another writer's identical error", () => {
   const { state, frames } = root(() => {
     const owner = createTestPageState(makeChatHost());

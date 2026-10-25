@@ -268,6 +268,7 @@ function* openOpenClawAgentDatabaseSteps(
     throw new Error("Prepared agent database lease belongs to another store");
   }
   let reuseIntegrity = false;
+  let liveOwnerAdmitted = false;
   let integrityRevoked = false;
   const diagnostics: SqliteIntegrityDiagnostics = {};
   const validation = pending?.validation ?? preparedLease?.validation;
@@ -275,8 +276,10 @@ function* openOpenClawAgentDatabaseSteps(
     runtimeIntegrityAllowed,
     invalidated,
     because,
+    admittedByLiveOwner = false,
   ) => {
     reuseIntegrity = runtimeIntegrityAllowed;
+    liveOwnerAdmitted = admittedByLiveOwner;
     // A host refusal may have no positive validation receipt to transfer.
     integrityRevoked =
       invalidated || preparedLease?.integrityRevoked === true || pending?.integrityRevoked === true;
@@ -442,7 +445,8 @@ function* openOpenClawAgentDatabaseSteps(
           pathname,
           diagnostics,
           verification,
-          isValidatedReopen && reuseAdmittedIntegrity,
+          (isValidatedReopen && reuseAdmittedIntegrity) ||
+            (liveOwnerAdmitted && diagnostics.integrityGateReason === "lease-class"),
           reusedSchema,
           integrityCheck,
           repairAdmission?.integrityTables ?? [],

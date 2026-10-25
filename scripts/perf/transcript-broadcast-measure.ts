@@ -54,6 +54,7 @@ import {
   buildGatewayBenchChildArgs,
   createGatewayBenchEnv,
   writePluginFixtures,
+  writeGatewayAuthorityCountsPreload,
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -74,6 +75,7 @@ const { values } = parseArgs({
     "prep-trace": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "workload-cpu-profile": { type: "boolean", default: false },
+    "sqlite-reply-census": { type: "boolean", default: false },
     "capture-responses": { type: "boolean", default: false },
     "list-filter-churn": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
@@ -121,6 +123,7 @@ const { values } = parseArgs({
     limit: { type: "string", default: "100" },
     "row-mode": { type: "string", default: "compact" },
     entry: { type: "string", default: "dist/entry.js" },
+    "default-state-dir": { type: "boolean", default: false },
     port: { type: "string", default: "41033" },
     "mock-port": { type: "string" },
     clients: { type: "string", default: "60" },
@@ -632,6 +635,15 @@ if ((values["cpu-profile"] || values["stream-start-diagnostics"]) && !turnScenar
 }
 if (values["workload-cpu-profile"] && values["cpu-profile"]) {
   throw new Error("--workload-cpu-profile and --cpu-profile cannot capture CPU simultaneously");
+}
+if (
+  values["sqlite-reply-census"] &&
+  !values["workload-cpu-profile"] &&
+  !values["cpu-profile"] &&
+  !values.allocations &&
+  !values["stream-start-allocations"]
+) {
+  throw new Error("--sqlite-reply-census requires a CPU or allocation profile window");
 }
 if (
   values["workload-cpu-profile"] &&
@@ -1316,94 +1328,7 @@ if (isMainThread) {
 }
 const authorityPreload = path.join(output, "authority-counts-preload.mjs");
 if (values["authority-counts"]) {
-  // Source observation belongs to the rig; the production owners expose no benchmark hooks.
-  writeFileSync(
-    authorityPreload,
-    String.raw`
-import fs from "node:fs";
-import { registerHooks, syncBuiltinESMExports } from "node:module";
-import { isMainThread } from "node:worker_threads";
-if (isMainThread) {
-  const state = { active: false, counts: {}, callers: {}, installed: {}, firstAuthPolicyStacks: [],
-    count(key) {
-      if (!this.active) return;
-      this.counts[key] = (this.counts[key] ?? 0) + 1;
-      if (key.endsWith(".assertSettled") || key.endsWith(".readProfileAuthority")) {
-        const caller = key + " <- " + new Error().stack.split("\n").slice(3, 6).join(" <- ").trim();
-        this.callers[caller] = (this.callers[caller] ?? 0) + 1;
-      }
-      if (key === "auth-policy.stableStringify" && this.firstAuthPolicyStacks.length < 8)
-        this.firstAuthPolicyStacks.push(new Error("auth-policy stringify caller").stack);
-    } };
-  globalThis[Symbol.for("openclaw.benchmark.authorityCounts")] = state;
-  const statSync = fs.statSync;
-  fs.statSync = function (...args) { state.count("filesystem.statSync"); return statSync.apply(this, args); };
-  syncBuiltinESMExports();
-  const owners = new Set([
-    "session-source-authority", "admitted-run-context", "operator-run-authority",
-    "session-delivery-generation", "session-entry-source-authority", "session-event-handoff",
-    "session-tool-overrides", "auth-policy", "sqlite-worker-identity",
-    "user-profile-events", "user-profile-authority"
-  ]);
-  registerHooks({ load(url, context, nextLoad) {
-    const loaded = nextLoad(url, context);
-    const owner = url.match(/\/([^/]+)\.ts$/)?.[1];
-    if (!owners.has(owner)) return loaded;
-    // A matched baseline/candidate source overlay runs before this observer.
-    const raw = loaded.format === "module-typescript" ? loaded.source : fs.readFileSync(new URL(url));
-    if (raw == null) throw new Error("Authority overlay omitted source: " + owner);
-    let source = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
-    const installed = {};
-    const count = (kind) => {
-      const key = owner + "." + kind;
-      installed[key] = (installed[key] ?? 0) + 1;
-      return "__authorityCounts.count(" + JSON.stringify(key) + ");";
-    };
-    source = source.replace(/const (assert\w*) = \((?:[^()]|\([^()]*\))*\) => \{/g,
-      (match, name) => match + count(name));
-    source = source.replace(/function (assert\w+)\([^{}]*\)(?::[^{}]+)? \{/g,
-      (match, name) => match + count(name));
-    if (owner === "user-profile-events") {
-      source = source.replace(/assertSettled\(this: void, profileIds: string \| readonly string\[\]\): void \{/g,
-        (match) => match + count("assertSettled"));
-    }
-    if (owner === "user-profile-authority") {
-      source = source.replace(/function readProfileAuthority\([^{}]+\{/g,
-        (match) => match + count("readProfileAuthority"));
-    }
-    if (owner === "session-source-authority") {
-      source = source.replace(/\(\) => \{\s*const scoped = sessionSourceScopes/g,
-        (match) => match.replace("{", "{" + count("composedAssertion")));
-    }
-    if (owner === "session-entry-source-authority") {
-      source = source.replace(/async prepareSessionSource\(\): Promise<PreparedSessionSourceAuthority> \{/g,
-        (match) => match + count("prepareSessionSource"));
-    }
-    if (owner === "operator-run-authority" || owner === "admitted-run-context") {
-      source = source.replace(/\(assertSource(?:s)?\) => \{/g,
-        (match) => match + count("composedGuard"));
-    }
-    if (owner === "sqlite-worker-identity" || owner === "auth-policy" || owner === "session-tool-overrides") {
-      const callee = owner === "sqlite-worker-identity" ? "statSync" : "stableStringify";
-      source = source.replace(new RegExp("\\b" + callee + "\\(", "g"), () =>
-        "(" + count(callee).slice(0, -1) + ", " + callee + ")(");
-    }
-    if (owner === "sqlite-worker-identity") {
-      source = source.replace(/realpathSync\.native\(/g, () =>
-        "(" + count("realpathSync.native").slice(0, -1) + ", realpathSync.native)(");
-    }
-    if (owner === "session-tool-overrides") {
-      if (!source.includes("  const intersectMap =")) throw new Error("Tool intersection observation source changed");
-      source = source.replace("  const intersectMap =", () => "  " + count("intersectSessionToolOverrides") + "const intersectMap =");
-    }
-    if (!Object.keys(installed).length) throw new Error("Authority observation source changed: " + owner);
-    state.installed[owner] = installed;
-    return { ...loaded, format: "module-typescript",
-      source: 'const __authorityCounts = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];\n' + source };
-  } });
-}
-`,
-  );
+  writeGatewayAuthorityCountsPreload(authorityPreload);
 }
 const authorityChannel = "openclaw-operator-authority-bench";
 const authorityEmail = "operator@authority.example.test";
@@ -1540,7 +1465,9 @@ const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) =
   );
   return file;
 });
-const configPath = path.join(output, "openclaw.json");
+const configPath = values["default-state-dir"]
+  ? path.join(root, `${path.basename(output)}.json`)
+  : path.join(output, "openclaw.json");
 writeFileSync(configPath, JSON.stringify(cfg));
 const chunk = "Synthetic streamed answer. ";
 function responseEvents(chunks: string[]) {
@@ -2366,9 +2293,14 @@ function measureFrameFields(
   return result;
 }
 const ownedListeners = new Set<ChildProcess>();
+if (values["default-state-dir"] && path.basename(root) !== ".openclaw") {
+  throw new Error("--default-state-dir requires a fixture rooted at <synthetic-home>/.openclaw");
+}
 const env = {
   ...createGatewayBenchEnv(path.join(root, "home"), configPath, { startupTrace: false }),
-  OPENCLAW_STATE_DIR: root,
+  ...(values["default-state-dir"]
+    ? { OPENCLAW_HOME: path.dirname(root), OPENCLAW_STATE_DIR: undefined }
+    : { OPENCLAW_STATE_DIR: root }),
   ...(values["attempt-setup-image"] && process.env.CONTAINERS_STORAGE_CONF
     ? { CONTAINERS_STORAGE_CONF: process.env.CONTAINERS_STORAGE_CONF }
     : {}),
@@ -2392,7 +2324,7 @@ const env = {
         GIT_CONFIG_VALUE_0: "never",
       }
     : {}),
-  OPENCLAW_PROFILE: `team-shape-${port}`,
+  OPENCLAW_PROFILE: values["default-state-dir"] ? "default" : `team-shape-${port}`,
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
@@ -4283,6 +4215,9 @@ try {
       ...(scenario === "chat.startup" ? ["--import", startupObserverPreload] : []),
       ...(values["authority-counts"] ? ["--import", authorityPreload] : []),
       ...(values["config-capture-counts"] ? ["--import", configCapturePreload] : []),
+      ...(values["sqlite-reply-census"]
+        ? ["--import", "./scripts/perf/sqlite-reply-census-preload.mjs"]
+        : []),
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
       ...(values["transport-counts"]
@@ -6117,6 +6052,7 @@ try {
           },
         }
       : {}),
+    defaultStateDir: values["default-state-dir"],
     verifyHistoryReplay,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? sessionCount : operations,

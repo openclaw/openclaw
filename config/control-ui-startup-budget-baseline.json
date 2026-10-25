@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281299,
-  "reason": "Shared visible clocks: 20 interleaved pairs reduced script CPU median 9.6% desktop and 12.9% mobile, with both p95s improved. Against 4d49d348, startup is 281299 B (+115 B), New Session +133 B, chat -213 B, and request counts unchanged. Accept the sub-0.5 KB CPU tradeoff and ratchet to the measured head.",
+  "startupJsGzipBytes": 281702,
+  "reason": "Combined warm transcript and shared visible clocks: measured 281702 B after integrating main. Warm transcript remote median improved from 509.3 to 304.7 ms; shared clocks retain their separately measured CPU win. Startup requests remain 7 JS and 1 CSS; accept the sub-0.5 KB change against main.",
   "updatedAt": "2026-10-24"
 }

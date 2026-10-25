@@ -128,10 +128,7 @@ describe("resolveRunFailoverDecision", () => {
 
     expect(failoverReason).toBe("timeout");
     expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        terminal: { kind: "ok" },
-        fallbackConfigured: true,
+      resolveAssistantDecision({
         failoverFailure: failoverReason !== null,
         failoverReason,
         profileRotated: true,

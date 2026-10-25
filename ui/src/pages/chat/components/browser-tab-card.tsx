@@ -18,7 +18,6 @@ import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import "../../../styles/session-menu.css";
-import "./browser-tab-card.css";
 
 /** Adapts existing anonymous page metadata; never fetches or embeds remote markup. */
 function browserTabTweet(url: string, title?: string, page?: ControlUiLinkPreview) {

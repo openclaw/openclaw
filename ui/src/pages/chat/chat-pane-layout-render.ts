@@ -289,9 +289,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         : undefined,
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
-      onOpenProcesses: ownsSubagentsPanel
-        ? () => this.requestBackgroundPanel("processes", "open")
-        : undefined,
+      onOpenProcesses: ownsSubagentsPanel ? this.showDetailsProcess : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons,
       presented: {
@@ -421,6 +419,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       contextDetails: ownsSubagentsPanel ? paneChatProps : undefined,
       subagentsAvailable: !catalog,
       subagentsShowRequest: this.companionIntents.subagentsShowRequest,
+      processesShowRequest: this.companionIntents.processesShowRequest,
+      onBackToProcessDetails: this.returnToProcessDetails,
       onSubagentSessionSelect: (sessionKey, options) =>
         this.onPaneSessionChange?.(this.paneId, sessionKey, options),
       panePresentation,

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { registerAcpSessionResetControls } from "../../acp/control-plane/manager.reset-controls.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
@@ -703,3 +704,22 @@ export {
   browserSessionTabMocks,
   bundleMcpRuntimeMocks,
 };
+
+export function createRepositoryDeviceHarness(failureMessage: string): AgentHarness {
+  return {
+    id: "repository-device",
+    label: "Repository device",
+    autoSelection: { providerIds: ["repository-provider"] },
+    supports: () => ({ supported: true }),
+    cloudPlacement: {
+      mode: "remote-exec",
+      devicePlacement: {
+        requiredNodeCommands: ["runtime.repository.v1"],
+        consumesWorkerSlot: false,
+      },
+    },
+    runAttempt: async () => {
+      throw new Error(failureMessage);
+    },
+  };
+}

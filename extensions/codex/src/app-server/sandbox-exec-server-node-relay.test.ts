@@ -34,14 +34,13 @@ const MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES = 64 * 1024 * 1024;
 type NodeChannel = Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>>;
 
 function createNodeChannel() {
-  let resolveClosed: (result: unknown) => void = () => {};
-  let rejectClosed: (error: Error) => void = () => {};
   let receive: ((message: Uint8Array) => void | Promise<void>) | undefined;
   let channelClosed = false;
-  const closed = new Promise<unknown>((resolve, reject) => {
-    resolveClosed = resolve;
-    rejectClosed = reject;
-  });
+  const {
+    promise: closed,
+    resolve: resolveClosed,
+    reject: rejectClosed,
+  } = Promise.withResolvers<unknown>();
   const channel = {
     send: vi.fn<NodeChannel["send"]>(async () => {
       if (channelClosed) {
@@ -116,10 +115,7 @@ async function expectPairedNodeHttpCredentialRejection(params: {
   const onExecutionDisconnect = vi.fn<(error: Error) => void>();
   const { transport, client } = await registerNodeRelay(onExecutionDisconnect);
   const socket = await openSocket(execServerUrlFromClient(client));
-  let resolveForwarded: () => void = () => {};
-  const forwarded = new Promise<void>((resolve) => {
-    resolveForwarded = resolve;
-  });
+  const { promise: forwarded, resolve: resolveForwarded } = Promise.withResolvers<void>();
   transport.channel.send.mockImplementation(async () => resolveForwarded());
   const outcome = Promise.race([
     once(socket, "message").then(([message]) => ({
@@ -554,10 +550,8 @@ describe("Codex paired-device exec-server relay", () => {
     const sandbox = createNodeSandbox();
     const client = createClient();
     const attempt = new AbortController();
-    let rejectRegistration: (error: Error) => void = () => {};
-    const registration = new Promise<Record<string, never>>((_resolve, reject) => {
-      rejectRegistration = reject;
-    });
+    const { promise: registration, reject: rejectRegistration } =
+      Promise.withResolvers<Record<string, never>>();
     client.request.mockImplementation(async () => await registration);
     const onExecutionDisconnect = vi.fn((error: Error) => {
       attempt.abort(error);

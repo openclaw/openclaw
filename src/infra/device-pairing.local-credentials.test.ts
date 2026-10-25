@@ -13,13 +13,13 @@ import {
   seedOriginDeviceToken,
 } from "./device-auth-store.test-support.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
-import { rotateDeviceToken, verifyDeviceToken } from "./device-pairing-tokens.js";
 import {
-  getPairedDevice,
-  requestDevicePairing,
-  withPairedDeviceRecords,
-  type PairedDevice,
-} from "./device-pairing.js";
+  requireValue,
+  requestPairing,
+  mutatePairedDevice,
+} from "./device-pairing-fixtures.test-support.js";
+import { rotateDeviceToken, verifyDeviceToken } from "./device-pairing-tokens.js";
+import { getPairedDevice } from "./device-pairing.js";
 
 const pairingWarn = vi.hoisted(() => vi.fn());
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -37,13 +37,6 @@ const suiteRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-pairing-local-credentials-",
 });
 
-function requireValue<T>(value: T | null | undefined, message: string): T {
-  if (value == null) {
-    throw new Error(message);
-  }
-  return value;
-}
-
 function requireToken(token: string | undefined): string {
   expect(token).toBeTypeOf("string");
   return requireValue(token, "expected device token");
@@ -55,28 +48,6 @@ function requireRotatedEntry(result: Awaited<ReturnType<typeof rotateDeviceToken
     throw new Error(`expected rotated token entry, got ${result.reason}`);
   }
   return result.entry;
-}
-
-function requestPairing(
-  request: Partial<Parameters<typeof requestDevicePairing>[0]>,
-  stateDir: string,
-) {
-  return requestDevicePairing(
-    { deviceId: "device-1", publicKey: "public-key-1", ...request },
-    stateDir,
-  );
-}
-
-async function mutatePairedDevice(
-  stateDir: string,
-  deviceId: string,
-  mutate: (device: PairedDevice) => void,
-) {
-  await withPairedDeviceRecords(stateDir, (pairedByDeviceId) => {
-    const device = requireValue(pairedByDeviceId[deviceId], `expected paired device ${deviceId}`);
-    mutate(device);
-    return { value: undefined, persist: true };
-  });
 }
 
 async function legacyNodeRecovery() {

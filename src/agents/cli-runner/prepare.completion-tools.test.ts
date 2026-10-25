@@ -23,7 +23,9 @@ import {
   testing as cliBackendsTesting,
 } from "../cli-backends.test-support.js";
 import {
+  createPersistedCompletionHandoff,
   createCliRunnerPrepareFixture,
+  createTestCliSessionBinding,
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
@@ -585,22 +587,7 @@ describe("restricted CLI tool preparation", () => {
       const context = await fixture.prepare({
         ...base,
         ...(completion
-          ? {
-              trustedInternalHandoff: {
-                kind: "subagent-completion" as const,
-                sourceSessionKey: childSessionKey,
-                sourceSessionId: "cache-prefix-child",
-                targetSessionKey: sessionTarget.sessionKey,
-                targetSessionId: sessionTarget.sessionId,
-                provider: "claude-cli",
-                model: "opus",
-              },
-              inputProvenance: {
-                kind: "inter_session" as const,
-                sourceTool: "subagent_announce",
-                sourceSessionKey: childSessionKey,
-              },
-            }
+          ? createPersistedCompletionHandoff(childSessionKey, "cache-prefix-child", sessionTarget)
           : {}),
       });
       try {
@@ -671,22 +658,7 @@ describe("restricted CLI tool preparation", () => {
       const context = await fixture.prepare({
         ...base,
         ...(completion
-          ? {
-              trustedInternalHandoff: {
-                kind: "subagent-completion" as const,
-                sourceSessionKey: childSessionKey,
-                sourceSessionId: "surface-tools-child",
-                targetSessionKey: sessionTarget.sessionKey,
-                targetSessionId: sessionTarget.sessionId,
-                provider: "claude-cli",
-                model: "opus",
-              },
-              inputProvenance: {
-                kind: "inter_session" as const,
-                sourceTool: "subagent_announce",
-                sourceSessionKey: childSessionKey,
-              },
-            }
+          ? createPersistedCompletionHandoff(childSessionKey, "surface-tools-child", sessionTarget)
           : {
               clientCaps: ["ui-commands", "inline-widgets"],
               taskSuggestionDeliveryMode: "gateway" as const,
@@ -694,17 +666,7 @@ describe("restricted CLI tool preparation", () => {
       });
       try {
         turns.push({
-          binding: {
-            sessionId: "native-surface-session",
-            authEpoch: context.authEpoch,
-            authEpochVersion: context.authEpochVersion,
-            extraSystemPromptHash: context.extraSystemPromptHash,
-            messageToolPolicyHash: context.messageToolPolicyHash,
-            promptToolNamesHash: context.promptToolNamesHash,
-            cwdHash: context.cwdHash,
-            mcpConfigHash: context.preparedBackend.mcpConfigHash,
-            mcpResumeHash: context.preparedBackend.mcpResumeHash,
-          },
+          binding: createTestCliSessionBinding(context, "native-surface-session"),
           systemPrompt: context.systemPrompt,
           names: [...(mintGrant.mock.lastCall?.[0]?.context.toolsAllow ?? [])].toSorted(),
         });
@@ -844,17 +806,7 @@ describe("restricted CLI tool preparation", () => {
       const context = await fixture.prepare({
         ...run,
         senderIsOwner,
-        cliSessionBinding: {
-          sessionId: "native-parent-session",
-          authEpoch: owner.authEpoch,
-          authEpochVersion: owner.authEpochVersion,
-          extraSystemPromptHash: owner.extraSystemPromptHash,
-          messageToolPolicyHash: owner.messageToolPolicyHash,
-          promptToolNamesHash: owner.promptToolNamesHash,
-          cwdHash: owner.cwdHash,
-          mcpConfigHash: owner.preparedBackend.mcpConfigHash,
-          mcpResumeHash: owner.preparedBackend.mcpResumeHash,
-        },
+        cliSessionBinding: createTestCliSessionBinding(owner, "native-parent-session"),
         trustedInternalHandoff,
         inputProvenance: {
           kind: "inter_session",

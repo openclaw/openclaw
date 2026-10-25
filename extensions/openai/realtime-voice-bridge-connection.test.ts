@@ -59,6 +59,7 @@ const {
   emitSessionUpdated,
   expectedResponseCreateEvent,
   requireRecord,
+  requireNestedRecord,
   expectRecordFields,
   requireSession,
   createRealtimeTool,
@@ -143,6 +144,25 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
+  it("uses Azure API-key authentication for GA realtime endpoint URLs", () => {
+    const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
+      providerConfig: {
+        apiKey: "azure-test-key",
+        azureEndpoint: "https://example.openai.azure.com/openai",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    void bridge.close();
+
+    const socket = FakeWebSocket.instances[0];
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.["api-key"]).toBe("azure-test-key");
+    expect(options?.headers).not.toHaveProperty("Authorization");
+  });
+
   it.each([true, false])(
     "shares GA policy and retires the gateway binding with throwing callback=%s",
     async (throwingCloseCallback) => {
@@ -175,7 +195,10 @@ describe("OpenAI realtime voice bridge connection", () => {
       await expect(
         provider.createBrowserSession?.({
           cfg,
-          providerConfig: { apiKey: "test-api-key-platform" },
+          providerConfig: {
+            apiKey: "test-api-key-platform",
+            inputTranscriptionModel: "transcribe-prod",
+          },
           instructions: "Stay concise.",
           model: "gpt-realtime-2.1",
           prefixPaddingMs: 420,
@@ -219,6 +242,7 @@ describe("OpenAI realtime voice bridge connection", () => {
           input: {
             format: { type: "audio/pcm", rate: 24000 },
             noise_reduction: { type: "near_field" },
+            transcription: { model: "transcribe-prod" },
             turn_detection: {
               type: "server_vad",
               threshold: 0.7,
@@ -541,78 +565,168 @@ describe("OpenAI realtime voice bridge connection", () => {
     await connecting;
   });
 
-  it("keeps Azure deployment bridges on deployment-compatible session payloads", async () => {
+  it("uses a configured input transcription model in the GA session payload", async () => {
     const bridge = createNativeBridge({
       providerConfig: {
-        apiKey: "test-api-key-test",
-        azureEndpoint: "https://example.openai.azure.com/",
-        azureDeployment: "realtime-prod",
-        azureApiVersion: "2024-10-01-preview",
-        voice: "verse",
+        apiKey: "test-key",
+        inputTranscriptionModel: "transcribe-prod",
       },
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      instructions: "Be helpful.",
-      tools: [
-        createRealtimeTool("1_lookup"),
-        createRealtimeTool("calendar.lookup:next"),
-        createRealtimeTool("x".repeat(65)),
-      ],
     });
     const { connecting, socket } = beginBridgeConnection(bridge);
-
-    expect(socket.args[0]).toBe(
-      "wss://example.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=realtime-prod",
-    );
 
     openSocket(socket);
     await Promise.resolve();
 
-    const session = requireSession(socket);
-    expectRecordFields(session, "session", {
-      modalities: ["text", "audio"],
-      instructions: "Be helpful.",
-      voice: "verse",
-      input_audio_format: "pcm16",
-      output_audio_format: "pcm16",
-      input_audio_transcription: { model: "whisper-1" },
-      temperature: 0.8,
-    });
     expectRecordFields(
-      requireRecord(session.turn_detection, "session turn detection"),
-      "turn detection",
-      {
-        create_response: true,
-      },
+      requireNestedRecord(requireSession(socket), ["audio", "input", "transcription"]),
+      "session transcription",
+      { model: "transcribe-prod" },
     );
-    expect(session).not.toHaveProperty("type");
-    expect(session).not.toHaveProperty("audio");
-    const tools = session.tools as Array<{ name?: string }>;
-    expect(tools.map((tool) => tool.name)).toEqual(["1_lookup"]);
-
     emitSessionUpdated(socket);
     await connecting;
+  });
 
-    bridge.triggerGreeting?.("Say hello.");
-    expect(parseSent(socket).slice(-2)).toEqual([
-      {
-        type: "session.update",
-        session: {
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 500,
-            create_response: false,
+  it.each([
+    { inputTranscriptionModel: undefined, deploymentField: "azureDeployment" },
+    { inputTranscriptionModel: "transcribe-prod", deploymentField: "azureDeployment" },
+    { inputTranscriptionModel: undefined, deploymentField: "model" },
+  ])(
+    "uses the Azure GA route and matching session payload with $deploymentField and transcription=$inputTranscriptionModel",
+    async ({ inputTranscriptionModel, deploymentField }) => {
+      const bridge = createNativeBridge({
+        providerConfig: {
+          apiKey: "test-api-key-test",
+          azureEndpoint: "https://example.openai.azure.com/openai/",
+          [deploymentField]: "realtime-prod",
+          voice: "verse",
+          inputTranscriptionModel,
+          reasoningEffort: "low",
+          temperature: 0.9,
+        },
+        audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        instructions: "Be helpful.",
+        tools: [
+          createRealtimeTool("1_lookup"),
+          createRealtimeTool("calendar.lookup:next"),
+          createRealtimeTool("x".repeat(65)),
+        ],
+      });
+      const { connecting, socket } = beginBridgeConnection(bridge);
+
+      expect(socket.args[0]).toBe(
+        "wss://example.openai.azure.com/openai/v1/realtime?model=realtime-prod",
+      );
+
+      openSocket(socket);
+      await Promise.resolve();
+
+      const session = requireSession(socket);
+      expectRecordFields(session, "session", {
+        type: "realtime",
+        instructions: "Be helpful.",
+        output_modalities: ["audio"],
+        audio: {
+          input: {
+            format: { type: "audio/pcm", rate: 24000 },
+            noise_reduction: null,
+            transcription: { model: inputTranscriptionModel ?? "whisper-1" },
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 500,
+              create_response: true,
+            },
+          },
+          output: { format: { type: "audio/pcm", rate: 24000 }, voice: "verse" },
+        },
+      });
+      for (const key of ["modalities", "temperature", "model", "reasoning"]) {
+        expect(session).not.toHaveProperty(key);
+      }
+      expect(session).not.toHaveProperty("input_audio_format");
+      const tools = session.tools as Array<{ name?: string }>;
+      expect(tools.map((tool) => tool.name)).toEqual(["1_lookup"]);
+
+      emitSessionUpdated(socket);
+      await connecting;
+
+      bridge.triggerGreeting?.("Say hello.");
+      expect(parseSent(socket).slice(-2)).toEqual([
+        {
+          type: "session.update",
+          session: {
+            type: "realtime",
+            audio: {
+              input: {
+                turn_detection: {
+                  type: "server_vad",
+                  threshold: 0.5,
+                  prefix_padding_ms: 300,
+                  silence_duration_ms: 500,
+                  create_response: false,
+                },
+              },
+            },
           },
         },
-      },
-      expectedResponseCreateEvent(),
-    ]);
+        expectedResponseCreateEvent(),
+      ]);
 
-    emitServerEvent(socket, { type: "response.done" });
-    expect(parseSent(socket).at(-1)).toEqual({
-      type: "session.update",
-      session: {
+      emitServerEvent(socket, { type: "response.done" });
+      expect(parseSent(socket).at(-1)).toEqual({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          audio: {
+            input: {
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500,
+                create_response: true,
+              },
+            },
+          },
+        },
+      });
+    },
+  );
+
+  it.each([
+    { suffix: "", inputTranscriptionModel: undefined },
+    { suffix: "/openai", inputTranscriptionModel: "transcribe-prod" },
+  ])(
+    "preserves the explicit Azure preview wire contract for $suffix",
+    async ({ suffix, inputTranscriptionModel }) => {
+      const bridge = createNativeBridge({
+        providerConfig: {
+          apiKey: "azure-test-key",
+          azureEndpoint: `https://example.openai.azure.com${suffix}/`,
+          azureDeployment: "realtime-prod",
+          azureApiVersion: "2024-10-01-preview",
+          inputTranscriptionModel,
+        },
+      });
+      const { connecting, socket } = beginBridgeConnection(bridge);
+      expect(socket.args[0]).toBe(
+        `wss://example.openai.azure.com${suffix}/openai/realtime?api-version=2024-10-01-preview&deployment=realtime-prod`,
+      );
+      const options = socket.args[1] as { headers?: Record<string, string> };
+      expect(options.headers?.["api-key"]).toBe("azure-test-key");
+      expect(options.headers).not.toHaveProperty("Authorization");
+
+      openSocket(socket);
+      await Promise.resolve();
+      const session = requireSession(socket);
+      expect(session).not.toHaveProperty("audio");
+      expect(session).toEqual({
+        modalities: ["text", "audio"],
+        voice: "alloy",
+        input_audio_format: "g711_ulaw",
+        output_audio_format: "g711_ulaw",
+        input_audio_transcription: { model: inputTranscriptionModel ?? "whisper-1" },
         turn_detection: {
           type: "server_vad",
           threshold: 0.5,
@@ -620,9 +734,23 @@ describe("OpenAI realtime voice bridge connection", () => {
           silence_duration_ms: 500,
           create_response: true,
         },
-      },
-    });
-  });
+        temperature: 0.8,
+      });
+      emitSessionUpdated(socket);
+      await connecting;
+
+      bridge.triggerGreeting?.("Say hello.");
+      expect(parseSent(socket).at(-2)).toMatchObject({
+        type: "session.update",
+        session: { turn_detection: { create_response: false } },
+      });
+      emitServerEvent(socket, { type: "response.done" });
+      expect(parseSent(socket).at(-1)).toMatchObject({
+        type: "session.update",
+        session: { turn_detection: { create_response: true } },
+      });
+    },
+  );
 
   it("rejects connection when the socket closes before session readiness", async () => {
     const bridge = createNativeBridge();

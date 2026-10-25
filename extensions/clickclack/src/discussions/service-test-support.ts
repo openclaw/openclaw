@@ -240,47 +240,33 @@ export function createHarness(
       },
     },
   });
-  const createChannel = vi.fn(
-    async (_workspaceId: string, input: Parameters<ClickClackClient["createChannel"]>[1]) => ({
-      id: "chn_discussion",
-      route_id: "discussion-route",
-      workspace_id: "wsp_team",
-      ...input,
-      kind: "public",
-      created_at: "2026-07-19T00:00:00.000Z",
-    }),
+  const createChannel = vi.fn<ClickClackClient["createChannel"]>(async (_workspaceId, input) =>
+    discussionChannel(input),
   );
   const updateChannel = vi.fn(
     async (
       _channelId: string,
       patch: Parameters<ClickClackClient["updateChannel"]>[1],
-    ): Promise<ClickClackChannel> => ({
-      id: "chn_discussion",
-      route_id: "discussion-route",
-      workspace_id: "wsp_team",
-      name: patch.name ?? "release-planning",
-      kind: "public",
-      external_managed: patch.external_managed ?? true,
-      external_ref: patch.external_ref ?? "agent:main:main",
-      external_url: patch.external_url ?? "https://control.example/control/chat/main",
-      sidebar_section: patch.sidebar_section ?? "Projects",
-      ...(patch.display_title !== undefined ? { display_title: patch.display_title } : {}),
-      created_at: "2026-07-19T00:00:00.000Z",
-    }),
+    ): Promise<ClickClackChannel> =>
+      discussionChannel({
+        name: patch.name ?? "release-planning",
+        external_managed: patch.external_managed ?? true,
+        external_ref: patch.external_ref ?? "agent:main:main",
+        external_url: patch.external_url ?? "https://control.example/control/chat/main",
+        sidebar_section: patch.sidebar_section ?? "Projects",
+        ...(patch.display_title !== undefined ? { display_title: patch.display_title } : {}),
+      }),
   );
   const messagePage = vi.fn<(channelId: string, limit: number) => Promise<DiscussionMessagePage>>(
     async () => ({ messages: [], oldest_seq: 0, has_older: false }),
   );
   const channels = vi.fn<() => Promise<ClickClackChannel[]>>(async () => [
-    {
+    discussionChannel({
       id: "chn_general",
       route_id: "general-route",
-      workspace_id: "wsp_team",
       name: "general",
-      kind: "public",
       ...MANAGED_CONTRACT_FIELDS,
-      created_at: "2026-07-19T00:00:00.000Z",
-    },
+    }),
   ]);
   const workspaces = vi.fn(async () => [
     {

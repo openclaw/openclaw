@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
-import type { OwnerAndDaclResult, WindowsAccessControlEntry } from "@openclaw/fs-safe/permissions";
+import type { OwnerAndDaclResult } from "@openclaw/fs-safe/permissions";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createWindowsAllowEntry as access } from "../test-utils/windows-acl.test-support.js";
 
 const aclMocks = vi.hoisted(() => ({
   readOwnerAndDaclBatch:
@@ -22,28 +23,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const CURRENT_USER_SID = "s-1-5-21-1000";
 type Security = Extract<OwnerAndDaclResult, { status: "supported" }>;
 
-function access(
-  sid: string,
-  mask: number,
-  inheritable = false,
-  inheritOnly = false,
-): WindowsAccessControlEntry {
-  return {
-    sid,
-    aceType: "allow",
-    mask,
-    flags: {
-      raw: (inheritable ? 3 : 0) | (inheritOnly ? 8 : 0),
-      objectInherit: inheritable,
-      containerInherit: inheritable,
-      inheritOnly,
-      noPropagateInherit: false,
-      inherited: false,
-      successfulAccess: false,
-      failedAccess: false,
-    },
-  };
-}
 const fullAccess = access(CURRENT_USER_SID, 0x1f01ff);
 const grant = (mask: number, inheritOnly = false): Partial<Security> => ({
   aces: [fullAccess, access("s-1-1-0", mask, true, inheritOnly)],

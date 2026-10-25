@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { importClaudeHistory } from "./session-catalog-history.js";
 import { parseTranscriptLine } from "./session-catalog-transcript.js";
 
+// mock-isolation: Catalog projection must not initialize an unrelated provider SDK.
+vi.mock("@google/genai", () => {
+  throw new Error("Anthropic catalog history must not initialize the Google SDK");
+});
+
 const appended: Array<Record<string, unknown>> = [];
 function importItems(items: Parameters<typeof importClaudeHistory>[0]["items"]) {
   appended.length = 0;

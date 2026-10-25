@@ -19,7 +19,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
 import { getPluginMetadataSnapshotCache, retirePluginCache } from "../plugins/plugin-cache.js";
@@ -778,12 +778,11 @@ describe("Gateway catalog worker pool", () => {
           pluginMetadataSnapshot: previous.metadataSnapshot,
         });
         void publication.catch(() => {});
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           preparing.promise,
-          publication.then(() => {
-            throw new Error("Publication completed before its credential preparation");
-          }),
-        ]);
+          publication,
+          "Publication completed before its credential preparation",
+        );
         if (previousCatalog) {
           fs.rmSync(`${fixture.marker}.hold`);
           await expect(previousCatalog).rejects.toThrow("superseded");
@@ -878,12 +877,11 @@ describe("Gateway catalog worker pool", () => {
             loadPreparedModelRuntimeAuth(replacement(), { providerIds: [] }),
           );
           try {
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               retiring.promise,
-              request.then(() => {
-                throw new Error("replacement completed before retiring its previous worker");
-              }),
-            ]);
+              request,
+              "replacement completed before retiring its previous worker",
+            );
             closing = closePreparedModelRuntimeSnapshots();
             resumeTermination.resolve();
             await expect(request).rejects.toThrow("process lifetime closed");

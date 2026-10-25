@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { build } from "esbuild";
 import { expect, it } from "vitest";
+import { collect } from "../../../test/helpers/async-iterable.js";
 
 type BrowserHostModule = {
   configureAiTransportHost(host: object): void;
@@ -68,13 +69,6 @@ it("keeps the default transport host usable in browser bundles", async () => {
     expect(() => browserHost.configureAiTransportHost({})).toThrow(
       "Cannot replace the AI transport host while browser provider work is pending",
     );
-  async function collect(stream: AsyncIterable<unknown>) {
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
-    return events;
-  }
   expect(
     browserHost.runWithAiTransportHost(browserHost.getDefaultAiTransportHost(), () => "ok"),
   ).toBe("ok");

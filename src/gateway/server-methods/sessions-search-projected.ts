@@ -133,15 +133,16 @@ export async function searchProjectedSessionTranscripts(params: {
     const hits = matchingHits(current, pages);
     const matches = hits.slice(0, limit);
     const matchedRows = new Set(matches.map(({ row }) => row));
-    projection.setArchivePageSize(matchedRows.size);
     const published = await withReadySessionRows(
       projection,
-      () =>
-        [...matchedRows].map((row) => ({
+      () => {
+        projection.setArchivePageSize(matchedRows.size);
+        return [...matchedRows].map((row) => ({
           agentId: row.agentId,
           key: row.key,
           storePath: row.storeTarget.storePath,
-        })),
+        }));
+      },
       (read) => {
         if (getSessionRowProjection(params.context) !== projection) {
           throw new Error("Session search owner changed while reading; retry the request");

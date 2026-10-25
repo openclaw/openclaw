@@ -281,9 +281,15 @@ the existing cache cap.
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
-published index; a failed rebuild leaves that index intact. The embedding cache
-is bounded before publication, not after copying excess entries into the
-shared database. When new entries would take the cache past its row cap, or it
+published index; a failed rebuild leaves that index intact. During a full rebuild,
+the embedding cache can temporarily exceed its row cap by the newly generated
+vectors. This preserves cached vectors that later rebuild batches still need,
+including after a database-engine port. The cache returns to its cap after
+publication or when the rebuild is abandoned; a suspended background rebuild
+retains its vectors until it resumes or is discarded. A process interruption can
+leave temporary excess entries until the next synchronization prunes them.
+Incremental writes reserve capacity before inserting. When new entries would
+take the cache past its row cap, or it
 is already over the cap, it removes exactly as many entries as before, but first
 takes entries for the active embedding provider that no published chunk
 references and that were written before the oldest published chunk, oldest

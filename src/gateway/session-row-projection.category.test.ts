@@ -7,7 +7,6 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SessionRowFactsPending, withReadySessionRows } from "./session-row-prepared-read.js";
 import { writeRow } from "./session-row-projection-read-fixtures.test-support.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
 import {
   createTestProjection,
   holdForeground,
@@ -34,23 +33,6 @@ function withCategoryState(run: () => Promise<void>) {
   return fixtureLifetime.run(() => withOpenClawTestState({ scenario: "minimal" }, run));
 }
 
-async function warmArchives(
-  projection: Awaited<ReturnType<typeof createSessionRowProjection>>,
-  queries: { agentId: string; key: string }[],
-) {
-  projection.setArchivePageSize(101);
-  await withReadySessionRows(
-    projection,
-    () => queries,
-    (read) => {
-      // Establish access order after the concurrent worker batches have finished.
-      for (const query of queries) {
-        expect(read.describe(query)?.entry.category).toBe("Work");
-      }
-    },
-  );
-}
-
 it.for(["search", "full", "overflow"] as const)(
   "prepares evicted category facts through %s reads",
   async (mode) => {
@@ -73,10 +55,25 @@ it.for(["search", "full", "overflow"] as const)(
       using projection = await createTestProjection({ cfg, modelCatalog: [] });
       let sql: ReturnType<typeof observeHostDataSql> | undefined;
       try {
-        await warmArchives(projection, queries.slice(0, 101));
+        await withReadySessionRows(
+          projection,
+          () => queries.slice(0, 101),
+          (read) => {
+            // Invalidate while pinned; release must preserve unresolved facts when demoting.
+            for (const query of queries.slice(0, 101)) {
+              expect(read.describe(query)?.entry.category).toBe("Work");
+            }
+            sessionChanges.emitBatch(
+              (overflow ? queries : [oldest]).map(({ key }) => ({
+                sessionKey: key,
+                factsInvalidated: "category" as const,
+              })),
+            );
+          },
+        );
         const materialized = projection.materializedCount;
         expect(materialized).toBe(101);
-        expect(projection.capture(oldest)?.materialized).toBeDefined();
+        expect(projection.capture(oldest)?.materialized).toBeUndefined();
         const reads: string[][] = [];
         observeRowFacts((owner) => async (input) => {
           reads.push([...input.sessionKeys]);
@@ -103,17 +100,6 @@ it.for(["search", "full", "overflow"] as const)(
         }
         sql = observeHostDataSql();
         const prepare = async () => {
-          if (overflow) {
-            sessionChanges.emitBatch(
-              queries.map(({ key }) => ({
-                sessionKey: key,
-                factsInvalidated: "category" as const,
-              })),
-            );
-          } else {
-            sessionChanges.emit({ sessionKey: oldest.key, factsInvalidated: "category" });
-          }
-          projection.setArchivePageSize(100);
           expect(projection.capture(oldest)?.materialized).toBeUndefined();
           expect(projection.sharingTargetState(oldest)).toEqual({ status: "pending" });
           if (overflow) {

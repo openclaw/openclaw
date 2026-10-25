@@ -189,8 +189,16 @@ it.each(process.platform === "win32" ? [false] : [false, true])(
         path: owner.database.path,
       });
       reopened.db.exec("INSERT INTO auth_profile_state VALUES ('alias-writer', '{}', 1)");
+    } else {
+      // Let the child verify the file itself; a peer that borrows admission cannot certify it.
+      closeOpenClawAgentDatabaseByPath(owner.database.path);
     }
     const child = await openChild(childPath, owner.env);
+    if (!alias) {
+      openOpenClawAgentDatabase({ agentId: "integrity-lease", env: owner.env }).db.exec(
+        "INSERT INTO auth_profile_state VALUES ('parent-writer', '{}', 1)",
+      );
+    }
     expect(owner.cleanClose()).toBe(false);
 
     closeOpenClawAgentDatabaseByPath(owner.database.path);
@@ -281,6 +289,33 @@ it.each(["forced cleanup", "stale admission"])(
     expect(owner.cleanClose()).toBe(true);
   },
 );
+
+it("reuses a live peer process admission instead of rescanning the file", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-lease-peer-") };
+  const pathname = resolveOpenClawAgentSqlitePath({ agentId: "integrity-lease", env });
+  const child = await openChild(pathname, env);
+  const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;
+  let diagnostics: SqliteIntegrityDiagnostics | undefined;
+  vi.spyOn(schema, "agentDatabaseIntegrityBeforeMutationSteps").mockImplementation(function* (
+    ...args
+  ) {
+    const result = yield* gate(...args);
+    diagnostics = args[3];
+    return result;
+  });
+
+  const database = openOpenClawAgentDatabase({ agentId: "integrity-lease", env });
+
+  expect(diagnostics).toMatchObject({ integrityGateOutcome: "cached" });
+  expect(diagnostics?.integrityGateMode).toBeUndefined();
+  database.db.exec("INSERT INTO auth_profile_state VALUES ('peer-borrow', '{}', 1)");
+  const exited = once(child, "exit");
+  child.send("close");
+  expect(await exited).toEqual([0, null]);
+  // The borrower never checked the file, so closing last leaves verification to the next opener.
+  closeOpenClawAgentDatabaseByPath(database.path);
+  expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
+});
 
 it("does not certify a failed checkpoint or native close", () => {
   const owner = openOwner();

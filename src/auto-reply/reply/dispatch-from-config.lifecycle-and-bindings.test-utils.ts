@@ -93,6 +93,25 @@ function mockPendingPluginClaim(params: {
   return (outcome: PluginTargetedInboundClaimOutcome) => resolveClaim?.(outcome);
 }
 
+function createDiagnosticSlackContext() {
+  return buildTestCtx({
+    Provider: "slack",
+    Surface: "slack",
+    SessionKey: "agent:main:main",
+    MessageSid: "msg-1",
+    To: "slack:C123",
+  });
+}
+
+function createPluginBindingData() {
+  return {
+    kind: "codex-app-server-session",
+    version: 1,
+    sessionFile: "/tmp/session.jsonl",
+    workspaceDir: "/workspace/openclaw",
+  };
+}
+
 beforeAll(dispatchHarness.globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
@@ -544,13 +563,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      SessionKey: "agent:main:main",
-      MessageSid: "msg-1",
-      To: "slack:C123",
-    });
+    const ctx = createDiagnosticSlackContext();
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -590,13 +603,7 @@ describe("dispatchReplyFromConfig", () => {
     };
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      SessionKey: "agent:main:main",
-      MessageSid: "msg-1",
-      To: "slack:C123",
-    });
+    const ctx = createDiagnosticSlackContext();
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -768,12 +775,7 @@ describe("dispatchReplyFromConfig", () => {
       bindingId: "binding-1",
       targetSessionKey: "plugin-binding:codex:abc123",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1505,12 +1507,7 @@ describe("dispatchReplyFromConfig", () => {
         conversationId: "chat:abc",
       },
       pluginRoot: "/plugins/openclaw-codex-app-server",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1760,12 +1757,7 @@ describe("dispatchReplyFromConfig", () => {
       bindingId: "binding-aborted-1",
       targetSessionKey: "plugin-binding:codex:abc123",
       pluginRoot: "/workspace/openclaw-app-server",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const abortController = new AbortController();
     abortController.abort();
@@ -1817,12 +1809,7 @@ describe("dispatchReplyFromConfig", () => {
       targetSessionKey: "plugin-binding:codex:abc123",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       detachHint: "/codex detach",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();

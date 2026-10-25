@@ -43,6 +43,7 @@ import {
 } from "../auth-profiles/sqlite.js";
 import type { ApiKeyCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { testModel } from "./agent-session-loop-correctness.test-support.js";
@@ -490,16 +491,12 @@ it("restores prepared session context without waiting for an unrelated database 
     const message = { role: "user" as const, content: "Restore these exact bytes", timestamp: 1 };
     manager.appendMessage(message);
     const before = await loadTranscriptEvents(target);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const gate = createEnteredGate();
     const writer = runOpenClawAgentWorkerWrite(
       { agentId: "main", path: target.storePath },
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
+      gate.wait,
     );
-    await entered.promise;
+    await gate.entered;
     const requestedWrite = createDeferredCore<"writer-admission">();
     const originalWrite = writeAdmission.withSessionManagerWrite;
     const intercepted = vi
@@ -519,7 +516,7 @@ it("restores prepared session context without waiting for an unrelated database 
       expect(await loadTranscriptEvents(target)).toEqual(before);
     } finally {
       intercepted.mockRestore();
-      release.resolve();
+      gate.release();
       await writer;
       (await restored).session.dispose();
     }
@@ -762,20 +759,16 @@ it.each(
       const before = manager.getEntries();
       const persistedBefore =
         storage === "persistent" ? await loadTranscriptEvents(target) : undefined;
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const writer = writeAdmission.withSessionManagerWrite(manager, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
+      const gate = createEnteredGate();
+      const writer = writeAdmission.withSessionManagerWrite(manager, gate.wait);
+      await gate.entered;
       const pending =
         surface === "extension"
           ? api.appendEntryAsync("revoked-state", { count: 1 })
           : session.setSessionNameAsync("revoked name");
       const rejected = expect(pending).rejects.toThrow("extension owner closed");
       runtime.invalidate("extension owner closed");
-      release.resolve();
+      gate.release();
       try {
         await writer;
         await rejected;
@@ -788,7 +781,7 @@ it.each(
           "extension owner closed",
         );
       } finally {
-        release.resolve();
+        gate.release();
         await writer;
         session.dispose();
       }

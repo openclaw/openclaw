@@ -31,7 +31,6 @@ function rootContent(): Extract<ChatDetailsMobilePage, { kind: "root" }>["conten
         people: "People",
         taskProgress: "Task progress",
         subagents: "Subagents",
-        processes: "Processes",
         environment: "Environment",
         context: "Context",
         pullRequests: "Pull requests",

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionCatalogTranscriptItem as TranscriptItem } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import {
@@ -8,7 +9,7 @@ import {
   readBoundedSessionCatalogHistory,
   SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
 } from "./session-catalog-history-import.js";
-import { listSessionCatalogEntries } from "./session-catalog.js";
+import { listAdoptedSessionCatalogSessions, listSessionCatalogEntries } from "./session-catalog.js";
 import { catalogReader } from "./session-catalog.test-support.js";
 
 const transcript = vi.hoisted(() => ({
@@ -101,9 +102,55 @@ describe("listSessionCatalogEntries", () => {
     expect(() => listSessionCatalogEntries({ config, runtime })).toThrow(
       "session agent resolution has no explicit owner",
     );
-    expect(listSessionCatalogEntries({ agentId: "beta", config, runtime })).toEqual([]);
+    const caller = { agentId: "beta", sessionKey: "agent:alpha:unrelated", config, runtime };
+    expect(listSessionCatalogEntries(caller)).toEqual([]);
     expect(listSessionEntries).toHaveBeenCalledOnce();
     expect(listSessionEntries).toHaveBeenCalledWith({ agentId: "beta", readOnly: true });
+  });
+});
+
+describe("listAdoptedSessionCatalogSessions", () => {
+  it.each([true, false])("parses only completed plugin-owned entries (snapshot=%s)", (snapshot) => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+    };
+    const rows = [
+      { agentId: "alpha", sessionKey: "foreign-agent", entry: { pluginOwnerId: "acpx" } },
+      { agentId: "beta", sessionKey: "unowned", entry: {} },
+      { agentId: "beta", sessionKey: "other-plugin", entry: { pluginOwnerId: "other" } },
+      {
+        agentId: "beta",
+        sessionKey: "pending",
+        entry: { pluginOwnerId: "acpx", initializationPending: true as const },
+      },
+      { agentId: "beta", sessionKey: "adopted", entry: { pluginOwnerId: "acpx" } },
+    ].map((row) => ({
+      agentId: row.agentId,
+      sessionKey: row.sessionKey,
+      entry: { sessionId: row.sessionKey, updatedAt: 1, ...row.entry },
+    }));
+    const entriesForAgent = (agentId: string) => rows.filter((row) => row.agentId === agentId);
+    const runtime = {
+      agent: {
+        session: {
+          listSessionEntries: ({ agentId }: { agentId: string }) => entriesForAgent(agentId),
+        },
+      },
+    } as unknown as PluginRuntime;
+    const sourceFromEntry = vi.fn((entry: SessionEntry) => ({
+      hostId: "local",
+      threadId: entry.sessionId,
+    }));
+    const adopted = listAdoptedSessionCatalogSessions({
+      agentId: "beta",
+      config,
+      pluginId: "acpx",
+      runtime,
+      sessionEntries: snapshot ? { entriesForAgent, entriesForCatalog: () => rows } : undefined,
+      sourceFromEntry,
+    });
+    expect([...adopted]).toEqual([["local\0adopted", "adopted"]]);
+    expect(sourceFromEntry.mock.calls.map(([entry]) => entry.sessionId)).toEqual(["adopted"]);
   });
 });
 

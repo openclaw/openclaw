@@ -31,6 +31,12 @@
   font-weight: 600;
 }
 
+.chat-run-failure__repeat {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
 .chat-run-failure__summary,
 .chat-run-failure__details p {
   margin: 6px 0 0;

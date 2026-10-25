@@ -19,9 +19,8 @@ export function requirePdfTool(options: Parameters<typeof createPdfTool>[0]) {
 }
 
 export function stubPdfInput(text = "PDF") {
-  const load = vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
-  const extract = vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({ text, images: [] });
-  return { load, extract };
+  vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
+  vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({ text, images: [] });
 }
 
 type StubPreparedRuntimeSnapshot = {

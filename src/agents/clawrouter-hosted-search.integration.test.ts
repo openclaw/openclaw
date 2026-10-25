@@ -4,7 +4,7 @@ import type { OpenAIResponsesOptions } from "@openclaw/ai/internal/openai";
 import MarkdownIt from "markdown-it";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamSimple } from "../llm/stream.js";
@@ -873,12 +873,7 @@ describe("ClawRouter admitted hosted search HTTP composition", () => {
     const before = requests.length;
     const pending = call(undefined, { signal: controller.signal });
     try {
-      await Promise.race([
-        held.promise,
-        pending.then(() => {
-          throw new Error("Completed before held HTTP response");
-        }),
-      ]);
+      await awaitGateBeforeSettlement(held.promise, pending, "Completed before held HTTP response");
       controller.abort();
       expect((await pending).result.stopReason).toBe("aborted");
       await closed.promise;

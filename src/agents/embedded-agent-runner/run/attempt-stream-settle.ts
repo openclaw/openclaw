@@ -96,6 +96,7 @@ export async function settleEmbeddedAttemptStream(input: {
   };
   markTimedOutDuringCompaction: () => void;
   getRunAbortDeadlineAtMs: () => number | undefined;
+  onRunAbortDeadlineChanged: (listener: () => void) => () => void;
   runAbortSignal: AbortSignal;
   isProbeSession: boolean;
   onBlockReplyFlush?: (payload: {
@@ -132,6 +133,7 @@ export async function settleEmbeddedAttemptStream(input: {
           const deadlineAtMs = input.getRunAbortDeadlineAtMs();
           return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
         },
+        onDeadlineChanged: input.onRunAbortDeadlineChanged,
         abortSignal: input.runAbortSignal,
       });
       // An aborted run legitimately leaves async tasks unfinished; stamping a

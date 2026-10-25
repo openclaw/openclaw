@@ -3,6 +3,7 @@ import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import type { SkillSnapshot } from "../skills/types.js";
 
 type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
@@ -34,21 +35,13 @@ function metadata(options: Partial<Parameters<typeof buildTrajectoryRunMetadata>
 function skill(name: string, description: string): ResolvedSkillEntry {
   const baseDir = `/tmp/workspace/skills/${name}`;
   const filePath = `${baseDir}/SKILL.md`;
-  return {
+  return createCanonicalFixtureSkill({
     name,
     description,
     filePath,
     baseDir,
     source: "workspace",
-    sourceInfo: {
-      path: filePath,
-      source: "workspace",
-      scope: "project",
-      origin: "top-level",
-      baseDir,
-    },
-    disableModelInvocation: false,
-  };
+  });
 }
 
 const partialSkill = {
