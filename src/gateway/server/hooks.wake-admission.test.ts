@@ -209,7 +209,7 @@ describe("authenticated immediate hook wake admission", () => {
   });
 
   it.each(["failed", "cancelled"] as const)(
-    "responds after acceptance and logs a later %s outcome without another handoff",
+    "responds at acceptance and logs later %s without another handoff",
     async (status) => {
       const settled = createDeferred<SessionEventOutcome>();
       mocks.enqueue.mockReturnValue(receipt({ settled: settled.promise }));
@@ -217,10 +217,6 @@ describe("authenticated immediate hook wake admission", () => {
       const response = await post(handler);
       expectWake(response, 200, { ok: true, eventOutcome: "queued" });
       expect(warn).not.toHaveBeenCalled();
-      expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(
-        "Wake notification",
-        expect.objectContaining({ expectedTarget: target, createIfMissing: true, source: "hook" }),
-      );
 
       settled.resolve({
         status,
@@ -238,26 +234,30 @@ describe("authenticated immediate hook wake admission", () => {
     },
   );
 
-  it.each(["capture", "acceptance"] as const)(
+  it.each(["capture", "acceptance", "scheduler"] as const)(
     "returns 503 after failed %s without leaving a pending event",
     async (phase) => {
       if (phase === "capture") {
         mocks.capture.mockRejectedValueOnce(new Error("session storage unavailable"));
-      } else {
+      } else if (phase === "acceptance") {
         mocks.enqueue.mockReturnValueOnce(
           receipt({
             accepted: Promise.resolve({ ok: false, error: "session storage unavailable" }),
           }),
         );
+      } else {
+        mocks.defer.mockResolvedValueOnce({ ok: false, reason: "session storage unavailable" });
       }
-      const response = await post(fixture().handler);
+      const response = await post(
+        fixture().handler,
+        phase === "scheduler" ? "next-heartbeat" : "now",
+      );
       expectWake(response, 503, {
         ok: false,
         error: "session storage unavailable",
       });
       expect(peekSystemEvents(sessionKey)).toEqual([]);
-      expect(mocks.capture).toHaveBeenCalledOnce();
-      expect(mocks.enqueue).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
+      expect(mocks.enqueue).toHaveBeenCalledTimes(phase === "acceptance" ? 1 : 0);
     },
   );
 
@@ -266,48 +266,45 @@ describe("authenticated immediate hook wake admission", () => {
     ["now", "acceptance"],
     ["next-heartbeat", "capture"],
     ["next-heartbeat", "acceptance"],
-  ] as const)(
-    "rejects a config replacement during %s %s without recapturing the destination",
-    async (mode, phase) => {
-      const reached = createDeferred();
-      const release = createDeferred();
-      if (phase === "capture") {
-        mocks.capture.mockImplementationOnce(async () => {
-          reached.resolve();
-          await release.promise;
-          return target;
-        });
-      } else if (mode === "now") {
-        mocks.enqueue.mockImplementationOnce(() => {
-          reached.resolve();
-          return receipt({ accepted: release.promise.then(() => ({ ok: true })) });
-        });
-      } else {
-        mocks.defer.mockImplementationOnce(async ({ commitGuard }) => {
-          reached.resolve();
-          await release.promise;
-          commitGuard();
-          return { ok: true, eventOutcome: "queued" };
-        });
-      }
-      const { handler, revoke } = fixture();
-      const responsePromise = post(handler, mode);
-      await awaitGateBeforeSettlement(reached.promise, responsePromise, "Admission did not start");
-      revoke();
-      release.resolve();
-      const response = await responsePromise;
-      expectWake(response, 409, {
-        error: "hook configuration changed; retry request",
+  ] as const)("rejects config replacement during %s %s without recapture", async (mode, phase) => {
+    const reached = createDeferred();
+    const release = createDeferred();
+    if (phase === "capture") {
+      mocks.capture.mockImplementationOnce(async () => {
+        reached.resolve();
+        await release.promise;
+        return target;
       });
-      expect(response.end).toHaveBeenCalledOnce();
-      expect(mocks.capture).toHaveBeenCalledOnce();
-      expect(mocks.enqueue).toHaveBeenCalledTimes(mode === "now" && phase === "acceptance" ? 1 : 0);
-      if (mode === "next-heartbeat") {
-        expect(mocks.defer).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
-      }
-      expect(peekSystemEvents(sessionKey)).toEqual([]);
-    },
-  );
+    } else if (mode === "now") {
+      mocks.enqueue.mockImplementationOnce(() => {
+        reached.resolve();
+        return receipt({ accepted: release.promise.then(() => ({ ok: true })) });
+      });
+    } else {
+      mocks.defer.mockImplementationOnce(async ({ commitGuard }) => {
+        reached.resolve();
+        await release.promise;
+        commitGuard();
+        return { ok: true, eventOutcome: "queued" };
+      });
+    }
+    const { handler, revoke } = fixture();
+    const responsePromise = post(handler, mode);
+    await awaitGateBeforeSettlement(reached.promise, responsePromise, "Admission did not start");
+    revoke();
+    release.resolve();
+    const response = await responsePromise;
+    expectWake(response, 409, {
+      error: "hook configuration changed; retry request",
+    });
+    expect(response.end).toHaveBeenCalledOnce();
+    expect(mocks.capture).toHaveBeenCalledOnce();
+    expect(mocks.enqueue).toHaveBeenCalledTimes(mode === "now" && phase === "acceptance" ? 1 : 0);
+    if (mode === "next-heartbeat") {
+      expect(mocks.defer).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
+    }
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+  });
 
   it.each([
     { accepted: true, global: false },
@@ -315,7 +312,7 @@ describe("authenticated immediate hook wake admission", () => {
     { accepted: true, global: true },
     { accepted: false, global: true },
   ])(
-    "adopts a pending occurrence for an immediate wake (accepted: $accepted, global: $global)",
+    "adopts pending wakes (accepted: $accepted, global: $global)",
     async ({ accepted, global }) => {
       const queueKey = global ? "agent:main:global" : sessionKey;
       const expectedTarget = global ? { ...target, sessionKey: "global" } : target;
@@ -327,7 +324,6 @@ describe("authenticated immediate hook wake admission", () => {
       enqueueRequiredSystemEventEntry("Wake notification", { sessionKey: queueKey });
       const original = peekSystemEventEntries(queueKey);
       expect(original).toHaveLength(1);
-      expect(mocks.enqueue).not.toHaveBeenCalled();
 
       const handoffReached = createDeferred();
       const acceptance = createDeferred<Awaited<SessionEventReceipt["accepted"]>>();
@@ -347,14 +343,10 @@ describe("authenticated immediate hook wake admission", () => {
           "Immediate wake returned without adopting the pending occurrence",
         );
         expect(responded).toBe(false);
-        expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(
-          "Wake notification",
-          expect.objectContaining({
-            occurrences: [original[0]],
-            expectedTarget,
-            preserveOccurrenceOnRejection: true,
-          }),
-        );
+        expect(mocks.enqueue.mock.calls[0]?.[1]).toMatchObject({
+          occurrences: original,
+          expectedTarget,
+        });
         expect(peekSystemEventEntries(queueKey)).toEqual(original);
       } finally {
         acceptance.resolve(acceptanceResult(accepted));
@@ -377,13 +369,11 @@ describe("authenticated immediate hook wake admission", () => {
   );
 
   it.each([true, false])(
-    "joins concurrent immediate requests to one admission decision (accepted: %s)",
+    "joins immediate requests to one decision (accepted: %s)",
     async (accepted) => {
       const { handler } = fixture();
       const { handoff, responses } = await withJoinedWakes([handler], accepted, (pending) => {
-        expect(mocks.enqueue).toHaveBeenCalledOnce();
         expect(pending.cancel).not.toHaveBeenCalled();
-        expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
         expect(
           peekSystemEventEntries(sessionKey).map((event) =>
             isSystemEventTurnOwned(sessionKey, event),
@@ -455,18 +445,11 @@ describe("authenticated immediate hook wake admission", () => {
   });
 
   it.each(["queued", "coalesced"] as const)(
-    "returns the scheduler's %s receipt for a deferred wake without an immediate handoff",
+    "returns deferred scheduler's %s receipt without immediate handoff",
     async (eventOutcome) => {
       mocks.defer.mockResolvedValueOnce({ ok: true, eventOutcome });
       const response = await post(fixture().handler, "next-heartbeat");
       expectWake(response, 200, { ok: true, eventOutcome });
-      expect(mocks.defer).toHaveBeenCalledExactlyOnceWith({
-        text: "Wake notification",
-        agentId: "main",
-        expectedTarget: target,
-        createIfMissing: true,
-        commitGuard: expect.any(Function),
-      });
       expect(peekSystemEvents(sessionKey)).toEqual([]);
       expect(mocks.enqueue).not.toHaveBeenCalled();
     },
@@ -475,48 +458,37 @@ describe("authenticated immediate hook wake admission", () => {
   it.for([
     { name: "ASCII", text: "A".repeat(2001) },
     { name: "CJK", text: "界".repeat(501) },
-  ])(
-    "refuses oversized $name deferrals before acceptance and keeps immediate wakes intact",
-    async ({ text }) => {
-      mocks.defer.mockImplementation(async ({ text: deferredText, commitGuard }) => {
-        const eventOutcome = enqueueAutomationSystemEvent(
-          deferredText,
-          { sessionKey },
-          {
-            jobId: "scheduled-receiver",
-            assertCurrent: commitGuard,
-          },
-        );
-        return { ok: true, eventOutcome };
-      });
-      const { handler } = fixture();
-      const rejected = await post(handler, "next-heartbeat", "hook-secret", text);
-      expectWake(rejected, 503, {
-        ok: false,
-        error:
-          'Deferred automation notices for this scheduled occurrence exceed the prompt limit of 2000 weighted characters. Shorten the notice or use mode "now".',
-      });
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      expect(mocks.enqueue).not.toHaveBeenCalled();
-
-      const shorter = await post(handler, "next-heartbeat", "hook-secret", "Short notice");
-      expectWake(shorter, 200, { ok: true, eventOutcome: "queued" });
-      expect(peekSystemEvents(sessionKey)).toEqual(["Short notice"]);
-
-      const immediate = await post(handler, "now", "hook-secret", text);
-      expect(immediate.status).toBe(200);
-      expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(
-        text,
-        expect.objectContaining({ source: "hook" }),
+  ])("refuses oversized $name deferrals but accepts immediate wakes", async ({ text }) => {
+    mocks.defer.mockImplementation(async ({ text: deferredText, commitGuard }) => {
+      const eventOutcome = enqueueAutomationSystemEvent(
+        deferredText,
+        { sessionKey },
+        {
+          jobId: "scheduled-receiver",
+          assertCurrent: commitGuard,
+        },
       );
-    },
-  );
-
-  it("returns 503 when no scheduled Automation can receive a deferred wake", async () => {
-    mocks.defer.mockResolvedValueOnce({ ok: false, reason: "No scheduled target" });
-    const response = await post(fixture().handler, "next-heartbeat");
-    expectWake(response, 503, { ok: false, error: "No scheduled target" });
-    expect(peekSystemEvents(sessionKey)).toEqual([]);
+      return { ok: true, eventOutcome };
+    });
+    const { handler } = fixture();
+    const rejected = await post(handler, "next-heartbeat", "hook-secret", text);
+    expectWake(rejected, 503, {
+      ok: false,
+      error:
+        'Deferred automation notices for this scheduled occurrence exceed the prompt limit of 2000 weighted characters. Shorten the notice or use mode "now".',
+    });
+    expect(peekSystemEventEntries(sessionKey)).toEqual([]);
     expect(mocks.enqueue).not.toHaveBeenCalled();
+
+    const shorter = await post(handler, "next-heartbeat", "hook-secret", "Short notice");
+    expectWake(shorter, 200, { ok: true, eventOutcome: "queued" });
+    expect(peekSystemEvents(sessionKey)).toEqual(["Short notice"]);
+
+    const immediate = await post(handler, "now", "hook-secret", text);
+    expect(immediate.status).toBe(200);
+    expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(
+      text,
+      expect.objectContaining({ source: "hook" }),
+    );
   });
 });

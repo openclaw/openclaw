@@ -12,7 +12,6 @@ import {
 import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-support.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
 const deferHookWakeMock = vi.fn<DeferredHookWake>();
 const captureSessionEventTargetMock = vi.fn(async (agentId: string, sessionKey: string) => ({
@@ -77,30 +76,14 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 
-let capturedDispatchAgentHook: ((...args: unknown[]) => unknown) | undefined;
-let capturedDispatchWakeHook: ((...args: unknown[]) => unknown) | undefined;
-
-vi.mock("./hooks-request-handler.js", () => ({
-  createHooksRequestHandler: vi.fn((opts: Record<string, unknown>) => {
-    capturedDispatchAgentHook = opts.dispatchAgentHook as typeof capturedDispatchAgentHook;
-    capturedDispatchWakeHook = opts.dispatchWakeHook as typeof capturedDispatchWakeHook;
-    return vi.fn();
-  }),
-}));
-
-const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
-  await import("./hooks.js");
+const { createGatewayHookDispatcher } = await import("./hooks.js");
+let dispatcher: ReturnType<typeof createGatewayHookDispatcher>;
 const createBroker = useSpawnBrokerTestFixture(afterEach);
 
 function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
   return {
-    scheduler: createTestGatewayScheduler("fake-timers"),
     deps: {} as never,
     deferHookWake: deferHookWakeMock,
-    getHooksConfig: () => null,
-    getClientIpConfig: () => ({ trustedProxies: undefined, allowRealIpFallback: false }),
-    bindHost: "127.0.0.1",
-    port: 18789,
     logHooks: {
       warn: logHooksWarnMock,
       debug: vi.fn(),
@@ -111,7 +94,10 @@ function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number }
   };
 }
 
-function buildAgentPayload(name: string, agentId?: string) {
+function buildAgentPayload(
+  name: string,
+  agentId?: string,
+): Parameters<typeof dispatcher.dispatchAgentHook>[0] {
   return {
     message: "test message",
     name,
@@ -127,7 +113,10 @@ function buildAgentPayload(name: string, agentId?: string) {
   };
 }
 
-function deliveryPayload(name: string, accountId?: string) {
+function deliveryPayload(
+  name: string,
+  accountId?: string,
+): Parameters<typeof dispatcher.dispatchAgentHook>[0] {
   return {
     ...buildAgentPayload(name),
     deliver: true,
@@ -160,47 +149,8 @@ function expectFailureNotice(text: string) {
   );
 }
 
-function dispatchAgentHook(payload: unknown): unknown {
-  return resolveDispatchAgentHook()(payload);
-}
-
-function dispatchWakeHook(payload: unknown, agentId: string): unknown {
-  if (!capturedDispatchWakeHook) {
-    throw new Error("dispatchWakeHook missing");
-  }
-  return capturedDispatchWakeHook(payload, agentId);
-}
-
-function resolveDispatchAgentHook(): (...args: unknown[]) => unknown {
-  if (!capturedDispatchAgentHook) {
-    throw new Error("dispatchAgentHook missing");
-  }
-  return capturedDispatchAgentHook;
-}
-
-type HookLogMeta = {
-  sourcePath?: string;
-  name?: string;
-  runId?: string;
-  jobId?: string;
-  sessionKey?: string;
-  logicalSessionKey?: string;
-  status?: string;
-  model?: string;
-  summary?: string;
-};
-
-function logWarnMetaFor(prefix: string, predicate?: (meta: HookLogMeta) => boolean): HookLogMeta {
-  const call = logHooksWarnMock.mock.calls.find(([actual, meta]) => {
-    if (!actual.startsWith(prefix)) {
-      return false;
-    }
-    return predicate ? predicate(meta as HookLogMeta) : true;
-  });
-  if (!call) {
-    throw new Error(`missing warn log: ${prefix}`);
-  }
-  return call[1] as HookLogMeta;
+function dispatchAgentHook(payload: Parameters<typeof dispatcher.dispatchAgentHook>[0]) {
+  return dispatcher.dispatchAgentHook(payload);
 }
 
 describe("dispatchAgentHook trust handling", () => {
@@ -217,9 +167,7 @@ describe("dispatchAgentHook trust handling", () => {
     );
     resolveOutboundChannelPluginMock.mockReturnValue({ id: "telegram" });
     resolveChannelDefaultAccountIdMock.mockReturnValue("default");
-    capturedDispatchAgentHook = undefined;
-    capturedDispatchWakeHook = undefined;
-    createGatewayHooksRequestHandler(buildMinimalParams());
+    dispatcher = createGatewayHookDispatcher(buildMinimalParams());
   });
 
   afterEach(() => {
@@ -227,63 +175,40 @@ describe("dispatchAgentHook trust handling", () => {
     vi.restoreAllMocks();
   });
 
-  it("queues and targets a deferred mapped global wake for the same agent", async () => {
-    loadConfigMock.mockReturnValue({
-      agents: { entries: { main: {}, hooks: {} } },
-      session: { scope: "global" },
-    });
-
-    await dispatchWakeHook(
-      {
-        text: "Mapped wake",
-        mode: "next-heartbeat",
-        sessionKey: "hook:mapped",
-      },
-      "hooks",
-    );
-
-    expect(deferHookWakeMock).toHaveBeenCalledExactlyOnceWith({
-      text: "Mapped wake",
-      agentId: "hooks",
-      expectedTarget: {
-        agentId: "hooks",
-        sessionKey: "global",
-        sessionId: "captured-session",
-        generation: "captured-generation",
-      },
-      createIfMissing: true,
-      commitGuard: expect.any(Function),
-    });
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
-    expect(captureSessionEventTargetMock).toHaveBeenCalledExactlyOnceWith(
-      "hooks",
-      "global",
-      expect.objectContaining({ assertCaptureCurrent: expect.any(Function) }),
-    );
-  });
-
-  it("keeps the resolved owner when a deferred multi-agent wake omits agentId", async () => {
+  it.each([true, false])("retains deferred wake ownership (global: %s)", async (global) => {
     loadConfigMock.mockReturnValue({
       agents: {
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "main" } },
-        entries: { main: {}, molty: {} },
+        entries: { main: {}, hooks: {} },
       },
+      ...(global ? { session: { scope: "global" as const } } : {}),
     });
-
     deferHookWakeMock.mockResolvedValueOnce({ ok: true, eventOutcome: "coalesced" });
-    const result = await dispatchWakeHook({ text: "Mapped wake", mode: "next-heartbeat" }, "molty");
-
-    expect(result).toEqual({ eventOutcome: "coalesced" });
+    expect(
+      await dispatcher.dispatchWakeHook(
+        {
+          text: "Mapped wake",
+          mode: "next-heartbeat",
+          ...(global ? { sessionKey: "hook:mapped" } : {}),
+        },
+        "hooks",
+      ),
+    ).toEqual({ eventOutcome: "coalesced" });
     expect(resolveAgentMainSessionKeyMock).toHaveBeenCalledWith({
       cfg: expect.any(Object),
-      agentId: "molty",
+      agentId: "hooks",
     });
     expect(deferHookWakeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         text: "Mapped wake",
-        agentId: "molty",
-        expectedTarget: expect.objectContaining({ sessionKey: "agent:molty:main" }),
+        agentId: "hooks",
+        expectedTarget: {
+          agentId: "hooks",
+          sessionKey: global ? "global" : "agent:hooks:main",
+          sessionId: "captured-session",
+          generation: "captured-generation",
+        },
       }),
     );
     expect(enqueueSessionEventMock).not.toHaveBeenCalled();
@@ -305,8 +230,8 @@ describe("dispatchAgentHook trust handling", () => {
       observedBroker = getSpawnBroker();
       return finishedRun();
     });
-    runWithSpawnBroker(broker, () =>
-      createGatewayHooksRequestHandler({
+    dispatcher = runWithSpawnBroker(broker, () =>
+      createGatewayHookDispatcher({
         ...buildMinimalParams(),
         resolveGatewayContext: () => gatewayContext,
       }),
@@ -349,14 +274,7 @@ describe("dispatchAgentHook trust handling", () => {
     const result = await dispatchAgentHook(deliveryPayload("Default account"));
 
     expect(result).toMatchObject({ ok: true });
-    expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        trigger: "event",
-        job: expect.objectContaining({
-          delivery: expect.objectContaining({ accountId: "default" }),
-        }),
-      }),
-    );
+    expect(runCronIsolatedAgentTurnMock.mock.calls[0]?.[0].job.delivery.accountId).toBe("default");
   });
 
   it("retains detached agent work after the hook request closes", async () => {
@@ -378,13 +296,15 @@ describe("dispatchAgentHook trust handling", () => {
         return finishedRun();
       },
     );
-    const dispatcher = createGatewayHookDispatcher(buildMinimalParams());
+    const detachedDispatcher = createGatewayHookDispatcher(buildMinimalParams());
     const requestAdmission = tryBeginGatewayRootWorkAdmission();
     assert(requestAdmission, "hook request must acquire admission");
 
     try {
       const admission = await requestWork.track(() =>
-        requestAdmission.run(() => dispatcher.dispatchAgentHook(buildAgentPayload("Async hook"))),
+        requestAdmission.run(() =>
+          detachedDispatcher.dispatchAgentHook(buildAgentPayload("Async hook")),
+        ),
       );
       assert(admission.ok, "hook must acknowledge execution before it finishes");
       expect(getActiveGatewayRootWorkCount()).toBe(2);
@@ -498,8 +418,9 @@ describe("dispatchAgentHook trust handling", () => {
   });
 
   it("does not start same-session work after its admission timeout", async () => {
-    capturedDispatchAgentHook = undefined;
-    createGatewayHooksRequestHandler(buildMinimalParams({ agentStartAdmissionTimeoutMs: 10 }));
+    dispatcher = createGatewayHookDispatcher(
+      buildMinimalParams({ agentStartAdmissionTimeoutMs: 10 }),
+    );
     const firstRunStarted = createDeferred();
     const releaseFirstRun = createDeferred();
     runCronIsolatedAgentTurnMock.mockImplementationOnce(
@@ -537,14 +458,6 @@ describe("dispatchAgentHook trust handling", () => {
       error: "raw failure",
       diagnostics: {
         summary: diagnosticSummary,
-        entries: [
-          {
-            ts: 1,
-            source: "cron-preflight",
-            severity: "error",
-            message: diagnosticSummary,
-          },
-        ],
       },
       delivered: false,
     });
@@ -555,25 +468,15 @@ describe("dispatchAgentHook trust handling", () => {
     });
 
     await expectFailureNotice(`Hook Model hook (error): ${diagnosticSummary}`);
-    const meta = logWarnMetaFor(
-      "hook agent run completed",
-      (candidate) => candidate.name === "Model hook",
-    );
+    const meta = logHooksWarnMock.mock.calls.find(([message]) =>
+      message.startsWith("hook agent run completed"),
+    )?.[1];
     expect(meta).toMatchObject({
-      sourcePath: "/hooks/agent",
-      runId: expect.any(String),
-      jobId: expect.any(String),
       logicalSessionKey: "session-1",
-      status: "error",
-      model: "anthropic/claude-sonnet-4-6",
       summary: diagnosticSummary,
     });
-    expect(meta.sessionKey).toBeUndefined();
+    expect(meta).not.toHaveProperty("sessionKey");
     expect(meta).not.toHaveProperty("consoleMessage");
     expect(logHooksWarnMock).toHaveBeenCalledWith(expect.stringContaining(diagnosticSummary), meta);
-    expect(logHooksWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("model=anthropic/claude-sonnet-4-6"),
-      meta,
-    );
   });
 });

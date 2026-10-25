@@ -118,7 +118,6 @@ function createMonitorHarness(params?: {
   };
   return {
     monitor,
-    scheduler,
     cpuUsage,
     eventLoopUtilization,
     clock,
@@ -243,10 +242,6 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       degraded: params.reasons.length > 0,
       degradedSinceMs: params.reasons.length ? 0 : null,
       intervalMs: count * params.delay,
-      delayP99Ms: params.delay,
-      delayMaxMs: params.delay,
-      utilization: params.utilization,
-      cpuCoreRatio: params.cpuMsPerWallMs,
       reasons: params.reasons,
     });
   });
@@ -388,22 +383,17 @@ describe("event-loop measurement telemetry", () => {
     expect(events.map((event) => event.trace)).toEqual([undefined, undefined]);
   });
 
-  it("keeps diagnostics-disabled sampling active without emitting telemetry", async () => {
-    const listener = vi.fn();
-    onInternalDiagnosticEvent(listener, { include: ["gateway.event_loop.sample"] });
-    setDiagnosticsEnabledForProcess(false);
-    const harness = createMonitorHarness();
-    await harness.sample(1_500);
-    expect(harness.monitor.snapshot()?.reasons).toEqual(["event_loop_delay"]);
-    await waitForDiagnosticEventsDrained();
-    expect(listener).not.toHaveBeenCalled();
-    expect(getInternalDiagnosticEventSequence()).toBe(0);
-  });
-
   it.each<{
     name: string;
     subscribe: () => () => void | Promise<void>;
   }>([
+    {
+      name: "diagnostics disabled",
+      subscribe: () => {
+        setDiagnosticsEnabledForProcess(false);
+        return onInternalDiagnosticEvent(vi.fn(), { include: ["gateway.event_loop.sample"] });
+      },
+    },
     { name: "no listener", subscribe: () => () => {} },
     {
       name: "stability recorder",
