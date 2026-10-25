@@ -6,7 +6,10 @@ import {
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { ModelAuthAvailabilityResolver } from "./model-auth-availability.js";
+import {
+  createModelAuthAvailabilityResolver,
+  type ModelAuthAvailabilityResolver,
+} from "./model-auth-availability.js";
 
 const synthetic = vi.hoisted(() => ({
   prepareProviderSyntheticAuthWithPlugin: vi.fn<
@@ -189,5 +192,35 @@ describe("model auth checker", () => {
     await expect(hasAuth("anthropic", { ...ref })).resolves.toBe(false);
     expect(evaluateModelAuth).toHaveBeenCalledWith("anthropic", ref);
     expect(auth.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
+  });
+
+  it("evaluates staged pendingAuthProfiles and discovery env", async () => {
+    evaluateModelAuth.mockReturnValue({ availability: true, routeResolution: null });
+    const pendingCredential = {
+      type: "api_key" as const,
+      provider: "ollama-cloud",
+      key: "secret-key",
+    };
+    const hasAuth = createProviderAuthChecker({
+      cfg: {},
+      env: { OLLAMA_API_KEY: "secret-key" },
+      pendingAuthProfiles: [
+        {
+          profileId: "ollama-cloud:default",
+          credential: pendingCredential,
+        },
+      ],
+    });
+    await hasAuth("ollama-cloud", { modelId: "kimi-k2.6" });
+    expect(createModelAuthAvailabilityResolver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: { OLLAMA_API_KEY: "secret-key" },
+        authStore: expect.objectContaining({
+          profiles: expect.objectContaining({
+            "ollama-cloud:default": pendingCredential,
+          }),
+        }),
+      }),
+    );
   });
 });

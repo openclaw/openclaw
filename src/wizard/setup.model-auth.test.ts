@@ -242,6 +242,41 @@ describe("runSetupModelAuthStep", () => {
     expect(result.config.agents?.defaults?.model).toBe("openai/global-model");
   });
 
+  it("extracts declared env vars for preferred provider without guessing provider env key", async () => {
+    const config = agentConfig();
+    promptAuthChoiceGrouped.mockResolvedValueOnce("ollama-cloud");
+    resolveManifestProviderAuthChoice.mockReturnValueOnce({
+      pluginId: "ollama",
+      providerId: "ollama-cloud",
+      methodId: "api-key",
+      choiceId: "ollama-cloud",
+      choiceLabel: "Ollama Cloud",
+    });
+    resolvePreferredProviderForAuthChoice.mockResolvedValueOnce("ollama-cloud");
+    const preparedProfiles = [
+      {
+        profileId: "ollama-cloud:default",
+        credential: { type: "api_key" as const, provider: "ollama-cloud", key: "test-ollama-key" },
+      },
+    ];
+    applyAuthChoice.mockResolvedValueOnce({
+      ...candidate(config),
+      authProfiles: preparedProfiles,
+    });
+
+    await runStep({ config });
+
+    expectCall(promptDefaultModel, {
+      preferredProvider: "ollama-cloud",
+      pendingAuthProfiles: preparedProfiles,
+      discoveryEnv: expect.objectContaining({
+        OLLAMA_API_KEY: "test-ollama-key",
+      }),
+    });
+    const lastCall = promptDefaultModel.mock.calls.at(-1)?.[0];
+    expect(lastCall?.discoveryEnv?.OLLAMA_CLOUD_API_KEY).toBeUndefined();
+  });
+
   it("keeps the current provider without applying auth or automatic lean changes", async () => {
     const config: OpenClawConfig = { agents: { defaults: { model: "managed-local/model" } } };
     promptAuthChoiceGrouped.mockResolvedValueOnce("__keep-current");

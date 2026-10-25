@@ -529,3 +529,25 @@ it.each([true, false])(
     }
   },
 );
+
+it("passes discoveryEnv and pendingAuthProfiles to createProviderAuthChecker", async () => {
+  loadModelCatalog.mockResolvedValue([catalogModel("ollama-cloud", "kimi-k2.6", "Kimi K2.6")]);
+  const pendingAuthProfiles = [
+    {
+      profileId: "ollama-cloud:default",
+      credential: { type: "api_key" as const, provider: "ollama-cloud", key: "test-key" },
+    },
+  ];
+  const discoveryEnv = { OLLAMA_API_KEY: "test-key" };
+  await promptDefaultPicker({
+    preferredProvider: "ollama-cloud",
+    discoveryEnv,
+    pendingAuthProfiles,
+  });
+  expect(createProviderAuthChecker).toHaveBeenCalledWith(
+    expect.objectContaining({
+      env: discoveryEnv,
+      pendingAuthProfiles,
+    }),
+  );
+});
