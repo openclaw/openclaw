@@ -22,6 +22,27 @@ import {
   withSubagentCompletionWorkerState,
 } from "./subagent-completion-admission.test-helpers.js";
 
+function requesterSession(entry: SubagentRunRecord) {
+  return {
+    cfg: {},
+    entry: { sessionId: "requester-session", updatedAt: 1 },
+    canonicalKey: entry.requesterSessionKey,
+    agentId: entry.requesterAgentId,
+    storePath: entry.requesterStorePath,
+  };
+}
+
+function pauseRequesterLookup(entry: SubagentRunRecord, hold: boolean) {
+  const requester = requesterSession(entry);
+  const entered = createDeferredCore();
+  const lookup = createDeferredCore<typeof requester>();
+  vi.spyOn(requesterLookup, "loadRequesterSessionEntry").mockImplementation(async () => {
+    entered.resolve();
+    return hold ? await lookup.promise : requester;
+  });
+  return { entered: entered.promise, release: () => lookup.resolve(requester) };
+}
+
 function reservationState(
   database: OpenClawStateDatabase,
   wake?: SubagentRunRecord["requesterSettleWake"],
@@ -158,13 +179,7 @@ it("does not resurrect a suspended reservation after the requester lookup finish
       await entered.promise;
       await expect(block("expiry")).resolves.toBe(true);
     } finally {
-      lookup.resolve({
-        cfg: {},
-        entry: { sessionId: "requester-session", updatedAt: 1 },
-        canonicalKey: entry.requesterSessionKey,
-        agentId: entry.requesterAgentId,
-        storePath: entry.requesterStorePath,
-      });
+      lookup.resolve(requesterSession(entry));
       inputs.push(...(await restoration));
     }
     expect(await restoration).toEqual([]);
@@ -217,29 +232,14 @@ it.each([
         if (!observed) {
           throw new Error("Synthetic startup snapshot disappeared");
         }
-        const requester = {
-          cfg: {},
-          entry: { sessionId: "requester-session", updatedAt: 1 },
-          canonicalKey: entry.requesterSessionKey,
-          agentId: entry.requesterAgentId,
-          storePath: entry.requesterStorePath,
-        };
-        const entered = createDeferredCore();
-        const lookup =
-          createDeferredCore<
-            Awaited<ReturnType<typeof requesterLookup.loadRequesterSessionEntry>>
-          >();
-        vi.spyOn(requesterLookup, "loadRequesterSessionEntry").mockImplementation(async () => {
-          entered.resolve();
-          return duringLookup ? await lookup.promise : requester;
-        });
+        const lookup = pauseRequesterLookup(entry, duringLookup);
         const restoration = reserveRestoredSubagentControllerSources([observed]);
         if (duringLookup) {
           try {
-            await entered.promise;
+            await lookup.entered;
             retireObligation();
           } finally {
-            lookup.resolve(requester);
+            lookup.release();
           }
         }
         const restored = await restoration;
@@ -298,24 +298,11 @@ it.each([
       if (scenario === "leader already retired") {
         retire(entry.runId);
       }
-      const requester = {
-        cfg: {},
-        entry: { sessionId: "requester-session", updatedAt: 1 },
-        canonicalKey: entry.requesterSessionKey,
-        agentId: entry.requesterAgentId,
-        storePath: entry.requesterStorePath,
-      };
-      const entered = createDeferredCore();
-      const lookup =
-        createDeferredCore<Awaited<ReturnType<typeof requesterLookup.loadRequesterSessionEntry>>>();
-      vi.spyOn(requesterLookup, "loadRequesterSessionEntry").mockImplementation(async () => {
-        entered.resolve();
-        return scenario === "leader already retired" ? requester : await lookup.promise;
-      });
+      const lookup = pauseRequesterLookup(entry, scenario !== "leader already retired");
       const restoration = reserveRestoredSubagentControllerSources([...subagentRuns.values()]);
       if (scenario !== "leader already retired") {
         try {
-          await entered.promise;
+          await lookup.entered;
           retire(entry.runId);
           if (scenario === "whole batch retires during lookup") {
             retire(sibling.runId);
@@ -323,7 +310,7 @@ it.each([
             subagentRuns.set(sibling.runId, { ...sibling, generation: sibling.generation! + 1 });
           }
         } finally {
-          lookup.resolve(requester);
+          lookup.release();
         }
       }
       const restored = await restoration;
