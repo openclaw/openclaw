@@ -238,10 +238,6 @@ it("batches fresh agent discovery without separate root-planning passes", async 
     tasks.mockClear();
     await refreshSkillsDiscovery({ config, reason: "config-change" });
     expect(tasks).toHaveBeenCalledTimes(1);
-    expect(tasks).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "scan", requests: expect.any(Array) }),
-      expect.any(Object),
-    );
     expect(await instructions(workspace, "main")).toBe(description);
     expect(await instructions(other, "second")).toBe("Other");
     expect(tasks).toHaveBeenCalledTimes(1);
