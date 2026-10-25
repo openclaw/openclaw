@@ -56,9 +56,10 @@ export class AsyncWorkScope {
     }
     const ancestry = currentWorkScopeAncestry.getStore();
     const parent = owner ? (ancestry?.scope === owner ? ancestry : { scope: owner }) : undefined;
-    return currentWorkScopeAncestry.run({ scope: this, parent }, () =>
-      currentWorkScope.run(this, run),
-    );
+    return runWithAsyncStore(currentWorkScope, this, () => {
+      currentWorkScopeAncestry.enterWith({ scope: this, parent });
+      return run();
+    });
   }
 
   /** Enters synchronous work without inspecting or assimilating its return value. */
