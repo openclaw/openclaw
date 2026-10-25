@@ -64,11 +64,17 @@ function sharingFixture(initial: PreparedChatSessionSharing, access = false) {
       <ChatSessionSharingMobile {...adapter.sharing} />
     );
   });
+  const setState = (state: Partial<NonNullable<PreparedChatSessionSharing["state"]>>) => {
+    setSource((current) => ({ ...current, state: { ...current.state!, ...state } }));
+    flush();
+  };
   return {
     ...view,
     applied,
     source,
     setSource,
+    setState,
+    person: (level = "read") => view.getByRole("button", { name: `Pat Member, Can ${level}` }),
     get adapter() {
       return adapter;
     },
@@ -177,53 +183,40 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
   expect(view.applied).not.toHaveBeenCalled();
 });
 
-it("returns from Session access only after a confirmed native success", async () => {
+it("retains access controls across rejection and retries, returning only on native success", async () => {
   const change = vi.fn<PreparedChatSessionSharing["onVisibilityChange"]>();
   const view = accessFixture(prepared({ onVisibilityChange: change }));
+  const draft = view.button(/Draft/);
   for (const outcome of [
+    new Error("Visibility command failed"),
     { status: "cancelled" },
     { status: "failed", error: "Rejected" },
     { status: "success" },
-  ] satisfies ChatSessionSharingOutcome[]) {
+  ] satisfies Array<ChatSessionSharingOutcome | Error>) {
     const pending = createDeferred<ChatSessionSharingOutcome>();
     change.mockReturnValueOnce(pending.promise);
-    view.button(/Draft/).click();
+    draft.click();
     expect(change).toHaveBeenLastCalledWith("draft");
     expect(view.applied).not.toHaveBeenCalled();
     await view.expectDisabled(/Draft/, true);
-    pending.resolve(outcome);
-    await pending.promise;
+    expect(view.queryByRole("alert")).toBeNull();
+    if (outcome instanceof Error) {
+      pending.reject(outcome);
+      await waitForSolid(() =>
+        expect(view.queryByRole("alert")?.textContent).toContain(outcome.message),
+      );
+    } else {
+      pending.resolve(outcome);
+      await pending.promise;
+    }
     await view.expectDisabled(/Draft/, false);
-    if (outcome.status === "success") {
+    expect(view.button(/Draft/)).toBe(draft);
+    if (!(outcome instanceof Error) && outcome.status === "success") {
       expect(view.applied).toHaveBeenCalledOnce();
     } else {
       expect(view.applied).not.toHaveBeenCalled();
     }
   }
-});
-
-it("retains access controls through a rejected command and a held retry", async () => {
-  const retry = createDeferred<ChatSessionSharingOutcome>();
-  const change = vi
-    .fn<PreparedChatSessionSharing["onVisibilityChange"]>()
-    .mockRejectedValueOnce(new Error("Visibility command failed"))
-    .mockReturnValueOnce(retry.promise);
-  const view = accessFixture(prepared({ onVisibilityChange: change }));
-  const draft = view.button(/Draft/);
-  draft.click();
-  await waitForSolid(() =>
-    expect(view.queryByRole("alert")?.textContent).toContain("Visibility command failed"),
-  );
-  expect(view.button(/Draft/)).toBe(draft);
-  expect(view.applied).not.toHaveBeenCalled();
-  draft.click();
-  await waitForSolid(() => {
-    expect(view.queryByRole("alert")).toBeNull();
-    expect(draft.hasAttribute("disabled")).toBe(true);
-  });
-  retry.resolve({ status: "success" });
-  await waitForSolid(() => expect(view.applied).toHaveBeenCalledOnce());
-  expect(view.button(/Draft/)).toBe(draft);
 });
 
 it.each(["destination", "session"] as const)(
@@ -314,18 +307,13 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
   const view = sharingFixture(initial);
   const { setSource } = view;
   const setPermission = (level: "read" | "send") => {
-    setSource((current) => ({
-      ...current,
-      state: {
-        ...current.state!,
-        result: {
-          ...current.state!.result!,
-          members: level === "send" ? [{ identityId: "member", addedBy: "owner", addedAt: 1 }] : [],
-          permissions: [{ identityId: "member", level, options: ["read", "send"] }],
-        },
+    view.setState({
+      result: {
+        ...view.source().state!.result!,
+        members: level === "send" ? [{ identityId: "member", addedBy: "owner", addedAt: 1 }] : [],
+        permissions: [{ identityId: "member", level, options: ["read", "send"] }],
       },
-    }));
-    flush();
+    });
   };
   const toggle = view.getByRole("switch") as HTMLInputElement;
   expect(toggle.checked).toBe(false);
@@ -337,30 +325,25 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
   await Promise.resolve();
   expect(toggle.checked).toBe(false);
   expect(view.getByText("Permissions")).toBeDefined();
-  const permission = view.getByRole("button", { name: "Pat Member, Can read" });
+  const permission = view.person();
   expect(permission.textContent).toContain("Can read");
   expect(member).not.toHaveBeenCalled();
   permission.focus();
-  setSource({ ...initial, state: { ...initial.state!, loading: true } });
-  flush();
+  view.setState({ loading: true });
   expect(document.activeElement).toBe(permission);
   expect(permission.getAttribute("aria-disabled")).toBe("true");
   expect(permission).toHaveProperty("disabled", false);
   permission.click();
   expect(member).not.toHaveBeenCalled();
   const url = "https://example.test/public/complete-session-link";
-  setSource({
-    ...initial,
-    state: {
-      loading: false,
-      publicUrl: url,
-      result: {
-        ...initial.state!.result!,
-        publicShare: { token: "synthetic-public-token", createdAt: 1 },
-      },
+  view.setState({
+    loading: false,
+    publicUrl: url,
+    result: {
+      ...initial.state!.result!,
+      publicShare: { token: "synthetic-public-token", createdAt: 1 },
     },
   });
-  flush();
   expect(toggle.checked).toBe(true);
   await waitForSolid(() => expect(permission.getAttribute("aria-disabled")).toBeNull());
   permission.click();
@@ -370,14 +353,14 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
   await waitForSolid(() => expect(permission.getAttribute("aria-expanded")).toBe("false"));
   expect(view.queryByRole("button", { name: /^Owner,/ })).toBeNull();
   setPermission("send");
-  expect(view.getByRole("button", { name: "Pat Member, Can send" })).toBe(permission);
+  expect(view.person("send")).toBe(permission);
   await waitForSolid(() => expect(permission.getAttribute("aria-disabled")).toBeNull());
   permission.click();
   await waitForSolid(() => expect(permission.getAttribute("aria-expanded")).toBe("true"));
   view.getByRole("menuitemradio", { name: "Can read" }).click();
   expect(member).toHaveBeenLastCalledWith("member", false);
   setPermission("read");
-  expect(view.getByRole("button", { name: "Pat Member, Can read" })).toBe(permission);
+  expect(view.person()).toBe(permission);
   expect(permission.textContent).toContain("Can read");
   const copyButton = view.getByRole("button", { name: "Copy public link" });
   expect(copyButton.textContent).toContain(url);
@@ -399,28 +382,21 @@ it("reads native permission readiness and retains people through refresh and fai
     ...initial,
     state: { loading: false, read: read.promise },
   });
-  const { setSource } = view;
   expect(view.getByRole("status", { name: "Loading…" }).getAttribute("aria-busy")).toBe("true");
   expect(view.queryByRole("button", { name: "Pat Member, Can read" })).toBeNull();
-  setSource(initial);
+  view.setSource(initial);
   read.resolve();
-  await waitForSolid(() =>
-    expect(view.queryByRole("button", { name: "Pat Member, Can read" })).not.toBeNull(),
-  );
-  const person = view.getByRole("button", { name: "Pat Member, Can read" });
+  await waitForSolid(() => expect(view.person()).not.toBeNull());
+  const person = view.person();
   expect(view.queryByRole("status", { name: "Loading…" })).toBeNull();
   const refresh = createDeferred();
-  setSource({ ...initial, state: { ...initial.state!, loading: true, read: refresh.promise } });
-  flush();
-  expect(view.getByRole("button", { name: "Pat Member, Can read" })).toBe(person);
+  view.setState({ loading: true, read: refresh.promise });
+  expect(view.person()).toBe(person);
   expect(person.getAttribute("aria-disabled")).toBe("true");
   expect(view.queryByRole("status", { name: "Loading…" })).toBeNull();
-  setSource({
-    ...initial,
-    state: { ...initial.state!, loading: false, error: "Permission refresh failed" },
-  });
+  view.setState({ loading: false, read: undefined, error: "Permission refresh failed" });
   refresh.resolve();
   await waitForSolid(() => expect(view.queryByRole("alert")).not.toBeNull());
   expect(view.getByRole("alert").textContent).toContain("Permission refresh failed");
-  expect(view.getByRole("button", { name: "Pat Member, Can read" })).toBe(person);
+  expect(view.person()).toBe(person);
 });

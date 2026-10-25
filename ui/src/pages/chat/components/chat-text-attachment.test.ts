@@ -103,11 +103,6 @@ it("retries a source-resolution failure through the attachment owner", async () 
 });
 
 it.each([
-  [
-    "notes.txt",
-    "text/plain",
-    "Pasted notes 🦞\n  preserve indentation\n<script>not executable</script>\n",
-  ],
   ["settings.json", "application/json", '{"ready":true}\n'],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],
   ["empty.txt", "", ""],

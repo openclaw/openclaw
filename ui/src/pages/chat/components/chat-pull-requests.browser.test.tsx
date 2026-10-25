@@ -284,14 +284,9 @@ it.each([
     const onDismiss = vi.fn();
     const onOpenSessionDiff = vi.fn();
     const request = pullRequest({
-      number: 173824,
-      owner: "openclaw",
       repo,
-      branch: "fix/sidebar-cards",
       title: "fix: keep long pull request titles readable in the session Details sidebar",
-      url: "https://github.com/openclaw/" + repo + "/pull/173824",
-      additions: 383,
-      deletions: 441,
+      url: "https://github.com/openclaw/" + repo + "/pull/103469",
       checks: {
         state: checks,
         passed: 12,
@@ -339,7 +334,7 @@ it.each([
     const titleText = query(".chat-pr__title", row);
     await visible(title);
     expect(title.getAttribute("href")).toBe(request.url);
-    expect(title.getAttribute("aria-label")).toContain("openclaw/" + repo + "#173824");
+    expect(title.getAttribute("aria-label")).toContain("openclaw/" + repo + "#103469");
     expect(titleText.textContent).toBe(request.title);
     const expectTitleFade = (overflow: boolean) =>
       waitForSolid(() => {
@@ -386,9 +381,9 @@ it.each([
     await expect.element(dismiss).toBeVisible();
     const facts = query(".chat-pr-menu__facts", row);
     expect(query(".chat-pr-menu__repository", facts).textContent).toContain("openclaw/" + repo);
-    expect(query(".chat-pr-menu__repository", facts).textContent).toContain("#173824");
-    expect(facts.textContent).toContain("+383");
-    expect(facts.textContent).toContain("−441");
+    expect(query(".chat-pr-menu__repository", facts).textContent).toContain("#103469");
+    expect(facts.textContent).toContain("+4");
+    expect(facts.textContent).toContain("−3");
     expect(facts.textContent).toContain("Open");
     await userEvent.keyboard("{Escape}");
     const menu = row.querySelector<HTMLElement>('[role="menu"]')!;

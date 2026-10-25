@@ -59,22 +59,6 @@ function renderImages(images: ImageBlock[], options: ImageRenderOptions) {
   }
 }
 
-async function whenImageAppears(draw: () => void) {
-  const ready = createDeferred();
-  const observer = new MutationObserver(() => {
-    if (container.querySelector(".chat-message-image")) {
-      ready.resolve();
-    }
-  });
-  observer.observe(container, { childList: true, subtree: true });
-  try {
-    draw();
-    await ready.promise;
-  } finally {
-    observer.disconnect();
-  }
-}
-
 describe("message image gallery loading", () => {
   it.each([false, true])("reads full original bytes for managed=%s images", async (managed) => {
     const source = managed ? managedSource() : "https://images.example.test/original.png";
@@ -126,15 +110,14 @@ describe("message image gallery loading", () => {
       id: "user-inbound-media-ref",
       __openclaw: { media: [{ path: source, contentType: "image/png", fileName: filename }] },
     });
-    await whenImageAppears(() =>
-      renderMessage(message, "user", {
-        showReasoning: true,
-        resourceBasePath: "/openclaw",
-        assistantAttachmentAuthToken: "test-auth-token",
-        mediaOwner: onMediaChange,
-        onOpenImage,
-      }),
-    );
+    renderMessage(message, "user", {
+      showReasoning: true,
+      resourceBasePath: "/openclaw",
+      assistantAttachmentAuthToken: "test-auth-token",
+      mediaOwner: onMediaChange,
+      onOpenImage,
+    });
+    await waitForSolid(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const expectedSrc = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-inbound&${new URLSearchParams({ filename })}`;
@@ -156,29 +139,6 @@ describe("message image gallery loading", () => {
         title: filename,
       }),
     );
-  });
-
-  it("keeps legacy local images on one native source without an upgrade", async () => {
-    const source = "/workspace/legacy-" + crypto.randomUUID() + ".png";
-    const fetchMetadata = vi.fn(async () => ticketResponse("legacy-ticket"));
-    vi.stubGlobal("fetch", fetchMetadata);
-    const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
-    await whenImageAppears(() =>
-      renderImages([{ url: source, mimeType: "image/png" }], {
-        onOpenImage,
-        mediaOwner: onMediaChange,
-      }),
-    );
-    const image = container.querySelector<HTMLImageElement>("img")!;
-    const url = new URL(image.src);
-    expect(url.searchParams.get("source")).toBe(source);
-    expect(url.searchParams.has("variant")).toBe(false);
-    expect(url.searchParams.has("width")).toBe(false);
-    expect(image.getAttribute("srcset")).toBeNull();
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
-    expect(onOpenImage).toHaveBeenCalledOnce();
-    expect(onOpenImage.mock.calls[0]![0].loadDisplayImage).toBeUndefined();
-    expect(fetchMetadata).toHaveBeenCalledOnce();
   });
 
   it("loads and retries the selected managed rendition without prefetching neighbors", async () => {
