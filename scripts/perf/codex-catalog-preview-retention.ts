@@ -4,6 +4,8 @@
  * Add --mode restore for persisted admission; --distinct 6200 is the unique-preview control.
  * Run five alternating base/candidate samples per mode. --sample measures allocated bytes,
  * including collected objects; --gc separately observes untraced natural collections.
+ * For a separate promotion pass, use Node --trace-gc-nvp plus --trace-markers;
+ * sum promoted bytes between OWNER_WORK_START and OWNER_WORK_END, excluding fixture/forced GC.
  * --verify-shared asserts physical sharing, old-revision release, and detached source slices.
  * Forced-GC retention snapshots are not throughput or production GC measurements.
  */
@@ -35,12 +37,14 @@ const { values } = parseArgs({
     revisions: { type: "string", default: "3" },
     sample: { type: "boolean", default: false },
     gc: { type: "boolean", default: false },
+    "trace-markers": { type: "boolean", default: false },
     "verify-shared": { type: "boolean", default: false },
   },
 });
 assert(values.output, "--output is required");
 assert(values.mode === "native" || values.mode === "restore", "--mode must be native or restore");
 assert(!(values.sample && values.gc), "Use separate allocation and natural GC runs");
+assert(!(values["trace-markers"] && (values.sample || values.gc)), "Keep trace passes separate");
 assert(global.gc, "Run Node with --expose-gc");
 const rows = Number(values.rows);
 const distinct = Number(values.distinct);
@@ -254,6 +258,9 @@ try {
     });
   }
   observer?.observe({ entryTypes: ["gc"] });
+  if (values["trace-markers"]) {
+    console.log("OWNER_WORK_START");
+  }
   const cpuBefore = process.cpuUsage();
   const started = performance.now();
   for (let revision = 0; revision < revisions; revision++) {
@@ -280,6 +287,9 @@ try {
   const cpu = process.cpuUsage(cpuBefore);
   await nextTurn();
   await nextTurn();
+  if (values["trace-markers"]) {
+    console.log("OWNER_WORK_END");
+  }
   if (observer) {
     recordGc(observer.takeRecords());
     observer.disconnect();
@@ -308,6 +318,8 @@ try {
     cursor = page.nextCursor;
   } while (cursor);
   assert.equal(checked, rows);
+  // RegExpMatchInfo otherwise retains the sanitizer's last sliced input outside the catalog.
+  assert(/^$/u.test(""));
   await collect();
   const heapAfter = process.memoryUsage().heapUsed;
   const snapshot = writeHeapSnapshot(`${output}.heapsnapshot`);
