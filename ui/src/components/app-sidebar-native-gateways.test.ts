@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
@@ -153,8 +153,10 @@ it("lists native gateways and dispatches switching, window, primary, and setting
 it.each(["missing snapshot", "empty list", "unknown current"] as const)(
   "keeps settings and known gateways available with %s",
   async (state) => {
-    const postMessage = setNativeGatewayTestState("local")!;
-    const initial = nativeGatewaysCapability()!.snapshot!;
+    setNativeGatewayTestState("local");
+    const capability = nativeGatewaysCapability()!;
+    const openSettings = vi.spyOn(capability, "openSettings");
+    const initial = capability.snapshot!;
     const gateways = state === "unknown current" ? initial.gateways : [];
     publishSnapshot(state === "missing snapshot" ? null : { currentId: "missing", gateways });
     const { sidebar, click, open } = await mountNative();
@@ -167,7 +169,7 @@ it.each(["missing snapshot", "empty list", "unknown current"] as const)(
     expect(query(menu, '[aria-checked="true"]')).toBeNull();
     expect(item(menu, "command:gateway-set-primary")).toBeNull();
     await click(item(menu, "command:gateway-settings")!);
-    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "open-settings" });
+    expect(openSettings).toHaveBeenCalledExactlyOnceWith();
     expect(query(sidebar, ".sidebar-identity-menu")).toBeNull();
   },
 );

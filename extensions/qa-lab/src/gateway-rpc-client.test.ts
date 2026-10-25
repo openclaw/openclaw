@@ -18,6 +18,7 @@ const rpc = vi.hoisted(() => {
   return { Client, hello, request, start, stop };
 });
 
+// mock-isolation: Exercise reconnect ownership with a deterministic client instead of live sockets.
 vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   GatewayClient: rpc.Client,
   startGatewayClientWhenEventLoopReady: rpc.start,

@@ -68,11 +68,14 @@ it("keeps readiness evidence and admits signed events through the transport life
         void (async () => {
           const body = await readText(request);
           const timestamp = request.headers["x-slack-request-timestamp"];
+          if (typeof timestamp !== "string") {
+            response.writeHead(401).end();
+            return;
+          }
           const signature = `v0=${createHmac("sha256", "crabline-slack-signing-secret")
             .update(`v0:${timestamp}:${body}`)
             .digest("hex")}`;
           const signed =
-            typeof timestamp === "string" &&
             request.headers["x-slack-signature"] === signature &&
             Math.abs(Date.now() / 1000 - Number(timestamp)) < 300;
           requests.push([request.url, signed, JSON.parse(body)]);

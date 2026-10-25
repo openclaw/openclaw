@@ -12,6 +12,7 @@ const video = { buffer: WEBM_VIDEO, mimeType: "video/webm", fileName: "video-1.w
 vi.hoisted(() => vi.resetModules());
 vi.unmock("openclaw/plugin-sdk/provider-http");
 
+// mock-isolation: Resolve synthetic credentials without loading the live auth store.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: vi.fn(async () => ({
     apiKey: "test",
@@ -28,8 +29,8 @@ afterAll(() => {
 });
 
 function createDeepInfraHandler(requests: CapturedRequest[], buffer = WEBM_VIDEO) {
-  return async (request: IncomingMessage, response: ServerResponse) => {
-    try {
+  return (request: IncomingMessage, response: ServerResponse) => {
+    void (async () => {
       requests.push({
         method: request.method,
         url: request.url,
@@ -41,13 +42,17 @@ function createDeepInfraHandler(requests: CapturedRequest[], buffer = WEBM_VIDEO
         JSON.stringify({
           id: "local-request",
           status: "succeeded",
-          data: [{ url: `data:video/webm;base64,${buffer.toString("base64")}` }],
+          data: [
+            {
+              url: `data:video/webm;base64,${buffer.toString("base64")}`,
+            },
+          ],
         }),
       );
-    } catch (error: unknown) {
+    })().catch((error: unknown) => {
       response.writeHead(500, { "content-type": "text/plain" });
       response.end(error instanceof Error ? error.message : String(error));
-    }
+    });
   };
 }
 
