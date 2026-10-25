@@ -47,6 +47,10 @@ The shared settlement owner preserves callback order and joins pending
 presentation work before terminal delivery. Projection draining stays under the
 attempt cancellation and settlement deadline.
 
+After a transient provider retry, final-answer recovery uses the original
+persisted user prompt and the completed tool results. It can produce a summary
+when the native turn finishes without text, without running those tools again.
+
 The Codex adapter retains native item identities, protocol parsing, approvals,
 hook handling, and transcript provenance. Constructed messages are persisted
 through the existing scoped transcript APIs; the shared projection helpers do
