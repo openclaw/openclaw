@@ -114,7 +114,6 @@ export function readSelectedSessionEntryRows(
                     inner.ref("actor_id"),
                     inner.ref("identity_namespace"),
                   ],
-                  "native",
                 ).as("identities"),
               )
               .whereRef("session_participants.session_key", "=", "session_nodes.session_key")
