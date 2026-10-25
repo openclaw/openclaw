@@ -186,6 +186,8 @@ describe("production lint suppressions", () => {
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
         "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
+        // Board private helpers only sort cloned layouts or freshly filtered arrays.
+        "src/boards/board-layout.ts|unicorn/no-array-sort|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/config-schema.ts|typescript/no-generated-empty-object-type|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
