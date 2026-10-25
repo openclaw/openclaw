@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 273698,
-  "reason": "Shared source subscriptions reduce Outbox observations from 1440 to 6 with script CPU median -4.42% and p95 -3.75%. Repaired SDK observations fall from 320 to 4 without a CPU regression. Same-host builds at 3e579ec1 and daccf9ec measure startup 273582 to 273698 B gzip (+116 B), unchanged 7 JS and 1 CSS requests, and 3787 B less total JS gzip. Accept the small startup tradeoff and set the baseline to the measured head.",
+  "startupJsGzipBytes": 273565,
+  "reason": "Streaming cold-runtime prefix retention cuts standard script CPU 47.1% and burst 37.7% over 20 interleaved base/A-A/head triplets per workload. After merging main b3ba4d62263, same-host builds measure startup 273582 to 273565 B gzip, unchanged raw startup bytes and seven JS/one CSS requests. Chat is 347 B smaller and New Session 56 B smaller. Ratchet to the measured integrated head.",
   "updatedAt": "2026-10-25"
 }

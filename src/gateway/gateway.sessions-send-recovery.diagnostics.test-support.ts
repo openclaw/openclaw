@@ -55,7 +55,7 @@ export async function writeRecoveryDiagnosticProbe(directory: string): Promise<v
   );
 }
 
-export async function readRecoveryDiagnosticSnapshot(
+async function readRecoveryDiagnosticSnapshot(
   databasePath: string,
   sessionKey: string,
   runId: string,

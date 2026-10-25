@@ -123,9 +123,11 @@ const repositoryScriptEntries = [
   // Maintained guides, source headers, and paired drivers invoke these roots by path.
   "scripts/perf/node-worker-journal-measure.ts!",
   "scripts/perf/orphan-recovery-observer.mjs!",
+  "scripts/perf/pairing-channel-attribution.mts!",
   "scripts/perf/session-actor-residency-snapshot.mjs!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-row-materialization-measure.ts!",
+  "scripts/perf/tool-result-hash-measure.ts!",
   "scripts/perf/ws-counter-stress-preload.ts!",
   "scripts/perf/ws-counter-stress.ts!",
   // The source header documents this GitHub reader benchmark's Node command.
@@ -329,6 +331,23 @@ const repositoryScriptEntries = [
   "scripts/perf/trajectory-preparation-retention.ts!",
   "scripts/perf/transcript-session-list-measure.ts!",
   "scripts/perf/transport-pull-allocation-measure.mjs!",
+  // Source headers and maintained benchmark contributions invoke these workloads by exact path.
+  "scripts/bench-binding-mismatch.mts!",
+  "scripts/bench-cron-run.mts!",
+  "scripts/bench-delivery-recovery.mts!",
+  "scripts/bench-reload-lease.mts!",
+  "scripts/bench-team-reports-snapshots.mts!",
+  "scripts/perf/async-work-scope-measure.ts!",
+  "scripts/perf/local-workspace-callers-measure.ts!",
+  "scripts/perf/placement-startup-wake-measure.ts!",
+  "scripts/perf/response-decode-measure.mts!",
+  "scripts/perf/text-projection-append-measure.ts!",
+  "scripts/perf/text-projection-rope-measure.mjs!",
+  "scripts/perf/trajectory-persistence.ts!",
+  // The maintained drivers spawn or preload these children through exact computed paths.
+  "scripts/perf/delivery-recovery-fixture.ts!",
+  "scripts/perf/team-reports-snapshots-preload.mjs!",
+  "scripts/perf/trajectory-flush-preload.mts!",
   // scripts/perf/README.md invokes this lazy-import probe and its preload by path.
   "scripts/perf/lazy-import-feature-probe.mjs!",
   "scripts/perf/lazy-import-trace-preload.mjs!",

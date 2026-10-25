@@ -115,7 +115,3 @@ export function takeStickyRateLimitFallback(
     },
   };
 }
-
-export function resetStickyRateLimitFallbacksForTest(): void {
-  stickyFallbacks.clear();
-}

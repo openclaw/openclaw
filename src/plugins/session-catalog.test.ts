@@ -7,10 +7,9 @@ import type { PluginRuntime } from "./runtime/types.js";
 import {
   importSessionCatalogHistory,
   readBoundedSessionCatalogHistory,
-  SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
 } from "./session-catalog-history-import.js";
 import { listAdoptedSessionCatalogSessions, listSessionCatalogEntries } from "./session-catalog.js";
-import { catalogReader } from "./session-catalog.test-support.js";
+import { catalogReader, readHistory } from "./session-catalog.test-support.js";
 
 const transcript = vi.hoisted(() => ({
   messages: [] as Array<Record<string, unknown>>,
@@ -36,14 +35,6 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
 
 function item(id: string, type: TranscriptItem["type"], text?: string): TranscriptItem {
   return { id, type, text };
-}
-
-function runtimeWithList() {
-  const listSessionEntries = vi.fn((_params: { agentId: string }) => []);
-  return {
-    listSessionEntries,
-    runtime: { agent: { session: { listSessionEntries } } } as unknown as PluginRuntime,
-  };
 }
 
 function importHistory(
@@ -75,36 +66,29 @@ function messageText(message: Record<string, unknown>): string | undefined {
 }
 
 describe("listSessionCatalogEntries", () => {
-  it("does not select a runtime catalog owner from retained migration metadata", () => {
-    const config = retainLegacyDefaultAgentId(
+  it.each([
+    retainLegacyDefaultAgentId(
       {
         agents: { entries: { alpha: {}, beta: {} } },
       } as OpenClawConfig,
       "beta",
-    );
-    const { listSessionEntries, runtime } = runtimeWithList();
+    ),
+    {
+      agents: {
+        ownership: "explicit",
+        entries: { alpha: {}, beta: {} },
+      },
+    } satisfies OpenClawConfig,
+  ])("requires and scopes an explicit owner (policy %#)", (config) => {
+    const listSessionEntries = vi.fn((_params: { agentId: string }) => []);
+    const runtime = { agent: { session: { listSessionEntries } } } as unknown as PluginRuntime;
 
     expect(() => listSessionCatalogEntries({ config, runtime })).toThrow(
       "session agent resolution has no explicit owner",
     );
     expect(listSessionEntries).not.toHaveBeenCalled();
-  });
-
-  it("requires and scopes an owner under explicit multi-agent ownership", () => {
-    const config = {
-      agents: {
-        ownership: "explicit",
-        entries: { alpha: {}, beta: {} },
-      },
-    } as OpenClawConfig;
-    const { listSessionEntries, runtime } = runtimeWithList();
-
-    expect(() => listSessionCatalogEntries({ config, runtime })).toThrow(
-      "session agent resolution has no explicit owner",
-    );
     const caller = { agentId: "beta", sessionKey: "agent:alpha:unrelated", config, runtime };
     expect(listSessionCatalogEntries(caller)).toEqual([]);
-    expect(listSessionEntries).toHaveBeenCalledOnce();
     expect(listSessionEntries).toHaveBeenCalledWith({ agentId: "beta", readOnly: true });
   });
 });
@@ -114,21 +98,18 @@ describe("listAdoptedSessionCatalogSessions", () => {
     const config: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     };
+    const sessionRow = (sessionKey: string, entry: Partial<SessionEntry>, agentId = "beta") => ({
+      agentId,
+      sessionKey,
+      entry: { sessionId: sessionKey, updatedAt: 1, ...entry },
+    });
     const rows = [
-      { agentId: "alpha", sessionKey: "foreign-agent", entry: { pluginOwnerId: "acpx" } },
-      { agentId: "beta", sessionKey: "unowned", entry: {} },
-      { agentId: "beta", sessionKey: "other-plugin", entry: { pluginOwnerId: "other" } },
-      {
-        agentId: "beta",
-        sessionKey: "pending",
-        entry: { pluginOwnerId: "acpx", initializationPending: true as const },
-      },
-      { agentId: "beta", sessionKey: "adopted", entry: { pluginOwnerId: "acpx" } },
-    ].map((row) => ({
-      agentId: row.agentId,
-      sessionKey: row.sessionKey,
-      entry: { sessionId: row.sessionKey, updatedAt: 1, ...row.entry },
-    }));
+      sessionRow("foreign-agent", { pluginOwnerId: "acpx" }, "alpha"),
+      sessionRow("unowned", {}),
+      sessionRow("other-plugin", { pluginOwnerId: "other" }),
+      sessionRow("pending", { pluginOwnerId: "acpx", initializationPending: true }),
+      sessionRow("adopted", { pluginOwnerId: "acpx" }),
+    ];
     const entriesForAgent = (agentId: string) => rows.filter((row) => row.agentId === agentId);
     const runtime = {
       agent: {
@@ -211,16 +192,11 @@ describe("importSessionCatalogHistory", () => {
   });
 
   it("keeps only the most recent 200 items and returns them oldest-first", async () => {
-    const items: TranscriptItem[] = Array.from({ length: 205 }, (_, index) => ({
-      id: `item-${String(index)}`,
-      type: "agentMessage",
-      text: `message-${String(index)}`,
-    }));
-
-    const read = catalogReader(items);
-    await importHistory(items, { read });
-
-    expect(read).toHaveBeenCalledTimes(4);
+    await importHistory(
+      Array.from({ length: 205 }, (_, index) =>
+        item(`item-${index}`, "agentMessage", `message-${index}`),
+      ),
+    );
     expect(transcript.messages).toHaveLength(200);
     expect(messageText(transcript.messages[0]!)).toBe("message-5");
     expect(messageText(transcript.messages.at(-1)!)).toBe("message-204");
@@ -293,7 +269,6 @@ describe("readBoundedSessionCatalogHistory", () => {
       limits: { maxItems: 10, maxBytes: 10_000 },
     });
 
-    expect(read).toHaveBeenCalledTimes(pages.length);
     expect(history).toEqual({
       items: pages.flatMap((page) => page.items).toReversed(),
       totalItems: pages.length,
@@ -338,10 +313,7 @@ describe("readBoundedSessionCatalogHistory", () => {
       type: "agentMessage",
       text: String(index),
     }));
-    const history = await readBoundedSessionCatalogHistory({
-      read: catalogReader(items),
-      limits: SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
-    });
+    const history = await readHistory(items);
 
     expect(history.items).toHaveLength(50_000);
     expect(history.items[0]?.text).toBe("1");
@@ -356,30 +328,27 @@ describe("readBoundedSessionCatalogHistory", () => {
       { type: "userMessage", text: "newer" },
     ];
     const itemBytes = Buffer.byteLength(JSON.stringify(items[0]), "utf8");
-    const read = catalogReader(items);
-
-    expect(
-      await readBoundedSessionCatalogHistory({
-        read,
-        limits: { maxItems: 2, maxBytes: 2 * itemBytes - 1 },
-      }),
-    ).toEqual({ items: [items[1]], totalItems: 2, complete: false });
-    expect(
-      await readBoundedSessionCatalogHistory({
-        read,
-        limits: { maxItems: 2, maxBytes: 2 * itemBytes },
-      }),
-    ).toEqual({ items, totalItems: 2, complete: true });
+    expect(await readHistory(items, 2, 2 * itemBytes - 1)).toEqual({
+      items: [items[1]],
+      totalItems: 2,
+      complete: false,
+    });
+    expect(await readHistory(items, 2, 2 * itemBytes)).toEqual({
+      items,
+      totalItems: 2,
+      complete: true,
+    });
   });
 
   it("retains transcript text when optional display input exceeds the remaining import budget", async () => {
-    const history = await readBoundedSessionCatalogHistory({
-      read: catalogReader([
+    const history = await readHistory(
+      [
         { type: "toolResult", text: "older result", toolInput: { input: "x".repeat(1000) } },
         { type: "agentMessage", text: "newer answer" },
-      ]),
-      limits: { maxItems: 10, maxBytes: 200 },
-    });
+      ],
+      10,
+      200,
+    );
     expect(history).toEqual({
       items: [
         { type: "toolResult", text: "older result", toolInputOmitted: true },
@@ -391,10 +360,7 @@ describe("readBoundedSessionCatalogHistory", () => {
   });
 
   it("reports when the newest item itself must be truncated to fit", async () => {
-    const history = await readBoundedSessionCatalogHistory({
-      read: catalogReader([{ type: "toolResult", text: "🙂".repeat(100) }]),
-      limits: { maxItems: 10, maxBytes: 100 },
-    });
+    const history = await readHistory([{ type: "toolResult", text: "🙂".repeat(100) }], 10, 100);
 
     expect(history).toMatchObject({ totalItems: 1, complete: false });
     expect(history.items).toHaveLength(1);

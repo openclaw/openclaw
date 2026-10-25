@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -121,14 +122,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 } };`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      contracts: { speechProviders: [id] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { speechProviders: [id] },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   const cfg: OpenClawConfig = {
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
     tts: { provider: id, providers: { [id]: {} } },

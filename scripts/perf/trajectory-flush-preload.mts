@@ -61,8 +61,8 @@ export function recordTrajectoryFlush(
   records.push({ runId, sessionId, startedAtEpochMs, durationMs, hasRecorder });
 }
 
-/** Exact checked transformation; exported only for isolated benchmark smoke checks. */
-export function instrumentTrajectoryFlushSource(source: string): string {
+/** Exact checked transformation used by the loader hook below. */
+function instrumentTrajectoryFlushSource(source: string): string {
   assert(source.includes(sourceMarker), "Trajectory flush source marker changed");
   assert.equal(source.split(expectedBody).length, 2, "Trajectory flush built body changed");
   const originalStatements = expectedBody.slice(expectedBody.indexOf("\n") + 1, -2);

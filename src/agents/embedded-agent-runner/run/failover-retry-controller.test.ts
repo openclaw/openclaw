@@ -20,7 +20,10 @@ vi.mock("../../../infra/backoff.js", async () => {
   return { ...actual, sleepWithAbort: mocks.sleepWithAbort };
 });
 
-import { createRetryController } from "./failover-retry-controller.test-support.js";
+import {
+  createRetryController,
+  type RetryRunParams,
+} from "./failover-retry-controller.test-support.js";
 
 const { sleepWithAbort: sleep, warn } = mocks;
 
@@ -341,3 +344,22 @@ it.each([false, true])(
     expect(closeRetryWait).toHaveBeenCalledWith(true);
   },
 );
+
+it("hands the watchdog rate-limit copy for the retries already completed", async () => {
+  const onRetryWait = vi.fn<NonNullable<RetryRunParams["onRetryWait"]>>(() => vi.fn());
+  controller = createRetryController({ runParams: { onRetryWait } });
+  await checkRetry({ reason: "rate_limit" });
+  await checkRetry({ reason: "rate_limit" });
+  await checkRetry({ reason: "server_error" });
+  expect(onRetryWait.mock.calls.map((call) => call[2])).toEqual([
+    {
+      rateLimitStopMessage:
+        "Rate-limit recovery stopped without a completed model response. Check completed work before trying again.",
+    },
+    {
+      rateLimitStopMessage:
+        "Rate-limit recovery stopped after 1 automatic retry without a completed model response. Check completed work before trying again.",
+    },
+    undefined,
+  ]);
+});

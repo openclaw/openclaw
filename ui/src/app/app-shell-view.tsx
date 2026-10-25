@@ -317,6 +317,7 @@ export function ApplicationShell(props: {
         <Show
           when={
             !view().nativeEmbed &&
+            !view().mobileNavLayout &&
             !view().navCollapsed &&
             !view().onboarding &&
             !view().settingsTakeover
