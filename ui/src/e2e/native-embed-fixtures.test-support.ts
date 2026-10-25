@@ -43,7 +43,10 @@ export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown
       state: { lastRunStatus },
     }),
   );
-  const secret = (name: string, content: string | string[]) => ({
+  const secret = (
+    name: string,
+    content: string | string[],
+  ): SecretsStoreListResult["entries"][number] => ({
     name,
     scopeKind: "team" as const,
     scopeId: "",

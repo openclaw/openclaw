@@ -34,7 +34,7 @@ function skillTools(skills: InstalledSkill[]) {
 }
 it("requires the effective native read tool for body I/O and cached body matches", async () => {
   const reader = vi.fn(async () => "Private canary deployment instructions");
-  const { tools, search, read, find } = skillTools([skill({ readSearchContent: reader })], false);
+  const { tools, search, read, find } = skillTools([skill({ readSearchContent: reader })]);
   const check = async (id: string, names: string[], reads: number, query = "canary") => {
     const skills = names.map((name) => ({ name }));
     expect((await find(id, query)).details).toMatchObject({ skills });

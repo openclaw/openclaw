@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import {
   createAssistantVisibleStreamText,
@@ -57,9 +58,9 @@ function expectOwnershipCorrection(
   options: { visibleBefore?: boolean; intermediateVisible?: boolean; replaces?: boolean } = {},
 ) {
   const stream = createAssistantVisibleStreamText("final_answer");
-  expect(stream.append(chunks[0]).text.includes("[tool:read] {}")).toBe(
-    options.visibleBefore ?? true,
-  );
+  expect(
+    stream.append(expectDefined(chunks[0], "initial chunk")).text.includes("[tool:read] {}"),
+  ).toBe(options.visibleBefore ?? true);
   for (const chunk of chunks.slice(1, -1)) {
     stream.append(chunk);
     if (options.intermediateVisible) {

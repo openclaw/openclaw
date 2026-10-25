@@ -8,6 +8,7 @@ import type {
   DecisionBatchV2,
   ProviderDecisionOutcomeV2,
 } from "../../decisions/types-v2.js";
+import type { DecisionBatch } from "../../decisions/types.js";
 import {
   createColdPluginFixture,
   createColdPluginConfig,
@@ -37,8 +38,10 @@ it("returns rich native outcomes through the core tool, registered host and real
   const events = harness.trackDecisionUsage();
   const root = roots.make("decision-tool-native-");
   const pluginRoot = path.join(root, "plugin");
+  const emptyBundled = path.join(root, "bundled");
+  const workspaceDir = path.join(root, "workspace");
   fs.mkdirSync(pluginRoot);
-  fs.mkdirSync(path.join(root, "bundled"));
+  fs.mkdirSync(emptyBundled);
   const id = "decision-tool-fixture";
   const model = {
     id: "native",
@@ -93,7 +96,6 @@ it("returns rich native outcomes through the core tool, registered host and real
         abstained: { type: "choice", choice: null, confidence: null },
         fractional: { type: "score", score: 1.25 },
         failed: { type: "error", code: "provider-error", providerCode: "fixture-rejected" },
-        target: { type: "box", box: { top: 0, bottom: 1, left: 0, right: 1 } },
       },
       usage: {
         inputTokens: 12,
@@ -109,11 +111,12 @@ it("returns rich native outcomes through the core tool, registered host and real
     ...createColdPluginConfig(pluginRoot, id).plugins,
   });
   await withEnvAsync(harness.decisionEnv(root), async () => {
-    await harness.activateDecisionRegistry(cfg);
+    const registry = await harness.activateDecisionRegistry(cfg);
+    expect(registry.decisionProviders).toHaveLength(1);
     await using prepared = await acquireReadOnlyPreparedModelRuntime({
       agentId: "main",
       agentDir: resolveAgentDir(cfg, "main"),
-      workspaceDir: path.join(root, "workspace"),
+      workspaceDir,
       config: cfg,
     });
     const tool = createDecisionTool("main", {
@@ -121,18 +124,16 @@ it("returns rich native outcomes through the core tool, registered host and real
       preparedModelRuntime: prepared.snapshot,
     });
     expect(tool).not.toBeNull();
-    const batch: DecisionBatchV2 = {
-      state: { type: "image", dataUri: "data:image/png;base64,AA==", text: "Synthetic square" },
+    const batch: DecisionBatch = {
+      state: { message: "synthetic evidence" },
       questions: {
         explicit: { type: "boolean" },
         abstained: { type: "choice", criteria: { a: "A", b: "B" } },
         fractional: { type: "score", criteria: ["Low", "Medium", "High"] },
         failed: { type: "boolean" },
-        target: { type: "box", instructions: "the square" },
       },
     };
-    const nativeInput = { contractVersion: 2, ...batch };
-    const result = await tool!.execute("native", nativeInput);
+    const result = await tool!.execute("native", batch);
     expect(events).toEqual([
       expect.objectContaining({
         type: "model.usage",
@@ -144,7 +145,10 @@ it("returns rich native outcomes through the core tool, registered host and real
       }),
     ]);
     expect(trace).toMatchObject({ authenticated: true, calls: 1 });
-    expect(trace.batch).toEqual(batch);
+    expect(trace.batch).toEqual({
+      state: { type: "json", value: batch.state },
+      questions: batch.questions,
+    });
     expect(result.details).toEqual({
       ...trace.outcome,
       provenance: {
@@ -158,6 +162,29 @@ it("returns rich native outcomes through the core tool, registered host and real
     expect(JSON.stringify(result)).not.toContain("synthetic-private-auth");
     expect(JSON.stringify(result)).not.toContain("authScope");
 
+    trace.outcome = nativeOutcome({ model: "native", answers: {}, usage: { costUsd: 0 } });
+    await expect(tool!.execute("invalid-native", batch)).resolves.toMatchObject({
+      details: { status: "unavailable", reason: "invalid-response" },
+    });
+    expect(trace.calls).toBe(2);
+    for (const type of ["sort", "tags"]) {
+      await expect(
+        tool!.execute("unsupported-kind", {
+          state: "synthetic evidence",
+          questions: { q: { type, criteria: { a: "A", b: "B" } } },
+        }),
+      ).rejects.toThrow("no evidence was sent");
+    }
+    expect(trace.calls).toBe(2);
+    const imageBatch: DecisionBatchV2 = {
+      state: { type: "image", dataUri: "data:image/png;base64,AA==", text: "Synthetic square" },
+      questions: { target: { type: "box", instructions: "the square" } },
+    };
+    const nativeInput = { contractVersion: 2, ...imageBatch };
+    trace.outcome = nativeOutcome({
+      model: "native",
+      answers: { target: { type: "box", box: { top: 0, bottom: 1, left: 0, right: 1 } } },
+    });
     expect(Value.Check(DecisionEvaluateInput, nativeInput)).toBe(true);
     expect(tool!.description).toContain("box");
     expect(tool!.description).toContain("Supported input modalities: text, image.");
@@ -168,7 +195,12 @@ it("returns rich native outcomes through the core tool, registered host and real
     };
     expect(Value.Check(DecisionEvaluateInput, nullBox)).toBe(false);
     await expect(tool!.execute("null-box", nullBox)).rejects.toThrow("no evidence was sent");
-    expect(trace.calls).toBe(1);
+    expect(trace.calls).toBe(2);
+    const imageResult = await tool!.execute("native-image", nativeInput);
+    expect(imageResult.details).toMatchObject(trace.outcome);
+    expect(Value.Check(DecisionEvaluateOutput, imageResult.details)).toBe(true);
+    expect(trace.batch).toEqual(imageBatch);
+    expect(trace.calls).toBe(3);
     expect(events).toHaveLength(1);
   });
 });

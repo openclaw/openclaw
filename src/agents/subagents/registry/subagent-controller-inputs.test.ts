@@ -1,5 +1,8 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
   releaseSessionControllerClaim,
@@ -10,6 +13,7 @@ import {
 } from "../../../sessions/session-controller.mailbox.js";
 import { bindSessionControllerEntryTarget } from "../../../sessions/session-controller.state.js";
 import { resetSessionControllerStateForTest } from "../../../sessions/session-lifecycle-admission.test-support.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { reserveSubagentCompletionControllerSource as reserveCompletion } from "../announce/subagent-announce-controller-source.js";
 import {
@@ -97,34 +101,49 @@ it("retires only the exact legacy completion source in its physical requester", 
   expectRetired(entry, exact, ...unrelated);
 });
 
-it.each([undefined, "/private/tmp/native-requester.sqlite"])(
-  "retires a prepared completion reservation with physical store %s",
-  async (physicalStorePath) => {
-    const physicalStore = physicalStorePath ?? storePath;
-    const entry = child({ requesterStorePath: physicalStore });
-    const input = expectDefined(
-      await reserveCompletion(entry, undefined, {
-        requester: {
-          cfg: {},
-          canonicalKey: requesterKey,
-          agentId: "main",
-          storePath,
-          physicalStorePath,
-          entry: { sessionId: "requester-session", updatedAt: 1 },
+it.each(["default", "custom", "memory"] as const)(
+  "retires a real completion reservation with its %s requester store",
+  async (layout) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey =
+        layout === "memory" ? "agent:main:dashboard:incognito-completion" : "agent:main:main";
+      const logicalStore =
+        layout === "custom"
+          ? state.path("custom", "sessions.json")
+          : path.join(state.sessionsDir(), "sessions.json");
+      const directory =
+        layout === "custom" ? state.path("custom") : state.statePath("agents", "main", "agent");
+      const databaseName =
+        layout === "memory" ? "incognito-openclaw-agent.sqlite" : "openclaw-agent.sqlite";
+      const physicalStore = path.join(directory, databaseName);
+      setRuntimeConfigSnapshot(layout === "custom" ? { session: { store: logicalStore } } : {});
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey, storePath: logicalStore },
+        {
+          sessionId: "requester-session",
+          updatedAt: 1,
+          ...(layout === "memory" ? { incognito: true } : {}),
         },
-      }),
-      "Requester reservation",
-    );
-    inputs.push(input);
-    expect(input.target?.storeScope).toBe(storePath);
-    const target = expectDefined(input.target, "Requester reservation target");
-    // Mailbox rebinding must not change the reservation's captured physical source.
-    bindSessionControllerEntryTarget(
-      input.mailbox.owner,
-      captureSessionTarget({ ...target, physicalStorePath: physicalStore + ".other" }),
-    );
-    expect(hasInput({ ...entry, requesterStorePath: physicalStore + ".other" })).toBe(false);
-    expectRetired(entry, input);
+      );
+      const entry = child({ requesterSessionKey: sessionKey, requesterStorePath: physicalStore });
+      const input = expectDefined(await reserveCompletion(entry), "Requester reservation");
+      inputs.push(input);
+      try {
+        expect(input.target?.storeScope).toBe(layout === "memory" ? physicalStore : logicalStore);
+        expect(hasInput(entry)).toBe(true);
+        const target = expectDefined(input.target, "Requester reservation target");
+        // A later binding can change the mailbox observation, but not this source's store.
+        bindSessionControllerEntryTarget(
+          input.mailbox.owner,
+          captureSessionTarget({ ...target, physicalStorePath: physicalStore + ".other" }),
+        );
+        expect(hasInput({ ...entry, requesterStorePath: physicalStore + ".other" })).toBe(false);
+        expectRetired(entry, input);
+      } finally {
+        retireSessionControllerInput(input);
+        await input.settlement.promise;
+      }
+    });
   },
 );
 

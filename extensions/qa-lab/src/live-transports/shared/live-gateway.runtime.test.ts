@@ -6,10 +6,12 @@ const { startQaGatewayChild, startQaProviderServer, gatewayStop } = vi.hoisted((
   startQaProviderServer: vi.fn(),
 }));
 
+// mock-isolation: Exercise child lifecycle outcomes without starting a Gateway process.
 vi.mock("../../gateway-child.js", () => ({
   createQaGatewayChild: () => ({ start: startQaGatewayChild, stop: gatewayStop }),
 }));
 
+// mock-isolation: Control provider startup and teardown without opening a provider server.
 vi.mock("../../providers/server-runtime.js", () => ({ startQaProviderServer }));
 
 import { createQaLiveLaneGateway } from "./live-gateway.runtime.js";

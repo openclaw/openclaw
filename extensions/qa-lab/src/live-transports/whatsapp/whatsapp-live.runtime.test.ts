@@ -21,6 +21,7 @@ import {
   runtimeEnv,
   groupJid,
 } from "./runtime.test-support.js";
+import { runWhatsAppScenario } from "./scenario-runtime.js";
 import {
   environment,
   gateway as makeGateway,

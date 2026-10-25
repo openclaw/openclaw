@@ -42,22 +42,9 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  for (const dispose of disposers.splice(0).toReversed()) {
-    dispose();
-  }
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
-
-const disposers: Array<() => void> = [];
-const workerConfig = { cloudWorkers: { profiles: { worker: machineProfile() } } };
-const isCatalog = (method: string, params: unknown) =>
-  method === "environments.list" && isRecord(params) && params.projection === "profiles";
-const field = (page: Element, label: string) =>
-  page.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
-const lifetimeField = (page: Element) => field(page, "Max lifetime");
-const waitEnabled = (page: Element, label: string) =>
-  waitForSolid(() => expect(actionButton(page, label).disabled).toBe(false));
 
 function mountProfiles(client: GatewayBrowserClient) {
   const gatewayHarness = createGatewayHarness(client);
@@ -66,7 +53,9 @@ function mountProfiles(client: GatewayBrowserClient) {
     client,
     gatewayHelloForMethods(["config.patch", "environments.list"]),
   );
-  const gateway = gatewayHarness.gateway;
+  const gateway = Object.assign(gatewayHarness.gateway, {
+    connection: { gatewayUrl: "ws://gateway.example.test", token: "", password: "" },
+  });
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const context = {
     gateway,
@@ -79,23 +68,15 @@ function mountProfiles(client: GatewayBrowserClient) {
       <CloudWorkersPage />
     </ApplicationProvider>
   ));
-  disposers.push(() => {
-    view.unmount();
-    runtimeConfig.dispose();
-  });
   return {
     gatewayHarness,
     runtimeConfig,
+    view,
     page: expectDefined(
       view.container.querySelector("openclaw-cloud-workers-page"),
       "Cloud workers page",
     ),
   };
-}
-
-function expectDraft(page: Element, input: HTMLInputElement) {
-  expect(lifetimeField(page)).toBe(input);
-  expect(input.value).toBe("9h");
 }
 
 function profileRow(page: Element, id: string) {
@@ -118,190 +99,388 @@ function osSelect(page: Element) {
   return page.querySelector<HTMLSelectElement>('select[aria-label="Operating system"]');
 }
 
-it("keeps profile drafts through catalog and save failures, then retires them on access loss", async () => {
+it("keeps the profile draft and accepted catalog through refresh failure and retry", async () => {
+  const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
   const catalog = {
     environments: [],
     profiles: [{ id: "worker", providerId: "crabbox", operatingSystems }],
   };
   let hash = "initial";
-  let pendingSave = createDeferred<unknown>();
-  let patches = 0;
   let response = Promise.resolve<EnvironmentsListResult>(catalog);
-  const transport = createGatewayRequestMock(async (method, params) => {
+  const request = createGatewayRequestMock(async (method, params) => {
     if (method === "config.get") {
-      return configSnapshot(workerConfig, hash);
+      return configSnapshot(config, hash);
     }
     if (method === "environments.list") {
-      return isCatalog(method, params) ? response : { environments: [] };
-    }
-    if (method === "config.patch") {
-      patches++;
-      return pendingSave.promise;
+      return isRecord(params) && params.projection === "profiles" ? response : { environments: [] };
     }
     throw new Error(`Unexpected request ${method}`);
   });
-  const client = createTestGatewayClient(transport);
-  const { runtimeConfig, page, gatewayHarness } = mountProfiles(client);
+  const client = createTestGatewayClient(request);
+  const transport = vi.spyOn(client, "request");
+  const { runtimeConfig, view, page } = mountProfiles(client);
   const catalogCalls = () =>
-    transport.mock.calls.filter(([method, params]) => isCatalog(method, params)).length;
-  await waitForSolid(() => expect(profileRow(page, "worker").textContent).toContain("Advertised"));
-  click(profileRow(page, "worker"), "Edit");
-  const lifetime = await waitForSolid(() => expectDefined(lifetimeField(page), "Profile lifetime"));
-  change(lifetime, "9h");
-  const refresh = async (nextHash: string) => {
-    const pending = createDeferred<EnvironmentsListResult>();
-    response = pending.promise;
-    hash = nextHash;
-    const before = catalogCalls();
-    await runtimeConfig.refresh();
-    await waitForSolid(() => expect(catalogCalls()).toBeGreaterThan(before));
-    return pending;
-  };
-  const pending = await refresh("second");
-  expect(profileRow(page, "worker").textContent).toContain("Advertised");
-  expectDraft(page, lifetime);
-  pending.reject(new Error("Synthetic catalog unavailable"));
-  await waitText(() => page, "Synthetic catalog unavailable");
-  expectDraft(page, lifetime);
+    transport.mock.calls.filter(
+      ([method, params]) =>
+        method === "environments.list" && isRecord(params) && params.projection === "profiles",
+    ).length;
+  try {
+    await waitForSolid(() =>
+      expect(profileRow(page, "worker").textContent).toContain("Advertised"),
+    );
+    click(profileRow(page, "worker"), "Edit");
+    const lifetime = await waitForSolid(() =>
+      expectDefined(
+        page.querySelector<HTMLInputElement>('input[aria-label="Max lifetime"]'),
+        "Profile lifetime",
+      ),
+    );
+    change(lifetime, "9h");
+    const refresh = async (nextHash: string) => {
+      const pending = createDeferred<EnvironmentsListResult>();
+      response = pending.promise;
+      hash = nextHash;
+      const before = catalogCalls();
+      await runtimeConfig.refresh();
+      await waitForSolid(() => expect(catalogCalls()).toBeGreaterThan(before));
+      return pending;
+    };
+    const pending = await refresh("second");
+    expect(profileRow(page, "worker").textContent).toContain("Advertised");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+    pending.reject(new Error("Synthetic catalog unavailable"));
+    await waitText(() => page, "Synthetic catalog unavailable");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
 
-  const retry = await refresh("third");
-  expect(page.textContent).toContain("Synthetic catalog unavailable");
-  retry.resolve(catalog);
-  await waitForSolid(() => expect(page.textContent).not.toContain("Synthetic catalog unavailable"));
-  expect(profileRow(page, "worker").textContent).toContain("Advertised");
-  expectDraft(page, lifetime);
-  click(page, "Save");
-  await waitForSolid(() => {
-    expect(patches).toBe(1);
-    expect(actionButton(page, "Saving…").disabled).toBe(true);
-    expect(lifetime.disabled).toBe(true);
-    expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(true);
+    const retry = await refresh("third");
+    expect(page.textContent).toContain("Synthetic catalog unavailable");
+    retry.resolve(catalog);
+    await waitForSolid(() =>
+      expect(page.textContent).not.toContain("Synthetic catalog unavailable"),
+    );
+    expect(profileRow(page, "worker").textContent).toContain("Advertised");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+  }
+});
+
+it("retires a pending profile catalog when permissions change on the same connection", async () => {
+  const pendingCatalog = createDeferred<EnvironmentsListResult>();
+  const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
+  const request = createGatewayRequestMock(async (method, params) => {
+    if (method === "config.get") {
+      return configSnapshot(config, "initial");
+    }
+    if (method === "environments.list") {
+      return isRecord(params) && params.projection === "profiles"
+        ? pendingCatalog.promise
+        : { environments: [] };
+    }
+    throw new Error(`Unexpected request ${method}`);
   });
-  pendingSave.reject(new Error("Synthetic profile save unavailable"));
-  await waitText(() => page, "Synthetic profile save unavailable");
-  expectDraft(page, lifetime);
-  await waitEnabled(page, "Save");
-  expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(false);
+  const client = createTestGatewayClient(request);
+  const transport = vi.spyOn(client, "request");
+  const { gatewayHarness: source, runtimeConfig, view } = mountProfiles(client);
+  try {
+    await waitForSolid(() => expect(view.getByText("worker", { selector: "code" })).toBeTruthy());
+    const { catalogSignal, catalogCompletion } = await waitForSolid(() => {
+      const candidateIndex = transport.mock.calls.findLastIndex(
+        ([method, params]) =>
+          method === "environments.list" && isRecord(params) && params.projection === "profiles",
+      );
+      const call = expectDefined(transport.mock.calls[candidateIndex], "Profile catalog request");
+      const signal = expectDefined(call[2]?.signal, "Profile catalog cancellation signal");
+      expect(signal.aborted).toBe(false);
+      return {
+        catalogSignal: signal,
+        catalogCompletion: expectDefined(
+          transport.mock.results[candidateIndex],
+          "Profile catalog result",
+        ).value,
+      };
+    });
 
-  pendingSave = createDeferred<unknown>();
-  click(page, "Save");
-  await waitForSolid(() => expect(patches).toBe(2));
-  gatewayHarness.publish(true, client, gatewayHelloForMethods([], ["operator.read"]));
-  await waitText(() => page, "Administrator access is required to manage cloud worker profiles.");
-  expect(lifetimeField(page)).toBeNull();
-  pendingSave.resolve({ ok: true, config: workerConfig, hash: "after" });
-  await pendingSave.promise;
-  flush();
-  expect(lifetimeField(page)).toBeNull();
-  expect(page.textContent).not.toContain("Profile saved.");
+    source.publish(true, client, gatewayHelloForMethods([]));
+    expect(catalogSignal.aborted).toBe(true);
+    await waitForSolid(() => expect(view.getByText("Unavailable")).toBeTruthy());
+    pendingCatalog.resolve({
+      environments: [],
+      profiles: [{ id: "worker", providerId: "crabbox" }],
+    });
+    await catalogCompletion;
+    flush();
+
+    expect(view.queryByText("Advertised")).toBeNull();
+    expect(view.getByText("Unavailable")).toBeTruthy();
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+  }
 });
 
 it.each([
-  [undefined, undefined, operatingSystems.slice(0, 1)],
-  ["linux", "linux", operatingSystems.slice(0, 1)],
-  [undefined, "macos", operatingSystems],
-  ["linux", "windows/wsl2", operatingSystems],
-  ["windows/wsl2", "", operatingSystems.slice(0, 1)],
-  ["retired-os", "", []],
-] as const)("saves OS %s → %s and clears setup fields", async (initialTarget, target, systems) => {
-  const opaque = { nullable: null, flags: ["kept"] };
-  let config: Record<string, unknown> = {
-    cloudWorkers: {
-      profiles: {
-        worker: machineProfile("standard", {
-          ...(initialTarget ? { target: initialTarget } : {}),
-          opaque,
-          setup: "true",
-          setupEnv: ["QA_WORKER_FLAG"],
-          desktop: true,
-          binary: "/opt/crabbox",
-        }),
-      },
-    },
-  };
-  const patches: ConfigPatchParams[] = [];
-  const request = vi.fn(async (method: string, params?: unknown) => {
+  ["delete", undefined, undefined, operatingSystems],
+  ["setup-clear", undefined, undefined, operatingSystems.slice(0, 1)],
+  ["setup-clear", "linux", "linux", operatingSystems.slice(0, 1)],
+  ["setup-clear", undefined, "macos", operatingSystems],
+  ["setup-clear", "linux", "windows/wsl2", operatingSystems],
+  ["setup-clear", "windows/wsl2", "", operatingSystems.slice(0, 1)],
+  ["setup-clear", "retired-os", "", []],
+] as const)(
+  "forwards %s array intent and saves OS %s → %s without losing unrelated data",
+  async (action, initialTarget, target, systems) => {
+    const renderingErrors = vi.spyOn(console, "error");
+    const settings = {
+      provider: "aws",
+      class: "standard",
+      ttl: "8h",
+      idleTimeout: "45m",
+      ...(initialTarget ? { target: initialTarget } : {}),
+    };
+    const retained = { provider: "crabbox", settings: { ...settings, opaque: null } };
+    const pending = {
+      provider: "crabbox",
+      settings: { ...settings, setup: "true", setupEnv: ["QA_WORKER_FLAG"], opaque: null },
+    };
+    const projectProfiles = {
+      "github.com/acme/pending": "pending",
+      "github.com/acme/retained": "retained",
+    };
+    let config: Record<string, unknown> = {
+      cloudWorkers: { profiles: { pending, retained }, projectProfiles },
+    };
+    let hash = "before";
+    const patches: ConfigPatchParams[] = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return configSnapshot(config, hash);
+      }
+      if (method === "environments.list") {
+        if (!isRecord(params) || params.projection !== "profiles") {
+          return { environments: [] };
+        }
+        return {
+          environments: [],
+          profiles: [
+            { id: "pending", operatingSystems: systems },
+            ...(hash === "after" ? [{ id: "retained" }] : []),
+          ],
+        };
+      }
+      if (method !== "config.patch" || !validateConfigPatchParams(params)) {
+        throw new Error(`Unexpected request ${method}`);
+      }
+      patches.push(params);
+      const merged = applyMergePatch(config, JSON.parse(params.raw), {
+        mergeObjectArraysById: true,
+      });
+      if (!isRecord(merged)) {
+        throw new Error("Expected a merged configuration object");
+      }
+      config = merged;
+      hash = "after";
+      return { ok: true, config, hash };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gatewayHarness, runtimeConfig, view, page } = mountProfiles(client);
+    try {
+      await waitForSolid(() => {
+        const profiles = [...page.querySelectorAll(".settings-section")].find((section) =>
+          section.querySelector("h2")?.textContent?.trim().startsWith("Machines"),
+        );
+        expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
+      });
+      const row = profileRow(page, "pending");
+      if (action === "delete") {
+        await waitForSolid(() => expect(actionButton(row, "Delete").disabled).toBe(false));
+        click(row, "Delete");
+      } else {
+        click(row, "Edit");
+        await waitForSolid(() => expect(page.querySelector("textarea")).not.toBeNull());
+        const operatingSystem = osSelect(page);
+        if (
+          systems.length < 2 &&
+          (!initialTarget || systems.some((system) => system.id === initialTarget))
+        ) {
+          expect(operatingSystem).toBeNull();
+        } else {
+          const select = expectDefined(operatingSystem, "Operating system editor");
+          expect(select.value).toBe(initialTarget ?? "");
+          expect([...select.options].map((option) => option.value)).toEqual([
+            "",
+            ...systems.map((system) => system.id),
+            ...(initialTarget && !systems.some((system) => system.id === initialTarget)
+              ? [initialTarget]
+              : []),
+          ]);
+          for (const system of systems) {
+            if (system.disabledReason) {
+              const option = expectDefined(
+                [...select.options].find((candidate) => candidate.value === system.id),
+                "Unavailable operating system",
+              );
+              expect(option).toMatchObject({
+                disabled: true,
+                textContent: expect.stringContaining(system.disabledReason),
+              });
+            }
+          }
+          change(select, expectDefined(target, "Selected OS"));
+        }
+        change(
+          expectDefined(page.querySelector<HTMLTextAreaElement>("textarea"), "Setup command"),
+          "",
+        );
+        await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+        click(page, "Save");
+        await waitText(() => page, "Enter a setup command or clear the setup environment names.");
+        expect(patches).toHaveLength(0);
+        const setupEnv = expectDefined(
+          page.querySelector<HTMLInputElement>('input[aria-label="Setup environment names"]'),
+          "Setup environment names",
+        );
+        expect(setupEnv.value).toBe("QA_WORKER_FLAG");
+        change(setupEnv, "");
+        await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+        click(page, "Save");
+      }
+      await waitForSolid(() => expect(patches).toHaveLength(1));
+      await runtimeConfig.refresh();
+      flush();
+      await waitForSolid(() => {
+        const retainedRow = profileRow(page, "retained");
+        expect(retainedRow?.textContent).toContain("Advertised");
+      });
+      if (action !== "delete") {
+        await waitText(() => page, "Profile saved.");
+        expect(request).not.toHaveBeenCalledWith("environments.prepare", expect.anything());
+      }
+      expect(patches[0]).toMatchObject({
+        baseHash: "before",
+        replacePaths: ["cloudWorkers.profiles.pending.settings.setupEnv"],
+      });
+      const raw = JSON.parse(expectDefined(patches[0], "mutation request").raw);
+      expect(Object.keys(raw.cloudWorkers.profiles)).toEqual(["pending"]);
+      const { target: _initialTarget, ...settingsWithoutTarget } = settings;
+      const savedProfile = {
+        provider: "crabbox",
+        install: "bundle",
+        settings: { ...settingsWithoutTarget, ...(target ? { target } : {}), opaque: null },
+      };
+      expect(config).toEqual({
+        cloudWorkers: {
+          profiles: action === "delete" ? { retained } : { pending: savedProfile, retained },
+          projectProfiles:
+            action === "delete" ? { "github.com/acme/retained": "retained" } : projectProfiles,
+        },
+      });
+      if (action !== "delete") {
+        await waitForSolid(() => expect(page.querySelector("textarea")).toBeNull());
+        const savedRow = profileRow(page, "pending");
+        if (target && target !== "linux") {
+          expect(savedRow.textContent).toContain(
+            `Operating system: ${systems.find((system) => system.id === target)?.label ?? target}`,
+          );
+        } else {
+          expect(savedRow.textContent).not.toContain("Operating system:");
+        }
+        click(savedRow, "Edit");
+        await waitForSolid(() => expect(page.querySelector("textarea")).not.toBeNull());
+        const savedSelect = osSelect(page);
+        if (systems.length >= 2) {
+          expect(savedSelect?.value).toBe(target || "");
+        } else {
+          expect(savedSelect).toBeNull();
+        }
+        click(page, "Cancel");
+        click(page, "Add profile");
+        await waitForSolid(() =>
+          expect(page.querySelector('input[aria-label="Profile ID"]')).not.toBeNull(),
+        );
+        expect(osSelect(page)).toBeNull();
+      } else {
+        gatewayHarness.publish(false);
+        flush();
+        const deleteButton = await waitForSolid(() => {
+          const retainedRow = profileRow(page, "retained");
+          expect(retainedRow?.textContent).toContain("Advertised");
+          expect(retainedRow?.textContent).not.toContain("Unavailable");
+          const button = actionButton(retainedRow, "Delete");
+          expect(button.disabled).toBe(true);
+          return button;
+        });
+        deleteButton.click();
+        expect(patches).toHaveLength(1);
+      }
+    } finally {
+      view.unmount();
+      runtimeConfig.dispose();
+    }
+    expect(renderingErrors).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps a rejected profile draft and retires pending save presentation on access loss", async () => {
+  const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
+  let pending = createDeferred<unknown>();
+  let patches = 0;
+  const request = createGatewayRequestMock(async (method) => {
     if (method === "config.get") {
-      return configSnapshot(config, patches.length ? "after" : "before");
+      return configSnapshot(config, "initial");
     }
     if (method === "environments.list") {
-      return isCatalog(method, params)
-        ? { environments: [], profiles: [{ id: "worker", operatingSystems: systems }] }
-        : { environments: [] };
+      return { environments: [], profiles: [] };
     }
-    if (method !== "config.patch" || !validateConfigPatchParams(params)) {
-      throw new Error(`Unexpected request ${method}`);
+    if (method === "config.patch") {
+      patches += 1;
+      return pending.promise;
     }
-    patches.push(params);
-    const merged = applyMergePatch(config, JSON.parse(params.raw), { mergeObjectArraysById: true });
-    if (!isRecord(merged)) {
-      throw new Error("Expected merged configuration");
-    }
-    config = merged;
-    return { ok: true, config, hash: "after" };
+    throw new Error(`Unexpected request ${method}`);
   });
-  const { page } = mountProfiles({ request } as unknown as GatewayBrowserClient);
-  const row = await waitForSolid(() => profileRow(page, "worker"));
-  await waitEnabled(row, "Edit");
-  click(row, "Edit");
-  await waitForSolid(() => expect(page.querySelector("textarea")).not.toBeNull());
-  const select = osSelect(page);
-  if (systems.length >= 2 || (initialTarget && !systems.some((s) => s.id === initialTarget))) {
-    const editor = expectDefined(select, "Operating system");
-    expect(editor.value).toBe(initialTarget ?? "");
-    if (systems.some((s) => s.id === "future-os")) {
-      const disabled = expectDefined(
-        [...editor.options].find((o) => o.value === "future-os"),
-        "Disabled OS",
-      );
-      expect(disabled).toMatchObject({
-        disabled: true,
-        textContent: expect.stringContaining("Upgrade the worker provider."),
-      });
-    }
-    change(editor, expectDefined(target, "Selected OS"));
-  } else {
-    expect(select).toBeNull();
-  }
-  change(expectDefined(page.querySelector("textarea"), "Setup"), "");
-  expectDefined(page.querySelector<HTMLInputElement>(".settings-toggle__input"), "Desktop").click();
-  change(expectDefined(field(page, "Crabbox binary"), "Binary"), "");
-  click(page, "Save");
-  await waitText(() => page, "Enter a setup command or clear the setup environment names.");
-  expect(patches).toHaveLength(0);
-  change(expectDefined(field(page, "Setup environment names"), "Setup names"), "");
-  click(page, "Save");
-  await waitText(() => page, "Profile saved.");
-  expect(patches[0]).toMatchObject({
-    baseHash: "before",
-    replacePaths: ["cloudWorkers.profiles.worker.settings.setupEnv"],
-  });
-  expect(config).toHaveProperty("cloudWorkers.profiles.worker.settings", {
-    provider: "aws",
-    class: "standard",
-    ttl: "8h",
-    idleTimeout: "45m",
-    ...(target ? { target } : {}),
-    opaque,
-  });
-  expect(request).not.toHaveBeenCalledWith("environments.prepare", expect.anything());
-  const savedRow = profileRow(page, "worker");
-  if (target && target !== "linux") {
-    expect(savedRow.textContent).toContain(
-      `Operating system: ${systems.find((s) => s.id === target)?.label ?? target}`,
+  const client = createTestGatewayClient(request);
+  const { gatewayHarness, runtimeConfig, view, page } = mountProfiles(client);
+  try {
+    await waitForSolid(() => expect(profileRow(page, "worker")).toBeTruthy());
+    click(profileRow(page, "worker"), "Edit");
+    const lifetime = await waitForSolid(() =>
+      expectDefined(
+        page.querySelector<HTMLInputElement>('input[aria-label="Max lifetime"]'),
+        "Profile lifetime",
+      ),
     );
-  } else {
-    expect(savedRow.textContent).not.toContain("Operating system:");
+    change(lifetime, "9h");
+    click(page, "Save");
+    await waitForSolid(() => {
+      expect(patches).toBe(1);
+      expect(actionButton(page, "Saving…").disabled).toBe(true);
+      expect(lifetime.disabled).toBe(true);
+      expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(true);
+    });
+    pending.reject(new Error("Synthetic profile save unavailable"));
+    await waitText(() => page, "Synthetic profile save unavailable");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+    await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+    expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(false);
+
+    pending = createDeferred<unknown>();
+    click(page, "Save");
+    await waitForSolid(() => expect(patches).toBe(2));
+    gatewayHarness.publish(true, client, gatewayHelloForMethods([], ["operator.read"]));
+    await waitText(() => page, "Administrator access is required to manage cloud worker profiles.");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
+    pending.resolve({ ok: true, config, hash: "after" });
+    await pending.promise;
+    flush();
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
+    expect(page.textContent).not.toContain("Profile saved.");
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
   }
-  click(savedRow, "Edit");
-  await waitForSolid(() => expect(page.querySelector("textarea")).not.toBeNull());
-  if (systems.length >= 2) {
-    expect(osSelect(page)?.value).toBe(target || "");
-  } else {
-    expect(osSelect(page)).toBeNull();
-  }
-  click(page, "Cancel");
-  click(page, "Add profile");
-  await waitForSolid(() => expect(field(page, "Profile ID")).not.toBeNull());
-  expect(osSelect(page)).toBeNull();
 });

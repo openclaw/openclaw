@@ -1,8 +1,8 @@
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { routeFixtures } from "../../app/router-outlet-fixtures.test-support.tsx";
 import { mountRouterOutlet, settleRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -17,32 +17,38 @@ import {
   sharedTarget,
 } from "./github-identity-harness.test-support.ts";
 import type { GitHubAuthorizationState } from "./github-identity-shared.ts";
-import { GitHubConnectionSetup, GitHubIdentity } from "./github-identity-view.tsx";
+import {
+  GitHubConnectionError,
+  GitHubConnectionSetup,
+  GitHubIdentity,
+} from "./github-identity-view.tsx";
 import { githubIdentityViewFixture } from "./github-identity.test-support.ts";
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
+const fallback = vi.fn(() => true);
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-async function settle() {
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-}
+const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
 
 beforeEach(() => {
   vi.useFakeTimers();
   writeText.mockReset().mockResolvedValue(undefined);
+  fallback.mockClear();
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  Object.defineProperty(document, "execCommand", { configurable: true, value: fallback });
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   restorePropertyDescriptor(navigator, "clipboard", clipboardDescriptor);
+  restorePropertyDescriptor(document, "execCommand", execCommandDescriptor);
 });
 
 describe("GitHub identity view", () => {
   it("shows device request and cancellation progress before the server settles", async () => {
     const start = createDeferred<typeof authorizationCode>();
     const cancel = createDeferred<{ cancelled: boolean }>();
-    const { identity, request } = setupRequest({
+    const { identity } = setupRequest({
       "tools.github.authorize.start": () => start.promise,
       "tools.github.authorize.cancel": () => cancel.promise,
     });
@@ -53,23 +59,105 @@ describe("GitHub identity view", () => {
     expect(view.getByText("Requesting code…")).toBeTruthy();
     expect(view.queryByRole("button", { name: "Continue with GitHub" })).toBeNull();
     start.resolve(authorizationCode);
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
     expect(view.getByText("ABCD-1234")).toBeTruthy();
     view.getByRole("button", { name: "Cancel" }).click();
     flush();
     expect(view.getByText("Requesting cancellation…")).toBeTruthy();
     expect(view.queryByRole("button", { name: "Cancel" })).toBeNull();
-    await identity.cancelAuthorization();
-    expect(
-      request.mock.calls.filter(([method]) => method === "tools.github.authorize.cancel"),
-    ).toEqual([["tools.github.authorize.cancel", { requestId: authorizationCode.requestId }]]);
     cancel.resolve({ cancelled: true });
-    await settle();
-    expect(identity.read().authorization).toEqual({ phase: "idle" });
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
     expect(view.getByRole("button", { name: "Continue with GitHub" })).toBeTruthy();
   });
 
-  it("preserves the focused PAT draft while saving and retires it when its scope changes", async () => {
+  it("retires the owned status request when its view unmounts", async () => {
+    const pending = createDeferred<ReturnType<typeof availableStatus>>();
+    const client = createTestGatewayClient(vi.fn().mockReturnValue(pending.promise));
+    let identity!: ReturnType<typeof createGitHubIdentityView>;
+    const view = mountSolid(() => {
+      identity = createGitHubIdentityView();
+      return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
+    });
+    flush();
+    identity.sync({
+      client,
+      connected: true,
+      permissionsReady: true,
+      target: sharedTarget(),
+      statusReadable: true,
+      configurable: true,
+      authorizable: true,
+      clientRevision: 1,
+    });
+    let retired = false;
+    const reading = identity.verify()?.then(() => {
+      retired = true;
+    });
+    flush();
+    view.unmount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retired).toBe(true);
+    pending.resolve(availableStatus("system"));
+    await reading;
+  });
+
+  it("shows a failed status read and clears it while retrying", async () => {
+    const first = createDeferred<ReturnType<typeof availableStatus>>();
+    const retry = createDeferred<ReturnType<typeof availableStatus>>();
+    const { identity } = setupRequest(
+      vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise),
+    );
+    const view = mountSolid(() => (
+      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+    ));
+    const reading = identity.verify();
+    flush();
+    expect(view.getByText("Checking connection…")).toBeTruthy();
+    first.reject(new Error("Synthetic GitHub status unavailable"));
+    await expect(reading).rejects.toThrow("Synthetic GitHub status unavailable");
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getByRole("alert").textContent).toContain("Synthetic GitHub status unavailable");
+    expect(view.getByText("Connection status unavailable")).toBeTruthy();
+    identity.showPatFallback();
+    await identity.configure();
+    flush();
+    expect(view.getByRole("alert").textContent).toContain(
+      "Paste a fine-grained personal access token first.",
+    );
+    view.getByRole("button", { name: "Verify" }).click();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(view.getByText("Checking connection…")).toBeTruthy();
+    retry.resolve(availableStatus("system"));
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getByText("@managed-user")).toBeTruthy();
+    expect(view.getByText("Verified")).toBeTruthy();
+  });
+
+  it("shows one shared error when the other identity read is still pending", async () => {
+    const personal = createDeferred();
+    const system = createDeferred();
+    const view = mountSolid(() => (
+      <GitHubConnectionError
+        error={null}
+        completion={personal.promise}
+        secondaryCompletion={system.promise}
+      />
+    ));
+    system.reject(new Error("Synthetic shared GitHub failure"));
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getAllByRole("alert")).toHaveLength(1);
+    expect(view.getByRole("alert").textContent).toContain("Synthetic shared GitHub failure");
+    personal.resolve();
+  });
+
+  it("retires saving presentation when a pending PAT command loses its scope", async () => {
     const oldSecret = createDeferred<unknown>();
     const newSecret = createDeferred<unknown>();
     const secrets = [oldSecret, newSecret];
@@ -86,27 +174,14 @@ describe("GitHub identity view", () => {
       { mutation: true, context: { scope: "agent" } },
     );
     identity.showPatFallback();
+    identity.setDraft("token", "synthetic-first-token");
     const view = mountSolid(() => (
       <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
     ));
-    await identity.configure();
-    flush();
-    expect(view.getByRole("alert").textContent).toContain(
-      "Paste a fine-grained personal access token first.",
-    );
-    const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
-    input.focus();
-    input.value = "synthetic-first-token";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    expect(identity.read().draft.token).toBe("synthetic-first-token");
-    expect(view.container.querySelector(".settings-secret input")).toBe(input);
-    expect(document.activeElement).toBe(input);
     const oldSaving = identity.configure();
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
     expect(view.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
-    expect(input).toMatchObject({ disabled: true, value: "synthetic-first-token" });
-    expect(view.container.querySelector(".settings-secret input")).toBe(input);
     sync({ agentId: "replacement" });
     await oldSaving;
     await vi.advanceTimersByTimeAsync(0);
@@ -114,17 +189,17 @@ describe("GitHub identity view", () => {
     identity.setDraft("token", "synthetic-new-token");
     flush();
     const saving = identity.configure();
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
     expect(view.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
     oldSecret.resolve({ ok: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(identity.read().status).toBeNull();
     newSecret.resolve({ ok: true });
     await saving;
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
     expect(view.queryByRole("button", { name: "Saving…" })).toBeNull();
-    expect(view.getByText("@managed-user")).toBeTruthy();
-    expect(view.getByText("Verified")).toBeTruthy();
   });
 
   it("leaves the GitHub panel while its admitted PAT command remains pending", async () => {
@@ -134,29 +209,40 @@ describe("GitHub identity view", () => {
     );
     const client = createTestGatewayClient(request);
     let identity!: ReturnType<typeof createGitHubIdentityView>;
-    const routes = routeFixtures<
-      "github" | "destination",
-      Record<string, never>,
-      Record<string, never>
-    >();
-    const router = routes.router(
-      routes.page("github", {
-        renderSolid: () => {
-          identity = createGitHubIdentityView({
-            runExternalMutation: createMutationRunner(client),
-          });
-          return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
-        },
-      }),
-      routes.page("destination", {
-        renderSolid: () => <section aria-label="Destination body" />,
-      }),
-    );
+    const router = createRouter({
+      routes: [
+        definePage({
+          id: "github",
+          path: "/github",
+          component: () => ({
+            renderSolid: () => {
+              identity = createGitHubIdentityView({
+                runExternalMutation: createMutationRunner(client),
+              });
+              return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
+            },
+          }),
+        }),
+        definePage({
+          id: "destination",
+          path: "/destination",
+          component: () => ({
+            renderSolid: () => (
+              <section aria-label="Destination body">The replacement route is ready.</section>
+            ),
+          }),
+        }),
+      ],
+    });
+    const view = mountSolid(() => (
+      <button onClick={() => void router.navigate("destination", {})}>Open destination</button>
+    ));
     const outlet = mountRouterOutlet({ router });
     const routed = getQueriesForElement(outlet);
     onTestFinished(() => {
       stored.resolve({ ok: true });
       outlet.dispose();
+      view.unmount();
       router.stop();
     });
     await router.navigate("github", {});
@@ -174,21 +260,28 @@ describe("GitHub identity view", () => {
     });
     identity.showPatFallback();
     flush();
-    const input = routed.getByLabelText<HTMLInputElement>("Fine-grained PAT");
+    const input = routed.getByLabelText("Fine-grained PAT");
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error("Expected PAT input");
+    }
     input.value = "synthetic-navigation-token";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     routed.getByRole("button", { name: "Save Identity" }).click();
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
     let destination: HTMLElement | undefined;
     try {
       expect(routed.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
       expect(routed.getByRole("button", { name: "Verify" })).toHaveProperty("disabled", true);
-      void router.navigate("destination", {});
+      view.getByRole("button", { name: "Open destination" }).click();
       await vi.advanceTimersByTimeAsync(0);
       flush();
       destination = routed.getByRole("region", { name: "Destination body" });
+      expect(destination.textContent).toBe("The replacement route is ready.");
       expect(outlet.querySelector("openclaw-github-identity")).toBeNull();
+      expect(routed.queryByLabelText("Fine-grained PAT")).toBeNull();
+      expect(routed.queryByRole("button", { name: "Saving…" })).toBeNull();
       expect(request.mock.calls.map(([method]) => method)).toEqual(["secrets.store.set"]);
     } finally {
       stored.resolve({ ok: true });
@@ -201,21 +294,22 @@ describe("GitHub identity view", () => {
     expect(identity.read().status).toBeNull();
     expect(routed.getByRole("region", { name: "Destination body" })).toBe(destination);
     expect(outlet.querySelector("openclaw-github-identity")).toBeNull();
+    expect(routed.queryByLabelText("Fine-grained PAT")).toBeNull();
   });
 
   it("retires pending authorization-code copying only when its payload changes", async () => {
     const pending = createDeferred();
     writeText.mockReturnValueOnce(pending.promise);
-    type Code = Extract<GitHubAuthorizationState, { userCode: string }>;
-    let update: (patch: Partial<Code>) => void = () => {};
+    type AuthorizationCode = Extract<GitHubAuthorizationState, { userCode: string }>;
+    let updateAuthorization: (patch: Partial<AuthorizationCode>) => void = () => {};
     const view = mountSolid(() => {
-      const [authorization, setAuthorization] = createSignal<Code>({
+      const [authorization, setAuthorization] = createSignal<AuthorizationCode>({
         ...authorizationCode,
         phase: "code",
         userCode: "first",
         displayExpiresAtMs: 70_000,
       });
-      update = (patch) => setAuthorization((value) => ({ ...value, ...patch }));
+      updateAuthorization = (patch) => setAuthorization((value) => ({ ...value, ...patch }));
       const fixture = githubIdentityViewFixture({ authorizable: true, connectionReady: true });
       const identity = {
         ...fixture,
@@ -223,25 +317,89 @@ describe("GitHub identity view", () => {
       };
       return <GitHubConnectionSetup identity={identity} />;
     });
-    const copyButton = () =>
-      view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
-    const button = copyButton();
+    const button = view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
     button.click();
-    update({ phase: "pending" });
+    expect(writeText).toHaveBeenCalledOnce();
+    updateAuthorization({ phase: "pending" });
     flush();
-    expect(copyButton()).toBe(button);
+    expect(view.container.querySelector(".github-device-code + button")).toBe(button);
     expect(view.getByText("Waiting for approval…")).toBeTruthy();
-    update({ userCode: "second" });
+    updateAuthorization({ userCode: "second" });
     flush();
-    const current = copyButton();
+    const current = view.container.querySelector<HTMLButtonElement>(
+      ".github-device-code + button",
+    )!;
     expect(current).not.toBe(button);
-    pending.resolve();
+    expect(current.disabled).toBe(false);
+    pending.reject(new Error("Synthetic clipboard rejection"));
     await vi.advanceTimersByTimeAsync(0);
+    expect(fallback).not.toHaveBeenCalled();
+    expect(current.dataset.copyState).toBeUndefined();
     current.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(writeText.mock.calls.map(([text]) => text)).toEqual(["first", "second"]);
-    expect(view.container.querySelector('.github-device-code ~ [role="status"]')?.textContent).toBe(
-      "Copied!",
+    expect(current.dataset.copyState).toBe("copied");
+  });
+
+  it("announces authorization-code copy outcomes in a status region", async () => {
+    const authorization: Extract<GitHubAuthorizationState, { userCode: string }> = {
+      ...authorizationCode,
+      phase: "code",
+      displayExpiresAtMs: 70_000,
+    };
+    const fixture = githubIdentityViewFixture({ authorizable: true, connectionReady: true });
+    const identity = { ...fixture, read: () => ({ ...fixture.read(), authorization }) };
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
+    const statusText = () =>
+      [...view.container.querySelectorAll('.github-device-code ~ [role="status"]')].map(
+        (node) => node.textContent,
+      );
+    const button = view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusText()).toEqual(["Copied!"]);
+
+    await vi.advanceTimersByTimeAsync(1500);
+    writeText.mockRejectedValueOnce(new Error("Synthetic clipboard rejection"));
+    fallback.mockReturnValueOnce(false);
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusText()).toEqual(["Copy failed"]);
+  });
+
+  it("keeps the focused PAT field across draft and mutation updates", async () => {
+    const stored = createDeferred<unknown>();
+    const { identity } = setupRequest(
+      async (method) => (method === "secrets.store.set" ? stored.promise : { ok: true }),
+      {
+        context: { scope: "agent" },
+        runExternalMutation: async () => ({
+          ok: false,
+          reason: "unavailable",
+          error: "Not dispatched in this view test.",
+        }),
+      },
     );
+    identity.showPatFallback();
+    const view = mountSolid(() => (
+      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+    ));
+    const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
+    input.focus();
+    input.value = "synthetic-pat";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(identity.read().draft.token).toBe("synthetic-pat");
+    expect(view.container.querySelector(".settings-secret input")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    const saving = identity.configure();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(input.disabled).toBe(true);
+    expect(input.value).toBe("synthetic-pat");
+    expect(view.container.querySelector(".settings-secret input")).toBe(input);
+    identity.dispose();
+    stored.resolve({ ok: true });
+    await saving;
   });
 });

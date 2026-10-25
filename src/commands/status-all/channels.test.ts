@@ -61,9 +61,11 @@ async function summarize(
   mocks.inspect.mockResolvedValueOnce(inspection(account, { accountId: "primary", ...snapshot }));
   return (await buildChannelsTable({}, { showSecrets })).rows[0];
 }
+// mock-isolation: Keep credential inspection synthetic instead of reading configured accounts.
 vi.mock("../../channels/account-inspection.js", () => ({
   resolveInspectedChannelAccount: mocks.inspect,
 }));
+// mock-isolation: Supply the selected channel owners without loading installed plugins.
 vi.mock("../../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: (...args: unknown[]) => ({
     plugins: mocks.plugins(...args),
@@ -75,6 +77,7 @@ vi.mock("../../channels/plugins/read-only.js", () => ({
     loadFailures: mocks.failures,
   }),
 }));
+// mock-isolation: Control missing-plugin repair hints independently of the installed inventory.
 vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
   resolveMissingOfficialExternalChannelPluginRepairHints: ({
     channelIds,

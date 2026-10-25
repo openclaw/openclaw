@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
-import type { UsersGitHubStatusResult } from "../../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
@@ -16,18 +15,19 @@ import {
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { GitHubConnections } from "./github-connections.tsx";
-import { availableIdentity, createMutationRunner } from "./github-identity-harness.test-support.ts";
+import { createMutationRunner } from "./github-identity-harness.test-support.ts";
 
 const system: ToolsGitHubStatusResult["effective"] = {
-  ...availableIdentity,
+  ...disconnectedGitHub.system,
   source: "system-configured",
+  credentialKind: "managed-oauth",
+  credentialState: "available",
   account: { login: "system-account" },
+  evidence: "github-api",
+  refreshState: "available",
+  repositoryGrants: "unknown",
 };
-const disconnected = {
-  ...disconnectedGitHub.personal,
-  state: "disconnected",
-  refreshState: "not_applicable",
-} as const;
+const disconnected = disconnectedGitHub.personal;
 const personalStatus = { personal: disconnected, system };
 const unavailable = "Connection status unavailable";
 const statusParams = (agentId: string) => ({ agentId, selectedScope: "system" as const });
@@ -100,11 +100,6 @@ function mount(
     waitText: (...args: Parameters<typeof text>) => waitForFast(() => text(...args)),
     row: (scope: string) => query(`[data-github-connection="${scope}"]`),
     button,
-    fill: (input: HTMLInputElement, value: string) => {
-      input.value = value;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      flush();
-    },
     openPat: () =>
       ["Change System GitHub", "Use a PAT instead"].forEach((label) => {
         button(label).click();
@@ -130,13 +125,17 @@ it.each([
   const request = statusRequest(sharedIdentity);
   const config = { tools: { github: { gitAuthor: { name: "Configured author" } } } };
   const harness = mount(["operator.admin"], "profile-a", request, config);
-  const { text, waitText, query, button, openPat, fill } = harness;
+  const { text, waitText, query, button, openPat } = harness;
   await waitText(["@admin-only-account"]);
   openPat();
   const input = () => query<HTMLInputElement>('input[aria-label="Author Name"]');
   const token = () => query<HTMLInputElement>(".settings-secret input");
-  fill(input()!, "Draft author");
-  fill(token()!, "synthetic-pat-draft");
+  expect(input()).not.toBeNull();
+  input()!.value = "Draft author";
+  input()!.dispatchEvent(new Event("input", { bubbles: true }));
+  token()!.value = "synthetic-pat-draft";
+  token()!.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
   harness.context.runtimeConfig.state.configForm = null;
   harness.emit({ phase: "reconnecting" });
   const expectDraft = () => {
@@ -172,19 +171,13 @@ it.each([
     harness.emit({ hello: gatewayHelloForMethods([], ["operator.admin"]) });
     await waitForFast(() => expect(button("Change System GitHub")?.disabled).toBe(false));
     openPat();
+    expect(input()?.value).toBe("Configured author");
     expect(token()?.value).toBe("");
   }
   await waitForFast(() => expect(input()?.disabled).toBe(false));
   expect(input()?.value).toBe(access === "unchanged" ? "Draft author" : "Configured author");
-  harness.replaceProfile("profile-b");
-  await waitForFast(() => expect(query("[data-github-setup]")).toBeNull());
+  harness.emit({ selfUser: { id: "profile-b" } });
   expect(input()).toBeNull();
-  await waitForFast(() => expect(button("Manage connections").disabled).toBe(false));
-  button("Manage connections").click();
-  await waitForFast(() =>
-    expect(query<HTMLInputElement>('input[type="radio"]:checked')?.value).toBe("personal"),
-  );
-  expect(token()).toBeNull();
 });
 
 it.each([null, "profile-a"])("separates GitHub scopes for profile %s", async (profileId) => {
@@ -213,6 +206,9 @@ it.each([null, "profile-a"])("separates GitHub scopes for profile %s", async (pr
     await pending.promise;
     await new Promise<void>(queueMicrotask);
     expectText(agent(), [], ["@main-account"]);
+    const personalReads = request.mock.calls.filter(([method]) => method === "users.github.status");
+    expect(personalReads).toHaveLength(1);
+    expect(request).toHaveBeenCalledWith("tools.github.status", statusParams("research"));
   } else {
     await waitText(["@system-account"]);
     expect(request.mock.calls).toEqual([["tools.github.status", statusParams("main")]]);
@@ -229,40 +225,42 @@ it.each([null, "profile-a"])("separates GitHub scopes for profile %s", async (pr
 
 it("shows one status failure during setup and retries without reconnecting the account", async () => {
   const error = "GitHub status temporarily unavailable";
-  const retry = createDeferredCore<UsersGitHubStatusResult>();
-  const shared = createDeferredCore<ToolsGitHubStatusResult>();
-  const personalRead = vi
+  const request = vi
     .fn()
     .mockRejectedValueOnce(new Error(error))
-    .mockReturnValue(retry.promise);
-  const request = vi.fn((method: string) =>
-    method === "users.github.status" ? personalRead() : shared.promise,
-  );
-  const ui = mount(["operator.admin"], "profile-a", request);
+    .mockResolvedValue({
+      personal: { ...disconnected, state: "connected", account: { login: "personal-account" } },
+      system,
+    });
+  const ui = mount(["operator.read"], "profile-a", request);
   await waitForFast(() => expect(ui.query('[role="alert"]')?.textContent).toContain(error));
-  ui.text(["Retry", unavailable], ["Not verified", "Connect My GitHub", "Not connected"]);
-  expectText(ui.row("personal"), [unavailable]);
-  expectText(ui.row("system"), ["Checking connection…"]);
-  shared.resolve(status());
-  await waitForFast(() => expect(ui.button("Manage connections").disabled).toBe(false));
+  expect(request.mock.calls).toEqual([["users.github.status", {}]]);
+  ui.text(
+    ["Retry", unavailable],
+    ["Change System GitHub", "Not verified", "Connect My GitHub", "Not connected"],
+  );
+  expectText(ui.row("system"), [unavailable]);
   ui.button("Manage connections").click();
   await waitForFast(() => expect(ui.query("[data-github-setup]")).not.toBeNull());
   expect(ui.element.querySelectorAll('[role="alert"]')).toHaveLength(1);
   ui.button("Retry").click();
-  await ui.waitText(["Checking connection…"], ["Connect My GitHub"]);
-  expect(ui.query('[role="alert"]')).toBeNull();
-  retry.resolve({
-    personal: { ...disconnected, state: "connected", account: { accountId: 1, login: "personal" } },
-    system,
-  });
-  await ui.waitText(["@personal"]);
+  await ui.waitText(["@personal-account"]);
+  expect(request.mock.calls).toEqual([
+    ["users.github.status", {}],
+    ["users.github.status", {}],
+  ]);
   expect(ui.query('[role="alert"]')).toBeNull();
   ui.text(["Change My GitHub"]);
 });
 
 it.each(["available", "unavailable"] as const)("loads native %s", async (credentialState) => {
   const label = credentialState === "available" ? "Verified" : "No credentials";
-  const request = vi.fn(async () => ({
+  const pending = createDeferredCore<typeof personalStatus>();
+  const request = vi.fn(() => pending.promise);
+  const { text, waitText, context, row } = mount(["operator.read"], "profile-a", request);
+  await waitText(["Checking connection…"]);
+  text([], ["Not verified", "Connect My GitHub"]);
+  pending.resolve({
     personal: disconnected,
     system: {
       ...system,
@@ -271,14 +269,36 @@ it.each(["available", "unavailable"] as const)("loads native %s", async (credent
       credentialState,
       account: credentialState === "available" ? system.account : null,
     },
-  }));
-  const { waitText, context, row } = mount(["operator.read"], "profile-a", request);
-  await waitText(
-    ["Connect My GitHub", "Not connected", "Admin managed"],
-    [unavailable, "Change System GitHub", "Use a PAT instead", "Checking connection…"],
+  });
+  await waitText(["Not connected"]);
+  text(["Connect My GitHub"], ["Checking connection…"]);
+  await waitForFast(() => expectText(row("system"), [label]));
+  expectText(row("system"), [], ["OS account running the Gateway"]);
+  if (credentialState !== "unavailable") {
+    expectText(row("system"), [], ["No credentials"]);
+  }
+  text(
+    ["Connect My GitHub", "Admin managed"],
+    [unavailable, "Change System GitHub", "Use a PAT instead"],
   );
-  expectText(row("system"), [label]);
+  expect(request.mock.calls).toEqual([["users.github.status", {}]]);
   expect(context.runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
+});
+
+it("closes setup and resets its purpose when the same Gateway snapshot changes profile", async () => {
+  const { query, button, replaceProfile } = mount(["operator.admin"], "profile-a", statusRequest());
+  const purpose = () => query<HTMLInputElement>('input[type="radio"]:checked')?.value;
+  await waitForFast(() => expect(button("Change System GitHub").disabled).toBe(false));
+  button("Change System GitHub").click();
+  await waitForFast(() => expect(purpose()).toBe("system"));
+  button("Use a PAT instead").click();
+  await waitForFast(() => expect(query(".settings-secret input")).not.toBeNull());
+  replaceProfile("profile-b");
+  await waitForFast(() => expect(query("[data-github-setup]")).toBeNull());
+  await waitForFast(() => expect(button("Manage connections").disabled).toBe(false));
+  button("Manage connections").click();
+  await waitForFast(() => expect(purpose()).toBe("personal"));
+  expect(query(".settings-secret input")).toBeNull();
 });
 
 it("disables connection controls while a PAT save is pending", async () => {
@@ -297,7 +317,9 @@ it("disables connection controls while a PAT save is pending", async () => {
   await ui.waitText(["@system-account"]);
   ui.openPat();
   const token = ui.query<HTMLInputElement>(".settings-secret input")!;
-  ui.fill(token, "synthetic-pending-pat");
+  token.value = "synthetic-pending-pat";
+  token.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
   ui.button("Save Identity").click();
   flush();
   try {

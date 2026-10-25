@@ -187,13 +187,17 @@ describe("OpenCode stream adapter", () => {
 
   it("round-trips dynamic record tool arguments through OpenCode-compatible schemas", async () => {
     const execMessage = toolCallMessage("exec", envArguments);
+    const streamingCall = {
+      ...execMessage.content[0]!,
+      partialJson: JSON.stringify(envArguments),
+    };
     const producerDelta: Extract<AssistantMessageEvent, { type: "toolcall_delta" }> = {
       type: "toolcall_delta",
       contentIndex: 0,
       delta: JSON.stringify(envArguments),
       partial: {
         ...execMessage,
-        content: [{ ...execMessage.content[0]!, partialJson: JSON.stringify(envArguments) }],
+        content: [streamingCall],
       },
     };
     const fixture = streamFixture((stream) => {
