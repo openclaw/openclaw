@@ -1,3 +1,10 @@
+type ScheduledCallbackCounts = {
+  created: number;
+  active: number;
+  cancelled: number;
+  callbacks: number;
+};
+
 export type ControlUiResourceCounts = {
   observers: Record<
     "ResizeObserver" | "IntersectionObserver" | "MutationObserver",
@@ -10,8 +17,21 @@ export type ControlUiResourceCounts = {
       disconnectCalls: number;
     }
   >;
-  intervals: { created: number; active: number; callbacks: number };
-  listeners: { window: number; document: number; mediaQuery: number };
+  intervals: ScheduledCallbackCounts;
+  timeouts: ScheduledCallbackCounts;
+  animationFrames: ScheduledCallbackCounts;
+  idleCallbacks: ScheduledCallbackCounts & { supported: boolean };
+  opaqueTimers: {
+    timeouts: { created: number; cleared: number; unresolved: number };
+    intervals: { created: number; cleared: number; active: number };
+  };
+  schedulingCoverage: {
+    callbacksComplete: boolean;
+    activeComplete: boolean;
+    cancellationsComplete: boolean;
+  };
+  listeners: { window: number; document: number; mediaQuery: number; fontFaceSet: number };
+  listenerCallbacks: { window: number; document: number; mediaQuery: number; fontFaceSet: number };
   mediaQueries: number;
 };
 
@@ -28,14 +48,38 @@ export function installControlUiResourceCounts() {
     observeCalls: 0,
     disconnectCalls: 0,
   });
+  const scheduledCounter = (): ScheduledCallbackCounts => ({
+    created: 0,
+    active: 0,
+    cancelled: 0,
+    callbacks: 0,
+  });
   const counts: ControlUiResourceCounts = {
     observers: {
       ResizeObserver: counter(),
       IntersectionObserver: counter(),
       MutationObserver: counter(),
     },
-    intervals: { created: 0, active: 0, callbacks: 0 },
-    listeners: { window: 0, document: 0, mediaQuery: 0 },
+    intervals: scheduledCounter(),
+    timeouts: scheduledCounter(),
+    animationFrames: scheduledCounter(),
+    idleCallbacks: {
+      ...scheduledCounter(),
+      supported:
+        typeof window.requestIdleCallback === "function" &&
+        typeof window.cancelIdleCallback === "function",
+    },
+    opaqueTimers: {
+      timeouts: { created: 0, cleared: 0, unresolved: 0 },
+      intervals: { created: 0, cleared: 0, active: 0 },
+    },
+    schedulingCoverage: {
+      callbacksComplete: true,
+      activeComplete: true,
+      cancellationsComplete: true,
+    },
+    listeners: { window: 0, document: 0, mediaQuery: 0, fontFaceSet: 0 },
+    listenerCallbacks: { window: 0, document: 0, mediaQuery: 0, fontFaceSet: 0 },
     mediaQueries: 0,
   };
   Object.defineProperty(window, "openclawResourceCounts", {
@@ -109,41 +153,157 @@ export function installControlUiResourceCounts() {
 
   // The init script runs in a browser, even though this module also has Node types.
   const browser: Window = window;
+  const timeouts = new Set<number>();
   const intervals = new Set<number>();
-  const setInterval = browser.setInterval.bind(browser);
-  const clearInterval = browser.clearInterval.bind(browser);
-  const clearTimeout = browser.clearTimeout.bind(browser);
-  browser.setInterval = (handler, timeout, ...args) => {
-    const timer = setInterval(
-      typeof handler === "function"
-        ? (...values: unknown[]) => {
-            counts.intervals.callbacks++;
-            Reflect.apply(handler, window, values);
+  const opaqueTimeouts = new Set<number>();
+  const opaqueIntervals = new Set<number>();
+  const instrumentTimer = (native: Window["setTimeout"], repeating: boolean) =>
+    new Proxy(native, {
+      apply(schedule, receiver, args) {
+        const handler = args[0];
+        const pending = repeating ? intervals : timeouts;
+        const total = repeating ? counts.intervals : counts.timeouts;
+        if (typeof handler !== "function") {
+          // Keep string evaluation, directive prologues and native argument coercion unchanged.
+          const timer: number = Reflect.apply(schedule, receiver, args);
+          counts.schedulingCoverage.callbacksComplete = false;
+          counts.schedulingCoverage.activeComplete = false;
+          counts.schedulingCoverage.cancellationsComplete = false;
+          if (repeating) {
+            intervals.add(timer);
+            counts.intervals.created++;
+            counts.intervals.active = intervals.size;
+            opaqueIntervals.add(timer);
+            counts.opaqueTimers.intervals.created++;
+            counts.opaqueTimers.intervals.active = opaqueIntervals.size;
+          } else {
+            opaqueTimeouts.add(timer);
+            counts.opaqueTimers.timeouts.created++;
+            counts.opaqueTimers.timeouts.unresolved = opaqueTimeouts.size;
           }
-        : handler,
-      timeout,
-      ...args,
-    );
-    intervals.add(timer);
-    counts.intervals.created++;
-    counts.intervals.active = intervals.size;
-    return timer;
-  };
-  const retireInterval = (timer: number | undefined) => {
-    if (timer !== undefined) {
-      intervals.delete(timer);
-      counts.intervals.active = intervals.size;
+          return timer;
+        }
+        let timer: number;
+        args[0] = function (this: unknown, ...values: unknown[]) {
+          if (!repeating) {
+            pending.delete(timer);
+            total.active = pending.size;
+          }
+          total.callbacks++;
+          return Reflect.apply(handler, this, values);
+        };
+        timer = Reflect.apply(schedule, receiver, args);
+        pending.add(timer);
+        total.created++;
+        total.active = pending.size;
+        return timer;
+      },
+    });
+  browser.setTimeout = instrumentTimer(browser.setTimeout, false);
+  browser.setInterval = instrumentTimer(browser.setInterval, true);
+  const retireTimer = (timer: number) => {
+    for (const [pending, total] of [
+      [timeouts, counts.timeouts],
+      [intervals, counts.intervals],
+    ] as const) {
+      if (pending.delete(timer)) {
+        total.cancelled++;
+        total.active = pending.size;
+      }
+    }
+    if (opaqueTimeouts.delete(timer)) {
+      // A string timeout may already have run; this records a clear, not confirmed cancellation.
+      counts.opaqueTimers.timeouts.cleared++;
+      counts.opaqueTimers.timeouts.unresolved = opaqueTimeouts.size;
+    }
+    if (opaqueIntervals.delete(timer)) {
+      counts.opaqueTimers.intervals.cleared++;
+      counts.opaqueTimers.intervals.active = opaqueIntervals.size;
     }
   };
-  browser.clearInterval = (timer) => {
-    retireInterval(timer);
-    clearInterval(timer);
-  };
+  const instrumentCancel = <T extends (handle: number) => void>(
+    native: T,
+    retire: (handle: number) => void,
+  ): T =>
+    new Proxy(native, {
+      apply(cancel, receiver, args) {
+        const result = Reflect.apply(cancel, receiver, args);
+        if (
+          typeof args[0] === "number" &&
+          Number.isInteger(args[0]) &&
+          args[0] >= 0 &&
+          args[0] <= 0x7fffffff
+        ) {
+          retire(args[0]);
+        } else if (args[0] !== undefined) {
+          // Forward unusual Web IDL handles once, without repeating user-defined coercion.
+          counts.schedulingCoverage.activeComplete = false;
+          counts.schedulingCoverage.cancellationsComplete = false;
+        }
+        return result;
+      },
+    });
   // Browser timeout and interval handles share a pool and either clearer can cancel them.
-  browser.clearTimeout = (timer) => {
-    retireInterval(timer);
-    clearTimeout(timer);
-  };
+  browser.clearTimeout = instrumentCancel(browser.clearTimeout, retireTimer);
+  browser.clearInterval = instrumentCancel(browser.clearInterval, retireTimer);
+
+  const frames = new Set<number>();
+  const requestFrame = browser.requestAnimationFrame;
+  browser.requestAnimationFrame = new Proxy(requestFrame, {
+    apply(request, receiver, args) {
+      const callback = args[0];
+      if (typeof callback !== "function") {
+        return Reflect.apply(request, receiver, args);
+      }
+      let frame: number;
+      args[0] = function (this: unknown, ...values: unknown[]) {
+        frames.delete(frame);
+        counts.animationFrames.active = frames.size;
+        counts.animationFrames.callbacks++;
+        return Reflect.apply(callback, this, values);
+      };
+      frame = Reflect.apply(request, receiver, args);
+      frames.add(frame);
+      counts.animationFrames.created++;
+      counts.animationFrames.active = frames.size;
+      return frame;
+    },
+  });
+  browser.cancelAnimationFrame = instrumentCancel(browser.cancelAnimationFrame, (frame) => {
+    if (frames.delete(frame)) {
+      counts.animationFrames.cancelled++;
+      counts.animationFrames.active = frames.size;
+    }
+  });
+  if (counts.idleCallbacks.supported) {
+    const idle = new Set<number>();
+    browser.requestIdleCallback = new Proxy(browser.requestIdleCallback, {
+      apply(request, receiver, args) {
+        const callback = args[0];
+        if (typeof callback !== "function") {
+          return Reflect.apply(request, receiver, args);
+        }
+        let handle: number;
+        args[0] = function (this: unknown, ...values: unknown[]) {
+          idle.delete(handle);
+          counts.idleCallbacks.active = idle.size;
+          counts.idleCallbacks.callbacks++;
+          return Reflect.apply(callback, this, values);
+        };
+        handle = Reflect.apply(request, receiver, args);
+        idle.add(handle);
+        counts.idleCallbacks.created++;
+        counts.idleCallbacks.active = idle.size;
+        return handle;
+      },
+    });
+    browser.cancelIdleCallback = instrumentCancel(browser.cancelIdleCallback, (handle) => {
+      if (idle.delete(handle)) {
+        counts.idleCallbacks.cancelled++;
+        counts.idleCallbacks.active = idle.size;
+      }
+    });
+  }
 
   type Listener = EventListenerOrEventListenerObject;
   type Registration = {
@@ -182,6 +342,7 @@ export function installControlUiResourceCounts() {
         listener,
         capture,
         wrapped(event) {
+          counts.listenerCallbacks[kind]++;
           if (once) {
             entry.remove();
           }
@@ -219,6 +380,7 @@ export function installControlUiResourceCounts() {
   };
   trackListeners(window, "window");
   trackListeners(document, "document");
+  trackListeners(document.fonts, "fontFaceSet");
   const matchMedia = window.matchMedia.bind(window);
   window.matchMedia = (query) => {
     const media = matchMedia(query);
