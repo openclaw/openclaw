@@ -353,6 +353,10 @@ try {
   }
   sqlPhase("settle");
   await wait(settleSeconds * 1000);
+  const cpuProfilePath = path.join(output, "idle.cpuprofile");
+  if (values.profile && values["watcher-failure"]) {
+    await controlGatewayProfile(child, "cpu", "start", cpuProfilePath, { includeWorkers: true });
+  }
   const reloads: Array<{ requests: number; elapsedMs: number }> = [];
   let watcherRecovery: Awaited<ReturnType<typeof watcherCommand>> | undefined;
   for (let index = 0; index < configReloads + (values["watcher-failure"] ? 1 : 0); index++) {
@@ -412,10 +416,9 @@ try {
     child.send({ channel, action: "enable" });
     await sample();
   }
-  const cpuProfilePath = path.join(output, "idle.cpuprofile");
   const heapProfilePath = path.join(output, "idle.heapprofile");
   const diagnosticsId = path.join(output, "idle-diagnostics");
-  if (values.profile) {
+  if (values.profile && !values["watcher-failure"]) {
     await controlGatewayProfile(child, "cpu", "start", cpuProfilePath);
   }
   if (values.allocations) {
