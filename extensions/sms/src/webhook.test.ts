@@ -21,7 +21,11 @@ const enqueueSmsIngress = vi.hoisted(() =>
 );
 vi.mock("./credential-availability.js", () => ({ assertSmsCredentialOwnerAvailable }));
 
-function fixture(overrides: Partial<SmsWebhookHandlerParams> = {}) {
+function fixture(
+  overrides: Omit<Partial<SmsWebhookHandlerParams>, "delivery"> & {
+    delivery?: ReturnType<typeof createSmsTestDeliveryRecorder>;
+  } = {},
+) {
   const account = overrides.account ?? createSmsTestAccount();
   const delivery = overrides.delivery ?? createSmsTestDeliveryRecorder();
   const handler = createSmsWebhookHandler({
