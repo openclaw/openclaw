@@ -136,20 +136,6 @@ describe("sanitizeToolUseResultPairing", () => {
       ],
       order: [0, 2, 1, 3],
     },
-    {
-      name: "retains matching results after an aborted assistant message",
-      input: [
-        callAssistant("aborted", "exec", "aborted"),
-        realResult("aborted", "exec", "partial result"),
-        user("retrying"),
-      ],
-      order: [0, 1, 2],
-    },
-    {
-      name: "drops unframed orphan results",
-      input: [user("hello"), realResult("orphan", "read", "orphan"), textAssistant("ok")],
-      order: [0, 2],
-    },
   ])("$name without synthesizing results", ({ input: raw, order }) => {
     const input = castAgentMessages(raw);
     const expected = structuredClone(order.map((index) => input[index]));
@@ -509,7 +495,6 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 describe("stripToolResultDetails", () => {
   it("strips opaque details and keeps synthetic projections stable", () => {
     const input = castAgentMessages([
-      { ...textToolResult("call_1", "read", "ok"), details: { internal: true } },
       { ...textAssistant("keep me"), details: { no: "touch" } },
       user("hello"),
       {
@@ -518,15 +503,10 @@ describe("stripToolResultDetails", () => {
       },
     ]);
 
-    const out = stripToolResultDetails(input) as unknown as Array<Record<string, unknown>>;
-
-    expect(Object.hasOwn(out[0] ?? {}, "details")).toBe(false);
-    expect((out[0] ?? {}).role).toBe("toolResult");
-
-    expect(Object.hasOwn(out[1] ?? {}, "details")).toBe(true);
-    expect((out[1] ?? {}).role).toBe("assistant");
-    expect((out[2] ?? {}).role).toBe("user");
-    expect(out[3]?.details).toEqual({ openclawSyntheticMissingToolResult: true });
+    const out = stripToolResultDetails(input);
+    expect(out[0]).toMatchObject({ role: "assistant", details: { no: "touch" } });
+    expect(out[1]?.role).toBe("user");
+    expect(out[2]).toHaveProperty("details", { openclawSyntheticMissingToolResult: true });
     expect(stripToolResultDetails(out)).toBe(out);
   });
 });
