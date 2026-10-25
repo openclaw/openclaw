@@ -108,6 +108,14 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Session-entry and transcript readers resolve read scopes without loading synchronous
+writer admission. A passive process-local borrower owner shares already admitted
+handles, failure visibility, pins, and idle activity with the writable lifecycle.
+The writable lifecycle alone opens and publishes those handles and owns leases,
+migrations, timers, and closure. Borrowers prevent idle eviction; explicit disposal
+can still close the connection and invalidate its claims immediately. Maintenance
+closes cached handles before migrating or replacing their storage.
+
 If PostgreSQL schema publication invalidates admission, connection opening,
 shared-state reads before their callback, and standalone feature-schema ensures
 share a brief backoff retry for at most one second, bounded by the caller's

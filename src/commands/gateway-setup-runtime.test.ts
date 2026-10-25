@@ -3,6 +3,7 @@ import { runtimeFixture } from "../cli/update-cli/update-command-fixtures.test-s
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { DaemonRuntimePinSnapshot } from "../daemon/runtime-pin-types.js";
 import { resolveDaemonInstallRuntimeInputs } from "./daemon-install-plan.shared.js";
+import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 
 const readPin = vi.hoisted(() => vi.fn<() => DaemonRuntimePinSnapshot>());
@@ -61,7 +62,7 @@ it.each([
     vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue(
       runtimeFixture("1.4.3", "3.53.4"),
     );
-    const select = vi.fn(async (runtime: "node" | "bun") => runtime);
+    const select = vi.fn(async (runtime: GatewayDaemonRuntime) => runtime);
     const selection = await resolveGatewaySetupRuntime({
       env: {},
       existingCommand: null,

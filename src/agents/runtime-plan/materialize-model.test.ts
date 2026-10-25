@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ModelProviderConfig } from "../../config/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { configFor } from "../model-auth.fixtures.test-support.js";
+import * as modelRoutes from "../provider-model-route.js";
 import {
   platformModel,
   platformRoute,
@@ -80,6 +81,36 @@ describe("materializePreparedRuntimeModel", () => {
       },
     ],
   });
+  it.each(["matching", "resolved"] as const)(
+    "compares the final %s route only once",
+    async (mode) => {
+      const compare = vi.spyOn(modelRoutes, "modelMatchesProviderModelRoute");
+      try {
+        await expectModel({
+          ...(mode === "matching" ? { model: subscriptionModel } : {}),
+          metadataSnapshot,
+          resolveModel: async () => ({ model: subscriptionModel }),
+        }).resolves.toBe(subscriptionModel);
+        expect(compare).toHaveBeenCalledTimes(1);
+      } finally {
+        compare.mockRestore();
+      }
+    },
+  );
+
+  it("revalidates the prepared target after asynchronous model resolution", async () => {
+    const currentPlan = createSubscriptionPlan();
+    const pending = createDeferred<{ model: typeof subscriptionModel }>();
+    const result = expectModel({
+      plan: currentPlan,
+      metadataSnapshot,
+      resolveModel: () => pending.promise,
+    }).rejects.toThrow("does not match target");
+    currentPlan.modelRoute!.modelId = "changed-target";
+    pending.resolve({ model: subscriptionModel });
+    await result;
+  });
+
   it("reuses suppression policy across selected routes and refreshes changed policy", async () => {
     let compilations = 0;
     const entries = new Proxy(

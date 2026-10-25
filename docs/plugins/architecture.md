@@ -253,7 +253,10 @@ Install, update, registry refresh, and doctor flows may read fresh package metad
 Inference verification fingerprints the artifact selected by the runtime's
 source/build preference, including explicit bundled source overrides. Loading an
 unchanged plugin preserves that proof; changing its selected runtime files
-invalidates it.
+invalidates it. For bundled modules embedded in a standalone executable, the
+fingerprint combines the image's build identity, compilation mode, and build
+flavor with the retained plugin sidecar files. Embedded JavaScript does not need
+a second copy on disk.
 
 A managed runtime instance owns its module results, registered callables, and
 runtime-store slots. Non-bundled instances also own a captured source artifact.

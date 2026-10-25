@@ -1,6 +1,13 @@
 /* @vitest-environment jsdom */
 import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
+import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
@@ -8,7 +15,7 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopComposition } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
-function mountDetails() {
+function mountDetails(overrides: Partial<ChatDetailsProps> = {}) {
   vi.useFakeTimers();
   // jsdom has no Web Animations API; real geometry and motion are covered in browser proof.
   const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
@@ -37,6 +44,7 @@ function mountDetails() {
       renderViewAllIcon: () => null,
     },
     progressCardInitialLoading: true,
+    ...overrides,
   };
   const [details, setDetails] = createSignal(initial);
   const view = mountSolid(() =>
@@ -101,6 +109,70 @@ it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads
   });
   expect(view.group("outputs")?.textContent).toContain("Build report");
   expect(view.container.textContent).toContain("Review the layout");
+});
+
+it("appends late desktop automations after retained Outputs and task progress", async () => {
+  const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const request = createGatewayRequestMock(() => pending.promise);
+  const { gateway, publish } = createApplicationGateway();
+  publish({
+    ...gateway.snapshot,
+    client: createTestGatewayClient(request),
+    phase: "connected",
+    hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: ["operator.read"] } },
+    assistantAgentId: "main",
+    sessionKey: "agent:main:arrival",
+  });
+  const view = mountDetails({ pullRequestsGateway: gateway });
+  view.update({
+    outputs: { ...view.initial.outputs!, dashboard: { title: "Build report", onOpen() {} } },
+    progressCard: {
+      sessionKey: view.initial.sessionKey,
+      revision: 1,
+      updatedAt: 1,
+      steps: [{ step: "Review the layout", status: "in_progress" }],
+    },
+  });
+  const outputs = view.group("outputs")!;
+  const progress = view.container.querySelector("openclaw-chat-details-progress")!;
+  expect(view.group("automations")).toBeNull();
+  const jobs: CronCompactJob[] = Array.from({ length: 10 }, (_, index) => ({
+    id: `arrival-${index}`,
+    name: `Scheduled check ${index}`,
+    agentId: "main",
+    enabled: true,
+    updatedAtMs: 1,
+    nextRunAt: null,
+    nextRunAtMs: null,
+    scheduleKind: "every",
+    schedule: { kind: "every", everyMs: 600_000 },
+    lastRunAt: null,
+    lastRunAtMs: null,
+    lastRunStatus: null,
+    lastRunError: null,
+  }));
+  pending.resolve({
+    jobs,
+    snapshotRevision: "arrival-1",
+    offset: 0,
+    limit: 50,
+    total: jobs.length,
+    hasMore: false,
+    nextOffset: null,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  const automations = view.group("automations")!;
+  expect(automations.querySelectorAll(".chat-summary__automation")).toHaveLength(10);
+  expect(view.group("outputs")).toBe(outputs);
+  expect(view.container.querySelector("openclaw-chat-details-progress")).toBe(progress);
+  expect(outputs.compareDocumentPosition(automations) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(
+    0,
+  );
+  expect(progress.compareDocumentPosition(automations) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(
+    0,
+  );
+  expect(request).toHaveBeenCalledOnce();
 });
 
 it("admits each real Environment content source without an empty section", async () => {

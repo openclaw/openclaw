@@ -90,6 +90,7 @@ packages/memory-host-sdk/package.json
 packages/memory-host-sdk/src/host/config-utils.ts
 packages/memory-host-sdk/src/host/embedding-vector.ts
 packages/memory-host-sdk/src/host/error-utils.ts
+packages/memory-host-sdk/src/host/memory-path-postgres.ts
 packages/memory-host-sdk/src/host/memory-schema-base.ts
 packages/memory-host-sdk/src/host/memory-schema-catalog.ts
 packages/memory-host-sdk/src/host/memory-schema-provenance.ts
@@ -1893,6 +1894,7 @@ src/state/openclaw-agent-canonical-validation-schema.ts
 src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts
 src/state/openclaw-agent-db-admission.ts
+src/state/openclaw-agent-db-borrower.ts
 src/state/openclaw-agent-db-close.ts
 src/state/openclaw-agent-db-contract.ts
 src/state/openclaw-agent-db-discovery-paths.ts
@@ -1908,6 +1910,7 @@ src/state/openclaw-agent-db-maintenance-authority.ts
 src/state/openclaw-agent-db-metadata-write.ts
 src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
+src/state/openclaw-agent-db-owner-read.ts
 src/state/openclaw-agent-db-permissions.ts
 src/state/openclaw-agent-db-read-error.ts
 src/state/openclaw-agent-db-readonly-open.ts
@@ -1945,6 +1948,7 @@ src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
+src/state/openclaw-agent-memory-path-migration.ts
 src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
@@ -2210,6 +2214,7 @@ scripts/pr-lib/merge-prior-ci-cancellation.mjs
 scripts/pr-lib/merge-prior-ci-security.mjs
 src/config/sessions/legacy-sqlite-marker.ts
 src/config/sessions/lifecycle-timestamps.ts
+src/config/sessions/session-accessor.sqlite-read-scope.ts
 src/config/sessions/session-accessor.sqlite-scope.ts
 src/config/sessions/session-accessor.sqlite-transcript-anchor.ts
 src/config/sessions/session-accessor.sqlite-transcript-incremental-read.ts

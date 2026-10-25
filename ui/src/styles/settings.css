@@ -1552,7 +1552,7 @@ textarea.settings-input {
 }
 
 .settings-sidebar__item--active .settings-sidebar__item-icon {
-  color: var(--accent);
+  color: var(--navigation-selected-icon, var(--accent));
 }
 
 .settings-sidebar__item-label {

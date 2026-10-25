@@ -80,12 +80,19 @@ export function validatePreparedRuntimeModel<Model extends RuntimeRouteModel>(
   params: PreparedRuntimeModelTarget & { model: Model },
 ): Model {
   validatePreparedTarget(params);
-  const { model, route } = params;
+  const { route } = params;
   if (route && !modelMatchesPreparedTarget({ ...params, route })) {
     throw new Error(
       `Caller-provided ${params.provider}/${params.modelId} metadata does not match its prepared ${route.authRequirement} route.`,
     );
   }
+  return validateModelRetirement(params);
+}
+
+function validateModelRetirement<Model extends RuntimeRouteModel>(
+  params: PreparedRuntimeModelTarget & { model: Model },
+): Model {
+  const { model, route } = params;
   const suppression = resolveBuiltInModelSuppressionFromManifest({
     provider: model.provider ?? params.provider,
     id: model.id ?? params.modelId,
@@ -124,7 +131,7 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
   const route = params.plan.modelRoute;
   const target = { ...params, route };
   const validateFinalModel = (model: Model | undefined): Model | undefined =>
-    model ? validatePreparedRuntimeModel({ ...target, model }) : undefined;
+    model ? validateModelRetirement({ ...target, model }) : undefined;
   if (!route && !params.forceResolve) {
     return validateFinalModel(params.model);
   }
@@ -162,6 +169,8 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
           : `Unable to rematerialize ${params.provider}/${params.modelId} for its resolved auth profile.`),
     );
   }
+  // Resolution may await a provider; the shared route must still name this target.
+  validatePreparedTarget(target);
   // Validate only the final route: an API credential may replace retired subscription metadata.
   return validateFinalModel(resolved.model);
 }

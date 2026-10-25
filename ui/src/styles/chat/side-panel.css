@@ -175,7 +175,7 @@
 }
 
 .side-panel__header .tabstrip-tab[active] .tabstrip-tab__icon {
-  color: var(--text);
+  color: var(--icon-active, var(--text));
 }
 
 .side-panel__header .tabstrip-tab__icon svg,
@@ -538,10 +538,6 @@ openclaw-chat-detail-panel,
   /* Balance the bottom divider so the controls stay on the shared header axis. */
   padding-top: var(--rail-divider-size);
   border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
-}
-
-.sidebar-region--desktop .side-panel__frame-action {
-  color: var(--muted);
 }
 
 .sidebar-region--desktop .side-panel__frame-action > .oc-menu-item__label {

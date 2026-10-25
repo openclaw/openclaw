@@ -41,6 +41,7 @@ async function readSnapshot(
   return (state.readSnapshot = {
     storeRevision,
     source,
+    lists: [],
     readJobs: new WeakMap<CronJob, CronJob>(),
     status: Object.freeze({
       enabled: state.deps.cronEnabled,
@@ -175,6 +176,7 @@ export async function writeScratch(
 }
 
 const SLOW_LIST_PAGE_MS = 1_000;
+const MAX_LIST_SNAPSHOTS = 4;
 
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
 export async function listPage(
@@ -248,16 +250,15 @@ export async function listPage(
           // In-process visibility must share the sorted snapshot and its revision.
           return !matchesJob || matchesJob(job);
         });
-        // Recheck visibility per request; passive readers still reload and repair.
-        // Empty visibility prepasses must not evict the prepared nonempty list.
-        let snapshot = read.list;
-        if (
-          !snapshot ||
-          snapshot.sortBy !== sortBy ||
-          snapshot.sortDir !== sortDir ||
-          snapshot.filteredJobs.length !== filtered.length ||
-          !snapshot.filteredJobs.every((job, index) => job === filtered[index])
-        ) {
+        // Recheck visibility before sharing work across interleaved list variants.
+        let snapshot = read.lists.find(
+          (candidate) =>
+            candidate.sortBy === sortBy &&
+            candidate.sortDir === sortDir &&
+            candidate.filteredJobs.length === filtered.length &&
+            candidate.filteredJobs.every((job, index) => job === filtered[index]),
+        );
+        if (!snapshot) {
           const jobs = sortCronJobs([...filtered], sortBy, sortDir);
           snapshot = {
             filteredJobs: filtered,
@@ -266,8 +267,12 @@ export async function listPage(
             jobs,
             snapshotRevision: resolveCronListSnapshotRevision(jobs),
           };
-          if (jobs.length > 0 || !read.list) {
-            read.list = snapshot;
+          // Empty visibility prepasses must not evict prepared nonempty lists.
+          if (jobs.length > 0 || read.lists.length === 0) {
+            read.lists.push(snapshot);
+            if (read.lists.length > MAX_LIST_SNAPSHOTS) {
+              read.lists.shift();
+            }
           }
         }
         const { jobs: sortedJobs, snapshotRevision } = snapshot;

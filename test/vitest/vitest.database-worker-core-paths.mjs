@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/infra/database-engine/memory-path-migration.conformance.test.ts",
   "src/auto-reply/reply/get-reply.fallback-transcript.test.ts",
   "src/config/sessions/session-actor-initialization.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
@@ -173,7 +174,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/admin-state-owner.process.test.ts",
   "src/cli/claws-cli.state-owner.test.ts",
   "src/cli/gateway-cli/run-loop.state-ownership.test.ts",
-  "src/pairing/pairing-store.test.ts",
   "src/pairing/pairing-store.worker.test.ts",
   "src/plugin-sdk/channel-pairing.store.test.ts",
   "src/hooks/bundled/session-memory/capture.test.ts",

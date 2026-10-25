@@ -118,7 +118,7 @@ describe("runDaemonInstall", () => {
       revision: expected.revision,
       definition: expected.definition,
     });
-    function recoveryFixture(runtime: "node" | "bun" = "node") {
+    function recoveryFixture(runtime: "node" | "bun" | "standalone" = "node") {
       const root = tempDirs.make("openclaw-restore-cli-");
       const executable = path.join(
         root,
@@ -129,8 +129,26 @@ describe("runDaemonInstall", () => {
       for (const file of [executable, entrypoint, sqliteLibrary]) {
         fs.writeFileSync(file, "", { mode: 0o755 });
       }
+      if (runtime === "standalone") {
+        fs.mkdirSync(path.join(root, "runtime"));
+        fs.writeFileSync(
+          path.join(root, "manifest.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            mode: "aot",
+            executable: { path: "standalone" },
+            runtime: { path: "runtime" },
+            openclaw: { version: "2026.10.25" },
+            bun: { version: "1.4.4" },
+          }),
+        );
+      }
       pinSnapshotMock.mockReturnValue(expected);
-      return { executable, entrypoint, sqliteLibrary };
+      return {
+        executable,
+        entrypoint,
+        sqliteLibrary,
+      };
     }
     const restore = (cli: object, options: Partial<DaemonInstallOptions> = {}) =>
       runDaemonInstall({
@@ -171,13 +189,18 @@ describe("runDaemonInstall", () => {
     it.each([
       { runtime: "node", library: false },
       { runtime: "bun", library: true },
+      { runtime: "standalone", library: false },
     ] as const)(
       "restores $runtime with retained library=$library and definition custody",
       async ({ runtime, library }) => {
         const files = recoveryFixture(runtime);
-        const cli = { ...files, sqliteLibrary: library ? files.sqliteLibrary : null };
+        const cli = {
+          ...files,
+          entrypoint: runtime === "standalone" ? null : files.entrypoint,
+          sqliteLibrary: library ? files.sqliteLibrary : null,
+        };
         process.env.OPENCLAW_SQLITE_LIBRARY = "/installer/libsqlite3.dylib";
-        if (runtime === "bun") {
+        if (runtime !== "node") {
           const probe = nodeProbeOutput("26.12.1");
           runExecMock.mockResolvedValue({
             ...probe,
@@ -187,19 +210,19 @@ describe("runDaemonInstall", () => {
         performServiceInstall();
         await restore(cli, {
           runtime,
-          ...(runtime === "bun" ? { runtimePath: cli.executable } : {}),
+          ...(runtime !== "node" ? { runtimePath: cli.executable } : {}),
         });
         expect(actionState.failed).toEqual([]);
         const plan = readFirstInstallPlanArg();
         expect(plan).toMatchObject({
           serviceCli: { executable: cli.executable, entrypoint: cli.entrypoint },
           runtimePath: cli.executable,
-          pinnedRuntimePath: runtime === "bun" ? cli.executable : undefined,
+          pinnedRuntimePath: runtime !== "node" ? cli.executable : undefined,
         });
         expectPartialCall(service.install, {
           runtimePinUpdate: {
             expected,
-            pin: runtime === "bun" ? { runtime, path: cli.executable } : undefined,
+            pin: runtime !== "node" ? { runtime, path: cli.executable } : undefined,
             requireDefinitionMatch: true,
           },
           env: plan.env,

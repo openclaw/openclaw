@@ -119,6 +119,12 @@ function parentDependencyIds(card: WorkboardCard): string[] {
   );
 }
 
+// Card writers replace the canonical array; retain its card references for fresh field reads.
+const dependencyCardsById = new WeakMap<
+  readonly WorkboardCard[],
+  ReadonlyMap<string, WorkboardCard>
+>();
+
 export function getWorkboardDependencyState(
   card: WorkboardCard,
   cards: readonly WorkboardCard[],
@@ -128,7 +134,11 @@ export function getWorkboardDependencyState(
   if (!parentIds.length) {
     return { parents: [], blockedParents: [] };
   }
-  const cardsById = new Map(cards.map((entry) => [entry.id, entry]));
+  let cardsById = dependencyCardsById.get(cards);
+  if (!cardsById) {
+    cardsById = new Map(cards.map((entry) => [entry.id, entry]));
+    dependencyCardsById.set(cards, cardsById);
+  }
   const parents = parentIds.map((id) => {
     const parent = cardsById.get(id);
     return {
