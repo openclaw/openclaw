@@ -5,6 +5,7 @@ import { createRouter } from "@openclaw/uirouter";
 import { createComponent, createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { resetServerUiPrefsSync } from "../../app/server-prefs.ts";
@@ -47,7 +48,8 @@ describe("ConfigPage cold reads", () => {
     { search: "", activeSection: "__appearance__" },
     { search: "?section=ui", activeSection: "ui" },
   ])("renders the initial Appearance selection $activeSection before route effects", (entry) => {
-    const context = completeConfigContext(routeContext());
+    const router = createRouter<RouteId, ApplicationContext>({ routes: [] });
+    const context = completeConfigContext({ ...routeContext(), router });
     const routeData = configRouteData({
       pathname: "/settings/appearance",
       search: entry.search,
@@ -67,7 +69,7 @@ describe("ConfigPage cold reads", () => {
       expect(initial.config.showModeToggle).toBe(false);
     } finally {
       initial.dispose();
-      context.router.stop();
+      router.stop();
     }
   });
 
@@ -95,9 +97,11 @@ describe("ConfigPage cold reads", () => {
       current: () => display,
       subscribe: () => () => undefined,
     });
+    const router = createRouter<RouteId, ApplicationContext>({ routes: [] });
     // SAFETY: real config and Gateway owners replace the partial presentation fixture.
     const context = completeConfigContext({
       ...routeContext(),
+      router,
       gateway: { ...gateway, connection: { gatewayUrl: "ws://config.test" } },
       runtimeConfig,
     } as unknown as ApplicationContext);
@@ -161,7 +165,7 @@ describe("ConfigPage cold reads", () => {
       firstRead.resolve(response);
       retryRead.resolve(response);
       mounted.dispose();
-      context.router.stop();
+      router.stop();
       runtimeConfig.dispose();
     }
   });

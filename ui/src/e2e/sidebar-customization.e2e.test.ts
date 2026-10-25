@@ -175,11 +175,12 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiSettingsTakeover(page);
+      const sidebarSettings = page.locator("#settings-appearance-sidebar");
+      await sidebarSettings.scrollIntoViewIfNeeded();
       const labelsRequest = await gateway.waitForRequest("sessions.catalog.list", {
         match: { metadataOnly: true },
       });
       expect(labelsRequest.params).not.toHaveProperty("limitPerHost");
-      const sidebarSettings = page.locator("#settings-appearance-sidebar");
       await sidebarSettings.getByRole("heading", { name: "Hidden session sections" }).waitFor();
       const recovery = sidebarSettings.locator(".settings-group", { hasText: "offline-catalog" });
       const row = recovery.locator(".settings-row", { hasText: "Claude Code" });
