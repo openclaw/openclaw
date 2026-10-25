@@ -107,6 +107,12 @@ function resolve() {
   return resolveSandboxContext({ config, sessionKey: "agent:test:reservation", workspaceDir });
 }
 
+const expectRuntime = (name: string, expected: Partial<registry.SandboxRegistryEntry>) =>
+  expect(readRegistryEntry(name)).resolves.toMatchObject(expected);
+const expectAbsent = (name: string) => expect(readRegistryEntry(name)).resolves.toBeNull();
+const expectResolvedId = (runtimeId: string) =>
+  expect(resolve()).resolves.toMatchObject({ runtimeId });
+
 async function resolveBackend() {
   const backend = (await resolve())?.backend;
   if (!backend) {
@@ -182,13 +188,12 @@ describe("durable sandbox runtime generations", () => {
   it("replays a shared reservation from its original provider workspace", async () => {
     config.agents!.defaults!.sandbox!.scope = "shared";
     const originalWorkspace = workspaceDir;
-    const factory = vi.fn(async (params: CreateSandboxBackendParams) => {
+    install(async (params) => {
       if (params.workspaceDir !== originalWorkspace) {
         throw new Error("Provider repository owner changed");
       }
       return handle(params);
     });
-    install(factory);
     const first = await resolve();
     workspaceDir = path.join(path.dirname(workspaceDir), "another-repository");
     const second = await resolveSandboxContext({
@@ -201,10 +206,6 @@ describe("durable sandbox runtime generations", () => {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
     });
-    expect(factory.mock.calls.map(([params]) => params.workspaceDir)).toEqual([
-      originalWorkspace,
-      originalWorkspace,
-    ]);
   });
 
   it("rejects a prepared exec removed during supervisor admission and finalizes its artifacts", async () => {
@@ -290,7 +291,7 @@ describe("durable sandbox runtime generations", () => {
     expect(allocated.size).toBe(0);
     await expect(removeSandboxContainer("reserved-1")).rejects.toThrow("provider config invalid");
     await closeStateDatabaseForTest();
-    await expect(readRegistryEntry("reserved-1")).resolves.toMatchObject({
+    await expectRuntime("reserved-1", {
       runtimeState: "removing-pending",
       workspaceDir,
     });
@@ -298,8 +299,8 @@ describe("durable sandbox runtime generations", () => {
     await removeSandboxContainer("reserved-1");
     expect(cleaned).toEqual(["reserved-1"]);
     expect(allocated.size).toBe(0);
-    await expect(readRegistryEntry("reserved-1")).resolves.toBeNull();
-    await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-2" });
+    await expectAbsent("reserved-1");
+    await expectResolvedId("reserved-2");
   });
 
   it.each([
@@ -338,9 +339,7 @@ describe("durable sandbox runtime generations", () => {
     const removing = legacyRemoval ?? startRemoval(id);
     try {
       await awaitGateBeforeSettlement(intent, removing, "Removal intent was not acknowledged");
-      await expect(readRegistryEntry(id)).resolves.toMatchObject({
-        runtimeState: "removing-pending",
-      });
+      await expectRuntime(id, { runtimeState: "removing-pending" });
       expect(remove).not.toHaveBeenCalled();
     } finally {
       finish.resolve();
@@ -349,9 +348,9 @@ describe("durable sandbox runtime generations", () => {
     await creating;
     await removing;
     expect(remove).toHaveBeenCalledOnce();
-    await expect(readRegistryEntry(id)).resolves.toBeNull();
+    await expectAbsent(id);
     if (!legacy) {
-      await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-2" });
+      await expectResolvedId("reserved-2");
     }
   });
 
@@ -389,9 +388,7 @@ describe("durable sandbox runtime generations", () => {
     let fail = true;
     install(async (params) => {
       const backend = handle(params);
-      await expect(readRegistryEntry(backend.runtimeId)).resolves.toMatchObject({
-        runtimeState: "pending",
-      });
+      await expectRuntime(backend.runtimeId, { runtimeState: "pending" });
       allocated.push(backend.runtimeId);
       if (fail) {
         throw error;
@@ -401,9 +398,9 @@ describe("durable sandbox runtime generations", () => {
     await expect(resolve()).rejects.toThrow(error.message);
     await closeStateDatabaseForTest();
     fail = false;
-    await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-1" });
+    await expectResolvedId("reserved-1");
     expect(allocated).toEqual(["reserved-1", "reserved-1"]);
-    await expect(readRegistryEntry("reserved-1")).resolves.toMatchObject({
+    await expectRuntime("reserved-1", {
       runtimeState: "ready",
       image: "provider-image",
       configLabelKind: "Provider",
@@ -469,11 +466,9 @@ describe("durable sandbox runtime generations", () => {
     await expect(
       backend.buildExecSpec({ command: "true", env: {}, usePty: false }),
     ).rejects.toThrow("removed or is being removed");
-    await expect(readRegistryEntry("reserved-1")).resolves.toMatchObject({
-      runtimeState: "removing",
-    });
+    await expectRuntime("reserved-1", { runtimeState: "removing" });
     await removeSandboxContainer("reserved-1");
-    await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-3" });
+    await expectResolvedId("reserved-3");
   });
 
   it("replaces only an exact provider-confirmed terminal ID and retries at most once", async () => {

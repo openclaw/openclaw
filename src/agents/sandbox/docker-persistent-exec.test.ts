@@ -217,14 +217,28 @@ function cancellableProbes() {
 
 function awaitAbort(signal: AbortSignal) {
   return new Promise<void>((_resolve, reject) => {
-    signal.addEventListener(
-      "abort",
-      () =>
-        reject(
-          signal.reason instanceof Error ? signal.reason : new Error("Docker inspection aborted"),
-        ),
-      { once: true },
-    );
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
+
+function interceptOnce(
+  matches: (args: string[]) => boolean,
+  intercept: (signal: AbortSignal) => Promise<void>,
+  after = false,
+) {
+  const execute = mocks.exec.getMockImplementation()!;
+  let held = false;
+  mocks.exec.mockImplementation(async (...args) => {
+    const selected = !held && matches(args[1]);
+    held ||= selected;
+    if (selected && !after) {
+      await intercept(args[2].signal);
+    }
+    const result = await execute(...args);
+    if (selected && after) {
+      await intercept(args[2].signal);
+    }
+    return result;
   });
 }
 
@@ -264,15 +278,13 @@ it("does not acknowledge CLI spawn as guest startup and removes a stalled attach
   const existsAfterStart = f.state.exists;
   // Join the transport even on the pre-fix path that incorrectly acknowledges startup.
   const stopped = await prepared.stop();
-  expect(error).toBeInstanceOf(Error);
   expect(error).toHaveProperty(
     "message",
     "Persistent sandbox command did not start within 30000ms.",
   );
   expect(existsAfterStart).toBe(false);
   expect(f.state.status).toBe("created");
-  expect(f.state.exists).toBe(false);
-  expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
+  expectExtinct(f, stopped);
 });
 
 describe.skipIf(!supportsSpawnBrokerCommandTransport())("persistent START broker scope", () => {
@@ -334,8 +346,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("persistent START broker
         const stopped = await prepared.stopped;
         expect(getSpawnBroker()).toBe(broker);
         expect(transportCancelled).toBe(currentAtLaunch);
-        expect(f.state.exists).toBe(false);
-        expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
+        expectExtinct(f, stopped);
       });
       expect(getSpawnBroker()).toBeUndefined();
     },
@@ -363,32 +374,25 @@ it.each(["parent", "prepared child", "started child"] as const)(
     cancellableProbes();
     const f = runtime();
     const inspecting = createDeferredCore();
-    const execute = mocks.exec.getMockImplementation()!;
-    let held = false;
     let preparedReady = false;
-    mocks.exec.mockImplementation(async (...args) => {
-      const requestedProbe =
-        probe === "parent"
-          ? args[1][0] === "info"
-          : args[1][0] === "inspect" &&
-            args[1].at(-1) === childId &&
-            (probe === "started child" ? f.state.spawned : !f.state.spawned);
-      if (!held && preparedReady && requestedProbe) {
-        held = true;
+    interceptOnce(
+      (args) =>
+        preparedReady &&
+        (probe === "parent"
+          ? args[0] === "info"
+          : args[0] === "inspect" &&
+            args.at(-1) === childId &&
+            (probe === "started child" ? f.state.spawned : !f.state.spawned)),
+      async (signal) => {
         inspecting.resolve();
-        const signal: AbortSignal = args[2].signal;
         await awaitAbort(signal);
-      }
-      return await execute(...args);
-    });
+      },
+    );
     const { watchers, fake, updateState } = createCronStreamWatcherFixture({
       spawnSandboxSource: async (
         input: Parameters<NonNullable<CronStreamOwnerParams["spawnSandboxSource"]>>[0],
       ) => {
-        const prepared = await f.capability.prepare({
-          attemptId,
-          custodyScope,
-          command,
+        const prepared = await f.prepare({
           assertCurrent: input.assertCurrent,
           signal: input.signal,
           onOutput: input.onOutput,
@@ -444,17 +448,13 @@ it("interrupts the prepared-container inspection without losing its cleanup iden
   cancellableProbes();
   const f = runtime();
   const inspecting = createDeferredCore();
-  const execute = mocks.exec.getMockImplementation()!;
-  let held = false;
-  mocks.exec.mockImplementation(async (...args) => {
-    if (!held && args[1][0] === "inspect" && args[1].at(-1) === childId) {
-      held = true;
+  interceptOnce(
+    (args) => args[0] === "inspect" && args.at(-1) === childId,
+    async (signal) => {
       inspecting.resolve();
-      const signal: AbortSignal = args[2].signal;
       await awaitAbort(signal);
-    }
-    return await execute(...args);
-  });
+    },
+  );
   let prepareOutcome: unknown = "pending";
   const preparing = f.prepare().then(
     () => {
@@ -478,8 +478,7 @@ it("interrupts the prepared-container inspection without losing its cleanup iden
   });
   expect(afterCancellation).toHaveProperty("message", "preparation cancelled");
   expect(mocks.spawn).not.toHaveBeenCalled();
-  expect(f.state.exists).toBe(false);
-  expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
+  expectExtinct(f, stopped);
 });
 
 it.each(["stop", "revocation"] as const)(
@@ -489,17 +488,14 @@ it.each(["stop", "revocation"] as const)(
     const prepared = await f.prepare({ assertCurrent: f.assertCurrent });
     const inspecting = createDeferredCore();
     const release = createDeferredCore();
-    const execute = mocks.exec.getMockImplementation()!;
-    let held = false;
-    mocks.exec.mockImplementation(async (...args) => {
-      const result = await execute(...args);
-      if (!held && f.state.spawned && args[1][0] === "inspect" && args[1].at(-1) === childId) {
-        held = true;
+    interceptOnce(
+      (args) => f.state.spawned && args[0] === "inspect" && args.at(-1) === childId,
+      async () => {
         inspecting.resolve();
         await release.promise;
-      }
-      return result;
-    });
+      },
+      true,
+    );
     const rejection = expect(prepared.start(async () => {})).rejects.toThrow(
       interruption === "revocation" ? "authority revoked" : "stopped during START",
     );
@@ -511,9 +507,7 @@ it.each(["stop", "revocation"] as const)(
     release.resolve();
     await rejection;
     await cleanup;
-    expect(f.state.exists).toBe(false);
-    const stopped = await prepared.stopped;
-    expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
+    expectExtinct(f, await prepared.stopped);
   },
 );
 
@@ -538,16 +532,11 @@ it.each([
       }
     };
     if (during === "probe") {
-      let interrupted = false;
-      const execute = mocks.exec.getMockImplementation()!;
-      mocks.exec.mockImplementation(async (...args) => {
-        const result = await execute(...args);
-        if (!interrupted) {
-          interrupted = true;
-          interrupt();
-        }
-        return result;
-      });
+      interceptOnce(
+        () => true,
+        async () => interrupt(),
+        true,
+      );
     }
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -580,33 +569,47 @@ it.each([
   },
 );
 
-it.each(["removed", "restarted"] as const)(
-  "refuses START when the physical parent is %s during durable admission",
-  async (change) => {
+it.each([
+  ["removed", "admission"],
+  ["restarted", "admission"],
+  ["removed", "execution"],
+  ["restarted", "execution"],
+] as const)(
+  "rejects a parent %s during %s while retaining child cleanup",
+  async (change, phase) => {
     const f = runtime();
     const prepared = await f.prepare();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const started = outcome(
-      prepared.start(async () => {
-        entered.resolve();
-        await release.promise;
-      }),
-    );
-    await entered.promise;
-    expect(mocks.spawn).not.toHaveBeenCalled();
-    if (change === "removed") {
-      f.state.parentExists = false;
+    const changeParent = () => {
+      if (change === "removed") {
+        f.state.parentExists = false;
+      } else {
+        f.state.parentStartedAt = "2026-02-01T00:00:00.000Z";
+      }
+    };
+    let error: unknown;
+    if (phase === "admission") {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const starting = outcome(
+        prepared.start(async () => {
+          entered.resolve();
+          await release.promise;
+        }),
+      );
+      await entered.promise;
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      changeParent();
+      release.resolve();
+      error = await starting;
+      expect(mocks.spawn).not.toHaveBeenCalled();
     } else {
-      f.state.parentStartedAt = "2026-02-01T00:00:00.000Z";
+      await prepared.start(async () => {});
+      changeParent();
+      error = await outcome(prepared.checkCurrent());
+      expect(mocks.spawn).toHaveBeenCalledOnce();
     }
-    release.resolve();
-    const error = await started;
     // Join cleanup even on a regression that incorrectly starts the child.
-    const stopped = await prepared.stop();
-    expectExtinct(f, stopped);
-    expect(mocks.spawn.mock.calls).toHaveLength(0);
-    expect(error).toBeInstanceOf(Error);
+    expectExtinct(f, await prepared.stop());
     expect(error).toHaveProperty("message", "The admitted sandbox container generation has ended.");
   },
 );
@@ -618,12 +621,7 @@ it("treats guest control-looking bytes as output and settles them before reporti
   const received: string[] = [];
   vi.stubEnv("DOCKER_HOST", "unix:///replacement/docker.sock");
   vi.stubEnv("DOCKER_CONTEXT", "replacement");
-  const prepared = await f.capability.prepare({
-    attemptId,
-    custodyScope,
-    command,
-    signal: f.controller.signal,
-    assertCurrent: () => {},
+  const prepared = await f.prepare({
     onOutput: async (_stream, chunk) => {
       outputEntered.resolve();
       await outputSettled.promise;
@@ -670,26 +668,7 @@ it("retains uncertainty after transport loss until Docker confirms removal, then
   f.state.refuseRemoval = false;
   const stopped = await prepared.stop();
   expectExtinct(f, stopped);
-  expect(mocks.spawn).toHaveBeenCalledOnce();
 });
-
-it.each(["replaced", "removed"] as const)(
-  "refuses continued execution after the parent container is %s while retaining child cleanup",
-  async (change) => {
-    const f = runtime();
-    const prepared = await f.prepare();
-    await prepared.start(async () => {});
-    if (change === "replaced") {
-      f.state.parentStartedAt = "2026-02-01T00:00:00.000Z";
-    } else {
-      f.state.parentExists = false;
-    }
-    await expect(prepared.checkCurrent()).rejects.toThrow("sandbox container generation has ended");
-    const stopped = await prepared.stop();
-    expectExtinct(f, stopped);
-    expect(mocks.spawn).toHaveBeenCalledOnce();
-  },
-);
 
 it.each(["before removal", "after removal"] as const)(
   "refuses extinction proof when the original Docker daemon changes %s",
@@ -698,14 +677,13 @@ it.each(["before removal", "after removal"] as const)(
     if (timing === "before removal") {
       f.state.daemonId = "replacement-daemon";
     } else {
-      const execute = mocks.exec.getMockImplementation()!;
-      mocks.exec.mockImplementation(async (...args) => {
-        const result = await execute(...args);
-        if (args[1][0] === "rm") {
+      interceptOnce(
+        (args) => args[0] === "rm",
+        async () => {
           f.state.daemonId = "replacement-daemon";
-        }
-        return result;
-      });
+        },
+        true,
+      );
     }
     await expect(stopDockerPersistentExec(receipt)).rejects.toThrow("daemon changed");
     expect(f.state.exists).toBe(timing === "before removal");

@@ -27,18 +27,18 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { registerSandboxBackend } from "./backend.js";
 import { sandboxRegistryPublication } from "./registry-publication.js";
 import {
-  completeSandboxRegistryReservation,
+  completeSandboxRegistryReservation as completeReservation,
   readBrowserRegistry,
-  assertSandboxRegistryEntryCurrent,
-  assertSandboxBrowserRegistryEntryCurrent,
+  assertSandboxRegistryEntryCurrent as assertCurrent,
+  assertSandboxBrowserRegistryEntryCurrent as assertBrowserCurrent,
   readRegisteredSandboxRuntimeIds,
   readRegistry,
   readRegistryEntry,
   removeBrowserRegistryEntry,
   removeRegistryEntry,
   removeSandboxRegistryGeneration,
-  removeSandboxRegistryRuntime,
-  reserveSandboxRegistryEntry,
+  removeSandboxRegistryRuntime as removeRuntime,
+  reserveSandboxRegistryEntry as reserveEntry,
   updateBrowserRegistry,
   updateRegistry,
 } from "./registry.js";
@@ -73,11 +73,17 @@ function containerEntry(overrides: Partial<SandboxRegistryEntry> = {}): SandboxR
 }
 
 const reserve = (backendId: string) =>
-  reserveSandboxRegistryEntry(containerEntry({ backendId, workspaceDir: "/synthetic/workspace" }));
+  reserveEntry(containerEntry({ backendId, workspaceDir: "/synthetic/workspace" }));
 const forbidHostSql = () =>
   vi.spyOn(sqliteQueries, "executeSqliteQuerySync").mockImplementation(() => {
     throw new Error("Registry writes must not execute SQL on the host");
   });
+
+const expectEntry = (name: string, entry: Partial<SandboxRegistryEntry>) =>
+  expect(readRegistryEntry(name)).resolves.toMatchObject(entry);
+const expectAbsent = (name: string) => expect(readRegistryEntry(name)).resolves.toBeNull();
+const writeNative = (write: Parameters<typeof writeSandboxRegistryInDatabase>[1]) =>
+  runOpenClawStateWriteTransaction(({ db }) => writeSandboxRegistryInDatabase(db, write));
 
 type RegistryReceipt = Extract<
   Parameters<Parameters<typeof sandboxRegistryPublication.subscribeFacts>[0]>[0],
@@ -135,32 +141,23 @@ describe("registry race safety", () => {
       }),
     ).toThrow("rollback outer");
     expect(observed).toHaveLength(2);
-    runOpenClawStateWriteTransaction(({ db }) => {
-      writeSandboxRegistryInDatabase(db, { operation: "remove", containerName: "first" });
-    });
+    writeNative({ operation: "remove", containerName: "first" });
     expect(facts.get(committedKeys[0]!)).toEqual({ kind: "absent" });
   });
 
   it("cannot restore a newer native deletion when a committed worker receipt arrives late", async () => {
     const entry = containerEntry();
-    runOpenClawStateWriteTransaction(({ db }) => {
-      writeSandboxRegistryInDatabase(db, { operation: "update", entry });
-    });
+    writeNative({ operation: "update", entry });
     const observe = admission.observeSqliteWorkerCommittedFacts;
     vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation((owner, listener) =>
       observe(owner, (receipt) => {
-        runOpenClawStateWriteTransaction(({ db }) => {
-          writeSandboxRegistryInDatabase(db, {
-            operation: "remove",
-            containerName: entry.containerName,
-          });
-        });
+        writeNative({ operation: "remove", containerName: entry.containerName });
         listener(receipt);
       }),
     );
     using recording = recordRegistryFacts();
     await updateRegistry({ ...entry, lastUsedAtMs: 2 });
-    await expect(readRegistryEntry(entry.containerName)).resolves.toBeNull();
+    await expectAbsent(entry.containerName);
     expect(recording.receipts.flatMap((receipt) => Array.from(receipt.facts.values()))).toEqual([
       { kind: "absent" },
       { kind: "unknown" },
@@ -173,40 +170,27 @@ describe("registry race safety", () => {
     calls.calibrate();
     using recording = recordRegistryFacts();
     const { receipts: publications } = recording;
-    const removeRuntime = vi.fn(async () => {});
-    const reserved = await reserveSandboxRegistryEntry(
-      containerEntry({
-        containerName: "reserved-boundary",
-        backendId: "boundary",
-        sessionKey: "agent:boundary",
-        workspaceDir: "/synthetic/workspace",
-      }),
-    );
-    expect(reserved).toMatchObject({
-      containerName: "reserved-boundary",
-      runtimeState: "pending",
-    });
-    await removeSandboxRegistryRuntime(reserved, removeRuntime);
-    expect(removeRuntime).toHaveBeenCalledExactlyOnceWith(
+    const cleanup = vi.fn(async () => {});
+    const reserved = await reserve("boundary");
+    expect(reserved).toMatchObject({ containerName: "container-a", runtimeState: "pending" });
+    await removeRuntime(reserved, cleanup);
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        containerName: "reserved-boundary",
+        containerName: reserved.containerName,
         runtimeState: "removing-pending",
       }),
     );
-    await expect(readRegistryEntry(reserved.containerName)).resolves.toBeNull();
+    await expectAbsent(reserved.containerName);
     const key = JSON.stringify(["container", reserved.containerName]);
-    expect(publications.map((receipt) => receipt.facts.get(key))).toEqual([
-      {
-        kind: "postimage",
-        value: expect.objectContaining({ entry_json: JSON.stringify(reserved) }),
-      },
-      {
-        kind: "postimage",
-        value: expect.objectContaining({
-          entry_json: expect.stringContaining('"runtimeState":"removing-pending"'),
-        }),
-      },
-      { kind: "absent" },
+    expect(
+      publications.map((receipt) => {
+        const fact = receipt.facts.get(key);
+        return fact?.kind === "postimage" ? fact.value.entry_json : fact?.kind;
+      }),
+    ).toEqual([
+      JSON.stringify(reserved),
+      expect.stringContaining('"runtimeState":"removing-pending"'),
+      "absent",
     ]);
     expect(new Set(publications.map((receipt) => receipt.source.identity)).size).toBe(1);
     calls.expectIdle();
@@ -216,12 +200,12 @@ describe("registry race safety", () => {
     const entry = await reserve("prune-boundary");
     const now = 2 * 60 * 60 * 1000;
     await updateRegistry({ ...entry, lastUsedAtMs: now });
-    const removeRuntime = vi.fn(async () => {});
-    await removeSandboxRegistryRuntime(entry, removeRuntime, {
+    const cleanup = vi.fn(async () => {});
+    await removeRuntime(entry, cleanup, {
       prune: { now, idleHours: 1, maxAgeDays: 0 },
     });
-    expect(removeRuntime).not.toHaveBeenCalled();
-    await expect(readRegistryEntry(entry.containerName)).resolves.toMatchObject({
+    expect(cleanup).not.toHaveBeenCalled();
+    await expectEntry(entry.containerName, {
       lastUsedAtMs: now,
       runtimeState: "pending",
     });
@@ -231,11 +215,11 @@ describe("registry race safety", () => {
     const entry = await reserve("close-boundary");
     const providerEntered = createDeferred();
     const releaseProvider = createDeferred();
-    const removeRuntime = vi.fn(async () => {
+    const cleanup = vi.fn(async () => {
       providerEntered.resolve();
       await releaseProvider.promise;
     });
-    const removing = removeSandboxRegistryRuntime(entry, removeRuntime);
+    const removing = removeRuntime(entry, cleanup);
     let closing: Promise<void> | undefined;
     try {
       await withinTest(
@@ -249,8 +233,8 @@ describe("registry race safety", () => {
       closing = closeOpenClawStateDatabaseAsync();
       releaseProvider.resolve();
       await withinTest(Promise.all([removing, closing]), signal);
-      expect(removeRuntime).toHaveBeenCalledOnce();
-      await expect(readRegistryEntry(entry.containerName)).resolves.toBeNull();
+      expect(cleanup).toHaveBeenCalledOnce();
+      await expectAbsent(entry.containerName);
     } finally {
       releaseProvider.resolve();
       await Promise.allSettled([removing, closing]);
@@ -260,8 +244,8 @@ describe("registry race safety", () => {
   it("refuses queued browser publication after hosted custody is released", async () => {
     using owner = acquireSandboxGatewayOwner(fixture.root);
     await updateRegistry(containerEntry());
-    const assertCurrent = await captureSandboxStateOwner();
-    const publication = updateBrowserRegistry(browserEntry(), assertCurrent);
+    const assertOwner = await captureSandboxStateOwner();
+    const publication = updateBrowserRegistry(browserEntry(), assertOwner);
     owner.release();
     await expect(publication).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
     await expect(readBrowserRegistry()).resolves.toEqual({ entries: [] });
@@ -279,9 +263,9 @@ describe("registry race safety", () => {
       entries: [browserEntry({ workspaceDir: "/original/workspace", lastUsedAtMs: 2 })],
     });
     const [selected] = (await readBrowserRegistry()).entries;
-    expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).not.toThrow();
+    expect(() => assertBrowserCurrent(selected!)).not.toThrow();
     await updateBrowserRegistry(browserEntry({ workspaceDir: "/other/workspace" }));
-    expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).toThrow("owner changed");
+    expect(() => assertBrowserCurrent(selected!)).toThrow("owner changed");
   });
 
   it("preserves the Podman target and immutable fields across usage updates", async () => {
@@ -304,17 +288,7 @@ describe("registry race safety", () => {
       }),
     );
 
-    await expect(readRegistryEntry("container-a")).resolves.toMatchObject({
-      backendId: "podman",
-      backendTarget: {
-        key: "machine:target-a",
-        globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
-      },
-      lastUsedAtMs: 2,
-      createdAtMs: 11,
-      image: "openclaw-sandbox:test",
-      workspaceDir: "/original/workspace",
-    });
+    await expectEntry("container-a", { ...entry, lastUsedAtMs: 2 });
   });
 
   it("settles runtime registry writes in the worker and retains pending completion rules", async () => {
@@ -326,28 +300,20 @@ describe("registry race safety", () => {
     await updateRegistry(entry);
     forbidHostSql();
     await updateRegistry({ ...entry, lastUsedAtMs: 2, createdAtMs: 99, image: "ignored-update" });
-    await completeSandboxRegistryReservation({
-      ...entry,
-      lastUsedAtMs: 3,
-      image: "initialized-image",
-    });
-    await completeSandboxRegistryReservation({
-      ...entry,
-      lastUsedAtMs: 4,
-      image: "ignored-ready",
-    });
-    await expect(readRegistryEntry(entry.containerName)).resolves.toMatchObject({
+    await completeReservation({ ...entry, lastUsedAtMs: 3, image: "initialized-image" });
+    await completeReservation({ ...entry, lastUsedAtMs: 4, image: "ignored-ready" });
+    await expectEntry(entry.containerName, {
       runtimeState: "ready",
       createdAtMs: 1,
       lastUsedAtMs: 4,
       image: "initialized-image",
       workspaceDir: "/original/workspace",
     });
-    await completeSandboxRegistryReservation(entry, true);
-    await expect(readRegistryEntry(entry.containerName)).resolves.toBeNull();
+    await completeReservation(entry, true);
+    await expectAbsent(entry.containerName);
     await updateRegistry({ ...entry, containerName: "direct-remove" });
     await removeRegistryEntry("direct-remove", { preserveRemovalIntent: true });
-    await expect(readRegistryEntry("direct-remove")).resolves.toBeNull();
+    await expectAbsent("direct-remove");
   });
 
   it("refuses pending publication, completion or retirement after removal intent", async () => {
@@ -363,7 +329,7 @@ describe("registry race safety", () => {
         );
       }
       for (const retired of [false, true]) {
-        await expect(completeSandboxRegistryReservation(entry, retired)).rejects.toThrow(
+        await expect(completeReservation(entry, retired)).rejects.toThrow(
           "Sandbox runtime was removed or is being removed",
         );
       }
@@ -371,36 +337,33 @@ describe("registry race safety", () => {
       await removeRegistryEntry(entry.containerName, { preserveRemovalIntent: true });
       await expect(readRegistryEntry(entry.containerName)).resolves.toEqual(before);
       await removeRegistryEntry(entry.containerName);
-      await expect(readRegistryEntry(entry.containerName)).resolves.toBeNull();
+      await expectAbsent(entry.containerName);
     }
   });
 
   it("refuses completion and retirement of a replaced reservation in the worker", async () => {
-    const original = await reserveSandboxRegistryEntry(
+    const original = await reserveEntry(
       containerEntry({ backendId: "generation-boundary", workspaceDir: "/original/workspace" }),
     );
     await removeRegistryEntry(original.containerName);
-    const replacement = await reserveSandboxRegistryEntry({
+    const replacement = await reserveEntry({
       ...original,
       createdAtMs: original.createdAtMs + 1,
       workspaceDir: "/replacement/workspace",
     });
     const calls = observeMainThreadSql();
     calls.calibrate();
-    expect(() => assertSandboxRegistryEntryCurrent(original)).toThrow("generation changed");
-    expect(() => assertSandboxRegistryEntryCurrent(replacement)).not.toThrow();
-    expect(() => assertSandboxRegistryEntryCurrent({ ...replacement })).not.toThrow();
+    expect(() => assertCurrent(original)).toThrow("generation changed");
+    expect(() => assertCurrent(replacement)).not.toThrow();
+    expect(() => assertCurrent({ ...replacement })).not.toThrow();
     await updateRegistry({ ...replacement, lastUsedAtMs: 999 });
-    expect(() => assertSandboxRegistryEntryCurrent(replacement)).not.toThrow();
+    expect(() => assertCurrent(replacement)).not.toThrow();
     for (const retired of [false, true]) {
-      await expect(completeSandboxRegistryReservation(original, retired)).rejects.toThrow(
+      await expect(completeReservation(original, retired)).rejects.toThrow(
         "Sandbox runtime generation changed",
       );
     }
-    await expect(readRegistryEntry(original.containerName)).resolves.toMatchObject({
-      ...replacement,
-      lastUsedAtMs: 999,
-    });
+    await expectEntry(original.containerName, { ...replacement, lastUsedAtMs: 999 });
     calls.expectIdle();
   });
 
@@ -415,10 +378,7 @@ describe("registry race safety", () => {
     }
 
     await expect(
-      readRegisteredSandboxRuntimeIds({
-        backendId: "openshell",
-        scopeKey: "agent:main",
-      }),
+      readRegisteredSandboxRuntimeIds({ backendId: "openshell", scopeKey: "agent:main" }),
     ).resolves.toEqual(["openshell-newer", "openshell-older"]);
   });
 
@@ -476,9 +436,7 @@ describe("registry race safety", () => {
 
       const registry = await readBrowserRegistry();
       expect(registry.entries).toHaveLength(0);
-      await expect(readRegistryEntry("browser-x")).resolves.toMatchObject({
-        containerName: "browser-x",
-      });
+      await expectEntry("browser-x", { containerName: "browser-x" });
     },
   );
 });
