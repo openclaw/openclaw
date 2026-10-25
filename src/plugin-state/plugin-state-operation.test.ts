@@ -267,10 +267,7 @@ it("waits for an earlier write to the empty target even when it is not watched",
     sqliteWorkerOwnerProbe.command(
       await import("../state/openclaw-state-worker-store.js"),
       async (command, commandOptions, scope) => {
-        if (
-          command.type === "pluginState.register" &&
-          command.input.namespace === "empty-target-order-second"
-        ) {
+        if (command.type === "pluginState.register") {
           entered.resolve();
           await release.promise;
         }

@@ -272,11 +272,11 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         // Quarantine revokes these admitted facts; the worker owns refusal and recovery.
         if (hasSqliteDatabaseSchemaAdmissionForIdentity(context.admission.identity)) {
           if (emptyShortcut) {
-            // SAFETY: Only a prepared read-only operation can reuse an empty namespace.
             return {
               value: structuredClone(emptyShortcut.value),
               validUntil: undefined,
               emptyShortcut: true,
+              // SAFETY: Only a prepared read-only operation can reuse an empty namespace.
             } as PluginStateWorkerRequests[Key]["output"];
           }
           if (typedCommand.type === "pluginState.clearRuntimeHealth") {
@@ -393,6 +393,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       healthClearCache?.complete();
       if (
         typedCommand.type === "pluginState.executeOperation" &&
+        // SAFETY: The command discriminant fixes the worker result's operation envelope.
         (result.value as PluginStateOperationResult).emptyShortcut
       ) {
         installEntries?.([]);
