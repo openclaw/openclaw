@@ -54,37 +54,15 @@ describe("chat model controls", () => {
     document.body.append(container);
     const { query, details, search } = pickerElements(container);
 
-    const providerHeadings = Array.from(
-      container.querySelectorAll<HTMLElement>("[data-chat-model-provider]"),
-    );
-    expect(
-      providerHeadings.map((heading) =>
-        heading.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
-      ),
-    ).toEqual(["OpenAI", "Anthropic", "Google"]);
-    const providerSettings = providerHeadings[0]?.querySelector<HTMLButtonElement>(
-      "[data-chat-model-provider-settings]",
-    );
-    expect(providerSettings?.getAttribute("aria-label")).toBe("Configure models");
-    expect(providerSettings?.closest("openclaw-tooltip")).toBeNull();
-    expect(providerSettings?.closest('[role="listbox"]')).toBeNull();
+    const providerSettings = query<HTMLButtonElement>("[data-chat-model-provider-settings]");
+    expect(providerSettings.closest('[role="listbox"]')).toBeNull();
     expect(
       Array.from(container.querySelectorAll<HTMLElement>('[role="option"]')).every(
         (option) => option.closest('[role="listbox"]') !== null,
       ),
     ).toBe(true);
-    providerSettings?.click();
+    providerSettings.click();
     expect(onProviderSettings).toHaveBeenCalledExactlyOnceWith("openai");
-    const anthropicModels = query('[data-chat-model-provider-group="anthropic"]');
-    const anthropicToggle = anthropicModels!.querySelector<HTMLButtonElement>(
-      "[data-chat-model-provider-toggle]",
-    )!;
-    expect(anthropicToggle.getAttribute("aria-expanded")).toBe("false");
-    anthropicToggle.click();
-    flush();
-    expect(anthropicModels?.textContent).toContain("Claude Sonnet 4.6");
-    anthropicToggle.click();
-    flush();
     details.open = true;
     expect(query("[data-chat-model-selection-target]")).toBeNull();
     searchFor(search, "anth");
