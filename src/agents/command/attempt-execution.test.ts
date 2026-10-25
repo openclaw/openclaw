@@ -3,19 +3,29 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveCommandAuthorizationAsync } from "../../auto-reply/command-auth.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ClaudeCliFallbackSeed } from "../../gateway/cli-session-history.claude.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { resolveOwnerPromptNumbers } from "../owner-display.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
+import { buildAgentSystemPrompt } from "../system-prompt.js";
 
 const mocks = vi.hoisted(() => ({
   readClaudeCliFallbackSeed: vi.fn(),
+  runEmbeddedAgent: vi.fn(async (_params: { ownerNumbers?: string[] }) => ({
+    meta: { durationMs: 1 },
+  })),
 }));
+
+// mock-isolation: Capture command attempt run parameters without starting a model.
+vi.mock("../embedded-agent.js", () => ({ runEmbeddedAgent: mocks.runEmbeddedAgent }));
 
 vi.mock("../cli-runner/log.js", () => ({
   cliBackendLog: { warn: vi.fn() },
@@ -25,6 +35,11 @@ vi.mock("../../gateway/cli-session-history.claude.js", () => ({
   readClaudeCliFallbackSeed: mocks.readClaudeCliFallbackSeed,
 }));
 
+import { createCompletionHandoff } from "./attempt-execution.announce.test-support.js";
+import {
+  makeRunAgentAttemptParams,
+  makeSessionEntry,
+} from "./attempt-execution.cli.test-support.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -33,6 +48,7 @@ import {
   resolveFallbackRetryPrompt,
   sessionTranscriptHasContent,
 } from "./attempt-execution.helpers.js";
+import { runAgentAttempt } from "./attempt-execution.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 function formatClaudeCliFallbackPrelude(seed: ClaudeCliFallbackSeed) {
@@ -367,5 +383,50 @@ describe("createAcpVisibleTextAccumulator", () => {
     const acc = createAcpVisibleTextAccumulator();
     acc.consume("NO_RE");
     expect(acc.finalizeReplySnapshot()).toEqual({ disposition: "visible", text: "NO_RE" });
+  });
+});
+
+describe("command attempt system prompt", () => {
+  afterEach(clearRuntimeConfigSnapshot);
+
+  // Prompt-cache invariant: a completion turn renders the user turn's configured owners.
+  it("renders the user turn's configured owners on a subagent completion turn", async () => {
+    const cfg: OpenClawConfig = {
+      commands: { ownerAllowFrom: ["telegram:111", "discord:222", "333"] },
+    };
+    const userTurn = await resolveCommandAuthorizationAsync({
+      ctx: { Provider: "telegram", Surface: "telegram", From: "telegram:111", SenderId: "111" },
+      cfg,
+      commandAuthorized: true,
+    });
+    const sessionKey = "agent:main:telegram:direct:111";
+    const sessionEntry = makeSessionEntry("owner-session");
+    setRuntimeConfigSnapshot(cfg);
+    await runAgentAttempt(
+      makeRunAgentAttemptParams({
+        cfg,
+        sessionEntry,
+        sessionKey,
+        agentDir: "/tmp/openclaw-owner-prompt/agent",
+        workspaceDir: "/tmp/openclaw-owner-prompt",
+        messageChannel: "telegram",
+        opts: createCompletionHandoff({
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionEntry.sessionId,
+          sourceSessionKey: "agent:main:subagent:owner-child",
+          sourceSessionId: "owner-child-session",
+          provider: "openai",
+          model: "gpt-5.4",
+        }),
+      }),
+    );
+    const completion = mocks.runEmbeddedAgent.mock.calls[0]?.[0];
+    const prompt = (ownerNumbers?: string[]) =>
+      buildAgentSystemPrompt({ workspaceDir: "/workspace", ownerNumbers });
+
+    expect(prompt(completion?.ownerNumbers)).toBe(
+      prompt(resolveOwnerPromptNumbers({ ownerNumbers: userTurn.ownerList, ...userTurn })),
+    );
+    expect(prompt(completion?.ownerNumbers)).toContain("Allowlisted senders: 111, 333.");
   });
 });
