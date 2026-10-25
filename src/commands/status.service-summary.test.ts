@@ -8,6 +8,7 @@ import type { GatewayServiceEnvArgs } from "../daemon/service-types.js";
 import type { GatewayService } from "../daemon/service.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveStatusServiceSummaries } from "./status-runtime-shared.ts";
 import { readGatewayServiceStatusForTest } from "./status.service-summary.test-support.ts";
 import { getStatusOverviewRowValue } from "./status.test-support.ts";
 
@@ -178,4 +179,88 @@ it("passes command environment to runtime and loaded checks", async () => {
   expect(summary.installed).toBe(true);
   expect(summary.loadState).toEqual({ status: "loaded" });
   expect(summary.runtime?.status).toBe("running");
+});
+
+it("includes suspicious systemd cgroup hygiene in the service runtime summary", async () => {
+  const systemd = {
+    unit: "openclaw-gateway.service",
+    killMode: "process",
+    tasksCurrent: 807,
+    memoryCurrent: 11_918_534_246,
+  };
+  const summary = await readService({
+    isLoaded: async () => true,
+    readRuntime: async () => ({ status: "running", pid: 1234, systemd }),
+  });
+  expect(summary).toMatchObject({
+    loaded: true,
+    runtimeShort: "running (pid 1234, cgroup hygiene: KillMode=process, tasks=807, memory=11.1GiB)",
+  });
+  expect(summary.runtime?.systemd).toEqual(systemd);
+});
+
+it("keeps gateway status readable for unsupported service adapters", async () => {
+  const detail = "Gateway service install not supported on aix";
+  const summary = await readService({
+    label: "Gateway service",
+    isLoaded: async () => {
+      throw new Error(detail);
+    },
+    readRuntime: async () => ({ status: "unknown", detail }),
+  });
+  expect(summary).toMatchObject({
+    label: "Gateway service",
+    installed: false,
+    loaded: null,
+    runtimeShort: "unknown (Gateway service install not supported on aix)",
+  });
+});
+
+it.each(["stopped", "running"] as const)(
+  "shows a masked Gateway's recovery hint while %s",
+  async (status) => {
+    const message =
+      "Service is masked. Run systemctl --user unmask openclaw-gateway.service, then retry.";
+    const summary = await readService({
+      readRuntime: async () => ({
+        status,
+        detail: message,
+        systemd: { scope: "user", startRefusal: { reason: "masked", message } },
+      }),
+    });
+    const output = getStatusOverviewRowValue("Gateway service", { gatewayService: summary });
+    expect(output).toContain(message);
+    expect(output).not.toContain("not installed");
+    expect(output?.split(message)).toHaveLength(2);
+  },
+);
+
+it("renders root-status recovery guidance for a rejected node runtime", async () => {
+  vi.spyOn(await import("../daemon/service.js"), "resolveGatewayService").mockReturnValue(
+    createService({}),
+  );
+  vi.spyOn(
+    await import("../infra/openclaw-root.js"),
+    "resolveOpenClawPackageRoot",
+  ).mockResolvedValue(null);
+  vi.spyOn(await import("../daemon/node-service.js"), "resolveNodeService").mockReturnValue(
+    createService({
+      label: "systemd user",
+      readRuntime: async () => {
+        throw new Error("node service manager unavailable");
+      },
+    }),
+  );
+  const [, summary] = await resolveStatusServiceSummaries();
+  expect(summary.runtime).toEqual({
+    status: "unknown",
+    detail: "service runtime inspection failed; retry with openclaw status --deep",
+    inspectionFailure: {
+      code: "service-runtime-inspection-failed",
+      detail: "node service manager unavailable",
+    },
+  });
+  expect(getStatusOverviewRowValue("Node service", { nodeService: summary })).toBe(
+    "systemd user disabled (inspection failed: service runtime inspection failed; retry with openclaw status --deep) · unknown",
+  );
 });

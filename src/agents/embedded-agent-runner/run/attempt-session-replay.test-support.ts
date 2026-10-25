@@ -335,7 +335,11 @@ export async function withInterruptedTurn(
 export async function withReplaySession(
   fixture: Parameters<Parameters<typeof withInterruptedTurn>[1]>[0],
   appendOnlyRuntimeContext: boolean,
-  run: (session: AgentSession, submit: () => Promise<void>) => Promise<void>,
+  run: (
+    session: AgentSession,
+    submit: () => Promise<void>,
+    manager: SessionManager,
+  ) => Promise<void>,
   options: {
     beforeStart?: () => Promise<unknown>;
     afterReplayPreparation?: () => Promise<unknown>;
@@ -404,7 +408,6 @@ export async function withReplaySession(
         images: options.images ?? [],
         modelPrompt: attempt.prompt,
         onFinalPromptText: () => {},
-        onSteeringAcknowledged: () => {},
         persistToolResultProjections: async () => {},
         runtimeOnly: false,
         systemPrompt: "",
@@ -420,7 +423,7 @@ export async function withReplaySession(
             session.prompt(text, { ...opts, expandPromptTemplates: false }),
           ),
       });
-    await run(session, submit);
+    await run(session, submit, prepared.sessionManager);
   } finally {
     session.dispose();
   }

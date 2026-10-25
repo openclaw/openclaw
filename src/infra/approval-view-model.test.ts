@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeApprovalRequest, resolveApprovalRequestKind } from "./approval-types.js";
+import { resolveApprovalRequestKind } from "./approval-types.js";
 import { buildPendingApprovalView } from "./approval-view-model.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
@@ -66,22 +66,25 @@ describe("buildPendingApprovalView", () => {
     expect(view.actions[0]?.action).toEqual(approvalAction("approval-id", "exec", "allow-once"));
   });
 
-  it("uses the typed request owner instead of approval id spelling", () => {
+  it("preserves plugin ownership, scope, and fail-closed decisions", () => {
     const request: PluginApprovalRequest = {
       ...pluginRequest({
         scope: { kind: "external-post", target: "github", visibility: "public" },
+        allowedDecisions: ["allow-once"],
       }),
       id: "custom-id-without-prefix",
     };
+    Object.defineProperty(request, "approvalKind", { value: "exec", enumerable: true });
 
     expect(resolveApprovalRequestKind(request)).toBe("plugin");
     const view = buildPendingApprovalView(request);
     expect(view.approvalKind).toBe("plugin");
     expect(view.scope).toEqual(request.request.scope);
     expect(view.metadata).toContainEqual({ label: "Scope", value: "Post publicly to github" });
-    expect(view.actions[0]?.action).toEqual(
+    expect(view.actions.map((action) => action.action)).toEqual([
       approvalAction("custom-id-without-prefix", "plugin", "allow-once"),
-    );
+      approvalAction("custom-id-without-prefix", "plugin", "deny"),
+    ]);
   });
 
   it("builds system-agent pending views with allow-once and deny only", () => {
@@ -124,21 +127,6 @@ describe("buildPendingApprovalView", () => {
 
     expect(view.metadata).toEqual(metadata);
     expect(view).not.toHaveProperty("scope");
-  });
-
-  it("does not trust conflicting approval kind metadata", () => {
-    const request = pluginRequest();
-    Object.defineProperty(request, "approvalKind", { value: "exec", enumerable: true });
-
-    expect(normalizeApprovalRequest(request).approvalKind).toBe("plugin");
-  });
-
-  it("keeps the fail-closed plugin decision in channel-facing actions", () => {
-    const view = buildPendingApprovalView(pluginRequest({ allowedDecisions: ["allow-once"] }));
-    expect(view.actions.map((action) => action.action)).toEqual([
-      approvalAction("plugin-approval", "plugin", "allow-once"),
-      approvalAction("plugin-approval", "plugin", "deny"),
-    ]);
   });
 
   it.each([

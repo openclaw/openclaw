@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
 import {
@@ -47,7 +48,7 @@ async function collectFailure(failures: Set<unknown>, work: () => Promise<unknow
 export function registerChatSteeringCommitCases(
   createBrowserFollowupFixture: ReturnType<typeof useBrowserFollowupFixture>,
 ) {
-  it.each([
+  it.for([
     "internal fresh",
     "native custody",
     "native committed",
@@ -57,7 +58,7 @@ export function registerChatSteeringCommitCases(
     "browser custody lifecycle",
   ] as const)(
     "owns the real backing-run outcome when authority changes at steering commit (%s)",
-    async (inputState) => {
+    async (inputState, { signal }) => {
       const sharedProfileCustody =
         inputState === "browser custody" ||
         inputState === "browser custody workspace" ||
@@ -146,6 +147,7 @@ export function registerChatSteeringCommitCases(
         };
         backingRun = session.prompt("Continue the original backing work.");
         const cancel = vi.fn();
+        const steeringAccepted = createDeferred();
         const fingerprint = "steering-commit-tools";
         bindSteeringTools(operation, fingerprint);
         operation.setPhase("running");
@@ -162,7 +164,15 @@ export function registerChatSteeringCommitCases(
               return await steerActiveSessionWithOptionalDeliveryWait(
                 session,
                 text,
-                options,
+                {
+                  ...options,
+                  onQueueAccepted: (accepted) => {
+                    options?.onQueueAccepted?.(accepted);
+                    if (accepted) {
+                      steeringAccepted.resolve();
+                    }
+                  },
+                },
                 scope.sessionKey,
                 () => {
                   assertCurrent();
@@ -177,7 +187,11 @@ export function registerChatSteeringCommitCases(
         expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
         expect(ack).toHaveBeenCalledOnce();
         const originalAck = structuredClone(ack.mock.calls);
+        await withinTest(steeringAccepted.promise, signal);
         recorder = expectDefined(recorder, "backing runtime input recorder");
+        if (inputState === "internal fresh") {
+          expect((await recorder.resolveMessage())?.["__openclaw"]?.transport).toBeUndefined();
+        }
         expect(recorder.getAdmissionReceipt()).toBeUndefined();
         const persistFallback = vi.spyOn(recorder, "persistFallback");
         const pending = await listSessionPendingInputs(scope);
@@ -278,6 +292,23 @@ export function registerChatSteeringCommitCases(
           inputState === "browser custody session ACL";
         const refused = inputState === "internal fresh";
         const failed = revoked || refused;
+        const sessionRevoked = inputState === "browser custody session ACL";
+        const sourceError = expect.stringContaining(
+          sessionRevoked ? "session is draft for this connection" : "Pending input ownership ended",
+        );
+        expect(session.messages.at(-1)).toMatchObject({
+          role: "assistant",
+          stopReason: failed ? "error" : "stop",
+          ...(failed
+            ? {
+                errorMessage: sessionRevoked
+                  ? expect.stringContaining("Message injection authority is no longer current")
+                  : revoked
+                    ? sourceError
+                    : expect.any(String),
+              }
+            : {}),
+        });
         const transcript = loadTranscriptEventsSync(scope);
         const originalInputs = transcript.filter(
           (entry) =>
@@ -320,20 +351,7 @@ export function registerChatSteeringCommitCases(
           );
         }
         if (revoked) {
-          const sessionRevoked = inputState === "browser custody session ACL";
-          const sourceError = expect.stringContaining(
-            sessionRevoked
-              ? "session is draft for this connection"
-              : "Pending input ownership ended",
-          );
           expect(terminals.map((event) => event.type)).toEqual(["agent_end", "agent_settled"]);
-          expect(session.messages.at(-1)).toMatchObject({
-            role: "assistant",
-            stopReason: "error",
-            errorMessage: sessionRevoked
-              ? expect.stringContaining("Message injection authority is no longer current")
-              : sourceError,
-          });
           expect(cached).toMatchObject({ error: { message: sourceError } });
           expect(
             vi
@@ -365,11 +383,6 @@ export function registerChatSteeringCommitCases(
                 ]),
               }),
             );
-            expect(session.messages.at(-1)).toMatchObject({
-              role: "assistant",
-              stopReason: "error",
-              errorMessage: expect.any(String),
-            });
             expect(context.broadcast).toHaveBeenCalledWith(
               "chat",
               expect.objectContaining({
@@ -380,10 +393,6 @@ export function registerChatSteeringCommitCases(
               expect.anything(),
             );
           } else {
-            expect(session.messages.at(-1)).toMatchObject({
-              role: "assistant",
-              stopReason: "stop",
-            });
             expect(recorder.getAdmissionReceipt()).toBeDefined();
           }
           if (inputState === "browser custody workspace") {

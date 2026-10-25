@@ -2,34 +2,18 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { finalizeAgentToolAvailability } from "../../agents/agent-tool-availability.js";
-import {
-  findSkillUsageMatch,
-  recordSkillUsed,
-} from "../../agents/agent-tools.before-tool-call.diagnostics.js";
-import { createSkillInstructionDeliveryMarkers } from "../../agents/agent-tools.read.js";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import { resolveSandboxSkillRuntimeInputs } from "../../agents/embedded-agent-runner/sandbox-skills.js";
 import { bindHostSkillCatalog } from "../../agents/harness/host-skills.js";
-import { readInstalledSkill } from "../../agents/installed-skill-catalog.js";
-import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
 import { withSessionSkillResources } from "../../agents/session-placement-skill-resources.js";
 import { createAgentToolsSandboxContext } from "../../agents/test-helpers/agent-tools-sandbox-context.js";
 import { createInstalledSkillTools } from "../../agents/tools/installed-skill-tools.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
-import {
-  onInternalDiagnosticEvent,
-  type DiagnosticEventPayload,
-} from "../../infra/diagnostic-events.js";
-import {
-  registerDiagnosticTracePropagationBridge,
-  resetDiagnosticTracePropagationForTest,
-} from "../../infra/diagnostic-trace-propagation.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
-import { prepareSkillBundle } from "../../skills/library/bundle.js";
 import { formatSkillsCompactForPrompt } from "../../skills/loading/skill-contract.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
@@ -40,7 +24,6 @@ import {
   readSkillResourceFiles,
   resolveExplicitSkillResource,
 } from "../../skills/runtime/resources.js";
-import { recordSkillFileHost } from "../../skills/skill-file-host.js";
 import { transferSkillResources } from "./skill-resource-transfer.js";
 import {
   createNodeCarrier,
@@ -51,10 +34,6 @@ import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { WORKER_ATTACHMENT_DIRECTORY_PREFIX } from "./workspace-path-exclusions.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  resetDiagnosticTracePropagationForTest();
-});
 const tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand"> = {
   runWorkspaceCommand: async (command) => {
     command.assertCurrent?.();
@@ -176,6 +155,25 @@ async function withResources(
   }
 }
 
+function resourceCatalog(
+  resources: NonNullable<Awaited<ReturnType<typeof transferSkillResources>>>,
+  containerWorkdir: string,
+) {
+  const sandbox = {
+    ...createAgentToolsSandboxContext({ workspaceDir: "/unreadable/gateway", containerWorkdir }),
+    backendId: "node" as const,
+    readOnlyResourceMounts: resources.mounts,
+  };
+  const catalogOptions = {
+    snapshot: resources.snapshot,
+    workspaceDir: sandbox.workspaceDir,
+    sandbox,
+    readable: true,
+    assertCurrent: () => {},
+  };
+  return { sandbox, catalogOptions, getCatalog: bindHostSkillCatalog(catalogOptions) };
+}
+
 async function createSource(binarySize = 150000) {
   const workspace = await fs.realpath(temps.make("remote-skill-source-"));
   const baseDir = path.join(workspace, "skills", "source");
@@ -258,7 +256,12 @@ it.each(["prompt", "discovery"])(
       filePath,
       "---\ndescription: Transfer\n---\n# Resources\nRead data.bin and run scripts/check.sh.\n",
     );
-    snapshot.resolvedSkills![0]!.readContent = "Stale host cache must not be read";
+    const stale = Object.freeze({
+      ...snapshot.resolvedSkills![0]!,
+      readContent: "Stale host cache must not be read",
+    });
+    snapshot.resolvedSkills = [stale];
+    snapshot.discoverySkills = [stale];
     if (mode === "discovery") {
       snapshot.prompt = "";
       snapshot.resolvedSkills = [];
@@ -277,32 +280,20 @@ it.each(["prompt", "discovery"])(
       tunnel: carrier,
     });
     expect(resources).toBeDefined();
+    expect(stale.filePath).toBe(filePath);
+    expect(stale.readContent).toBe("Stale host cache must not be read");
     await fs.writeFile(filePath, "Changed host instructions after transfer");
     try {
       await withSessionSkillResources(resources!, async () => {
         // Paired-node placement deliberately has no host filesystem bridge.
-        const sandbox = {
-          ...createAgentToolsSandboxContext({
-            workspaceDir: "/unreadable/gateway",
-            containerWorkdir: carrier.workspace,
-          }),
-          backendId: "node" as const,
-          readOnlyResourceMounts: resources!.mounts,
-        };
-        const getCatalog = bindHostSkillCatalog({
-          snapshot: resources!.snapshot,
-          workspaceDir: sandbox.workspaceDir,
-          sandbox,
-          readable: true,
-          assertCurrent: () => {},
-        });
+        const { sandbox, catalogOptions, getCatalog } = resourceCatalog(
+          resources!,
+          carrier.workspace,
+        );
         expect(
           bindHostSkillCatalog({
-            snapshot: resources!.snapshot,
-            workspaceDir: sandbox.workspaceDir,
+            ...catalogOptions,
             sandbox: { ...sandbox, readOnlyResourceMounts: [...resources!.mounts] },
-            readable: true,
-            assertCurrent: () => {},
           })(),
         ).toEqual([]);
         const inputs = resolveSandboxSkillRuntimeInputs({
@@ -367,21 +358,7 @@ it("keeps node-hosted discovery instructions when they are omitted from the prom
   const carrier = await createCarrier("node");
   await withResources(await transfer(carrier, snapshot), async (resources) => {
     await withSessionSkillResources(resources, async () => {
-      const sandbox = {
-        ...createAgentToolsSandboxContext({
-          workspaceDir: "/unreadable/gateway",
-          containerWorkdir: carrier.workspace,
-        }),
-        backendId: "node" as const,
-        readOnlyResourceMounts: resources.mounts,
-      };
-      const catalog = bindHostSkillCatalog({
-        snapshot: resources.snapshot,
-        workspaceDir: sandbox.workspaceDir,
-        sandbox,
-        readable: true,
-        assertCurrent: () => {},
-      })();
+      const catalog = resourceCatalog(resources, carrier.workspace).getCatalog();
       const tools = createInstalledSkillTools(catalog);
       finalizeAgentToolAvailability(tools);
       expect(
@@ -738,24 +715,6 @@ it.each(["cancelled", "retired"])(
     expect(selected).toMatchObject({ filePath: `${remote}/SKILL.md`, baseDir: remote });
     expect(selected.sourceInfo).toEqual(snapshot.resolvedSkills![0]!.sourceInfo);
     expect(snapshot.resolvedSkills![0]!.filePath).toBe(filePath);
-    // The transfer adapter stamps the retained field on its resolved entries
-    // identically to local materialization: the fingerprint is the transfer's
-    // own bundle revision, absent on the pre-transfer snapshot entry, and the
-    // delivered discovery projection carries the same transferred identity.
-    const expectedFingerprint = prepareSkillBundle(
-      (await readSkillResourceFiles(snapshot.resolvedSkills![0]!, {
-        allowMissingRoot: false,
-      }))!,
-    ).revision;
-    expect(snapshot.resolvedSkills![0]!.bundleFingerprint).toBeUndefined();
-    expect(selected.bundleFingerprint).toBe(expectedFingerprint);
-    const discoveryEntry = resources!.snapshot.discoverySkills?.find(
-      (entry) => entry.name === "source",
-    );
-    expect(discoveryEntry?.filePath).toBe(`${remote}/SKILL.md`);
-    expect(discoveryEntry?.baseDir).toBe(remote);
-    expect(discoveryEntry?.readContent).toBe(instructions);
-    expect(discoveryEntry?.bundleFingerprint).toBe(expectedFingerprint);
     for (const prompt of [
       resources!.snapshot.prompt,
       formatSkillsCompactForPrompt([selected], { descriptionMaxChars: 0 }),
@@ -763,66 +722,14 @@ it.each(["cancelled", "retired"])(
       expect(prompt).toContain(`<location>${remote}/SKILL.md</location>`);
       expect(prompt).not.toContain(filePath);
     }
-    // Real catalog/serving route with the active tracing consumer present: the
-    // installed skills_read tool serves the transferred instructions and
-    // captures its delivery receipt; the matcher consumes that invocation's
-    // receipt, so the emission asserts the emitted fingerprint belongs to the
-    // delivered bundle, never resolved-entry state alone.
-    registerDiagnosticTracePropagationBridge({
-      resolveTraceContext: () => undefined,
-    });
-    const markers = createSkillInstructionDeliveryMarkers();
-    const catalog = prepareInstalledSkillCatalog({
-      snapshot: resources!.snapshot,
-      workspaceDir: workspace,
-    });
-    const skillReadTool = createInstalledSkillTools(catalog, {
-      skillInstructionDeliveryMarkers: markers,
-    }).find((tool) => tool.name === "skills_read")!;
-    const served = await skillReadTool.execute(
-      "transfer-skills-read",
-      { name: "source" },
-      undefined,
-      undefined,
-    );
-    expect((served.details as { content: string }).content).toBe(instructions);
-    const emitted: DiagnosticEventPayload[] = [];
-    const stop = onInternalDiagnosticEvent((evt) => emitted.push(evt));
-    try {
-      const match = findSkillUsageMatch({
-        toolName: "skills_read",
-        toolParams: { name: "source" },
-        ctx: { skillsSnapshot: resources!.snapshot, skillInstructionDeliveryMarkers: markers },
-        toolCallId: "transfer-skills-read",
-      });
-      expect(match).toBeDefined();
-      recordSkillUsed({
-        match: match!,
-        toolName: "skills_read",
-        toolCallId: "transfer-skills-read",
-      });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    } finally {
-      stop();
-    }
-    const used = emitted.filter((evt) => evt.type === "skill.used");
-    expect(used).toHaveLength(1);
-    expect(used[0]).toMatchObject({
-      type: "skill.used",
-      skillName: "source",
-      activation: "read",
-      skillFingerprint: expectedFingerprint,
-    });
     await fs.writeFile(filePath, "Instructions changed after transfer");
     const [codeModeSkill] = resolveCodeModeSkills({
       skillsPrompt: resources!.snapshot.prompt,
       candidates: [selected],
-      reader: async () => {
-        throw new Error("Paired nodes have no Gateway filesystem bridge");
-      },
     });
+    codeModeSkill!.reader = async () => {
+      throw new Error("Paired nodes have no Gateway filesystem bridge");
+    };
     expect(await readCodeModeSkill(codeModeSkill!)).toBe(instructions);
     expect(await fs.readFile(selected.filePath, "utf8")).toBe(instructions);
     if (outcome === "cancelled") {
@@ -839,279 +746,6 @@ it.each(["cancelled", "retired"])(
     }
   },
 );
-
-it("maps same-path gateway and workspace skills onto their own identities", async () => {
-  // A Gateway skill and a workspace skill can share one absolute path with
-  // different names and distinct bytes. Delivery prep disambiguates the
-  // workspace entry via a workspace-skill:// read path; the transfer mapper
-  // must match that same admitted identity so each projection entry maps onto
-  // its own delivered bundle — never the sibling's bytes or fingerprint.
-  const source = await createSource(16);
-  const baseDir = path.dirname(source.filePath);
-  const hostRoot = temps.make("skill-resource-host-");
-  await fs.cp(source.workspace, hostRoot, { recursive: true });
-  const toHost = (file: string) => path.join(hostRoot, path.relative(source.workspace, file));
-  const gatewayInstructions =
-    "---\ndescription: Resource transfer test\n---\n# Resource\nGateway instructions.\n";
-  const workspaceInstructions =
-    "---\ndescription: Resource transfer test\n---\n# Resource\nHost instructions.\n";
-  const gatewayScript = "#!/bin/sh\nprintf gateway\n";
-  const workspaceScript = "#!/bin/sh\nprintf workspace\n";
-  await fs.writeFile(source.filePath, gatewayInstructions);
-  await fs.writeFile(path.join(baseDir, "scripts/check.sh"), gatewayScript);
-  await fs.writeFile(toHost(source.filePath), workspaceInstructions);
-  await fs.writeFile(toHost(path.join(baseDir, "scripts/check.sh")), workspaceScript);
-  const workspaceSkill = source.snapshot.resolvedSkills![0]!;
-  recordSkillFileHost(workspaceSkill, "workspace");
-  const gatewaySkill = recordSkillFileHost(
-    { ...workspaceSkill, name: "zeta-gateway-source" },
-    "gateway",
-  );
-  source.snapshot.skills.push({ name: gatewaySkill.name });
-  source.snapshot.resolvedSkills?.push(gatewaySkill);
-  source.snapshot.discoverySkills?.push(gatewaySkill);
-  const expectedGatewayRevision = prepareSkillBundle(
-    (await readSkillResourceFiles(gatewaySkill, { allowMissingRoot: false }))!,
-  ).revision;
-  const expectedWorkspaceRevision = prepareSkillBundle(
-    (await readSkillResourceFiles(
-      {
-        ...workspaceSkill,
-        baseDir: toHost(workspaceSkill.baseDir),
-        filePath: toHost(workspaceSkill.filePath),
-      },
-      { allowMissingRoot: false },
-    ))!,
-  ).revision;
-  expect(expectedGatewayRevision).not.toBe(expectedWorkspaceRevision);
-  const release = registerAgentWorkspaceAccess(source.workspace, {
-    bridge: {
-      readFile: vi.fn(),
-      writeFile: vi.fn(),
-      stat: vi.fn(),
-    },
-    loadSkills: async () => ({
-      entries: [],
-      executionEntries: [],
-      runtime: { platform: process.platform, bins: [] },
-    }),
-    skillResources: {
-      readInstructions: (filePath, options) =>
-        fs.readFile(toHost(filePath), { ...options, encoding: "utf8" }),
-      resolveExplicitSkill: resolveExplicitSkillResource,
-      readSkillFiles: (skill, options) =>
-        readSkillResourceFiles(
-          {
-            ...skill,
-            baseDir: toHost(skill.baseDir),
-            filePath: toHost(skill.filePath),
-          },
-          options,
-        ),
-    },
-  });
-  const carrier = await createCarrier("ssh");
-  let resources: Awaited<ReturnType<typeof transferSkillResources>>;
-  try {
-    resources = await transferSkillResources({
-      snapshot: source.snapshot,
-      workspaceDir: source.workspace,
-      remoteWorkspaceDir: carrier.workspace,
-      assertCurrent: () => {},
-      tunnel: carrier,
-    });
-    const transferred = resources!.snapshot;
-    // Both identities share one host baseDir, so each delivery entry mounts it
-    // onto its own remote copy.
-    expect(resources!.mounts.map((mount) => mount.hostPath)).toEqual([baseDir, baseDir]);
-    const remoteBases = resources!.mounts.map((mount) => mount.containerPath);
-    const resolvedByName = new Map(transferred.resolvedSkills!.map((skill) => [skill.name, skill]));
-    const discoveryByName = new Map(
-      (transferred.discoverySkills ?? []).map((skill) => [skill.name, skill]),
-    );
-    const identities: Array<{
-      name: string;
-      instructions: string;
-      script: string;
-      revision: string;
-    }> = [
-      {
-        name: workspaceSkill.name,
-        instructions: workspaceInstructions,
-        script: workspaceScript,
-        revision: expectedWorkspaceRevision,
-      },
-      {
-        name: gatewaySkill.name,
-        instructions: gatewayInstructions,
-        script: gatewayScript,
-        revision: expectedGatewayRevision,
-      },
-    ];
-    for (const [index, identity] of identities.entries()) {
-      const remoteBase = remoteBases[index]!;
-      for (const projection of [resolvedByName, discoveryByName]) {
-        const entry = projection.get(identity.name)!;
-        expect(entry.filePath).toBe(`${remoteBase}/SKILL.md`);
-        expect(entry.baseDir).toBe(remoteBase);
-        expect(entry.readContent).toBe(identity.instructions);
-        expect(entry.bundleFingerprint).toBe(identity.revision);
-      }
-      expect(await fs.readFile(path.join(remoteBase, "scripts/check.sh"), "utf8")).toBe(
-        identity.script,
-      );
-    }
-    // The shared Gateway-local source path never leaks into the transferred catalog.
-    expect(transferred.prompt).not.toContain(baseDir);
-    // The transfer mutates clones: the pre-transfer snapshot stays unstamped and local.
-    for (const entry of [workspaceSkill, gatewaySkill]) {
-      expect(entry.filePath).not.toContain(carrier.workspace);
-      expect(entry.bundleFingerprint).toBeUndefined();
-    }
-    // Consumers read the transferred catalog: each installed skill serves its own
-    // transferred instructions, and each skills_read emission carries its own
-    // delivered receipt. The carrier workspace has no live host binding, so
-    // reads take the no-bridge Code Mode route through the transferred content.
-    release();
-    const catalog = prepareInstalledSkillCatalog({
-      snapshot: transferred,
-      workspaceDir: carrier.workspace,
-    });
-    expect((await readInstalledSkill(catalog, workspaceSkill.name)).content).toBe(
-      workspaceInstructions,
-    );
-    expect((await readInstalledSkill(catalog, gatewaySkill.name)).content).toBe(
-      gatewayInstructions,
-    );
-    // Real serving route with the active tracing consumer present (the
-    // matcher's fingerprint field is gated on active tracing): each
-    // invocation's skills_read tool captures the receipt for the bytes it
-    // actually served, and the matcher consumes that invocation's receipt —
-    // so each emission carries its own delivered bundle's fingerprint,
-    // never the sibling entry's stamp.
-    registerDiagnosticTracePropagationBridge({
-      resolveTraceContext: () => undefined,
-    });
-    const markers = createSkillInstructionDeliveryMarkers();
-    const skillReadTool = createInstalledSkillTools(catalog, {
-      skillInstructionDeliveryMarkers: markers,
-    }).find((tool) => tool.name === "skills_read")!;
-    const emitted: DiagnosticEventPayload[] = [];
-    const stop = onInternalDiagnosticEvent((evt) => emitted.push(evt));
-    try {
-      for (const identity of identities) {
-        const toolCallId = `collision-skills-read-${identity.name}`;
-        const served = await skillReadTool.execute(
-          toolCallId,
-          { name: identity.name },
-          undefined,
-          undefined,
-        );
-        expect((served.details as { content: string }).content).toBe(identity.instructions);
-        const match = findSkillUsageMatch({
-          toolName: "skills_read",
-          toolParams: { name: identity.name },
-          ctx: { skillsSnapshot: transferred, skillInstructionDeliveryMarkers: markers },
-          toolCallId,
-        });
-        expect(match).toBeDefined();
-        recordSkillUsed({
-          match: match!,
-          toolName: "skills_read",
-          toolCallId,
-        });
-      }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    } finally {
-      stop();
-    }
-    const used = emitted.filter((evt) => evt.type === "skill.used");
-    expect(used).toHaveLength(2);
-    expect(used[0]).toMatchObject({
-      type: "skill.used",
-      skillName: workspaceSkill.name,
-      activation: "read",
-      skillFingerprint: expectedWorkspaceRevision,
-    });
-    expect(used[1]).toMatchObject({
-      type: "skill.used",
-      skillName: gatewaySkill.name,
-      activation: "read",
-      skillFingerprint: expectedGatewayRevision,
-    });
-    // An unstamped workspace entry may omit the fingerprint only with its
-    // delivery and accounting preserved — never borrowing the same-path
-    // gateway sibling's stamp. Strip the workspace identity from both
-    // consumer projections and re-run the real serving route: the read still
-    // serves the workspace's own transferred bytes, its skill.used event
-    // still fires (accounting), and the omission disguises no lost delivery.
-    for (const projection of [transferred.resolvedSkills!, transferred.discoverySkills!]) {
-      const unstamped = projection.find((skill) => skill.name === workspaceSkill.name);
-      unstamped!.bundleFingerprint = undefined;
-    }
-    const unstampedCatalog = prepareInstalledSkillCatalog({
-      snapshot: transferred,
-      workspaceDir: carrier.workspace,
-    });
-    const unstampedMarkers = createSkillInstructionDeliveryMarkers();
-    const unstampedTool = createInstalledSkillTools(unstampedCatalog, {
-      skillInstructionDeliveryMarkers: unstampedMarkers,
-    }).find((tool) => tool.name === "skills_read")!;
-    const unstampedEmitted: DiagnosticEventPayload[] = [];
-    const stopUnstamped = onInternalDiagnosticEvent((evt) => unstampedEmitted.push(evt));
-    try {
-      for (const identity of identities) {
-        const toolCallId = `collision-unstamped-${identity.name}`;
-        const served = await unstampedTool.execute(
-          toolCallId,
-          { name: identity.name },
-          undefined,
-          undefined,
-        );
-        expect((served.details as { content: string }).content).toBe(identity.instructions);
-        const match = findSkillUsageMatch({
-          toolName: "skills_read",
-          toolParams: { name: identity.name },
-          ctx: {
-            skillsSnapshot: transferred,
-            skillInstructionDeliveryMarkers: unstampedMarkers,
-          },
-          toolCallId,
-        });
-        expect(match).toBeDefined();
-        recordSkillUsed({
-          match: match!,
-          toolName: "skills_read",
-          toolCallId,
-        });
-      }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    } finally {
-      stopUnstamped();
-    }
-    const unstampedUsed = unstampedEmitted.filter((evt) => evt.type === "skill.used");
-    expect(unstampedUsed).toHaveLength(2);
-    expect(unstampedUsed[0]).toMatchObject({
-      type: "skill.used",
-      skillName: workspaceSkill.name,
-      activation: "read",
-    });
-    expect(unstampedUsed[0]).not.toHaveProperty("skillFingerprint");
-    expect(unstampedUsed[1]).toMatchObject({
-      type: "skill.used",
-      skillName: gatewaySkill.name,
-      activation: "read",
-      skillFingerprint: expectedGatewayRevision,
-    });
-  } finally {
-    await resources?.cleanup();
-    release();
-  }
-});
 
 it.each([
   { name: "empty batch", patch: { files: [] } },

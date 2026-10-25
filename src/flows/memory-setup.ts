@@ -31,63 +31,6 @@ async function closeProvider(provider: EmbeddingProvider): Promise<void> {
   }
 }
 
-async function probeProvider(params: {
-  adapter: EmbeddingProviderAdapter;
-  config: OpenClawConfig;
-  agentDir?: string;
-  providerId: string;
-  model: string;
-  search: Search;
-  remote?: Remote;
-}): Promise<boolean> {
-  const controller = new AbortController();
-  let provider: EmbeddingProvider | null = null;
-  const check = async () => {
-    const createOptions = {
-      config: params.config,
-      agentDir: params.agentDir,
-      provider: params.providerId,
-      model: params.model,
-      remote: params.remote,
-      inputType: params.search.inputType,
-      queryInputType: params.search.queryInputType,
-      documentInputType: params.search.documentInputType,
-      dimensions: params.search.outputDimensionality,
-    };
-    const result = await params.adapter.create({
-      ...createOptions,
-      model: params.adapter.normalizeModel?.(createOptions) ?? createOptions.model,
-    });
-    // Creation has no abort contract; release a late result without embedding.
-    if (controller.signal.aborted) {
-      if (result.provider) {
-        await closeProvider(result.provider);
-      }
-      return false;
-    }
-    provider = result.provider;
-    if (!provider) {
-      return false;
-    }
-    const vector = await provider.embed("ping", { signal: controller.signal, inputType: "query" });
-    return Array.isArray(vector) && vector.length > 0 && vector.every(Number.isFinite);
-  };
-  try {
-    return await withTimeout(check(), PROBE_TIMEOUT_MS, {
-      createError: () => {
-        controller.abort();
-        return new Error("embedding probe timed out");
-      },
-    });
-  } catch {
-    return false;
-  } finally {
-    if (provider) {
-      await closeProvider(provider);
-    }
-  }
-}
-
 /** Optional, non-indexing embedding setup. The caller owns persistence. */
 export async function runMemorySetupFlow(
   config: OpenClawConfig,
@@ -337,15 +280,57 @@ export async function runMemorySetupFlow(
   const progress = prompter.progress(
     "Checking embedding readiness (local model loading can take two minutes)…",
   );
-  const ready = await probeProvider({
-    adapter,
-    config: probeConfig,
-    agentDir: opts.agentDir,
-    providerId: selected,
-    model,
-    search: candidateSearch,
-    remote: remoteForProbe,
-  });
+  const probeAdapter = adapter;
+  const configForProbe = probeConfig;
+  const probeAgentDir = opts.agentDir;
+  const probeRemote = remoteForProbe;
+  let ready: boolean;
+  const controller = new AbortController();
+  let provider: EmbeddingProvider | null = null;
+  const check = async () => {
+    const createOptions = {
+      config: configForProbe,
+      agentDir: probeAgentDir,
+      provider: selected,
+      model,
+      remote: probeRemote,
+      inputType: candidateSearch.inputType,
+      queryInputType: candidateSearch.queryInputType,
+      documentInputType: candidateSearch.documentInputType,
+      dimensions: candidateSearch.outputDimensionality,
+    };
+    const result = await probeAdapter.create({
+      ...createOptions,
+      model: probeAdapter.normalizeModel?.(createOptions) ?? createOptions.model,
+    });
+    // Creation has no abort contract; release a late result without embedding.
+    if (controller.signal.aborted) {
+      if (result.provider) {
+        await closeProvider(result.provider);
+      }
+      return false;
+    }
+    provider = result.provider;
+    if (!provider) {
+      return false;
+    }
+    const vector = await provider.embed("ping", { signal: controller.signal, inputType: "query" });
+    return Array.isArray(vector) && vector.length > 0 && vector.every(Number.isFinite);
+  };
+  try {
+    ready = await withTimeout(check(), PROBE_TIMEOUT_MS, {
+      createError: () => {
+        controller.abort();
+        return new Error("embedding probe timed out");
+      },
+    });
+  } catch {
+    ready = false;
+  } finally {
+    if (provider) {
+      await closeProvider(provider);
+    }
+  }
   progress.stop(ready ? "Embedding check passed" : "Embedding check failed");
   if (!ready) {
     await prompter.note(

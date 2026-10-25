@@ -90,30 +90,27 @@ it("reports an unresolved remote token ref instead of substituting ambient auth"
   expect(result.authFailureReason).toContain("gateway.remote.token SecretRef is unresolved");
 });
 
-it("never reuses config or env credentials for a CLI URL override", async () => {
-  await expect(
-    interactive({ config: localConfig, gatewayUrl: overrideUrl, env: shellToken }),
-  ).rejects.toThrow("gateway url override requires explicit credentials");
-});
-
-it("uses only env credentials for an env URL override", async () => {
-  const result = await interactive({
-    config: localConfig,
+it.each([
+  { source: "CLI", gatewayUrl: overrideUrl, env: shellToken, token: undefined },
+  {
+    source: "environment",
     env: { OPENCLAW_GATEWAY_URL: overrideUrl, ...shellToken },
-  });
-
-  expect(result.auth).toEqual({ token: "shell-token-value", password: undefined });
-});
-
-it("keeps explicit credentials ahead of every implicit source", async () => {
-  const result = await interactive({
-    config: localConfig,
+    token: "shell-token-value",
+  },
+  {
+    source: "explicit credentials",
     gatewayUrl: overrideUrl,
-    explicitAuth: { token: "caller-auth-value" },
     env: shellToken,
-  });
-
-  expect(result.auth).toEqual({ token: "caller-auth-value", password: undefined });
+    explicitAuth: { token: "caller-auth-value" },
+    token: "caller-auth-value",
+  },
+])("limits URL override credentials to $source", async ({ source: _source, token, ...params }) => {
+  const result = interactive({ config: localConfig, ...params });
+  if (token === undefined) {
+    await expect(result).rejects.toThrow("gateway url override requires explicit credentials");
+  } else {
+    expect((await result).auth).toEqual({ token, password: undefined });
+  }
 });
 
 it("allows stored auth only for the exact normalized URL origin", async () => {

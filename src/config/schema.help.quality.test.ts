@@ -5,6 +5,8 @@ import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { buildBaseHints } from "./schema.hints.js";
 
 type JsonSchemaNode = {
+  title?: string;
+  description?: string;
   properties?: Record<string, JsonSchemaNode>;
   additionalProperties?: JsonSchemaNode | boolean;
   items?: JsonSchemaNode | JsonSchemaNode[];
@@ -88,5 +90,12 @@ describe("config tier coverage", () => {
   it("keeps the curated common leaf set reviewable", () => {
     const common = leaves.filter((path) => response.uiHints[path]?.advanced === false);
     expect(common).toMatchSnapshot();
+  });
+
+  it("documents the Appearance-owned interface language preference", () => {
+    const locale = schema.properties?.ui?.properties?.prefs?.properties?.locale;
+    expect(locale?.title).toBe("Interface language");
+    expect(locale?.description).toContain("browser or system language");
+    expect(locale?.description).toContain("agents.defaults.userTimezone");
   });
 });

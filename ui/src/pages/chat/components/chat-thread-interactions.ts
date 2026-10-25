@@ -28,7 +28,7 @@ import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
-import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import type { ChatCommentPinsHandle } from "./chat-comment-pins.tsx";
@@ -256,8 +256,6 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   }
   if (state) {
     state.asyncQuestionDrafts = new Map();
-    // Parked rows must commit fresh bindings on return even when visible props match.
-    state.transcriptRenderDependencies = [];
     // Search input belongs to the outgoing transcript; pane preferences survive.
     state.search.reset();
   }

@@ -8,6 +8,7 @@ import {
   resolveCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../scheduled-tool-policy.js";
+import { isCronOperatorSourceParent } from "../session-target.js";
 import {
   normalizeCronToolsAllowProvenance,
   resolveCronAuthenticatedCallerOrigin,
@@ -99,30 +100,37 @@ export function resolveCronRequesterExecutionRevision(job: CronStoredJob): strin
   return resolveCronJobConfigRevision(executableJob);
 }
 
+/** Runtime auto-disable writes enabled into job_json without rebinding the owner's source. */
+export function resolveCronOperatorExecutionRevision(job: CronStoredJob): string {
+  return resolveCronRequesterExecutionRevision({ ...job, enabled: true });
+}
+
 /** Executable edits cannot borrow the previous creator's authenticated source. */
 export function reconcileCronOperatorSource(params: {
   job: CronStoredJob;
   previousJob?: CronStoredJob;
   captured?: NonNullable<CronStoredJob["operatorSource"]>["source"];
+  capturedExecutionRevision?: string;
 }): void {
-  const { job, previousJob, captured } = params;
-  const previous = previousJob?.operatorSource;
-  const source = captured ?? previous?.source;
-  if (!source) {
+  const { job, previousJob } = params;
+  if (!params.captured && !previousJob?.operatorSource) {
     delete job.operatorSource;
     return;
   }
-  const policy = job.scheduledToolPolicy;
-  const executionRevision = resolveCronRequesterExecutionRevision(job);
+  const executionRevision = resolveCronOperatorExecutionRevision(job);
+  const captured =
+    params.capturedExecutionRevision === executionRevision ? params.captured : undefined;
+  const previous = previousJob?.operatorSource;
+  const source = captured ?? previous?.source;
   if (
     source &&
     (captured || previous?.executionRevision === executionRevision) &&
     job.payload.kind === "agentTurn" &&
-    policy?.mode === "account" &&
+    job.scheduledToolPolicy?.mode === "account" &&
     job.owner?.sessionKey === source.sessionKey &&
-    policy.ownerSessionKey === source.sessionKey &&
+    job.scheduledToolPolicy.ownerSessionKey === source.sessionKey &&
     job.agentId === source.agentId &&
-    job.sessionTarget === `session:${source.sessionKey}`
+    isCronOperatorSourceParent(job, source.sessionKey)
   ) {
     job.operatorSource = { source, executionRevision };
   } else {

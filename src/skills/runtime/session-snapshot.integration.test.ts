@@ -312,14 +312,7 @@ it("rebuilds changed source bytes and version before publishing an in-flight sna
   expect(snapshot.prompt).toContain("Updated instructions");
   expect(snapshot.prompt).not.toContain("Original instructions");
   expect(snapshot.version).toBe(currentVersion);
-  // The resourceVersion field is the resolve-start resource revision, not
-  // snapshot content: a later resolve after the version advance legitimately
-  // restamps while republishing the same bytes. Compare the published
-  // content, and keep the stamp monotonic alongside it.
-  const { resourceVersion: inFlightStamp, ...published } = snapshot;
-  const { resourceVersion: restamped, ...resolved } = (await params.resolve()).snapshot;
-  expect(resolved).toEqual(published);
-  expect(restamped ?? 0).toBeGreaterThanOrEqual(inFlightStamp ?? 0);
+  expect((await params.resolve()).snapshot).toEqual(snapshot);
 });
 
 it("rechecks eligibility after preparation without changing admitted configuration", async () => {
@@ -343,13 +336,7 @@ it("keeps a shared rebuild alive for its remaining caller after another caller a
   const result = await second;
   await rejected;
   expect(result.snapshot.prompt).toContain("Original instructions");
-  // Same restamp boundary as the in-flight rebuild case: a fresh resolve
-  // republishes identical content while its own resolve-start resource
-  // revision may have advanced.
-  const { resourceVersion: sharedStamp, ...published } = result.snapshot;
-  const { resourceVersion: restamped2, ...resolved2 } = (await params.resolve()).snapshot;
-  expect(resolved2).toEqual(published);
-  expect(restamped2 ?? 0).toBeGreaterThanOrEqual(sharedStamp ?? 0);
+  expect((await params.resolve()).snapshot).toEqual(result.snapshot);
 });
 
 it("observes abort before applying a skill environment and leaves no override behind", async () => {

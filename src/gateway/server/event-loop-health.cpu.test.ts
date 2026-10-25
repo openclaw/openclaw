@@ -49,7 +49,11 @@ beforeEach(() => {
   revision = 0;
   workers = [{ cpuUsage: workerUsage }];
   workerUsage.mockReset().mockImplementation(async () => ({ user: now * 500, system: 0 }));
-  vi.mocked(getTrackedWorkerCpuSources).mockImplementation(() => ({ workers, revision }));
+  vi.mocked(getTrackedWorkerCpuSources).mockImplementation(() => ({
+    workers,
+    revision,
+    currentRevision: () => revision,
+  }));
   mainThreadUsage.mockReset().mockImplementation(() => ({ user: now * 250, system: 0 }));
   vi.spyOn(process, "threadCpuUsage").mockImplementation(mainThreadUsage);
   vi.mocked(cpus)
@@ -175,7 +179,7 @@ describe("CPU breakdown sampling", () => {
     expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBe(0);
   });
 
-  it.each(["timeout", "reset", "stop"] as const)(
+  it.each(["timeout", "reset", "stop", "worker churn"] as const)(
     "fences pending worker replies after %s without delaying process samples",
     async (action) => {
       const monitor = await createMonitor();
@@ -188,12 +192,14 @@ describe("CPU breakdown sampling", () => {
       if (action === "timeout") {
         now += 101;
         await clock.advanceTo(now);
+      } else if (action === "worker churn") {
+        revision++;
       } else {
         monitor[action]();
       }
       slow.resolve({ user: now * 500, system: 0 });
       await setImmediate();
-      if (action === "timeout") {
+      if (action === "timeout" || action === "worker churn") {
         expect(monitor.snapshot()).toBe(health);
         await sample();
         expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBeUndefined();

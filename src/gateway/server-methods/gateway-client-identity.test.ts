@@ -16,6 +16,7 @@ import {
   gatewayClientSessionCreator,
   resolveChatSendCallerContext,
 } from "./gateway-client-identity.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 function profile(profileId: string, displayName: string, updatedAt = 1) {
@@ -93,15 +94,9 @@ describe("gateway client identity", () => {
 describe("chat send command authority", () => {
   function createClient(overrides: Partial<GatewayClient> = {}): GatewayClient {
     return {
+      ...createSessionMutationTestClient(),
       authenticatedUserId: "ada@example.test",
       authenticatedUserProfile: profile("profile-ada", "Ada"),
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-        role: "operator",
-        scopes: ["operator.write"],
-      },
       ...overrides,
     };
   }

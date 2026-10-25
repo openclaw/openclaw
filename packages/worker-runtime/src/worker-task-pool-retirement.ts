@@ -33,7 +33,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   onRotationComplete: () => void;
   serviceDeadlines: () => void;
   markWorkerRetirement: WorkerTaskHost["workerRetiring"];
-  serviceHost: Pick<WorkerTaskHost, "serviceNativeWorkers">;
+  serviceHost: Pick<WorkerTaskHost, "serviceNativeWorkers" | "flushWorkerDiagnostics">;
 }) {
   const artifactCleanups = new Map<Promise<void>, RetainedOperation<void>>();
   let lastIdleRetirementAt = -Infinity;
@@ -154,6 +154,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     }
     const runRetirement = AsyncLocalStorage.snapshot();
     let nativeStop: RetainedOperation<void> | undefined;
+    let diagnosticFlush: RetainedOperation<void> | null | undefined;
     let observingSection = false;
     let advancing = false;
     const completion = createRetainedOperation<void>(() => {
@@ -182,6 +183,19 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
           }
           if (slot.worker && !nativeStop) {
             markWorkerRetirement(slot.worker, reason);
+            try {
+              if (diagnosticFlush === undefined) {
+                diagnosticFlush = serviceHost.flushWorkerDiagnostics?.(slot.worker, reason) ?? null;
+                void diagnosticFlush?.result.then(advance, advance);
+              }
+              diagnosticFlush?.service();
+              if (diagnosticFlush?.read().status === "pending") {
+                return;
+              }
+            } catch {
+              // Telemetry cannot prevent native termination or turn it into a failed retirement.
+              diagnosticFlush = null;
+            }
             if (slot.native) {
               nativeStop = slot.native.stop();
             } else {

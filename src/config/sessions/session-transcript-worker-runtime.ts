@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
@@ -16,7 +15,7 @@ import {
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   historyLane,
   maintenanceLane,
   pruneHistoryDatabases,
@@ -100,7 +99,6 @@ export async function prewarmSessionHistoryWorker(
         (owner) =>
           owner.prewarm({
             env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
-            history: lane === historyLane,
           }),
         lane,
       ).then(
@@ -134,7 +132,7 @@ export function retainSessionHistoryWorkerDatabase(
       throw new WorkerTaskError("Session history database read was revoked", "unavailable");
     }
   };
-  historyClearTimeout(lane.idleTimer);
+  clearDatabaseWorkerIdleRetirement(lane);
   lane.pending++;
   owned.pending++;
   refreshDatabaseWorkerPressureSubscription();
@@ -271,10 +269,10 @@ export function retainSessionHistoryWorkerDatabase(
         },
       );
     };
-    const owner: SessionHistoryWorkerDatabase = {
-      assertCurrent,
-      ...createSessionHistoryWorkerReaders(runRequest),
-    };
+    const owner: SessionHistoryWorkerDatabase = Object.assign(
+      createSessionHistoryWorkerReaders(runRequest),
+      { assertCurrent },
+    );
     return { owner, release };
   } catch (error) {
     release();
@@ -301,17 +299,18 @@ export async function withSessionHistoryWorkerDatabases<T>(
   }
 }
 
-/** Single-target callers retain the same batch admission and revocation boundary. */
-export function withSessionHistoryWorkerDatabase<T>(
+/** Single-target callers retain the same admission and revocation boundary. */
+export async function withSessionHistoryWorkerDatabase<T>(
   options: SessionHistoryDatabaseTarget,
   operation: (owner: SessionHistoryWorkerDatabase) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
-  return withSessionHistoryWorkerDatabases(
-    [options],
-    (owners) => operation(expectDefined(owners[0], "retained session history reader")),
-    lane,
-  );
+  const retained = retainSessionHistoryWorkerDatabase(options, lane);
+  try {
+    return await operation(retained.owner);
+  } finally {
+    retained.release();
+  }
 }
 
 /** Process-held sources exchange bounded pages without reopening their memory database. */
@@ -321,8 +320,7 @@ export async function runProcessHeldHistoryTask(
   signal?: AbortSignal,
 ) {
   historyLane.pending++;
-  historyClearTimeout(historyLane.idleTimer);
-  historyLane.idleTimer = undefined;
+  clearDatabaseWorkerIdleRetirement(historyLane);
   refreshDatabaseWorkerPressureSubscription();
   let retirement: Promise<void> | undefined;
   try {

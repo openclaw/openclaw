@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
-import { shouldComputeCommandAuthorized } from "../../auto-reply/command-detection.js";
+import { hasCommandSyntax } from "../../auto-reply/command-detection.js";
 import {
   resolveChannelResetConfig,
   resolveSessionResetType,
@@ -12,6 +12,7 @@ import {
   resolvePreparedSessionEntryResetFreshness,
   resolveSessionEntryResetFreshness,
 } from "../../config/sessions/entry-freshness.js";
+import type { SessionGoalOperation } from "../../config/sessions/goals-operations.types.js";
 import type { SessionLifecycleTimestamps } from "../../config/sessions/lifecycle.types.js";
 import {
   hasRestartRecoveryTerminalRun,
@@ -67,6 +68,7 @@ const log = createSubsystemLogger("gateway/restart-recovery");
 
 type RestartSafeChatRequest = {
   fingerprint: string;
+  goalReplacement?: true;
 };
 
 type RestartSafeChatAdmission = {
@@ -89,11 +91,7 @@ type DurableChatClaimResolution =
   | { kind: "rejected"; message: string; unavailable?: true };
 
 function hasRestartUnsafeMessageSemantics(rawMessage: string, cfg: OpenClawConfig): boolean {
-  if (
-    shouldComputeCommandAuthorized(rawMessage, cfg) ||
-    rawMessage.startsWith("/") ||
-    rawMessage.startsWith("!")
-  ) {
+  if (hasCommandSyntax(rawMessage, cfg) || rawMessage.startsWith("/")) {
     return true;
   }
   const directives = parseInlineDirectives(rawMessage, {
@@ -127,17 +125,21 @@ async function fingerprintRestartSafeChatRequest(params: {
 }
 
 export async function createRestartSafeChatRequest(params: {
-  goalRequestFingerprint?: string;
+  goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   eligible: boolean;
   message: string;
   mentions?: readonly HumanMention[];
   senderIsOwner: boolean;
   cfg: OpenClawConfig;
 }): Promise<RestartSafeChatRequest | undefined> {
-  if (params.goalRequestFingerprint) {
+  const goal = params.goalOperation;
+  if (goal) {
     // Goal admission owns literal intent; slash-looking objectives are not commands.
     // Its receipt fingerprints attachments, routing, and every immutable run option.
-    return { fingerprint: params.goalRequestFingerprint };
+    return {
+      fingerprint: goal.requestFingerprint,
+      ...(goal.action === "resume" && goal.preserveBudget ? { goalReplacement: true } : {}),
+    };
   }
   if (!params.eligible || hasRestartUnsafeMessageSemantics(params.message, params.cfg)) {
     return undefined;
@@ -275,6 +277,7 @@ export function resolveDurableChatClaim(
 }
 
 export function isDirectChatGoalSession(params: {
+  allowAborted?: boolean;
   entry?: SessionEntry;
   acpMeta: SessionEntry["acp"] | null;
   requestedSessionId?: string;
@@ -284,7 +287,7 @@ export function isDirectChatGoalSession(params: {
   return Boolean(
     entry?.sessionId &&
     params.sessionKey !== "global" &&
-    entry.abortedLastRun !== true &&
+    (entry.abortedLastRun !== true || params.allowAborted === true) &&
     entry.archivedAt === undefined &&
     entry.initializationPending !== true &&
     entry.pendingFinalDelivery === undefined &&
@@ -405,7 +408,7 @@ export function resolveRestartSafeChatAdmission(
   if (
     !request ||
     !entry ||
-    !isDirectChatGoalSession({ ...params, entry }) ||
+    !isDirectChatGoalSession({ ...params, entry, allowAborted: request.goalReplacement }) ||
     (entry.agentHarnessId !== undefined && entry.agentHarnessId !== OPENCLAW_AGENT_RUNTIME_ID)
   ) {
     return undefined;
@@ -498,6 +501,7 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryRequesterSenderId: undefined,
       restartRecoverySameChannelThreadRequired: undefined,
       restartRecoverySourceIngress: params.sourceIngress,
+      restartRecoverySourceMessageChannel: "webchat",
       restartRecoveryOperatorSource: params.admission.retryExpectedState
         ? params.admission.retryExpectedState.restartRecoveryOperatorSource
         : params.operatorSource,

@@ -21,6 +21,7 @@ import {
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { getActiveNativeAttempt, getEmbeddedRunAttachment } from "../run-state.js";
+import { registerReplyPromotionTests } from "./attempt-stream-prepare.reply-promotion.test-support.js";
 
 type QuestionDispatcher = Extract<
   Parameters<typeof registerPendingAgentQuestion>[0]["gatewayCall"],
@@ -67,6 +68,37 @@ import {
 } from "./attempt-stream-prepare.test-support.js";
 
 registerAgentSessionLoopTestLifecycle();
+
+const steeringOptions = {
+  isInboundUserMessage: true,
+  toolAuthorityFingerprint: "test-steering",
+  // Source-bound steering is checked again at final dispatch.
+  assertCurrent: () => {},
+};
+
+function prepareDeferredSteering(
+  session: NonNullable<Parameters<typeof prepareCatalogExecutor>[0]>["activeSession"],
+  withFinalizeHook = false,
+) {
+  return prepareCatalogExecutor({
+    activeSession: session,
+    ...(withFinalizeHook
+      ? { hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never }
+      : {}),
+    attempt: {
+      deferTerminalLifecycle: true,
+      onDeferredLifecycleOwner: () => {},
+      toolAuthorityFingerprint: steeringOptions.toolAuthorityFingerprint,
+    },
+  });
+}
+
+async function useRealSubscription() {
+  const actual = await vi.importActual<typeof import("../../embedded-agent-subscribe.js")>(
+    "../../embedded-agent-subscribe.js",
+  );
+  mocks.subscribe.mockImplementation(actual.subscribeEmbeddedAgentSession);
+}
 
 describe("prepareEmbeddedAttemptStream", () => {
   afterEach(async () => {
@@ -172,6 +204,8 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect.objectContaining({ trustedLocalMediaToolNames, sessionKey }),
     );
   });
+
+  registerReplyPromotionTests();
 
   it.each([
     ["replacement", "steering"],
@@ -329,10 +363,7 @@ describe("prepareEmbeddedAttemptStream", () => {
   ] as const)(
     "renders %s progress detail through the real subscription",
     async (toolProgressDetail, meta) => {
-      const { subscribeEmbeddedAgentSession } = await vi.importActual<
-        typeof import("../../embedded-agent-subscribe.js")
-      >("../../embedded-agent-subscribe.js");
-      mocks.subscribe.mockImplementation(subscribeEmbeddedAgentSession);
+      await useRealSubscription();
       const onAgentEvent = vi.fn();
       const prepared = prepareCatalogExecutor({ toolProgressDetail, onAgentEvent });
       try {
@@ -358,35 +389,6 @@ describe("prepareEmbeddedAttemptStream", () => {
       }
     },
   );
-
-  it("retains exact heartbeat preemption on the embedded queue handle", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
-      sessionId: "session-output-schema",
-      turnKind: "heartbeat",
-      resetTriggered: false,
-    });
-    try {
-      const prepared = prepareCatalogExecutor({ replyOperation: operation });
-
-      expect(prepared.queueHandle.preemptByVisibleTurn?.()).toBe(true);
-      expect(operation.result).toEqual({
-        kind: "aborted",
-        code: "aborted_for_supersession",
-      });
-      expect(mocks.setActiveRun).toHaveBeenCalledWith(
-        "session-output-schema",
-        expect.objectContaining({ preemptByVisibleTurn: expect.any(Function) }),
-        "agent:main:main",
-        undefined,
-        "main",
-        operation,
-        expect.any(String),
-      );
-    } finally {
-      operation.complete();
-    }
-  });
 
   it.each([false, true])(
     "keeps finalization closed after revision or unsubscribe (unsubscribe: %s)",
@@ -517,26 +519,8 @@ describe("prepareEmbeddedAttemptStream", () => {
     const sessionId = "session-output-schema";
     const { session, settled, releaseSettlement } = await createHeldSettlementSession();
     const steer = vi.spyOn(session.agent, "admitSteeringMessage");
-    const actual = await vi.importActual<typeof import("../../embedded-agent-subscribe.js")>(
-      "../../embedded-agent-subscribe.js",
-    );
-    mocks.subscribe.mockImplementation(actual.subscribeEmbeddedAgentSession);
-    const toolAuthorityFingerprint = "test-steering";
-    const steeringOptions = {
-      isInboundUserMessage: true,
-      toolAuthorityFingerprint,
-      // Source-bound steering requires the guarded runtime to recheck final dispatch.
-      assertCurrent: () => {},
-    };
-    const prepared = prepareCatalogExecutor({
-      activeSession: session,
-      hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
-      attempt: {
-        deferTerminalLifecycle: true,
-        onDeferredLifecycleOwner: () => {},
-        toolAuthorityFingerprint,
-      },
-    });
+    await useRealSubscription();
+    const prepared = prepareDeferredSteering(session, true);
     const prompt = session.prompt("Finish this turn.");
     let nestedPrompt: Promise<void> | undefined;
     let unsubscribeNested: (() => void) | undefined;
@@ -591,21 +575,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       requests.push(context);
       return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }]));
     });
-    const toolAuthorityFingerprint = "test-steering";
-    const steeringOptions = {
-      isInboundUserMessage: true,
-      toolAuthorityFingerprint,
-      // Source-bound steering requires the guarded runtime to recheck final dispatch.
-      assertCurrent: () => {},
-    };
-    const prepared = prepareCatalogExecutor({
-      activeSession: session,
-      attempt: {
-        deferTerminalLifecycle: true,
-        onDeferredLifecycleOwner: () => {},
-        toolAuthorityFingerprint,
-      },
-    });
+    const prepared = prepareDeferredSteering(session);
     const { steerTestSessionTurn: queueMessage } = await import("../runs.test-support.js");
     const events: string[] = [];
     let queued: Awaited<ReturnType<typeof queueMessage>> | undefined;
@@ -642,21 +612,7 @@ describe("prepareEmbeddedAttemptStream", () => {
 
   it("rejects registered steering after a real turn handoff", async () => {
     const session = await createTurnHandoffSession();
-    const toolAuthorityFingerprint = "test-steering";
-    const steeringOptions = {
-      isInboundUserMessage: true,
-      toolAuthorityFingerprint,
-      // Source-bound steering requires the guarded runtime to recheck final dispatch.
-      assertCurrent: () => {},
-    };
-    const prepared = prepareCatalogExecutor({
-      activeSession: session,
-      attempt: {
-        deferTerminalLifecycle: true,
-        onDeferredLifecycleOwner: () => {},
-        toolAuthorityFingerprint,
-      },
-    });
+    const prepared = prepareDeferredSteering(session);
     const events: string[] = [];
     const unsubscribe = session.subscribe((event) => {
       events.push(event.type);

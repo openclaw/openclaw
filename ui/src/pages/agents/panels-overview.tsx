@@ -9,7 +9,7 @@ import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
 import { MultiSelect } from "../../components/multi-select.tsx";
 import { createOverlayAnchor } from "../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../components/overlay-lifecycle.ts";
-import { failPanelRefresh } from "../../components/panel-refresh-status.ts";
+import { failPanelRefresh } from "../../components/panel-refresh-status-state.ts";
 import "../../components/tooltip.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
@@ -32,6 +32,7 @@ import {
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
@@ -40,6 +41,7 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AvatarPicker } from "./avatar-picker.tsx";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
+import type { AgentIdentityOutcome } from "./identity-actions.ts";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -55,6 +57,7 @@ export function AgentOverview(
       agentFilesList: AgentsFilesListResult | null;
       agentIdentity: AgentIdentityResult | null;
       canUpdateIdentity: boolean;
+      identitySavePending: boolean;
       onSelectPanel: (panel: AgentsPanel) => void;
     },
 ) {
@@ -309,11 +312,32 @@ export function AgentOverview(
                   </div>
                 </div>
               </div>
-              {params.readData().identityError ? (
-                <div class="settings-row__desc" role="alert" style={{ color: "var(--danger)" }}>
-                  {params.readData().identityError}
-                </div>
-              ) : undefined}
+              <Show when={params.identitySavePending}>
+                <span class="settings-row__desc" role="status">
+                  {t("common.saving")}
+                </span>
+              </Show>
+              <For
+                each={params.readData().identityOutcome ? [params.readData().identityOutcome] : []}
+              >
+                {(request) => (
+                  <Errored
+                    fallback={(error) => (
+                      <div
+                        class="settings-row__desc"
+                        role="alert"
+                        style={{ color: "var(--danger)" }}
+                      >
+                        {formatUiError(error())}
+                      </div>
+                    )}
+                  >
+                    <Loading>
+                      <IdentityCompletion request={request} />
+                    </Loading>
+                  </Errored>
+                )}
+              </For>
             </div>
             <div
               ref={(element) => (avatarSurface = element)}
@@ -489,5 +513,16 @@ export function renderAgentContextSection(
 
 function ModelCatalogCompletion(props: { read: Promise<void> }) {
   const completion = createMemo(() => props.read.then(() => null));
+  return <>{completion()}</>;
+}
+
+function IdentityCompletion(props: { request: Promise<AgentIdentityOutcome> | null }) {
+  const completion = createMemo(async () => {
+    const outcome = await props.request;
+    if (outcome?.error) {
+      throw new Error(outcome.error);
+    }
+    return null;
+  });
   return <>{completion()}</>;
 }

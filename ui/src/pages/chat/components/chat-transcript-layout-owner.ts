@@ -39,7 +39,7 @@ export class TranscriptLayoutOwner {
 
   private geometryTarget: HTMLElement | undefined;
 
-  constructor(private readonly onClamp: (before: number, after: number) => void) {}
+  constructor(private readonly onLayoutChange: (before: number, after: number) => void) {}
 
   get viewportResizePending(): boolean {
     const viewport = this.viewport;
@@ -245,9 +245,8 @@ export class TranscriptLayoutOwner {
     // Publish the native clamp before another measurement can move the anchor.
     const measuredViewport = readTranscriptViewport(viewport);
     const after = measuredViewport.scrollTop;
-    if (before !== after) {
-      this.onClamp(before, after);
-    }
+    // Padding can move the end without clamping the offset; its anchor still needs reconciliation.
+    this.onLayoutChange(before, after);
     publishTranscriptScroll(viewport, {
       type: "resize",
       viewport: measuredViewport,

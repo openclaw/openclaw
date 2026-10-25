@@ -43,7 +43,10 @@ export function showWorkRow(props: ChatPullRequestsProps): boolean {
 }
 
 export function hasChatPullRequests(props: ChatPullRequestsProps): boolean {
-  return props.pullRequests.length > 0 || showWorkRow(props);
+  return (
+    props.pullRequests.length > 0 ||
+    (props.publishedOnly ? props.publication?.result?.status === "published" : showWorkRow(props))
+  );
 }
 
 function readDismissedStore(storage: Storage): Record<string, string[]> {

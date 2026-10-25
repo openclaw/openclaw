@@ -1,10 +1,11 @@
+import { randomUUID, X509Certificate } from "node:crypto";
 // Real authenticated Gateway, agent/tool dispatch and persisted creator effects.
 // Only provider HTTP is replayed; authorization and storage use production owners.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import { randomUUID, X509Certificate } from "node:crypto";
 import { createServer } from "node:http";
 import { expect, it, vi } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
@@ -19,7 +20,6 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
@@ -71,7 +71,7 @@ it(
     let receipt: Receipt | undefined;
     const provider = createServer((request, response) => {
       void (async () => {
-        const body = JSON.parse(await readProviderBody(request)) as {
+        const body = JSON.parse(await readRequestText(request)) as {
           tools?: Array<{ name: string }>;
           input: Array<{ type?: string; role?: string; output?: string }>;
         };

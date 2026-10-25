@@ -384,7 +384,7 @@ export async function prepareChatSendSession(params: {
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideMs: p.timeoutMs });
   const now = Date.now();
   const restartSafeRequest = await createRestartSafeChatRequest({
-    goalRequestFingerprint: request.goalOperation?.requestFingerprint,
+    goalOperation: request.goalOperation,
     cfg,
     eligible:
       !readChatInputRecoveryAdmission(p.idempotencyKey) &&

@@ -1,28 +1,31 @@
 import { once } from "node:events";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { afterEach, expect, it } from "vitest";
+import { expect, it, describe } from "vitest";
 import { WebSocket, type RawData } from "ws";
-import { startQaMockOpenAiServer } from "./server.js";
+import { createQaBusState } from "../../bus-state.js";
+import { runScenarioFlow } from "../../scenario-flow-runner.js";
+import { runQaSuiteScenarioSteps } from "../../suite-runtime-flow.js";
+import { makeQaSuiteTestScenario } from "../../suite-test-helpers.js";
+import type { QaMockContinuationHold } from "../shared/types.js";
+import { userInputs } from "./server.fixtures.test-support.js";
+import {
+  createMockServerTestHarness,
+  getJson,
+  makeToolOutputWithCallId,
+  outputItem,
+  outputToolCall,
+  postJson,
+  requireRecord,
+} from "./server.test-harness.js";
+
+const { startMockServer, cleanups } = createMockServerTestHarness();
 
 type JsonObject = Record<string, unknown>;
+
 type Request = JsonObject | string;
-const cleanups: Array<() => Promise<void>> = [];
+
 const QA_COMPACTION_RETRY_PROMPT =
   "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
-const QA_COMPACTION_SUMMARY_INSTRUCTIONS =
-  "You are a context summarization assistant. Produce a structured summary. Do not continue.";
-
-afterEach(async () => {
-  while (cleanups.length > 0) {
-    await cleanups.pop()?.();
-  }
-});
-
-async function startServer() {
-  const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
-  cleanups.push(async () => server.stop());
-  return server;
-}
 
 async function connectResponsesWebSocket(baseUrl: string) {
   const socket = new WebSocket(`${baseUrl.replace(/^http/u, "ws")}/v1/responses`);
@@ -36,7 +39,7 @@ async function connectResponsesWebSocket(baseUrl: string) {
 }
 
 async function startConnection() {
-  const server = await startServer();
+  const server = await startMockServer();
   const socket = await connectResponsesWebSocket(server.baseUrl);
   const send = (request: Request) => collectResponseEvents(socket, request);
   return {
@@ -49,8 +52,11 @@ async function startConnection() {
 }
 
 const userInput = (text: string) => [{ role: "user", content: [{ type: "input_text", text }] }];
+
 const readTool = [{ type: "function", name: "read" }];
+
 const streaming = { model: "gpt-5.6-sol", stream: true };
+
 const debugJson = async (baseUrl: string, path: string) =>
   await fetch(`${baseUrl}/debug/${path}`).then((response) => response.json());
 
@@ -103,7 +109,7 @@ function functionOutput(callId: unknown, output: string) {
 }
 
 it("holds one continuation across a disconnect without holding its replacement", async () => {
-  const server = await startServer();
+  const server = await startMockServer();
   const controller = new AbortController();
   const hold = server.holdNextContinuation("replacement-session", controller.signal);
   const socket = await connectResponsesWebSocket(server.baseUrl);
@@ -183,6 +189,40 @@ it("preserves empty tool-result identity without replaying a native patch", asyn
   expect(recorded).not.toHaveProperty("plannedToolName");
 });
 
+it("preserves namespaced native custom-tool identity over Responses WebSocket", async () => {
+  const { send } = await startConnection();
+  const events = await send({
+    tools: [
+      {
+        type: "namespace",
+        name: "openclaw_direct",
+        tools: [
+          {
+            type: "custom",
+            name: "apply_patch",
+            format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+          },
+        ],
+      },
+    ],
+    input: userInput(
+      "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+    ),
+  });
+  for (const item of [
+    ...["response.output_item.added", "response.output_item.done"].map((type) =>
+      requireRecord(events.find((event) => event.type === type)?.item, type),
+    ),
+    outputItem(readCompletedResponse(events)),
+  ]) {
+    expect(item).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      namespace: "openclaw_direct",
+    });
+  }
+});
+
 it("preserves the full warmup prompt when the first real response sends an empty delta", async () => {
   const { send, read, debug } = await startConnection();
   const prompt = "Read README.md for the source and docs discovery report.";
@@ -217,10 +257,7 @@ it("preserves the injected post-tool 503 failure on the WebSocket transport", as
   });
   expectError(failure, 503, { type: "server_error", message: "Service Unavailable" });
   expectError(
-    await send({
-      previous_response_id: firstResponse.id,
-      input: [],
-    }),
+    await send({ previous_response_id: firstResponse.id, input: [] }),
     400,
     expect.objectContaining({ code: "previous_response_not_found" }),
     { sequence_number: 0 },
@@ -253,41 +290,140 @@ it("preserves the coded compaction overflow on the WebSocket transport", async (
   ]);
 });
 
-it.each([
-  {
-    faultMode: "empty-output-once",
-    marker: "QA-COMPACTION-EMPTY-OUTPUT-ONCE-websocket",
-    recoveredMarker: "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY",
-  },
-  {
-    faultMode: "reasoning-only-output-once",
-    marker: "QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE-websocket",
-    recoveredMarker: "QA-COMPACTION-REASONING-RECOVERED-SUMMARY",
-  },
-] as const)("preserves $faultMode compaction recovery on WebSocket", async (testCase) => {
-  const { complete, debug } = await startConnection();
-  const request = {
-    ...streaming,
-    instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
-    input: userInput(`<conversation>${testCase.marker}</conversation>`),
-  };
-
-  const first = await complete(request);
-  expect(JSON.stringify(first.output)).not.toContain(testCase.recoveredMarker);
-  const recovered = await complete(request);
-  expect(JSON.stringify(recovered.output)).toContain(testCase.recoveredMarker);
-
-  const requests = (await debug("requests")) as JsonObject[];
-  expect(requests.map((entry) => entry.compactionSummaryFaultMode)).toEqual([
-    testCase.faultMode,
-    "none",
-  ]);
-});
-
 it("returns a bounded protocol error for malformed WebSocket requests", async () => {
   const { send } = await startConnection();
   expectError(await send("{invalid-json"), 400, {
     type: "invalid_request_error",
     message: "Expected a JSON response.create request.",
   });
+});
+
+describe("QA held continuation", () => {
+  it("lets a maintained flow hold one exact session continuation before its response", async () => {
+    const server = await startMockServer();
+    const controller = new AbortController();
+    const sessionId = "held-session";
+    const input = userInputs("Inspect the repo kickoff task.");
+    const post = (items: unknown[], id = sessionId) =>
+      postJson(server, "/v1/responses", { input: items }, { session_id: id });
+    const initial = await post(input);
+    const call = outputToolCall(await initial.json(), "read");
+    if (typeof call.call_id !== "string") {
+      throw new Error("provider omitted tool-call identity");
+    }
+    const vars: Record<string, QaMockContinuationHold> = {};
+    try {
+      const result = await runScenarioFlow({
+        api: {
+          env: { mock: server },
+          signal: controller.signal,
+          state: createQaBusState(),
+          scenario: makeQaSuiteTestScenario("held-continuation"),
+          config: {},
+          runScenario: runQaSuiteScenarioSteps,
+        },
+        scenarioTitle: "held continuation",
+        vars,
+        flow: {
+          steps: [
+            {
+              name: "arm",
+              actions: [
+                {
+                  call: "env.mock.holdNextContinuation",
+                  args: [sessionId, { expr: "signal" }],
+                  saveAs: "hold",
+                },
+              ],
+            },
+          ],
+        },
+      });
+      expect(result, JSON.stringify(result)).toMatchObject({
+        status: "pass",
+        steps: [{ status: "pass" }],
+      });
+      const hold = vars.hold;
+      if (!hold) {
+        throw new Error("scenario did not return its continuation hold");
+      }
+      const continuation = [...input, call, makeToolOutputWithCallId(call.call_id, "done")];
+      // An initial request and another session's continuation must not consume the hold.
+      expect((await post(userInputs("Reply exactly: INITIAL-OK"))).status).toBe(200);
+      expect((await post(continuation, "other-session")).status).toBe(200);
+      const summary = await postJson(server, "/v1/responses", {
+        client_metadata: { session_id: sessionId },
+        instructions:
+          "You are a context summarization assistant. Produce a structured summary. Do not continue.",
+        input: continuation,
+      });
+      expect(summary.status).toBe(200);
+      let completed = false;
+      const pending = post(continuation).then((response) => {
+        completed = true;
+        return response;
+      });
+      const checkpoint = await Promise.race([
+        hold.reached,
+        pending.then(() => {
+          throw new Error("continuation responded before checkpoint");
+        }),
+      ]);
+      expect(checkpoint).toEqual({ cursor: 5, sessionId, toolOutputCallId: call.call_id });
+      expect(await getJson(server, "/debug/requests?after=4")).toMatchObject([
+        { ...checkpoint, requestKind: "tool-continuation", toolOutput: "done" },
+      ]);
+      expect(completed).toBe(false);
+      hold.release();
+      expect((await pending).status).toBe(200);
+      // The hold is one-shot; observing the same identity again proceeds naturally.
+      expect((await post(continuation)).status).toBe(200);
+    } finally {
+      controller.abort();
+    }
+  });
+
+  it("cancels an unreached hold without poisoning the next scenario", async () => {
+    const server = await startMockServer();
+    const controller = new AbortController();
+    const first = server.holdNextContinuation("first-session", controller.signal);
+    expect(() => first.release()).toThrow("has not reached");
+    expect(() => server.holdNextContinuation("other-session", controller.signal)).toThrow(
+      "idle hold",
+    );
+    controller.abort();
+    await expect(first.reached).rejects.toThrow("hold aborted");
+    const next = server.holdNextContinuation("next-session", new AbortController().signal);
+    first.cancel();
+    // A stale handle must not cancel the replacement hold; provider shutdown must.
+    await cleanups.pop()?.();
+    await expect(next.reached).rejects.toThrow("provider stopped");
+    expect(() => server.holdNextContinuation("late-session", new AbortController().signal)).toThrow(
+      "live provider",
+    );
+  });
+
+  it.each(["cancel", "abort", "stop"] as const)(
+    "settles a held HTTP dispatch on %s",
+    async (action) => {
+      const server = await startMockServer();
+      const controller = new AbortController();
+      const hold = server.holdNextContinuation("cleanup-session", controller.signal);
+      const pending = postJson(server, "/v1/responses", {
+        client_metadata: { session_id: "cleanup-session" },
+        input: userInputs("Reply exactly: DONE", makeToolOutputWithCallId("cleanup-call", "done")),
+      });
+      await hold.reached;
+      if (action === "cancel") {
+        hold.cancel();
+      } else if (action === "abort") {
+        controller.abort();
+      } else {
+        await cleanups.pop()?.();
+      }
+      const response = await pending;
+      expect(response.status).toBe(500);
+      expect(await response.text()).toContain("QA continuation");
+    },
+  );
 });

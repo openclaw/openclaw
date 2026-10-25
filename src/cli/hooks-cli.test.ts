@@ -1,18 +1,26 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { hasTerminalControl } from "../../packages/terminal-core/src/safe-text.js";
 import { withContendedConfigMutation } from "../../test/helpers/config-mutation-lock.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as config from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as gateway from "../gateway/call.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
+import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeHookStatusEntry } from "./cli-fixtures.test-support.js";
 import { registerHooksCli } from "./hooks-cli.js";
 import * as oneShotExit from "./one-shot-exit.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const escape = "\u001b]0;untrusted-title\u0007\u009f";
+const untrusted = (text: string) => `${text}${escape}`;
+const descriptorConfig = { plugins: { enabled: false } };
 const runPluginInstallCommandMock = vi.hoisted(() => vi.fn());
 const runPluginUpdateCommandMock = vi.hoisted(() => vi.fn());
 
@@ -78,6 +86,54 @@ async function runHooksReport(statusReport: HookStatusReport, args: string[]): P
     }
   }
 }
+
+it("renders hook metadata and requirements safely while retaining raw JSON values", async () => {
+  const workspaceDir = tempDirs.make("hook-terminal-");
+  const directory = path.join(workspaceDir, "hooks", "terminal-fixture");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    path.join(directory, "HOOK.md"),
+    `---\nname: terminal-fixture\ndescription: ${JSON.stringify(untrusted("Readable description\nsecond\tline"))}\nmetadata: ${JSON.stringify(
+      {
+        openclaw: {
+          emoji: untrusted("🔗"),
+          homepage: untrusted("https://example.com/hook"),
+          events: ["command:new", untrusted("unknown:event")],
+          requires: { env: [untrusted("MISSING_HOOK_ENV")] },
+        },
+      },
+    )}\n---\nHook fixture.\n`,
+  );
+  await fs.writeFile(path.join(directory, "handler.js"), 'throw new Error("must not load");\n');
+  const report = buildWorkspaceHookStatus(workspaceDir, {
+    config: descriptorConfig,
+  });
+  const entry = report.hooks.find((candidate) => candidate.name === "terminal-fixture");
+  expect(entry?.emoji).toBe(untrusted("🔗"));
+  for (const output of [
+    await runHooksReport(report, ["list", "--verbose"]),
+    await runHooksReport(report, ["info", "terminal-fixture"]),
+    await runHooksReport(report, ["check"]),
+  ]) {
+    expect(
+      hasTerminalControl(
+        stripAnsi(output).replaceAll("\n", "").replaceAll("\r", "").replaceAll("\t", ""),
+      ),
+    ).toBe(false);
+    expect(output).not.toContain(escape);
+    expect(output).toContain("terminal-fixture");
+  }
+  const infoOutput = stripAnsi(await runHooksReport(report, ["info", "terminal-fixture"]));
+  expect(infoOutput).toContain("🔗 terminal-fixture");
+  expect(infoOutput).toContain("unknown:event");
+  expect(infoOutput).toContain("MISSING_HOOK_ENV");
+  expect(infoOutput).toContain("Readable description\nsecond\tline");
+  expect(stripAnsi(await runHooksReport(report, ["list"]))).not.toContain("second\\tline");
+  expect(
+    JSON.parse(await runHooksReport(report, ["info", "terminal-fixture", "--json"])).emoji,
+  ).toBe(untrusted("🔗"));
+  expect(entry?.emoji).toBe(untrusted("🔗"));
+});
 
 describe("hooks cli formatting", () => {
   it.each<[name: string, render: () => Promise<string>, includes: string[], excludes?: string[]]>([

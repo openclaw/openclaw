@@ -1,17 +1,12 @@
 import { Show, createMemo, onSettled } from "solid-js";
-import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
-import type { GatewaySessionRow } from "../../../api/types.ts";
-import type { ApplicationContext } from "../../../app/context.ts";
-import { resolveControlUiAuthCandidates } from "../../../app/control-ui-auth.ts";
-import { SessionColorDot } from "../../../components/session-color.ts";
-import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
+import { SessionColorDot } from "../../../components/session-color.tsx";
 import { GatewayStatus } from "../../../components/solid/gateway-status.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
-import "../../../components/workspace-icon.ts";
+import "../../../components/workspace-icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
   clearCompositionEnd,
@@ -19,13 +14,9 @@ import {
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
-import {
-  areUiSessionKeysEquivalent,
-  resolveUiSessionNavigationParentKey,
-} from "../../../lib/sessions/session-key.ts";
+import { isSessionTitlePending } from "../../../lib/session-display.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
-import type { ChatPaneHeaderProps, ChatPaneParentSession } from "./chat-pane-header.types.ts";
+import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -37,18 +28,6 @@ function revealLabel(platform: string | null): string {
     return t("chat.sessionHeader.revealFileExplorer");
   }
   return t("chat.sessionHeader.revealFileManager");
-}
-
-export function resolveChatPaneParentSession(
-  session: GatewaySessionRow | undefined,
-  sessions: readonly GatewaySessionRow[],
-): ChatPaneParentSession | null {
-  const parentKey = resolveUiSessionNavigationParentKey(session);
-  if (!parentKey || (session && areUiSessionKeysEquivalent(parentKey, session.key))) {
-    return null;
-  }
-  const parent = sessions.find((row) => areUiSessionKeysEquivalent(row.key, parentKey));
-  return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
 }
 
 function CrumbSeparator(props: { merged: boolean }) {
@@ -163,7 +142,6 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
             <button
               class="chat-pane__session-title chat-pane__session-title-button"
               type="button"
-              title={t("chat.sessionHeader.renameTooltip")}
               aria-label={t("chat.sessionHeader.renameAria", { title: props.title })}
               onClick={() => props.onBeginRename()}
             >
@@ -283,11 +261,6 @@ export function ProjectCrumb(props: ChatPaneHeaderProps) {
       placement="bottom-start"
       label={t("chat.sessionHeader.workspaceAria", { workspace: props.workspaceLabel ?? "" })}
       triggerClass={`chat-pane__workspace-chip${!copied() && !props.workspaceIcon ? " chat-pane__workspace-chip--fallback-icon" : ""}`}
-      triggerAttributes={{
-        title: props.mergedChrome
-          ? undefined
-          : (props.workspaceRoot ?? props.workspaceLabel ?? undefined),
-      }}
       items={items()}
       onSelect={(item) => {
         if (item.id === "reveal" || item.id === "copy-path" || item.id === "copy-branch") {
@@ -321,42 +294,6 @@ export function ProjectCrumb(props: ChatPaneHeaderProps) {
       }
     />
   );
-}
-
-export function canRevealSessionWorkspace(params: {
-  session: GatewaySessionRow | undefined;
-  workspaceRoot: string | null;
-  methodAdvertised: boolean;
-  hasAdminAccess: boolean;
-}): boolean {
-  return Boolean(
-    params.workspaceRoot &&
-    params.methodAdvertised &&
-    params.hasAdminAccess &&
-    !params.session?.execNode &&
-    !isCloudWorkerPlacementState(params.session?.placement?.state),
-  );
-}
-
-export function resolveChatPaneWorkspaceIcon(
-  context: ApplicationContext,
-  sessionKey: string | undefined,
-) {
-  if (!sessionKey) {
-    return null;
-  }
-  const gateway = context.gateway;
-  const authTokens = resolveControlUiAuthCandidates({
-    hello: gateway.snapshot.hello,
-    settings: { token: gateway.connection.token },
-    password: gateway.connection.password,
-  });
-  return {
-    routeUrl: buildControlUiResourcePath("workspaceIcon", context.resourceBasePath, sessionKey),
-    authTokens,
-    authReady: Boolean(gateway.snapshot.hello || authTokens.length),
-    connectionId: gateway.snapshot.hello?.server?.connId,
-  };
 }
 
 declare module "@solidjs/web" {

@@ -1,10 +1,9 @@
-import { once } from "node:events";
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { json } from "node:stream/consumers";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
@@ -15,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
 import type { MemoryIndexManager } from "./memory/manager.js";
 import { isolateMemoryManagerTestConfig } from "./memory/test-config-helpers.js";
@@ -30,14 +30,6 @@ const { closeAllMemorySearchManagers, getMemorySearchManager } = await import(".
 type ServerMode = "ok" | "unauthorized" | "quota";
 
 const closeServers: Array<() => Promise<void>> = [];
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-}
 
 function errorBody(mode: Exclude<ServerMode, "ok">): Record<string, unknown> {
   const quota = mode === "quota";
@@ -55,45 +47,41 @@ function errorBody(mode: Exclude<ServerMode, "ok">): Record<string, unknown> {
 async function startEmbeddingServer() {
   const requests: Array<{ status: number; body: Record<string, unknown> }> = [];
   let mode: ServerMode = "ok";
+  const respond = (res: ServerResponse, status: number, body: Record<string, unknown>) => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  };
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       try {
-        const body = await readJsonBody(req);
+        const body = (await json(req)) as Record<string, unknown>;
         if (mode !== "ok") {
           const status = mode === "quota" ? 429 : 401;
           requests.push({ status, body });
-          res.writeHead(status, { "content-type": "application/json" });
-          res.end(JSON.stringify(errorBody(mode)));
+          respond(res, status, errorBody(mode));
           return;
         }
         requests.push({ status: 200, body });
         const input = body.input;
         const texts = Array.isArray(input) ? input : [input];
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            object: "list",
-            data: texts.map((text, index) => ({
-              object: "embedding",
-              embedding: [String(text).length, index + 0.5, 3],
-              index,
-            })),
-            model: body.model,
-          }),
-        );
+        respond(res, 200, {
+          object: "list",
+          data: texts.map((text, index) => ({
+            object: "embedding",
+            embedding: [String(text).length, index + 0.5, 3],
+            index,
+          })),
+          model: body.model,
+        });
       } catch (error) {
         requests.push({ status: 500, body: {} });
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: String(error) } }));
+        respond(res, 500, { error: { message: String(error) } });
       }
     })();
   });
-  const listening = once(server, "listening");
-  server.listen(0, "127.0.0.1");
-  await listening;
-  const address = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   const fixture = {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
     setMode: (next: ServerMode) => {
       mode = next;

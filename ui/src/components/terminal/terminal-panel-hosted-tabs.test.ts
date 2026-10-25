@@ -7,6 +7,7 @@ import { createInitializationContext } from "../../pages/chat/chat-pane.test-sup
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import * as confirmation from "../confirm-dialog.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, readPanelHostedTabs } from "../panel-hosted-tabs.ts";
 import {
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
@@ -16,6 +17,7 @@ import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.tsx";
 import {
   createTerminalController,
+  createTerminalGatewayClient,
   createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
@@ -31,19 +33,15 @@ async function mount(embedded = true, tabsInHeader = true) {
   let nextOpen:
     | ReturnType<typeof createDeferred<ReturnType<typeof terminalOpenResult>>>
     | undefined;
-  const client: TerminalGatewayClient = {
-    forceReconnect: () => {},
-    request: async <T>(method: string) => {
-      if (method === "terminal.open") {
-        const reply = nextOpen;
-        nextOpen = undefined;
-        const immediate = terminalOpenResult(`session-${++sequence}`);
-        return (reply ? await reply.promise : immediate) as T;
-      }
-      return (method === "terminal.list" ? { sessions: [] } : { ok: true }) as T;
-    },
-    addEventListener: () => () => {},
-  };
+  const client: TerminalGatewayClient = createTerminalGatewayClient(async <T>(method: string) => {
+    if (method === "terminal.open") {
+      const reply = nextOpen;
+      nextOpen = undefined;
+      const immediate = terminalOpenResult(`session-${++sequence}`);
+      return (reply ? await reply.promise : immediate) as T;
+    }
+    return (method === "terminal.list" ? { sessions: [] } : { ok: true }) as T;
+  });
   const panel = createTestTerminalPanel(tagName);
   panel.available = true;
   panel.embedded = embedded;
@@ -116,9 +114,8 @@ describe("Terminal panel hosted tabs", () => {
       const oldController = createTerminalController();
       createGhosttyTerminalMock.mockResolvedValueOnce(oldController);
       const session = terminalOpenResult("retained-session");
-      const client: TerminalGatewayClient = {
-        forceReconnect: () => {},
-        request: async <T>(method: string) => {
+      const client: TerminalGatewayClient = createTerminalGatewayClient(
+        async <T>(method: string) => {
           // SAFETY: Each fixture reply matches the terminal method requested by the owner.
           return (
             method === "terminal.open" || method === "terminal.attach"
@@ -128,8 +125,7 @@ describe("Terminal panel hosted tabs", () => {
                 : { ok: true }
           ) as T;
         },
-        addEventListener: () => () => {},
-      };
+      );
       const first = createInitializationContext();
       const provider = createApplicationContextProvider(first);
       const panel = createTestTerminalPanel(tagName);
@@ -308,20 +304,6 @@ describe("Terminal panel hosted tabs", () => {
     }
   });
 
-  it("opens another shell for an explicit new-session toggle", async () => {
-    const { panel } = await mount();
-    panel.handleToggleRequest(
-      new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
-        detail: { open: true, newSession: true },
-      }),
-    );
-    await waitForFast(() => expect(panel.hostedTabs).toHaveLength(2));
-    await waitForFast(() =>
-      expect(panel.hostedTabs.every((tab) => tab.className === "is-live")).toBe(true),
-    );
-    await panel.updateComplete;
-  });
-
   it("keeps mobile docking hosted and routes upload through the embedded composer", async () => {
     const { panel } = await mount();
     panel.mobile = true;
@@ -406,6 +388,21 @@ describe("Terminal panel hosted tabs", () => {
     expect(cancel).toBeDefined();
     cancel!.click();
     await closing;
+    expect(panel.activeHostedTabId).toBe(id);
+    expect(panel.hostedTabs).toHaveLength(1);
+    expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
+  });
+
+  it("keeps a mobile terminal open and shows a rejected close confirmation", async () => {
+    const { panel, client } = await mount();
+    panel.mobile = true;
+    await panel.updateComplete;
+    const request = vi.spyOn(client, "request");
+    const failure = new Error("Close confirmation unavailable. Try again.");
+    vi.spyOn(confirmation, "showConfirmDialog").mockRejectedValueOnce(failure);
+    const id = panel.activeHostedTabId!;
+    await panel.closeHostedTab(id);
+    await waitForFast(() => expect(panel.textContent).toContain(failure.message));
     expect(panel.activeHostedTabId).toBe(id);
     expect(panel.hostedTabs).toHaveLength(1);
     expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);

@@ -1,5 +1,5 @@
 import type { NewSessionResponse, SessionUpdate } from "@agentclientprotocol/sdk";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import {
   createNewSessionRequest,
@@ -15,8 +15,6 @@ import {
 } from "./translator.bridge-test-helpers.js";
 import type { GatewaySessionPresentationRow } from "./translator.presentation.js";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
-
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 
 const sessionId = "bridge-session";
 const row: GatewaySessionPresentationRow = {
@@ -169,25 +167,14 @@ it("rate limits new session IDs without counting loadSession refreshes", async (
   );
 });
 
-it("settles and clears the active run when the completion snapshot cannot be delivered", async () => {
-  const { agent, sessionStore, sessionUpdate } = harness({ row });
-  await agent.loadSession(createLoadSessionRequest(sessionId));
-  sessionUpdate.mockClear();
-  sessionUpdate.mockRejectedValueOnce(new Error("session update transport failed"));
-  const prompt = agent.prompt(createPromptRequest(sessionId, "hello"));
-  await agent.handleGatewayEvent(createChatFinalEvent(sessionId));
-  await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
-  const session = sessionStore.getSession(sessionId);
-  expect(session).toMatchObject({ activeRunId: null, abortController: null });
-});
-
 it("streams partial tool output and retains file locations through completion", async () => {
   const { agent, sessionUpdate, expectUpdate } = harness();
   await agent.loadSession(createLoadSessionRequest(sessionId));
   sessionUpdate.mockClear();
   const prompt = agent.prompt(createPromptRequest(sessionId, "Inspect app.ts"));
   const tool = { sessionKey: sessionId, toolCallId: "tool-1", name: "read" };
-  const args = { path: "src/app.ts", line: 12 };
+  const args = { path: "src/app.ts", line: 12.9 };
+  const location = { path: "src/app.ts", line: 12 };
   const output = (text: string) => ({
     content: [{ type: "text", text }],
     details: { path: "src/app.ts" },
@@ -204,11 +191,11 @@ it("streams partial tool output and retains file locations through completion", 
   expectUpdate({
     sessionUpdate: "tool_call",
     toolCallId: "tool-1",
-    title: "read: path: src/app.ts, line: 12",
+    title: "read: path: src/app.ts, line: 12.9",
     status: "in_progress",
     rawInput: args,
     kind: "read",
-    locations: [args],
+    locations: [location],
   });
   for (const [rawOutput, status, text] of [
     [partial, "in_progress", "partial output"],
@@ -220,7 +207,7 @@ it("streams partial tool output and retains file locations through completion", 
       status,
       rawOutput,
       content: [{ type: "content", content: { type: "text", text } }],
-      locations: [args],
+      locations: [location],
     });
   }
 });

@@ -10,6 +10,7 @@ import * as sessions from "../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { loadSessionEntryAsync as loadEntry } from "./session-entry-load.test-support.js";
+import { holdSubagentExecution } from "./session-row-projection.read-fixture.test-support.js";
 import { createResidentSessionRowReader } from "./session-row-projection.test-support.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnlyAsync as loadGatewayEntry } from "./session-utils.js";
@@ -109,7 +110,9 @@ async function control(childSessionKey: string, controllerSessionKey: string, cr
     createdAt,
     startedAt: createdAt,
   });
+  const execution = holdSubagentExecution(childSessionKey, childSessionKey);
   subagentRuns.commitOwnership(subagentRuns.get(childSessionKey)!);
+  return execution;
 }
 
 afterEach(async () => {
@@ -256,6 +259,8 @@ test(
         if (!denied) {
           throw new Error("expected lifecycle tool overrides");
         }
+        expect(denied).toEqual(["blocked"]);
+        expect(Object.isFrozen(denied)).toBe(true);
         expect(() => denied.push("response-only")).toThrow(TypeError);
         expect((await rowReader.snapshot(parentA, { now })).row).toEqual(row);
       });
@@ -289,9 +294,10 @@ test(
       [navigation]: session("navigation", now),
       [child]: { ...session("child", now, navigation), spawnedBy: oldParent },
     });
-    await control(child, oldParent, now);
+    using oldControl = await control(child, oldParent, now);
     expect(await children(navigation, now)).toEqual([child]);
-    await control(child, newParent, now + 25);
+    oldControl[Symbol.dispose]();
+    using _ = await control(child, newParent, now + 25);
     expect(await children(navigation, now + 50)).toEqual([child]);
     expect(await children(oldParent, now + 50)).toBeUndefined();
     expect(await children(newParent, now + 50)).toEqual([child]);
@@ -306,37 +312,32 @@ test.each([false, true])(
       const parentKey = incognito ? "agent:main:dashboard:incognito-parent" : "agent:main:parent";
       const childKey = `agent:${agentId}:subagent:child`;
       const childStorePath = resolveSessionStorePathCore(undefined, { agentId });
+      const childTarget = { agentId, storePath: childStorePath, sessionKey: childKey };
       const childPrompt = "unused registry child prompt ".repeat(2048);
       await sessions.replaceSessionEntry(
         { agentId: MAIN_AGENT_ID, sessionKey: parentKey, ...(incognito ? {} : { storePath }) },
         { ...session("parent", now), ...(incognito ? { incognito: true } : {}) },
       );
-      await sessions.replaceSessionEntry(
-        { agentId, storePath: childStorePath, sessionKey: childKey },
-        {
-          ...session("child", now),
-          ...retainedDetails(now, childPrompt),
-        },
-      );
-      await control(childKey, parentKey, now);
+      await sessions.replaceSessionEntry(childTarget, {
+        ...session("child", now),
+        ...retainedDetails(now, childPrompt),
+      });
+      using childControl = await control(childKey, parentKey, now);
       await withParseSpy(async (parse) => {
         const sql = observeHostDataSql();
-        try {
-          const loaded = await loadChildren(parentKey);
-          expect(loaded.store[childKey]).toMatchObject({ sessionId: "child", updatedAt: now });
-          expectCompact(loaded.store[childKey]);
-          expectUnparsed(parse, childPrompt, '"systemPromptReport"');
-          expect(sql.queries).toEqual([]);
-        } finally {
-          sql.restore();
-        }
+        using _ = { [Symbol.dispose]: sql.restore };
+        const loaded = await loadChildren(parentKey);
+        expect(loaded.store[childKey]).toMatchObject({ sessionId: "child", updatedAt: now });
+        expectCompact(loaded.store[childKey]);
+        expectUnparsed(parse, childPrompt, '"systemPromptReport"');
+        expect(sql.queries).toEqual([]);
       });
       expect(await children(parentKey, now)).toEqual([childKey]);
 
-      await sessions.replaceSessionEntry(
-        { agentId, storePath: childStorePath, sessionKey: childKey },
-        { ...session("child", now + 1), label: "Updated child" },
-      );
+      await sessions.replaceSessionEntry(childTarget, {
+        ...session("child", now + 1),
+        label: "Updated child",
+      });
       expect((await loadChildren(parentKey)).store[childKey]?.label).toBe("Updated child");
 
       await sessions.deleteSessionEntryLifecycle({
@@ -347,5 +348,6 @@ test.each([false, true])(
       });
       expect((await loadChildren(parentKey)).store[childKey]).toBeUndefined();
       expect(await children(parentKey, now)).toBeUndefined();
+      childControl[Symbol.dispose]();
     })(),
 );

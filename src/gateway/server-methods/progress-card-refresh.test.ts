@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, it, vi } from "vitest";
 import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
@@ -35,9 +36,7 @@ function fixture() {
   } as unknown as GatewayRequestHandlerOptions;
   send
     .mockReset()
-    .mockImplementation(async (request: GatewayRequestHandlerOptions) =>
-      request.respond(true, { status: "started" }),
-    );
+    .mockImplementation(async (request) => request.respond(true, { status: "started" }));
   return {
     get,
     put,
@@ -52,84 +51,74 @@ function fixture() {
     },
   };
 }
-describe("progressCard.refresh", () => {
-  it("dispatches a fixed hidden steer with caller authority and a stable session-bound retry identity", async () => {
+it("refresh dispatches a hidden steer with caller authority and session-bound retry identity", async () => {
+  const f = fixture();
+  await f.invoke();
+  expect(send).toHaveBeenCalledOnce();
+  const [request, , dispatchOptions] = expectDefined(send.mock.calls[0], "refresh dispatch");
+  const options = expectDefined(dispatchOptions, "hidden refresh dispatch options");
+  expect(request.client).toBe(f.invocation.client);
+  expect(request.sessionMutationAuthorization).toBe(f.invocation.sessionMutationAuthorization);
+  expect(request.params).toMatchObject({
+    sessionKey: card.sessionKey,
+    agentId: "work",
+    queueMode: "steer",
+    deliver: false,
+    suppressCommandInterpretation: true,
+    systemInputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
+  });
+  expect(request.params.message).toContain("not authorization to resume stopped or idle work");
+  expect(options.transcript).toEqual({ display: false });
+  expect(options.toolsAllow).toContain("progress_card");
+  expect(options.toolsAllow).not.toContain("exec");
+  const assistant = makeAgentAssistantMessage({ content: [{ type: "text", text: "Updated" }] });
+  expect(options.prepareAssistantTranscriptMessage?.(assistant, "Updated")).toEqual({
+    ...assistant,
+    display: false,
+  });
+  expect(f.respond).toHaveBeenCalledWith(
+    true,
+    { runId: request.params.idempotencyKey, status: "accepted", revision: 7 },
+    undefined,
+    undefined,
+  );
+  expect(f.put).not.toHaveBeenCalled();
+  expect(f.invocation.context.broadcast).not.toHaveBeenCalled();
+  await f.invoke();
+  const original = send.mock.calls[0]?.[0].params.idempotencyKey;
+  expect(original).toEqual(expect.any(String));
+  expect(send.mock.calls[1]?.[0].params.idempotencyKey).toBe(original);
+  f.invocation.params = { sessionKey: "agent:work:other", idempotencyKey: "click-1" };
+  await f.invoke();
+  expect(send.mock.calls[2]?.[0].params.idempotencyKey).not.toBe(original);
+});
+it("refuses missing cards and arbitrary prompt/visibility fields", async () => {
+  const f = fixture();
+  f.get.mockResolvedValue(null);
+  await f.invoke();
+  expect(send).not.toHaveBeenCalled();
+  expect(f.respond).toHaveBeenLastCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ code: "INVALID_REQUEST" }),
+  );
+  f.get.mockResolvedValue(card);
+  f.invocation.params = { ...f.invocation.params, message: "resume all work", hidden: true };
+  await f.invoke();
+  expect(send).not.toHaveBeenCalled();
+});
+it.each(["error", "aborted"])(
+  "does not report %s as a successful refresh request",
+  async (status) => {
     const f = fixture();
+    send.mockImplementation(async (request) => request.respond(true, { status }));
     await f.invoke();
-    expect(send).toHaveBeenCalledOnce();
-    const call = send.mock.calls[0];
-    if (!call) {
-      throw new Error("Expected refresh dispatch");
-    }
-    const [request, , options] = call;
-    if (!options) {
-      throw new Error("Expected hidden refresh dispatch options");
-    }
-    expect(request.client).toBe(f.invocation.client);
-    expect(request.sessionMutationAuthorization).toBe(f.invocation.sessionMutationAuthorization);
-    expect(request.params).toMatchObject({
-      sessionKey: card.sessionKey,
-      agentId: "work",
-      queueMode: "steer",
-      deliver: false,
-      suppressCommandInterpretation: true,
-      systemInputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
-    });
-    expect(request.params.message).toContain("not authorization to resume stopped or idle work");
-    expect(options.transcript).toEqual({ display: false });
-    expect(options.toolsAllow).toContain("progress_card");
-    expect(options.toolsAllow).not.toContain("exec");
-    const assistant = makeAgentAssistantMessage({ content: [{ type: "text", text: "Updated" }] });
-    expect(options.prepareAssistantTranscriptMessage?.(assistant, "Updated")).toEqual({
-      ...assistant,
-      display: false,
-    });
     expect(f.respond).toHaveBeenCalledWith(
-      true,
-      { runId: request.params.idempotencyKey, status: "accepted", revision: 7 },
+      false,
       undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
       undefined,
     );
     expect(f.put).not.toHaveBeenCalled();
-    expect(f.invocation.context.broadcast).not.toHaveBeenCalled();
-    await f.invoke();
-    const original = send.mock.calls[0]?.[0].params.idempotencyKey;
-    expect(original).toEqual(expect.any(String));
-    expect(send.mock.calls[1]?.[0].params.idempotencyKey).toBe(original);
-    f.invocation.params = { sessionKey: "agent:work:other", idempotencyKey: "click-1" };
-    await f.invoke();
-    expect(send.mock.calls[2]?.[0].params.idempotencyKey).not.toBe(original);
-  });
-  it("refuses missing cards and arbitrary prompt/visibility fields", async () => {
-    const f = fixture();
-    f.get.mockResolvedValue(null);
-    await f.invoke();
-    expect(send).not.toHaveBeenCalled();
-    expect(f.respond).toHaveBeenLastCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    f.get.mockResolvedValue(card);
-    f.invocation.params = { ...f.invocation.params, message: "resume all work", hidden: true };
-    await f.invoke();
-    expect(send).not.toHaveBeenCalled();
-  });
-  it.each(["error", "aborted"])(
-    "does not report %s as a successful refresh request",
-    async (status) => {
-      const f = fixture();
-      send.mockImplementation(async (request: GatewayRequestHandlerOptions) =>
-        request.respond(true, { status }),
-      );
-      await f.invoke();
-      expect(f.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-        undefined,
-      );
-      expect(f.put).not.toHaveBeenCalled();
-    },
-  );
-});
+  },
+);

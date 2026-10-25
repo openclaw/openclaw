@@ -51,17 +51,19 @@ describe("webhooks cli", () => {
   });
 
   it.each([
-    ["setup", "--port", "8080x", true],
-    ["run", "--max-bytes", "10mb"],
-    ["run", "--renew-minutes", "30m"],
-  ])("rejects partial gmail %s %s", async (command, flag, value, json = false) => {
+    ["setup", "--port", "8080x", "--port must be a positive integer.", true],
+    ["run", "--max-bytes", "10mb", "--max-bytes must be a positive integer."],
+    ["run", "--renew-minutes", "30m", "--renew-minutes must be a positive integer."],
+    ["setup", "--tailscale", "", "Invalid --tailscale (must be funnel, serve, or off)."],
+    ["run", "--tailscale", "offf", "Invalid --tailscale (must be funnel, serve, or off)."],
+  ])("rejects invalid gmail %s %s=%j", async (command, flag, value, message, json = false) => {
     const args = [flag, value, ...(json ? ["--json"] : [])];
     if (json) {
-      await expect(parse(command, args)).rejects.toThrow(`${flag} must be a positive integer.`);
+      await expect(parse(command, args)).rejects.toThrow(message);
       expectNoRuntimeOutput();
     } else {
       await expect(parse(command, args)).rejects.toThrow("__exit__:1");
-      expect(runtimeErrors().join("\n")).toContain(`${flag} must be a positive integer.`);
+      expect(runtimeErrors().join("\n")).toContain(message);
     }
     expectNoGmailCalls();
   });
@@ -93,17 +95,6 @@ describe("webhooks cli", () => {
     for (const privateValue of [error.name, secret]) {
       expect(output).not.toContain(privateValue);
     }
-  });
-
-  it.each([
-    ["setup", ""],
-    ["run", "offf"],
-  ])("rejects invalid gmail %s --tailscale mode %j", async (command, mode) => {
-    await expect(parse(command, ["--tailscale", mode])).rejects.toThrow("__exit__:1");
-    expect(runtimeErrors().join("\n")).toContain(
-      "Invalid --tailscale (must be funnel, serve, or off).",
-    );
-    expectNoGmailCalls();
   });
 
   it("accepts an explicitly disabled Gmail exposure mode", async () => {

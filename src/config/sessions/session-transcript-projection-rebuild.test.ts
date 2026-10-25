@@ -31,6 +31,7 @@ import {
   finalizePreparedSessionTranscriptProjectionInTransaction as finalizeProjection,
   prepareSessionTranscriptProjection as prepareProjection,
 } from "./session-transcript-projection-rebuild.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
@@ -142,12 +143,10 @@ function projectionFixture(seed = true) {
     const id = i % 2 ? "sibling" : "target";
     const seq = Math.floor(i / 2);
     const eventId = `${id}-${seq}`;
-    const event = {
-      type: "message",
-      id: eventId,
-      parentId: seq ? `${id}-${seq - 1}` : null,
-      message: { role: "user", content: `needle ${eventId}` },
-    };
+    const event = messageEvent(eventId, seq ? `${id}-${seq - 1}` : null, {
+      role: "user",
+      content: `needle ${eventId}`,
+    });
     inserters.get(id)!({ seq, eventJson: JSON.stringify(event), createdAt: seq });
     expect(appenders.get(id)!.append({ seq, event, eventId, createdAt: seq })).toBe(false);
   }

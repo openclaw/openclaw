@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement as awaitGate } from "../../../test/helpers/promise.js";
 import {
   bindMessageInjectionAdmission,
   MessageInjectionAcceptedUnconfirmedError,
@@ -49,6 +49,69 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 
 registerAgentSessionLoopTestLifecycle();
+type Session = Awaited<ReturnType<typeof createTestSession>>["session"];
+function steer(
+  session: Session,
+  text: string,
+  {
+    canAdmit = () => true,
+    prepare,
+    recorder,
+  }: {
+    canAdmit?: () => boolean;
+    prepare?: () => Promise<void>;
+    recorder?: Parameters<Session["steer"]>[2];
+  },
+) {
+  return session.steer(
+    text,
+    undefined,
+    recorder,
+    undefined,
+    undefined,
+    undefined,
+    canAdmit,
+    undefined,
+    prepare,
+  );
+}
+const currentGuard = (assertCurrent: () => void) => () => {
+  assertCurrent();
+  return true;
+};
+function preparedInjection(
+  session: Session,
+  {
+    sessionKey,
+    before = () => {},
+    after,
+  }: { sessionKey?: string; before?: () => void; after?: () => Promise<void> } = {},
+): ReplyBackendMessageInjectionV2 {
+  return {
+    version: 2,
+    isAvailable: () => true,
+    async queueMessage() {
+      throw new Error("Expected prepared steering");
+    },
+    queueMessageAsync(text, options, preparation) {
+      before();
+      return steerActiveSessionWithOptionalDeliveryWait(
+        session,
+        text,
+        options,
+        sessionKey,
+        currentGuard(() => preparation.assertCurrent()),
+        undefined,
+        after
+          ? async () => {
+              await preparation.prepareCurrent();
+              await after();
+            }
+          : preparation.prepareCurrent,
+      );
+    },
+  };
+}
 afterEach(() => {
   embeddedTesting.resetActiveEmbeddedRuns();
   testing.resetSessionControllerForTest();
@@ -59,83 +122,55 @@ afterEach(() => {
 it.each(["allowed", "refused", "revoked"] as const)(
   "retains the independent embedded caller guard through real enqueue: %s",
   async (caller) => {
+    const allowed = caller === "allowed";
     const { session } = await createTestSession();
-    const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     let canInject = caller !== "refused";
     const onQueueAccepted = vi.fn();
-    const sourcePreparation = {
-      assertCurrent() {},
-      async prepareCurrent() {},
-    };
-    const injection: ReplyBackendMessageInjectionV2 = {
-      version: 2,
-      isAvailable: () => true,
-      async queueMessage() {
-        throw new Error("Expected prepared embedded steering");
+    const injection = preparedInjection(session, {
+      after: async () => {
+        if (caller === "revoked") {
+          entered.resolve();
+          await resume.promise;
+        }
       },
-      queueMessageAsync: (text, options, preparation) =>
-        steerActiveSessionWithOptionalDeliveryWait(
-          session,
-          text,
-          options,
-          undefined,
-          () => {
-            preparation.assertCurrent();
-            return true;
-          },
-          undefined,
-          async () => {
-            await preparation.prepareCurrent();
-            if (caller === "revoked") {
-              entered.resolve();
-              await resume.promise;
-            }
-          },
-        ),
-    };
-    const sessionId = `independent-caller-${caller}`;
+    });
+    const sessionId = `caller-${caller}`;
     setActiveEmbeddedRun(sessionId, {
       ...createEmbeddedRunHandle(),
       messageInjectionV2: injection,
     });
-    const outcome = steerTestSessionTurn(sessionId, "independent caller input", {
+    const outcome = steerTestSessionTurn(sessionId, "input", {
       onQueueAccepted,
       canAdmit: () => canInject,
       assertCurrent: () => {
         if (!canInject) {
-          throw new Error("independent caller revoked");
+          throw new Error("caller revoked");
         }
       },
       toolAuthorityPreparation: {
-        ...sourcePreparation,
+        assertCurrent() {},
+        async prepareCurrent() {},
         compatAssertCurrent() {},
       },
     });
     void outcome.catch(() => {});
     try {
       if (caller === "revoked") {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          outcome,
-          "Final preparation was not reached",
-        );
+        await awaitGate(entered.promise, outcome, "Preparation not reached");
         canInject = false;
         resume.resolve();
       }
-      if (caller !== "allowed") {
-        await expect(outcome).rejects.toThrow("independent caller revoked");
+      if (!allowed) {
+        await expect(outcome).rejects.toThrow("caller revoked");
       } else {
         await expect(outcome).resolves.toMatchObject({ status: "accepted" });
       }
-      if (caller === "allowed") {
-        expect(enqueue).toHaveBeenCalledOnce();
-        expect(session.getSteeringMessages()).toEqual(["independent caller input"]);
+      expect(session.getSteeringMessages()).toEqual(allowed ? ["input"] : []);
+      if (allowed) {
         expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
       } else {
-        expect(enqueue).not.toHaveBeenCalled();
-        expect(session.getSteeringMessages()).toEqual([]);
         expect(onQueueAccepted).not.toHaveBeenCalledWith(true);
       }
     } finally {
@@ -151,30 +186,16 @@ it("orders final steering preparation through the actual session enqueue", async
   const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const steer = (text: string, prepare: () => Promise<void>) =>
-    session.steer(
-      text,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      () => true,
-      undefined,
-      prepare,
-    );
-  const first = steer("first", async () => {
-    entered.resolve();
-    await release.promise;
+  const first = steer(session, "first", {
+    prepare: async () => {
+      entered.resolve();
+      await release.promise;
+    },
   });
   const pending = [first];
   try {
-    await awaitGateBeforeSettlement(
-      entered.promise,
-      first,
-      "first final preparation did not start",
-    );
-    pending.push(steer("second", async () => {}));
+    await awaitGate(entered.promise, first, "First preparation not reached");
+    pending.push(steer(session, "second", { prepare: async () => {} }));
     await vi.advanceTimersByTimeAsync(0);
     expect(enqueue).not.toHaveBeenCalled();
     release.resolve();
@@ -203,16 +224,16 @@ it.each([
         tools: { sandbox: { tools: { deny: ["exec"] } } },
       };
       setRuntimeConfigSnapshot(config);
-      const sessionKey = `agent:main:execution-${surface}-${changePolicy}`;
-      const policyKey = `agent:main:policy-${surface}-${changePolicy}`;
-      const sessionId = `execution-${surface}-${changePolicy}`;
+      const sessionKey = "agent:main:execution";
+      const policyKey = "agent:main:policy";
+      const sessionId = "execution";
       const policyScope = { agentId: "main", sessionKey: policyKey, env: state.env };
       await upsertSessionEntryCore(policyScope, {
         sessionId: "independent-policy",
         updatedAt: 1,
         sandboxMode: "off",
       });
-      const run = createQueueTestRun({ prompt: "input under current caller policy" });
+      const run = createQueueTestRun({ prompt: "input" });
       Object.assign(run.run, {
         agentId: "main",
         sessionKey,
@@ -225,30 +246,13 @@ it.each([
       await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
       const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
       const { session } = await createTestSession();
-      const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
       let atBackend = false;
-      const injection: ReplyBackendMessageInjectionV2 = {
-        version: 2,
-        isAvailable: () => true,
-        async queueMessage() {
-          throw new Error("Expected prepared steering");
-        },
-        queueMessageAsync: (text, options, preparation) => {
+      const injection = preparedInjection(session, {
+        sessionKey,
+        before: () => {
           atBackend = true;
-          return steerActiveSessionWithOptionalDeliveryWait(
-            session,
-            text,
-            options,
-            sessionKey,
-            () => {
-              preparation.assertCurrent();
-              return true;
-            },
-            undefined,
-            preparation.prepareCurrent,
-          );
         },
-      };
+      });
       const handle = {
         ...createEmbeddedRunHandle({ runId: sessionId, toolAuthorityFingerprint: fingerprint }),
         kind: "embedded" as const,
@@ -260,14 +264,14 @@ it.each([
       setActiveEmbeddedRun(sessionId, handle, sessionKey);
       let changed = false;
       const project = operation.projectToolAuthorityFingerprintAsync;
-      const delayed = vi
+      using _ = vi
         .spyOn(operation, "projectToolAuthorityFingerprintAsync")
         .mockImplementation(async (caller) => {
           const result = await project(caller);
           if (atBackend && !changed) {
             changed = true;
             await updateSessionEntry(policyScope, () =>
-              changePolicy ? { sandboxMode: undefined } : { label: "renamed policy session" },
+              changePolicy ? { sandboxMode: undefined } : { label: "renamed" },
             );
           }
           return result;
@@ -291,10 +295,8 @@ it.each([
               ).queued;
         expect(changed).toBe(true);
         expect(accepted).toBe(!changePolicy);
-        expect(enqueue).toHaveBeenCalledTimes(changePolicy ? 0 : 1);
         expect(session.getSteeringMessages()).toEqual(changePolicy ? [] : [run.prompt]);
       } finally {
-        delayed.mockRestore();
         operation.complete();
       }
     });
@@ -348,7 +350,6 @@ it.each([
       });
       const overlay = toolAuthorityOverlay(run);
       const { session } = await createTestSession();
-      const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
       const recorderEntered = createDeferredCore();
       const releaseRecorder = createDeferredCore();
       const policyPrepared = createDeferredCore();
@@ -376,42 +377,25 @@ it.each([
         version: 2,
         isAvailable: () => true,
         queueMessage: (text, options, assertOwner) =>
-          session.steer(
-            text,
-            undefined,
-            options?.userTurnTranscriptRecorder,
-            undefined,
-            undefined,
-            undefined,
-            () => {
-              assertOwner();
-              return true;
-            },
-          ),
+          steer(session, text, {
+            canAdmit: currentGuard(assertOwner),
+            recorder: options?.userTurnTranscriptRecorder,
+          }),
         ...(change.startsWith("legacy-")
           ? {}
           : {
               queueMessageAsync: (async (text, options, preparation) =>
-                session.steer(
-                  text,
-                  undefined,
-                  options?.userTurnTranscriptRecorder,
-                  undefined,
-                  undefined,
-                  undefined,
-                  () => {
-                    preparation.assertCurrent();
-                    return true;
-                  },
-                  undefined,
-                  async () => {
+                steer(session, text, {
+                  canAdmit: currentGuard(() => preparation.assertCurrent()),
+                  prepare: async () => {
                     await preparation.prepareCurrent();
                     if (change === "worker-revoked") {
                       policyPrepared.resolve();
                       await releasePolicy.promise;
                     }
                   },
-                )) satisfies NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>,
+                  recorder: options?.userTurnTranscriptRecorder,
+                })) satisfies NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>,
             }),
       };
       const handle = {
@@ -442,43 +426,30 @@ it.each([
                 // Controller authority failures reject; both surfaces must leave input unqueued.
                 () => false,
               );
-        await awaitGateBeforeSettlement(
-          recorderEntered.promise,
-          accepted,
-          "Steering settled before recorder preparation",
-        );
-        if (
-          change === "legacy-session" ||
-          change === "legacy-revision" ||
-          change === "legacy-metadata"
-        ) {
+        await awaitGate(recorderEntered.promise, accepted, "Recorder not reached");
+        const policyUpdate =
+          change === "worker-revoked"
+            ? undefined
+            : change === "legacy-session"
+              ? { sessionId: "replacement" }
+              : change === "legacy-revision"
+                ? { lifecycleRevision: "replacement" }
+                : change === "legacy-metadata"
+                  ? { label: "renamed" }
+                  : { sandboxMode: undefined };
+        if (policyUpdate) {
           await updateSessionEntry(
             { agentId: "main", sessionKey: policyKey, storePath: database.path },
-            () =>
-              change === "legacy-session"
-                ? { sessionId: "replacement" }
-                : change === "legacy-revision"
-                  ? { lifecycleRevision: "replacement" }
-                  : { label: "renamed" },
-          );
-        } else if (change !== "worker-revoked") {
-          await updateSessionEntry(
-            { agentId: "main", sessionKey: policyKey, storePath: database.path },
-            () => ({ sandboxMode: undefined }),
+            () => policyUpdate,
           );
         }
         releaseRecorder.resolve();
         if (change === "worker-revoked") {
-          await awaitGateBeforeSettlement(
-            policyPrepared.promise,
-            accepted,
-            "Steering settled before policy preparation",
-          );
+          await awaitGate(policyPrepared.promise, accepted, "Policy not reached");
           current = false;
           releasePolicy.resolve();
         }
         await expect(accepted).resolves.toBe(change === "legacy-metadata");
-        expect(enqueue).toHaveBeenCalledTimes(change === "legacy-metadata" ? 1 : 0);
         expect(session.getSteeringMessages()).toEqual(
           change === "legacy-metadata" ? ["steer"] : [],
         );
@@ -505,10 +476,8 @@ it.each([
     const release = createDeferredCore();
     const cleanupError = new Error("admission cleanup failed");
     const notificationError = new Error("queue notification failed");
-    const cleanupFails =
-      outcome === "cleanup-failed" || outcome === "cleanup-and-notification-failed";
-    const notificationFails =
-      outcome === "notification-failed" || outcome === "cleanup-and-notification-failed";
+    const cleanupFails = outcome.includes("cleanup");
+    const notificationFails = outcome.includes("notification");
     let insideAdmission = false;
     let callerCurrent = true;
     const prepare = async () => {};
@@ -545,19 +514,9 @@ it.each([
         notified();
       }
     });
-    const pending = session.steer(
-      "owned enqueue",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      () => callerCurrent,
-      undefined,
-      prepare,
-    );
+    const pending = steer(session, "owned enqueue", { canAdmit: () => callerCurrent, prepare });
     try {
-      await awaitGateBeforeSettlement(entered.promise, pending, "Final admission was not entered");
+      await awaitGate(entered.promise, pending, "Admission not reached");
       expect(enqueue).not.toHaveBeenCalled();
       callerCurrent = outcome !== "revoked";
       release.resolve();
@@ -625,7 +584,7 @@ it.each(["current", "notification", "preflight", "both", "refused"] as const)(
     });
     const active = session.prompt("active run");
     try {
-      await awaitGateBeforeSettlement(entered.promise, active, "Active prompt never streamed");
+      await awaitGate(entered.promise, active, "Prompt never streamed");
       const pending = session.prompt("streamed prompt", {
         streamingBehavior: feedback === "refused" ? undefined : "steer",
         preflightResult,

@@ -4,15 +4,18 @@ import path from "node:path";
 import { finished } from "node:stream/promises";
 import { expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../api/types.ts";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import {
+  callGateway,
+  createChatGatewayInstance,
+  gatewayChatUrl,
+} from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:stop-finished";
@@ -40,20 +43,15 @@ type EventPayload = {
   data?: { phase?: string };
   session?: SessionDescriptor;
   sessions?: SessionDescriptor[];
-  ok?: boolean;
-  aborted?: boolean;
-  runIds?: string[];
   sessionInfo?: SessionDescriptor;
 };
 type Frame = {
   type: string;
   id?: string;
   ok?: boolean;
-  error?: { code?: string; message?: string };
   method?: string;
   params?: Record<string, unknown>;
   event?: string;
-  seq?: number;
   payload?: EventPayload;
 };
 let artifactDir: string;
@@ -126,30 +124,15 @@ const suite = createControlUiE2eSuite({
     artifactDir = createControlUiE2eArtifactDir("stop-finished-run");
     provider = await startProvider();
     try {
-      instance = await createOpenClawTestInstance({
+      instance = await createChatGatewayInstance({
         name: "stop-finished-run",
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
-        config: {
-          gateway: { controlUi: { enabled: true } },
-          cron: { enabled: false },
-          agents: {
-            ownership: "explicit",
-            defaults: { model: "stop-fixture/echo", modelPolicy: { allow: ["stop-fixture/*"] } },
-            entries: { main: { identity: { name: "Stop fixture" } } },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              "stop-fixture": {
-                api: "openai-responses",
-                apiKey: "synthetic-unused-key",
-                baseUrl: `http://127.0.0.1:${provider.port}/v1`,
-                models: [{ id: "echo", name: "Echo" }],
-              },
-            },
-          },
-          plugins: { allow: [] },
-        },
+        provider: "stop-fixture",
+        identity: "Stop fixture",
+        model: "echo",
+        agents: { ownership: "explicit" },
+        apiKey: "synthetic-unused-key",
+        baseUrl: `http://127.0.0.1:${provider.port}/v1`,
+        models: [{ id: "echo", name: "Echo" }],
       });
       await instance.startGateway();
       return {
@@ -191,12 +174,7 @@ suite.define(() => {
         let delayTerminalDescriptors = true;
         const deferredDescriptors: Array<() => void> = [];
         const call = async (method: string, params: Record<string, unknown>) => {
-          const args = ["gateway", "call", method, "--json", "--params", JSON.stringify(params)];
-          const result = await instance.cli(args);
-          expect(result.code, `${method}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(
-            0,
-          );
-          return JSON.parse(result.stdout);
+          return JSON.parse(await callGateway(instance, method, params));
         };
         const sessionRow = async () => {
           const result: SessionsListResult = await call("sessions.list", {
@@ -255,12 +233,7 @@ suite.define(() => {
           agentId: "main",
           label: "Stop finished run",
         });
-        const handoff = await instance.cli(["dashboard", "--json"]);
-        expect(handoff.code, handoff.stderr).toBe(0);
-        const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
-        const url = new URL(browserUrl);
-        url.pathname = "/chat/main/stop-finished";
-        url.search = "";
+        const url = await gatewayChatUrl(instance, "stop-finished");
         await suite.withPage(
           { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
           async ({ page }) => {
@@ -364,16 +337,7 @@ suite.define(() => {
             const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
             const browserState = () =>
               pane.evaluate((element) => {
-                const state = (
-                  element as HTMLElement & {
-                    state: {
-                      sessionKey: string;
-                      chatRunId: string | null;
-                      chatSending: boolean;
-                      chatLoading: boolean;
-                    };
-                  }
-                ).state;
+                const state = (element as HTMLElement & { state: ChatPageHost }).state;
                 return {
                   sessionKey: state.sessionKey,
                   runId: state.chatRunId,

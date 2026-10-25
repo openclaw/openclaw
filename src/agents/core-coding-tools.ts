@@ -21,7 +21,6 @@ import {
   createSandboxedWriteTool,
   resolveAdaptiveReadMaxBytes,
   type SkillInstructionDeliveryCache,
-  type SkillInstructionDeliveryMarkers,
   wrapReadToolWithSkillContent,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapSandboxFileToolPath,
@@ -189,7 +188,6 @@ type CoreCodingToolsOptions = {
   skillReadResources?: SkillSnapshot["resolvedSkills"];
   skillInstructionPaths?: readonly string[];
   skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
-  skillInstructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;
@@ -268,7 +266,11 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                 bridge: sandboxFsBridge,
                 normalizeGuardedPathParams: true,
               }
-            : { resolutionCwd: options.codingRoot, normalizeGuardedPathParams: true },
+            : {
+                resolutionCwd: options.codingRoot,
+                normalizeGuardedPathParams: true,
+                allowLinkedWorktrees: tool.name !== "ls",
+              },
         )
       : tool;
 
@@ -339,6 +341,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
+                allowLinkedWorktrees: true,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,
               },
@@ -357,24 +360,10 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       bindAgentToolReplaySafety(
         wrapReadToolWithSkillContent(
           sandboxRoot ? wrapped : wrapWorkspaceSkillRead(wrapped, skillReadResources, options),
-          // A sandboxed run serves filesystem paths through its guarded bridge.
-          // Host-retained content and host-tree stamps describe host bytes:
-          // carrying either into the sandboxed wrapper would serve pre-sandbox
-          // instructions without consulting the bridge, or attribute
-          // bridge-served bytes to a host bundle. Drop both so filesystem reads
-          // use the bridge and carry no delivery identity — the activation then
-          // omits a fingerprint rather than borrowing a host stamp. node://
-          // entries have no filesystem path — retained content is their only
-          // serving route — so they keep their bytes and producer-stamped
-          // identity on every run.
-          skillReadResources?.map((skill) => {
-            const retainHostContent = !sandboxRoot || skill.filePath.startsWith("node://");
-            return {
-              filePath: resolveSkillReadPath(skill),
-              readContent: retainHostContent ? skill.readContent : undefined,
-              bundleFingerprint: retainHostContent ? skill.bundleFingerprint : undefined,
-            };
-          }),
+          skillReadResources?.map((skill) => ({
+            filePath: resolveSkillReadPath(skill),
+            readContent: skill.readContent,
+          })),
           {
             modelContextWindowTokens: options.modelContextWindowTokens,
             imageSanitization: options.imageSanitization,
@@ -382,7 +371,6 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             containerWorkdir: sandbox?.containerWorkdir,
             instructionPaths: options.skillInstructionPaths,
             instructionDeliveryCache: options.skillInstructionDeliveryCache,
-            instructionDeliveryMarkers: options.skillInstructionDeliveryMarkers,
           },
         ),
         "bounded-read",

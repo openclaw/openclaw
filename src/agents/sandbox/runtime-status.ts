@@ -9,10 +9,7 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
-import {
-  resolveSessionStorePathCore,
-  resolveSessionStorePathWithContext,
-} from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnlyResultInScope } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import {
@@ -186,14 +183,10 @@ export async function withSandboxRuntimeStatusInWorker<T>(
       source.readSource?.path ??
       (reader && !params.cfg?.session?.store?.trim()
         ? reader.database.path
-        : resolveSessionStorePathWithContext(
-            params.cfg?.session?.store,
-            {
-              agentId: classification.classificationAgentId,
-              env: source.env,
-            },
-            { cwd: source.cwd },
-          )),
+        : resolveSessionStorePathCore(params.cfg?.session?.store, {
+            agentId: classification.classificationAgentId,
+            env: source.env,
+          })),
     env: source.env,
   };
   const memory = captureSessionActorStorageOwner(scope, {
@@ -314,14 +307,10 @@ export function withSandboxRuntimeStatusesInWorker<T>(
     if (!classification.classificationSessionKey) {
       return () => project(undefined);
     }
-    const storePath = resolveSessionStorePathWithContext(
-      params.cfg?.session?.store,
-      {
-        agentId: classification.classificationAgentId,
-        env: source.env,
-      },
-      { cwd: source.cwd },
-    );
+    const storePath = resolveSessionStorePathCore(params.cfg?.session?.store, {
+      agentId: classification.classificationAgentId,
+      env: source.env,
+    });
     const target = {
       agentId: classification.classificationAgentId,
       sessionKey: resolveSqliteSessionKey(

@@ -86,6 +86,7 @@ export function mountPage(
   const context = {
     gateway: harness.gateway,
     runtimeConfig,
+    router: { subscribe: () => () => {} },
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
   const mounted = mountSolid(() =>

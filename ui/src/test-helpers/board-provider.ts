@@ -1,6 +1,6 @@
 import type { BoardCommand, BoardCommandEvent, BoardSnapshot } from "@openclaw/gateway-protocol";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { t } from "../i18n/index.ts";
-import { normalizeBoardWidgetTitle } from "../lib/board/provider-helpers.ts";
 import { EventStream, ValueSignal } from "../lib/board/provider-signals.ts";
 import type {
   BoardPinMcpAppInput,
@@ -57,7 +57,8 @@ export function createMockBoardProvider(rawSessionKey: string): BoardProvider & 
     contentKind: "html" | "mcp-app",
   ): void {
     const snapshot = snapshot$.value;
-    const title = normalizeBoardWidgetTitle(input.title);
+    const normalizedTitle = input.title?.trim() ?? "";
+    const title = normalizedTitle ? truncateCodePoints(normalizedTitle, 80) : undefined;
     const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
     const tabs = snapshot.tabs.length
       ? snapshot.tabs

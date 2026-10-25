@@ -21,6 +21,7 @@ import {
   controlUiPageOptions,
   historyMessages,
   startControlUiGateway,
+  stopControlUiGateway,
   writeControlUiVerdict,
 } from "./control-ui-gateway.e2e.test-support.ts";
 import { createQaLiveLaneGateway } from "./live-transports/shared/live-gateway.runtime.ts";
@@ -63,6 +64,7 @@ function startGateway(owner: ReturnType<typeof createQaLiveLaneGateway>) {
 
 const pageOptions = () => controlUiPageOptions(suite.artifactDir);
 const screenshot = (page: Page, name: string) => captureControlUi(page, suite.artifactDir, name);
+const writeVerdict = (verdict: unknown) => writeControlUiVerdict(suite.artifactDir, verdict);
 
 async function expectLoadedImage(image: Locator) {
   await image.waitFor({ state: "visible" });
@@ -73,24 +75,17 @@ async function expectLoadedImage(image: Locator) {
     .toBe(64);
 }
 
-const writeVerdict = (verdict: unknown) => writeControlUiVerdict(suite.artifactDir, verdict);
-
 async function send(page: Page, text: string) {
   await page.locator(".agent-chat__composer-combobox textarea").fill(text);
   await page.getByRole("button", { name: "Send message" }).click();
 }
 
 async function healthyReplay(readHistory: () => Promise<unknown>, text: string) {
-  try {
-    await expect
-      .poll(async () => historyHasAssistantText(await readHistory(), text), {
-        timeout: 30_000,
-      })
-      .toBe(true);
-    return true;
-  } catch {
-    return false;
-  }
+  await expect
+    .poll(async () => historyHasAssistantText(await readHistory(), text), {
+      timeout: 30_000,
+    })
+    .toBe(true);
 }
 
 async function createPptx(): Promise<Buffer> {
@@ -131,25 +126,12 @@ async function readRawAssistantMessages(stateDir: string): Promise<PersistedAssi
     path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite"),
     (eventJson) => {
       const message = (JSON.parse(eventJson) as { message?: unknown }).message;
-      if (
-        message &&
-        typeof message === "object" &&
-        (message as { role?: unknown }).role === "assistant"
-      ) {
+      if (asOptionalRecord(message)?.role === "assistant") {
         messages.push(message as PersistedAssistantMessage);
       }
     },
   );
   return messages;
-}
-
-function readModelReplayError(messages: AssistantMessage[]): string | null {
-  try {
-    transformMessages(messages, replayModel);
-    return null;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
 }
 
 suite.define(() => {
@@ -228,7 +210,6 @@ suite.define(() => {
         const visiblePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         const card = omittedCard(visiblePane);
         await card.waitFor({ state: "visible" });
-        const omittedCardText = await card.textContent();
         const omittedInteractiveDescendantCount = await card
           .locator("a, button, img, audio, video")
           .count();
@@ -257,20 +238,9 @@ suite.define(() => {
         await expectLoadedImage(retainedPreview);
         expect(await omittedCard(retainedPane).count()).toBe(0);
         await writeVerdict({
-          gateway: {
-            omittedHasMarker: JSON.stringify(omittedHistory).includes('"omitted":true'),
-            recoveredArtifactId: artifactId,
-            recoveredExcludesInlinePayload:
-              !JSON.stringify(recoveredHistory).includes(retainedImageBase64),
-            downloadedPixelsMatch: asOptionalRecord(download)?.data === retainedImageBase64,
-            retainedIncludesUrl: JSON.stringify(retainedHistory).includes(retainedImageUrl),
-          },
-          ui: {
-            omittedCardText,
-            omittedInteractiveDescendantCount,
-            retainedImageSrc: await retainedPreview.getAttribute("src"),
-            retainedOmittedCardCount: await omittedCard(retainedPane).count(),
-          },
+          omittedImage,
+          recoveredImage,
+          retainedImage: imageInHistory(retainedHistory),
         });
         await screenshot(page, "04-retained-image.png");
       });
@@ -284,29 +254,22 @@ suite.define(() => {
     { timeout: 180_000 },
     async () => {
       const startedAt = performance.now();
-      // A suite deadline can expire without a Playwright locator stack.
-      const reportPhase = (phase: string) => {
+      // Suite deadlines can expire without a Playwright locator stack.
+      const reportPhase = (phase: string) =>
         console.info("[media-transcript]", {
           phase,
           elapsedMs: Math.round(performance.now() - startedAt),
         });
-      };
       const gatewayOwner = createQaLiveLaneGateway();
-      const proofDir = suite.artifactDir;
       const errors: unknown[] = [];
       try {
         reportPhase("gateway-starting");
         const gateway = await startGateway(gatewayOwner);
         await writeFile(path.join(gateway.gateway.workspaceDir, "slides.pptx"), await createPptx());
-        expect(await gateway.gateway.call("config.get", {})).toMatchObject({
-          config: {
-            agents: {
-              entries: {
-                qa: { model: { primary: "mock-openai/gpt-5.6-luna" } },
-              },
-            },
-          },
-        });
+        expect(await gateway.gateway.call("config.get", {})).toHaveProperty(
+          "config.agents.entries.qa.model.primary",
+          "mock-openai/gpt-5.6-luna",
+        );
 
         await suite.withPage(pageOptions(), async ({ page }) => {
           const history = (limit: number) =>
@@ -337,77 +300,63 @@ suite.define(() => {
           await card.waitFor();
           const firstCardText = (await card.textContent()) ?? "";
           await screenshot(page, "01-pptx-result.png");
-          const firstHistory = await history(20);
+          expect(firstCardText).not.toContain("Not sent");
 
           // Persisted replies can precede the browser's terminal event.
           await stop.waitFor({ state: "hidden" });
           await send(page, "Reply exactly `Session healthy`");
-          const successPathHealthy = await healthyReplay(() => history(20), "Session healthy");
+          await healthyReplay(() => history(20), "Session healthy");
           reportPhase("success-replay-checked");
-          let failureCardVisible = firstCardText.includes("Not sent");
-          let failurePathHealthy = false;
-          if (successPathHealthy) {
-            await stop.waitFor({ state: "hidden" });
-            await send(page, "Reply exactly `Missing file\nMEDIA:./missing-proof.txt`");
-            const failureCard = page.locator(".chat-assistant-attachment-card", {
-              hasText: "missing-proof.txt",
-            });
-            await failureCard.waitFor();
-            failureCardVisible = ((await failureCard.textContent()) ?? "").includes("Not sent");
-            await stop.waitFor({ state: "hidden" });
-            await send(page, "Reply exactly `Session recovered`");
-            failurePathHealthy = await healthyReplay(() => history(30), "Session recovered");
-            reportPhase("failure-replay-checked");
-          }
-          const secondHistory = await history(30);
+          await stop.waitFor({ state: "hidden" });
+          await send(page, "Reply exactly `Missing file\nMEDIA:./missing-proof.txt`");
+          const failureCard = page.locator(".chat-assistant-attachment-card", {
+            hasText: "missing-proof.txt",
+          });
+          await failureCard.waitFor();
+          expect(await failureCard.textContent()).toContain("Not sent");
+          await stop.waitFor({ state: "hidden" });
+          await send(page, "Reply exactly `Session recovered`");
+          await healthyReplay(() => history(30), "Session recovered");
+          reportPhase("failure-replay-checked");
           const stateDir = gateway.gateway.runtimeEnv.OPENCLAW_STATE_DIR;
           if (!stateDir) {
             throw new Error("QA Gateway state directory is unavailable");
           }
           const rawAssistantMessages = await readRawAssistantMessages(stateDir);
-          const rawModelContent = rawAssistantMessages.flatMap((message) =>
-            Array.isArray(message.content) ? message.content : [],
-          );
-          const rawDisplayContent = rawAssistantMessages.flatMap((message) =>
-            Array.isArray(message.openclawDisplayContent) ? message.openclawDisplayContent : [],
-          );
+          const hasAttachmentError = (key: "content" | "openclawDisplayContent") =>
+            JSON.stringify(
+              rawAssistantMessages.flatMap<unknown>((message) =>
+                Array.isArray(message[key]) ? message[key] : [],
+              ),
+            ).includes("attachment_error");
           await screenshot(page, "02-next-turn-result.png");
-          const verdict = {
-            failureCardVisible,
-            failurePathHealthy,
-            firstCardText,
-            modelHistoryHasAttachmentError:
-              JSON.stringify(rawModelContent).includes("attachment_error"),
-            modelReplayError: readModelReplayError(rawAssistantMessages),
-            displayHistoryHasAttachmentError:
-              JSON.stringify(rawDisplayContent).includes("attachment_error"),
-            pptxDelivered: !firstCardText.includes("Not sent"),
-            successPathHealthy,
-            firstHistory,
-            secondHistory,
+          const attachmentHistory = {
+            modelHistoryHasAttachmentError: hasAttachmentError("content"),
+            displayHistoryHasAttachmentError: hasAttachmentError("openclawDisplayContent"),
           };
-          await writeVerdict(verdict);
-          expect(verdict).toMatchObject({
-            displayHistoryHasAttachmentError: true,
-            failureCardVisible: true,
-            failurePathHealthy: true,
-            modelHistoryHasAttachmentError: false,
-            modelReplayError: null,
-            pptxDelivered: true,
-            successPathHealthy: true,
+          await writeVerdict({
+            firstCardText,
+            ...attachmentHistory,
+            messages: rawAssistantMessages,
           });
+          expect(attachmentHistory).toEqual({
+            displayHistoryHasAttachmentError: true,
+            modelHistoryHasAttachmentError: false,
+          });
+          expect(() => transformMessages(rawAssistantMessages, replayModel)).not.toThrow();
           reportPhase("verdict-checked");
         });
       } catch (error) {
         errors.push(error);
       }
       reportPhase("gateway-stopping");
-      const stopped = await gatewayOwner.stop({ preserveToDir: path.join(proofDir, "gateway") });
+      await stopControlUiGateway(
+        gatewayOwner,
+        suite.artifactDir,
+        "Control UI media transcript proof failed",
+        errors,
+      );
       reportPhase("gateway-stopped");
-      errors.push(...stopped.errors);
-      if (errors.length > 0) {
-        throw new AggregateError(errors, "Control UI media transcript proof failed");
-      }
     },
   );
 });

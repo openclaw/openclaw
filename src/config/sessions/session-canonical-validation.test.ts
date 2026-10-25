@@ -106,8 +106,7 @@ it("processes an oversized first row alone and preserves the exact validated sna
     const limits = { maxRows: 128, maxBytes: 1024 };
     const batch = readBatch(database, limits);
     expect(batch.rows.map((row) => row.session_key)).toEqual([scope.sessionKey]);
-    expect(batch.oversizedRows).toBe(1);
-    expect(batch.hasMore).toBe(true);
+    expect(batch).toMatchObject({ oversizedRows: 1, hasMore: true });
     const validated = validate(batch);
     batch.rows[0]!.entry_json = "changed after validation";
     runOpenClawAgentWriteTransaction((writer) => {

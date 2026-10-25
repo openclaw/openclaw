@@ -136,13 +136,12 @@ describe("managed local embedding setup health check", () => {
     expect(registerHealthCheck).toHaveBeenCalledTimes(2);
   });
 
-  it("passes configured local setup and ignores non-local providers", async () => {
+  it("passes configured local setup", async () => {
     const stateDir = await createState();
     const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => null);
     const check = captureCheck(inspect);
 
     await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([]);
-    await expect(check.detect(context(stateDir, "openai"))).resolves.toEqual([]);
     expect(inspect.mock.calls.map(([params]) => params.provider)).toEqual(["local"]);
   });
 
@@ -170,9 +169,12 @@ describe("managed local embedding setup health check", () => {
         }),
       ).resolves.toEqual([
         expect.objectContaining({
+          checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
           target: "local/local",
           path: "agents.entries.local.memory.search.provider",
           requirement: "memory-embedding-provider-plugin",
+          message: expect.stringMatching(/official llama.cpp provider plugin.*llama-server/s),
+          fixHint: expect.stringContaining("openclaw plugins install @openclaw/llama-cpp-provider"),
         }),
       ]);
       expect(snapshot.mock.calls.map(([databasePath]) => databasePath)).toEqual([
@@ -183,44 +185,22 @@ describe("managed local embedding setup health check", () => {
     }
   });
 
-  it("reports a structured blocker when the local provider plugin is unavailable", async () => {
-    const stateDir = await createState();
-    const check = captureCheck();
-
-    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([
-      expect.objectContaining({
-        checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
-        target: "main/local",
-        requirement: "memory-embedding-provider-plugin",
-        message: expect.stringMatching(/official llama.cpp provider plugin.*llama-server/s),
-        fixHint: expect.stringContaining("openclaw plugins install @openclaw/llama-cpp-provider"),
-      }),
-    ]);
-  });
-
-  it("ignores stale built-in indexes when another plugin owns the memory slot", async () => {
-    const stateDir = await createState();
+  it.each([
+    { name: "non-local provider", index: model, active: true, provider: "openai" },
+    { name: "another memory plugin", index: model, active: false, provider: "local" },
+    { name: "missing index", index: false, active: true, provider: "local" },
+    { name: "FTS-only index", index: "fts-only", active: true, provider: "local" },
+  ] as const)("does not inspect local setup for $name", async ({ index, active, provider }) => {
+    const stateDir = await createState(index);
     const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => ({
       provider: "local",
       reason: setupFailure.reason,
     }));
-    const check = captureCheck(inspect, false);
+    const check = captureCheck(inspect, active);
 
-    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([]);
+    await expect(check.detect(context(stateDir, provider))).resolves.toEqual([]);
     expect(inspect).not.toHaveBeenCalled();
   });
-
-  it.each(["missing", "fts-only"] as const)(
-    "does not inspect a provider for a %s vector index",
-    async (indexMode) => {
-      const stateDir = await createState(indexMode === "fts-only" ? "fts-only" : false);
-      const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => null);
-      const check = captureCheck(inspect);
-
-      await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([]);
-      expect(inspect).not.toHaveBeenCalled();
-    },
-  );
 
   it("reads an active WAL index without changing committed database or WAL bytes", async () => {
     const stateDir = await createState(false);

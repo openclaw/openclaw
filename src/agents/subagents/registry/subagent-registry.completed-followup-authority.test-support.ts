@@ -14,22 +14,50 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
+import type { RegistryRegistrationFixture } from "./subagent-registry.requester-completion.fixture.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+export function operatorFixture(
+  profileName: string,
+  attachAccess = true,
+  context = createContext(),
+  resolveGatewayContext = () => context,
+) {
+  context.resolveGatewayContext = resolveGatewayContext;
+  const client = createOperatorClient({ profileName, scopes: ["operator.write"] });
+  const revoked = new AbortController();
+  const sourceAuthority = {
+    signal: revoked.signal,
+    assertCurrent: () => revoked.signal.throwIfAborted(),
+  };
+  if (attachAccess) {
+    client.internal = { operatorAccessAuthority: sourceAuthority };
+  }
+  return { context, resolveGatewayContext, client, revoked, sourceAuthority };
+}
+
+export async function retainedOperatorFixture(
+  profileName: string,
+  context?: ReturnType<typeof createContext>,
+  resolveGatewayContext?: () => ReturnType<typeof createContext>,
+) {
+  const fixture = operatorFixture(profileName, false, context, resolveGatewayContext);
+  const source = expectDefined(
+    await operatorCapture.captureGatewayOperatorRunAuthority(fixture),
+    "operator registration source",
+  );
+  fixture.client.internal = { operatorRunAuthority: source.authority };
+  return { ...fixture, source };
+}
+
 export function registerCompletedFollowupAuthorityTests({
   registration,
   updateRun,
-}: {
-  registration: (
-    runId: string,
-    overrides?: Partial<Parameters<typeof registerSubagentRun>[0]>,
-  ) => Parameters<typeof registerSubagentRun>[0];
-  updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
-}) {
+}: RegistryRegistrationFixture) {
   it.each(["original", "successor"] as const)(
     "keeps completed-result and followup custody independent when the %s source is revoked",
     (revokedOwner) =>
@@ -37,22 +65,12 @@ export function registerCompletedFollowupAuthorityTests({
         setRuntimeConfigSnapshot({});
         const context = createContext();
         const resolveGatewayContext = () => context;
-        context.resolveGatewayContext = resolveGatewayContext;
         const captureSource = async (profileName: string) => {
-          const client = createOperatorClient({ profileName, scopes: ["operator.write"] });
-          const revoked = new AbortController();
-          const source = expectDefined(
-            await operatorCapture.captureGatewayOperatorRunAuthority({
-              client,
-              context,
-              sourceAuthority: {
-                signal: revoked.signal,
-                assertCurrent: () => revoked.signal.throwIfAborted(),
-              },
-            }),
-            "completion followup source",
+          const { source, revoked, client } = await retainedOperatorFixture(
+            profileName,
+            context,
+            resolveGatewayContext,
           );
-          client.internal = { operatorRunAuthority: source.authority };
           return {
             ...source,
             revoked,

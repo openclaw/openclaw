@@ -41,61 +41,33 @@ describe("resolveFastModeState", () => {
     },
   );
 
-  it("prefers session overrides over per-agent and global defaults", () => {
-    const state = resolve({
-      cfg: {
-        agents: {
-          defaults: { fastModeDefault: "auto" },
-          entries: { main: { fastModeDefault: false } },
-        },
-      } as OpenClawConfig,
-      model: "gpt-4o",
-      agentId: "main",
-      sessionEntry: { fastMode: true },
-    });
-
-    expect(state).toMatchObject({ enabled: true, mode: true, source: "session" });
-  });
-
-  it.each(["auto", "ultrafast"] as const)(
-    "keeps %s as the persisted mode and starts enabled",
-    (mode) => {
-      const state = resolve({
-        sessionEntry: { fastMode: mode },
-      });
-
-      expect(state).toMatchObject({ mode, enabled: true });
+  it.each([
+    [true, false, "auto", undefined, true, "session"],
+    ["auto", undefined, undefined, undefined, "auto", "session"],
+    ["ultrafast", undefined, undefined, undefined, "ultrafast", "session"],
+    [undefined, undefined, true, false, true, "agent"],
+    [undefined, false, true, true, false, "agent"],
+  ] as const)(
+    "resolves session=%s, agent=%s, global=%s, model=%s by priority",
+    (session, agent, global, modelMode, mode, source) => {
+      const configured = global !== undefined;
+      const cfg: OpenClawConfig = configured
+        ? modelConfig(modelMode === undefined ? {} : { fastMode: modelMode }, "openai/gpt-4o", {
+            fastModeDefault: global,
+          })
+        : {};
+      if (agent !== undefined) {
+        cfg.agents = { ...cfg.agents, entries: { main: { fastModeDefault: agent } } };
+      }
+      expect(
+        resolve({
+          cfg,
+          ...(configured ? { model: "gpt-4o", agentId: "main" } : {}),
+          sessionEntry: { fastMode: session },
+        }),
+      ).toMatchObject({ mode, enabled: mode !== false, source });
     },
   );
-
-  it("uses rosterless global fastModeDefault over model config", () => {
-    const cfg = modelConfig({ fastMode: false }, "openai/gpt-4o", { fastModeDefault: true });
-
-    const state = resolve({
-      cfg,
-      model: "gpt-4o",
-      agentId: "main",
-    });
-
-    expect(state).toMatchObject({ mode: true, enabled: true, source: "agent" });
-  });
-
-  it("prefers per-agent fastModeDefault over the global default", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        ...modelConfig({ fastMode: true }, "openai/gpt-4o", { fastModeDefault: true }).agents,
-        entries: { main: { fastModeDefault: false } },
-      },
-    };
-
-    const state = resolve({
-      cfg,
-      model: "gpt-4o",
-      agentId: "main",
-    });
-
-    expect(state).toMatchObject({ mode: false, source: "agent" });
-  });
 
   it("formats auto mode with the default threshold", () => {
     expect(formatFastModeAutoLabel()).toBe("auto (60 sec)");
@@ -118,25 +90,13 @@ describe("resolveFastModeState", () => {
     ).toBe("Current fast mode: auto (30 sec) (default: model).");
   });
 
-  it("uses model fastAutoOnSeconds for auto cutoff across session overrides", () => {
-    const cfg = modelConfig({ fastMode: "auto", fastAutoOnSeconds: 30 });
-
-    const state = resolve({
-      cfg,
-      sessionEntry: { fastMode: "auto" },
-    });
-
-    expect(state).toMatchObject({ mode: "auto", source: "session", fastAutoOnSeconds: 30 });
-  });
-
-  it("uses model fast_seconds alias for auto cutoff", () => {
-    const cfg = modelConfig({ fastMode: "auto", fast_seconds: 15 });
-
-    const state = resolve({
-      cfg,
-    });
-
-    expect(state).toMatchObject({ mode: "auto", source: "config", fastAutoOnSeconds: 15 });
+  it.each([
+    ["fastAutoOnSeconds", 30, { fastMode: "auto" as const }, "session"],
+    ["fast_seconds", 15, undefined, "config"],
+  ] as const)("uses model %s for auto cutoff", (key, seconds, sessionEntry, source) => {
+    expect(
+      resolve({ cfg: modelConfig({ fastMode: "auto", [key]: seconds }), sessionEntry }),
+    ).toMatchObject({ mode: "auto", source, fastAutoOnSeconds: seconds });
   });
 
   it.each([

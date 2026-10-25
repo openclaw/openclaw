@@ -55,7 +55,13 @@ it.each([
       );
       fs.writeFileSync(
         path.join(dir, "openclaw.plugin.json"),
-        JSON.stringify({ id: pluginId, providers, configSchema: { type: "object" } }),
+        JSON.stringify({
+          id: pluginId,
+          providers,
+          kind: "context-engine",
+          contextEngineIds: [`engine-${version}`],
+          configSchema: { type: "object" },
+        }),
       );
     }
     writeArtifact(installedDir, "1.0.0", ["existing-provider"]);
@@ -161,6 +167,7 @@ it.each([
         expect(declared.providers).toEqual(["existing-provider", "new-provider"]);
         expect(result.config.plugins?.installs?.[pluginId]).toMatchObject({
           version: "2.0.0",
+          contextEngineIdsByPlugin: { [pluginId]: ["engine-2.0.0"] },
           acceptedSurface: declared,
           acceptedSurfaceHash: computeDeclaredSurfaceHash(declared),
           acceptedSurfaceIntegrity: source === "npm" ? "sha512-next" : "sha256-next",

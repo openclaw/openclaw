@@ -10,19 +10,15 @@ import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import type { SandboxContext } from "./sandbox/types.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const parentKey = "agent:main:dashboard:parent";
 const childKey = "agent:main:dashboard:child";
 const allowed = ["sessions_spawn", "github_publish", "github_identity_status"];
-const plan = {
-  includeBaseCodingTools: false,
-  includeShellTools: false,
-  includeChannelTools: false,
-  includeOpenClawTools: true,
-  includePluginTools: false,
-};
+const plan = createOpenClawOnlyToolConstructionPlan();
 
 describe("publication policy inherited by a managed child", () => {
   afterEach(() => clearRuntimeConfigSnapshot());
@@ -212,10 +208,27 @@ describe("publication policy inherited by a managed child", () => {
         agents: config.agents,
         tools: { allow: allowed, gatewayPolicy: tools.gatewayPolicy },
       };
+      // PR preparation is offered only to a writable managed sandbox.
+      const childSandbox: SandboxContext = {
+        ...sandbox,
+        workspaceSource: "managed-worktree",
+        backend: {
+          id: "docker",
+          runtimeId: sandbox.runtimeId,
+          runtimeLabel: sandbox.runtimeLabel,
+          workdir: sandbox.containerWorkdir,
+          buildExecSpec: async () => {
+            throw new Error("Inheritance fixture does not execute commands");
+          },
+          runShellCommand: async () => {
+            throw new Error("Inheritance fixture does not execute commands");
+          },
+        },
+      };
       const child = createOpenClawCodingToolsInternal({
         config: childConfig,
         sessionKey: childKey,
-        sandbox,
+        sandbox: childSandbox,
         githubPublicationAvailable: true,
         toolConstructionPlan: plan,
         wrapBeforeToolCallHook: false,

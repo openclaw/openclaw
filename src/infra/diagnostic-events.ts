@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
-import type { IsolatedCompletionPurpose } from "../agents/isolated-completion-purpose.js";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
+import type { ExecProcessFailureKind } from "../agents/bash-tools.exec-output.js";
+import type { EmbeddedAgentExecutionPhaseInfo } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { registerListener } from "../shared/listeners.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
   hasInternalDiagnosticEventInterest,
@@ -20,16 +21,21 @@ import {
   PUBLIC_EXCLUDED_DIAGNOSTIC_EVENT_NAMES,
 } from "./diagnostic-event-queue-policy.js";
 import {
+  type DiagnosticBaseEvent,
+  type DiagnosticEventMetadata,
+  captureQueuedDiagnosticEvent,
+  enrichDiagnosticEvent,
   cloneDiagnosticValueForListener,
   createDiagnosticMetadataForListener,
+  createInternalDiagnosticMetadata,
   createDiagnosticValueForListeners,
-  deepFreezeDiagnosticValue,
 } from "./diagnostic-event-snapshot.js";
 import {
   consumeCoreModelRequestLifecycleDiagnosticEvent,
   CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY,
   type CoreModelRequestLifecycleProvenance,
 } from "./diagnostic-model-request-provenance.js";
+import type { DiagnosticModelUsageFields } from "./diagnostic-model-usage-types.js";
 import { isTrustedOtelDiagnosticListener } from "./diagnostic-otel-listener-provenance.js";
 import { consumeHostPluginUsageDiagnosticEvent } from "./diagnostic-plugin-usage-provenance.js";
 import type {
@@ -55,66 +61,29 @@ import {
   TOOL_EXECUTION_LIVENESS_METADATA_KEY,
   type DiagnosticToolExecutionLiveness,
 } from "./diagnostic-tool-execution-liveness.js";
+import { getActiveDiagnosticTraceContext } from "./diagnostic-trace-context.js";
 import {
-  getActiveDiagnosticTraceContext,
-  type DiagnosticTraceContext,
-} from "./diagnostic-trace-context.js";
-import {
-  hasActiveDiagnosticTracePropagation,
   hasDiagnosticTracePropagationConsumer,
   prepareDiagnosticTracePropagation,
   resetDiagnosticTracePropagationForTest,
   shouldPrepareDiagnosticTracePropagation,
 } from "./diagnostic-trace-propagation.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
 import {
   MAX_DIAGNOSTIC_WORKER_SLOTS,
   normalizeDiagnosticWorkerScript,
 } from "./worker-diagnostic-script.js";
 
+export { isInternalDiagnosticEventMetadata } from "./diagnostic-event-snapshot.js";
+export type { DiagnosticEventMetadata } from "./diagnostic-event-snapshot.js";
+
 export type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
-type DiagnosticBaseEvent = {
-  ts: number;
-  seq: number;
-  trace?: DiagnosticTraceContext;
-};
-
 type DiagnosticSessionEvent = DiagnosticBaseEvent &
   Pick<DiagnosticRunScopeFields, "sessionKey" | "sessionId">;
 
-type DiagnosticUsageEvent = DiagnosticSessionEvent & {
-  type: "model.usage";
-  channel?: string;
-  agentId?: string;
-  provider?: string;
-  model?: string;
-  purpose?: IsolatedCompletionPurpose;
-  runtimeKind?: "cli" | "harness";
-  usage: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    promptTokens?: number;
-    total?: number;
-  };
-  lastCallUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
-  context?: {
-    limit?: number;
-    used?: number;
-  };
-  costUsd?: number;
-  durationMs?: number;
-};
+type DiagnosticUsageEvent = DiagnosticSessionEvent & DiagnosticModelUsageFields;
 
 export type DiagnosticFailoverEvent = DiagnosticSessionEvent & {
   type: "model.failover";
@@ -412,21 +381,13 @@ type DiagnosticRunProgressEvent = DiagnosticSessionEvent & {
  * EmbeddedAgentExecutionPhase contract (type-only import keeps this module
  * runtime-independent of the agents layer).
  */
-type DiagnosticRunExecutionPhaseEvent = DiagnosticBaseEvent & {
-  type: "run.execution_phase";
-  sessionKey?: string;
-  sessionId: string;
-  runId: string;
-  phase: EmbeddedAgentExecutionPhase;
-  provider?: string;
-  model?: string;
-  backend?: string;
-  source?: string;
-  tool?: string;
-  toolCallId?: string;
-  itemId?: string;
-  firstModelCallStarted?: boolean;
-};
+type DiagnosticRunExecutionPhaseEvent = DiagnosticBaseEvent &
+  EmbeddedAgentExecutionPhaseInfo & {
+    type: "run.execution_phase";
+    sessionKey?: string;
+    sessionId: string;
+    runId: string;
+  };
 
 type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
@@ -547,22 +508,14 @@ type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEvent & {
   reason: string;
 };
 
-type DiagnosticSkillTelemetrySource = "bundled" | "unknown" | "workspace";
-type DiagnosticSkillActivation = "command" | "read";
-
 export type DiagnosticSkillUsedEvent = DiagnosticSessionEvent & {
   type: "skill.used";
   runId?: string;
   agentId?: string;
   skillName: string;
-  skillSource: DiagnosticSkillTelemetrySource;
-  activation: DiagnosticSkillActivation;
-  /**
-   * Retained content fingerprint of the loaded skill bundle associated with
-   * this invocation's qualifying delivery — the bundle digest stamped on the
-   * delivered entry, resolved by lookup at emission; omitted when no
-   * qualifying delivery association is established.
-   */
+  skillSource: "bundled" | "unknown" | "workspace";
+  activation: "command" | "read";
+  /** SHA-256 of the complete instructions actually delivered, when known. */
   skillFingerprint?: string;
   toolName?: string;
   toolCallId?: string;
@@ -579,14 +532,7 @@ type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
   exitCode?: number;
   exitSignal?: string;
   timedOut?: boolean;
-  failureKind?:
-    | "shell-command-not-found"
-    | "shell-not-executable"
-    | "overall-timeout"
-    | "no-output-timeout"
-    | "signal"
-    | "aborted"
-    | "runtime-error";
+  failureKind?: ExecProcessFailureKind;
 };
 
 type DiagnosticExecApprovalFollowupSuppressedEvent = DiagnosticBaseEvent & {
@@ -875,12 +821,6 @@ type TrustedSkillUsedEventInput = Extract<DiagnosticEventInput, { type: "skill.u
 
 type DiagnosticDispatchInput = DiagnosticEventInput | Omit<DiagnosticSecurityEvent, "seq" | "ts">;
 
-export type DiagnosticEventMetadata = Readonly<{
-  internal?: boolean;
-  trustedTraceContext?: boolean;
-  trusted: boolean;
-}>;
-
 type InternalDiagnosticEventMetadata = DiagnosticEventMetadata &
   Readonly<{
     [TOOL_EXECUTION_LIVENESS_METADATA_KEY]?: DiagnosticToolExecutionLiveness;
@@ -1018,20 +958,6 @@ export function areDiagnosticsEnabledForProcess(): boolean {
   return diagnosticEventsState.enabled;
 }
 
-/**
- * Re-applies the tracing gate to a queued `skill.used` payload: the async
- * queue can outlive the exporter-owned tracing consumer that admitted the
- * fingerprint, so every boundary that forms a listener- or inspector-facing
- * payload — dispatch and pending-queue inspection — drops the private field
- * while tracing is inactive. Skill accounting is never gated: the event and
- * its skill identity stay intact.
- */
-function dropInactiveTracingSkillFingerprint(event: DiagnosticEventPayload): void {
-  if (event.type === "skill.used" && !hasActiveDiagnosticTracePropagation()) {
-    delete event.skillFingerprint;
-  }
-}
-
 function dispatchDiagnosticEvent(
   state: DiagnosticEventsGlobalState,
   enriched: DiagnosticEventPayload,
@@ -1048,8 +974,8 @@ function dispatchDiagnosticEvent(
 
   state.dispatchDepth += 1;
   try {
-    dropInactiveTracingSkillFingerprint(enriched);
-    const eventForListener = createDiagnosticValueForListeners(enriched);
+    const eventForListener = createDiagnosticValueForListeners(enriched, true);
+    const privateValues = privateData && createDiagnosticValueForListeners(privateData);
     let metadataForListener: DiagnosticEventMetadata | undefined;
     if (!options.trustedListenersOnly) {
       for (const [listener, interest] of state.listeners) {
@@ -1062,7 +988,8 @@ function dispatchDiagnosticEvent(
             (metadataForListener ??= createDiagnosticMetadataForListener(metadata)),
           );
         } catch (err) {
-          const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
+          const errorMessage =
+            err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
           console.error(
             `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
           );
@@ -1077,21 +1004,21 @@ function dispatchDiagnosticEvent(
         const event = eventForListener();
         metadataForListener ??= createDiagnosticMetadataForListener(metadata);
         const otel = isTrustedOtelDiagnosticListener(listener);
-        const hostPluginId = otel ? options.hostPluginId : undefined;
-        let privateDataForListener = EMPTY_DIAGNOSTIC_PRIVATE_DATA;
-        if (interest?.includePrivateData !== false && (privateData || hostPluginId)) {
-          // Retain the host-owned transport for independently updated OTel installs.
-          const cloned = structuredClone(privateData ?? {});
-          if (hostPluginId) {
-            Object.assign(cloned, { hostPluginId });
-          } else if (otel) {
-            Reflect.deleteProperty(cloned, "hostPluginId");
+        let privateValue = EMPTY_DIAGNOSTIC_PRIVATE_DATA;
+        if (interest?.includePrivateData !== false) {
+          privateValue = privateValues?.() ?? EMPTY_DIAGNOSTIC_PRIVATE_DATA;
+          if (otel && (options.hostPluginId || Object.hasOwn(privateValue, "hostPluginId"))) {
+            // Keep host attribution listener-local for independently updated OTel installs.
+            const attributed = { ...privateValue, hostPluginId: options.hostPluginId };
+            if (!options.hostPluginId) {
+              Reflect.deleteProperty(attributed, "hostPluginId");
+            }
+            privateValue = Object.freeze(attributed);
           }
-          privateDataForListener = deepFreezeDiagnosticValue(cloned);
         }
-        listener(event, metadataForListener, privateDataForListener);
+        listener(event, metadataForListener, privateValue);
       } catch (err) {
-        const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
+        const errorMessage = err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
         console.error(
           `[diagnostic-events] trusted listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
         );
@@ -1192,31 +1119,6 @@ export async function waitForDiagnosticEventsDrained(): Promise<void> {
   }
 }
 
-function enrichDiagnosticEvent(
-  state: DiagnosticEventsGlobalState,
-  event: DiagnosticDispatchInput,
-  captureActiveTrace = true,
-): DiagnosticEventPayload {
-  const enriched = {} as DiagnosticEventPayload & Record<string, unknown>;
-  for (const [key, value] of Object.entries(event as Record<string, unknown>)) {
-    if (isBlockedObjectKey(key)) {
-      continue;
-    }
-    enriched[key] = value;
-  }
-  if (captureActiveTrace) {
-    enriched.trace ??= getActiveDiagnosticTraceContext();
-  }
-  state.seq += 1;
-  enriched.seq = state.seq;
-  enriched.ts = Date.now();
-  return enriched;
-}
-
-function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMetadata {
-  return { internal: true, trusted };
-}
-
 type EmitDiagnosticEventOptions = {
   toolExecutionLiveness?: DiagnosticToolExecutionLiveness;
   allowSecurityEvent?: boolean;
@@ -1235,9 +1137,10 @@ function emitDiagnosticEventWithTrust(
   options: EmitDiagnosticEventOptions = {},
 ) {
   const state = diagnosticEventsState;
-  if (trusted && isToolExecutionEventInput(event)) {
-    dispatchTrustedToolExecutionEvent(state, event);
-  }
+  const capturedToolEvent =
+    trusted && isToolExecutionEventInput(event)
+      ? dispatchTrustedToolExecutionEvent(state, event)
+      : undefined;
   if (!state.enabled) {
     return;
   }
@@ -1255,7 +1158,7 @@ function emitDiagnosticEventWithTrust(
     return;
   }
   // Queued phases already captured their trace, including an absent parent.
-  const enriched = enrichDiagnosticEvent(state, event, !options.queuedPhase);
+  let enriched = enrichDiagnosticEvent(state, capturedToolEvent ?? event, !options.queuedPhase);
   if (trusted && enriched.type === "diagnostic.gc") {
     // SDK producers cross this boundary; native samples already carry bounded attribution.
     switch (enriched.kind) {
@@ -1325,10 +1228,18 @@ function emitDiagnosticEventWithTrust(
         noteAsyncDiagnosticDrop(state, droppedEntry);
       }
     }
-    state.asyncQueue.push({ event: enriched, metadata, privateData, hostPluginId });
+    const entry = { event: enriched, metadata, privateData, hostPluginId };
+    if (!captureQueuedDiagnosticEvent(entry, state.trustedListeners.values())) {
+      return;
+    }
+    enriched = entry.event;
+    state.asyncQueue.push(entry);
   }
 
   if (prepareTracePropagation) {
+    if (!queued) {
+      enriched = cloneDiagnosticValueForListener(enriched, true);
+    }
     prepareDiagnosticTracePropagation(
       cloneDiagnosticValueForListener(enriched),
       createDiagnosticMetadataForListener(metadata),
@@ -1355,29 +1266,38 @@ function isToolExecutionEventInput(
 function dispatchTrustedToolExecutionEvent(
   state: DiagnosticEventsGlobalState,
   event: TrustedToolExecutionEventInput,
-): void {
+): TrustedToolExecutionEvent | undefined {
   state.toolExecutionSeq += 1;
   if (state.toolExecutionListeners.size === 0) {
-    return;
+    return undefined;
   }
   let enriched: TrustedToolExecutionEvent;
   try {
-    enriched = cloneDiagnosticValueForListener({
-      ...event,
-      seq: state.toolExecutionSeq,
-      ts: Date.now(),
-    });
+    enriched = cloneDiagnosticValueForListener(
+      {
+        ...event,
+        seq: state.toolExecutionSeq,
+        ts: Date.now(),
+      },
+      true,
+    );
   } catch (error) {
     console.error(
       `[diagnostic-events] tool execution clone error type=${event.type}: ${String(error)}`,
     );
-    return;
+    return undefined;
   }
-  notifyListeners(state.toolExecutionListeners, enriched, (error) => {
-    console.error(
-      `[diagnostic-events] tool execution listener error type=${enriched.type} seq=${enriched.seq}: ${String(error)}`,
-    );
-  });
+  const eventForListener = createDiagnosticValueForListeners(enriched);
+  for (const listener of state.toolExecutionListeners) {
+    try {
+      listener(eventForListener());
+    } catch (error) {
+      console.error(
+        `[diagnostic-events] tool execution listener error type=${enriched.type} seq=${enriched.seq}: ${String(error)}`,
+      );
+    }
+  }
+  return enriched;
 }
 
 /** Emits an untrusted diagnostic event from external/plugin-facing code. */
@@ -1470,6 +1390,9 @@ export function emitTrustedSkillUsedDiagnosticEvent(
   } satisfies QueuedDiagnosticEvent;
   if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
     noteAsyncDiagnosticDrop(state, queued);
+    return;
+  }
+  if (!captureQueuedDiagnosticEvent(queued, state.trustedListeners.values())) {
     return;
   }
   state.asyncQueue.push(queued);
@@ -1598,14 +1521,7 @@ export function hasPendingInternalDiagnosticEvent(
   for (const entry of state.asyncQueue) {
     let event: DiagnosticEventPayload;
     try {
-      // Strip before the inspector copy freezes: a queued skill.used payload
-      // drops its fingerprint from this copy while tracing is inactive, so an
-      // in-process inspector — including the Plugin SDK surface — never
-      // observes a retained stamp the dispatch gate would strip. Skill
-      // accounting stays intact: the event and its skill identity remain.
-      const cloned = structuredClone(entry.event);
-      dropInactiveTracingSkillFingerprint(cloned);
-      event = deepFreezeDiagnosticValue(cloned);
+      event = cloneDiagnosticValueForListener(entry.event);
     } catch {
       continue;
     }
@@ -1622,11 +1538,6 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
     includeTrusted: [],
     exclude: PUBLIC_EXCLUDED_DIAGNOSTIC_EVENT_NAMES,
   });
-}
-
-/** Returns whether listener metadata marks dispatcher-internal provenance. */
-export function isInternalDiagnosticEventMetadata(metadata: DiagnosticEventMetadata): boolean {
-  return metadata.internal === true;
 }
 
 /** Resets dispatcher state between tests. */

@@ -134,29 +134,24 @@ describe("browser navigation guard", () => {
     expect(lookupFn).toHaveBeenCalledWith("example.com", { all: true });
   });
 
-  it("blocks explicit browser proxy routing in strict SSRF mode", async () => {
-    const lookupFn = createLookupFn("93.184.216.34");
-    await expect(
-      assertBrowserNavigationAllowed({
+  it.each([false, true])(
+    "gates explicit browser proxy routing on private-network mode (%s)",
+    async (allowed) => {
+      const lookupFn = createLookupFn("93.184.216.34");
+      const result = assertBrowserNavigationAllowed({
         url: "https://example.com",
         lookupFn,
         browserProxyMode: "explicit-browser-proxy",
-      }),
-    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
-    expect(lookupFn).not.toHaveBeenCalled();
-  });
-
-  it("allows explicit browser proxy routing when private-network mode is enabled", async () => {
-    const lookupFn = createLookupFn("93.184.216.34");
-    await expect(
-      assertBrowserNavigationAllowed({
-        url: "https://example.com",
-        lookupFn,
-        browserProxyMode: "explicit-browser-proxy",
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-      }),
-    ).resolves.toBeUndefined();
-  });
+        ...(allowed ? { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } } : {}),
+      });
+      if (allowed) {
+        await expect(result).resolves.toBeUndefined();
+      } else {
+        await expect(result).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+        expect(lookupFn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("blocks network URLs with embedded credentials before lookup", async () => {
     const lookupFn = createLookupFn("93.184.216.34");

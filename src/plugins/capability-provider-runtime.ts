@@ -153,25 +153,32 @@ function prepareCapabilityPluginResolution(params: {
   };
 }
 
-function createCapabilityProviderLoadOptions(params: {
-  cfg?: OpenClawConfig;
-  resolution: CapabilityPluginResolution;
-  loadContext?: PluginRuntimeLoadContext;
-}): PluginLoadOptions {
-  const pluginIds = params.resolution.bundledCompatPluginIds;
+function createCapabilityLoad<K extends CapabilityProviderRegistryKey>(
+  params: { key: K; cfg?: OpenClawConfig },
+  resolution: CapabilityPluginResolution,
+  loadContext: PluginRuntimeLoadContext | undefined,
+  requested: Set<string> | undefined,
+) {
+  const pluginIds = resolution.bundledCompatPluginIds;
   const config = withBundledPluginEnablementCompat({
     config: params.cfg,
     pluginIds,
-    ...(params.loadContext?.env ? { env: params.loadContext.env } : {}),
+    ...(loadContext?.env ? { env: loadContext.env } : {}),
   });
   const overrides: PluginLoadOptions = {
     ...(config === undefined ? {} : { config }),
-    onlyPluginIds: params.resolution.runtimePluginIds,
+    onlyPluginIds: resolution.runtimePluginIds,
     activate: false,
   };
-  return params.loadContext
-    ? buildPluginRuntimeLoadOptions(params.loadContext, overrides)
+  const loadOptions = loadContext
+    ? buildPluginRuntimeLoadOptions(loadContext, overrides)
     : overrides;
+  return {
+    key: params.key,
+    bundledCompatPluginIds: resolution.bundledCompatPluginIds,
+    loadOptions,
+    requested,
+  };
 }
 
 function resolveCapabilityLoadContext(
@@ -483,17 +490,12 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
     }
   }
 
-  const loadOptions = createCapabilityProviderLoadOptions({
-    cfg: params.cfg,
-    resolution: pluginIds,
+  const load = createCapabilityLoad(
+    params,
+    pluginIds,
     loadContext,
-  });
-  const load = {
-    key: params.key,
-    bundledCompatPluginIds: pluginIds.bundledCompatPluginIds,
-    loadOptions,
-    requested: new Set([params.providerId.toLowerCase()]),
-  };
+    new Set([params.providerId.toLowerCase()]),
+  );
   return {
     load,
     prepareLoad: () => prepareCapabilityProviderLoad(load, selectRegistry),
@@ -564,17 +566,7 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
   const pluginIds = requestedPluginIds?.runtimePluginIds.length
     ? requestedPluginIds
     : resolvePluginIds(params.key);
-  const loadOptions = createCapabilityProviderLoadOptions({
-    cfg: params.cfg,
-    resolution: pluginIds,
-    loadContext,
-  });
-  const load = {
-    key: params.key,
-    bundledCompatPluginIds: pluginIds.bundledCompatPluginIds,
-    loadOptions,
-    requested: requestedProviderFilter,
-  };
+  const load = createCapabilityLoad(params, pluginIds, loadContext, requestedProviderFilter);
   return {
     load,
     prepareLoad: () => prepareCapabilityProviderLoad(load, onSelectedRegistry),

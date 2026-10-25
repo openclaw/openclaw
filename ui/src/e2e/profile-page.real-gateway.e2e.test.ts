@@ -18,7 +18,7 @@ const suite = createControlUiE2eSuite({
 const authenticatedUser = "primary.user@example.test";
 
 suite.define(() => {
-  it("shows the authenticated user instead of the default agent through a real Gateway", async () => {
+  it("lets a session-only member save their name and avatar through a real Gateway", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "control-ui-profile-real-gateway",
@@ -64,6 +64,16 @@ suite.define(() => {
             controlUi: { allowedOrigins: [origin], enabled: false },
             port,
             trustedProxies: ["127.0.0.1", "::1"],
+            roles: {
+              default: "member",
+              definitions: {
+                member: {
+                  agents: "*",
+                  sessions: { others: "view" },
+                  scopes: ["operator.sessions.write"],
+                },
+              },
+            },
           },
         });
         const { startGatewayServer } = await import("../../../src/gateway/server.js");
@@ -127,6 +137,23 @@ suite.define(() => {
             await nameInput.fill("Remote Person");
             await nameInput.press("Enter");
             await text(".profile-hero__name").toBe("Remote Person");
+            await editor.locator('#settings-profile-identity input[type="file"]').setInputFiles({
+              name: "avatar.png",
+              mimeType: "image/png",
+              buffer: Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+                "base64",
+              ),
+            });
+            const image = editor.locator(".identity-avatar-control img");
+            await expect
+              .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+              .toBeGreaterThan(0);
+            await editor.reload();
+            await expect.poll(() => nameInput.inputValue()).toBe("Remote Person");
+            await expect
+              .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+              .toBeGreaterThan(0);
             await nameInput.fill("");
             await nameInput.press("Enter");
             await text(".profile-hero__name").toBe(authenticatedUser);

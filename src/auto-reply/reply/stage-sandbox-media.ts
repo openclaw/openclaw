@@ -255,12 +255,68 @@ export async function stageSandboxMedia(params: {
 
     try {
       if (ctx.MediaRemoteHost) {
-        await stageRemoteFileIntoRoot({
-          remoteHost: ctx.MediaRemoteHost,
-          remotePath: source,
-          abortSignal,
-          stageDownloadedFile: stageSource,
-        });
+        const safeRemoteHost = normalizeScpRemoteHost(ctx.MediaRemoteHost);
+        if (!safeRemoteHost) {
+          throw new Error("invalid remote host for SCP");
+        }
+        const safeRemotePath = normalizeScpRemotePath(source);
+        if (!safeRemotePath) {
+          throw new Error("invalid remote path for SCP");
+        }
+        const tmpRoot = resolvePreferredOpenClawTmpDir();
+        await fs.mkdir(tmpRoot, { recursive: true });
+        const tmpDir = await fs.mkdtemp(path.join(tmpRoot, "stage-sandbox-media-"));
+        const tmpPath = path.join(tmpDir, "download");
+        try {
+          await retryAsync(
+            async () => {
+              if (abortSignal?.aborted) {
+                return;
+              }
+              const result = await runCommandWithTimeout(
+                [
+                  "scp",
+                  "-o",
+                  "BatchMode=yes",
+                  "-o",
+                  "StrictHostKeyChecking=yes",
+                  "--",
+                  `${safeRemoteHost}:${safeRemotePath}`,
+                  tmpPath,
+                ],
+                {
+                  // The runner owns both descendants and settlement before temp cleanup.
+                  signal: abortSignal,
+                  killProcessTree: true,
+                  // Four UTF-8 bytes retain the existing UTF-16 diagnostic tail bound.
+                  maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
+                },
+              );
+              if (result.code !== 0) {
+                // A late abort can coexist with a concrete failed exit; keep that error.
+                if (
+                  result.code === null &&
+                  result.termination === "signal" &&
+                  abortSignal?.aborted
+                ) {
+                  return;
+                }
+                const stderr = sliceUtf16Safe(result.stderr, -SCP_STDERR_TAIL_CHARS).trim();
+                throw new Error(`scp failed (${result.code}): ${stderr}`);
+              }
+            },
+            {
+              attempts: 3,
+              label: "remote inbound media SCP",
+              shouldRetry: () => !abortSignal?.aborted,
+            },
+          );
+          // Preserve arbitrary abort reasons outside retry's Error normalization.
+          abortSignal?.throwIfAborted();
+          await stageSource(tmpPath);
+        } finally {
+          await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+        }
       } else {
         const copySource = await fs.realpath(source).catch(() => source);
         await stageSource(copySource);
@@ -372,69 +428,6 @@ async function resolveStageableMediaSource(value: string): Promise<string | null
   }
   const inboundReference = await resolveInboundMediaReference(raw).catch(() => null);
   return inboundReference?.physicalPath ?? resolveAbsolutePath(raw);
-}
-
-async function stageRemoteFileIntoRoot(params: {
-  remoteHost: string;
-  remotePath: string;
-  abortSignal?: AbortSignal;
-  stageDownloadedFile: (sourcePath: string) => Promise<void>;
-}): Promise<void> {
-  const { abortSignal } = params;
-  const safeRemoteHost = normalizeScpRemoteHost(params.remoteHost);
-  if (!safeRemoteHost) {
-    throw new Error("invalid remote host for SCP");
-  }
-  const safeRemotePath = normalizeScpRemotePath(params.remotePath);
-  if (!safeRemotePath) {
-    throw new Error("invalid remote path for SCP");
-  }
-  const tmpRoot = resolvePreferredOpenClawTmpDir();
-  await fs.mkdir(tmpRoot, { recursive: true });
-  const tmpDir = await fs.mkdtemp(path.join(tmpRoot, "stage-sandbox-media-"));
-  const tmpPath = path.join(tmpDir, "download");
-  try {
-    await retryAsync(
-      async () => {
-        if (abortSignal?.aborted) {
-          return;
-        }
-        const result = await runCommandWithTimeout(
-          [
-            "scp",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "--",
-            `${safeRemoteHost}:${safeRemotePath}`,
-            tmpPath,
-          ],
-          {
-            // The runner owns both descendants and settlement before temp cleanup.
-            signal: abortSignal,
-            killProcessTree: true,
-            // Four UTF-8 bytes retain the existing UTF-16 diagnostic tail bound.
-            maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
-          },
-        );
-        if (result.code !== 0) {
-          // A late abort can coexist with a concrete failed exit; keep that error.
-          if (result.code === null && result.termination === "signal" && abortSignal?.aborted) {
-            return;
-          }
-          const stderr = sliceUtf16Safe(result.stderr, -SCP_STDERR_TAIL_CHARS).trim();
-          throw new Error(`scp failed (${result.code}): ${stderr}`);
-        }
-      },
-      { attempts: 3, label: "remote inbound media SCP", shouldRetry: () => !abortSignal?.aborted },
-    );
-    // Preserve arbitrary abort reasons outside retry's Error normalization.
-    abortSignal?.throwIfAborted();
-    await params.stageDownloadedFile(tmpPath);
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  }
 }
 
 function resolveAbsolutePath(value: string): string | null {

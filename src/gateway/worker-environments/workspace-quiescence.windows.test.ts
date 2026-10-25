@@ -7,7 +7,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { workspaceQuiescenceArgv } from "./workspace-quiescence-scripts.js";
+import {
+  legacyWindowsWorkspaceQuiescenceAcquireArgv,
+  workspaceQuiescenceArgv,
+} from "./workspace-quiescence-scripts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -22,7 +25,13 @@ async function fixture() {
     mode: Parameters<typeof workspaceQuiescenceArgv>[2] = "shared-host",
   ) =>
     runCommandWithTimeout(
-      [process.execPath, ...workspaceQuiescenceArgv(workspace, input, mode).slice(1)],
+      [
+        process.execPath,
+        ...(input.action === "acquire"
+          ? legacyWindowsWorkspaceQuiescenceAcquireArgv(workspace, input, mode)
+          : workspaceQuiescenceArgv(workspace, input, mode)
+        ).slice(1),
+      ],
       { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home, USERPROFILE: home } },
     );
   return {

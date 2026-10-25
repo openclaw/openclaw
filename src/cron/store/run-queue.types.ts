@@ -1,5 +1,6 @@
 import type { CronEventAdmission } from "../event-source.js";
-import type { CronJob } from "../types.js";
+import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
+import type { CronJob, CronStoredJob } from "../types.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 export type CronRunRequestContext = {
@@ -10,7 +11,7 @@ export type CronRunRequestContext = {
 };
 
 export type CronQueuedRun = {
-  job: CronJob;
+  job: CronStoredJob;
   runReceipt: CronRunReceiptHandle;
   migrationPending?: boolean;
 };
@@ -52,6 +53,16 @@ export type CronRunQueueOperations = {
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
       preparingAgentIds?: string[];
+      /**
+       * The draining Gateway process. Private command schedules from another process, or a
+       * drain without this identity, retire before spending an attempt.
+       */
+      hostProcessId?: string;
+      /**
+       * Plugin instances loaded in the draining process that can serve command schedules. A
+       * restartable schedule from an earlier process re-arms onto a matching one in the claim.
+       */
+      pluginCommandHosts?: PluginCommandScheduleHost[];
     };
     output: {
       launches: CronQueuedRun[];

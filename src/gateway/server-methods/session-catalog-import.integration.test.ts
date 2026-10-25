@@ -37,6 +37,7 @@ import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { listProjectedSessions } from "../session-utils-list.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
+import { catalogHost, catalogSession } from "./session-catalog.fixtures.test-support.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
 import {
   createSessionMutationTestClient,
@@ -147,24 +148,18 @@ async function createCatalog(restricted: boolean) {
       throw new Error("Unrestricted import must not enumerate the catalog");
     }
     return [
-      {
+      catalogHost({
         hostId: "node:fixture",
         label: "Fixture node",
         kind: "node",
-        connected: true,
         sessions: [
-          {
-            threadId: `thread-${id}`,
+          catalogSession(`thread-${id}`, {
             sourceHomeId: "home-a",
             sessionKey: nativeKey,
             name: "Native source",
-            status: "stored",
-            archived: false,
-            canContinue: true,
-            canArchive: false,
-          },
+          }),
         ],
-      },
+      }),
     ];
   });
   const provider: SessionCatalogProvider = { id: "claude", label: "Claude", list, read };
@@ -336,6 +331,7 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
           client,
           opts: { agentId: "main" },
         });
+      const listed = expect.arrayContaining([expect.objectContaining({ key: fixture.key })]);
       const canReadHistory = async (client: GatewayClient) => {
         const respond = vi.fn<RespondFn>();
         const read = await prepareChatHistorySessionRead({
@@ -348,12 +344,8 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
         read?.release();
         return { allowed: Boolean(read), respond };
       };
-      expect((await listFor(fixture.client)).sessions).toEqual(
-        expect.arrayContaining([expect.objectContaining({ key: fixture.key })]),
-      );
-      expect((await listFor(fixture.other)).sessions).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ key: fixture.key })]),
-      );
+      expect((await listFor(fixture.client)).sessions).toEqual(listed);
+      expect((await listFor(fixture.other)).sessions).not.toEqual(listed);
       expect((await canReadHistory(fixture.client)).allowed).toBe(true);
       const hiddenHistory = await canReadHistory(fixture.other);
       expect(hiddenHistory.allowed).toBe(false);
@@ -381,9 +373,7 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expectSuccess(await fixture.call(), { created: false, importedItems: 1 });
       expect(fixture.entry()?.visibility).toBe("shared");
       expect(await fixture.transcript()).toHaveLength(4);
-      expect((await listFor(fixture.other)).sessions).toEqual(
-        expect.arrayContaining([expect.objectContaining({ key: fixture.key })]),
-      );
+      expect((await listFor(fixture.other)).sessions).toEqual(listed);
       expect((await canReadHistory(fixture.other)).allowed).toBe(true);
     }, true));
 
@@ -501,9 +491,9 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })).toMatchObject({
         displayName: "Copied catalog session",
       });
-      const transcript = await fixture.transcriptFor(sessionKey);
-      expect(JSON.stringify(transcript)).toContain("Synthetic imported question");
-      expect(JSON.stringify(transcript)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+      const transcript = JSON.stringify(await fixture.transcriptFor(sessionKey));
+      expect(transcript).toContain("Synthetic imported question");
+      expect(transcript).toContain("EXTERNAL_UNTRUSTED_CONTENT");
       expect((await listSessionStateEventsSince(sessionKey, "main", 0)).events).toEqual(
         expect.arrayContaining([expect.objectContaining({ kind: "adopted" })]),
       );

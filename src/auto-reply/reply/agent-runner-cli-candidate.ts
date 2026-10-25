@@ -185,6 +185,7 @@ export async function runCliFallbackCandidate(
         cliSessionBinding,
         assertSettlementCurrent,
         settleResult,
+        persistStoppedFirstSession,
       }) => {
         let sessionEntry = initialSessionEntry;
         const clearCliBinding = () =>
@@ -199,20 +200,35 @@ export async function runCliFallbackCandidate(
             storePath: turn.storePath,
             activeSessionEntry: sessionEntry,
           });
+        const scheduledInference = params.scheduledInference;
         // The CLI owner must see explicit pins before provider scoping can discard them.
-        const authProfileId = allowCliAuthProfileForwarding
-          ? await resolveCliExecutionAuthProfileId({
-              cliExecutionProvider: params.cliExecutionProvider,
-              authProfileProvider: params.provider,
-              config: params.runtimeConfig,
-              agentDir: params.candidateRun.agentDir,
-              selected: params.candidateRun,
-              sessionBinding: cliSessionBinding,
-            })
-          : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
-              config: params.runtimeConfig,
-            }).authProfileId;
-        if (turn.followupRun.run.scheduledAutomation && authProfileId) {
+        // A recorded account runs only when this backend forwards exactly that account.
+        const authProfileId = scheduledInference
+          ? await scheduledInference.resolveCliAuthProfile(async (selected) =>
+              allowCliAuthProfileForwarding
+                ? await resolveCliExecutionAuthProfileId({
+                    cliExecutionProvider: params.cliExecutionProvider,
+                    authProfileProvider: params.provider,
+                    config: params.runtimeConfig,
+                    agentDir: params.candidateRun.agentDir,
+                    selected,
+                    sessionBinding: cliSessionBinding,
+                  })
+                : undefined,
+            )
+          : allowCliAuthProfileForwarding
+            ? await resolveCliExecutionAuthProfileId({
+                cliExecutionProvider: params.cliExecutionProvider,
+                authProfileProvider: params.provider,
+                config: params.runtimeConfig,
+                agentDir: params.candidateRun.agentDir,
+                selected: params.candidateRun,
+                sessionBinding: cliSessionBinding,
+              })
+            : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
+                config: params.runtimeConfig,
+              }).authProfileId;
+        if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
           const refusal = new Error(
             "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
           );
@@ -450,8 +466,32 @@ export async function runCliFallbackCandidate(
             cliSessionBinding,
             forkCliSessionOnResume,
             ...forkRunParams,
+            // Room events and preserved provenance never publish a new native session.
+            ...(turn.followupRun.currentInboundEventKind === "room_event" ||
+            shouldPreserveUserFacingSessionStateForInputProvenance(
+              turn.followupRun.run.inputProvenance,
+            )
+              ? {}
+              : {
+                  persistStoppedFirstCliSession: (binding) =>
+                    persistStoppedFirstSession({
+                      binding,
+                      expectedSession: sessionEntry,
+                      sessionStore: turn.activeSessionStore,
+                    }),
+                }),
             authProfileId,
-            nativeAuthOnly: turn.followupRun.run.scheduledAutomation ? true : undefined,
+            // The CLI owner rechecks this after awaits and before credential/transport effects.
+            assertCurrent: scheduledInference
+              ? () => {
+                  assertSettlementCurrent();
+                  scheduledInference.runParams.authProfileBinding?.assertCurrent();
+                }
+              : undefined,
+            nativeAuthOnly:
+              turn.followupRun.run.scheduledAutomation && !params.scheduledInference
+                ? true
+                : undefined,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,
             messageChannel: turn.followupRun.originatingChannel,
             messageProvider: hookMessageProvider,

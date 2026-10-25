@@ -119,17 +119,9 @@ const transcriptMessage = (message: unknown) => transcriptCommit({ messages: [me
 const commitResponse = (value: Record<string, unknown>) =>
   Value.Check(CommitResponse, { type: "res", id: "commit-1", ...value });
 const commitError = (message: string, reason: string) =>
-  commitResponse({
-    ok: false,
-    error: { code: "INVALID_REQUEST", message, details: { reason } },
-  });
+  commitResponse({ ok: false, error: { code: "INVALID_REQUEST", message, details: { reason } } });
 const liveBase = { runEpoch: 2, lastAckedSeq: 0, seq: 1, runId: "r" };
-const models = {
-  selectedProvider: "p",
-  selectedModel: "m",
-  activeProvider: "q",
-  activeModel: "n",
-};
+const models = { selectedProvider: "p", selectedModel: "m", activeProvider: "q", activeModel: "n" };
 const event = (kind: string, payload: Record<string, unknown>) => ({ kind, payload });
 const params = (liveEvent: unknown, overrides: Record<string, unknown> = {}) => ({
   ...liveBase,
@@ -140,6 +132,11 @@ const tool = (phase: string, payload: Record<string, unknown>) =>
   event("tool", { phase, name: "t", toolCallId: "c", ...payload });
 
 const inferenceIdentity = { runEpoch: 2, sessionId: "s", runId: "r", turnId: "t" };
+const inferenceFrame = (kind: string, payload: object) => ({
+  type: "event",
+  event: `worker.inference.${kind}`,
+  payload: { ...inferenceIdentity, seq: 1, ...payload },
+});
 const inferenceStart = {
   ...inferenceIdentity,
   modelRef: { provider: "fixture-provider", model: "fixture-model" },
@@ -190,45 +187,42 @@ const liveResponse = (value: Record<string, unknown>) =>
 
 describe("worker protocol schemas", () => {
   it("accepts the bootstrap receipt and future unique feature names", () => {
-    expect(validateHandshake(handshake)).toBe(true);
-    expect(
-      validateHandshake({
-        ...handshake,
-        protocolFeatures: ["run-v1", "resume-v1"],
-      }),
-    ).toBe(true);
+    checkAll(validateHandshake, [
+      handshake,
+      { ...handshake, protocolFeatures: ["run-v1", "resume-v1"] },
+    ]);
   });
 
   it("rejects malformed admission identity", () => {
     check(validateHandshake, { ...handshake, bundleHash: "short" }, false);
   });
   it("accepts a dedicated connect and explicit unattached session", () => {
-    expect(validateConnect(request("connect", connectParams))).toBe(true);
+    check(validateConnect, request("connect", connectParams));
     const missingRunId = structuredClone(connectParams);
     Reflect.deleteProperty(missingRunId.admission, "runId");
-    expect(validateConnect(request("connect", missingRunId))).toBe(false);
+    check(validateConnect, request("connect", missingRunId), false);
     for (const admission of [
       { ...connectParams.admission, sessionId: null, runId: "run-1" },
       { ...connectParams.admission, sessionId: "session-1", runId: null },
     ]) {
-      expect(validateConnect(request("connect", { ...connectParams, admission }))).toBe(false);
+      check(validateConnect, request("connect", { ...connectParams, admission }), false);
     }
     checkSchema(AdmissionResponse, response(workerHello));
   });
 
   it("validates heartbeat status frames", () => {
-    expect(validateHeartbeat({ sentAtMs: 1, status: "ready" })).toBe(true);
-    expect(validateHeartbeat({ sentAtMs: 1, status: "unknown" })).toBe(false);
+    check(validateHeartbeat, { sentAtMs: 1, status: "ready" });
+    check(validateHeartbeat, { sentAtMs: 1, status: "unknown" }, false);
     checkSchema(HeartbeatRequest, request("worker.heartbeat", { sentAtMs: 1, status: "busy" }));
     checkSchema(HeartbeatResponse, response({ receivedAtMs: 2, status: "ok", ownerEpoch: 1 }));
   });
 
   it("accepts semantic transcript commits and generated-id responses", () => {
     const commitParams = transcriptCommit();
-    expect(validateCommit(commitParams)).toBe(true);
+    check(validateCommit, commitParams);
     checkSchema(CommitRequest, request("worker.transcript.commit", commitParams));
     const committed = { entryIds: ["entry-1", "entry-2", "entry-3"], newLeafId: "entry-3" };
-    expect(commitResponse({ ok: true, payload: committed })).toBe(true);
+    check(commitResponse, { ok: true, payload: committed });
     expect(commitError("worker request rejected", "credential-replaced")).toBe(true);
     expect(commitError("transcript commit rejected", "stale-base-leaf")).toBe(true);
   });
@@ -239,11 +233,9 @@ describe("worker protocol schemas", () => {
       return [
         validateCommit(transcriptMessage(message)),
         validateInferenceStart(inferenceMessages([message])),
-        validateInferenceTerminal({
-          type: "event",
-          event: "worker.inference.terminal",
-          payload: { ...inferenceIdentity, seq: 1, outcome: { type: "done", message } },
-        }),
+        validateInferenceTerminal(
+          inferenceFrame("terminal", { outcome: { type: "done", message } }),
+        ),
       ];
     };
 
@@ -300,10 +292,12 @@ describe("worker protocol schemas", () => {
           providerReplay: { ...providerReplay, ...overrides },
         }),
       );
-    expect(validateReplay()).toBe(true);
-    expect(validateReplay({ privateScratch: "drop" })).toBe(false);
-    expect(validateReplay({ data: "x".repeat(MAX_REPLAY_BYTES) })).toBe(true);
-    expect(validateReplay({ data: "x".repeat(MAX_REPLAY_BYTES + 1) })).toBe(false);
+    checkAll(validateReplay, [{}, { data: "x".repeat(MAX_REPLAY_BYTES) }]);
+    checkAll(
+      validateReplay,
+      [{ privateScratch: "drop" }, { data: "x".repeat(MAX_REPLAY_BYTES + 1) }],
+      false,
+    );
   });
 
   it("advertises only the current execution-context dialect", () => {
@@ -338,8 +332,8 @@ describe("worker protocol schemas", () => {
     ]) {
       check(validateLive, params(validEvent));
     }
-    expect(liveRequest(params(assistant))).toBe(true);
-    expect(liveResponse({ ok: true, payload: { ackedSeq: 3 } })).toBe(true);
+    check(liveRequest, params(assistant));
+    check(liveResponse, { ok: true, payload: { ackedSeq: 3 } });
     for (const details of [
       { reason: "epoch-mismatch" },
       { reason: "session-not-attached" },
@@ -349,8 +343,11 @@ describe("worker protocol schemas", () => {
     ]) {
       check(liveResponse, liveError(details));
     }
-    expect(liveResponse(liveError({ reason: "later" }))).toBe(false);
-    expect(liveResponse({ ok: true, payload: { ackedSeq: -1 } })).toBe(false);
+    checkAll(
+      liveResponse,
+      [liveError({ reason: "later" }), { ok: true, payload: { ackedSeq: -1 } }],
+      false,
+    );
     for (const [field, value] of [
       ["runEpoch", -1],
       ["lastAckedSeq", -1],
@@ -358,7 +355,7 @@ describe("worker protocol schemas", () => {
       ["seq", 0],
       ["seq", Number.MAX_SAFE_INTEGER + 1],
     ] as const) {
-      expect(validateLive(params(assistant, { [field]: value }))).toBe(false);
+      check(validateLive, params(assistant, { [field]: value }), false);
     }
     for (const invalid of [
       params(event("unknown", {})),
@@ -414,26 +411,26 @@ describe("worker protocol schemas", () => {
   it("keeps inference content events closed and indexed", () => {
     const contentEvent = { type: "toolcall_start", id: "call-1", toolName: "probe" };
     const validateEvent = (value: unknown) =>
-      validateInferenceEvent({
-        type: "event",
-        event: "worker.inference.event",
-        payload: { ...inferenceIdentity, seq: 1, event: value },
-      });
-    expect(validateEvent({ ...contentEvent, contentIndex: 0 })).toBe(true);
-    expect(validateEvent(contentEvent)).toBe(false);
-    expect(validateEvent({ ...contentEvent, contentIndex: -1 })).toBe(false);
-    expect(validateEvent({ ...contentEvent, contentIndex: 0, unexpected: true })).toBe(false);
+      validateInferenceEvent(inferenceFrame("event", { event: value }));
+    check(validateEvent, { ...contentEvent, contentIndex: 0 });
+    checkAll(
+      validateEvent,
+      [
+        contentEvent,
+        { ...contentEvent, contentIndex: -1 },
+        { ...contentEvent, contentIndex: 0, unexpected: true },
+      ],
+      false,
+    );
   });
 
   it.each([
     transcriptCommit({ sessionId: "other" }),
     transcriptCommit({ messages: [{ ...transcriptMessages[0], id: "entry-from-worker" }] }),
     transcriptCommit({ messages: [{ ...transcriptMessages[0], parentId: "parent-from-worker" }] }),
-    transcriptCommit({
-      messages: [{ ...transcriptMessages[0], sessionId: "foreign-session" }],
-    }),
+    transcriptCommit({ messages: [{ ...transcriptMessages[0], sessionId: "foreign-session" }] }),
   ])("rejects raw transcript identity or invalid batch fields %#", (candidate) => {
-    expect(validateCommit(candidate)).toBe(false);
+    check(validateCommit, candidate, false);
   });
 
   it("rejects deeply nested worker JSON before schema compilation", () => {

@@ -1,21 +1,12 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Session snapshot tests cover runtime skill state captured for agent sessions.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  registerDiagnosticTracePropagationBridge,
-  resetDiagnosticTracePropagationForTest,
-} from "../../infra/diagnostic-trace-propagation.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { prepareSkillBundle } from "../library/bundle.js";
-import type { Skill } from "../loading/skill-contract.js";
-import { recordSkillFileHost } from "../skill-file-host.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillSnapshot } from "../types.js";
-import { readSkillResourceFiles } from "./resources.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
@@ -32,8 +23,6 @@ type SnapshotFixture = {
   skills: unknown[];
   resolvedSkills: unknown[];
   version?: number;
-  // The real projection stamps the current prompt format onto fresh builds.
-  promptFormatVersion?: number;
 };
 type SnapshotBuildOptions = NonNullable<
   Parameters<typeof import("../loading/workspace-skill-prompt.js").buildSkillSnapshot>[1]
@@ -48,45 +37,10 @@ function strippedSnapshot(skillName = "test", version = 1): SkillSnapshot {
   };
 }
 
-const temps = useAutoCleanupTempDirTracker(afterEach);
-
-/** A gateway-hosted fixture skill backed by real bundle bytes on disk. */
-async function stampedFixtureSkillFixture(): Promise<{
-  skill: Skill;
-  /** Write support-file bytes, then return the bundle revision over them. */
-  bundleRevisionOver: (supportBytes: string) => Promise<string>;
-}> {
-  const dir = temps.make("session-snapshot-identity-");
-  await fs.mkdir(dir, { recursive: true });
-  const skillPath = path.join(dir, "SKILL.md");
-  const supportPath = path.join(dir, "check.sh");
-  const skill = createCanonicalFixtureSkill({
-    name: "guide",
-    description: "Guide",
-    filePath: skillPath,
-    baseDir: dir,
-    source: "openclaw-workspace",
-  });
-  recordSkillFileHost(skill, "gateway");
-  await fs.writeFile(skillPath, "---\nname: guide\ndescription: Guide\n---\nUse check.sh.\n");
-  return {
-    skill,
-    bundleRevisionOver: async (supportBytes: string) => {
-      await fs.writeFile(supportPath, supportBytes);
-      const files = await readSkillResourceFiles(
-        { ...skill, bundleFingerprint: undefined },
-        { allowMissingRoot: false },
-      );
-      return prepareSkillBundle(files!).revision;
-    },
-  };
-}
-
 const {
   buildWorkspaceSkillSnapshotMock,
   ensureSkillsWatcherMock,
   getSkillsSnapshotVersionMock,
-  getSkillsResourceVersionMock,
   shouldRefreshSnapshotForVersionMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn<
@@ -98,7 +52,6 @@ const {
   })),
   ensureSkillsWatcherMock: vi.fn(),
   getSkillsSnapshotVersionMock: vi.fn(() => 1),
-  getSkillsResourceVersionMock: vi.fn(() => 0),
   shouldRefreshSnapshotForVersionMock: vi.fn((cached = 0, next = 0) =>
     next === 0 ? cached > 0 : cached < next,
   ),
@@ -112,11 +65,9 @@ vi.mock("./refresh.js", () => ({
   ensureSkillsWatcher: ensureSkillsWatcherMock,
 }));
 
-// mock-isolation: Version clocks are shared refresh-state module state; cases control snapshot refresh decisions without cross-case version drift.
 vi.mock("./refresh-state.js", () => ({
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   getSkillsSourceVersion: getSkillsSnapshotVersionMock,
-  getSkillsResourceVersion: getSkillsResourceVersionMock,
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
 
@@ -129,14 +80,9 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     buildWorkspaceSkillSnapshotMock.mockReturnValue({ prompt: "", skills: [], resolvedSkills: [] });
     ensureSkillsWatcherMock.mockImplementation(() => undefined);
     getSkillsSnapshotVersionMock.mockReturnValue(1);
-    getSkillsResourceVersionMock.mockReturnValue(0);
     shouldRefreshSnapshotForVersionMock.mockImplementation((cached = 0, next = 0) =>
       next === 0 ? cached > 0 : cached < next,
     );
-  });
-
-  afterEach(() => {
-    resetDiagnosticTracePropagationForTest();
   });
 
   it("prepares fresh session eligibility even when the snapshot version is unchanged", async () => {
@@ -452,93 +398,4 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
       expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(change === "rotated" ? 1 : 2);
     },
   );
-
-  it("re-stamps a reused snapshot after a watcher-observed support-file edit", async () => {
-    const fixture = await stampedFixtureSkillFixture();
-    const identityBefore = await fixture.bundleRevisionOver("session v1\n");
-    const existing: SkillSnapshot = {
-      ...strippedSnapshot("guide"),
-      resolvedSkills: [{ ...fixture.skill, bundleFingerprint: identityBefore }],
-      discoverySkills: [{ ...fixture.skill, bundleFingerprint: identityBefore }],
-    };
-    getSkillsResourceVersionMock.mockReturnValue(0);
-    const first = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      config: {},
-      existingSnapshot: existing,
-      watch: false,
-    });
-    expect(first.shouldRefresh).toBe(false);
-    // Steady state: no resource change, the reuse path keeps the snapshot as-is.
-    expect(first.snapshot).toEqual(existing);
-    // The watcher observed a support-file edit: the resource version advances
-    // without a snapshot rebuild, and the reuse path must refresh the identity
-    // projections so later uses emit the reloaded bundle's fingerprint.
-    const identityAfter = await fixture.bundleRevisionOver("session v2\n");
-    getSkillsResourceVersionMock.mockReturnValue(1);
-    registerDiagnosticTracePropagationBridge({ resolveTraceContext: () => undefined });
-    const second = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      config: {},
-      existingSnapshot: existing,
-      watch: false,
-    });
-    expect(second.shouldRefresh).toBe(false);
-    expect(second.snapshot.resolvedSkills?.[0]?.bundleFingerprint).toBe(identityAfter);
-    expect(second.snapshot.discoverySkills?.[0]?.bundleFingerprint).toBe(identityAfter);
-    expect(second.snapshot.resolvedSkills?.[0]?.bundleFingerprint).not.toBe(identityBefore);
-    expect(second.snapshot.prompt).toBe(existing.prompt);
-    expect(second.snapshot.skills).toEqual(existing.skills);
-    expect(second.snapshot.version).toBe(existing.version);
-  });
-
-  it("keeps a reused snapshot untouched while tracing is inactive despite a resource change", async () => {
-    const fixture = await stampedFixtureSkillFixture();
-    const identityBefore = await fixture.bundleRevisionOver("quiet v1\n");
-    const existing: SkillSnapshot = {
-      ...strippedSnapshot("guide"),
-      resolvedSkills: [{ ...fixture.skill, bundleFingerprint: identityBefore }],
-      discoverySkills: [{ ...fixture.skill, bundleFingerprint: identityBefore }],
-    };
-    getSkillsResourceVersionMock.mockReturnValue(3);
-    // No tracing consumer: zero telemetry-driven work on the reuse path — the
-    // carried stamp stays (never stripped or recomputed while the gate is closed).
-    const result = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      config: {},
-      existingSnapshot: existing,
-      watch: false,
-    });
-    expect(result.shouldRefresh).toBe(false);
-    expect(result.snapshot).toEqual(existing);
-    expect(result.snapshot.resolvedSkills?.[0]?.bundleFingerprint).toBe(identityBefore);
-  });
-
-  it("records the resource version a fresh snapshot was stamped at", async () => {
-    getSkillsResourceVersionMock.mockReturnValue(11);
-    const fixture = await stampedFixtureSkillFixture();
-    buildWorkspaceSkillSnapshotMock.mockReturnValue({
-      prompt: "fresh prompt",
-      skills: [{ name: "guide" }],
-      resolvedSkills: [fixture.skill],
-      version: 1,
-      promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
-    });
-    const built = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      config: {},
-      watch: false,
-    });
-    expect(built.snapshot.resourceVersion).toBe(11);
-    // A reuse against the same resource version does no identity work and no
-    // rebuild: the shortcut returns the same snapshot object untouched.
-    const reused = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      config: {},
-      existingSnapshot: built.snapshot as SkillSnapshot,
-      watch: false,
-    });
-    expect(reused.snapshot).toBe(built.snapshot);
-    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-  });
 });

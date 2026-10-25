@@ -11,6 +11,9 @@ export type SlackActionClientOpts = {
   accountId?: string;
   token?: string;
   teamId?: string;
+  /** Preserve admission scope while omitting team_id from a Slack API request. */
+  omitTeamId?: boolean;
+  inviteUserId?: string;
   client?: WebClient;
   assertDirectAdapterHandoff?: () => void;
 };
@@ -36,4 +39,6 @@ export type SlackActionContext = Pick<
   assertDirectAdapterHandoff?: ChannelMessageActionContext["assertDirectAdapterHandoff"];
   /** Slack-private ordered delivery plan prepared after presentation normalization. */
   preparedMessages?: readonly SlackReplyDeliveryMessage[];
+  /** Slack-private once-rendered bytes; direct action edits still accept Markdown. */
+  preparedEditText?: string;
 };

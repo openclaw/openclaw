@@ -46,36 +46,34 @@ function createLifecycleRoute(path: string) {
 }
 
 describe("shared lifecycle admission", () => {
-  it.each(["request canceled", "connection canceled"])(
+  it.each(["request canceled", "connection canceled", "dashboard retired"])(
     "rejects a request before mutation when %s",
     async (reason) => {
       const route = createLifecycleRoute("/start");
       const request = new AbortController();
       const connection = new AbortController();
-      (reason === "request canceled" ? request : connection).abort(new Error(reason));
+      const error = new Error(reason);
+      if (reason !== "dashboard retired") {
+        (reason === "request canceled" ? request : connection).abort(error);
+      }
 
       const response = await route.call({
         signal: request.signal,
         requester: { signal: connection.signal, isCurrent: () => true },
+        assertCurrent: async () => {
+          if (reason === "dashboard retired") {
+            throw error;
+          }
+        },
       });
 
       expect(response.statusCode).toBeGreaterThanOrEqual(400);
+      if (reason === "dashboard retired") {
+        expect(response.body).toEqual({ error: "Error: dashboard retired" });
+      }
       expect(route.mutation).not.toHaveBeenCalled();
     },
   );
-
-  it("rejects a retired dashboard before mutation", async () => {
-    const route = createLifecycleRoute("/start");
-    const response = await route.call({
-      assertCurrent: async () => {
-        throw new Error("dashboard retired");
-      },
-    });
-
-    expect(response.statusCode).toBeGreaterThanOrEqual(400);
-    expect(response.body).toEqual({ error: "Error: dashboard retired" });
-    expect(route.mutation).not.toHaveBeenCalled();
-  });
 
   it.each(["/start", "DELETE /profiles/:name"])(
     "%s rechecks requester authority after dashboard admission",

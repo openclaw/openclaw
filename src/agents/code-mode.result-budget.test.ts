@@ -14,7 +14,6 @@ import {
   expectCompleted,
   expectFailure,
   expectOriginalCodeModeMarker,
-  fakeTool,
   resetCodeModeTestState,
   resultDetails,
   resultText as text,
@@ -35,6 +34,7 @@ import { agentSessionQueuePromptContext } from "./sessions/agent-session-prompti
 import { SessionManager } from "./sessions/session-manager.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { resolveLiveToolResultMaxChars } from "./tool-result-limits.js";
@@ -126,7 +126,6 @@ async function dispatch(
       trajectoryRecorder: null,
       transcriptLeafId: null,
       onFinalPromptText: () => {},
-      onSteeringAcknowledged: () => {},
       persistToolResultProjections: async () => {},
       promptActiveSession: async () => {
         const context = await agent.transformContext!(messages, new AbortController().signal);

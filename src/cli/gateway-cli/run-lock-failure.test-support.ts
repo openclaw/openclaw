@@ -12,6 +12,30 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { getFreePort } from "../../test-utils/ports.js";
 import type { GatewayLoopParams } from "./run-cleanup-receipt.test-support.js";
 
+async function withReadOnlyDatabase(
+  run: (databasePath: string, options: GatewayLockOptions) => Promise<void>,
+) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-readonly-"));
+  const databasePath = path.join(root, "state", "openclaw.sqlite");
+  const options: GatewayLockOptions = {
+    env: { OPENCLAW_STATE_DIR: root },
+    allowInTests: true,
+    listenerMode: "supervised",
+    supervisor: { kind: "systemd", name: null },
+    port: 12345,
+    timeoutMs: 0,
+  };
+  try {
+    const initial = await acquireGatewayLock(options);
+    await initial?.release();
+    await fs.chmod(databasePath, 0o444);
+    await run(databasePath, options);
+  } finally {
+    await fs.chmod(databasePath, 0o600);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
 export function registerGatewayLockFailureTests({
   expectExit,
   configState,
@@ -59,21 +83,8 @@ export function registerGatewayLockFailureTests({
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "hardens a real user-owned read-only state database before acquiring it",
-    async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-readonly-"));
-      const databasePath = path.join(root, "state", "openclaw.sqlite");
-      const options: GatewayLockOptions = {
-        env: { OPENCLAW_STATE_DIR: root },
-        allowInTests: true,
-        listenerMode: "supervised",
-        supervisor: { kind: "systemd", name: null },
-        port: 12345,
-        timeoutMs: 0,
-      };
-      try {
-        const initial = await acquireGatewayLock(options);
-        await initial?.release();
-        await fs.chmod(databasePath, 0o444);
+    () =>
+      withReadOnlyDatabase(async (databasePath, options) => {
         const lock = await acquireGatewayLock(options);
         try {
           expect(lock).not.toBeNull();
@@ -81,54 +92,36 @@ export function registerGatewayLockFailureTests({
         } finally {
           await lock?.release();
         }
-      } finally {
-        await fs.chmod(databasePath, 0o600);
-        await fs.rm(root, { recursive: true, force: true });
-      }
-    },
+      }),
   );
 
   it.skipIf(process.platform !== "darwin")(
     "reports a real immutable state database without contention diagnostics or retry",
-    async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-immutable-"));
-      const databasePath = path.join(root, "state", "openclaw.sqlite");
-      const lockOptions: GatewayLockOptions = {
-        env: { OPENCLAW_STATE_DIR: root },
-        allowInTests: true,
-        listenerMode: "supervised",
-        supervisor: { kind: "systemd", name: null },
-        port: 12345,
-        timeoutMs: 0,
-      };
-      const initial = await acquireGatewayLock(lockOptions);
-      await initial?.release();
-      await fs.chmod(databasePath, 0o444);
-      try {
-        execFileSync("/usr/bin/chflags", ["uchg", databasePath]);
-        const { inspectPortUsage } = await import("../../infra/ports-inspect.js");
-        detectRespawnSupervisor.mockReturnValue("systemd");
-        runGatewayLoop.mockImplementationOnce(async () => {
-          await acquireGatewayLock(lockOptions);
-        });
-        await expectExit(1);
-        const output = runtimeErrors.join("\n");
-        expect(output).toContain("storage failure");
-        expect(output).toContain(databasePath);
-        expect(output).toContain("read-only or not writable by this user");
-        expect(output).toContain("chflags nouchg");
-        expect(output).toContain("openclaw doctor");
-        expect(output).not.toContain("gateway stop");
-        expect(inspectPortUsage).not.toHaveBeenCalled();
-        expect(runGatewayLoop).toHaveBeenCalledOnce();
-        expect(triageAfterFailure).not.toHaveBeenCalled();
-        expect((await fs.stat(databasePath)).mode & 0o777).toBe(0o444);
-      } finally {
-        execFileSync("/usr/bin/chflags", ["nouchg", databasePath]);
-        await fs.chmod(databasePath, 0o600);
-        await fs.rm(root, { recursive: true, force: true });
-      }
-    },
+    () =>
+      withReadOnlyDatabase(async (databasePath, lockOptions) => {
+        try {
+          execFileSync("/usr/bin/chflags", ["uchg", databasePath]);
+          const { inspectPortUsage } = await import("../../infra/ports-inspect.js");
+          detectRespawnSupervisor.mockReturnValue("systemd");
+          runGatewayLoop.mockImplementationOnce(async () => {
+            await acquireGatewayLock(lockOptions);
+          });
+          await expectExit(1);
+          const output = runtimeErrors.join("\n");
+          expect(output).toContain("storage failure");
+          expect(output).toContain(databasePath);
+          expect(output).toContain("read-only or not writable by this user");
+          expect(output).toContain("chflags nouchg");
+          expect(output).toContain("openclaw doctor");
+          expect(output).not.toContain("gateway stop");
+          expect(inspectPortUsage).not.toHaveBeenCalled();
+          expect(runGatewayLoop).toHaveBeenCalledOnce();
+          expect(triageAfterFailure).not.toHaveBeenCalled();
+          expect((await fs.stat(databasePath)).mode & 0o777).toBe(0o444);
+        } finally {
+          execFileSync("/usr/bin/chflags", ["nouchg", databasePath]);
+        }
+      }),
   );
 
   it.each([

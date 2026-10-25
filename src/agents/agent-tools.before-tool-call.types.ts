@@ -15,7 +15,6 @@ import type {
 } from "../plugins/types.js";
 import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
-import type { SkillInstructionDeliveryMarkers } from "./agent-tools.read.types.js";
 import type { AgentTool } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -65,11 +64,6 @@ export type HookContext = {
   onToolOutcome?: ToolOutcomeObserver;
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   skillsSnapshot?: SkillSnapshot;
-  /**
-   * This run's delivery fingerprint markers. The skill.used emission consumes
-   * the per-invocation marker captured by the delivery owner.
-   */
-  skillInstructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
   skillUsagePaths?: SkillUsagePath[];
   skillCommand?: {
     commandName: string;

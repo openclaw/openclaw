@@ -40,18 +40,20 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
-  it("passes explicit env through legacy auth normalization", async () => {
-    const env = { OPENCLAW_AUTH_CHOICE_TEST: "1" };
+  it("normalizes legacy auth choices before provider selection", async () => {
     resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
       choiceId: "anthropic-cli",
       choiceLabel: "Anthropic Claude CLI",
     });
     resolveManifestProviderAuthChoice.mockReturnValue({ providerId: "anthropic" });
 
-    await expect(
-      resolvePreferredProviderForAuthChoice({ choice: "claude-cli", env }),
-    ).resolves.toBe("anthropic");
-    expect(resolveManifestDeprecatedProviderAuthChoice).toHaveBeenCalledWith("claude-cli", { env });
+    await expect(resolvePreferredProviderForAuthChoice({ choice: "claude-cli" })).resolves.toBe(
+      "anthropic",
+    );
+    expect(resolveManifestDeprecatedProviderAuthChoice).toHaveBeenCalledWith(
+      "claude-cli",
+      undefined,
+    );
     expect(resolveProviderPluginChoiceCore).not.toHaveBeenCalled();
     expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });

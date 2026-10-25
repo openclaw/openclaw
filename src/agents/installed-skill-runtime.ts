@@ -100,10 +100,6 @@ export function prepareInstalledSkillCatalog(params: {
         // This resource owner supports whole reads only. Its document bridge
         // is not a substitute for bounded skill-resource authority.
       }
-      // A sandboxed run attributes no bundle identity: its entries carry no
-      // stamps (the preparation gate skips sandboxed runs), and a sandboxed
-      // serving read routes through the bridge, never a host bundle tree.
-      const bundleFingerprint = !sandbox?.enabled ? skill.bundleFingerprint : undefined;
       return {
         name: skill.name,
         promptListed: promptListed.has(skill.name),
@@ -117,10 +113,6 @@ export function prepareInstalledSkillCatalog(params: {
         reader,
         assertCurrent,
         readSearchContent,
-        // The skills_read route carries what it serves into its delivery
-        // receipt: the entry's retained loaded-bundle identity, resolved by
-        // lookup at the serving boundary.
-        bundleFingerprint,
       };
     });
 }

@@ -3,9 +3,11 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
+import * as messageDecoder from "./app-server/client-message-decoder.js";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./app-server/test-support.js";
+import { catalogThread } from "./session-catalog-client.test-support.js";
 import {
   codexCatalogResidentHomeKey,
   observeCodexCatalogClient,
@@ -21,19 +23,13 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureId = 0;
 
 function thread(overrides: Partial<CodexThread> = {}): CodexThread {
-  return {
-    id: "thread-1",
-    projectId: null,
+  return catalogThread({
     preview: "The original user request",
     name: null,
-    source: "cli",
     originator: "codex_cli_rs",
     cwd: "/workspace/project",
-    updatedAt: 100,
-    recencyAt: 100,
-    status: { type: "idle" },
     ...overrides,
-  };
+  });
 }
 
 async function fixture(
@@ -106,7 +102,7 @@ async function fixture(
     reply: async (position: number, value: CodexThread) => {
       const { id } = await events.request(position, value.id);
       harness.send({ id, result: { thread: value } });
-      await nativeReads.mock.results[position]!.value;
+      return await nativeReads.mock.results[position]!.value;
     },
   };
   return { index, harness, startOptions, readNative, project, ...events };
@@ -123,6 +119,7 @@ const sessions = async (index: CodexCatalogIndex) => (await index.list({})).sess
 const ids = async (index: CodexCatalogIndex) => (await sessions(index)).map((row) => row.threadId);
 const expectName = (index: CodexCatalogIndex, id: string, name: string) =>
   vi.waitFor(() => expect(index.get(id)?.page.sessions[0]?.name).toBe(name));
+const row = (index: CodexCatalogIndex, id: string) => index.get(id)?.page.sessions[0];
 const warnings = () => vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
 const expectWarning = (spy: ReturnType<typeof warnings>, error: unknown) =>
   expect(spy).toHaveBeenCalledExactlyOnceWith("Codex resident catalog background update failed", {
@@ -200,9 +197,7 @@ it.each([false, true])(
     if (queuedActivity) {
       await reply(1, thread({ name: "Fresh activity after failed read" }));
       await nextTurn();
-      expect(index.get("thread-1")?.page.sessions[0]?.name).toBe(
-        "Fresh activity after failed read",
-      );
+      expect(row(index, "thread-1")?.name).toBe("Fresh activity after failed read");
     }
     expect(index.hasActiveWork()).toBe(false);
     expectWarning(
@@ -248,15 +243,15 @@ it("reads changed pages through an unchanged page, then repairs silent tail chan
   await settled(index);
   expect(readNative).toHaveBeenCalledTimes(19);
   expect(index.get("missed-start")).toBeDefined();
-  expect(index.get("stored-16")?.page.sessions[0]?.name).toBe("Renamed without new activity");
-  expect(index.get("stored-220")?.page.sessions[0]?.name).toBeNull();
+  expect(row(index, "stored-16")?.name).toBe("Renamed without new activity");
+  expect(row(index, "stored-220")?.name).toBeNull();
   expect(index.get("stored-255")).toBeDefined();
   await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
   expect(readNative).toHaveBeenCalledTimes(19);
   await index.list({ limit: 64 });
   await settled(index);
   expect(readNative).toHaveBeenCalledTimes(36);
-  expect(index.get("stored-220")?.page.sessions[0]?.name).toBe("Silent tail rename");
+  expect(row(index, "stored-220")?.name).toBe("Silent tail rename");
   expect(index.get("stored-255")).toBeUndefined();
 });
 
@@ -288,9 +283,15 @@ it.each([
       harness.send({ method: "turn/completed", params: { threadId: first.id, turn: {} } });
       start(first.id);
     }
+    const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
     await reply(1, { ...second, name: "Second read returned first" });
     await expectName(index, second.id, "Second read returned first");
-    await reply(0, { ...first, name: "First read returned last" });
+    const updated = { ...first, name: "First read returned last", preview: "x".repeat(40 * 1024) };
+    expect(
+      await reply(0, { ...updated, extra: { discarded: "native payload ".repeat(4_096) } }),
+    ).toEqual({
+      thread: { ...updated, preview: "x".repeat(500) },
+    });
     await expectName(index, first.id, "First read returned last");
     if (repeatFirst === "inflight") {
       await reply(2, { ...first, name: "Latest first turn" });
@@ -299,6 +300,7 @@ it.each([
     expect(await ids(index)).toEqual(expected);
     expect(harness.writes).toHaveLength(repeatFirst === "inflight" ? 3 : 2);
     expect(readNative).toHaveBeenCalledOnce();
+    expect(parse).not.toHaveBeenCalled();
   },
 );
 
@@ -391,8 +393,7 @@ it("uses started payloads without a read and waits for first-user content before
   started(thread({ preview }));
   await vi.waitFor(async () => {
     const page = await index.list({});
-    expect(page.sessions).toHaveLength(1);
-    expect(page.sessions[0]).toMatchObject({ threadId: "thread-1" });
+    expect(page.sessions).toMatchObject([{ threadId: "thread-1" }]);
     expect(page.sessions[0]?.fallbackName).toHaveLength(500);
     expect(index.get("thread-1")?.preview).toHaveLength(500);
   });

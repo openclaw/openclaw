@@ -87,19 +87,20 @@ export function AppearancePicker(props: AppearancePickerProps) {
       : ([...EMOJI_CHOICES, ...SESSION_ICON_GLYPH_IDS].find((icon) => icon === props.currentIcon) ??
         EMOJI_CHOICES[0]),
   );
-  const choice = (icon: string | null, glyph = false) => (
+  // `slot` keys roving focus; the repeated clear choice gets its own and is never the tab stop.
+  const choice = (icon: string | null, glyph = false, slot: string | null = icon) => (
     <button
       type="button"
       class={["session-menu__icon-choice", { "session-menu__icon-choice--glyph": glyph }]}
       data-form-control
       aria-label={glyph ? (icon ?? t("sessionsView.noIcon")) : undefined}
       aria-pressed={props.currentIcon === icon ? "true" : "false"}
-      tabindex={icon === tabStop() ? 0 : -1}
+      tabindex={slot === tabStop() ? 0 : -1}
       disabled={props.disabled}
       title={props.disabledReason ?? (icon === null ? t("sessionsView.noIcon") : undefined)}
       ref={[
         props.controlRef?.(),
-        (element) => choices.set(icon, element),
+        (element) => choices.set(slot, element),
         nativeListener("click", (event) => props.onSelect(event, icon)),
       ]}
     >
@@ -192,7 +193,10 @@ export function AppearancePicker(props: AppearancePickerProps) {
           )}
         >
           <div class="session-menu__icon-section-label">{t("sessionsView.iconEmojiSection")}</div>
+          {/* Emoji and glyph share one icon slot; both sections lead with the same clear
+              choice, but only the first one is a tab stop. */}
           <div class="session-menu__icon-grid">
+            {props.clearable !== false ? choice(null, true) : undefined}
             <For each={EMOJI_CHOICES}>{(icon) => choice(icon)}</For>
             <button
               type="button"
@@ -216,7 +220,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
           </div>
           <div class="session-menu__icon-section-label">{t("sessionsView.iconGlyphSection")}</div>
           <div class="session-menu__icon-grid">
-            {props.clearable !== false ? choice(null, true) : undefined}
+            {props.clearable !== false ? choice(null, true, "glyph:none") : undefined}
             <For each={SESSION_ICON_GLYPH_IDS}>{(icon) => choice(icon, true)}</For>
           </div>
         </div>
@@ -392,6 +396,10 @@ export function useSessionMenuAppearance(
     setMode("grid");
     setCustomValue("");
   };
+  const selectAppearance = (event: Event, action: AppearanceAction) => {
+    event.stopPropagation();
+    runAction(action);
+  };
   const showIconGrid = (event?: Event) => {
     event?.stopPropagation();
     prepare();
@@ -416,21 +424,12 @@ export function useSessionMenuAppearance(
         currentColor={readState().session.color}
         colorDisabled={actionDisabled("set-color")}
         colorDisabledReason={readState().actionDisabledReasons["set-color"]}
-        onSelectColor={(event, color) => {
-          event.stopPropagation();
-          runAction({ kind: "set-color", color });
-        }}
-        onReset={(event) => {
-          event.stopPropagation();
-          runAction({ kind: "reset-appearance" });
-        }}
+        onSelectColor={(event, color) => selectAppearance(event, { kind: "set-color", color })}
+        onReset={(event) => selectAppearance(event, { kind: "reset-appearance" })}
         customIconValue={customValue()}
         disabled={actionDisabled("set-icon")}
         disabledReason={readState().actionDisabledReasons["set-icon"]}
-        onSelect={(event, icon) => {
-          event.stopPropagation();
-          runAction({ kind: "set-icon", icon });
-        }}
+        onSelect={(event, icon) => selectAppearance(event, { kind: "set-icon", icon })}
         onShowCustom={(event) => {
           event.stopPropagation();
           setMode("custom");

@@ -27,7 +27,7 @@ suite.define(() => {
         const entries = {
           "ui.theme": "claw",
           "ui.themeMode": "light",
-          "ui.railShortcuts": ["route:agents-home"],
+          "ui.railShortcuts": ["route:sessions"],
         };
         const scenario = {
           authMethod: "trusted-proxy" as const,

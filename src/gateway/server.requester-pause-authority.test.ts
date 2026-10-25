@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-execution-identity.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import { consumeSubagentPauseNotice } from "../agents/subagents/registry/subagent-delivery-state.js";
@@ -20,6 +24,7 @@ import {
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
@@ -41,9 +46,10 @@ it.for([
   "requester reset",
   "same-human follow-up",
   "follow-up source revoked during dispatch",
+  "outbox retired after acceptance",
 ] as const)(
   "enforces %s after consuming the pause notice and before starting the next turn",
-  async (outcome) => {
+  async (outcome, { signal }) => {
     await prepareGatewayReplyRuntimeForTest();
     const { markRequesterTurnYielded, settleRequesterAfterSessionSpawns } =
       await import("../agents/subagents/registry/subagent-registry.js");
@@ -63,6 +69,7 @@ it.for([
     const resetRequester = outcome === "requester reset";
     const revokedSource = outcome === "follow-up source revoked during dispatch";
     const followsUp = outcome === "same-human follow-up" || revokedSource;
+    const retiresAfterAcceptance = outcome === "outbox retired after acceptance";
     const sourceRevocation = new AbortController();
     let originalSource: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     const marker = `PAUSE-MARKER-${id}`;
@@ -205,7 +212,13 @@ it.for([
             ).toBe(true);
           } else {
             received.push(opts.message);
-            if (runId === pauseRunId) {
+            if (retiresAfterAcceptance) {
+              expect(opts.cronCreatorAuthorityCapability?.managementEntitlement?.source).toBe(
+                "control-ui-admin",
+              );
+              expect(opts.cronCreatorAuthorityCapability?.isCurrent?.()).toBe(true);
+            }
+            if (runId === pauseRunId && !retiresAfterAcceptance) {
               await mutateChild((draft) => {
                 expect(consumeSubagentPauseNotice(draft)).toBe(true);
               });
@@ -230,7 +243,12 @@ it.for([
       idempotencyKey: runId,
       deliver: false,
     });
-    const dispatch = (runId: string, target: string, message: string) =>
+    const dispatch = (
+      runId: string,
+      target: string,
+      message: string,
+      onAccepted?: (payload: unknown) => void,
+    ) =>
       runs.runWithCompletionBatchAuthority([currentChild()], () =>
         captureRequesterContinuationCaller({
           requesterSessionKey: parent,
@@ -251,7 +269,11 @@ it.for([
                 sourceSessionKey: child.childSessionKey,
               },
             },
-            { expectFinal: true, resolveGatewayContext: () => context },
+            {
+              expectFinal: true,
+              resolveGatewayContext: () => context,
+              ...(onAccepted ? { onAccepted } : {}),
+            },
           ),
         ),
       );
@@ -286,10 +308,73 @@ it.for([
       await sendHuman(client, originalRunId, "Spawn work and yield");
       originalSource?.release();
       await mutateChild((draft) => {
-        draft.pauseReason = "sessions_yield";
         draft.execution = { status: "terminal", endedAt: Date.now() };
-        draft.requesterSettleWake!.pauseNotice = { acknowledgment: marker };
+        if (!retiresAfterAcceptance) {
+          draft.pauseReason = "sessions_yield";
+          draft.requesterSettleWake!.pauseNotice = { acknowledgment: marker };
+        }
       });
+      if (retiresAfterAcceptance) {
+        const source = currentChild();
+        const entered = createDeferred();
+        const release = createDeferred();
+        const accepted = createDeferred();
+        // Real controller ownership delays execution after the Gateway transfers
+        // input custody. No currentness callback or grant is replaced by this test.
+        const predecessor = withSessionTurn(
+          { sessionKey: parent, sessionId: parentId, agentId: "main" },
+          async () => {
+            entered.resolve();
+            await release.promise;
+          },
+        );
+        let pending: ReturnType<typeof dispatch> | undefined;
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              entered.promise,
+              predecessor,
+              "predecessor did not acquire its real controller claim",
+            ),
+            signal,
+          );
+          pending = dispatch(
+            pauseRunId,
+            parent,
+            `Child completed; continue requester work: ${marker}`,
+            () => accepted.resolve(),
+          );
+          const settled = pending.then(
+            () => {},
+            () => {},
+          );
+          await withinTest(
+            awaitGateBeforeSettlement(
+              accepted.promise,
+              pending,
+              "continuation did not reach Gateway acceptance",
+            ),
+            signal,
+          );
+          expect(received).toEqual([]);
+          // Match committed outbox cleanup ordering: acceptance, persisted
+          // retirement, cohort release, then execution of the admitted input.
+          await writeChild(() => null);
+          revokeRequesterCronAuthorityBatch([source], source.requesterSettleWake?.rearmGeneration);
+          expect(runs.has(child.runId)).toBe(false);
+          release.resolve();
+          await withinTest(pending, signal);
+          await settled;
+          expect(received).toEqual([
+            `${interSessionPrefix}Child completed; continue requester work: ${marker}`,
+          ]);
+          return;
+        } finally {
+          release.resolve();
+          await predecessor;
+          await pending?.catch(() => {});
+        }
+      }
       await dispatch(pauseRunId, parent, `Child paused awaiting continuation: ${marker}`);
       expect(received).toEqual([
         `${interSessionPrefix}Child paused awaiting continuation: ${marker}`,
@@ -410,7 +495,10 @@ it.for([
       }
     } finally {
       revokeRequesterCronAuthority(parent);
-      runs.releaseCompletionAuthority(currentChild());
+      const remaining = runs.get(child.runId);
+      if (remaining) {
+        runs.releaseCompletionAuthority(remaining);
+      }
       originalSource?.release();
       await writeChild(() => null);
     }

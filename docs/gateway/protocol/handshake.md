@@ -64,6 +64,19 @@ Client replies with `connect`:
 }
 ```
 
+Clients may send small requests immediately after `connect` when their parameters
+do not depend on `hello-ok`. The Gateway queues up to 15 following frames, each at
+most 64 KiB, until hello delivery completes. It then dispatches them in receipt
+order under the connection's current authorization; responses may complete out of
+order. Authentication rejection closes the connection and discards queued frames.
+Clients must retire pending requests with that connection and wait for an accepted
+hello before enabling authenticated UI actions.
+
+This queue is existing protocol behavior. Using it changes neither the wire schema
+nor protocol version 4; clients that wait for hello continue to work. Protocol
+changes remain additive first, with an explicit version decision required for an
+incompatible change.
+
 Gateway responds with `hello-ok`:
 
 The default connect deadline is 30 seconds, allowing authentication and profile
@@ -305,7 +318,7 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
 - `chat-only-assistant-text`: renders assistant text from `chat` and omits the
   redundant assistant-text `agent` stream. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).
 
-Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities; the Gateway omits those tools unless every requirement appears in the originating client's `caps`. Channel-originated runs have no Gateway client capabilities, so capability-gated tools are unavailable even when tool policy explicitly allows them.
+Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities. The session metadata owner records the operator client's declaration for tool listing and replaces it on the next operator turn; an empty declaration or a channel-originated turn clears it. Internal wakes and restart recovery retain that session fact, so they list the same tools even without a current client. Session reset or deletion removes it. Existing sessions acquire it on their next operator turn. Calls still require current client capabilities, and attached-client tools check that their bound recipient is connected at execution. For example, `screen` refuses a call without its requesting Control UI and asks the model to retry from the open Control UI.
 
 ### Node connect example
 

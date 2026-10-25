@@ -5,6 +5,10 @@ import path from "node:path";
 import { json } from "node:stream/consumers";
 import { describe, expect, it, vi } from "vitest";
 import {
+  listenLoopback,
+  closeHttpServer,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
@@ -13,7 +17,6 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
-import { requestHeartbeatAndWait, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { isSystemEventTurnOwned, peekSystemEventEntries } from "../infra/system-events.js";
 import * as stateEventSweep from "../sessions/session-state-events.sweep.js";
 import { decodeSessionStateNoticeContextKey } from "../sessions/session-state-notices.js";
@@ -110,16 +113,9 @@ async function startProvider() {
       response.end();
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Provider did not bind");
-  }
+  const origin = await listenLoopback(server);
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `${origin}/v1`,
     requests,
     errors,
     armNoticeObservation() {
@@ -130,10 +126,7 @@ async function startProvider() {
       return spawn;
     },
     async stop() {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     },
   };
 }
@@ -276,10 +269,6 @@ describe("session notification store ownership through the Gateway", () => {
                 agents: { defaults: { model: "proof/backup" } },
               }),
             });
-            expect(await gateway.client.request("last-heartbeat", {})).toMatchObject({
-              status: "skipped",
-              reason: "store-replaced",
-            });
             const after = await gateway.client.request<SessionsListResult>("sessions.list", {
               agentId: "main",
               limit: 100,
@@ -335,18 +324,6 @@ describe("session notification store ownership through the Gateway", () => {
           }
           expect(provider.errors).toEqual([]);
         },
-        async () => {
-          if (!gateway) {
-            return;
-          }
-          setHeartbeatsEnabled(false);
-          await requestHeartbeatAndWait({
-            source: "manual",
-            intent: "immediate",
-            reason: "wake",
-            coalesceMs: 0,
-          });
-        },
         () => gateway && disconnectGatewayClient(gateway.client),
         () => gateway?.server.close({ reason: "heartbeat store proof complete" }),
         () => sweepSpy.mockRestore(),
@@ -354,7 +331,6 @@ describe("session notification store ownership through the Gateway", () => {
         () => resetSubagentRegistryForTests({ persist: false }),
         () => removeGatewayTempHome(home.tempHome),
         () => home.envSnapshot.restore(),
-        () => setHeartbeatsEnabled(true),
         resetHeartbeatEventsForTest,
         resetGatewayTestState,
       );

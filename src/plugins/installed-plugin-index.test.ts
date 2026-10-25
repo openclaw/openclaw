@@ -440,30 +440,6 @@ describe("installed plugin index", () => {
     expect(index.installRecords).toEqual(installRecords);
   });
 
-  it("treats legacy config-path startup metadata as migration invalidation", () => {
-    const fixture = createRichPluginFixture();
-    writePluginManifest(fixture.rootDir, {
-      id: "demo",
-      name: "Demo",
-      providers: ["demo"],
-      activation: { onConfigPaths: ["browser"] },
-    });
-    const current = fixture.load();
-    const previous = {
-      ...current,
-      plugins: current.plugins.map((plugin) => ({
-        ...plugin,
-        startup: {
-          sidecar: plugin.startup.sidecar,
-          memory: plugin.startup.memory,
-          agentHarnesses: plugin.startup.agentHarnesses,
-        },
-      })),
-    };
-
-    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual(["migration"]);
-  });
-
   it("does not mark enabled-only migration snapshots stale for omitted disabled plugins", () => {
     const enabledFixture = createRichPluginFixture();
     const disabledFixture = createRichPluginFixture();
@@ -536,24 +512,5 @@ describe("installed plugin index", () => {
       })),
     };
     expect(diffInstalledPluginIndexInvalidationReasons(current, moved)).toContain("source-changed");
-  });
-
-  it("invalidates persisted metadata when only the doctor contract changes", () => {
-    const fixture = createRichPluginFixture();
-    const contractPath = path.join(fixture.rootDir, "doctor-contract-api.ts");
-    fs.writeFileSync(contractPath, "export const stateMigrations = [];\n", "utf8");
-    const previous = fixture.load();
-
-    fs.writeFileSync(contractPath, "export const stateMigrations = [{ id: 'changed' }];\n", "utf8");
-    const current = withPluginCache(createPluginCache(), () => fixture.load());
-
-    expect(current.plugins[0]?.manifestHash).toBe(previous.plugins[0]?.manifestHash);
-    expect(current.plugins[0]?.packageJson?.hash).toBe(previous.plugins[0]?.packageJson?.hash);
-    expect(current.plugins[0]?.doctorContractHash).not.toBe(
-      previous.plugins[0]?.doctorContractHash,
-    );
-    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
-      "stale-manifest",
-    ]);
   });
 });

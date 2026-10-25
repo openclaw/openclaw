@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -78,6 +78,25 @@ async function writeCompletionCache(shell: CompletionShell, content = "# complet
 }
 
 const readProfile = (profilePath: string) => fs.readFile(profilePath, "utf8");
+
+it.skipIf(process.platform === "win32")("rejects a special-device profile target", async () => {
+  await withCompletionHome(async ({ homeDir }) => {
+    await fs.symlink("/dev/null", path.join(homeDir, ".zshrc"));
+    await expect(isCompletionInstalled("zsh")).rejects.toThrow(/regular file/);
+  });
+});
+
+it.skipIf(process.platform === "win32")("rejects a FIFO profile without replacing it", async () => {
+  await withCompletionHome(async ({ homeDir }) => {
+    await writeCompletionCache("zsh");
+    const profilePath = path.join(homeDir, ".zshrc");
+    execFileSync("mkfifo", [profilePath]);
+    await expect(isCompletionInstalled("zsh")).rejects.toThrow(/regular file/);
+    await expect(usesSlowDynamicCompletion("zsh")).rejects.toThrow(/regular file/);
+    await expect(installCompletion("zsh", true)).rejects.toThrow(/regular file/);
+    expect((await fs.lstat(profilePath)).isFIFO()).toBe(true);
+  });
+});
 
 function expectProfileMode(profilePath: string) {
   return process.platform === "win32"
@@ -210,25 +229,6 @@ it("loads cached Bash completion from a literal path through the login profile",
     expect(shell.stdout).toContain("complete -W 'status' openclaw");
     expect(shell.stdout).toContain("<value >\n");
   }, "openclaw-completion-literal$dollar Ada's !42-");
-});
-
-it("prints the same canonical reload hint used by Doctor and onboarding", async () => {
-  await withCompletionHome(async () => {
-    await writeCompletionCache("zsh");
-    const profilePath = await writeProfile("zsh", "");
-    await fs.chmod(profilePath, 0o640);
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    try {
-      await installCompletion("zsh", false, "openclaw");
-      expect(log).toHaveBeenCalledWith(
-        "Completion installed. Restart your shell or run: source ~/.zshrc",
-      );
-      await expectProfileMode(profilePath);
-    } finally {
-      log.mockRestore();
-    }
-  });
 });
 
 it("preserves an existing profile when atomic publication fails", async () => {

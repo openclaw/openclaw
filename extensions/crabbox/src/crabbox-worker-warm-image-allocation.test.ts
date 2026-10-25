@@ -1,9 +1,9 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
 import * as processRunner from "./crabbox-process.js";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
+import { pause, warmRecord } from "./crabbox-warm-scenarios.test-support.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
@@ -193,12 +193,10 @@ it("skips optional capture visibly when lifetime cannot cover it and releases on
 it.each(["runtime grant", "lifetime admission"])(
   "does not scrub a source recovered while %s was in flight",
   async (phase) => {
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const gate = pause();
     const prepareCapture = vi.fn(async () => {
       if (phase === "lifetime admission") {
-        entered.resolve();
-        await release.promise;
+        await gate.wait();
       }
     });
     const { owner, context, calls } = fixture(false, undefined, undefined, prepareCapture);
@@ -207,12 +205,11 @@ it.each(["runtime grant", "lifetime admission"])(
     const run = vi.fn(async () => {});
     const capturing = owner.capture(source, async () => {
       if (phase === "runtime grant") {
-        entered.resolve();
-        await release.promise;
+        await gate.wait();
       }
       return { timeoutMs: 30 * 60_000, run };
     });
-    await entered.promise;
+    await gate.entered;
     try {
       const operation = record()!.operation!;
       if (operation.type !== "capture") {
@@ -220,7 +217,7 @@ it.each(["runtime grant", "lifetime admission"])(
       }
       await recoverCrabboxWarmImageCapture(crabboxState, operation.id, true);
     } finally {
-      release.resolve();
+      gate.release();
     }
     await expect(capturing).resolves.toBe(false);
     expect(calls).toEqual([]);
@@ -312,12 +309,10 @@ it("leaves unrelated expired generations for maintenance during allocation", asy
     checkpointId: "chk_unrelated",
     lastDemandAtMs: Date.now() - 14 * 86_400_000,
   };
-  const unrelated: WarmProfileRecord = {
-    version: 3,
-    allocations: {},
+  const unrelated = warmRecord({
     image: expired,
     previous: { ...expired, checkpointId: "chk_unrelated_previous" },
-  };
+  });
   store.register("unrelated", unrelated);
   calls.length = 0;
 

@@ -68,7 +68,8 @@ it("refreshes once after sleep while personal maintenance is pending, then stops
   const initialWake = time.wake();
   try {
     await scheduled.promise;
-    expect(refreshToken).toHaveBeenCalledOnce();
+    // The durable refresh claim commits before dispatch and may arm a reconcile wake first.
+    await vi.waitFor(() => expect(refreshToken).toHaveBeenCalledOnce());
 
     await githubRecords.writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
     await time.advanceBy(5 * 60_000);

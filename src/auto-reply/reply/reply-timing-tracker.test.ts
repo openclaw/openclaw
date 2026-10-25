@@ -22,14 +22,16 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockImplementation(() => nowMs);
   [subsystemWarn, subsystemInfo, warn].forEach((mock) => mock.mockReset());
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 it.each([false, true])("logs once at the profiling=%s threshold", async (enabled) => {
+  vi.stubEnv("OPENCLAW_DIAGNOSTICS", enabled ? "reply.profiler" : "");
   const tracker = createReplyTimingTracker({
     log: { warn },
-    enabled: isReplyProfilerEnabled({
-      env: { OPENCLAW_DIAGNOSTICS: enabled ? "reply.profiler" : "" },
-    }),
+    enabled: isReplyProfilerEnabled(),
   });
   expect(
     tracker.measureSync("sync", () => {

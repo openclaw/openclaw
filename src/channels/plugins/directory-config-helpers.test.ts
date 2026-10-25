@@ -1,12 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   createInspectedDirectoryEntriesLister,
-  createResolvedDirectoryEntriesLister,
   listInspectedDirectoryEntriesFromSources,
   listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
   listDirectoryGroupEntriesFromMapKeys,
-  listResolvedDirectoryGroupEntriesFromMapKeys,
-  listResolvedDirectoryUserEntriesFromAllowFrom,
   listDirectoryUserEntriesFromAllowFromAndMapKeys,
   listDirectoryUserEntriesFromAllowFrom,
 } from "./directory-config-helpers.js";
@@ -85,44 +82,5 @@ describe("directory config helpers", () => {
     });
 
     await expect(listGroups({ cfg, query: "a" })).resolves.toEqual(groups("a"));
-  });
-
-  const resolveAccount = () => ({
-    allowFrom: ["user:alice", "user:bob"],
-    groups: { "room:a": {}, "room:b": {} },
-  });
-
-  it("lists user entries from resolved account allowFrom", () => {
-    const entries = listResolvedDirectoryUserEntriesFromAllowFrom({
-      cfg,
-      resolveAccount,
-      resolveAllowFrom: (account) => account.allowFrom,
-      normalizeId: stripUser,
-      query: "a",
-    });
-
-    expect(entries).toEqual([{ kind: "user", id: "alice" }]);
-  });
-
-  it("lists group entries from resolved account map keys", () => {
-    const entries = listResolvedDirectoryGroupEntriesFromMapKeys({
-      cfg,
-      resolveAccount,
-      resolveGroups: (account) => account.groups,
-      normalizeId: stripRoom,
-    });
-
-    expect(entries).toEqual(groups("a", "b"));
-  });
-
-  it("builds a reusable resolved-account lister", async () => {
-    const listUsers = createResolvedDirectoryEntriesLister({
-      kind: "user",
-      resolveAccount,
-      resolveSources: (account) => [account.allowFrom, ["user:carla", "user:alice"]],
-      normalizeId: stripUser,
-    });
-
-    await expect(listUsers({ cfg, query: "a", limit: 2 })).resolves.toEqual(users);
   });
 });

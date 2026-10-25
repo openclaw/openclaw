@@ -31,6 +31,23 @@ function emptyAttempt(assistant = emptyAssistant()) {
   });
 }
 
+function turnState(
+  attempt: Parameters<typeof resolveNonVisibleTurnRetryInstructions>[0]["attempt"] = emptyAttempt(),
+) {
+  return { payloadCount: 0, aborted: false, timedOut: false, attempt };
+}
+
+function retryInstructions(
+  overrides: Partial<Parameters<typeof resolveNonVisibleTurnRetryInstructions>[0]> = {},
+) {
+  return resolveNonVisibleTurnRetryInstructions({
+    ...turnState(overrides.attempt),
+    settledToolPayloadCount: 0,
+    replyDeliveryState: "missing",
+    ...overrides,
+  });
+}
+
 describe("incomplete-turn recovery policy", () => {
   it("does not request a visible continuation for an authored speech-only answer", () => {
     const assistant = emptyAssistant({
@@ -42,13 +59,8 @@ describe("incomplete-turn recovery policy", () => {
     });
 
     expect(
-      resolveNonVisibleTurnRetryInstructions({
-        payloadCount: 0,
-        settledToolPayloadCount: 0,
-        replyDeliveryState: "missing",
+      retryInstructions({
         modelApi: "openai-completions",
-        aborted: false,
-        timedOut: false,
         attempt: emptyAttempt(assistant),
       })[0],
     ).toBeNull();
@@ -78,7 +90,7 @@ describe("incomplete-turn recovery policy", () => {
         replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
         currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       });
-      const state = { payloadCount: 0, aborted: false, timedOut: false, attempt };
+      const state = turnState(attempt);
       // Outward silence does not prove delivery or authorize replaying pending work.
       expect(
         shouldTreatEmptyAssistantReplyAsSilent({
@@ -87,13 +99,7 @@ describe("incomplete-turn recovery policy", () => {
           terminalReplyExpectation,
         }),
       ).toBe(true);
-      expect(
-        resolveNonVisibleTurnRetryInstructions({
-          ...state,
-          settledToolPayloadCount: 0,
-          replyDeliveryState: "missing",
-        })[1],
-      ).toBeNull();
+      expect(retryInstructions(state)[1]).toBeNull();
       expect(resolveIncompleteTurnPayloadText({ ...state, externalAbort: false })).toBeNull();
     },
   );
@@ -109,22 +115,16 @@ describe("incomplete-turn recovery policy", () => {
     attempt.assistantTexts = ["NO_REPLY"];
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
+        ...turnState(attempt),
         allowEmptyAssistantReplyAsSilent: true,
         terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
       }),
     ).toBe(false);
     if (stopReason === "error") {
       expect(
         resolveIncompleteTurnPayloadText({
-          payloadCount: 0,
-          aborted: false,
+          ...turnState(attempt),
           externalAbort: false,
-          timedOut: false,
-          attempt,
         }),
       ).toBe("No answer was returned. Ask again if you still need one.");
     }
@@ -140,11 +140,8 @@ describe("incomplete-turn recovery policy", () => {
     });
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
+        ...turnState(emptyAttempt(assistant)),
         terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt: emptyAttempt(assistant),
       }),
     ).toBe(false);
   });
@@ -177,15 +174,10 @@ describe("incomplete-turn recovery policy", () => {
     "returns the visible-answer prompt for $name",
     ({ provider, modelId, modelApi, assistant }) => {
       expect(
-        resolveNonVisibleTurnRetryInstructions({
-          settledToolPayloadCount: 0,
+        retryInstructions({
           provider,
           modelId,
           modelApi,
-          replyDeliveryState: "missing",
-          payloadCount: 0,
-          aborted: false,
-          timedOut: false,
           attempt: emptyAttempt(assistant),
         })[1],
       ).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
@@ -198,14 +190,9 @@ describe("incomplete-turn recovery policy", () => {
     attempt.replayMetadata = { hadPotentialSideEffects: true, replaySafe: false };
 
     expect(
-      resolveNonVisibleTurnRetryInstructions({
-        settledToolPayloadCount: 0,
+      retryInstructions({
         provider: "openai",
         modelId: "gpt-5.4",
-        replyDeliveryState: "missing",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
         attempt,
       })[1],
     ).toBeNull();
@@ -220,15 +207,10 @@ describe("incomplete-turn recovery policy", () => {
     });
 
     expect(
-      resolveNonVisibleTurnRetryInstructions({
-        payloadCount: 0,
-        settledToolPayloadCount: 0,
-        replyDeliveryState: "missing",
+      retryInstructions({
         provider: "kimi",
         modelId: "kimi-for-coding",
         modelApi: "anthropic-messages",
-        aborted: false,
-        timedOut: false,
         attempt: emptyAttempt(assistant),
       })[0],
     ).toBe(REASONING_ONLY_RETRY_INSTRUCTION);

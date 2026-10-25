@@ -9,6 +9,7 @@ import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { suppressedInlineImageFacts } from "./image-media-facts.test-support.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
@@ -49,14 +50,7 @@ describe("structured prompt media replay", () => {
   it("attributes a suppressed-plus-inline sanitization failure to the inline fact", async () => {
     const result = await loadImages({
       prompt: "already described",
-      media: [
-        {
-          path: "/tmp/described-missing.png",
-          contentType: "image/png",
-          hydrationSuppressed: true,
-        },
-        { path: "/tmp/inline.png", contentType: "image/png" },
-      ],
+      media: suppressedInlineImageFacts(),
       workspaceDir: "/tmp",
       existingImages: [image("%%%")],
       imageOrder: ["inline"],

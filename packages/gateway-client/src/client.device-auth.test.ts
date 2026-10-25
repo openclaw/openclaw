@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
@@ -28,6 +29,7 @@ class MockWebSocket extends EventEmitter {
       event: "connect.challenge",
       payload: { nonce: "synthetic-nonce", ts: 1_800_000_000_000 },
     });
+    return this;
   }
 
   receive(frame: unknown) {
@@ -62,6 +64,13 @@ function storageGate() {
   const deferred = createDeferred();
   releaseStorage.push(deferred.resolve);
   return deferred;
+}
+
+async function reconnectSocket() {
+  await vi.advanceTimersByTimeAsync(1_000);
+  const socket = MockWebSocket.instances[1];
+  assert(socket);
+  return socket.open();
 }
 
 function tokenStorage(initial: DeviceAuthTokenRecord | null = storedToken) {
@@ -116,7 +125,7 @@ function connect(
   hostDeps: GatewayClientHostDeps,
   options: Pick<
     GatewayClientOptions,
-    "preferBootstrapToken" | "bootstrapToken" | "token" | "password"
+    "preferBootstrapToken" | "bootstrapToken" | "token" | "password" | "assertConnectionCurrent"
   > = {},
   reportError?: ((error: Error) => void) | false,
 ) {
@@ -156,11 +165,108 @@ function connect(
 const storedToken = { token: "synthetic-stored-token", scopes: ["operator.read"] };
 const hello = {
   type: "hello-ok",
-  protocol: 4,
+  protocol: PROTOCOL_VERSION,
   auth: { deviceToken: "synthetic-issued-token", role: "operator", scopes: ["operator.read"] },
 };
 
 describe("GatewayClient host token storage", () => {
+  it("rejects connection authority retired by socket registration and cleans the registration", () => {
+    const failure = new Error("connection owner retired");
+    const onConnectError = vi.fn();
+    const cleanup = vi.fn();
+    let current = true;
+    const client = new GatewayClient({
+      url: "wss://gateway.example.invalid",
+      edgeAuthHeaders: { Authorization: "synthetic-edge-token" },
+      assertConnectionCurrent() {
+        if (!current) {
+          throw failure;
+        }
+      },
+      onConnectError,
+      hostDeps: {
+        registerGatewayLoopbackBypass() {
+          current = false;
+          return cleanup;
+        },
+      },
+    });
+    clients.push(client);
+    expect(() => client.start()).toThrow(failure.message);
+    expect(MockWebSocket.instances).toEqual([]);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: failure.message }),
+    );
+  });
+
+  it("rejects connection authority retired during asynchronous token loading", async () => {
+    const loaded = createDeferred<DeviceAuthTokenRecord | null>();
+    let current = true;
+    const failure = new Error("connection owner retired");
+    const { socket, onHelloOk, onConnectError } = connect(
+      { loadDeviceAuthToken: () => loaded.promise },
+      {
+        assertConnectionCurrent() {
+          if (!current) {
+            throw failure;
+          }
+        },
+      },
+    );
+    expect(socket.send).not.toHaveBeenCalled();
+    current = false;
+    loaded.resolve(storedToken);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(onHelloOk).not.toHaveBeenCalled();
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: String(failure) }),
+    );
+  });
+
+  it("rejects a correlated startup retry after connection authority retires", async () => {
+    let current = true;
+    const failure = new Error("connection owner retired");
+    const { client, socket } = connect(
+      {},
+      {
+        assertConnectionCurrent() {
+          if (!current) {
+            throw failure;
+          }
+        },
+      },
+    );
+    socket.respond({ type: "hello-ok", protocol: PROTOCOL_VERSION });
+    await vi.advanceTimersByTimeAsync(0);
+    const request = client.request("sessions.create", {}, { timeoutMs: 1_000 });
+    const outcome = request.catch((error: unknown) => error);
+    const sent = socket.send.mock.calls.at(-1);
+    assert(sent);
+    const frame = JSON.parse(sent[0]) as { id: string; method: string };
+    expect(frame.method).toBe("sessions.create");
+    socket.receive({
+      type: "res",
+      id: frame.id,
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "agent is preparing",
+        retryable: true,
+        retryAfterMs: 250,
+        details: { reason: "startup-sidecars", method: frame.method },
+      },
+    });
+    current = false;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(socket.send.mock.calls.map(([data]) => JSON.parse(data).method)).toEqual([
+      "connect",
+      "sessions.create",
+    ]);
+    expect(await outcome).toBe(failure);
+  });
+
   it("settles pending token loading after stop", async () => {
     const loaded = createDeferred<DeviceAuthTokenRecord | null>();
     const { client, socket, onHelloOk } = connect({ loadDeviceAuthToken: () => loaded.promise });
@@ -227,10 +333,7 @@ describe("GatewayClient host token storage", () => {
     socket.respond(hello);
     await vi.advanceTimersByTimeAsync(0);
     socket.close(1006, "transport retired");
-    await vi.advanceTimersByTimeAsync(1_000);
-    const replacement = MockWebSocket.instances[1];
-    assert(replacement);
-    replacement.open();
+    const replacement = await reconnectSocket();
     expect(replacement.send).not.toHaveBeenCalled();
     gate.resolve();
     await vi.advanceTimersByTimeAsync(0);
@@ -332,14 +435,12 @@ describe("GatewayClient host token storage", () => {
       const stopped =
         lifetime === "stopped" ? expect(client.stopAndWait()).rejects.toBe(failure) : undefined;
       permitStore.resolve();
-      await vi.advanceTimersByTimeAsync(reporter === "missing" ? 1_000 : 0);
       if (reporter === "missing") {
-        const replacement = MockWebSocket.instances[1];
-        assert(replacement);
-        replacement.open();
+        const replacement = await reconnectSocket();
         expect(replacement.send).toHaveBeenCalledOnce();
         await expect(client.stopAndWait()).rejects.toBe(failure);
       } else {
+        await vi.advanceTimersByTimeAsync(0);
         await stopped;
         if (reporter === "reported") {
           expect(onConnectError).toHaveBeenCalledExactlyOnceWith(failure);
@@ -392,10 +493,7 @@ describe("GatewayClient host token storage", () => {
       expect(onConnectError).toHaveBeenCalledOnce();
       expect(MockWebSocket.instances).toHaveLength(1);
     } else {
-      await vi.advanceTimersByTimeAsync(1_000);
-      const replacement = MockWebSocket.instances[1];
-      assert(replacement);
-      replacement.open();
+      const replacement = await reconnectSocket();
       expect(loadDeviceAuthToken).toHaveBeenCalledOnce();
       cleared.resolve();
       await vi.advanceTimersByTimeAsync(0);

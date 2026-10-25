@@ -1,5 +1,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   expectForegroundUnchanged,
   openFromForeground,
@@ -144,11 +145,16 @@ suite.define(() => {
             }
           }
           await palette.locator(".composer-context-strip__more").waitFor({ state: "visible" });
-          expect(
-            await palette
-              .locator(".composer-context-strip__people")
-              .evaluate((element) => element.scrollWidth <= element.clientWidth),
-          ).toBe(true);
+          // The existing +more chip can stay visible until ResizeObserver sizes the new person.
+          await expect
+            .poll(
+              () =>
+                palette
+                  .locator(".composer-context-strip__people")
+                  .evaluate((element) => element.scrollWidth <= element.clientWidth),
+              { timeout: controlUiE2eWaitTimeoutMs },
+            )
+            .toBe(true);
           await input.press("@");
           const menu = palette.getByRole("listbox", { name: "Mention a person" });
           await menu.getByText(/10 people/u).waitFor();

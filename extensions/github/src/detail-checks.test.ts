@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadGitHubDetail } from "./detail.js";
+import { githubJson as json, queuedFetch } from "./preview.test-support.js";
 import type { GitHubTarget } from "./targets.js";
 
 const sha = "a".repeat(40);
@@ -8,9 +9,6 @@ const nextSha = "d".repeat(40);
 let sequence = 0;
 function target(): GitHubTarget {
   return { kind: "pull", owner: "octocat", repo: "checks-" + ++sequence, number: 1 };
-}
-function json(value: unknown, status = 200, headers: Record<string, string> = {}) {
-  return new Response(JSON.stringify(value), { status, headers });
 }
 function pull(headSha: unknown = sha) {
   return {
@@ -60,14 +58,7 @@ function publicFetch(
   legacy = statuses(),
   item = pull(),
 ) {
-  const fetchMock = vi.fn<typeof fetch>();
-  const pages = [json({ private: false, visibility: "public" }), json(item), checks, legacy];
-  for (const response of pages) {
-    fetchMock.mockImplementationOnce(async () =>
-      typeof response === "function" ? response() : response,
-    );
-  }
-  return fetchMock;
+  return queuedFetch(json({ private: false, visibility: "public" }), json(item), checks, legacy);
 }
 function readChecks(checks: Response, legacy: Response) {
   return loadGitHubDetail(target(), undefined, publicFetch(checks, legacy));

@@ -100,7 +100,6 @@ async function createInitialYieldFixture(label: string) {
     requesterSessionKey,
     requesterTurnRunId,
     runId,
-    childSessionKey,
     entry: expectDefined(subagentRuns.get(runId), "initial child"),
     onYield,
     tool,
@@ -144,11 +143,9 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
   context.resolveGatewayContext = () => context;
   const delivery = { dispatch: dispatchGatewayMethodInProcess };
-  const dispatch = vi.spyOn(delivery, "dispatch").mockImplementation(async () => {
-    return {
-      status: "ok",
-      result: { payloads: [{ text: "Both results received; parent continues." }], meta: {} },
-    };
+  const dispatch = vi.spyOn(delivery, "dispatch").mockResolvedValue({
+    status: "ok",
+    result: { payloads: [{ text: "Both results received; parent continues." }], meta: {} },
   });
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: delivery.dispatch });
 
@@ -217,10 +214,8 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
         undefined,
       ]);
       releaseIntent.resolve();
-      await expect(yielding).resolves.toMatchObject({
-        details: { status: "yielded" },
-      });
-      const settlement = withLocalSessionPlacementTurnSettlement(
+      await expect(yielding).resolves.toMatchObject({ details: { status: "yielded" } });
+      const result = await withLocalSessionPlacementTurnSettlement(
         {
           sessionId: `${requesterSessionKey}-session`,
           sessionKey: requesterSessionKey,
@@ -237,7 +232,6 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
         }),
         {},
       );
-      const result = await settlement;
       expect(result.requesterContinuationSettled).toBe(true);
       expect(registryWrites).toBe(2);
     });
@@ -289,11 +283,9 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
     respond(true, { runId: nextRunId, status: "started" });
   });
   const sendResponse = vi.fn<RespondFn>();
+  const handler = expectDefined(sessionMessagingHandlers["sessions.send"], "sessions.send");
   const send = () =>
-    expectDefined(
-      sessionMessagingHandlers["sessions.send"],
-      "sessions.send",
-    )({
+    handler({
       req: { type: "req", id: "resume-request", method: "sessions.send" },
       params: { key: childSessionKey, message: followup, idempotencyKey: nextRunId },
       respond: sendResponse,
@@ -386,10 +378,10 @@ it.each(["runtime owner", "state source"] as const)(
       releaseAcknowledgement.resolve();
       const outcome = await first;
       expect(outcome).toMatchObject({
-        error:
-          retirement === "runtime owner"
-            ? { outcome: "committed", publication: "published" }
-            : { outcome: "committed", publication: "superseded" },
+        error: {
+          outcome: "committed",
+          publication: retirement === "runtime owner" ? "published" : "superseded",
+        },
       });
       expect(committed).toBe(true);
       await closing;

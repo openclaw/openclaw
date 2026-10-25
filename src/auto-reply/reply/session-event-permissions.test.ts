@@ -1,8 +1,9 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi, type TestContext } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -20,6 +21,7 @@ import {
   loadSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionLifecycleProjection from "../../config/sessions/session-lifecycle-projection.js";
 import { SessionEntryLifecycleUpsertConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
@@ -39,17 +41,19 @@ import {
 } from "../../sessions/session-state-events.js";
 import { readCursor } from "../../sessions/session-state-events.test-support.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as routedReplies from "./route-reply.js";
 import * as sessionEventHandoff from "./session-event-handoff.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
+import {
+  configureEventState,
+  runEventFixture,
+  startEmbeddedTurn,
+} from "./session-event.test-support.js";
 // mock-isolation: Use synthetic model execution with real admission and native filesystem guards.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: vi.fn(),
@@ -67,39 +71,6 @@ await Promise.all([
     runtime.prewarmConfigDrivenReplyRuntime(),
   ),
 ]);
-
-async function configureEventState(
-  state: OpenClawTestState,
-  overrides: Partial<OpenClawConfig> = {},
-) {
-  const config: OpenClawConfig = {
-    agents: {
-      entries: { main: { workspace: state.workspaceDir } },
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
-    },
-    plugins: { enabled: false },
-    skills: { load: { watch: false } },
-    ...overrides,
-  };
-  setRuntimeConfigSnapshot(config);
-  await state.writeConfig(config);
-  openOpenClawStateDatabase();
-  return config;
-}
-
-async function startEmbeddedTurn(params: RunEmbeddedAgentParams, label: string) {
-  const admission = expectDefined(params.preparedRunAdmission, label);
-  const context = await admission.admit("gateway", params.runId);
-  params.onExecutionPhase?.({ phase: "model_call_started" });
-  await params.onExecutionStarted?.();
-  await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-  return context;
-}
 
 type EventReceipt = ReturnType<typeof enqueueSessionEventForHost>;
 function observeEnqueue(source: string, onReceipt: (receipt: EventReceipt) => void) {
@@ -132,19 +103,6 @@ async function recordWatchEvents(child: string, sessionId: string) {
   };
 }
 
-function runEventFixture(
-  label: string,
-  onTestFinished: TestContext["onTestFinished"],
-  run: (state: OpenClawTestState) => Promise<void>,
-) {
-  const work = withOpenClawTestState({ label, env: { OPENCLAW_TEST_FAST: "0" } }, run);
-  // Cancellation must settle the state owner even when the test body times out.
-  onTestFinished(async () => {
-    await Promise.allSettled([work]);
-  });
-  return work;
-}
-
 async function enqueueGuardedCliWatchdog(params: {
   config: OpenClawConfig;
   workspaceDir: string;
@@ -156,7 +114,7 @@ async function enqueueGuardedCliWatchdog(params: {
   const { testing: cliBackends } = await import("../../agents/cli-backends.test-support.js");
   const { prepareCliRunContext } = await import("../../agents/cli-runner/prepare.js");
   const { runPreparedCliAgent } = await import("../../agents/cli-runner.js");
-  const { executeDeps } = await import("../../agents/cli-runner/execute-deps.js");
+  const processSupervisor = await import("../../process/supervisor/index.js");
   const { resolveSessionFilePathCore, resolveSessionFilePathOptions, resolveSessionStorePathCore } =
     await import("../../config/sessions/paths.js");
   const sessionTarget = {
@@ -187,12 +145,14 @@ async function enqueueGuardedCliWatchdog(params: {
     ],
   });
   let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-  const enqueue = executeDeps.enqueueSessionEvent;
-  const observer = vi.spyOn(executeDeps, "enqueueSessionEvent").mockImplementation((...args) => {
-    receipt = enqueue(...args);
-    return receipt;
-  });
-  const supervisor = vi.spyOn(executeDeps, "getProcessSupervisor").mockReturnValue({
+  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+  const observer = vi
+    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+    .mockImplementation((...args) => {
+      receipt = enqueue(...args);
+      return receipt;
+    });
+  const supervisor = vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue({
     acquireScopeCleanup: () => async () => {},
     spawn: async () => ({
       runId,
@@ -300,6 +260,8 @@ it.for([
   "downgrade",
   "upgrade",
   "retained-tool-downgrade",
+  "retained-overrides-downgrade",
+  "retained-database-replacement",
   "retained-config-downgrade",
   "remapped-workspace",
   "remapped-guarded",
@@ -309,7 +271,10 @@ it.for([
   "cli-watchdog-guarded",
 ] as const)(
   "bounds a production background completion by current and retained permissions: %s",
-  async (change, { signal, onTestFinished }) => {
+  async (change, { signal, onTestFinished, skip }) => {
+    if (change === "retained-database-replacement" && process.platform === "win32") {
+      skip("Windows cannot replace an open database file");
+    }
     await runEventFixture("session-event-permissions", onTestFinished, async (state) => {
       const config = await configureEventState(state, {
         tools: { profile: "coding", codeMode: false, toolSearch: false },
@@ -400,6 +365,7 @@ it.for([
             },
             pluginId: "openclaw",
           });
+          let restoreDatabase: (() => void) | undefined;
           try {
             observedMode = params.permissionMode;
             const toolRunContext = buildEmbeddedAttemptToolRunContext({
@@ -446,6 +412,36 @@ it.for([
               expect(write).toBeDefined();
               if (change === "retained-tool-downgrade") {
                 await setMode("read-only");
+              } else if (change === "retained-overrides-downgrade") {
+                await updateSessionEntry(scope, () => ({ toolOverrides: { webSearch: false } }));
+              } else if (change === "retained-database-replacement") {
+                const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+                const foreignPath = `${database.path}.foreign.sqlite`;
+                const originalPath = `${database.path}.original`;
+                const foreign = openOpenClawAgentDatabase({
+                  agentId: scope.agentId,
+                  path: foreignPath,
+                });
+                replaceSessionEntrySync(
+                  { ...scope, storePath: foreignPath },
+                  {
+                    ...expectDefined(loadSessionEntry(scope), "retained session"),
+                    label: "foreign owner",
+                  },
+                );
+                expect(
+                  String(
+                    foreign.db
+                      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+                      .get(scope.sessionKey)?.entry_json,
+                  ),
+                ).toContain("foreign owner");
+                fsSync.renameSync(database.path, originalPath);
+                fsSync.renameSync(foreignPath, database.path);
+                restoreDatabase = () => {
+                  fsSync.renameSync(database.path, foreignPath);
+                  fsSync.renameSync(originalPath, database.path);
+                };
               } else {
                 config.tools = { ...config.tools, deny: ["write"] };
                 setRuntimeConfigSnapshot(config);
@@ -476,6 +472,7 @@ it.for([
             }
             return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
           } finally {
+            restoreDatabase?.();
             host.close();
           }
         });
@@ -708,7 +705,8 @@ it.for([
         try {
           await expect(first.accepted).resolves.toEqual({ ok: true });
           await withinTest(firstStarted.promise, signal);
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+          // Advance notice timers without moving mailbox enqueue timestamps into the future.
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           const observed = [await recordWatchEvents(child, "notice-child")];
           const assertCursor = (notice: (typeof observed)[number], consumed = false) => {
             expect(

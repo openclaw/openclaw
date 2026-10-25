@@ -120,3 +120,22 @@ describe("header metadata", () => {
     expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
   });
 });
+
+it("skips invalid JSON payloads and hydrates valid sibling cards", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `<section class="oc-diff-card"><div data-openclaw-diff-host></div>
+        <script type="application/json" data-openclaw-diff-payload>{not-json</script></section>`,
+    );
+    await hydrateOptions();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "Skipping invalid diff payload",
+      new Error("Diff payload is not valid JSON."),
+    );
+    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
+  } finally {
+    warn.mockRestore();
+  }
+});

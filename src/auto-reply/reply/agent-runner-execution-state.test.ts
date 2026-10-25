@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  createRunResult,
+  runFallbackCandidate as runFallback,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createFollowupRun,
@@ -19,14 +21,6 @@ const success = (text: string, model: string) => ({
   payloads: [{ text }],
   meta: { agentMeta: { sessionId: "session", provider: "openai", model } },
 });
-async function runFallback(
-  params: FallbackRunnerParams,
-  provider: string,
-  model: string,
-  options = initialFallbackAttemptOptions(params),
-) {
-  return { result: await params.run(provider, model, options), provider, model, attempts: [] };
-}
 function failPrimaryThenFallback() {
   state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
     await params
@@ -34,7 +28,7 @@ function failPrimaryThenFallback() {
       .catch(() => undefined);
     return runFallback(params, "openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown"));
   });
-  state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
+  state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("ok"));
 }
 
 describe("executeAgentTurn: session state", () => {

@@ -6,7 +6,6 @@ import {
   resolveTimeZoneDayStartMs,
   resolveTimezone,
 } from "./format-datetime.js";
-import { formatSingleUnitDuration } from "./format-duration-internal.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -80,18 +79,13 @@ it("formats single-unit outputs and day threshold behavior", () => {
     [5000, "5s"],
     [180000, "3m"],
     [7200000, "2h"],
+    [43_200_000, "12h"],
     [23 * 3600000, "23h"],
     [24 * 3600000, "1d"],
     [25 * 3600000, "1d"],
+    [86_370_000, "1d"],
     [172800000, "2d"],
   ]);
-});
-it("rounds nearly 24 hours up to one day", () => {
-  expect(formatSingleUnitDuration(86_370_000, true)).toBe("1 day");
-});
-
-it("keeps 12 hours in its own unit", () => {
-  expect(formatSingleUnitDuration(43_200_000, true)).toBe("12 hours");
 });
 it.each([
   [999, "999ms"],
@@ -146,16 +140,6 @@ it("follows host timezone changes while keeping explicit zones fixed", () => {
       expect(formatZonedTimestamp(timestamp, utcOptions)).toBe("2024-01-15 14:30 UTC");
     });
   }
-});
-
-it("returns undefined when required Intl parts are missing", () => {
-  vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockReturnValue([
-    { type: "month", value: "01" },
-    { type: "day", value: "15" },
-    { type: "hour", value: "14" },
-    { type: "minute", value: "30" },
-  ]);
-  expect(formatZonedTimestamp(timestamp, utcOptions)).toBeUndefined();
 });
 
 it("returns undefined when Intl formatting throws", () => {

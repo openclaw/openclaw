@@ -177,6 +177,20 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
             : undefined,
           presenceAllowed,
           isConnectionCurrent: isEventConnectionCurrent,
+          assertSessionEventCurrent: () => {
+            const current = eventPairingGeneration
+              ? sessionForGeneration(eventPairingGeneration)
+              : undefined;
+            if (
+              !eventConnId ||
+              !current ||
+              current !== nodeSession ||
+              current.connId !== eventConnId ||
+              current.client.invalidated === true
+            ) {
+              throw new Error("Node event connection changed during preparation");
+            }
+          },
           assertApnsRegistrationCurrent: () => {
             const current = apnsGeneration
               ? context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key)

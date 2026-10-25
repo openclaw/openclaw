@@ -6,6 +6,7 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { isReplaySafeToolCall } from "../../tool-mutation.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import { buildAttemptReplayMetadata } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
@@ -327,6 +328,9 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
     });
 
+    // #178300: the unrecovered earlier exec failure must reach the summary instruction.
+    const withEarlierFailure = `${SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`;
+
     const request = (
       payloadsWithToolMedia = buildEmbeddedRunPayloads({
         assistantTexts: attempt.assistantTexts,
@@ -360,7 +364,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         settledTurnFinalizationAvailable: true,
       });
 
-    expect(request()).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(request()).toBe(withEarlierFailure);
     expect(
       request([
         setReplyPayloadMetadata(
@@ -372,7 +376,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
           },
         ),
       ]),
-    ).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    ).toBe(withEarlierFailure);
     expect(request([{ text: progress, mediaUrls: ["file:///tmp/result.png"] }])).toBeNull();
     expect(request([{ text: progress, channelData: { notice: "Ready" } }])).toBeNull();
     expect(
@@ -403,7 +407,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
           { terminalProviderError: true },
         ),
       ]),
-    ).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    ).toBe(withEarlierFailure);
 
     const finalAnswer = "The file contains the requested value.";
     attempt.assistantTexts.push(finalAnswer);

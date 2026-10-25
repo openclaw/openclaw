@@ -58,24 +58,17 @@ function hardlinkCase<Args extends unknown[]>(
       const ownerPath = path.join(directory, opaque ? "zeta.sqlite" : "alpha.sqlite");
       const aliasPath = path.join(directory, opaque ? "alpha.sqlite" : "zeta.sqlite");
       await fs.mkdir(directory, { recursive: true });
-      const sqlite = requireNodeSqlite();
-      const database = new sqlite.DatabaseSync(ownerPath);
-      try {
-        database.exec(`
+      using database = new (requireNodeSqlite().DatabaseSync)(ownerPath);
+      database.exec(`
           PRAGMA journal_mode = WAL;
           PRAGMA wal_autocheckpoint = 0;
           CREATE TABLE hardlink_records (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
           INSERT INTO hardlink_records (id, value) VALUES (7, 'committed-in-wal');
         `);
-        await fs.link(ownerPath, aliasPath);
-        expect((await fs.stat(`${ownerPath}-wal`)).size).toBeGreaterThan(0);
-        await expectAbsent(`${aliasPath}-wal`);
-        await run({ state, database, ownerPath, aliasPath }, ...args);
-      } finally {
-        if (database.isOpen) {
-          database.close();
-        }
-      }
+      await fs.link(ownerPath, aliasPath);
+      expect((await fs.stat(`${ownerPath}-wal`)).size).toBeGreaterThan(0);
+      await expectAbsent(`${aliasPath}-wal`);
+      await run({ state, database, ownerPath, aliasPath }, ...args);
     });
 }
 
@@ -125,15 +118,10 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
       );
       const archive = await createVerifiedBackup(state);
       expect(archive.verified).toBe(true);
-      expect(
-        archive.warnings
-          ?.map<[string, boolean]>((warning) => [path.basename(warning), /opaque/iu.test(warning)])
-          .toSorted(([left], [right]) => left.localeCompare(right)),
-      ).toEqual(
-        names
-          .map<[string, boolean]>((name) => [name, true])
-          .toSorted(([left], [right]) => left.localeCompare(right)),
+      expect(archive.warnings?.map((warning) => path.basename(warning)).toSorted()).toEqual(
+        names.toSorted(),
       );
+      expect(archive.warnings?.every((warning) => /opaque/iu.test(warning))).toBe(true);
       const restored = await restoreBackup(state, archive);
       const asset = expectDefined(
         archive.assets.find((candidate) => candidate.kind === "state"),

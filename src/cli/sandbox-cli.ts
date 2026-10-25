@@ -104,6 +104,24 @@ export function registerSandboxCli(program: Command) {
     });
 
   sandbox
+    .command("recover")
+    .description("Preserve a selected oversized guest artifact outside workspace synchronization")
+    .requiredOption("--session <key>", "Exact managed workspace session key")
+    .requiredOption("--path <relative>", "Selected oversized path relative to the guest workspace")
+    .option("--recovery-id <uuid>", "Reuse the recorded ID to inspect a previous attempt")
+    .option("--json", "Output result as JSON", false)
+    .action(
+      async (
+        opts: Parameters<typeof import("../commands/sandbox-recover.js").sandboxRecoverCommand>[0],
+      ) => {
+        const { sandboxRecoverCommand } = await import("../commands/sandbox-recover.js");
+        await runCommandWithRuntime(defaultRuntime, () =>
+          sandboxRecoverCommand(opts, defaultRuntime),
+        );
+      },
+    );
+
+  sandbox
     .command("explain")
     .description("Explain effective sandbox/tool policy for a session/agent")
     .option("--session <key>", "Session key to inspect (defaults to agent main)")

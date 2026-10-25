@@ -104,14 +104,12 @@ it("stops a canceled lock observation before process inspection resumes", async 
     }
     return await readFile(filePath, options);
   });
-  const readProcessStartTime = vi.fn(() => 111);
   const controller = new AbortController();
   const observed = readActiveGatewayLockIdentity({
     env: { OPENCLAW_STATE_DIR: root },
     lockDir: root,
     requireInspection: true,
     signal: controller.signal,
-    readProcessStartTime,
   }).catch((error: unknown) => error);
   try {
     await entered.promise;
@@ -119,7 +117,7 @@ it("stops a canceled lock observation before process inspection resumes", async 
     controller.abort(reason);
     released.resolve(lockRecord(root, { pid: process.pid, startTime: 111, port: 48789 }));
     expect(await observed).toBe(reason);
-    expect(readProcessStartTime).not.toHaveBeenCalled();
+    expect(mocks.identity).not.toHaveBeenCalled();
   } finally {
     released.resolve("");
     await observed;

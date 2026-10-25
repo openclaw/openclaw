@@ -128,6 +128,19 @@ function deferPreparation() {
   return preparation;
 }
 
+function deadlineClock() {
+  vi.useFakeTimers();
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  return async (next: number, fireTimers = true) => {
+    const elapsed = next - now;
+    now = next;
+    if (fireTimers) {
+      await vi.advanceTimersByTimeAsync(elapsed);
+    }
+  };
+}
+
 function generatedRoutes() {
   const calls = vi.mocked(generateNarration).mock.calls;
   return calls.map(([{ prepared }]) => prepared.agentHarnessRuntimeOverride ?? "http");
@@ -229,15 +242,12 @@ it.each([
   { preparationMs: 9_999.75, timeoutMs: 1 },
   { preparationMs: 10_000, timeoutMs: 0 },
 ])("charges preparation to deadline: $preparationMs", async ({ preparationMs, timeoutMs }) => {
-  vi.useFakeTimers();
-  let nowMs = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+  const advance = deadlineClock();
   const preparation = deferPreparation();
   const { narrator, generate, onUpdate } = narratorHarness();
 
   narrator.tool("exec");
-  nowMs = preparationMs;
-  await vi.advanceTimersByTimeAsync(preparationMs);
+  await advance(preparationMs);
   preparation.resolve(modelMocks.prepared);
   await flushNarrations();
 
@@ -252,26 +262,20 @@ it.each([
 });
 
 it.each([false, true])("discards late narration: timer fired=%s", async (fireTimer) => {
-  vi.useFakeTimers();
-  let nowMs = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+  const advance = deadlineClock();
   const preparation = deferPreparation();
   const generation = createDeferred<string>();
   const { narrator, generate, onUpdate } = narratorHarness({ generate: () => generation.promise });
 
   narrator.tool("exec");
-  nowMs = 4_000;
-  await vi.advanceTimersByTimeAsync(4_000);
+  await advance(4_000);
   preparation.resolve(modelMocks.prepared);
   await flushNarrations();
   expect(generate).toHaveBeenCalledOnce();
   const signal = generate.mock.calls[0]?.[1];
   expect(signal?.aborted).toBe(false);
 
-  nowMs = 10_000;
-  if (fireTimer) {
-    await vi.advanceTimersByTimeAsync(6_000);
-  }
+  await advance(10_000, fireTimer);
   expect(signal?.aborted).toBe(fireTimer);
   generation.resolve("This status arrived too late.");
   await flushNarrations();
@@ -281,22 +285,18 @@ it.each([false, true])("discards late narration: timer fired=%s", async (fireTim
 });
 
 it("retains expired pending preparation for a replacement turn", async () => {
-  vi.useFakeTimers();
-  let nowMs = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+  const advance = deadlineClock();
   const preparation = deferPreparation();
   const { narrator, generate, onUpdate, inputs } = narratorHarness();
 
   narrator.tool("exec");
-  nowMs = 10_000;
-  await vi.advanceTimersByTimeAsync(10_000);
+  await advance(10_000);
   narrator.tool("read");
   expect(modelMocks.prepare).toHaveBeenCalledOnce();
   expect(generate).not.toHaveBeenCalled();
 
   narrator.replaceTurn();
-  nowMs = 11_000;
-  await vi.advanceTimersByTimeAsync(1_000);
+  await advance(11_000);
   preparation.resolve(modelMocks.prepared);
   await flushNarrations();
 
@@ -350,14 +350,9 @@ it("does not let a stale borrowed completion evict a queued turn's native prepar
 
 it("cancels active narration at final without aborting its caller", async () => {
   const outer = new AbortController();
-  const started = createDeferred<AbortSignal | undefined>();
-  const generation = createDeferred<string>();
-  const { narrator, onUpdate } = narratorHarness({
+  const { narrator, onUpdate, started, generation } = narratorHarness({
     abortSignal: outer.signal,
-    generate: (_input, signal) => {
-      started.resolve(signal);
-      return generation.promise;
-    },
+    blocked: true,
   });
 
   narrator.tool("exec");

@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -51,12 +52,8 @@ async function openApprovals(page: Page) {
     ],
     methodResponses: {
       "config.get": {
-        config: operatorConfig,
+        ...configSnapshot(operatorConfig, "config-hash-1"),
         sourceConfig: operatorConfig,
-        hash: "config-hash-1",
-        issues: [],
-        raw: JSON.stringify(operatorConfig),
-        valid: true,
       },
       "device.pair.list": { paired: [], pending: [] },
       "exec.approvals.get": approvals("gateway-hash-1"),
@@ -75,8 +72,8 @@ async function openApprovals(page: Page) {
 }
 
 suite.define(() => {
-  it("confirms before discarding a dirty draft on Gateway to node and node to node switches", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+  it("confirms before discarding a dirty draft on Gateway to node and node to node switches", async () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const { gateway, section, hostSelect } = await openApprovals(page);
       const saveButton = section.getByRole("button", { name: "Save", exact: true });
       const defaultsMode = section.getByRole("combobox", { name: "Mode" }).first();
@@ -117,17 +114,15 @@ suite.define(() => {
         await expect.poll(() => select.inputValue()).toBe(to);
         await unloadedHint.waitFor();
       }
-    });
-  });
+    }));
 
-  it("switches without confirming when the draft is clean", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+  it("switches without confirming when the draft is clean", async () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const { hostSelect } = await openApprovals(page);
       await expect.poll(() => hostSelect.inputValue()).toBe("gateway");
 
       await hostSelect.selectOption("node");
       await expect.poll(() => hostSelect.inputValue()).toBe("node");
       expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
-    });
-  });
+    }));
 });

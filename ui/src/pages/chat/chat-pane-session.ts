@@ -11,6 +11,7 @@ import type {
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { collectUnreadHiddenRunRows } from "../../components/app-sidebar-session-parent.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -52,6 +53,8 @@ import {
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
+registerChatSessionEnglish();
+
 const NO_PULL_REQUESTS: ControlUiSessionPullRequest[] = [];
 
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
@@ -72,14 +75,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   protected get sessionPullRequestsBranch(): ControlUiSessionBranch | undefined {
     return this.readPullRequestSnapshot()?.branch;
   }
-  protected get githubRepo() {
-    return sessionGitHubRepository(this.readPullRequestSnapshot());
-  }
   protected get sessionPullRequestsStatus(): ControlUiSessionPullRequestSnapshot["status"] {
     return this.readPullRequestSnapshot()?.status ?? "ready";
   }
 
-  private deferredSessionHydration: { resume?: () => void } | null = null;
+  deferredSessionHydration: { resume?: () => void } | null = null;
   /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
   private readonly hiddenRunReadRequests = new Map<
     string,
@@ -299,6 +299,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       scheduleControlUiAfterPaint(state, () => {
         if (isCurrent() && this.presented && document.visibilityState !== "hidden") {
           this.deferredSessionHydration = null;
+          this.syncSessionReactions();
           void this.refreshTaskSuggestions({ automatic: true });
           if (historyCommitted) {
             this.markSessionRead(selectedChatSessionRow(state));
@@ -336,7 +337,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
-    if (!state?.connected || !row || !isGatewayAvailable(this.context.gateway.snapshot)) {
+    if (!state || !row || !this.secondarySessionReadsReady()) {
       return;
     }
     const failureAt = row.endedAt ?? row.updatedAt ?? 0;
@@ -383,6 +384,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     guard: SessionUnreadPatchGuard,
     agentId: string | undefined,
   ) {
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
     const settle = guard.settlePatch();
     void this.context.sessions
       .patch(
@@ -391,7 +394,17 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
       )
       .then(
-        (result) => settle(result !== null),
+        (result) => {
+          if (
+            settle(result !== null) &&
+            result !== null &&
+            state &&
+            this.state === state &&
+            state.sessionKey === sessionKey
+          ) {
+            this.markSessionRead(selectedChatSessionRow(state));
+          }
+        },
         (error: unknown) => settle(false, error),
       );
   }

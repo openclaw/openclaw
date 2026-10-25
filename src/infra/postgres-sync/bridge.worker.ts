@@ -70,10 +70,8 @@ async function handleRequest(request: BridgeRequest) {
         connectionError = error;
       });
       await client.connect();
-      // Matches the pilot's SQLite WAL + synchronous=NORMAL durability tradeoff.
       await client.query(
-        "SELECT set_config('synchronous_commit', 'off', false), " +
-          "set_config('lock_timeout', $1, false), " +
+        "SELECT set_config('lock_timeout', $1, false), " +
           "set_config('statement_timeout', $2, false), set_config('search_path', $3, false)",
         [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, `"${schema.replaceAll('"', '""')}"`],
       );

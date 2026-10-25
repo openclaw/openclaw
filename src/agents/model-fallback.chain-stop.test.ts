@@ -178,6 +178,7 @@ it("does not attribute a returned timeout to a deduplicated single-candidate cha
         hasPartialAssistantTextAfterPromptTimeout: false,
         payloads: [],
         payloadsWithToolMedia: [],
+        payloadsForVisibleCompletion: [],
         agentMeta: {
           sessionId: "chain-stop-session",
           provider: "runtime-provider",

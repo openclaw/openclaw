@@ -3,13 +3,17 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { commandResult } from "../agents/github-identity.test-support.js";
 import { parseRemoteWorkspaceManifestEnvelope } from "../gateway/worker-environments/workspace-hash-memo.js";
 import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import * as gitExec from "../infra/git-exec.js";
 import * as exec from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
+import {
+  NODE_WORKSPACE_DRAIN_COMMAND,
+  parseNodeWorkerWorkspaceExecInput,
+} from "../worker/node-workspace-protocol.js";
 import {
   fileEntry,
   manifestFixture,
@@ -64,7 +68,7 @@ async function fixture() {
 }
 
 describe("resident node manifest capture", () => {
-  it("captures, memoizes, and detects small edits through workspace exec without spawning", async () => {
+  it("captures, memoizes, and detects small edits through parsed workspace exec without spawning", async () => {
     const { runtime, identity, workspaceDir, argv } = await fixture();
     const spawn = vi
       .spyOn(exec, "runCommandWithTimeout")
@@ -72,7 +76,9 @@ describe("resident node manifest capture", () => {
     const file = path.join(workspaceDir, "file.txt");
     await fs.writeFile(file, "before");
     const capture = async (memo = "[]") => {
-      const result = await runtime.exec({ ...identity, argv, input: memo });
+      const result = await runtime.exec(
+        parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...identity, argv, input: memo })),
+      );
       expect(result).toMatchObject({ code: 0, termination: "exit", workspaceDir });
       return parseRemoteWorkspaceManifestEnvelope(result.stdout);
     };
@@ -199,14 +205,7 @@ describe("resident node manifest capture", () => {
         });
         entered.resolve();
         await release.promise;
-        return {
-          stdout: Buffer.alloc(0),
-          stderr: Buffer.alloc(0),
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return commandResult();
       },
     );
     let settled = false;

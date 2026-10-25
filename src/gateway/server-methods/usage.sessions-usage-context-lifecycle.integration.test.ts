@@ -17,6 +17,7 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
   createSessionRowProjection,
@@ -93,24 +94,8 @@ it.for([
       const viewer = ensureProfileForEmail("usage-viewer@example.com");
       releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
       const client: GatewayClient = {
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            id: "openclaw-control-ui",
-            version: "test",
-            platform: "test",
-            mode: "webchat",
-          },
-          role: "operator",
-          scopes: ["operator.read", "operator.write"],
-        },
-        authenticatedUserProfile: {
-          profileId: viewer.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        connect: gatewayConnect(["operator.read", "operator.write"]),
+        authenticatedUserProfile: gatewayProfile(viewer.id),
       };
       const sessionId = "usage-before-change";
       const scope = {

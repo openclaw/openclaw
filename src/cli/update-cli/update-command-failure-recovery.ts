@@ -35,6 +35,7 @@ export async function verifyUpdateFailureRecovery(params: {
   opts: UpdateCommandOptions;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  mutationStarted?: boolean;
   serviceStopped?: boolean;
   gatewayStartAttempted?: "install" | "restart";
   definitionRecovery?: UpdateServiceDefinitionRecovery;
@@ -99,7 +100,8 @@ export async function verifyUpdateFailureRecovery(params: {
   try {
     await withCommandProcessScope(async () => {
       const untouched =
-        ["managed-service-preflight", "gateway-stop-unverified"].includes(result.reason ?? "") &&
+        ((params.mutationStarted === false && !dataAtRisk) ||
+          ["managed-service-preflight", "gateway-stop-unverified"].includes(result.reason ?? "")) &&
         !params.serviceStopped &&
         !params.preManagedServiceStop?.stopped &&
         !params.gatewayStartAttempted &&
@@ -238,9 +240,7 @@ export async function verifyUpdateFailureRecovery(params: {
           result.status = "ok";
         }
         if (run) {
-          recordUpdateRunDiagnostics(run.runId, { recovery: result.recovery }, warnRecording, {
-            env: run.env,
-          });
+          recordUpdateRunDiagnostics(run.runId, { recovery: result.recovery }, warnRecording, run);
         }
       }
     });
@@ -279,7 +279,7 @@ export async function verifyUpdateFailureRecovery(params: {
         return result;
       },
       warnRecording,
-      { env: run.env },
+      run,
     );
     // Unread history may still prohibit restart until the atomic merge confirms it.
     result.recovery =

@@ -5,13 +5,12 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { showInputDialog } from "../../components/input-dialog.ts";
+import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
+import * as uiErrors from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type {
   SessionDeleteOutcome,
   SessionDeleteTarget,
@@ -24,6 +23,12 @@ import {
   SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
+import {
+  answerConfirmDialog,
+  createModalDialogTestFixture,
+  getRenderedModalDialog,
+  waitForConfirmDialogActions,
+} from "../../test-helpers/modal-dialog.ts";
 import {
   openSubmenu,
   selectMenuValue,
@@ -38,33 +43,18 @@ import {
   createPage,
   createRenderedPage,
   createSessions,
-  type TestSessionsPage,
+  liveSessions,
+  mountMutation,
+  openRowMenu,
+  selectRows,
+  sessionRow,
 } from "./sessions-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
-vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));
-type TestSessionMenu = HTMLElementTagNameMap["openclaw-session-menu"];
-const sessionRow = (key: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
-  key: `agent:main:${key}`,
-  sessionId: `${key}-id`,
-  kind: "direct",
-  updatedAt: 1,
-  ...extra,
-});
-async function mountMutation(overrides: Partial<SessionCapability> = {}) {
-  const sessions = createSessions(overrides);
-  const connection = createGateway();
-  const context = createContext(connection.gateway, sessions);
-  return {
-    page: await createRenderedPage(context, sessionsResult([], 1), "all"),
-    connection,
-    context,
-    sessions,
-  };
-}
-function selectRows(page: TestSessionsPage, ...rows: GatewaySessionRow[]) {
-  page.selectedSessions = new Map(rows.map((row) => [row.key, row]));
-}
+vi.mock("../../components/input-dialog.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/input-dialog.tsx")>()),
+  showInputDialog: vi.fn(),
+}));
 function capturedTarget(row: GatewaySessionRow) {
   return {
     key: row.key,
@@ -80,32 +70,6 @@ function publishRows(managed: ReturnType<typeof createManagedSessions>, rows: Ga
     loading: false,
     error: null,
   });
-}
-function liveSessions<Params = unknown>(
-  handlers: Record<string, (params?: Params) => unknown>,
-  agentId?: string,
-  phase?: "connecting",
-) {
-  const request = vi.fn(async (method: string, params?: Params) => {
-    if (!Object.hasOwn(handlers, method)) {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    return handlers[method]!(params);
-  });
-  const connection = createGateway({ request } as unknown as GatewayBrowserClient);
-  if (phase) {
-    connection.emit({ phase });
-  }
-  const sessions = createTestSessionCapability(connection.gateway, agentId);
-  return { request, connection, sessions, context: createContext(connection.gateway, sessions) };
-}
-async function openRowMenu(page: TestSessionsPage, target: GatewaySessionRow) {
-  page.openSessionMenu(target, { x: 10, y: 20 }, document.createElement("button"));
-  await page.updateComplete;
-  const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu")!;
-  expect(menu).not.toBeNull();
-  await settleSessionMenu(menu);
-  return menu;
 }
 async function createDeletionPage(rows: GatewaySessionRow[], agentId = "main") {
   let serverRows = rows;
@@ -147,6 +111,122 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it("retries a retained agent identity on roster publication after reconnect backoff", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const readIdentity = vi
+      .fn()
+      .mockResolvedValueOnce({ agentId: "main", name: "Before", avatar: "" })
+      .mockRejectedValueOnce(new Error("Identity temporarily unavailable"))
+      .mockResolvedValueOnce({ agentId: "main", name: "After", avatar: "" });
+    const connection = createGateway(createTestGatewayClient(readIdentity));
+    const agentIdentity = createAgentIdentityCapability(connection.gateway);
+    const managed = createManagedSessions();
+    const context = { ...createContext(connection.gateway, managed.sessions), agentIdentity };
+    const row = sessionRow("webchat:identity");
+    const page = await createRenderedPage(context, sessionsResult([row], 1), "all");
+    const label = () => page.querySelector(".session-link")?.textContent;
+    await waitForFast(() => expect(label()).toContain("Before"));
+
+    connection.emit({ phase: "reconnecting" });
+    connection.emit({ phase: "connected" });
+    await agentIdentity.ensure(["main"]);
+    expect(readIdentity).toHaveBeenCalledTimes(2);
+    expect(label()).toContain("Before");
+
+    publishRows(managed, [row]);
+    await page.updateComplete;
+    expect(readIdentity).toHaveBeenCalledTimes(2);
+    now += 1_000;
+    publishRows(managed, [row]);
+    await waitForFast(() => expect(label()).toContain("After"));
+    expect(readIdentity).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps a failed rename editable until a confirmed retry succeeds", async () => {
+    const actual = await vi.importActual<typeof import("../../components/input-dialog.tsx")>(
+      "../../components/input-dialog.tsx",
+    );
+    vi.mocked(showInputDialog).mockImplementation(actual.showInputDialog);
+    const fixture = createModalDialogTestFixture();
+    const pending = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
+    const target = sessionRow("rename-command", { label: "Before rename" });
+    const patch = vi
+      .fn<SessionCapability["patch"]>()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({
+        ok: true,
+        key: target.key,
+        path: "",
+        entry: { sessionId: target.sessionId! },
+      });
+    const { page } = await mountMutation({ patch });
+    page.result = sessionsResult([target], 1);
+    try {
+      await selectMenuValue(await openRowMenu(page, target), "rename");
+      const { modal } = await getRenderedModalDialog(document.body);
+      const input = modal.querySelector<HTMLInputElement>('input[name="value"]')!;
+      const form = modal.querySelector("form")!;
+      input.value = "Retryable rename";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await waitForFast(() => expect(patch).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(input.disabled).toBe(true));
+      pending.reject(new Error("Rename unavailable. Try again."));
+      await waitForFast(() =>
+        expect(modal.querySelector('[role="alert"]')?.textContent).toContain(
+          "Rename unavailable. Try again.",
+        ),
+      );
+      expect(input.value).toBe("Retryable rename");
+      expect(input.disabled).toBe(false);
+      expect(document.activeElement).toBe(input);
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await waitForFast(() =>
+        expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
+      );
+      expect(patch).toHaveBeenCalledTimes(2);
+    } finally {
+      pending.resolve(null);
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps command confirmation visible and reports a failed effect after the menu closes", async () => {
+    const actual = await vi.importActual<typeof import("../../components/confirm-dialog.ts")>(
+      "../../components/confirm-dialog.ts",
+    );
+    vi.mocked(showConfirmDialog).mockImplementation(actual.showConfirmDialog);
+    const fixture = createModalDialogTestFixture();
+    const pending = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const target = sessionRow("command", { label: "Command fixture" });
+    const { page, sessions } = await mountMutation({ deleteMany: vi.fn(() => pending.promise) });
+    page.result = sessionsResult([target], 1);
+    try {
+      const menu = await openRowMenu(page, target);
+      await openSubmenu(menu, "Advanced");
+      await selectMenuValue(menu, "delete");
+      const actions = await waitForConfirmDialogActions();
+      expect((await getRenderedModalDialog(document.body)).dialog.open).toBe(true);
+      expect(page.querySelector("openclaw-session-menu")).toBeNull();
+      expect(sessions.deleteMany).not.toHaveBeenCalled();
+      answerConfirmDialog(actions, "confirm");
+      await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+      expect(page.textContent).toContain("Working…");
+      pending.reject(new Error("Deletion unavailable. Try again."));
+      await waitForFast(() =>
+        expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+          "Deletion unavailable. Try again.",
+        ),
+      );
+      expect(page.textContent).not.toContain("Working…");
+      expect(page.textContent).toContain("Command fixture");
+    } finally {
+      pending.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      await fixture.cleanup();
+    }
+  });
+
   it("disables refresh during transport loss and restores it after reconnect", async () => {
     const { page, connection, sessions } = await mountMutation();
     const refreshList = vi.mocked(sessions.refreshList);
@@ -165,6 +245,52 @@ describe("sessions page lifecycle", () => {
     const requests = refreshList.mock.calls.length;
     refresh().click();
     await waitForFast(() => expect(refreshList).toHaveBeenCalledTimes(requests + 1));
+  });
+
+  it("retires command status and isolates later commands after the agent scope changes", async () => {
+    const pending = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const next = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const sessions = createSessions({
+      deleteMany: vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(next.promise),
+    });
+    const context = createContext(createGateway().gateway, sessions);
+    const listeners = new Set<() => void>();
+    context.agentSelection.subscribe = (listener) => {
+      const notify = () => listener(context.agentSelection.state);
+      listeners.add(notify);
+      return () => listeners.delete(notify);
+    };
+    const target = sessionRow("old-scope-command");
+    const page = await createRenderedPage(context, sessionsResult([target], 1), "all");
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+    try {
+      const menu = await openRowMenu(page, target);
+      await openSubmenu(menu, "Advanced");
+      await selectMenuValue(menu, "delete");
+      await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+      expect(page.textContent).toContain("Working…");
+      context.agentSelection.state.scopeId = "reviewer";
+      listeners.forEach((notify) => notify());
+      await page.updateComplete;
+      expect(page.textContent).not.toContain("Working…");
+      const nextTarget = sessionRow("new-scope-command", {
+        key: "agent:reviewer:new-scope-command",
+      });
+      page.result = sessionsResult([nextTarget], 2);
+      const nextMenu = await openRowMenu(page, nextTarget);
+      await openSubmenu(nextMenu, "Advanced");
+      await selectMenuValue(nextMenu, "delete");
+      await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledTimes(2));
+      expect(page.textContent).toContain("Working…");
+      next.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
+      pending.reject(new Error("Old agent deletion failed"));
+      await page.updateComplete;
+      expect(page.textContent).not.toContain("Old agent deletion failed");
+    } finally {
+      pending.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      next.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+    }
   });
 
   it("pins from the page menu without changing shared pin metadata", async () => {
@@ -188,7 +314,8 @@ describe("sessions page lifecycle", () => {
         sessionId: "assignment-session",
         label: "Assignment fixture",
       });
-      const failure = "Assignment unavailable. Try again.";
+      const failure = new Error("Assignment unavailable. Try again.");
+      const formatError = vi.spyOn(uiErrors, "formatUiError");
       const assignment = createDeferred<unknown>();
       const { request, connection, sessions, context } = liveSessions(
         {
@@ -222,20 +349,22 @@ describe("sessions page lifecycle", () => {
       if (retired) {
         connection.emit({ phase: "reconnecting", client: null });
       }
-      assignment.reject(new Error(failure));
-      await assignOwner.mock.results[0]!.value;
+      assignment.reject(failure);
       if (retired) {
+        await assignOwner.mock.results[0]!.value;
         await page.updateComplete;
-        expect(page.textContent).not.toContain(failure);
+        expect(page.textContent).not.toContain(failure.message);
       } else {
-        await waitForFast(() => expect(page.textContent).toContain(failure));
+        await expect(assignOwner.mock.results[0]!.value).rejects.toBe(failure);
+        await waitForFast(() => expect(page.textContent).toContain(failure.message));
+        expect(formatError.mock.calls.at(-1)?.[0]).toBe(failure);
         expect(page.textContent).toContain("Assignment fixture");
       }
     },
   );
 
   it.each(["startup", "same-client reconnect"])(
-    "retains the current query when a route started before %s completes late",
+    "loads the current query before config settles on %s",
     async (ordering) => {
       const config = createDeferred();
       const sidebar = createDeferred<SessionsListResult>();
@@ -253,17 +382,28 @@ describe("sessions page lifecycle", () => {
         ordering === "startup" ? "connecting" : undefined,
       );
       context.runtimeConfig.ensureLoaded = () => config.promise;
-      const pendingRoute = sessionsRoute.loader!(context, {
-        signal: new AbortController().signal,
-        shouldRun: () => true,
-        revalidating: false,
-        location: { pathname: "/sessions", search: "", hash: "" },
-        deps: "",
-        cause: "navigation",
+      let routeData: SessionsRouteData | undefined;
+      const pendingRoute = Promise.resolve(
+        sessionsRoute.loader!(context, {
+          signal: new AbortController().signal,
+          shouldRun: () => true,
+          revalidating: false,
+          location: { pathname: "/sessions", search: "", hash: "" },
+          deps: "",
+          cause: "navigation",
+        }),
+      ).then((data) => {
+        routeData = data as SessionsRouteData;
+        return routeData;
       });
       connection.emit({ phase: "connected" });
-      const page = await createPage(context);
+      let mountedPage: Awaited<ReturnType<typeof createPage>> | undefined;
       try {
+        await waitForFast(() =>
+          expect(routeData).toEqual({ expandedSessionKey: null, statusFilter: "active" }),
+        );
+        const page = await createPage(context, routeData);
+        mountedPage = page;
         await waitForFast(() => expect(page.result?.sessions[0]?.key).toBe("agent:main:current-1"));
         if (ordering === "same-client reconnect") {
           connection.emit({ phase: "reconnecting" });
@@ -292,7 +432,7 @@ describe("sessions page lifecycle", () => {
       } finally {
         config.resolve();
         sidebar.resolve(result("agent:main:sidebar"));
-        page.remove();
+        mountedPage?.remove();
         sessions.dispose();
       }
     },
@@ -301,7 +441,10 @@ describe("sessions page lifecycle", () => {
   it("reports a connection error instead of silently dropping a patch", async () => {
     const { page, connection, sessions } = await mountMutation({ patch: vi.fn() });
     connection.emit({ phase: "reconnecting", client: null });
-    expect(await page.patchSession("agent:main:main", { label: "renamed" })).toBe("failed");
+    expect(await page.patchSession("agent:main:main", { label: "renamed" })).toEqual({
+      status: "failed",
+      error: "Connect to the Gateway to change sessions.",
+    });
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
   });
@@ -539,12 +682,12 @@ describe("sessions page lifecycle", () => {
   it("drops stale mutation state, errors, menus, and navigation after disconnect", async () => {
     const deleted = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
     const patched = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
-    const forked = createDeferred<string | null>();
+    const forked = createDeferred<Awaited<ReturnType<SessionCapability["createResult"]>>>();
     const groups = createDeferred<Awaited<ReturnType<SessionCapability["groupsPut"]>>>();
     const { page, sessions, connection, context } = await mountMutation({
       deleteMany: vi.fn(() => deleted.promise),
       patch: vi.fn(() => patched.promise),
-      create: vi.fn(() => forked.promise),
+      createResult: vi.fn(() => forked.promise),
       groupsPut: vi.fn(() => groups.promise),
     });
     const target = sessionRow("main", { key: "main" });
@@ -566,9 +709,13 @@ describe("sessions page lifecycle", () => {
       preservedWorktrees: [],
     });
     patched.resolve({ ok: true, key: "main", path: "", entry: { sessionId: target.sessionId! } });
-    forked.resolve("forked");
+    forked.resolve({
+      key: "forked",
+      entry: { sessionId: "forked-id" },
+      initialRun: { status: "idle" },
+    });
     groups.reject(new Error("stale group error"));
-    await Promise.all(requests);
+    expect(await Promise.all(requests)).toEqual(["stale", "stale", "stale", "stale"]);
     expect(page.result?.sessions.map(({ key }) => key)).toEqual(["main"]);
     expect([...page.selectedSessions.keys()]).toEqual(["main"]);
     expect([page.error, page.sessionMenu]).toEqual([null, null]);
@@ -577,9 +724,15 @@ describe("sessions page lifecycle", () => {
   });
 
   it("forks an active session from its last completed message", async () => {
-    const { page, sessions } = await mountMutation({ create: vi.fn(async () => "active-fork") });
+    const { page, sessions } = await mountMutation({
+      createResult: vi.fn<SessionCapability["createResult"]>(async () => ({
+        key: "active-fork",
+        entry: { sessionId: "active-fork-id" },
+        initialRun: { status: "idle" },
+      })),
+    });
     await page.forkSession("main", true);
-    expect(sessions.create).toHaveBeenCalledWith(
+    expect(sessions.createResult).toHaveBeenCalledWith(
       {
         parentSessionKey: "main",
         fork: true,
@@ -706,6 +859,24 @@ describe("sessions page new group", () => {
     expect(alert?.classList.contains("sessions-error")).toBe(true);
     expect(alert?.textContent).toContain("Group name rejected");
   });
+
+  it.each(["failure", "retirement"])(
+    "does not assign a dropped row after catalog %s",
+    async (outcome) => {
+      const catalog = createDeferred<SessionGroupMutationResult>();
+      const { page, sessions, connection } = await mount(() => catalog.promise);
+      const operation = page.onAssignCategory(key, group);
+      await waitForFast(() => expect(sessions.groupsPut).toHaveBeenCalledWith([group]));
+      if (outcome === "retirement") {
+        connection.emit({ client: createTestGatewayClient(async () => ({ profiles: [] })) });
+        catalog.resolve("completed");
+      } else {
+        catalog.reject(new Error("Group name rejected"));
+      }
+      await operation;
+      expect(sessions.patch).not.toHaveBeenCalled();
+    },
+  );
 
   it("requires a refresh before starting an unbound move", async () => {
     const { page, sessions } = await mount(async () => "completed");

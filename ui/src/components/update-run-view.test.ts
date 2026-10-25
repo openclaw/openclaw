@@ -45,6 +45,7 @@ function mount(initial: Partial<Run>) {
 afterEach(() => {
   cleanupSolid();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 it.each(["running", "skipped"] as const)("omits native progress for OCM %s", (status) => {
@@ -179,6 +180,7 @@ it("presents diagnostic receipts as readable details without inventing installat
 });
 
 it("follows run output on opening and updates, preserving scrollback until a new run", async () => {
+  const warnings = vi.spyOn(console, "warn");
   vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
   const record = run({ steps: [makeStep("build", "in_progress")] });
   const { element, find, setRecord } = mount(record);
@@ -221,6 +223,9 @@ it("follows run output on opening and updates, preserving scrollback until a new
   expect(streams.map((stream) => stream.scrollTop)).toEqual([1200, 1200]);
   expect(find(".update-run-view__step-scroll")).toBe(list);
   expect(find(".update-run-view__details")).toBe(streams[1]);
+  expect(
+    warnings.mock.calls.filter(([message]) => String(message).includes("STRICT_READ_UNTRACKED")),
+  ).toEqual([]);
 });
 
 it.each([

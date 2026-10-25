@@ -20,15 +20,6 @@ async function loadRuntimeForHost(platform: NodeJS.Platform, arch: NodeJS.Archit
   }
 }
 
-function expectFailure(error: unknown, message: string, dependencyFailure: Error) {
-  expect(error).toHaveProperty("message", expect.stringContaining(message));
-  // Preserve both the product error and Vitest's module-factory wrapper.
-  assert(error && typeof error === "object" && "cause" in error);
-  const importFailure = error.cause;
-  assert(importFailure && typeof importFailure === "object" && "cause" in importFailure);
-  expect(importFailure.cause).toBe(dependencyFailure);
-}
-
 afterEach(() => {
   vi.doUnmock("@lancedb/lancedb");
   vi.resetModules();
@@ -64,7 +55,11 @@ test.each([
   });
   const { loadLanceDbModule } = await loadRuntimeForHost(platform, "x64");
   const error = await loadLanceDbModule().catch((cause: unknown) => cause);
-  expectFailure(error, diagnostic, dependencyFailure);
+  expect(error).toHaveProperty("message", expect.stringContaining(diagnostic));
+  assert(error && typeof error === "object" && "cause" in error);
+  const importFailure = error.cause;
+  assert(importFailure && typeof importFailure === "object" && "cause" in importFailure);
+  expect(importFailure.cause).toBe(dependencyFailure);
   if (platform === "linux") {
     const connect = vi.fn();
     vi.doMock("@lancedb/lancedb", () => ({ connect }));

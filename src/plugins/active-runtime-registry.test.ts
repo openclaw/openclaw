@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import {
   getLoadedRuntimePluginRegistry,
   listLoadedRuntimePluginIds,
@@ -261,16 +262,14 @@ it.each([
       capabilities: { chatTypes: ["direct"] }, config: { listAccountIds: () => [], resolveAccount: () => ({}) },
     }};`,
       );
-      writeFileSync(
-        path.join(rootDir, "package.json"),
-        JSON.stringify({
-          openclaw: { extensions: [`./index.${format}`], setupEntry: `./setup.${format}` },
-        }),
-      );
-      writeFileSync(
-        path.join(rootDir, "openclaw.plugin.json"),
-        JSON.stringify({ id: "bundled-setup", channels: ["bundled-setup"], configSchema: schema }),
-      );
+      writeJsonFile(path.join(rootDir, "package.json"), {
+        openclaw: { extensions: [`./index.${format}`], setupEntry: `./setup.${format}` },
+      });
+      writeJsonFile(path.join(rootDir, "openclaw.plugin.json"), {
+        id: "bundled-setup",
+        channels: ["bundled-setup"],
+        configSchema: schema,
+      });
       return createLoadOptions(
         { id: "bundled-setup", rootDir, source, setupSource, channels: ["bundled-setup"] },
         { preferBuiltPluginArtifacts, channelPluginLoadIntent: "setup" },

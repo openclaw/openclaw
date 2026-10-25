@@ -104,8 +104,7 @@ it("yields an inert exclusion checkpoint and retains filled rows, limits and cur
       { limit: 1, cursor: "next", searchTerm: "keep" },
     ]);
     await Promise.all(f.publications);
-    expect(f.onHost).toHaveBeenCalledOnce();
-    expect(f.onHost).toHaveBeenCalledWith(result.hosts[0]);
+    expect(f.onHost).toHaveBeenCalledExactlyOnceWith(result.hosts[0]);
   } finally {
     await finish(f, operation);
   }
@@ -229,7 +228,13 @@ it("keeps the filled operation inline after failed discovery", async () => {
     expect(result.hosts[0]?.sessions.map((row) => row.threadId)).toEqual(["visible"]);
     expect(f.listPage).toHaveBeenCalledTimes(2);
     expect(listNodes).toHaveBeenCalledOnce();
-    expect(result.hosts[1]?.hostId).toBe("node:registry");
+    expect(result.hosts[1]).toMatchObject({
+      hostId: "node:registry",
+      error: {
+        code: "NODE_LIST_FAILED",
+        message: "Paired nodes could not be listed: discovery unavailable",
+      },
+    });
   } finally {
     await finish(f, operation);
   }

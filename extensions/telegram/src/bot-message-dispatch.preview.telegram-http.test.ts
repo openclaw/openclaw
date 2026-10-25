@@ -1,15 +1,13 @@
 import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginHookReplyPayloadSendingEvent } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  addTestHook,
-  createEmptyPluginRegistry,
-  initializeGlobalHookRunner,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { describe, expect, it, vi } from "vitest";
-import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
+import {
+  createTelegramDispatchHttpFixture,
+  installTelegramDispatchHook as installHook,
+} from "./bot-message-dispatch.telegram-http.test-support.js";
 
 describe("Telegram preview, presentation, and progress delivery through HTTP", () => {
   const http = createTelegramDispatchHttpFixture();
@@ -22,16 +20,8 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     dispatchProgressTurn,
     waitForBotApiCall,
   } = http;
-  const texts = () => [...visibleMessages.values()];
-  const sends = () => acceptedCalls.filter((call) => call.method === "sendMessage");
+  const sends = () => http.acceptedFor("sendMessage");
   const sentTexts = () => sends().map((call) => call.fields.text);
-  const waitForMethod = (method: string) => waitForBotApiCall((call) => call.method === method);
-  const waitForText = (text: string, method?: string) =>
-    waitForBotApiCall((call) => (!method || call.method === method) && call.fields.text === text);
-  const waitForContaining = (text: string, method?: string) =>
-    waitForBotApiCall(
-      (call) => (!method || call.method === method) && String(call.fields.text).includes(text),
-    );
 
   type Scenario = NonNullable<Parameters<typeof dispatchProgressTurn>[1]>;
   type Events = Parameters<typeof dispatchProgressTurn>[0];
@@ -52,11 +42,6 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   function produce(producer: NonNullable<Scenario["producer"]>, scenario: Partial<Scenario> = {}) {
     return runTurn(async () => undefined, { ...scenario, producer });
   }
-  function installHook(hook: Omit<Parameters<typeof addTestHook>[0], "registry" | "pluginId">) {
-    const registry = createEmptyPluginRegistry();
-    addTestHook({ registry, pluginId: "http-policy", ...hook });
-    initializeGlobalHookRunner(registry);
-  }
   async function accepts(options: Options, text: string, channelData: ReplyPayload["channelData"]) {
     expect(await options?.onToolResult?.({ text, channelData })).toBe(true);
   }
@@ -76,6 +61,22 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     args?: Record<string, unknown>,
   ) {
     return emitToolStart(options, { name, toolCallId, phase, ...(args ? { args } : {}) });
+  }
+  function groupContext(id: number, title: string) {
+    const context = http.createContext();
+    const chat = { id, type: "supergroup" as const, title };
+    context.chatId = id;
+    context.isGroup = true;
+    context.msg.chat = context.primaryCtx.message.chat = chat;
+    context.route.sessionKey = `agent:default:telegram:group:${id}`;
+    Object.assign(context.ctxPayload, {
+      ChatType: "group",
+      From: `telegram:group:${id}`,
+      To: `telegram:${id}`,
+      SessionKey: context.route.sessionKey,
+      WasMentioned: true,
+    });
+    return context;
   }
 
   it.each([
@@ -99,18 +100,13 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           await dispatcher.waitForIdle();
           dispatcher.sendBlockReply({ text: first, textMode: "delta" });
           await dispatcher.waitForIdle();
-          expect([...visibleMessages.values()]).toEqual([
-            (prefix + first + chunk + first).trimEnd(),
-          ]);
+          expect(http.texts()).toEqual([(prefix + first + chunk + first).trimEnd()]);
           dispatcher.sendFinalReply({ text: finalText });
           dispatcher.sendFinalReply({ text: "Separate status." });
           return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
         },
       });
-      expect([...visibleMessages.values()]).toEqual([
-        prefix + finalText,
-        prefix + "Separate status.",
-      ]);
+      expect(http.texts()).toEqual([prefix + finalText, prefix + "Separate status."]);
     },
   );
 
@@ -124,7 +120,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       dispatcher.sendFinalReply({ text: "Session ids resolved.", isStatusNotice: true });
       return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
     });
-    expect(texts()).toEqual([first + second, "Session ids resolved."]);
+    expect(http.texts()).toEqual([first + second, "Session ids resolved."]);
   });
 
   it("keeps the same preview after one HTTP 502 edit failure", async () => {
@@ -142,9 +138,9 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     await runTurn(
       async (options) => {
         await options?.onPartialReply?.({ text: initial });
-        await waitForMethod("sendMessage");
+        await http.waitForMethod("sendMessage");
         await options?.onPartialReply?.({ text: updated });
-        await waitForMethod("editMessageText");
+        await http.waitForMethod("editMessageText");
       },
       { finalReply: { text: finalText } },
     );
@@ -167,12 +163,12 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         await options?.onPartialReply?.({ text: "Unapproved partial fixture-secret" });
         expect(visibleMessages.size).toBe(0);
         await options?.onBlockReply?.({ text: "Checking fixture-secret while work continues." });
-        await waitForText("Checking filtered while work continues.");
-        expect(texts()).toEqual(["Checking filtered while work continues."]);
+        await http.waitForText("Checking filtered while work continues.");
+        expect(http.texts()).toEqual(["Checking filtered while work continues."]);
       },
       { mode, finalReply: { text: "Finished fixture-secret." } },
     );
-    expect(texts()).toEqual(["Checking filtered while work continues.", "Finished filtered."]);
+    expect(http.texts()).toEqual(["Checking filtered while work continues.", "Finished filtered."]);
     expect(JSON.stringify(calls)).not.toContain("fixture-secret");
     expect(calls.some((call) => call.method === "editMessageText")).toBe(false);
     const expected = ["Checking filtered while work continues.", "Finished filtered."];
@@ -187,7 +183,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         { mode, ...config, finalReply: { text: `${label} final fixture-secret.` } },
       );
       expected.push(`${label} final filtered.`);
-      expect(texts()).toEqual(expected);
+      expect(http.texts()).toEqual(expected);
     }
   });
 
@@ -249,7 +245,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     }
     const writes = JSON.stringify(calls);
     expect(writes).not.toContain("fixture-secret");
-    expect(texts()).toEqual(["Allowed final"]);
+    expect(http.texts()).toEqual(["Allowed final"]);
   });
 
   it("paginates quoted block finals without losing text or replacing the accepted preview", async () => {
@@ -261,7 +257,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     await runTurn(
       async (options) => {
         await options?.onPartialReply?.({ text: finalText });
-        await waitForMethod("sendMessage");
+        await http.waitForMethod("sendMessage");
         preview = [...visibleMessages];
       },
       {
@@ -308,7 +304,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     };
     await runTurn(
       async () => {
-        await waitForMethod("sendChatAction");
+        await http.waitForMethod("sendChatAction");
         await http.waitForTypingSend();
         await vi.advanceTimersByTimeAsync(0);
         for (let interval = 0; interval < 17; interval += 1) {
@@ -332,25 +328,39 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     expect(acceptedTypingAt).toHaveLength(settledTypingCount);
   });
 
+  it("stops typing between failed recovery attempts and after the final failure", async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await runTurn(
+        async () => {
+          await http.waitForTypingSend();
+          throw new Error("prepared reply dispatch runtime owner was not published for default");
+        },
+        {
+          mode: "off",
+          allowErrors: true,
+          outcome: "failed-retryable",
+          suppressFailureFallback: true,
+        },
+      );
+      const typingCount = http.acceptedFor("sendChatAction").length;
+      expect(typingCount).toBeGreaterThan(attempt);
+      expect(sends()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(http.acceptedFor("sendChatAction")).toHaveLength(typingCount);
+    }
+  });
+
   it.each(["control-only", "immediate", "buffered"] as const)(
     "delivers presentation controls through %s",
     async (branch) => {
       const blocks: NonNullable<ReplyPayload["presentation"]>["blocks"] = [];
       if (branch !== "control-only") {
-        blocks.push(
-          {
-            type: "chart",
-            chartType: "pie",
-            title: "Revenue mix",
-            segments: [{ label: "Product", value: 60 }],
-          },
-          {
-            type: "table",
-            caption: "Pipeline",
-            headers: ["Account", "Stage"],
-            rows: [["Acme", "Won"]],
-          },
-        );
+        blocks.push({
+          type: "table",
+          caption: "Pipeline",
+          headers: ["Account", "Stage"],
+          rows: [["Acme", "Won"]],
+        });
       }
       blocks.push({
         type: "buttons",
@@ -373,7 +383,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
             await options?.onPartialReply?.({
               text: "The presentation is ready for review and selection.",
             });
-            await waitForMethod("sendMessage");
+            await http.waitForMethod("sendMessage");
             await options?.onBlockReply?.(controls);
             await waitForBotApiCall(
               (call) => call.method === "editMessageText" && call.fields.reply_markup !== undefined,
@@ -388,7 +398,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
               text: "<think>first reasoning attempt</think>",
               isReasoning: true,
             });
-            await waitForContaining("first reasoning attempt");
+            await http.waitForContaining("first reasoning attempt");
           }
         },
         {
@@ -417,11 +427,11 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       );
       expect(markup).not.toContain("x".repeat(65));
       if (branch !== "control-only") {
-        assertContains(answer?.[1], "Revenue mix", "Product", "Acme", "Won");
+        assertContains(answer?.[1], "Pipeline", "Acme", "Won");
       }
       if (branch === "buffered") {
         expect(String(sends()[0]?.fields.text)).toContain("accepted second reasoning attempt");
-        expect(String(sends().at(-1)?.fields.text)).toContain("Revenue mix");
+        expect(String(sends().at(-1)?.fields.text)).toContain("Pipeline");
       } else if (branch === "immediate") {
         expect([...visibleMessages.keys()]).toEqual([1]);
       }
@@ -438,7 +448,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
             await tool(options, "exec", "first");
             await options?.onAssistantMessageStart?.();
             await options?.onPartialReply?.({ text: answer, delta: answer });
-            await waitForText(answer, "sendMessage");
+            await http.waitForText(answer, "sendMessage");
             await tool(options, "exec", "first", "update");
           } else {
             // Callback start order matters: the queued partial must retire before the tool.
@@ -450,9 +460,9 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         { finalReply: { text: failure, isError: true } },
       );
       if (update) {
-        expect(texts()).toEqual([`${answer}\n\n${failure}`]);
+        expect(http.texts()).toEqual([`${answer}\n\n${failure}`]);
       } else {
-        await expect.poll(texts, { timeout: 5_000 }).toEqual([failure]);
+        await expect.poll(http.texts, { timeout: 5_000 }).toEqual([failure]);
       }
     },
   );
@@ -469,7 +479,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     await produce(async ({ dispatcher, replyOptions }) => {
       if (skip) {
         await replyOptions?.onPartialReply?.({ text: firstText });
-        await waitForText(firstText, "sendMessage");
+        await http.waitForText(firstText, "sendMessage");
         previewId = [...visibleMessages.keys()][0];
         await replyOptions?.onBlockReplyQueued?.(first, { assistantMessageIndex: 0 });
         await replyOptions?.onAssistantMessageStart?.();
@@ -479,7 +489,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         await replyOptions?.onBlockReplyQueued?.(first, { assistantMessageIndex: 0 });
         await replyOptions?.onBlockReplyQueued?.(second, { assistantMessageIndex: 1 });
         dispatcher.sendBlockReply(first);
-        await waitForText(firstText, "sendMessage");
+        await http.waitForText(firstText, "sendMessage");
         previewId = [...visibleMessages.keys()][0];
         dispatcher.sendBlockReply(second);
       }
@@ -487,7 +497,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       const counts = dispatcher.getQueuedCounts();
       return { queuedFinal: counts.final > 0, counts };
     });
-    expect(texts()).toEqual(skip ? [answer] : [firstText, answer]);
+    expect(http.texts()).toEqual(skip ? [answer] : [firstText, answer]);
     expect(sentTexts()).toEqual([firstText, answer]);
     if (skip) {
       expect(visibleMessages.has(previewId!)).toBe(false);
@@ -504,20 +514,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   it.each([false, true])(
     "keeps replay failure custody with a terminal provider failure=%s",
     async (terminalFailure) => {
-      const context = http.createContext();
-      const chat = { id: -1001234, type: "supergroup" as const, title: "Replay room" };
-      context.chatId = chat.id;
-      context.isGroup = true;
-      context.msg.chat = chat;
-      context.primaryCtx.message.chat = chat;
-      context.route.sessionKey = "agent:default:telegram:group:-1001234";
-      Object.assign(context.ctxPayload, {
-        ChatType: "group",
-        From: "telegram:group:-1001234",
-        To: "telegram:-1001234",
-        SessionKey: context.route.sessionKey,
-        WasMentioned: true,
-      });
+      const context = groupContext(-1001234, "Replay room");
       await runTurn(
         async (options) => {
           if (terminalFailure) {
@@ -548,7 +545,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     await runTurn(
       async (options, channelOptions) => {
         await tool(options, "exec", "exec-1", "start", { command: "echo fixture-private-token" });
-        await waitForContaining("Exec", "sendMessage");
+        await http.waitForContaining("Exec", "sendMessage");
         await accepts(channelOptions, "Formatted summary", {
           openclawToolProgressId: "tool:exec-1",
         });
@@ -569,8 +566,8 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
             isError: true,
           }),
         );
-        await waitForContaining("failed", "editMessageText");
-        const card = [...visibleMessages.values()][0] ?? "";
+        await http.waitForContaining("failed", "editMessageText");
+        const card = http.texts()[0] ?? "";
         expect(card.match(/Exec/gu)).toHaveLength(1);
         assertContains(card, "🛠️ Exec", "failed");
       },
@@ -607,8 +604,8 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
             // A preamble replaces reasoning rows, so verify token updates before it arrives.
             await options?.onReasoningProgress?.({ progressTokens: 50 });
             await options?.onReasoningProgress?.({ progressTokens: 200 });
-            await waitForContaining("200 tokens");
-            const card = [...visibleMessages.values()][0] ?? "";
+            await http.waitForContaining("200 tokens");
+            const card = http.texts()[0] ?? "";
             expect(card).toContain("200 tokens");
             expect(card).not.toContain("50 tokens");
             expect(card.match(/tokens/gu)).toHaveLength(1);
@@ -621,19 +618,19 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           await accepts(channelOptions, "Fast mode enabled", {
             openclawProgressKind: "fast-mode-auto",
           });
-          await waitForContaining("Fast mode enabled");
-          const notices = texts().join("\n");
+          await http.waitForContaining("Fast mode enabled");
+          const notices = http.texts().join("\n");
           expect(notices.match(/Fast mode enabled/gu)).toHaveLength(1);
           if (mode === "progress") {
-            expect(texts()[0]).toContain("Checking the queued work");
-            expect(texts()[0]?.match(/Agents/gu)).toHaveLength(1);
-            assertExcludes(texts()[0], "Agents summary", "tokens");
+            expect(http.texts()[0]).toContain("Checking the queued work");
+            expect(http.texts()[0]?.match(/Agents/gu)).toHaveLength(1);
+            assertExcludes(http.texts()[0], "Agents summary", "tokens");
           }
         },
         { mode, toolProgress: true, finalReply: { text: "The queued work is complete." } },
       );
       if (mode === "off") {
-        expect(texts()).toEqual(["Fast mode enabled", "The queued work is complete."]);
+        expect(http.texts()).toEqual(["Fast mode enabled", "The queued work is complete."]);
       }
     },
   );
@@ -673,21 +670,76 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           finalReply: { text: "Inspection complete." },
         },
       );
-      expect([...visibleMessages.values()].filter((text) => text === diagnostic)).toHaveLength(
-        visible ? 1 : 0,
-      );
-      expect([...visibleMessages.values()]).toContain("Inspection complete.");
+      expect(http.texts().filter((text) => text === diagnostic)).toHaveLength(visible ? 1 : 0);
+      expect(http.texts()).toContain("Inspection complete.");
       if (mode === "progress") {
         expect(
           acceptedCalls.some((call) =>
             String(call.fields.text).includes("Inspecting the requested files"),
           ),
         ).toBe(preamble);
-        expect(texts()).not.toContain("Inspecting the requested files");
+        expect(http.texts()).not.toContain("Inspecting the requested files");
         if (!preamble) {
           expect(sentTexts()).toEqual([diagnostic, "Inspection complete."]);
         }
       }
+    },
+  );
+
+  it.each([
+    ["direct", "automatic", false],
+    ["direct", "automatic", true],
+    ["direct", "message_tool", false],
+    ["direct", "message_tool", true],
+    ["group", "automatic", false],
+    ["group", "automatic", true],
+    ["group", "message_tool", false],
+    ["group", "message_tool", true],
+  ] as const)(
+    "respects send denial for %s/%s commentary (denied=%s)",
+    async (chat, ownership, denied) => {
+      const commentary = "Checking the requested workspace.";
+      const finalText = "The requested inspection is complete.";
+      const context =
+        chat === "group" ? groupContext(-100123, "Inspection fixture") : http.createContext();
+      context.isGroup = chat === "group";
+      context.ctxPayload.ChatType = chat;
+      context.ctxPayload.WasMentioned = chat === "group";
+      await runTurn(
+        async (options) => {
+          await options?.onReasoningProgress?.({ progressTokens: 200 });
+          await emitPreamble(options, commentary);
+          await tool(options, "exec", "inspect-tool");
+          if (!denied) {
+            await http.waitForContaining(commentary);
+            expect(http.texts().join("\n")).toContain(commentary);
+          }
+        },
+        {
+          mode: "progress",
+          context,
+          telegramCfg: {
+            streaming: { mode: "progress", progress: { commentary: true, toolProgress: true } },
+          },
+          cfg: {
+            messages: { visibleReplies: ownership, groupChat: { visibleReplies: ownership } },
+            ...(denied ? { session: { sendPolicy: { default: "deny" } } } : {}),
+          },
+          finalReply: { text: finalText },
+        },
+      );
+      if (denied) {
+        expect(
+          calls.filter((call) =>
+            ["sendMessage", "editMessageText", "deleteMessage", "sendChatAction"].includes(
+              call.method,
+            ),
+          ),
+        ).toEqual([]);
+      } else {
+        expect(calls.some((call) => call.method === "deleteMessage")).toBe(true);
+      }
+      expect(http.texts()).toEqual(!denied && ownership === "automatic" ? [finalText] : []);
     },
   );
 });

@@ -1,25 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "./model-utils.js";
+import { makeProviderModel } from "./providers/provider-model.test-support.js";
 import type { Model } from "./types.js";
 
 function makeModel(
   thinkingLevelMap: Model["thinkingLevelMap"],
   overrides: Partial<Model> = {},
 ): Model {
-  return {
-    id: "test-model",
+  return makeProviderModel("openai-responses", "openai", "test-model", {
     name: "Test Model",
-    api: "openai-responses",
-    provider: "openai",
     baseUrl: "https://example.com",
-    reasoning: true,
     thinkingLevelMap,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
     maxTokens: 4096,
     ...overrides,
-  };
+  });
 }
 
 describe("clampThinkingLevel", () => {

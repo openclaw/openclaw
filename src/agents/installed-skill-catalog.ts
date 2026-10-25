@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
@@ -12,12 +13,6 @@ export type InstalledSkill = CodeModeSkill & {
   assertCurrent?: () => void;
   /** The owner must bound I/O before allocating the returned content. */
   readSearchContent?: (maxBytes: number, signal?: AbortSignal) => Promise<string>;
-  /**
-   * Retained loaded-bundle identity this entry's snapshot skill carries; the
-   * skills_read serving read resolves it by lookup at the delivery boundary.
-   * Unset under sandbox, where no bundle identity is attributed.
-   */
-  bundleFingerprint?: string;
 };
 
 const MAX_QUERY_CHARS = 1_000;
@@ -224,7 +219,7 @@ export async function searchInstalledSkills(
   for (const { value } of ranked.slice(0, limit)) {
     const result = {
       name: value.name,
-      description: value.description.slice(0, MAX_DESCRIPTION_CHARS),
+      description: truncateUtf16Safe(value.description, MAX_DESCRIPTION_CHARS),
       location: value.location,
     };
     chars += JSON.stringify(result).length;

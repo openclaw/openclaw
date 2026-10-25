@@ -22,10 +22,9 @@ type MantisCleanupDeadline = {
 };
 
 class MantisCleanupDeadlineError extends Error {
-  constructor(deadline: MantisCleanupDeadline, operation: string, cause?: unknown) {
+  constructor(deadline: MantisCleanupDeadline, operation: string) {
     super(
       `${deadline.lane} worktree cleanup exceeded its total ${deadline.timeoutMs}ms deadline while ${operation}`,
-      cause === undefined ? undefined : { cause },
     );
     this.name = "MantisCleanupDeadlineError";
   }

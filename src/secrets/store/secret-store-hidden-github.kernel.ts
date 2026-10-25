@@ -148,10 +148,22 @@ function selectHiddenGitHubSecretRecords(sqlite: EngineConnection) {
 
 export function writeHiddenGitHubSecretInDatabase(
   sqlite: EngineConnection,
-  params: { name: string; value: string; updatedBy?: string | null; now: number },
+  params: {
+    name: string;
+    value: string;
+    expectedValue?: string;
+    updatedBy?: string | null;
+    now: number;
+  },
 ): void {
   assertHiddenGitHubSecretRecordName(params.name);
   assertSecretStoreValueLength(params.value, "secret");
+  if (
+    params.expectedValue !== undefined &&
+    readHiddenGitHubSecretInDatabase(sqlite, params.name, params.now) !== params.expectedValue
+  ) {
+    throw new Error("GitHub OAuth record changed before settlement");
+  }
   ensureSecretStoreSchema(sqlite);
   upsertHiddenGitHubSecret(
     sqlite,

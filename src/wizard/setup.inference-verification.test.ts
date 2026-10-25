@@ -4,7 +4,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
   readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
@@ -16,7 +15,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SetupInferenceConfigTarget } from "../system-agent/setup-inference-transition.js";
 import { verifySetupInferenceConfig } from "../system-agent/setup-inference-turn.js";
-import type { WizardPrompter } from "./prompts.js";
+import { authCandidate, createEmptyWizardPrompter } from "./setup.credentials.test-support.js";
 import type { SetupModelAuthCandidate } from "./setup.model-auth.js";
 
 const mocks = vi.hoisted(() => ({
@@ -35,19 +34,13 @@ vi.mock("./setup.model-auth.js", () => ({
 
 import { offerLiveModelVerification } from "./setup.inference-verification.js";
 
+type VerificationParams = Parameters<typeof offerLiveModelVerification>[0];
 type VerificationOptions = Partial<
-  Omit<
-    Parameters<typeof offerLiveModelVerification>[0],
-    "config" | "configTarget" | "runtime" | "prompter"
-  >
+  Omit<VerificationParams, "config" | "configTarget" | "runtime" | "prompter">
 >;
 
-function authCandidate(config: OpenClawConfig) {
-  return { config, authProfiles: [], persistAuthProfiles: vi.fn(async () => {}) };
-}
-
 function verificationFixture(config: OpenClawConfig, options: VerificationOptions = {}) {
-  const prompter = createPrompter();
+  const prompter = createEmptyWizardPrompter();
   const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
   let current = structuredClone(config);
   const target: SetupInferenceConfigTarget = {
@@ -80,18 +73,6 @@ function verificationFixture(config: OpenClawConfig, options: VerificationOption
 
 const tempRoots = createTempDirTracker();
 afterEach(() => tempRoots.cleanup());
-
-function createPrompter(): WizardPrompter {
-  return createWizardPrompter({
-    intro: vi.fn(),
-    outro: vi.fn(),
-    note: vi.fn(),
-    confirm: vi.fn(),
-    select: vi.fn(),
-    multiselect: vi.fn(),
-    text: vi.fn(),
-  });
-}
 
 function expectNotCalled(...functions: ReturnType<typeof vi.fn>[]) {
   for (const fn of functions) {
@@ -267,13 +248,8 @@ describe("offerLiveModelVerification", () => {
     const verificationError = new Error("provider network dropped");
     mocks.verify.mockRejectedValue(verificationError);
     const { run, prompter } = verificationFixture(
-      {
-        agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
-      },
-      {
-        opts: { nonInteractive: true },
-        required: true,
-      },
+      { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
+      { opts: { nonInteractive: true }, required: true },
     );
     const stop = vi.fn();
     vi.mocked(prompter.progress).mockReturnValue({ stop, update: vi.fn() });

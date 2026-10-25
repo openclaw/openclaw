@@ -25,6 +25,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   cleanupCronTestRun,
   expectEnqueuedRunPayload,
@@ -33,7 +34,7 @@ import {
   runCronJobAndWaitForFinished,
   waitForCronEvent,
 } from "./server-cron.events.test-support.js";
-import type { GatewayCronState } from "./server-cron.js";
+import { registerCronRepairCases } from "./server.cron-repair.cases.js";
 import { expectCronJobIdFromResponse } from "./server.cron.assertions.test-support.js";
 import {
   agentCommandMock,
@@ -984,6 +985,8 @@ describe("gateway server cron", () => {
       expect.objectContaining({ id: jobId, trigger: validTrigger }),
     ]);
   });
+
+  registerCronRepairCases(() => caseDir, startCronClient, sendCronAnnouncePayloadStrictMock);
 
   test.for(["success", "error"] as const)(
     "keeps owner-topic repair pending through retries until the agent turn settles with %s",

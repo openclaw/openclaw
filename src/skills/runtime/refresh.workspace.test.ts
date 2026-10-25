@@ -128,16 +128,13 @@ it.each(["Gateway drain", "closed transport"])(
   },
 );
 
-it("keeps a shared remote subscription until its last agent owner is removed", async () => {
+it("shares a remote subscription across agents until shutdown", async () => {
   const { params, subscriptions, access } = await remoteFixture();
   await refresh.ensureSkillsWatcher({ ...params, agentId: "first" });
   await refresh.ensureSkillsWatcher({ ...params, agentId: "second" });
   expect(access.watchSkills).toHaveBeenCalledTimes(1);
 
-  await refresh.closeSkillsWatchersForAgent({ agentId: "first" });
-  expect(subscriptions[0]?.signal.aborted).toBe(false);
-
-  await refresh.closeSkillsWatchersForAgent({ agentId: "second" });
+  await refresh.closeSkillsWatchers();
   expect(subscriptions[0]?.signal.aborted).toBe(true);
 });
 
@@ -212,17 +209,12 @@ it("bounds remote subscriptions by recent access and invalidates evicted source 
   expect(subscriptions.filter(({ signal }) => !signal.aborted)).toHaveLength(128);
 });
 
-it.each(["agent deletion", "replacement", "watch disablement", "shutdown"] as const)(
+it.each(["replacement", "watch disablement", "shutdown"] as const)(
   "joins transport retirement during %s",
   async (operation) => {
     const options = { finishOnAbort: false };
     const { access, subscriptions, remoteParams, params, gateway } = await remoteFixture(options);
-    const agentId = operation === "agent deletion" ? "worker" : undefined;
-    if (agentId) {
-      await refresh.ensureSkillsWatcher({ ...params, agentId });
-    } else {
-      await remoteRefresh.ensureRemoteSkillsWatcher(remoteParams);
-    }
+    await remoteRefresh.ensureRemoteSkillsWatcher(remoteParams);
     const subscription = subscriptions[0]!;
     const aborted = once(subscription.signal, "abort");
     const task =
@@ -237,9 +229,7 @@ it.each(["agent deletion", "replacement", "watch disablement", "shutdown"] as co
               sourcePlan: remoteParams.sourcePlan,
               config: { plugins: { enabled: false }, skills: { load: { watch: false } } },
             })
-          : operation === "shutdown"
-            ? remoteRefresh.closeRemoteSkillsWatchers()
-            : refresh.closeSkillsWatchersForAgent({ agentId: "worker" });
+          : remoteRefresh.closeRemoteSkillsWatchers();
     try {
       await beforeSettlement(aborted, task, "Retirement settled before cancellation");
       await beforeSettlement(nextTurn(), task, "Retirement settled before transport close");

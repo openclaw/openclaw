@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
  */
 import os from "node:os";
 import path from "node:path";
+import { setImmediate as flushDiagnosticEvents } from "node:timers/promises";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -17,15 +18,10 @@ import {
   onDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-  setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
-import {
-  registerDiagnosticTracePropagationBridge,
-  resetDiagnosticTracePropagationForTest,
-} from "../infra/diagnostic-trace-propagation.js";
 import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -48,29 +44,18 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  materializeSkillResources,
-  prepareSkillResourceDelivery,
-} from "../skills/runtime/resources.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
-import type { SkillSnapshot } from "../skills/types.js";
 import {
   type HookContext,
   getBeforeToolCallFailureDisposition,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import {
-  createSkillInstructionDeliveryMarkers,
-  wrapReadToolWithSkillContent,
-} from "./agent-tools.read.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createWriteTool } from "./sessions/index.js";
-import type { ReadToolDetails } from "./sessions/tools/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
-import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
@@ -141,16 +126,12 @@ function createStableNoProgressWriteResult() {
   };
 }
 
-function asAgentTool<TDetails = unknown>(tool: {
-  name: string;
-  execute: ReturnType<typeof vi.fn>;
-}): AnyAgentTool<TDetails> {
-  return tool as unknown as AnyAgentTool<TDetails>;
+function asAgentTool(tool: { name: string; execute: ReturnType<typeof vi.fn> }): AnyAgentTool {
+  return tool as unknown as AnyAgentTool;
 }
 
 afterEach(() => {
   resetDiagnosticRunActivityForTest();
-  resetDiagnosticTracePropagationForTest();
   setGlobalHookRunnerForTest(null);
   mockGetGlobalHookRunner.mockReset();
   mockGetGlobalHookRunner.mockImplementation(() => getGlobalHookRunnerForTest());
@@ -171,6 +152,25 @@ describe("before_tool_call loop detection behavior", () => {
     mockGetGlobalHookRunner.mockReturnValue(hookRunner);
     hookRunner.hasHooks.mockReturnValue(false);
   });
+
+  function createObservedChurnWriteTool(sessionId: string, sessionKey: string, runId: string) {
+    const progressReasonsDuringExecution: Array<string | undefined> = [];
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
+      progressReasonsDuringExecution.push(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+      );
+      return createStableNoProgressWriteResult();
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      sessionKey,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    return { progressReasonsDuringExecution, execute, tool };
+  }
 
   function createWrappedTool(
     name: string,
@@ -211,12 +211,8 @@ describe("before_tool_call loop detection behavior", () => {
         emitted.push(evt);
       }
     });
-    const flush = () =>
-      new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
     try {
-      await run(emitted, flush);
+      await run(emitted, flushDiagnosticEvents);
     } finally {
       stop();
     }
@@ -229,12 +225,8 @@ describe("before_tool_call loop detection behavior", () => {
     const stop = onInternalDiagnosticEvent((evt) => {
       emitted.push(evt);
     });
-    const flush = () =>
-      new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
     try {
-      await run(emitted, flush);
+      await run(emitted, flushDiagnosticEvents);
     } finally {
       stop();
     }
@@ -255,12 +247,8 @@ describe("before_tool_call loop detection behavior", () => {
         skillUsagePrivateData.push(privateData);
       }
     });
-    const flush = () =>
-      new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
     try {
-      await run(emitted, skillUsagePrivateData, flush);
+      await run(emitted, skillUsagePrivateData, flushDiagnosticEvents);
     } finally {
       stopTrusted();
       stopShared();
@@ -811,21 +799,11 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionId = "write-churn-rewrite-session";
     const sessionKey = "main";
     const runId = "write-churn-rewrite-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return createStableNoProgressWriteResult();
-    });
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
+    const { progressReasonsDuringExecution, execute, tool } = createObservedChurnWriteTool(
       sessionId,
       sessionKey,
       runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    );
     const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
 
     for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
@@ -861,21 +839,11 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionId = "write-churn-below-threshold-session";
     const sessionKey = "main";
     const runId = "write-churn-below-threshold-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return createStableNoProgressWriteResult();
-    });
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
+    const { progressReasonsDuringExecution, tool } = createObservedChurnWriteTool(
       sessionId,
       sessionKey,
       runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    );
     const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md"];
 
     for (const [index, targetPath] of paths.entries()) {
@@ -1650,1176 +1618,6 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted[1])).not.toContain(skillFilePath);
       expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
       expect(JSON.stringify(emitted)).not.toContain("display name");
-    });
-  });
-
-  it("never records skill use for a command whose completed result crossed an abort", async () => {
-    const skillBaseDir = path.join(
-      "/tmp",
-      "openclaw-skill-command-abort",
-      "skills",
-      "matrix-profile",
-    );
-    const skillFilePath = path.join(skillBaseDir, "SKILL.md");
-    // The tool completes while its invocation is already canceled: the
-    // completed result may never reach the model, so the accounting records
-    // no skill use for the aborted invocation.
-    const controller = new AbortController();
-    const execute = vi.fn(async () => {
-      controller.abort();
-      return { content: [{ type: "text", text: "sent" }] };
-    });
-    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "message", execute }), {
-      agentId: "main",
-      sessionKey: "session-key",
-      sessionId: "session-id",
-      skillCommand: {
-        commandName: "set_profile",
-        skillFile: skillFilePath,
-        skillName: "matrix-profile",
-        skillSource: "workspace",
-        toolName: "message",
-      },
-      loopDetection: { enabled: false },
-    });
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      await tool.execute(
-        "tool-call-skill-command-aborted",
-        { command: "display name", commandName: "set_profile", skillName: "matrix-profile" },
-        controller.signal,
-        undefined,
-      );
-      await flush();
-
-      expect(emitted.map((evt) => evt.type)).toEqual([
-        "tool.execution.started",
-        "tool.execution.completed",
-      ]);
-    });
-  });
-
-  const fingerprintWorkspaceDir = path.join("/tmp", "openclaw-skill-fingerprint");
-  const pondBaseDir = path.join(fingerprintWorkspaceDir, ".agents", "skills", "pond");
-  const pondLocator = path.join(pondBaseDir, "SKILL.md");
-  const pondInstructions = "# Pond\ncomplete instructions";
-
-  function asSkillUsageTextResult(text: string) {
-    return {
-      content: [{ type: "text" as const, text }],
-      details: { kind: "text" as const, content: text },
-    };
-  }
-
-  function extractSkillReadText(result: unknown): string {
-    const content = (result as { content?: unknown } | null | undefined)?.content;
-    if (!Array.isArray(content)) {
-      return "";
-    }
-    const textBlock = content.find(
-      (block): block is { type: "text"; text: string } =>
-        typeof block === "object" &&
-        block !== null &&
-        (block as { type?: unknown }).type === "text",
-    );
-    return textBlock?.text ?? "";
-  }
-
-  function createSkillDeliveryState() {
-    return {
-      cache: new Map<string, Promise<boolean>>(),
-      markers: createSkillInstructionDeliveryMarkers(),
-    };
-  }
-
-  // The active-tracing gate the matcher's fingerprint field keys on: a
-  // registered trace-propagation bridge is exactly the exporter-owned tracing
-  // consumer the diagnostics-otel service registers while traces are active,
-  // and a metrics-only install never registers one. Positive fingerprint
-  // assertions drive the real bridge surface; the file-level afterEach resets
-  // the registry between tests.
-  function registerActiveTracingBridge(): () => void {
-    return registerDiagnosticTracePropagationBridge({
-      resolveTraceContext: () => undefined,
-    });
-  }
-
-  function createSkillFingerprintContext(params: {
-    delivery: ReturnType<typeof createSkillDeliveryState>;
-    entryBundleFingerprint?: string;
-    skillsSnapshot?: SkillSnapshot;
-  }): HookContext {
-    return {
-      agentId: "main",
-      sessionKey: "session-key",
-      loopDetection: { enabled: false },
-      skillsSnapshot: params.skillsSnapshot ?? {
-        prompt: "",
-        skills: [{ name: "pond" }],
-        resolvedSkills: [
-          {
-            ...createCanonicalFixtureSkill({
-              name: "pond",
-              description: "Pond skill",
-              filePath: pondLocator,
-              baseDir: pondBaseDir,
-              source: "workspace",
-            }),
-            ...(params.entryBundleFingerprint
-              ? { bundleFingerprint: params.entryBundleFingerprint }
-              : {}),
-          },
-        ],
-      },
-      skillInstructionDeliveryMarkers: params.delivery.markers,
-    };
-  }
-
-  function createDeliveryWrappedRead(
-    execute: ReturnType<typeof vi.fn>,
-    bundleFingerprint: string | undefined,
-    delivery: ReturnType<typeof createSkillDeliveryState>,
-  ) {
-    return wrapToolWithBeforeToolCallHook(
-      wrapReadToolWithSkillContent(
-        asAgentTool<ReadToolDetails>({ name: "read", execute }),
-        [
-          {
-            filePath: pondLocator,
-            ...(bundleFingerprint ? { bundleFingerprint } : {}),
-          },
-        ],
-        {
-          instructionDeliveryCache: delivery.cache,
-          instructionDeliveryMarkers: delivery.markers,
-        },
-      ),
-      createSkillFingerprintContext({ delivery, entryBundleFingerprint: bundleFingerprint }),
-    );
-  }
-
-  const pondGenerationOneScript = "#!/bin/sh\nprintf pond-one\n";
-  const pondGenerationTwoScript = "#!/bin/sh\nprintf pond-two\n";
-
-  async function pondFileRead(_toolCallId: unknown, params: unknown) {
-    const filePath = (params as { path?: string }).path;
-    return asSkillUsageTextResult(await fs.readFile(filePath!, "utf8"));
-  }
-
-  async function createPondSource() {
-    const workspace = tempDirs.make("openclaw-skill-fingerprint-source-");
-    const baseDir = path.join(workspace, "skills", "pond");
-    await fs.mkdir(path.join(baseDir, "scripts"), { recursive: true });
-    await fs.writeFile(
-      path.join(baseDir, "SKILL.md"),
-      "---\nname: pond\ndescription: Pond skill\n---\n# Pond\ncomplete instructions\n",
-    );
-    return { workspace, baseDir };
-  }
-
-  async function materializePondGeneration(params: {
-    workspace: string;
-    checkScript: string;
-    scope: { sessionId: string; workspaceDir: string };
-  }) {
-    // Real producer routes: delivery prep reads the source tree through the
-    // resource owner; scoped materialization rm/mkdir's the revision-keyed
-    // directory, so each generation owns its own paths.
-    await fs.writeFile(
-      path.join(params.workspace, "skills", "pond", "scripts", "check.sh"),
-      params.checkScript,
-    );
-    const snapshot: SkillSnapshot = {
-      prompt: "",
-      skills: [{ name: "pond" }],
-      resolvedSkills: [
-        createCanonicalFixtureSkill({
-          name: "pond",
-          description: "Pond skill",
-          filePath: path.join(params.workspace, "skills", "pond", "SKILL.md"),
-          baseDir: path.join(params.workspace, "skills", "pond"),
-          source: "openclaw-workspace",
-        }),
-      ],
-    };
-    const delivery = await prepareSkillResourceDelivery(snapshot, () => {}, [], params.workspace);
-    return await materializeSkillResources(delivery!, () => {}, params.scope);
-  }
-
-  function createMaterializedDeliveryRead(params: {
-    execute: ReturnType<typeof vi.fn>;
-    delivery: ReturnType<typeof createSkillDeliveryState>;
-    materialized: Awaited<ReturnType<typeof materializeSkillResources>>;
-  }) {
-    return wrapToolWithBeforeToolCallHook(
-      wrapReadToolWithSkillContent(
-        asAgentTool<ReadToolDetails>({ name: "read", execute: params.execute }),
-        (params.materialized.snapshot.resolvedSkills ?? []).map((skill) =>
-          skill.bundleFingerprint
-            ? { filePath: skill.filePath, bundleFingerprint: skill.bundleFingerprint }
-            : { filePath: skill.filePath },
-        ),
-        {
-          instructionDeliveryCache: params.delivery.cache,
-          instructionDeliveryMarkers: params.delivery.markers,
-        },
-      ),
-      createSkillFingerprintContext({
-        delivery: params.delivery,
-        skillsSnapshot: params.materialized.snapshot,
-      }),
-    );
-  }
-
-  it("attributes read activations to the settled delivery fingerprint of their invocation", async () => {
-    // Fingerprint acquisition is a retained-field lookup at emission: the
-    // wrapper adds no hashing or filesystem reads for telemetry, so hash and
-    // read counts are structurally unchanged; the execute-count assertion
-    // below pins the no-extra-reads property on the already-served route.
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
-    const tool = createDeliveryWrappedRead(execute, "fp-generation-b", delivery);
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      await tool.execute("skill-read-fp", { path: pondLocator }, undefined, undefined);
-      await flush();
-      let used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], {
-        type: "skill.used",
-        activation: "read",
-        skillName: "pond",
-        skillFingerprint: "fp-generation-b",
-      });
-
-      // An already-served re-read inherits the prior qualifying delivery's marker.
-      await tool.execute("skill-read-fp-again", { path: pondLocator }, undefined, undefined);
-      await flush();
-      used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(2);
-      expectEventFields(used[1], {
-        toolCallId: "skill-read-fp-again",
-        skillFingerprint: "fp-generation-b",
-      });
-      expect(execute).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("binds a transferred entry's read to its retained identified bytes", async () => {
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    const underlying = vi.fn().mockResolvedValue(asSkillUsageTextResult("# Changed on disk"));
-    const tool = wrapToolWithBeforeToolCallHook(
-      wrapReadToolWithSkillContent(
-        asAgentTool<ReadToolDetails>({ name: "read", execute: underlying }),
-        [
-          {
-            filePath: pondLocator,
-            readContent: pondInstructions,
-            bundleFingerprint: "fp-retained-generation",
-          },
-        ],
-        {
-          instructionDeliveryCache: delivery.cache,
-          instructionDeliveryMarkers: delivery.markers,
-        },
-      ),
-      createSkillFingerprintContext({
-        delivery,
-        entryBundleFingerprint: "fp-retained-generation",
-      }),
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      const result = await tool.execute(
-        "retained-instruction-read",
-        { path: pondLocator },
-        undefined,
-        undefined,
-      );
-      // Retained identified instructions serve verbatim: the underlying
-      // reader is never consulted for the delivery, so a changed file can
-      // never swap the bytes an emission attributes.
-      expect(extractSkillReadText(result)).toBe(pondInstructions);
-      expect(underlying).not.toHaveBeenCalled();
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], {
-        type: "skill.used",
-        activation: "read",
-        skillFingerprint: "fp-retained-generation",
-      });
-    });
-  });
-
-  it("attributes within-generation already-served re-reads while support-file reads emit no skill usage", async () => {
-    // Real producer routes ground the sequence: delivery prep reads the source
-    // tree through the resource owner; scoped materialization rm/mkdir's the
-    // revision-keyed directory, so each generation owns its own paths.
-    registerActiveTracingBridge();
-    const source = await createPondSource();
-    const first = await materializePondGeneration({
-      workspace: source.workspace,
-      checkScript: pondGenerationOneScript,
-      scope: { sessionId: "skill-fingerprint-within-generation", workspaceDir: source.workspace },
-    });
-    try {
-      const entry = first.snapshot.resolvedSkills![0]!;
-      const revision = entry.bundleFingerprint!;
-      const supportFilePath = path.join(entry.baseDir, "scripts", "check.sh");
-      const delivery = createSkillDeliveryState();
-      const execute = vi.fn(pondFileRead);
-      const tool = createMaterializedDeliveryRead({ execute, delivery, materialized: first });
-      // A real qualifying delivery settles outside the captured window.
-      const firstRead = await tool.execute(
-        "within-generation-read",
-        { path: entry.filePath },
-        undefined,
-        undefined,
-      );
-      expect(extractSkillReadText(firstRead)).toContain("complete instructions");
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-
-      await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-        // The already-served re-read short-circuits in the delivery cache: no
-        // reader call, and the emission still identifies the settled delivery.
-        const reRead = await tool.execute(
-          "within-generation-already-served",
-          { path: entry.filePath },
-          undefined,
-          undefined,
-        );
-        expect(extractSkillReadText(reRead)).toContain("already served whole");
-        // A support-file read serves the materialized generation's real bytes but
-        // is not an instruction delivery: the matcher covers instruction paths
-        // only, so no skill.used fires at all (emission-surface boundary).
-        const supportRead = await tool.execute(
-          "within-generation-support-read",
-          { path: supportFilePath },
-          undefined,
-          undefined,
-        );
-        expect(extractSkillReadText(supportRead)).toBe(pondGenerationOneScript);
-        await flush();
-        expect(execute).toHaveBeenCalledTimes(2);
-        const used = emitted.filter((evt) => evt.type === "skill.used");
-        expect(used).toHaveLength(1);
-        expectEventFields(used[0], {
-          type: "skill.used",
-          toolCallId: "within-generation-already-served",
-          activation: "read",
-          skillFingerprint: revision,
-        });
-      });
-    } finally {
-      await first.cleanup();
-    }
-  });
-
-  it("delivers a real second materialization while stale generation paths read as missing", async () => {
-    registerActiveTracingBridge();
-    const source = await createPondSource();
-    const scope = {
-      sessionId: "skill-fingerprint-cross-generation",
-      workspaceDir: source.workspace,
-    };
-    const first = await materializePondGeneration({
-      workspace: source.workspace,
-      checkScript: pondGenerationOneScript,
-      scope,
-    });
-    let second: Awaited<ReturnType<typeof materializeSkillResources>> | undefined;
-    try {
-      const entryB = first.snapshot.resolvedSkills![0]!;
-      const delivery = createSkillDeliveryState();
-      const turnOneExecute = vi.fn(pondFileRead);
-      const turnOne = createMaterializedDeliveryRead({
-        execute: turnOneExecute,
-        delivery,
-        materialized: first,
-      });
-      await turnOne.execute("cross-turn-one-read", { path: entryB.filePath }, undefined, undefined);
-      // Drain the pre-listener emission so it cannot leak into the captured window.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-
-      // The worker route releases the scoped materialization at turn end; the
-      // next turn's support-file edit delivers a new revision through a real
-      // second materialization into a new revision-keyed path.
-      await first.cleanup();
-      second = await materializePondGeneration({
-        workspace: source.workspace,
-        checkScript: pondGenerationTwoScript,
-        scope,
-      });
-      const entryC = second.snapshot.resolvedSkills![0]!;
-      // Real materialization is revision-keyed and scoped: the support-file edit
-      // yields a new bundle identity at a new path, and P_B no longer exists.
-      expect(entryC.bundleFingerprint).not.toBe(entryB.bundleFingerprint);
-      expect(entryC.filePath).not.toBe(entryB.filePath);
-      await expect(fs.stat(entryB.filePath)).rejects.toMatchObject({ code: "ENOENT" });
-
-      const turnTwoExecute = vi.fn(pondFileRead);
-      const turnTwo = createMaterializedDeliveryRead({
-        execute: turnTwoExecute,
-        delivery,
-        materialized: second,
-      });
-      await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-        // Cross-generation reads are fresh deliveries on the new keyed path:
-        // the current generation C is delivered and emitted, never B.
-        const fresh = await turnTwo.execute(
-          "cross-turn-two-fresh",
-          { path: entryC.filePath },
-          undefined,
-          undefined,
-        );
-        expect(extractSkillReadText(fresh)).toContain("complete instructions");
-        // The stale path is outside the current wrapper's entry set and gone
-        // from disk: the read ENOENTs and no skill usage fires for it.
-        await expect(
-          turnTwo.execute("cross-stale-read", { path: entryB.filePath }, undefined, undefined),
-        ).rejects.toMatchObject({ code: "ENOENT" });
-        await flush();
-        const used = emitted.filter((evt) => evt.type === "skill.used");
-        expect(used).toHaveLength(1);
-        expectEventFields(used[0], {
-          toolCallId: "cross-turn-two-fresh",
-          activation: "read",
-          skillFingerprint: entryC.bundleFingerprint!,
-        });
-        expect(turnTwoExecute).toHaveBeenCalledTimes(2);
-      });
-    } finally {
-      await first.cleanup().catch(() => undefined);
-      await second?.cleanup().catch(() => undefined);
-    }
-  });
-
-  it("omits the fingerprint for read activations without a qualifying delivery", async () => {
-    // Tracing is active, so the matcher's general tracing gate cannot
-    // satisfy these omissions: each path must omit through its own guard. A
-    // truncated (oversized or paged) or non-text outcome resets its delivery
-    // before a marker settles, and a thrown read never completes an
-    // activation.
-    registerActiveTracingBridge();
-    const truncatedResult = {
-      content: [{ type: "text" as const, text: "partial" }],
-      details: { kind: "truncated" as const },
-    };
-    const imageResult = {
-      content: [{ type: "image" as const, data: "", mimeType: "image/png" }],
-      details: { kind: "image" as const, content: "", mimeType: "image/png" },
-    };
-    const truncatedExecute = vi.fn().mockResolvedValue(truncatedResult);
-    const truncatedTool = createDeliveryWrappedRead(
-      truncatedExecute,
-      "fp-generation-b",
-      createSkillDeliveryState(),
-    );
-    const imageExecute = vi.fn().mockResolvedValue(imageResult);
-    const imageTool = createDeliveryWrappedRead(
-      imageExecute,
-      "fp-generation-b",
-      createSkillDeliveryState(),
-    );
-    const thrownExecute = vi.fn().mockRejectedValue(new Error("skill read failed"));
-    const thrownTool = createDeliveryWrappedRead(
-      thrownExecute,
-      "fp-generation-b",
-      createSkillDeliveryState(),
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      await truncatedTool.execute(
-        "truncated-skill-read",
-        { path: pondLocator },
-        undefined,
-        undefined,
-      );
-      await imageTool.execute("image-skill-read", { path: pondLocator }, undefined, undefined);
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      // Truncated (oversized or paged) and non-text outcomes reset their delivery,
-      // so both completed activations emit without a fingerprint association.
-      expect(used).toHaveLength(2);
-      expectEventFields(used[0], { toolCallId: "truncated-skill-read", skillName: "pond" });
-      expect(used[0]).not.toHaveProperty("skillFingerprint");
-      expectEventFields(used[1], { toolCallId: "image-skill-read", skillName: "pond" });
-      expect(used[1]).not.toHaveProperty("skillFingerprint");
-
-      await expect(
-        thrownTool.execute("thrown-skill-read", { path: pondLocator }, undefined, undefined),
-      ).rejects.toThrow("skill read failed");
-      await flush();
-      // A thrown read never completes, so no skill usage emission fires at all.
-      expect(emitted.filter((evt) => evt.type === "skill.used")).toHaveLength(2);
-    });
-  });
-
-  it("omits the fingerprint for node locator reads that run no bundle preparation", async () => {
-    // Tracing is active: the node:// locator runs no bundle preparation, so
-    // the entry carries no stamp and the delivery settles no marker — the
-    // per-path omission, not the tracing gate, is what this pins.
-    registerActiveTracingBridge();
-    const nodeLocator = "node://node-1/skills/remote-skill/SKILL.md";
-    const delivery = createSkillDeliveryState();
-    const tool = wrapToolWithBeforeToolCallHook(
-      wrapReadToolWithSkillContent(
-        asAgentTool<ReadToolDetails>({ name: "read", execute: vi.fn() }),
-        [{ filePath: nodeLocator, readContent: pondInstructions }],
-        {
-          instructionDeliveryCache: delivery.cache,
-          instructionDeliveryMarkers: delivery.markers,
-        },
-      ),
-      {
-        agentId: "main",
-        sessionKey: "session-key",
-        loopDetection: { enabled: false },
-        skillsSnapshot: {
-          prompt: "",
-          skills: [{ name: "remote-skill" }],
-          resolvedSkills: [
-            createCanonicalFixtureSkill({
-              name: "remote-skill",
-              description: "Remote skill",
-              filePath: nodeLocator,
-              baseDir: "node://node-1/skills/remote-skill",
-              source: "openclaw-node",
-            }),
-          ],
-        },
-        skillInstructionDeliveryMarkers: delivery.markers,
-      },
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      const result = await tool.execute(
-        "node-skill-read",
-        { path: nodeLocator },
-        undefined,
-        undefined,
-      );
-      await flush();
-      expect(extractSkillReadText(result)).toBe(pondInstructions);
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], { skillName: "remote-skill", activation: "read" });
-      expect(used[0]).not.toHaveProperty("skillFingerprint");
-    });
-  });
-
-  it("treats an epoch clear between settlement and emission as an unknown association", async () => {
-    // Tracing is active so the settled marker could flow through: the
-    // epoch clear between settlement and emission drops the in-flight
-    // unconsumed marker, and that per-path guard is what omits here.
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
-    const tool = wrapToolWithBeforeToolCallHook(
-      wrapReadToolWithSkillContent(
-        asAgentTool<ReadToolDetails>({ name: "read", execute }),
-        [{ filePath: pondLocator, bundleFingerprint: "fp-generation-b" }],
-        {
-          instructionDeliveryCache: delivery.cache,
-          instructionDeliveryMarkers: delivery.markers,
-        },
-      ),
-      {
-        ...createSkillFingerprintContext({
-          delivery,
-          entryBundleFingerprint: "fp-generation-b",
-        }),
-        onToolOutcome: () => {
-          delivery.cache.clear();
-          delivery.markers.clear();
-        },
-      },
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      await tool.execute("epoch-clear-read", { path: pondLocator }, undefined, undefined);
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], { skillName: "pond", activation: "read" });
-      // The compaction clear dropped the in-flight unconsumed settlement marker.
-      expect(used[0]).not.toHaveProperty("skillFingerprint");
-    });
-  });
-
-  it("emits no skill usage for a read blocked before execution", async () => {
-    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      block: true,
-      blockReason: "blocked by policy",
-    });
-    const delivery = createSkillDeliveryState();
-    const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
-    const tool = createDeliveryWrappedRead(execute, "fp-generation-b", delivery);
-
-    await withDiagnosticEvents(async (emitted, flush) => {
-      await tool.execute("blocked-skill-read", { path: pondLocator }, undefined, undefined);
-      await flush();
-      expect(execute).not.toHaveBeenCalled();
-      expect(emitted.some((evt) => evt.type === "skill.used")).toBe(false);
-    });
-  });
-
-  it("attributes command activations from stamped resolved entries", async () => {
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    const ctx = createSkillFingerprintContext({
-      delivery,
-      entryBundleFingerprint: "fp-generation-b",
-    });
-    const unstampedCtx = createSkillFingerprintContext({ delivery });
-    const commandExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult("sent"));
-    const stampedCommand = wrapToolWithBeforeToolCallHook(
-      asAgentTool({ name: "message", execute: commandExecute }),
-      {
-        ...ctx,
-        skillCommand: {
-          commandName: "pond_command",
-          skillFile: pondLocator,
-          skillName: "pond",
-          skillSource: "workspace",
-          toolName: "message",
-        },
-      },
-    );
-    const unstampedCommand = wrapToolWithBeforeToolCallHook(
-      asAgentTool({ name: "message", execute: commandExecute }),
-      {
-        ...unstampedCtx,
-        skillCommand: {
-          commandName: "pond_command",
-          skillFile: pondLocator,
-          skillName: "pond",
-          skillSource: "workspace",
-          toolName: "message",
-        },
-      },
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      await stampedCommand.execute(
-        "command-stamped",
-        { commandName: "pond_command" },
-        undefined,
-        undefined,
-      );
-      await unstampedCommand.execute(
-        "command-unstamped",
-        { commandName: "pond_command" },
-        undefined,
-        undefined,
-      );
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(2);
-      // A command dispatch attributes the retained generation its resolved
-      // snapshot entry carries: the discovered identity stamped at preparation.
-      expectEventFields(used[0], {
-        toolCallId: "command-stamped",
-        activation: "command",
-        skillFingerprint: "fp-generation-b",
-      });
-      // A name/source snapshot match alone is not bundle identity: without a
-      // stamped resolved entry the emission omits instead of guessing.
-      expectEventFields(used[1], { toolCallId: "command-unstamped", activation: "command" });
-      expect(used[1]).not.toHaveProperty("skillFingerprint");
-    });
-  });
-
-  it("omits a command fingerprint whose file is not the stamped entry's own", async () => {
-    // Tracing is active: the stamped resolved entry exists, but the
-    // dispatched command's relocated file is not that entry's own, so the
-    // dispatch-identity guard — never the tracing gate — is what omits.
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    const ctx = createSkillFingerprintContext({
-      delivery,
-      entryBundleFingerprint: "fp-generation-b",
-    });
-    const commandExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult("sent"));
-    // The dispatched command moved; the stamped resolved entry still carries
-    // its old generation. A name/source match never borrows that stamp.
-    const relocatedCommandFile = path.join(
-      "/tmp",
-      "openclaw-skill-fingerprint",
-      "relocated",
-      "pond",
-      "SKILL.md",
-    );
-    const tool = wrapToolWithBeforeToolCallHook(
-      asAgentTool({ name: "message", execute: commandExecute }),
-      {
-        ...ctx,
-        skillCommand: {
-          commandName: "pond_command",
-          skillFile: relocatedCommandFile,
-          skillName: "pond",
-          skillSource: "workspace",
-          toolName: "message",
-        },
-      },
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
-      await tool.execute(
-        "command-relocated-read",
-        { commandName: "pond_command" },
-        undefined,
-        undefined,
-      );
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], {
-        type: "skill.used",
-        skillName: "pond",
-        activation: "command",
-      });
-      // The command's own file is named, and no stamp is borrowed from the
-      // different file the snapshot entry still carries.
-      expect(used[0]).not.toHaveProperty("skillFingerprint");
-      expect(privateData[0]?.skillUsage?.skillFile).toContain(
-        path.join("relocated", "pond", "SKILL.md"),
-      );
-    });
-  });
-
-  it("omits a read's settled marker when the epoch clears during its instruction I/O", async () => {
-    // Tracing is active: the epoch clear during the delivery's instruction
-    // I/O treats this delivery's settlement as cleared, so the emission omits
-    // through the epoch guard rather than the tracing gate.
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    const execute = vi.fn(async () => {
-      // The compaction epoch clears while this delivery's instruction I/O is in flight.
-      delivery.cache.clear();
-      delivery.markers.clear();
-      return asSkillUsageTextResult(pondInstructions);
-    });
-    const tool = wrapToolWithBeforeToolCallHook(
-      wrapReadToolWithSkillContent(
-        asAgentTool<ReadToolDetails>({ name: "read", execute }),
-        [{ filePath: pondLocator, bundleFingerprint: "fp-generation-b" }],
-        {
-          instructionDeliveryCache: delivery.cache,
-          instructionDeliveryMarkers: delivery.markers,
-        },
-      ),
-      createSkillFingerprintContext({ delivery, entryBundleFingerprint: "fp-generation-b" }),
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      const result = await tool.execute(
-        "cleared-mid-io-read",
-        { path: pondLocator },
-        undefined,
-        undefined,
-      );
-      expect(extractSkillReadText(result)).toBe(pondInstructions);
-      // The cleared delivery settles no marker, so the emission omits.
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expect(used[0]).not.toHaveProperty("skillFingerprint");
-    });
-  });
-
-  it("omits a skills_read receipt when the epoch clears during its serving read", async () => {
-    // Tracing is active: the serving read's epoch clear leaves no receipt on
-    // the installed skills_read route, so the emission omits through the
-    // epoch guard rather than the tracing gate.
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    const skills = [
-      {
-        name: "pond",
-        description: "Pond skill",
-        location: pondLocator,
-        source: { filePath: pondLocator },
-        promptListed: true,
-        bundleFingerprint: "fp-generation-b",
-        reader: async () => {
-          // The epoch clears while the serving read is in flight.
-          delivery.markers.clear();
-          return pondInstructions;
-        },
-      },
-    ];
-    const tools = createInstalledSkillTools(skills, {
-      skillInstructionDeliveryMarkers: delivery.markers,
-    });
-    const skillsReadTool = tools.find((tool) => tool.name === "skills_read")!;
-    const tool = wrapToolWithBeforeToolCallHook(
-      skillsReadTool,
-      createSkillFingerprintContext({
-        delivery,
-        skillsSnapshot: {
-          prompt: "",
-          skills: [{ name: "pond" }],
-          resolvedSkills: [
-            {
-              ...createCanonicalFixtureSkill({
-                name: "pond",
-                description: "Pond skill",
-                filePath: pondLocator,
-                baseDir: pondBaseDir,
-                source: "workspace",
-              }),
-            },
-          ],
-        },
-      }),
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      const result = await tool.execute(
-        "cleared-mid-read-skills",
-        { name: "pond" },
-        undefined,
-        undefined,
-      );
-      // The installed route serves the instruction body under the upstream
-      // location header; the receipt tests pin the served body, not the
-      // whole formatted envelope.
-      expect(extractSkillReadText(result)).toContain(pondInstructions);
-      // The cleared serving read captures no receipt for the fresh
-      // generation to consume.
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expect(used[0]).not.toHaveProperty("skillFingerprint");
-    });
-  });
-
-  it("omits a command fingerprint whose source is not the dispatched command's own", async () => {
-    // Tracing is active: the stamped entry exists under a different source
-    // family, so the exact-source dispatch guard — not the tracing gate —
-    // is what omits the fingerprint.
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    const commandExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult("sent"));
-    const ctx = createSkillFingerprintContext({ delivery });
-    const tool = wrapToolWithBeforeToolCallHook(
-      asAgentTool({ name: "message", execute: commandExecute }),
-      {
-        ...ctx,
-        skillsSnapshot: {
-          prompt: "",
-          skills: [{ name: "pond" }],
-          resolvedSkills: [
-            {
-              ...createCanonicalFixtureSkill({
-                name: "pond",
-                description: "Pond skill",
-                filePath: pondLocator,
-                baseDir: pondBaseDir,
-                source: "openclaw-workspace",
-              }),
-              bundleFingerprint: "fp-workspace-tree",
-            },
-          ],
-        },
-        skillCommand: {
-          commandName: "pond_command",
-          skillFile: pondLocator,
-          skillName: "pond",
-          skillSource: "bundled",
-          toolName: "message",
-        },
-      },
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      await tool.execute(
-        "command-source-mismatch",
-        { commandName: "pond_command" },
-        undefined,
-        undefined,
-      );
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], {
-        type: "skill.used",
-        skillName: "pond",
-        activation: "command",
-      });
-      // Same file, different source family: the dispatch identity is not the
-      // stamped entry's, so the stamp is never borrowed.
-      expect(used[0]).not.toHaveProperty("skillFingerprint");
-    });
-  });
-
-  it("attributes the installed skills_read route from the receipt its serving read captures", async () => {
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    // Real receipt shapes: each serving read resolves its own entry's retained
-    // loaded-bundle identity into the receipt by lookup at the delivery
-    // boundary, and an unstamped entry (no preparation stamp, or a sandboxed
-    // route) leaves no receipt — the emission omits instead of borrowing
-    // another entry's stamp.
-    const skills = [
-      {
-        name: "pond",
-        description: "Pond skill",
-        location: pondLocator,
-        source: { filePath: pondLocator, readContent: pondInstructions },
-        promptListed: true,
-        bundleFingerprint: "fp-loaded-bundle",
-      },
-      {
-        name: "retained",
-        description: "Retained skill",
-        location: pondLocator,
-        source: { filePath: pondLocator, readContent: "Retained instructions" },
-        promptListed: true,
-        bundleFingerprint: "fp-retained-bundle",
-      },
-      {
-        name: "unarmed",
-        description: "Unarmed live skill",
-        location: pondLocator,
-        source: { filePath: pondLocator, readContent: "Unarmed instructions" },
-        promptListed: true,
-      },
-    ];
-    const tools = createInstalledSkillTools(skills, {
-      skillInstructionDeliveryMarkers: delivery.markers,
-    });
-    const skillsReadTool = tools.find((tool) => tool.name === "skills_read")!;
-    const tool = wrapToolWithBeforeToolCallHook(
-      skillsReadTool,
-      createSkillFingerprintContext({
-        delivery,
-        skillsSnapshot: {
-          prompt: "",
-          skills: skills.map((skill) => ({ name: skill.name })),
-          // Snapshot entries carry their own stamps; the receipt comes from
-          // the serving entry's lookup at the delivery boundary, so a
-          // deliberately divergent snapshot stamp never substitutes for it.
-          resolvedSkills: skills.map((skill) =>
-            Object.assign(
-              createCanonicalFixtureSkill({
-                name: skill.name,
-                description: skill.description,
-                filePath: pondLocator,
-                baseDir: pondBaseDir,
-                source: "workspace",
-              }),
-              { bundleFingerprint: "fp-preparation-stamp" },
-            ),
-          ),
-        },
-      }),
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      const live = await tool.execute(
-        "installed-live-read",
-        { name: "pond" },
-        undefined,
-        undefined,
-      );
-      const retained = await tool.execute(
-        "installed-retained-read",
-        { name: "retained" },
-        undefined,
-        undefined,
-      );
-      const unarmed = await tool.execute(
-        "installed-unarmed-read",
-        { name: "unarmed" },
-        undefined,
-        undefined,
-      );
-      await flush();
-      expect(extractSkillReadText(live)).toContain(pondInstructions);
-      expect(extractSkillReadText(retained)).toContain("Retained instructions");
-      expect(extractSkillReadText(unarmed)).toContain("Unarmed instructions");
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(3);
-      expectEventFields(used[0], {
-        toolCallId: "installed-live-read",
-        activation: "read",
-        skillName: "pond",
-        skillFingerprint: "fp-loaded-bundle",
-      });
-      expectEventFields(used[1], {
-        toolCallId: "installed-retained-read",
-        activation: "read",
-        skillName: "retained",
-        skillFingerprint: "fp-retained-bundle",
-      });
-      // No receipt for this invocation: the serving boundary omits instead
-      // of borrowing another entry's stamp.
-      expectEventFields(used[2], {
-        toolCallId: "installed-unarmed-read",
-        activation: "read",
-        skillName: "unarmed",
-      });
-      expect(used[2]).not.toHaveProperty("skillFingerprint");
-    });
-  });
-
-  it("omits the skill fingerprint from skill.used while tracing is inactive and emits it while active", async () => {
-    // The matcher gates the fingerprint field on the active-tracing signal
-    // (a registered trace-propagation bridge) at every attachment site: the
-    // read activation's delivery marker, the skills_read receipt, and the
-    // entry-carried stamp. Diagnostics stay enabled throughout — this is the
-    // metrics-only install shape — so the skill.used event and ordinary skill
-    // accounting must stay fully intact while the retained fingerprint stays
-    // absent, then appear once the exporter-owned tracing consumer registers.
-    setDiagnosticsEnabledForProcess(true);
-    const inactiveDelivery = createSkillDeliveryState();
-    const readExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
-    const inactiveRead = createDeliveryWrappedRead(
-      readExecute,
-      "fp-generation-b",
-      inactiveDelivery,
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
-      // Read activation whose entry carries a stamped fingerprint and whose
-      // delivery settles a marker: with no bridge registered, both the
-      // entry stamp and the invocation marker are omitted from the event.
-      await inactiveRead.execute(
-        "read-tracing-inactive",
-        { path: pondLocator },
-        undefined,
-        undefined,
-      );
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], {
-        type: "skill.used",
-        toolCallId: "read-tracing-inactive",
-        activation: "read",
-        skillName: "pond",
-        toolName: "read",
-      });
-      expect(used[0]).not.toHaveProperty("skillFingerprint");
-      // Accounting is never gated: the trusted event still carries the
-      // skill's file identity through private data.
-      expect(privateData[0]?.skillUsage?.skillFile).toBe(pondLocator);
-    });
-
-    // skills_read receipt path: a retained entry provably serves its
-    // producer-stamped bytes, so the serving read captures a receipt — the
-    // matcher consumes it and must still omit it while tracing is inactive.
-    const inactiveSkills = [
-      {
-        name: "pond",
-        description: "Pond skill",
-        location: pondLocator,
-        source: { filePath: pondLocator, readContent: pondInstructions },
-        promptListed: true,
-        bundleFingerprint: "fp-retained",
-      },
-    ];
-    const inactiveTools = createInstalledSkillTools(inactiveSkills, {
-      skillInstructionDeliveryMarkers: inactiveDelivery.markers,
-    });
-    const inactiveSkillsRead = wrapToolWithBeforeToolCallHook(
-      inactiveTools.find((tool) => tool.name === "skills_read")!,
-      createSkillFingerprintContext({
-        delivery: inactiveDelivery,
-        entryBundleFingerprint: "fp-generation-b",
-      }),
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      await inactiveSkillsRead.execute(
-        "skills-read-tracing-inactive",
-        { name: "pond" },
-        undefined,
-        undefined,
-      );
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], {
-        type: "skill.used",
-        toolCallId: "skills-read-tracing-inactive",
-        activation: "read",
-        skillName: "pond",
-        toolName: "skills_read",
-      });
-      expect(used[0]).not.toHaveProperty("skillFingerprint");
-    });
-
-    // With the exporter-owned tracing consumer registered, the same routes
-    // emit the retained fingerprint: the bridge is exactly the active-tracing
-    // signal the diagnostics-otel service registers while traces are active.
-    registerActiveTracingBridge();
-    const activeDelivery = createSkillDeliveryState();
-    const activeExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
-    const activeRead = createDeliveryWrappedRead(activeExecute, "fp-generation-b", activeDelivery);
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      await activeRead.execute("read-tracing-active", { path: pondLocator }, undefined, undefined);
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], {
-        type: "skill.used",
-        toolCallId: "read-tracing-active",
-        activation: "read",
-        skillName: "pond",
-        skillFingerprint: "fp-generation-b",
-      });
-    });
-
-    const activeSkills = [
-      {
-        name: "pond",
-        description: "Pond skill",
-        location: pondLocator,
-        source: { filePath: pondLocator, readContent: pondInstructions },
-        promptListed: true,
-        bundleFingerprint: "fp-retained",
-      },
-    ];
-    const activeTools = createInstalledSkillTools(activeSkills, {
-      skillInstructionDeliveryMarkers: activeDelivery.markers,
-    });
-    const activeSkillsRead = wrapToolWithBeforeToolCallHook(
-      activeTools.find((tool) => tool.name === "skills_read")!,
-      createSkillFingerprintContext({
-        delivery: activeDelivery,
-        entryBundleFingerprint: "fp-generation-b",
-      }),
-    );
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      await activeSkillsRead.execute(
-        "skills-read-tracing-active",
-        { name: "pond" },
-        undefined,
-        undefined,
-      );
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], {
-        type: "skill.used",
-        toolCallId: "skills-read-tracing-active",
-        activation: "read",
-        skillName: "pond",
-        skillFingerprint: "fp-retained",
-      });
     });
   });
 
@@ -3819,12 +2617,8 @@ describe("before_tool_call tool content private-data capture", () => {
         emitted.push({ event, privateData });
       }
     });
-    const flush = () =>
-      new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
     try {
-      await run(emitted, flush);
+      await run(emitted, flushDiagnosticEvents);
     } finally {
       stop();
     }

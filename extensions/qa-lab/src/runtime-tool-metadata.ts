@@ -11,8 +11,6 @@ type QaRuntimeToolExpectedLayer = (typeof QA_RUNTIME_TOOL_EXPECTED_LAYERS)[numbe
 
 type QaRuntimeCapabilityLayer = (typeof QA_RUNTIME_CAPABILITY_LAYERS)[number];
 
-export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
-
 export type QaRuntimeToolCoverageMetadata = {
   bucket: QaRuntimeToolBucket;
   expectedLayer: QaRuntimeToolExpectedLayer;

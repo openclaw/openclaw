@@ -46,7 +46,8 @@ export type SessionEventOutcome = {
   summary?: string;
   nextCheckMs?: number;
   sourceDeliveryOutcome?: SourceDeliveryOutcome;
-  automationResult?: CronRunTelemetry & Pick<CronRunOutcome, "replyDisposition" | "diagnostics">;
+  automationResult?: CronRunTelemetry &
+    Pick<CronRunOutcome, "replyDisposition" | "diagnostics" | "result">;
   /** Recorded controller restart outcome, before the error is flattened. */
   interruptedByRestart?: boolean;
   error?: string;
@@ -91,6 +92,8 @@ export type SessionEventOptions = {
   contextKey?: string;
   /** Stable identity for durable host producers across restart handoffs. */
   sourceTurnId?: string;
+  /** Run that started the producer's work; a provenance fact for this turn, never authority. */
+  sourceRunId?: string;
   deliveryContext?: DeliveryContext;
   abortSignal?: AbortSignal;
   expectedTarget?: SessionEventTarget;
@@ -120,10 +123,14 @@ export type SessionEventSourcePolicy = Readonly<
 /** Cron-owned snapshot and live occurrence fence shared with ordinary reply admission. */
 export type ScheduledSessionAutomation = {
   job: CronStoredJob;
+  /** The occurrence the cron service admitted; the turn's run admission mints from it. */
+  occurrence: import("../../cron/scheduled-occurrence.js").ScheduledOccurrence;
   /** Selected with this admission's config and session; never persisted on the job. */
   modelFallbackPolicy?: {
     useSubagentFallbacks: boolean;
     inheritDefaultFallbacksForAgentStringModel: boolean;
+    /** Stored provenance when the turn uses the session's model selection. */
+    sessionModelOverrideSource?: "auto" | "user";
   };
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Original Control UI admin classification, revalidated by the restored operator source. */

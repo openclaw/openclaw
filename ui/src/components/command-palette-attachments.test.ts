@@ -6,10 +6,6 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import { CommandPaletteLoading } from "../app/app-shell-command-palette-loading-view.tsx";
 import { ShellCommandPaletteOwner } from "../app/app-shell-command-palette-loading.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  COMMAND_PALETTE_ELEMENT,
-  createLazyCustomElementRequests,
-} from "../app/lazy-custom-element.ts";
 import * as toast from "../lib/toast.ts";
 import * as payloads from "../pages/chat/attachment-payload-store.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
@@ -21,6 +17,7 @@ import {
   prepareDraftContext,
   mountPalette,
   paletteInput,
+  pressKey,
   setInputValue,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
@@ -54,10 +51,7 @@ function createLoading(context?: ApplicationContext) {
       {
         elements: {},
         context,
-        commandPaletteElement: COMMAND_PALETTE_ELEMENT,
-        lazyCustomElements: createLazyCustomElementRequests(),
-        chatNavigationOptions: () => undefined,
-        navigate: () => {},
+        shellNavigation: { chatNavigationOptions: () => undefined, navigate: () => {} },
       },
       { request: () => {}, clear: () => {}, cancel: () => {}, pending: () => false },
     ).loading;
@@ -86,11 +80,8 @@ function finishRead(index: number, dataUrl = "data:image/png;base64,aW1hZ2U=") {
   reader.dispatchEvent(new ProgressEvent("load"));
 }
 
-function key(input: HTMLTextAreaElement, init: KeyboardEventInit) {
-  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  input.dispatchEvent(event);
-  return event;
-}
+const key = (input: HTMLTextAreaElement, { key: name = "", ...init }: KeyboardEventInit) =>
+  pressKey(input, name, { cancelable: true, ...init });
 
 async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
   const fixture = createDraftFixture(options);
@@ -122,7 +113,77 @@ async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
   };
 }
 
-describe("command palette paste-only images", () => {
+describe("command palette attachments", () => {
+  it("owns dropped files immediately, retains intent through failures/removal, and clears an empty draft", async () => {
+    const { palette, input, query, start, create, context } = await mount();
+    const surface = query<HTMLElement>(".cmd-palette")!;
+    const dispatch = (type: string, files: File[] = []) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", {
+        value: { types: ["Files"], files, dropEffect: "none" },
+      });
+      surface.dispatchEvent(event);
+      return event;
+    };
+    dispatch("dragenter");
+    expect(surface.hasAttribute("data-attachment-drop-active")).toBe(true);
+    expect(
+      dispatch("drop", [image(), new File(["brief"], "brief.pdf", { type: "application/pdf" })])
+        .defaultPrevented,
+    ).toBe(true);
+    expect(surface.hasAttribute("data-attachment-drop-active")).toBe(false);
+    await palette.updateComplete;
+    await waitForSolid(() =>
+      expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(true),
+    );
+    expect(input.getAttribute("aria-controls")).toBeNull();
+    expect(input.placeholder).toBe("What would you like to do with these files?");
+    expect(start().disabled).toBe(true);
+    readers[0]!.dispatchEvent(new ProgressEvent("error"));
+    finishRead(1, "data:application/pdf;base64,YnJpZWY=");
+    setInputValue(input, "Review");
+    await palette.updateComplete;
+    await waitForSolid(() => expect(start().disabled).toBe(false));
+    expect(create).not.toHaveBeenCalled();
+    expect(query(".chat-attachment-thumb--error")).toBeNull();
+    expect(query(".chat-attachment-failures")).toBeNull();
+    await waitForSolid(() =>
+      expect(query(".chat-attachment-file__name")?.textContent).toBe("brief.pdf"),
+    );
+    expect(toast.showToast).toHaveBeenCalledExactlyOnceWith({
+      message: "Could not attach file. Try again.",
+      placement: "top-center",
+      severity: "error",
+    });
+    query<HTMLButtonElement>(".chat-attachment-remove")!.click();
+    await palette.updateComplete;
+    expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(true);
+    key(input, { key: "Enter" });
+    expect(context.navigate).not.toHaveBeenCalled();
+    setInputValue(input, "");
+    await palette.updateComplete;
+    expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("keeps ready and pending attachments when dismissed, but releases them on disconnect", async () => {
+    const registered = vi.spyOn(payloads, "registerChatAttachmentPayload");
+    const { palette, input, query } = await mount();
+    paste(input, [image("ready.png"), image("pending.png")]);
+    finishRead(0);
+    await palette.updateComplete;
+    const attachment = registered.mock.calls[0]![0].attachment;
+    key(input, { key: "Escape" });
+    finishRead(1);
+    await palette.updateComplete;
+    expect(payloads.getChatAttachmentDataUrl(attachment)).not.toBeNull();
+    await openPalette(palette);
+    await waitForSolid(() =>
+      expect(query(".chat-attachments-preview")?.querySelectorAll("img")).toHaveLength(2),
+    );
+    palette.remove();
+    expect(payloads.getChatAttachmentDataUrl(attachment)).toBeNull();
+  });
+
   it.each([true, false])(
     "keeps non-image paste native with uploads enabled=%s",
     async (uploadsEnabled) => {
@@ -142,7 +203,7 @@ describe("command palette paste-only images", () => {
         const loadingInput = document.createElement("textarea");
         loadingInput.addEventListener("paste", (event) => loading.handlePaste(event));
         expect(paste(loadingInput, [image()]).defaultPrevented).toBe(true);
-        expect(loading.captureHandoff()()?.imageFiles).toBeUndefined();
+        expect(loading.captureHandoff()()?.attachmentFiles).toBeUndefined();
       }
       expect(readers).toHaveLength(0);
       expect(query(".chat-attachments-preview")).toBeNull();
@@ -159,6 +220,7 @@ describe("command palette paste-only images", () => {
     expect(paste(input, [image()]).defaultPrevented).toBe(true);
     await palette.updateComplete;
     expect(start().disabled).toBe(true);
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(query('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull(),
     );
@@ -180,7 +242,7 @@ describe("command palette paste-only images", () => {
     expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
   });
 
-  it.each(["dismiss", "disconnect", "owner"])(
+  it.each(["disconnect", "owner"])(
     "retires ready payloads and ignores late reads after %s",
     async (reason) => {
       const registered = vi.spyOn(payloads, "registerChatAttachmentPayload");
@@ -190,9 +252,7 @@ describe("command palette paste-only images", () => {
       await palette.updateComplete;
       const attachment = registered.mock.calls[0]![0].attachment;
       expect(payloads.getChatAttachmentDataUrl(attachment)).not.toBeNull();
-      if (reason === "dismiss") {
-        key(input, { key: "Escape" });
-      } else if (reason === "disconnect") {
+      if (reason === "disconnect") {
         palette.remove();
       } else {
         Object.assign(context.gateway, { connectionRevision: 2 });
@@ -210,38 +270,7 @@ describe("command palette paste-only images", () => {
     },
   );
 
-  it("removes failed reads, reports an error toast, and permits repaste", async () => {
-    const { palette, input, create, start, query, queryAll, expectSubmit } = await mount();
-    setInputValue(input, "Keep my draft");
-    paste(input, [image("unreadable.png")]);
-    readers[0]!.dispatchEvent(new ProgressEvent("error"));
-    await palette.updateComplete;
-    await waitForSolid(() => expect(queryAll(".chat-attachment-thumb")).toHaveLength(0));
-    expect(query(".chat-attachment-failures")).toBeNull();
-    expect(toast.showToast).toHaveBeenCalledExactlyOnceWith({
-      message: "Could not attach file. Try again.",
-      placement: "top-center",
-      severity: "error",
-    });
-    expect(input.value).toBe("Keep my draft");
-    expect(start().disabled).toBe(false);
-    expect(create).not.toHaveBeenCalled();
-    paste(input, [image("retry.png")]);
-    finishRead(1);
-    await vi.waitFor(() => expect(start().disabled).toBe(false));
-    expect(queryAll(".chat-attachment-thumb")).toHaveLength(1);
-    expect(query(".chat-attachment-thumb--error")).toBeNull();
-    start().click();
-    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
-    expectSubmit({
-      message: "Keep my draft",
-      attachments: [
-        expect.objectContaining({ type: "image", ...imageFields, fileName: "retry.png" }),
-      ],
-    });
-  });
-
-  it("keeps a rejected image prompt visible without creating a duplicate session", async () => {
+  it("clears a rejected pasted-data-URL prompt when its image is removed", async () => {
     const { palette, input, create, start, query } = await mount();
     create.mockResolvedValueOnce({
       key: "agent:main:dashboard:rejected-images",
@@ -254,14 +283,7 @@ describe("command palette paste-only images", () => {
       expect(query('[role="alert"]')?.textContent).toContain("Image turn rejected"),
     );
     expect(start().disabled).toBe(true);
-    expect(query(".chat-attachment-thumb img")).not.toBeNull();
-    key(input, { key: "Enter", metaKey: true });
-    expect(create).toHaveBeenCalledOnce();
-    key(input, { key: "Escape" });
-    await palette.updateComplete;
-    await openPalette(palette);
-    expect(query(".chat-attachment-thumb img")).not.toBeNull();
-    expect(query(".cmd-palette__footer button")?.textContent).toContain("Open session");
+    await waitForSolid(() => expect(query(".chat-attachment-thumb img")).not.toBeNull());
     query<HTMLButtonElement>(".chat-attachment-remove")!.click();
     await palette.updateComplete;
     expect(query('[role="alert"]')).toBeNull();
@@ -304,6 +326,7 @@ describe("command palette paste-only images", () => {
         }),
       { container: loader },
     );
+    await vi.dynamicImportSettled();
     flush();
     const coldInput = loader.querySelector("textarea")!;
     if (outcome !== "ready" && outcome !== "policy-delayed") {
@@ -350,7 +373,9 @@ describe("command palette paste-only images", () => {
       // A valid text/remaining-image prompt could be sent explicitly, but the
       // cold submit must not silently drop a rejected clipboard image.
       await vi.waitFor(() => expect(start().disabled).toBe(false));
-      expect(queryAll(".chat-attachment-thumb")).toHaveLength(outcome === "partial" ? 1 : 0);
+      await waitForSolid(() =>
+        expect(queryAll(".chat-attachment-thumb")).toHaveLength(outcome === "partial" ? 1 : 0),
+      );
       expect(query(".chat-attachment-failures")).toBeNull();
       expect(replacement.value).toBe("Keep every image");
       expect(toast.showToast).toHaveBeenCalledExactlyOnceWith({
@@ -370,4 +395,32 @@ describe("command palette paste-only images", () => {
     }
     loadingView.unmount();
   });
+});
+
+it("keeps mobile attachment Return native and starts only from its button", async () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  const { palette, input, query, start, context, expectSubmit } = await mount();
+  paste(input, [image()]);
+  finishRead(0);
+  input.value = "A mobile prompt";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await vi.waitFor(() => expect(start().disabled).toBe(false));
+  for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }]) {
+    const event = key(input, { key: "Enter", ...modifiers });
+    expect(event.defaultPrevented).toBe(false);
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(palette.isOpen).toBe(true);
+  }
+  expect(start().querySelector("kbd")).toBeNull();
+  const footer = query<HTMLElement>(".cmd-palette > .cmd-palette__footer")!;
+  expect(footer.querySelectorAll("kbd")).toHaveLength(1);
+  expect(footer.querySelector("kbd")?.textContent).toMatch(/^(Enter|⏎)$/);
+  expect(footer.textContent).not.toContain("Start session");
+  start().click();
+  await vi.waitFor(() =>
+    expectSubmit({
+      message: "A mobile prompt",
+      attachments: [expect.objectContaining(imageFields)],
+    }),
+  );
 });

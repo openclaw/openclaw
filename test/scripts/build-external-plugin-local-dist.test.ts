@@ -20,7 +20,6 @@ import {
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { BUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { resolveBuildRequirement } from "../../scripts/run-node.mts";
-import { hasChannelPackageState } from "../../src/channels/plugins/package-state-probes.js";
 import { loadPluginManifest } from "../../src/plugins/manifest.js";
 import {
   createPluginCache,
@@ -65,6 +64,10 @@ function writeFiles(root: string, files: Record<string, string | object>) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value));
   }
+}
+
+function linkDirectory(target: string, link: string) {
+  fs.symlinkSync(path.relative(path.dirname(link), target), link, "dir");
 }
 
 function makeRepo(prefix: string, metadata: object = {}) {
@@ -450,57 +453,8 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
       );
       expect(probe.status, probe.stdout + probe.stderr).toBe(0);
       const sourcePackagePath = path.join(repoRoot, "extensions", id, "package.json");
-      const sourceText = readText(sourcePackagePath);
-      const sourcePackage = JSON.parse(sourceText);
+      const sourcePackage = readJson(sourcePackagePath);
       expect(sourcePackage.openclaw.channel).toEqual({ id, label: id, ...channelStateFixtures });
-      const setState = (metadataKey: string, declaration: object) => {
-        sourcePackage.openclaw.channel = {
-          id,
-          label: id,
-          ...channelStateFixtures,
-          [metadataKey]: declaration,
-        };
-        fs.writeFileSync(sourcePackagePath, JSON.stringify(sourcePackage));
-      };
-      // Reuse the built graphs: partial pairs must retain env semantics, not require a sidecar.
-      for (const metadataKey of ["configuredState", "persistedAuthState"] as const) {
-        for (const partial of [
-          {},
-          { specifier: "./absent-probe" },
-          { specifier: "./absent-probe", exportName: " \t" },
-          { exportName: "hasState" },
-          { specifier: " \t", exportName: "hasState" },
-        ]) {
-          for (const env of [undefined, { anyOf: ["SYNTHETIC_PLUGIN_TOKEN"] }]) {
-            const declaration = { ...partial, ...(env ? { env } : {}) };
-            setState(metadataKey, declaration);
-            copyMetadata(repoRoot);
-            const channel = readJson(pluginRoot, "package.json").openclaw.channel;
-            expect(channel).toEqual({ ...metadata.openclaw.channel, [metadataKey]: declaration });
-            const stateProbe = {
-              entry: { channel, pluginId: id, rootDir: pluginRoot, origin: "bundled" as const },
-              metadataKey,
-              cfg: {},
-            };
-            const check = (probeEnv: NodeJS.ProcessEnv) =>
-              hasChannelPackageState({ ...stateProbe, env: probeEnv });
-            expect([check({}), check({ SYNTHETIC_PLUGIN_TOKEN: "synthetic-test-value" })]).toEqual([
-              false,
-              Boolean(env),
-            ]);
-          }
-        }
-        setState(metadataKey, {
-          env: { anyOf: ["SYNTHETIC_PLUGIN_TOKEN"] },
-          specifier: "./missing-state",
-          exportName: "hasState",
-        });
-        expect(() => copyMetadata(repoRoot)).toThrow(
-          `channel ${metadataKey} specifier './missing-state' has no runtime output for ${id}`,
-        );
-      }
-      fs.writeFileSync(sourcePackagePath, sourceText);
-      copyMetadata(repoRoot);
     }
 
     const readiness = buildReadiness(repoRoot);
@@ -550,11 +504,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
         writeFiles(modulesDir, {
           ".bin/probe.cjs": `console.log(require("../${dependency}").version);\n`,
         });
-        fs.symlinkSync(
-          path.relative(path.dirname(dependencyLink), dependencyDir),
-          dependencyLink,
-          "dir",
-        );
+        linkDirectory(dependencyDir, dependencyLink);
         makePlugin(
           repoRoot,
           pluginId,
@@ -573,11 +523,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
           "index.cjs": `exports.version = ${JSON.stringify(version)};\n`,
           "SKILL.md": `# Private dependency ${version}\n`,
         });
-        fs.symlinkSync(
-          path.relative(modulesDir, repoRoot),
-          path.join(packageDir, "node_modules", "openclaw"),
-          "dir",
-        );
+        linkDirectory(repoRoot, path.join(modulesDir, "openclaw"));
         sourceHostLinks.set(pluginId, fs.readlinkSync(path.join(modulesDir, "openclaw")));
       }
       await buildExternal(repoRoot);

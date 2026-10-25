@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -65,21 +66,19 @@ it("keeps the published install generation across ledger writes until restart", 
 function writeChannelPlugin(rootDir: string, id: string): void {
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(path.join(rootDir, "index.js"), "export default { register() {} };\n");
-  fs.writeFileSync(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({ id, channels: [id], configSchema: { type: "object", properties: {} } }),
-  );
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
-    JSON.stringify({
-      name: id,
-      type: "module",
-      openclaw: {
-        extensions: ["./index.js"],
-        channel: { id, name: id, description: `Synthetic ${id} channel` },
-      },
-    }),
-  );
+  writeJsonFile(path.join(rootDir, "openclaw.plugin.json"), {
+    id,
+    channels: [id],
+    configSchema: { type: "object", properties: {} },
+  });
+  writeJsonFile(path.join(rootDir, "package.json"), {
+    name: id,
+    type: "module",
+    openclaw: {
+      extensions: ["./index.js"],
+      channel: { id, name: id, description: `Synthetic ${id} channel` },
+    },
+  });
 }
 
 it("keeps channel catalog workspace and load-path scopes after Gateway publication", () => {

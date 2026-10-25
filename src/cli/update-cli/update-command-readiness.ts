@@ -89,7 +89,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       detail,
     };
     if (run) {
-      recordUpdateRunStep(run.runId, fact, { env: run.env });
+      recordUpdateRunStep(run.runId, fact, run);
     }
     defaultRuntime[params.opts.json ? "error" : "log"](`${fact.step}: ${detail}`);
   };
@@ -255,6 +255,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   };
   const service = resolveGatewayService();
   const probeParams = {
+    assertCurrent,
     service,
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,

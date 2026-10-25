@@ -6,6 +6,7 @@ import {
   resolveAgentRunFailureText,
 } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
 import { assertCurrentSessionTranscriptHeader } from "../../../config/sessions/session-entry-codec.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
@@ -415,10 +416,7 @@ describe("handleEmbeddedPromptFailure", () => {
 
   it("returns the profile-rotation retry before failure marking finishes", async () => {
     const events: string[] = [];
-    let releaseMark: (() => void) | undefined;
-    const markCanFinish = new Promise<void>((resolve) => {
-      releaseMark = resolve;
-    });
+    const { promise: markCanFinish, resolve: releaseMark } = createDeferredCore();
     const maybeMarkAuthProfileFailure = vi.fn(async () => {
       events.push("mark-start");
       await markCanFinish;

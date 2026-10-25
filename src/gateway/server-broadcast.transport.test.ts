@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { listSystemPresence } from "../infra/system-presence.js";
-import { gatewayFrameSegments } from "./serialized-json.js";
+import { SerializedGatewayFrame } from "./serialized-json.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
@@ -23,7 +23,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-function clientFor(connId: string, socket: WebSocket): GatewayWsClient {
+function clientFor(connId: string, socket: GatewayWsClient["socket"]): GatewayWsClient {
   return {
     connId,
     socket,
@@ -42,8 +42,8 @@ function controlledPeer(connId: string) {
     terminate: vi.fn(),
     send: vi.fn(
       (
-        wire: string | Buffer,
-        options: { binary: false } | ((error?: Error) => void),
+        wire: string | Buffer | SerializedGatewayFrame,
+        options?: { binary: false } | ((error?: Error) => void),
         callback?: (error?: Error) => void,
       ) => {
         frames.push(JSON.parse(String(wire)));
@@ -51,7 +51,7 @@ function controlledPeer(connId: string) {
       },
     ),
   });
-  return { client: clientFor(connId, socket as unknown as WebSocket), socket, callbacks, frames };
+  return { client: clientFor(connId, socket), socket, callbacks, frames };
 }
 
 const liveText = (group: AbortSignal) => ({
@@ -283,7 +283,7 @@ describe("broadcast transport retirement", () => {
       expect(peer.socket.send.mock.calls[0]?.[1]).toEqual({ binary: false });
     }
     const first = write.socket.send.mock.calls[0]![0];
-    expect(Buffer.isBuffer(first)).toBe(true);
+    expect(first).toBeInstanceOf(SerializedGatewayFrame);
     expect(admin.socket.send.mock.calls[0]![0]).toBe(first);
 
     const encode = vi.spyOn(Buffer, "from");
@@ -322,7 +322,7 @@ describe("broadcast transport retirement", () => {
     broadcast("presence", { presence: visible });
 
     const frames = peers.map((peer) => peer.socket.send.mock.lastCall![0]);
-    expect(Buffer.isBuffer(frames[0])).toBe(true);
+    expect(frames[0]).toBeInstanceOf(SerializedGatewayFrame);
     expect(frames[3]).toBe(frames[0]);
     expect(frames[4]).toBe(frames[0]);
     expect(project).toHaveBeenCalledTimes(6);
@@ -390,7 +390,7 @@ describe("broadcast transport retirement", () => {
           recipientProfileId: peer.client.connId,
         });
         if (sharedMessage && peer.client.connId !== "roster") {
-          const segments = Buffer.isBuffer(frame) ? gatewayFrameSegments(frame) : undefined;
+          const segments = frame instanceof SerializedGatewayFrame ? frame.segments : undefined;
           expect(segments).toContain(messageBytes);
           // Splitting the row from the sequence creates another deflate boundary on the wire.
           expect(String(segments?.at(-1))).toContain('"session":');

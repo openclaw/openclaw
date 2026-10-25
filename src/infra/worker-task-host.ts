@@ -15,8 +15,10 @@ import {
 import {
   attributeWorkerToPool,
   createCpuTrackedWorker,
+  flushWorkerDiagnostics,
   markWorkerRetirement,
   receiveWorkerMemoryPort,
+  isWorkerGcObservationEnabled,
 } from "./worker-cpu.js";
 import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
@@ -134,6 +136,7 @@ export function createWorkerTaskHost(
       // The retained relay supplies current facts on demand; global snapshots grow with sessions.
       const selection = getDatabaseEngineSelection();
       const context: WorkerTaskContext = {
+        collectWorkerMetrics: isWorkerGcObservationEnabled(),
         ...(selection ? { databaseEngineSelection: selection } : {}),
         deletedAgentDatabaseFences: captureDeletedAgentDatabaseFences(),
         databaseAdmissionDeadlineAtMs: readSqliteDatabaseAdmissionDeadline(),
@@ -170,7 +173,7 @@ export function createWorkerTaskHost(
       if (owner.databaseAccess !== "read-only") {
         trackSqliteDatabaseAdmissionWorker(worker);
       }
-      attributeWorkerToPool(worker, pool);
+      attributeWorkerToPool(worker, pool, workerClass);
     },
     workerRetiring(worker, reason) {
       const admission = admissions.get(worker);
@@ -180,6 +183,7 @@ export function createWorkerTaskHost(
       }
       markWorkerRetirement(worker, reason);
     },
+    flushWorkerDiagnostics,
     computeCapacity: getWorkerComputeCapacity(),
     pools: liveWorkerTaskPools,
   };

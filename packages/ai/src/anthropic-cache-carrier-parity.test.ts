@@ -10,20 +10,20 @@ import { describe, expect, it } from "vitest";
 import { createFailureMessage } from "../../agent-core/src/turn-interruption.js";
 import {
   anthropicModel,
+  assistantMessage,
   captureAnthropicRequest,
   context,
   registerParityHostLifecycle,
+  textBlock,
+  userMessage,
 } from "./provider-transport-parity.test-support.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./replay-turn-classification.js";
-import { createZeroUsage } from "./usage.test-support.js";
 
 function user(content: string, timestamp: number, turnScoped?: boolean): UserMessage {
-  return {
-    role: "user",
-    content,
+  return userMessage(content, {
     timestamp,
     ...(turnScoped === undefined ? {} : { operatorMessage: { turnScoped } }),
-  };
+  });
 }
 
 function assistant(
@@ -32,20 +32,7 @@ function assistant(
   timestamp = 1,
   stopReason: "stop" | "toolUse" = "stop",
 ): Message {
-  return {
-    role: "assistant",
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    timestamp,
-    stopReason,
-    usage: createZeroUsage(),
-    content,
-  };
-}
-
-function textBlock(text: string, cache_control?: { type: string; ttl?: string }) {
-  return { type: "text" as const, text, ...(cache_control ? { cache_control } : {}) };
+  return assistantMessage(model, content, { timestamp, stopReason });
 }
 
 const runtimeText = "OpenClaw runtime context:\nRuntime context";
@@ -103,13 +90,11 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       "retained v2026.9.7 context",
       "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     ].join("\n");
-    const legacyCarrier: Message = {
-      role: "user",
-      content: [{ type: "text", text: legacyText }],
+    const legacyCarrier = userMessage([textBlock(legacyText)], {
       timestamp: 2,
       runtimeContextCarrier: true,
       runtimeContextCarrierRetained: true,
-    };
+    });
     const messages: Context["messages"] = [
       user("Original question", 1),
       legacyCarrier,
@@ -134,15 +119,13 @@ describe("Anthropic runtime-context cache lifecycle", () => {
   });
 
   it("keeps mixed-media canonical carriers before steering out of the cache through transport replay", async () => {
-    const carrier: Message = {
-      role: "user",
-      content: [
-        { type: "text", text: "legacy plugin runtime context" },
+    const carrier = userMessage(
+      [
+        textBlock("legacy plugin runtime context"),
         { type: "image", mimeType: "image/png", data: "aW1n" },
       ],
-      timestamp: 2,
-      runtimeContext: { retained: false },
-    };
+      { timestamp: 2, runtimeContext: { retained: false } },
+    );
     const messages = [user("Original question", 1), carrier, user("Steering correction", 3)];
     const { payload } = await captureMessages("transport", { input: ["text", "image"] }, messages, {
       cacheRetention: "short",
@@ -151,7 +134,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
 
     expect(wire[0]?.content).toEqual([textBlock("Original question", { type: "ephemeral" })]);
     expect(wire[1]?.content).toEqual([
-      { type: "text", text: "legacy plugin runtime context" },
+      textBlock("legacy plugin runtime context"),
       {
         type: "image",
         source: { type: "base64", media_type: "image/png", data: "aW1n" },
@@ -179,7 +162,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
         ...(priorConversation
           ? [
               { role: "user", content: "Earlier question" },
-              { role: "assistant", content: [{ type: "text", text: "Answer" }] },
+              { role: "assistant", content: [textBlock("Answer")] },
             ]
           : []),
         { role: "user", content: "." },
@@ -198,11 +181,11 @@ describe("Anthropic runtime-context cache lifecycle", () => {
         ]);
         expect(second.payload.messages).toMatchObject([
           ...expected,
-          { role: "assistant", content: [{ type: "text", text: "Answer" }] },
+          { role: "assistant", content: [textBlock("Answer")] },
           { role: "user", content: "Next question" },
         ]);
         expect(second.payload.system).toEqual(first.payload.system);
-        expect(second.payload.system).toEqual([{ type: "text", text: context.systemPrompt }]);
+        expect(second.payload.system).toEqual([textBlock(context.systemPrompt)]);
         expect((second.payload.messages as unknown[]).slice(0, expected.length)).toEqual(
           first.payload.messages,
         );

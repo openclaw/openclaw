@@ -52,10 +52,7 @@ type WebProviderConfiguredCredentialFallback = {
   value: unknown;
 };
 
-type WebSearchRuntimeMetadataContext = {
-  config?: OpenClawConfig;
-  searchConfig?: Record<string, unknown>;
-  runtimeMetadata?: RuntimeWebSearchMetadata;
+type WebSearchRuntimeMetadataContext = Omit<WebSearchProviderContext, "agentDir"> & {
   resolvedCredential?: {
     value?: string;
     source: WebSearchCredentialResolutionSource;
@@ -73,10 +70,7 @@ export type WebSearchProviderSetupContext = {
 
 export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
 
-type WebFetchRuntimeMetadataContext = {
-  config?: OpenClawConfig;
-  fetchConfig?: Record<string, unknown>;
-  runtimeMetadata?: RuntimeWebFetchMetadata;
+type WebFetchRuntimeMetadataContext = WebFetchProviderContext & {
   resolvedCredential?: {
     value?: string;
     source: WebFetchCredentialResolutionSource;

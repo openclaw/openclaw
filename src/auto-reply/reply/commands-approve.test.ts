@@ -1,4 +1,3 @@
-// Tests approval command behavior for pending tool and execution requests.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -101,7 +100,6 @@ function createApprovalTestPlugin(id: string, label: string, approvals = false):
 const telegramApproveTestPlugin = createApprovalTestPlugin("telegram", "Telegram", true);
 telegramApproveTestPlugin.config.defaultAccountId = (cfg) =>
   cfg.channels?.telegram?.defaultAccount ?? "default";
-const discordApproveTestPlugin = createApprovalTestPlugin("discord", "Discord", true);
 const signalApproveTestPlugin = createApprovalTestPlugin("signal", "Signal", true);
 const slackApproveTestPlugin = createApprovalTestPlugin("slack", "Slack");
 const whatsappApproveTestPlugin = createApprovalTestPlugin("whatsapp", "WhatsApp");
@@ -116,7 +114,12 @@ const channelConfig = (channel = "whatsapp", allowFrom = ["*"]): OpenClawConfig 
   commands: { text: true },
   channels: { [channel]: { allowFrom } },
 });
-const telegramContext = { Provider: "telegram", Surface: "telegram", SenderId: "123" };
+const channelContext = (channel: string, senderId: string) => ({
+  Provider: channel,
+  Surface: channel,
+  SenderId: senderId,
+});
+const telegramContext = channelContext("telegram", "123");
 
 function buildApproveParams(
   commandBodyNormalized: string,
@@ -156,9 +159,9 @@ function expectReply(result: Awaited<ReturnType<typeof approve>>, text: string) 
 describe("handleApproveCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveApprovalOverGatewayMock.mockReset().mockResolvedValue(undefined);
     isPendingSystemAgentApprovalMock.mockResolvedValue(false);
     setPlugins(
-      discordApproveTestPlugin,
       slackApproveTestPlugin,
       whatsappApproveTestPlugin,
       signalApproveTestPlugin,
@@ -171,22 +174,16 @@ describe("handleApproveCommand", () => {
     senders = ["123"],
     accountId?: string,
   ): OpenClawConfig {
-    const execApprovals = enabled === null ? null : { enabled, approvers: senders, target: "dm" };
     const approvers = {
-      authorizedSenders: execApprovals?.approvers ?? [],
+      authorizedSenders: enabled === null ? [] : senders,
       ...(accountId ? { accountId } : {}),
     };
-    const account = execApprovals ? { execApprovals } : {};
-    const telegram = {
-      allowFrom: ["*"],
-      ...(accountId ? { defaultAccount: accountId, accounts: { [accountId]: account } } : account),
-    };
     return withApprovalPolicy(
-      { commands: { text: true }, channels: { telegram } } as OpenClawConfig,
+      { commands: { text: true }, channels: { telegram: { defaultAccount: accountId } } },
       {
         exec: {
           ...approvers,
-          ...(execApprovals?.enabled
+          ...(enabled
             ? {}
             : { reply: "❌ Telegram exec approvals are not enabled for this bot account." }),
         },
@@ -200,13 +197,10 @@ describe("handleApproveCommand", () => {
     expectReply(await approve(buildApproveParams("/approve")), "Usage: /approve");
   });
 
-  it.each(["constructor"])(
-    "rejects Object.prototype decision %s instead of treating it as an approval decision",
-    async (decision) => {
-      expectReply(await approve(buildApproveParams(`/approve abc ${decision}`)), "Usage: /approve");
-      expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects Object.prototype decisions instead of treating them as approval decisions", async () => {
+    expectReply(await approve(buildApproveParams("/approve abc constructor")), "Usage: /approve");
+    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+  });
 
   it("accepts forwarded Telegram plugin approvals from approvers when native delivery is disabled", async () => {
     const params = buildApproveParams(
@@ -215,7 +209,6 @@ describe("handleApproveCommand", () => {
       telegramContext,
     );
     params.command.isAuthorizedSender = false;
-    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
 
     expectReply(await approve(params), "Approval allow-once submitted");
     expectApprovalResolverCall("plugin:abc12345", "plugin");
@@ -234,12 +227,9 @@ describe("handleApproveCommand", () => {
       exec: { authorizedSenders: [] },
     });
     const ctx = {
-      Provider: "slack",
-      Surface: "slack",
-      SenderId: "U12345678",
+      ...channelContext("slack", "U12345678"),
       GroupSpace: "T11111111",
     };
-    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
 
     const plugin = buildApproveParams("/approve plugin:abc allow-once", cfg, ctx);
     plugin.command.isAuthorizedSender = false;
@@ -256,11 +246,10 @@ describe("handleApproveCommand", () => {
   });
 
   it("honors the configured default account for omitted-account /approve auth", async () => {
-    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
     const params = buildApproveParams(
       "/approve abc12345 allow-once",
       createTelegramApproveCfg(true, ["123"], "work"),
-      { ...telegramContext, AccountId: undefined },
+      telegramContext,
     );
     params.command.isAuthorizedSender = false;
 
@@ -273,13 +262,13 @@ describe("handleApproveCommand", () => {
     {
       name: "does not treat implicit default approval auth as a bypass for unauthorized senders",
       cfg: { commands: { text: true } } as OpenClawConfig,
-      ctx: { Provider: "webchat", Surface: "webchat", SenderId: "123" },
+      ctx: channelContext("webchat", "123"),
       setup: undefined,
     },
     {
       name: "does not treat implicit same-chat approval auth as a bypass for unauthorized senders",
       cfg: channelConfig("slack"),
-      ctx: { Provider: "slack", Surface: "slack", SenderId: "U123" },
+      ctx: channelContext("slack", "U123"),
       setup: () =>
         setPlugins({
           ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
@@ -292,7 +281,7 @@ describe("handleApproveCommand", () => {
     {
       name: "does not allow empty helper approvers to bypass unauthorized sender checks",
       cfg: channelConfig("signal", []),
-      ctx: { Provider: "signal", Surface: "signal", SenderId: "+15551239999" },
+      ctx: channelContext("signal", "+15551239999"),
       setup: undefined,
     },
   ] as const)("$name", async ({ cfg, ctx, setup }) => {
@@ -314,15 +303,16 @@ describe("handleApproveCommand", () => {
       .mockResolvedValueOnce({ applied: true });
     isPendingSystemAgentApprovalMock.mockResolvedValueOnce(true);
 
-    const result = await approve(
-      buildApproveParams(
-        "/approve system-agent:abc allow-once",
-        createTelegramApproveCfg(),
-        telegramContext,
+    expectReply(
+      await approve(
+        buildApproveParams(
+          "/approve system-agent:abc allow-once",
+          createTelegramApproveCfg(),
+          telegramContext,
+        ),
       ),
+      "Approval allow-once submitted for system-agent:abc",
     );
-
-    expect(result?.reply?.text).toContain("Approval allow-once submitted for system-agent:abc");
     expect(resolveApprovalOverGatewayMock).toHaveBeenCalledTimes(3);
     const canonical = approvalResolverRequest(2);
     expect(canonical).toMatchObject({ approvalKind: "system-agent", decision: "allow-once" });
@@ -338,11 +328,7 @@ describe("handleApproveCommand", () => {
     const params = buildApproveParams(
       "/approve system-agent:abc allow-once",
       {},
-      {
-        Provider: "slack",
-        Surface: "slack",
-        SenderId: "U123",
-      },
+      channelContext("slack", "U123"),
     );
     params.command.senderIsOwner = senderIsOwner;
     if (senderIsOwner) {

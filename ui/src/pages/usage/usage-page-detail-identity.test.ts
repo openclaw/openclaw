@@ -12,9 +12,10 @@ import {
   cleanupUsagePageTest,
   contextWeight,
   focusDocument,
-  preloadUsage,
   refreshButton,
   usagePoints,
+  loadUsagePage,
+  selectUsageSession,
 } from "./usage-page.test-support.ts";
 
 beforeEach(focusDocument);
@@ -46,9 +47,8 @@ function readOverview(
 }
 
 async function selectSession(request: Parameters<typeof createUsagePageFixture>[0]) {
-  const fixture = await createUsagePageFixture(request);
-  await preloadUsage(fixture.page);
-  fixture.page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+  const fixture = await loadUsagePage(request);
+  selectUsageSession(fixture.page);
   return fixture;
 }
 
@@ -146,17 +146,22 @@ it.each([
     const overview = overviewFixture({ sessionId: "original-instance", label: "Original session" });
     const row = overview.sessions[0]!;
     const retired = deferred<SessionUsageTimeSeries>();
+    const started = deferred();
     let holdOriginal = false;
     let replaced = false;
     const detailResponse = (method: "logs" | "timeseries") => {
       if (replaced) {
         throw new Error("Replacement details unavailable");
       }
-      return holdOriginal
-        ? retired.promise
-        : method === "logs"
-          ? { logs: [{ timestamp: 1, role: "user", content: "Original turn" }] }
-          : { sessionId: "original-instance", points: [] };
+      if (holdOriginal) {
+        if (method === "timeseries") {
+          started.resolve();
+        }
+        return retired.promise;
+      }
+      return method === "logs"
+        ? { logs: [{ timestamp: 1, role: "user", content: "Original turn" }] }
+        : { sessionId: "original-instance", points: [] };
     };
     const request = usageRequest({
       "sessions.usage": () => readOverview(overview),
@@ -170,7 +175,8 @@ it.each([
 
     holdOriginal = true;
     const oldLoad = page.refresh();
-    await vi.waitFor(() => expect(page.read().detail.timeSeriesLoading).toBe(true));
+    await started.promise;
+    await oldLoad;
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
     replaced = true;
@@ -188,13 +194,7 @@ it.each([
     expect.soft(page.usageSelectedSessions).toEqual(["global"]);
     expect.soft(page.read().detail).toMatchObject({ timeSeries: null, sessionLogs: null });
     retired.resolve({ sessionId: "retired-instance", points: [] });
-    await oldLoad;
-    await vi.waitFor(() => {
-      expect(page.read().detail).toMatchObject({
-        timeSeriesLoading: false,
-        sessionLogsLoading: false,
-      });
-    });
+    await Promise.all([page.read().detail.timeSeriesRead, page.read().detail.sessionLogsRead]);
     expect.soft(page.read().detail).toMatchObject({
       timeSeries: null,
       sessionLogs: null,
@@ -235,7 +235,7 @@ it.each([
     await vi.waitFor(() =>
       expect(textOf(page, ".session-bar-selection")).toContain(state.row.label),
     );
-    await vi.waitFor(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
+    await page.read().detail.timeSeriesRead;
     await page.updateComplete;
     expect(textOf(page, ".session-bar-selection")).toContain(state.row.label);
     await vi.waitFor(() => expect(page.read().data.selectedSession?.usage?.totalTokens).toBe(350));
@@ -285,7 +285,7 @@ it.each([
       return { providers: [], logs: [], points: [] };
     });
     const { page } = await selectSession(request);
-    await vi.waitFor(() => expect(page.read().detail.context.loading).toBe(false));
+    await page.read().detail.context.read;
     await page.updateComplete;
     if (conflict) {
       expect.soft(page.read().detail.context.weight).toBeUndefined();

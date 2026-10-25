@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { resolveSourceReplyExpectation } from "../../../auto-reply/reply/source-reply-delivery-mode.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   buildEmbeddedRunnerAssistant as makeAssistant,
@@ -30,6 +31,44 @@ vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
 
 describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
   const getContext = useFinalizationAdmission([backendMocks.finalize, transcriptMocks.append]);
+
+  it("accepts an internal scheduled heartbeat's NO_REPLY after settled tools", async () => {
+    const assistant = makeAssistant({ content: [{ type: "text", text: SILENT_REPLY_TOKEN }] });
+    const attempt = makeAttempt({
+      sessionIdUsed: "session-settled",
+      assistantTexts: [SILENT_REPLY_TOKEN],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+      messagesSnapshot: [
+        { role: "user", content: "Check the monitor scratch.", timestamp: 0 },
+        toolAssistant(["scratch", "exec"]),
+        makeTextToolResult("scratch", "exec", "No pending checks", false, 1),
+        assistant,
+      ],
+      toolMetas: [{ toolCallId: "scratch", toolName: "exec", replaySafe: false }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+    const input = makeInput(attempt, getContext());
+    const source = {
+      cfg: {},
+      ctx: { Provider: "webchat", SessionKey: "agent:main:main" },
+    };
+    expect(resolveSourceReplyExpectation(source)).toBe("result-required");
+    input.terminalBase.runParams.terminalReplyExpectation = resolveSourceReplyExpectation({
+      ...source,
+      scheduledAutomation: true,
+    });
+
+    const result = await finalize(input);
+
+    expect(backendMocks.finalize).not.toHaveBeenCalled();
+    expect(result.finalizationOutcome).toBe("not-attempted");
+    expect(result.prepared.preparedTerminalReply.terminalReply).toEqual({ disposition: "silent" });
+    expect(result.prepared.payloadsWithToolMedia).toEqual([]);
+  });
 
   it.each([
     ["required", "missing", "phased"],

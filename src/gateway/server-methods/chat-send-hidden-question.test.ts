@@ -131,6 +131,7 @@ it.each(
           },
           session: {
             agentId: "main",
+            resolvedSessionModel: { provider: owner.run.provider, model: owner.run.model },
             cfg: { messages: { queue: { allowCollaborativeSteering: true } } },
             entry: undefined,
             sessionKey,

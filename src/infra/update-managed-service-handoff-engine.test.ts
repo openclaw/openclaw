@@ -45,6 +45,15 @@ afterEach(() => {
 
 const itUnix = it.runIf(process.platform !== "win32");
 
+async function writePostgresAnchor(pathname: string) {
+  await fs.mkdir(path.dirname(pathname), { recursive: true });
+  using db = new DatabaseSync(pathname);
+  db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+  db.exec(
+    "INSERT INTO openclaw_engine_anchor VALUES ('handoff-fixture', 'postgres', 'handoff_fixture')",
+  );
+}
+
 it.each(["sqlite", "postgres"] as const)(
   "uses the admitted %s selection without inspecting the state file",
   async (engine) => {
@@ -64,15 +73,7 @@ it("recognizes an offline PostgreSQL anchor through its inspection worker", asyn
   const root = tempDirs.make("handoff-engine-anchor-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
   const pathname = resolveOpenClawStateSqlitePath(env);
-  await fs.mkdir(path.dirname(pathname), { recursive: true });
-  const db = new DatabaseSync(pathname);
-  db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
-  db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
-    "handoff-fixture",
-    "postgres",
-    "handoff_fixture",
-  );
-  db.close();
+  await writePostgresAnchor(pathname);
   await expect(resolveManagedHandoffStateEngine(env)).resolves.toBe("postgres");
 });
 
@@ -91,15 +92,7 @@ itUnix.for(["transfer", "cancel"] as const)(
     process.stdout.write(JSON.stringify({ status: "skipped", mode: "npm", reason: "already-current" }));
   `,
     );
-    await fs.mkdir(path.join(root, "state"));
-    const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
-    db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
-    db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
-      "exit-fixture",
-      "postgres",
-      "exit_fixture",
-    );
-    db.close();
+    await writePostgresAnchor(path.join(root, "state", "openclaw.sqlite"));
     const parentScript = path.join(root, "parent.mjs");
     await fs.writeFile(
       parentScript,

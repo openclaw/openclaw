@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { expect, it } from "vitest";
+import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import {
@@ -43,6 +43,7 @@ import { readPreparedSessionParticipants } from "./session-participant-prepared-
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const { getReplacementPublicationDelivery } =
@@ -330,14 +331,7 @@ it.each([false, true])(
           files: [],
         },
         skillsSnapshot: { prompt: "Persisted skill prompt", skills: [] },
-        systemPromptReport: {
-          source: "run",
-          generatedAt: 1,
-          systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-          injectedWorkspaceFiles: [],
-          skills: { promptChars: 0, entries: [] },
-          tools: { listChars: 0, schemaChars: 0, entries: [] },
-        },
+        systemPromptReport: promptReport(1, 1, 0),
       } satisfies Partial<SessionEntry>;
       replaceSessionEntrySync(scope, { sessionId: "full-receipt", updatedAt: 1, ...snapshots });
       let published: ReturnType<typeof readPreparedSessionEntryChange>;

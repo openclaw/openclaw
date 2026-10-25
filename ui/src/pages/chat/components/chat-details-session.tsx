@@ -1,24 +1,25 @@
-import { For, Show, createMemo, createSignal, createStore, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, lazy } from "solid-js";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerSessionProgressEnglish } from "../../../i18n/locales/en-session-progress.ts";
 import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
+import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { registerEnglishCatalog, getLocale, t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
-import { createSessionDiffSummary } from "../../../lib/session-diff-summary.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
-import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
-import { ChatDetailsContext, ChatDetailsEnvironment } from "./chat-details-environment.tsx";
-import { ChatDetailsPeople, ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
+import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import type {
@@ -26,29 +27,42 @@ import type {
   ChatDetailsOutputs,
   ChatDetailsProps,
 } from "./chat-details-types.ts";
-import { ChatOutputsDesktop, getChatOutputsCount, isChatOutputsEmpty } from "./chat-outputs.tsx";
-import { hasChatPullRequests } from "./chat-pull-requests.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs-data.ts";
+import { isProcessesPresentationReady } from "./chat-processes-presentation.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
+registerEnglishCatalog(registerSessionProgressEnglish);
+
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
+
+const ChatDetailsPeople = lazy(() => import("./chat-details-people-list.tsx"), {
+  export: "ChatDetailsPeople",
+});
+const ChatOutputsDesktop = lazy(() => import("./chat-outputs.tsx"), {
+  export: "ChatOutputsDesktop",
+});
 
 type Props = {
   props?: ChatDetailsProps;
   presented: boolean;
   dismissed?: boolean;
+  scrollport?: HTMLElement;
   /** Set by ChatDetails from its native presentation context, never pane width. */
   desktop?: boolean;
 };
 export type ChatDetailsSession = SolidBridgeElement<Props>;
-const diffSummaryInputs = new WeakMap<ChatDetailsSession, () => void>();
 
 export const ChatDetailsSession = defineSolidBridge<Props>(
   "openclaw-chat-details-session",
   (props, host) => {
     // Keep the shared observation at the native host across keyed detail replacements.
-    const processes = useOptionalApplication()
+    const context = useOptionalApplication();
+    const gateway = context ? projectGateway(context.gateway) : undefined;
+    const processes = context
       ? useSessionPanel(
           host,
           () => ({
@@ -62,69 +76,27 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
       : () => undefined;
     const Background = (backgroundProps: Parameters<typeof ChatDetailsBackground>[0]) =>
       ChatDetailsBackground(backgroundProps, processes);
-    const changes = createSessionDiffSummary(host.ownerDocument, () => host.isConnected);
-    const syncDiffSummary = () =>
-      changes.update({
-        gateway: host.props?.pullRequestsGateway,
-        sessionKey: host.props?.sessionKey ?? "",
-        agentId: host.props?.currentAgentId ?? undefined,
-        sessionId: host.props?.selectedSession?.sessionId,
-        presented: host.presented && !host.desktop && Boolean(host.props?.onOpenSessionDiff),
-        runActive:
-          host.props?.runActive === true || host.props?.selectedSession?.hasActiveRun === true,
-      });
-    onSettled(() => {
-      diffSummaryInputs.set(host, syncDiffSummary);
-      syncDiffSummary();
-      return () => {
-        diffSummaryInputs.delete(host);
-        changes.dispose();
-      };
-    });
-    const changesView = projectOwner(changes, (owner) => owner.snapshot);
-    const summary = () => changesView.read().summary;
-    const compactNumber = createMemo(
-      () => new Intl.NumberFormat(getLocale(), { notation: "compact", maximumFractionDigits: 1 }),
-    );
-    const fileCount = (count: number) =>
-      count === 1
-        ? t("chat.sessionDetails.changedFile")
-        : t("chat.sessionDetails.changedFiles", { count: String(count) });
-    const summaryDescription = () => {
-      const value = summary();
-      return [
-        value
-          ? t("chat.sessionDetails.changeSummary", {
-              files: fileCount(value.fileCount),
-              additions: String(value.additions),
-              deletions: String(value.deletions),
-            })
-          : t("chat.sessionDetails.changesUnavailable"),
-        value?.truncated ? t("chat.sessionDetails.changesPartialDescription") : "",
-        changesView.read().stale ? t("chat.sessionDetails.changesStaleDescription") : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-    };
-    const identity = createMemo(() =>
+    const readIdentity = () =>
       JSON.stringify([
         props.props?.sessionKey,
         props.props?.currentAgentId,
         props.props?.selectedSession?.sessionId,
-      ]),
-    );
-    const outputsDemand = createMemo(() =>
-      props.presented && props.desktop && props.props?.outputs
-        ? props.props.retainOutputs
-        : undefined,
-    );
-    return [
-      <Show when={outputsDemand()} keyed>
-        {(retain) => {
-          onSettled(retain);
-          return null;
-        }}
-      </Show>,
+      ]);
+    const identity = createMemo(readIdentity);
+    createScrollPosition(() => {
+      const owner = processes();
+      return {
+        retain: props.scrollport
+          ? {
+              identity: [identity()],
+              target: props.scrollport,
+              presented: props.presented,
+              ready: isProcessesPresentationReady(owner, gateway?.read().snapshot),
+            }
+          : undefined,
+      };
+    });
+    return (
       <Show when={identity()} keyed>
         {(_identity) => {
           const [pullRequestsOpen, setPullRequestsOpen] = createSignal(true);
@@ -185,16 +157,21 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               ? props.props?.desktopDisclosures?.expanded["pull-requests"]
               : undefined) ?? pullRequestsOpen();
           const active = () => props.presented;
-          const openAllChanges = () => {
-            if (host.isConnected && props.presented) {
-              props.props?.onOpenSessionDiff?.();
-            }
-          };
           const session = () => props.props?.selectedSession;
           const creatorName = () => session()?.createdActor?.label || session()?.createdActor?.id;
           const owner = () => session()?.owner?.actor;
+          const OwnerAttribution = () => (
+            <div class="chat-details__person">
+              <span>{t("chat.sessionDetails.owner")}</span>
+              <span ref={createTextOverflow(() => owner()?.label || owner()?.id || owner()?.type)}>
+                {owner()?.label || owner()?.id || owner()?.type}
+              </span>
+            </div>
+          );
           const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
           const count = () => session()?.participantCount ?? people().length;
+          const partialPeople = () =>
+            session()?.participantCount === undefined || count() > people().length;
           const desktopPeople = createMemo(() => {
             const union = new Map<string, SessionParticipant>();
             const actors = [owner(), session()?.createdActor];
@@ -219,6 +196,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             if (!snapshot) {
               return null;
             }
+            const navigationIdentity = readIdentity();
             const current = () =>
               host.isConnected && props.presented && props.props?.outputs === snapshot;
             return {
@@ -229,8 +207,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 }
               },
               onViewAll: () => {
-                if (current()) {
-                  snapshot.onViewAll();
+                // Native props can advance before the visible Outputs row settles.
+                if (host.isConnected && props.presented && readIdentity() === navigationIdentity) {
+                  props.props?.outputs?.onViewAll();
                 }
               },
               onRetryArtifacts: snapshot.onRetryArtifacts
@@ -315,7 +294,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                         {creatorName() && (
                           <div class="chat-details__creator">
                             <span>{t("chat.sessionDetails.createdBy")}</span>
-                            <span title={creatorName()}>{creatorName()}</span>
+                            <span ref={createTextOverflow(creatorName)} title={creatorName()}>
+                              {creatorName()}
+                            </span>
                           </div>
                         )}
                       </div>
@@ -331,12 +312,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                               </span>
                               <Icon name="chevronDown" />
                             </summary>
-                            {owner() && (
-                              <div class="chat-details__person">
-                                <span>{t("chat.sessionDetails.owner")}</span>
-                                <span>{owner()?.label || owner()?.id || owner()?.type}</span>
-                              </div>
-                            )}
+                            {owner() && <OwnerAttribution />}
                             <For each={people()}>
                               {(person) => (
                                 <div class="chat-details__person">
@@ -348,7 +324,12 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                                       profileAvatarUrl: person.avatarUrl,
                                     }}
                                   />
-                                  <span title={person.label || person.identity.id}>
+                                  <span
+                                    ref={createTextOverflow(
+                                      () => person.label || person.identity.id,
+                                    )}
+                                    title={person.label || person.identity.id}
+                                  >
                                     {person.label || person.identity.id}
                                   </span>
                                 </div>
@@ -364,7 +345,12 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           </details>
                         </div>
                       </Show>
-                      <ChatDetailsEnvironment details={props.props!} presented={active()} />
+                      <ChatDetailsEnvironment
+                        {...props.props?.environment}
+                        details={props.props!}
+                        presented={active()}
+                        work={pullRequests() ?? undefined}
+                      />
                     </>
                   }
                 >
@@ -383,16 +369,19 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             <Show when={desktopPeople().length > 0}>
                               <ChatDetailsPeopleSummary
                                 people={desktopPeople()}
+                                partial={partialPeople()}
                                 expanded={sectionExpanded("people")}
                               />
                             </Show>
                           }
                         >
-                          <ChatDetailsPeople
-                            people={desktopPeople()}
-                            ownerIdentity={owner()?.identity}
-                            personActivity={props.props?.personActivity}
-                          />
+                          <ChatLazyBoundary>
+                            <ChatDetailsPeople
+                              people={desktopPeople()}
+                              ownerIdentity={owner()?.identity}
+                              personActivity={props.props?.personActivity}
+                            />
+                          </ChatLazyBoundary>
                           <Show when={count() > people().length}>
                             <div class="chat-details__muted">
                               {t("chat.sessionDetails.moreParticipants", {
@@ -404,19 +393,19 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           <Show when={creatorName() && !session()?.createdActor?.identity}>
                             <div class="chat-details__creator">
                               <span>{t("chat.sessionDetails.createdBy")}</span>
-                              <span title={creatorName()}>{creatorName()}</span>
+                              <span ref={createTextOverflow(creatorName)} title={creatorName()}>
+                                {creatorName()}
+                              </span>
                             </div>
                           </Show>
                           <Show when={owner() && !owner()?.identity}>
-                            <div class="chat-details__person">
-                              <span>{t("chat.sessionDetails.owner")}</span>
-                              <span>{owner()?.label || owner()?.id || owner()?.type}</span>
-                            </div>
+                            <OwnerAttribution />
                           </Show>
                         </ChatDetailsDesktopSection>
                       </Show>
                       <ChatDetailsEnvironment
                         {...props.props?.environment}
+                        work={pullRequests() ?? undefined}
                         details={props.props!}
                         presented={active()}
                         expanded={sectionExpanded("environment")}
@@ -425,31 +414,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     </>
                   )}
                 </Show>
-                <Show
-                  when={props.desktop}
-                  fallback={<ChatDetailsContext details={props.props!} presented={active()} />}
-                >
-                  <Show when={getContextNoticeViewModel(session())}>
-                    <ChatDetailsDesktopSection
-                      section="context"
-                      title={t("chat.sessionDetails.context")}
-                      expanded={sectionExpanded("context")}
-                      presented={active()}
-                      onExpandedChange={(expanded) => changeSection("context", expanded)}
-                      metadata={
-                        <span class="chat-details-desktop-context-summary">
-                          <ChatDetailsContextSummary details={props.props!} />
-                        </span>
-                      }
-                    >
-                      <ChatDetailsContextContent
-                        desktop
-                        details={props.props!}
-                        presented={active() && sectionExpanded("context")}
-                      />
-                    </ChatDetailsDesktopSection>
-                  </Show>
-                </Show>
                 <Show when={!props.desktop}>
                   <Background details={props.props!} presented={active()} />
                 </Show>
@@ -457,20 +421,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                   {(requests) => (
                     <Show
                       when={
-                        (!props.desktop && Boolean(props.props?.onOpenSessionDiff)) ||
-                        hasChatPullRequests(requests())
+                        requests().pullRequests.length > 0 ||
+                        requests().publication?.result?.status === "published"
                       }
                     >
-                      <div
-                        class={[
-                          "chat-details__group",
-                          "chat-details__changes",
-                          {
-                            "chat-details__changes--summary":
-                              !props.desktop && Boolean(props.props?.onOpenSessionDiff),
-                          },
-                        ]}
-                      >
+                      <div class="chat-details__group chat-details__changes">
                         <Show
                           when={!props.desktop}
                           fallback={
@@ -487,7 +442,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                                 );
                               }}
                             >
-                              <ChatPullRequests {...requests()} />
+                              <ChatPullRequests {...requests()} publishedOnly />
                             </ChatDetailsDesktopSection>
                           }
                         >
@@ -501,75 +456,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             }}
                           >
                             <summary class="chat-details__caption">
-                              {t("chat.sessionDetails.changes")}
+                              {t("sessionHovercard.pullRequests")}
                               <span>{props.props?.pullRequests?.length || null}</span>
                               <Icon name="chevronDown" />
                             </summary>
-                            <ChatPullRequests {...requests()} />
+                            <ChatPullRequests {...requests()} publishedOnly />
                           </details>
                         </Show>
-                        {props.props?.onOpenSessionDiff && !props.desktop && (
-                          <button
-                            type="button"
-                            class="chat-details__all-changes"
-                            aria-label={t("chat.sessionDetails.allChanges")}
-                            aria-description={summaryDescription()}
-                            title={summaryDescription()}
-                            onClick={openAllChanges}
-                          >
-                            <span>{t("chat.sessionDetails.allChanges")}</span>
-                            <span class="chat-details__change-summary" aria-hidden="true">
-                              <Show
-                                when={summary()}
-                                fallback={
-                                  <span class="chat-details__change-status">
-                                    {changesView.read().unavailable
-                                      ? t("chat.sessionDetails.changesUnavailableShort")
-                                      : "—"}
-                                  </span>
-                                }
-                              >
-                                {(value) => (
-                                  <>
-                                    <span class="chat-details__change-files">
-                                      {fileCount(value().fileCount)}
-                                    </span>
-                                    <span
-                                      class={[
-                                        "chat-details__change-lines",
-                                        {
-                                          "chat-details__change-lines--add": value().additions > 0,
-                                        },
-                                      ]}
-                                    >
-                                      +{compactNumber().format(value().additions)}
-                                    </span>
-                                    <span
-                                      class={[
-                                        "chat-details__change-lines",
-                                        {
-                                          "chat-details__change-lines--del": value().deletions > 0,
-                                        },
-                                      ]}
-                                    >
-                                      −{compactNumber().format(value().deletions)}
-                                    </span>
-                                    {value().truncated && (
-                                      <span class="chat-details__change-status">
-                                        {t("chat.sessionDetails.changesPartial")}
-                                      </span>
-                                    )}
-                                    {changesView.read().stale && (
-                                      <span class="chat-details__change-status">
-                                        {t("chat.sessionDetails.changesStale")}
-                                      </span>
-                                    )}
-                                  </>
-                                )}
-                              </Show>
-                            </span>
-                          </button>
-                        )}
                       </div>
                     </Show>
                   )}
@@ -604,7 +497,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 </Show>
                 <Show when={desktopPresentation() && outputs()}>
                   {(data) => (
-                    <Show when={!isChatOutputsEmpty(data())}>
+                    <Show when={hasChatDesktopOutputs(data())}>
                       <ChatDetailsDesktopSection
                         section="outputs"
                         title={desktopPresentation()!.outputsLabel}
@@ -625,7 +518,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           </Show>
                         }
                       >
-                        <ChatOutputsDesktop {...data()} />
+                        <ChatLazyBoundary>
+                          <ChatOutputsDesktop {...data()} />
+                        </ChatLazyBoundary>
                       </ChatDetailsDesktopSection>
                     </Show>
                   )}
@@ -634,19 +529,19 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             </Show>
           );
         }}
-      </Show>,
-    ];
+      </Show>
+    );
   },
   {
     propertyChanged: (host, key) => {
       if (key === "props" || key === "presented" || key === "desktop") {
         syncSessionPanelInputs(host);
-        diffSummaryInputs.get(host)?.();
       }
     },
     properties: {
       props: { default: undefined, attribute: false },
       presented: { default: false, type: Boolean },
+      scrollport: { default: undefined, attribute: false },
       dismissed: { default: false, type: Boolean },
       desktop: { default: false, type: Boolean },
     },
@@ -667,20 +562,17 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
+  const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
   return (
-    <ChatDetailsDesktopBody presented={props.presented}>
+    <ChatDetailsDesktopBody presented={props.presented} onScrollPortRef={setScrollport}>
       <ChatDetailsSession
         props={props.props}
         presented={props.presented}
         dismissed={props.dismissed}
+        scrollport={scrollport()}
         desktop
       />
-      <Show
-        when={
-          props.props?.progressCard ||
-          (props.props?.progressCardInitialLoading && !props.props?.progressCardError)
-        }
-      >
+      <Show when={props.props?.progressCard}>
         <ChatDetailsProgress
           desktop
           props={props.props}
@@ -689,16 +581,10 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
           onHideProgress={props.onHideProgress}
         />
       </Show>
-      <Show when={!props.props?.progressCard && props.props?.progressCardError}>
-        {(error) => (
-          <div class="chat-details__muted" role="status">
-            {t(
-              error() === "access-denied"
-                ? "sessionProgressCard.widgetAccessDenied"
-                : "sessionProgressCard.widgetUnavailable",
-            )}
-          </div>
-        )}
+      <Show when={!props.props?.progressCard && props.props?.progressCardError === "access-denied"}>
+        <div class="chat-details__muted" role="status">
+          {t("sessionProgressCard.widgetAccessDenied")}
+        </div>
       </Show>
     </ChatDetailsDesktopBody>
   );

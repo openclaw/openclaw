@@ -1,8 +1,11 @@
 import type { Question } from "@openclaw/gateway-protocol";
 import {
+  action,
   createMemo,
+  createOptimistic,
   createSignal,
   createStore,
+  Errored,
   For,
   lazy,
   Loading,
@@ -16,13 +19,17 @@ import type {
   QuestionResourceActionResult,
 } from "../../../../../packages/gateway-protocol/src/question-resource.js";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { assertUploadsEnabled } from "../../../lib/uploads.ts";
 import { admitAttachmentFiles, resolveChatAttachmentLimits } from "./chat-attachment-admission.ts";
+
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
 type ResourceProps = {
   question?: Question;
@@ -36,7 +43,7 @@ type ResourceProps = {
 
 type OperationScope = { live: boolean; abort: AbortController | undefined };
 
-const ResourcePreview = lazy(() => import("../../../components/mcp-app-view-registration.ts"), {
+const ResourcePreview = lazy(() => import("../../../components/mcp-app-view.tsx"), {
   export: "McpAppView",
 });
 
@@ -45,9 +52,10 @@ export function ChatQuestionResource(props: ResourceProps) {
   let host!: HTMLElement;
   const context = useOptionalApplication();
   const gateway = context && projectGateway(context.gateway);
-  const [pendingOperation, setPendingOperation] = createSignal<AbortController>();
-  const isBusy = () => Boolean(pendingOperation());
-  const [error, setError] = createSignal("");
+  const [isBusy, setBusy] = createOptimistic(false);
+  const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
+  // Outcome observation must not hold the controls presenting the admitted operation.
+  const outcome = createMemo(() => attempt()?.result.then(() => null), { loadingValue: undefined });
   const [uploaded, setUploaded] = createStore<Array<{ uri: string; name: string }>>([]);
   const [preview, setPreview] = createSignal<{
     view?: { id: string };
@@ -68,7 +76,20 @@ export function ChatQuestionResource(props: ResourceProps) {
     gateway?.read();
     return key();
   });
-  async function operation(action: (isCurrent: () => boolean) => Promise<QuestionResourceAction>) {
+  const presentOperation = action(function* (pending: Promise<void>, signal: AbortSignal) {
+    if (signal.aborted) {
+      return;
+    }
+    const retired = Promise.withResolvers<void>();
+    const stop = listen(signal, "abort", () => retired.resolve(), { once: true });
+    setBusy(true);
+    try {
+      yield Promise.race([pending, retired.promise]);
+    } finally {
+      stop();
+    }
+  });
+  async function operation(prepare: (isCurrent: () => boolean) => Promise<QuestionResourceAction>) {
     const client = context?.gateway.snapshot.client;
     const question = props.question;
     const active = operationScope;
@@ -84,6 +105,7 @@ export function ChatQuestionResource(props: ResourceProps) {
     ) {
       return;
     }
+    const viewId = question.resource.viewId;
     const abort = new AbortController();
     active.abort = abort;
     const scope = gatewayPresentationScope(context.gateway).key;
@@ -95,85 +117,89 @@ export function ChatQuestionResource(props: ResourceProps) {
       operationIdentity === key() &&
       context.gateway.snapshot.client === client &&
       gatewayPresentationScope(context.gateway).key === scope;
-    setPendingOperation(abort);
-    setError("");
-    try {
-      const request = await action(current);
-      if (!current()) {
-        return;
-      }
-      const result = await client.request<QuestionResourceActionResult>(
-        "mcp.app.formResource",
-        {
-          sessionKey: props.sessionKey,
-          agentId: props.agentId,
-          viewId: question.resource.viewId,
-          requestId: props.requestId,
-          questionId: question.questionId,
-          ...request,
-        },
-        { signal: abort.signal },
-      );
-      if (!current()) {
-        return;
-      }
-      if ("resources" in result) {
-        if (
-          !Array.isArray(result.resources) ||
-          result.resources.length > 64 ||
-          !result.resources.every(
-            (resource) =>
-              typeof resource.uri === "string" &&
-              resource.uri.length <= 2048 &&
-              typeof resource.name === "string",
-          )
-        ) {
-          throw new Error("Invalid resource upload result");
+    const pending = (async () => {
+      try {
+        const request = await prepare(current);
+        if (!current()) {
+          return;
         }
-        const allUploaded = new Map(
-          [...uploaded, ...result.resources].map((resource) => [resource.uri, resource]),
+        const result = await client.request<QuestionResourceActionResult>(
+          "mcp.app.formResource",
+          {
+            sessionKey: props.sessionKey,
+            agentId: props.agentId,
+            viewId,
+            requestId: props.requestId,
+            questionId: question.questionId,
+            ...request,
+          },
+          { signal: abort.signal },
         );
-        if (allUploaded.size > 64 || (!question.multiSelect && result.resources.length !== 1)) {
-          throw new Error("Invalid resource upload count");
+        if (!current()) {
+          return;
         }
-        setUploaded(reconcile([...allUploaded.values()], "uri"));
-        const values = question.multiSelect ? new Set(props.selected) : new Set<string>();
-        for (const resource of result.resources) {
-          values.add(resource.uri);
-        }
-        dispatchSelection([...values]);
-      } else if ("preview" in result) {
-        if (result.preview.viewId) {
-          // Keep the previous preview and operation busy until its renderer is ready.
-          await ResourcePreview.preload();
-          if (!current()) {
-            return;
+        if ("resources" in result) {
+          if (
+            !Array.isArray(result.resources) ||
+            result.resources.length > 64 ||
+            !result.resources.every(
+              (resource) =>
+                typeof resource.uri === "string" &&
+                resource.uri.length <= 2048 &&
+                typeof resource.name === "string",
+            )
+          ) {
+            throw new Error("Invalid resource upload result");
           }
-          setPreview({ view: { id: result.preview.viewId } });
-        } else {
-          const text = result.preview.contents?.map((entry) => entry.text ?? "").join("\n") ?? "";
-          const images = result.preview.contents
-            ?.flatMap((entry) => {
-              const url =
-                entry.blob && entry.mimeType
-                  ? `data:${entry.mimeType};base64,${entry.blob}`
-                  : undefined;
-              return isQuestionThumbnail(url) ? [url] : [];
-            })
-            .slice(0, 4);
-          setPreview({ text: text.slice(0, 65536), images });
+          const allUploaded = new Map(
+            [...uploaded, ...result.resources].map((resource) => [resource.uri, resource]),
+          );
+          if (allUploaded.size > 64 || (!question.multiSelect && result.resources.length !== 1)) {
+            throw new Error("Invalid resource upload count");
+          }
+          setUploaded(reconcile([...allUploaded.values()], "uri"));
+          const values = question.multiSelect ? new Set(props.selected) : new Set<string>();
+          for (const resource of result.resources) {
+            values.add(resource.uri);
+          }
+          dispatchSelection([...values]);
+        } else if ("preview" in result) {
+          if (result.preview.viewId) {
+            // Keep the previous preview and operation busy until its renderer is ready.
+            await ResourcePreview.preload();
+            if (!current()) {
+              return;
+            }
+            setPreview({ view: { id: result.preview.viewId } });
+          } else {
+            const text = result.preview.contents?.map((entry) => entry.text ?? "").join("\n") ?? "";
+            const images = result.preview.contents
+              ?.flatMap((entry) => {
+                const url =
+                  entry.blob && entry.mimeType
+                    ? `data:${entry.mimeType};base64,${entry.blob}`
+                    : undefined;
+                return isQuestionThumbnail(url) ? [url] : [];
+              })
+              .slice(0, 4);
+            setPreview({ text: text.slice(0, 65536), images });
+          }
+        }
+      } catch (failure) {
+        if (current()) {
+          throw failure;
+        }
+      } finally {
+        if (current()) {
+          active.abort = undefined;
         }
       }
-    } catch (failure) {
-      if (current()) {
-        setError(formatUiError(failure));
-      }
-    } finally {
-      if (current()) {
-        active.abort = undefined;
-        setPendingOperation(undefined);
-      }
-    }
+    })();
+    // The scoped boundary may retire before it observes this attempt's rejection.
+    void pending.catch(() => {});
+    setAttempt({ result: pending });
+    await Promise.resolve();
+    await presentOperation(pending, abort.signal).catch(() => {});
   }
 
   async function upload(input: HTMLInputElement) {
@@ -229,8 +255,7 @@ export function ChatQuestionResource(props: ResourceProps) {
                 onSettled(() => {
                   const next: OperationScope = { live: true, abort: undefined };
                   operationScope = next;
-                  setPendingOperation(undefined);
-                  setError("");
+                  setAttempt(undefined);
                   setPreview(null);
                   return () => {
                     next.live = false;
@@ -254,7 +279,7 @@ export function ChatQuestionResource(props: ResourceProps) {
                     <button
                       class="btn btn--sm"
                       type="button"
-                      disabled={props.disabled || isBusy()}
+                      disabled={isBusy() || props.disabled}
                       onClick={() =>
                         void operation(async () => ({ action: "preview", optionIndex: index() }))
                       }
@@ -277,7 +302,7 @@ export function ChatQuestionResource(props: ResourceProps) {
                 }
                 accept={props.question.resource.userOptions.accept?.join(",")}
                 webkitdirectory={props.question.resource.userOptions.kind === "directory"}
-                disabled={props.disabled || isBusy()}
+                disabled={isBusy() || props.disabled}
                 onChange={(event) => void upload(event.currentTarget)}
               />
             </label>
@@ -289,7 +314,7 @@ export function ChatQuestionResource(props: ResourceProps) {
                 <button
                   class="btn btn--sm"
                   type="button"
-                  disabled={props.disabled || isBusy()}
+                  disabled={isBusy() || props.disabled}
                   onClick={() =>
                     dispatchSelection([...props.selected].filter((value) => value !== entry.uri))
                   }
@@ -300,7 +325,11 @@ export function ChatQuestionResource(props: ResourceProps) {
             )}
           </For>
           {isBusy() && <div role="status">{t("common.loading")}</div>}
-          {error() && <div role="alert">{error()}</div>}
+          <Show when={!isBusy()}>
+            <Errored fallback={(error) => <div role="alert">{formatUiError(error())}</div>}>
+              {outcome()}
+            </Errored>
+          </Show>
           <Show
             when={preview()?.view}
             keyed

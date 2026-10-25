@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { clearAuthProfileMigrationDiagnostics } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -15,6 +13,8 @@ import {
 } from "../commands/models/auth.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cleanupPluginLoaderFixturesForTest } from "../plugins/loader.test-fixtures.js";
+import { updatePluginManifest, writeWorkspacePlugin } from "../plugins/loader.test-harness.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import {
@@ -39,20 +39,11 @@ function oauthCredential(accountId: string, generation: string): AuthProfileCred
   };
 }
 
-async function writeIdentityProvider(workspaceDir: string, credential: AuthProfileCredential) {
-  const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", providerId);
-  await fs.mkdir(pluginDir, { recursive: true, mode: 0o755 });
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: providerId,
-      providers: [providerId],
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "index.cjs"),
-    `module.exports = {
+function writeIdentityProvider(workspaceDir: string, credential: AuthProfileCredential) {
+  const { plugin } = writeWorkspacePlugin({
+    workspaceDir,
+    id: providerId,
+    body: `module.exports = {
       id: ${JSON.stringify(providerId)},
       register(api) {
         api.registerProvider({
@@ -77,9 +68,11 @@ async function writeIdentityProvider(workspaceDir: string, credential: AuthProfi
         });
       },
     };`,
-  );
+  });
+  updatePluginManifest(plugin, { providers: [providerId] });
 }
 
+afterAll(cleanupPluginLoaderFixturesForTest);
 let cleanupState: OpenClawTestState | undefined;
 afterEach(async () => {
   getPluginLoaderCacheState().clear();
@@ -110,7 +103,7 @@ async function proofFixture(accountId: string, generation = "new", extraProfiles
   };
   getPluginLoaderCacheState().clear();
   resetPluginRuntimeStateForTest();
-  await writeIdentityProvider(state.workspaceDir, oauthCredential(accountId, generation));
+  writeIdentityProvider(state.workspaceDir, oauthCredential(accountId, generation));
   await state.writeConfig(config);
   seedProfiles(state, { ...extraProfiles, [pinnedProfileId]: oauthCredential("account-a", "old") });
   const runLogin = (

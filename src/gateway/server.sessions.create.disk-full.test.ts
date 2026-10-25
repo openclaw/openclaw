@@ -13,6 +13,7 @@ import {
   chatSendOwner,
   setupSessionCreateHandlerTestHarness,
 } from "./server.sessions.create.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const fault = vi.hoisted(() => ({
@@ -100,13 +101,9 @@ test.each(["transcript", "admission"] as const)(
     await initializeSessionReadContext(context);
     const client: GatewayClient = {
       connId: "disk-full-browser",
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.read", "operator.write", "operator.admin"],
-        client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
-      },
+      connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"], {
+        platform: "web",
+      }),
     };
     const key = "agent:main:dashboard:disk-full";
     Atomics.store(diskState, 1, 0);

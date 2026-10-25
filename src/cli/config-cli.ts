@@ -32,6 +32,9 @@ import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
+const CONFIG_ALLOW_EXEC_DESCRIPTION =
+  "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)";
+
 const CONFIG_SET_DESCRIPTION = [
   "Set config values by path (value mode, ref/provider builder mode, or batch JSON mode).",
   "Examples:",
@@ -269,130 +272,6 @@ export async function runConfigUnset(opts: {
   });
 }
 
-async function runConfigFile(opts: { json?: boolean; runtime?: RuntimeEnv }) {
-  const runtime = opts.runtime ?? defaultRuntime;
-  try {
-    const path = resolveConfigPath();
-    if (opts.json) {
-      writeRuntimeJson(runtime, { path });
-      return;
-    }
-    writeRuntimeStdout(runtime, `${path}\n`);
-  } catch (err) {
-    runtime.error(danger(formatErrorMessage(err)));
-    exitCliAfterOutput(runtime, 1);
-  }
-}
-
-async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
-  const runtime = opts.runtime ?? defaultRuntime;
-  try {
-    const { readBestEffortRuntimeConfigSchema } = await import("../config/runtime-schema.js");
-    const schema = (await readBestEffortRuntimeConfigSchema()).schema as {
-      properties?: Record<string, unknown>;
-    };
-    writeRuntimeJson(runtime, {
-      ...schema,
-      properties: { $schema: { type: "string" }, ...schema.properties },
-    });
-  } catch (err) {
-    runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
-    exitCliAfterOutput(runtime, 1);
-  }
-}
-
-async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
-  const runtime = opts.runtime ?? defaultRuntime;
-  let outputPath = CONFIG_PATH ?? "openclaw.json";
-  try {
-    const { readConfigSnapshotForEngineSelection } =
-      await import("../commands/config-preflight-snapshot.js");
-    const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
-    const { finishConfigValidationForCli } = await import("./config-cli-validation.js");
-    const { formatInvalidConfigRepairHint } = await import("./config-recovery-hints.js");
-    const selected = await readConfigSnapshotForEngineSelection();
-    const snapshot =
-      isConfigReadFailure(selected) ||
-      selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
-        ? selected
-        : await finishConfigValidationForCli(
-            await readConfigFileSnapshotWithPluginMetadata({
-              observe: false,
-              prepareValidation: "strict",
-              completePluginMetadata: false,
-            }),
-          );
-    outputPath = snapshot.path;
-    const shortPath = shortenHomePath(outputPath);
-    if (!snapshot.exists) {
-      if (opts.json) {
-        writeRuntimeJson(
-          runtime,
-          { ...formatCliJsonFailure("file not found"), valid: false, path: outputPath },
-          0,
-        );
-      } else {
-        runtime.error(danger(`Config file not found: ${shortPath}`));
-        runtime.error(
-          `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
-        );
-      }
-      exitCliAfterOutput(runtime, 1);
-    }
-    if (!snapshot.valid) {
-      const issues = normalizeConfigIssues(snapshot.issues);
-      if (opts.json) {
-        writeRuntimeJson(runtime, {
-          ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
-          repairHint: formatInvalidConfigRepairHint(snapshot, "to repair, then retry."),
-          valid: false,
-          path: outputPath,
-          issues,
-        });
-      } else {
-        runtime.error(`Config needs correction: ${shortPath}`);
-        for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
-          runtime.error(`  ${line}`);
-        }
-        runtime.error("");
-        runtime.error(
-          formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
-        );
-        runtime.error(
-          `Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values, then rerun ${formatCliCommand("openclaw config validate")}.`,
-        );
-      }
-      exitCliAfterOutput(runtime, 1);
-    }
-    const warnings = normalizeConfigIssues(snapshot.warnings);
-    if (opts.json) {
-      writeRuntimeJson(runtime, { valid: true, path: outputPath, warnings }, 0);
-    } else {
-      runtime.log(success(`Config valid: ${shortPath}`));
-      if (warnings.length > 0) {
-        runtime.log(warn(`${warnings.length} warning(s):`));
-        for (const line of formatConfigIssueLines(warnings, warn("!"), { normalizeRoot: true })) {
-          runtime.log(`  ${line}`);
-        }
-      }
-    }
-  } catch (err) {
-    if (err instanceof ExitError) {
-      throw err;
-    }
-    if (opts.json) {
-      writeRuntimeJson(
-        runtime,
-        { ...formatCliJsonFailure(err), valid: false, path: outputPath },
-        0,
-      );
-    } else {
-      runtime.error(danger(`Config validation error: ${formatErrorMessage(err)}`));
-    }
-    exitCliAfterOutput(runtime, 1);
-  }
-}
-
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
@@ -437,11 +316,7 @@ export function registerConfigCli(program: Command) {
       "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)",
       false,
     )
-    .option(
-      "--allow-exec",
-      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
-      false,
-    )
+    .option("--allow-exec", CONFIG_ALLOW_EXEC_DESCRIPTION, false)
     .option("--merge", "Merge object/map values instead of replacing the target path", false)
     .option(
       "--replace",
@@ -511,11 +386,7 @@ export function registerConfigCli(program: Command) {
       "Validate changes without writing openclaw.json (checks schema and SecretRef resolvability; exec SecretRefs are skipped unless --allow-exec is set)",
       false,
     )
-    .option(
-      "--allow-exec",
-      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
-      false,
-    )
+    .option("--allow-exec", CONFIG_ALLOW_EXEC_DESCRIPTION, false)
     .option("--json", "Output dry-run result as JSON", false)
     .option(
       "--replace-path <path>",
@@ -549,17 +420,136 @@ export function registerConfigCli(program: Command) {
     .command("file")
     .description("Print the active config file path")
     .option("--json", "Output JSON", false)
-    .action((opts: { json?: boolean }) => runConfigFile(opts));
+    .action(async (opts: { json?: boolean; runtime?: RuntimeEnv }) => {
+      const runtime = opts.runtime ?? defaultRuntime;
+      try {
+        const path = resolveConfigPath();
+        if (opts.json) {
+          writeRuntimeJson(runtime, { path });
+          return;
+        }
+        writeRuntimeStdout(runtime, `${path}\n`);
+      } catch (err) {
+        runtime.error(danger(formatErrorMessage(err)));
+        exitCliAfterOutput(runtime, 1);
+      }
+    });
   cmd
     .command("schema")
     .description("Print the JSON schema for openclaw.json")
     .option("--json", "Output JSON", false)
-    .action(runConfigSchema);
+    .action(async (opts: { runtime?: RuntimeEnv } = {}) => {
+      const runtime = opts.runtime ?? defaultRuntime;
+      try {
+        const { readBestEffortRuntimeConfigSchema } = await import("../config/runtime-schema.js");
+        const schema = (await readBestEffortRuntimeConfigSchema()).schema as {
+          properties?: Record<string, unknown>;
+        };
+        writeRuntimeJson(runtime, {
+          ...schema,
+          properties: { $schema: { type: "string" }, ...schema.properties },
+        });
+      } catch (err) {
+        runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
+        exitCliAfterOutput(runtime, 1);
+      }
+    });
   cmd
     .command("validate")
     .description("Validate the current config against the schema without starting the gateway")
     .option("--json", "Output validation result as JSON", false)
     .action(async (opts) => {
-      await runConfigValidate({ json: Boolean(opts.json) });
+      const json = Boolean(opts.json);
+      const runtime = defaultRuntime;
+      let outputPath = CONFIG_PATH ?? "openclaw.json";
+      try {
+        const { readConfigSnapshotForEngineSelection } =
+          await import("../commands/config-preflight-snapshot.js");
+        const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
+        const { finishConfigValidationForCli } = await import("./config-cli-validation.js");
+        const { formatInvalidConfigRepairHint } = await import("./config-recovery-hints.js");
+        const selected = await readConfigSnapshotForEngineSelection();
+        const snapshot =
+          isConfigReadFailure(selected) ||
+          selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+            ? selected
+            : await finishConfigValidationForCli(
+                await readConfigFileSnapshotWithPluginMetadata({
+                  observe: false,
+                  prepareValidation: "strict",
+                  completePluginMetadata: false,
+                }),
+              );
+        outputPath = snapshot.path;
+        const shortPath = shortenHomePath(outputPath);
+        if (!snapshot.exists) {
+          if (json) {
+            writeRuntimeJson(
+              runtime,
+              { ...formatCliJsonFailure("file not found"), valid: false, path: outputPath },
+              0,
+            );
+          } else {
+            runtime.error(danger(`Config file not found: ${shortPath}`));
+            runtime.error(
+              `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
+            );
+          }
+          exitCliAfterOutput(runtime, 1);
+        }
+        if (!snapshot.valid) {
+          const issues = normalizeConfigIssues(snapshot.issues);
+          if (json) {
+            writeRuntimeJson(runtime, {
+              ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
+              repairHint: formatInvalidConfigRepairHint(snapshot, "to repair, then retry."),
+              valid: false,
+              path: outputPath,
+              issues,
+            });
+          } else {
+            runtime.error(`Config needs correction: ${shortPath}`);
+            for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
+              runtime.error(`  ${line}`);
+            }
+            runtime.error("");
+            runtime.error(
+              formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
+            );
+            runtime.error(
+              `Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values, then rerun ${formatCliCommand("openclaw config validate")}.`,
+            );
+          }
+          exitCliAfterOutput(runtime, 1);
+        }
+        const warnings = normalizeConfigIssues(snapshot.warnings);
+        if (json) {
+          writeRuntimeJson(runtime, { valid: true, path: outputPath, warnings }, 0);
+        } else {
+          runtime.log(success(`Config valid: ${shortPath}`));
+          if (warnings.length > 0) {
+            runtime.log(warn(`${warnings.length} warning(s):`));
+            for (const line of formatConfigIssueLines(warnings, warn("!"), {
+              normalizeRoot: true,
+            })) {
+              runtime.log(`  ${line}`);
+            }
+          }
+        }
+      } catch (err) {
+        if (err instanceof ExitError) {
+          throw err;
+        }
+        if (json) {
+          writeRuntimeJson(
+            runtime,
+            { ...formatCliJsonFailure(err), valid: false, path: outputPath },
+            0,
+          );
+        } else {
+          runtime.error(danger(`Config validation error: ${formatErrorMessage(err)}`));
+        }
+        exitCliAfterOutput(runtime, 1);
+      }
     });
 }

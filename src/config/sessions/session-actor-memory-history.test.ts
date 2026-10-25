@@ -80,6 +80,24 @@ async function fixture(events: unknown[], entry: Partial<InternalSessionEntry> =
 }
 
 describe("memory actor history", () => {
+  it("selects retained message owners across memory branches and keeps an empty selection empty", async () => {
+    const { storage } = await fixture([
+      message("root", null, "user", "Question"),
+      message("old", "root", "assistant", "Off-path attachment"),
+      message("unrelated", "root", "assistant", "Unrelated content"),
+      message("current", "unrelated", "assistant", "Current attachment"),
+    ]);
+    for (const selected of [["old", "current"], []]) {
+      const page = await readMemory(storage, "session.history.source", {
+        options: { mode: "page", includeOffPathMessages: true, messageIds: selected },
+      });
+      expect(
+        messageIds(page.messages).toSorted((a, b) => String(a).localeCompare(String(b))),
+      ).toEqual(selected.toSorted((a, b) => a.localeCompare(b)));
+      expect(page.nextCursor).toBeUndefined();
+    }
+  });
+
   it("keeps raw progress distinct from the active branch and publishes phase writes before reads", async () => {
     const { actor, storage } = await fixture([
       message("user", null, "user", "Question"),

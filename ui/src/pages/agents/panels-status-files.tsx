@@ -1,26 +1,21 @@
-import { createMemo, For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelsStatusSnapshot } from "../../api/types.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
-import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
   SettingsSection,
   SettingsStatus,
-  SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { AgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../../lib/channels/index.ts";
-import type { CronState } from "../../lib/cron/types.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
-  formatCronPayload,
-  formatCronSchedule,
-  formatCronState,
-  formatNextRun,
-} from "../../lib/presenter.ts";
+  resolveChannelExtras as resolveChannelExtrasFromConfig,
+  type ChannelRead,
+} from "../../lib/channels/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
@@ -81,6 +76,36 @@ function summarizeChannelAccounts(accounts: ChannelAccountSnapshot[]) {
   };
 }
 
+function ChannelReadBoundary(props: {
+  read: ChannelRead | null;
+  retainedError: string | null;
+  children: (pending: boolean, error: string | null) => JSX.Element;
+}) {
+  return (
+    <Show when={props.read} keyed fallback={props.children(false, props.retainedError)}>
+      {(receipt) => {
+        const complete = createMemo(async () => {
+          const error = await receipt.completion;
+          if (error) {
+            throw new Error(error);
+          }
+          return null;
+        });
+        return (
+          <Errored fallback={(error) => props.children(false, formatUiError(error()))}>
+            <Loading fallback={props.children(true, props.retainedError)}>
+              {props.children(
+                isPending(() => complete()),
+                complete(),
+              )}
+            </Loading>
+          </Errored>
+        );
+      }}
+    </Show>
+  );
+}
+
 export function AgentChannels(
   params: AgentsPageView["channels"] & {
     context: AgentContext;
@@ -102,9 +127,12 @@ export function AgentChannels(
         t("agents.context.configurationSubtitle"),
         params.onSelectPanel,
       )}
-      {params.readState().channelsError ? (
-        <div class="callout danger">{params.readState().channelsError}</div>
-      ) : undefined}
+      <ChannelReadBoundary
+        read={params.readState().channelsRead}
+        retainedError={params.readState().channelsError}
+      >
+        {(_pending, error) => (error ? <div class="callout danger">{error}</div> : undefined)}
+      </ChannelReadBoundary>
       {!params.readState().channelsSnapshot ? (
         <div class="callout info">{t("agents.channels.loadHint")}</div>
       ) : undefined}
@@ -117,50 +145,62 @@ export function AgentChannels(
           </>
         }
         actions={
-          <AgentPanelAction
-            label={
-              params.readState().channelsLoading ? t("common.refreshing") : t("common.refresh")
-            }
-            disabled={params.readState().channelsLoading}
-            onClick={params.onRefresh}
-          />
+          <ChannelReadBoundary
+            read={params.readState().channelsRead}
+            retainedError={params.readState().channelsError}
+          >
+            {(pending) => (
+              <AgentPanelAction
+                label={pending ? t("common.refreshing") : t("common.refresh")}
+                disabled={pending}
+                onClick={params.onRefresh}
+              />
+            )}
+          </ChannelReadBoundary>
         }
       >
-        {entries().length === 0 ? (
-          <SettingsEmpty message={t("agents.channels.empty")} />
-        ) : (
-          entries().map((entry) => {
-            const summary = summarizeChannelAccounts(entry.accounts);
-            const status = summary.total
-              ? t("agents.channels.connectedCount", {
-                  connected: String(summary.connected),
-                  total: String(summary.total),
-                })
-              : t("agents.channels.noAccounts");
-            const configLabel = summary.configured
-              ? t("agents.channels.configuredCount", { count: String(summary.configured) })
-              : t("agents.channels.notConfigured");
-            const enabled = summary.total
-              ? t("agents.channels.enabledCount", { count: String(summary.enabled) })
-              : t("common.disabled");
-            const extras = resolveChannelExtrasFromConfig({
-              configForm: params.configForm,
-              channelId: entry.id,
-              fields: CHANNEL_EXTRA_FIELDS,
-            });
-            const metaParts = [
-              entry.id,
-              configLabel,
-              enabled,
-              ...extras.map((extra) => `${extra.label}: ${extra.value}`),
+        <For
+          each={entries()}
+          keyed={(entry) => entry.id}
+          fallback={<SettingsEmpty message={t("agents.channels.empty")} />}
+        >
+          {(entry) => {
+            const summary = createMemo(() => summarizeChannelAccounts(entry().accounts));
+            const status = () =>
+              summary().total
+                ? t("agents.channels.connectedCount", {
+                    connected: String(summary().connected),
+                    total: String(summary().total),
+                  })
+                : t("agents.channels.noAccounts");
+            const configLabel = () =>
+              summary().configured
+                ? t("agents.channels.configuredCount", { count: String(summary().configured) })
+                : t("agents.channels.notConfigured");
+            const enabled = () =>
+              summary().total
+                ? t("agents.channels.enabledCount", { count: String(summary().enabled) })
+                : t("common.disabled");
+            const extras = createMemo(() =>
+              resolveChannelExtrasFromConfig({
+                configForm: params.configForm,
+                channelId: entry().id,
+                fields: CHANNEL_EXTRA_FIELDS,
+              }),
+            );
+            const metaParts = () => [
+              entry().id,
+              configLabel(),
+              enabled(),
+              ...extras().map((extra) => `${extra.label}: ${extra.value}`),
             ];
             return (
               <SettingsRow
-                title={entry.label}
-                description={metaParts.join(" · ")}
+                title={entry().label}
+                description={metaParts().join(" · ")}
                 control={
                   <>
-                    {summary.configured === 0 ? (
+                    {summary().configured === 0 ? (
                       <a
                         class="settings-row__value"
                         href="https://docs.openclaw.ai/channels"
@@ -171,142 +211,15 @@ export function AgentChannels(
                       </a>
                     ) : undefined}
                     <SettingsStatus
-                      kind={summary.connected > 0 ? "ok" : summary.total ? "warn" : "muted"}
-                      label={status}
+                      kind={summary().connected > 0 ? "ok" : summary().total ? "warn" : "muted"}
+                      label={status()}
                     />
                   </>
                 }
               />
             );
-          })
-        )}
-      </SettingsSection>
-    </>
-  );
-}
-
-export function AgentCron(
-  params: AgentsPageView["cron"] & {
-    basePath: string;
-    context: AgentContext;
-    readState: () => CronState;
-    canRunNow: boolean;
-    onSelectPanel: (panel: AgentsPanel) => void;
-  },
-) {
-  return (
-    <>
-      {renderAgentContextSection(
-        params.context,
-        t("agents.context.schedulingSubtitle"),
-        params.onSelectPanel,
-      )}
-      {params.readState().cronError ? (
-        <div class="callout danger">{params.readState().cronError}</div>
-      ) : undefined}
-      <SettingsSection
-        title={t("agents.cronPanel.schedulerTitle")}
-        description={t("agents.cronPanel.schedulerSubtitle")}
-        actions={
-          <AgentPanelAction
-            label={params.readState().cronLoading ? t("common.refreshing") : t("common.refresh")}
-            disabled={params.readState().cronLoading}
-            onClick={params.onRefresh}
-          />
-        }
-      >
-        <For
-          each={
-            [
-              [
-                t("common.enabled"),
-                params.readState().cronStatus
-                  ? params.readState().cronStatus?.enabled
-                    ? t("common.yes")
-                    : t("common.no")
-                  : t("common.na"),
-              ],
-              [t("agents.cronPanel.jobs"), params.readState().cronScopedTotal ?? t("common.na")],
-              [
-                t("agents.cronPanel.nextWake"),
-                formatNextRun(
-                  params.readState().cronStatus?.enabled === false
-                    ? null
-                    : params.readState().cronScopedNextWakeAtMs,
-                ),
-              ],
-            ] as const
-          }
-        >
-          {([title, value]) => (
-            <SettingsRow title={title} control={<SettingsValue value={value} />} />
-          )}
+          }}
         </For>
-      </SettingsSection>
-      <SettingsSection
-        title={t("agents.cronPanel.agentJobsTitle")}
-        description={t("agents.cronPanel.agentJobsSubtitle")}
-      >
-        <Show when={params.readState().cronJobsError}>
-          <div class="callout danger" role="alert">
-            {params.readState().cronJobsError}
-          </div>
-        </Show>
-        {params.readState().cronJobs.length === 0 ? (
-          <SettingsEmpty message={t("agents.cronPanel.noJobs")} />
-        ) : (
-          <>
-            <For each={params.readState().cronJobs} keyed={(job) => job.id}>
-              {(job) => {
-                const description = createMemo(() =>
-                  [
-                    job().description,
-                    formatCronSchedule(job()),
-                    job().sessionTarget,
-                    formatCronState(job()),
-                    formatCronPayload(job()),
-                  ]
-                    .filter(Boolean)
-                    .join(" · "),
-                );
-                return (
-                  <SettingsRow
-                    title={job().name}
-                    description={description()}
-                    control={
-                      <>
-                        <SettingsStatus
-                          kind={job().enabled ? "ok" : "warn"}
-                          label={job().enabled ? t("common.enabled") : t("common.disabled")}
-                        />
-                        <a
-                          class="btn btn--sm"
-                          href={`${pathForRoute("cron", params.basePath)}?job=${encodeURIComponent(job().id)}`}
-                          aria-label={t("agents.cronPanel.editJob", { name: job().name })}
-                        >
-                          {t("agents.cronPanel.edit")}
-                        </a>
-                        <AgentPanelAction
-                          label={t("agents.cronPanel.runNow")}
-                          disabled={!params.canRunNow}
-                          onClick={() => params.onRunNow(job().id)}
-                        />
-                      </>
-                    }
-                  />
-                );
-              }}
-            </For>
-            <CronJobsPagination
-              jobsShown={params.readState().cronJobs.length}
-              jobsTotal={params.readState().cronJobsTotal}
-              hasMore={params.readState().cronJobsHasMore}
-              loading={params.readState().cronLoading}
-              loadingMore={params.readState().cronJobsLoadingMore}
-              onLoadMore={params.onLoadMore}
-            />
-          </>
-        )}
       </SettingsSection>
     </>
   );

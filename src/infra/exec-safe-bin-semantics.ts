@@ -1,11 +1,6 @@
 // Applies semantic validators for safe-bin command arguments.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-type SafeBinSemanticValidationParams = {
-  binName?: string;
-  positional: readonly string[];
-};
-
 const UNSAFE_SAFE_BIN_WARNINGS = {
   awk: "awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
   jq: "jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
@@ -39,8 +34,8 @@ function getDeniedSafeBinWarning(binName?: string): string | undefined {
 }
 
 /** Applies command-specific semantic gates for executables that are risky as broad safeBins. */
-export function validateSafeBinSemantics(params: SafeBinSemanticValidationParams): boolean {
-  return getDeniedSafeBinWarning(params.binName) === undefined;
+export function validateSafeBinSemantics(binName?: string): boolean {
+  return getDeniedSafeBinWarning(binName) === undefined;
 }
 
 /** Lists configured safeBins that need operator warnings because their semantics are broad. */

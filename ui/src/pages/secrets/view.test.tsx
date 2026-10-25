@@ -37,7 +37,17 @@ function mount(
   state.store.entries = entries;
   Object.assign(state, overrides);
   const view = mountSolid(() => (
-    <SecretsStore state={state} bulkSecretCount={0} bulkEntryCount={0} bulkInvalidNames={[]} />
+    <SecretsStore
+      state={state}
+      scope={state.store}
+      read={() => state.store.entries}
+      busy={state.store.busy}
+      onSubmit={(bulk) => void (bulk ? state.submitBulk() : state.submitDraft())}
+      onRemove={(entry) => void state.removeEntry(entry)}
+      bulkSecretCount={0}
+      bulkEntryCount={0}
+      bulkInvalidNames={[]}
+    />
   ));
   mounts.push(view);
   return view.container;

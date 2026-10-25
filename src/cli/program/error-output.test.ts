@@ -236,15 +236,26 @@ describe("formatCliParseErrorOutput", () => {
     expect(error.humanOutput).toContain("Did you mean this?\n  openclaw sessions list\n");
   });
 
-  it("explains unknown subcommands within the active command tree", () => {
-    const output = formatCliParseErrorOutput("error: unknown command 'list'\n", {
-      argv: ["node", "openclaw", "webhooks", "list"],
-      commandPath: ["webhooks"],
-    });
-
-    expect(output).toBe(
+  it.each([
+    [
+      "unknown command 'list'",
+      "webhooks list",
+      ["webhooks"],
       'OpenClaw webhooks has no command "list".\nTry: openclaw webhooks --help\nDocs: https://docs.openclaw.ai/cli\n',
-    );
+    ],
+    [
+      "unknown option '--wat'",
+      "channels status --wat",
+      undefined,
+      'OpenClaw does not recognize option "--wat".\nTry: openclaw channels status --help\n',
+    ],
+  ] as const)("renders %s within the active command tree", (raw, args, commandPath, expected) => {
+    expect(
+      formatCliParseErrorOutput(`error: ${raw}\n`, {
+        argv: ["node", "openclaw", ...args.split(" ")],
+        commandPath: commandPath ? [...commandPath] : undefined,
+      }),
+    ).toBe(expected);
   });
 
   it.each([false, true])("reports an unmatched lazy subcommand with help=%s", async (help) => {
@@ -254,8 +265,7 @@ describe("formatCliParseErrorOutput", () => {
       ...(help ? ["--help"] : []),
     ]);
 
-    expect(error.code).toBe("commander.unknownCommand");
-    expect(error.exitCode).toBe(1);
+    expect(error).toMatchObject({ code: "commander.unknownCommand", exitCode: 1 });
     expect(stdout).toBe("");
     expect(output).toBe(
       'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli\n',
@@ -274,29 +284,17 @@ describe("formatCliParseErrorOutput", () => {
     );
   });
 
-  it("suggests explicit aliases for common adjacent terminology", () => {
-    const output = formatCliParseErrorOutput("error: unknown command 'upgrade'\n", {
-      argv: ["node", "openclaw", "upgrade"],
-    });
-
-    expect(output).toContain("Did you mean this?\n  openclaw update\n");
-  });
-
-  it("preserves active profile context in command suggestions", () => {
-    vi.stubEnv("OPENCLAW_PROFILE", "work");
-    const output = formatCliParseErrorOutput("error: unknown command 'doctr'\n", {
-      argv: ["node", "openclaw", "doctr"],
-    });
-    expect(output).toContain("Did you mean this?\n  openclaw --profile work doctor\n");
-  });
-
-  it("points unknown options at the active command help", () => {
-    const output = formatCliParseErrorOutput("error: unknown option '--wat'\n", {
-      argv: ["node", "openclaw", "channels", "status", "--wat"],
-    });
-
-    expect(output).toBe(
-      'OpenClaw does not recognize option "--wat".\nTry: openclaw channels status --help\n',
-    );
+  it.each([
+    ["upgrade", undefined, "openclaw update"],
+    ["doctr", "work", "openclaw --profile work doctor"],
+  ])("suggests commands for %s with profile=%s", (input, profile, command) => {
+    if (profile) {
+      vi.stubEnv("OPENCLAW_PROFILE", profile);
+    }
+    expect(
+      formatCliParseErrorOutput(`error: unknown command '${input}'\n`, {
+        argv: ["node", "openclaw", input],
+      }),
+    ).toContain(`Did you mean this?\n  ${command}\n`);
   });
 });

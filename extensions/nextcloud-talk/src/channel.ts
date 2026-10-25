@@ -1,4 +1,5 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   adaptScopedAccountAccessor,
@@ -20,11 +21,11 @@ import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   createAllowlistProviderRouteAllowlistWarningCollector,
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
@@ -44,7 +45,6 @@ import {
   resolveNextcloudTalkAccount,
 } from "./accounts.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
-import { DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import { NextcloudTalkChannelConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
@@ -83,34 +83,6 @@ const nextcloudTalkApprovalAuth = createChannelApprovalAuth({
   normalizeApprover: (value) => normalizeNextcloudTalkAllowEntry(String(value)) || undefined,
 }).approvalAuth;
 
-function resolveNextcloudTalkOutboundSessionRoute(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  accountId?: string | null;
-  target: string;
-}) {
-  const roomId = stripNextcloudTalkTargetPrefix(params.target);
-  if (!roomId) {
-    return null;
-  }
-  return buildChannelOutboundSessionRoute({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "nextcloud-talk",
-    accountId: params.accountId,
-    // Room tokens do not reveal whether inbound keys by room or sender id.
-    // Keep delivery behavior, but reject this route for explicit session selection.
-    recipientSessionExact: false,
-    peer: {
-      kind: "group",
-      id: roomId,
-    },
-    chatType: "group",
-    from: `nextcloud-talk:room:${roomId}`,
-    to: `nextcloud-talk:${roomId}`,
-  });
-}
-
 function normalizeOrigin(value: string): string | null {
   return URL.parse(value)?.origin.toLowerCase() ?? null;
 }
@@ -122,6 +94,7 @@ function sendNextcloudTalkMessage(
   return sendMessageNextcloudTalk(ctx.to, text, {
     accountId: ctx.accountId ?? undefined,
     replyTo: ctx.replyToId ?? undefined,
+    silent: ctx.silent,
     cfg: ctx.cfg,
     onPlatformSendDispatch: ctx.onPlatformSendDispatch,
     assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
@@ -152,6 +125,7 @@ const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
       text: true,
       media: true,
       replyTo: true,
+      silent: true,
     },
   },
   send: {
@@ -285,7 +259,28 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         normalizeTarget: normalizeNextcloudTalkMessagingTarget,
         inferTargetChatType: ({ to }) =>
           normalizeNextcloudTalkMessagingTarget(to) ? "group" : undefined,
-        resolveOutboundSessionRoute: resolveNextcloudTalkOutboundSessionRoute,
+        resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+          const roomId = stripNextcloudTalkTargetPrefix(target);
+          if (!roomId) {
+            return null;
+          }
+          return buildChannelOutboundSessionRoute({
+            cfg,
+            agentId,
+            channel: "nextcloud-talk",
+            accountId,
+            // Room tokens do not reveal whether inbound keys by room or sender id.
+            // Keep delivery behavior, but reject this route for explicit session selection.
+            recipientSessionExact: false,
+            peer: {
+              kind: "group",
+              id: roomId,
+            },
+            chatType: "group",
+            from: `nextcloud-talk:room:${roomId}`,
+            to: `nextcloud-talk:${roomId}`,
+          });
+        },
         targetResolver: {
           looksLikeId: looksLikeNextcloudTalkTargetId,
           hint: "<roomToken>",

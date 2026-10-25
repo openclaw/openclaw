@@ -608,12 +608,15 @@ it("keeps refreshed publication on its replacement connection despite an old ack
 });
 
 it.each([false, true])(
-  "advertises prepared workspace registration only when enabled: %s",
+  "negotiates prefetch for persistent hosts and prepared workspaces for ephemeral hosts: %s",
   async (enabled) => {
     const { connection, request, start } = startConnectionFixture(true, enabled);
     try {
       start.mock.calls[0]?.[0].onRunnerCapacityChanged?.({ total: 1, available: 1 });
-      connection.connect(gateway);
+      connection.connect({
+        ...gateway,
+        capabilities: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH],
+      });
       const declaration = request.mock.calls.find(
         ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
       )?.[1];
@@ -624,6 +627,7 @@ it.each([false, true])(
         throw new Error("Expected an enabled worker declaration");
       }
       expect(parsed.workerHost.preparedWorkspace).toBe(enabled ? 1 : undefined);
+      expect(parsed.workerHost.bundlePrefetch).toBe(enabled ? undefined : 1);
       start.mock.calls[0]?.[0].onWorkerHostingDisabled?.("test revoked worker consent");
       await vi.advanceTimersByTimeAsync(0);
       expect(
@@ -667,6 +671,7 @@ it.each([
           : { total: 2, available: 2 };
     const capabilities = {
       optional: [
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
         GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
         GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
@@ -674,6 +679,7 @@ it.each([
       idle: [GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION],
       disabled: [GATEWAY_SERVER_CAPS.NODE_WORKER_HOST_DIAGNOSTICS],
       workspace: [
+        GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
@@ -706,6 +712,7 @@ it.each([
                   bundlePrewarm: 1,
                   ...(supported && kind === "idle" ? { idleRetention: true } : {}),
                   ...(supported && kind === "optional" ? { capturedExecPolicy: true } : {}),
+                  ...(supported && kind === "optional" ? { bundlePrefetch: 1 } : {}),
                   ...(supported && (kind === "optional" || kind === "workspace")
                     ? {
                         statusWait: 1,
@@ -722,6 +729,7 @@ it.each([
                             : [...CORE_WORKER_LAUNCH_TOOL_NAMES],
                       }
                     : {}),
+                  ...(supported && kind === "workspace" ? { workspaceResultVersion: 2 } : {}),
                   ...(supported &&
                   kind === "workspace" &&
                   (platform === "linux" || platform === "win32") &&

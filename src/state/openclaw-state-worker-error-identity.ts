@@ -23,7 +23,7 @@ import {
 } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
-import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner-errors.js";
 import {
   SqliteCoordinatorError,
   OpenClawStateExternalOwnershipError,

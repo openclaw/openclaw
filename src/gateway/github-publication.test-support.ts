@@ -644,7 +644,13 @@ export function installGitHubPublicationTestHarness(
         return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
       }
 
-      if (argv.includes("--includes") && argv.includes("--get-regexp")) {
+      if (
+        (argv.includes("--includes") && argv.includes("--get-regexp")) ||
+        (argv[0] === "git" &&
+          argv[1] === "config" &&
+          (argv.includes("--global") || argv.includes("--system")) &&
+          argv.includes("core.attributesFile"))
+      ) {
         return commandResult("", 1);
       }
       if (command.startsWith("git ls-tree -r -z --full-tree ")) {
@@ -653,19 +659,9 @@ export function installGitHubPublicationTestHarness(
       if (argv.includes("rev-parse") && argv.includes("--git-path") && argv.at(-1) === "index") {
         return commandResult(syntheticIndex);
       }
-
-      if (
-        argv[0] === "git" &&
-        argv[1] === "config" &&
-        (argv.includes("--global") || argv.includes("--system")) &&
-        argv.includes("core.attributesFile")
-      ) {
-        return commandResult("", 1);
-      }
       if (command.endsWith("write-tree")) {
         return commandResult(`${WORKSPACE_TREE}\n`);
       }
-
       if (command.startsWith("git commit-tree ")) {
         return commandResult(`${NEW_HEAD}\n`);
       }

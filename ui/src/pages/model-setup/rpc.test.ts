@@ -133,23 +133,33 @@ it.each([
   },
 );
 
-it("retires a disconnected detection before a transport that ignores abort replies", async () => {
-  const response = createDeferred<import("../../api/types.ts").SystemAgentSetupDetectResult>();
-  let stop!: () => void;
-  const onComplete = vi.fn();
-  const client = { request: () => response.promise } as unknown as GatewayBrowserClient;
-  const runDetection = createRoot((dispose) => {
-    stop = dispose;
-    return createModelSetupDetectRequest({ getHello: () => null, onComplete });
-  });
-  const running = runDetection([client, "main", {}]);
-  stop();
-  response.resolve({
-    candidates: [],
-    manualProviders: [],
-    workspace: "/tmp/setup",
-    setupComplete: false,
-  });
-  await expect(running).resolves.toBeUndefined();
-  expect(onComplete).not.toHaveBeenCalled();
-});
+it.each(["disconnected", "owner-rejected"])(
+  "retires a %s detection before returning its transport response",
+  async (reason) => {
+    const response = createDeferred<import("../../api/types.ts").SystemAgentSetupDetectResult>();
+    let stop!: () => void;
+    const onComplete = vi.fn(() => (reason === "owner-rejected" ? false : undefined));
+    const client = { request: () => response.promise } as unknown as GatewayBrowserClient;
+    const runDetection = createRoot((dispose) => {
+      stop = dispose;
+      return createModelSetupDetectRequest({ getHello: () => null, onComplete });
+    });
+    const running = runDetection([client, "main", {}]);
+    if (reason === "disconnected") {
+      stop();
+    }
+    response.resolve({
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/setup",
+      setupComplete: false,
+    });
+    await expect(running).resolves.toBeUndefined();
+    if (reason === "disconnected") {
+      expect(onComplete).not.toHaveBeenCalled();
+    } else {
+      expect(onComplete).toHaveBeenCalledOnce();
+    }
+    stop();
+  },
+);

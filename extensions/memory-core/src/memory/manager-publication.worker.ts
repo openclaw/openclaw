@@ -204,6 +204,16 @@ function createPublicationBackend(
   admit: (stage: "transaction" | "commit") => void,
 ) {
   const vectorIndex = admitMemoryVectorIndex(db);
+  function assertSourceCurrent(header: MemorySourceIndexHeader): void {
+    if (
+      header.source === "sessions" &&
+      hasMemorySessionTombstone(db, header.agentId, header.sessionId)
+    ) {
+      throw new Error(
+        "A session was forgotten while memory indexing was running; retry the memory index.",
+      );
+    }
+  }
   // Agent handles are admitted by the database owner; private shadows are checked once on open.
   if (!("kind" in input)) {
     assertMemoryShadowIdentity(databasePath, input.fileIdentity);
@@ -404,7 +414,6 @@ function createPublicationBackend(
                   admission: {
                     hasIndex: true,
                     ftsAvailable: published.value.ftsAvailable,
-                    schemaVersion: getAdmittedSqliteSchemaFacts(db)?.userVersion,
                     identity: readOpenClawAgentDatabaseIdentity({ db }),
                     facts: published.facts,
                   },
@@ -459,6 +468,15 @@ function createPublicationBackend(
       }
       if (command.type === "cache.prune") {
         if (cacheSize().size <= command.input.maxEntries) {
+          if (command.input.recount) {
+            let exceedsCap = false;
+            const result = writeCache(() => {
+              const size = countMemoryEmbeddingCache(db);
+              exceedsCap = size > command.input.maxEntries;
+              return { size, exact: true };
+            });
+            return result.ok ? { ...result, value: exceedsCap } : result;
+          }
           return { ok: true, value: false };
         }
         return writeCache((size) =>
@@ -551,7 +569,9 @@ function createPublicationBackend(
           write(() => {
             stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
-            vectorIndex.capability.drop(vectorIndex.index);
+            if (hasVectorTable) {
+              vectorIndex.capability.drop(vectorIndex.index);
+            }
             vectorIndex.capability.create(vectorIndex.index, dimensions);
             admitStoreSearch(db, memoryVectorSearchSchema(dimensions), {
               extension: "memory.vector",
@@ -601,14 +621,7 @@ function createPublicationBackend(
           const inputs = command.input.sources;
           function* sources() {
             for (const { header, fragments } of inputs) {
-              if (
-                header.source === "sessions" &&
-                hasMemorySessionTombstone(db, header.agentId, header.sessionId)
-              ) {
-                throw new Error(
-                  "A session was forgotten while memory indexing was running; retry the memory index.",
-                );
-              }
+              assertSourceCurrent(header);
               yield { header, rows: readPublicationRows<MemorySourceIndexRow>(fragments) };
             }
           }
@@ -634,14 +647,7 @@ function createPublicationBackend(
       }
       let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;
       const outcome = write(() => {
-        if (
-          header.source === "sessions" &&
-          hasMemorySessionTombstone(db, header.agentId, header.sessionId)
-        ) {
-          throw new Error(
-            "A session was forgotten while memory indexing was running; retry the memory index.",
-          );
-        }
+        assertSourceCurrent(header);
         new MemorySourceIndexKernel(db, command.input.state).replaceRows(header, rows);
         advanceMemoryIndexRevision(db);
         facts = readMemoryDatabaseFacts(db, command.input.state.hasVectorTable);

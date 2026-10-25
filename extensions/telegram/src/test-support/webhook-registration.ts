@@ -36,7 +36,6 @@ export function registerTelegramWebhookRegistrationTests({
   path,
 }: RegistrationFixture) {
   const webhookOptions = { secret, path };
-  const webhookRegistrationRetryPolicy = { initialMs: 0, maxMs: 0, factor: 1, jitter: 0 };
   let runtime: { log: Mock<(message: unknown) => void>; error: Mock; exit: Mock };
   let setStatus: Mock<(patch: { mode?: string; connected?: boolean }) => void>;
   beforeEach(() => {
@@ -73,7 +72,6 @@ export function registerTelegramWebhookRegistrationTests({
         ...webhookOptions,
         runtime,
         setStatus,
-        webhookRegistrationRetryPolicy,
       },
       async ({ port }) => {
         try {
@@ -150,7 +148,6 @@ export function registerTelegramWebhookRegistrationTests({
       ...requireWebhookQueueScope(),
       runtime,
       setStatus,
-      webhookRegistrationRetryPolicy,
     });
 
     try {

@@ -15,6 +15,7 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
+import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
 import "../debug/debug-overlay-content.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
@@ -468,11 +469,13 @@ it("shares one host and activity poll independently of ping and reports failed r
   const setVisibility = mockVisibility();
   const initial = deferred<SystemInfoResult>();
   const next = deferred<SystemInfoResult>();
+  const recovery = deferred<SystemInfoResult>();
   const systemInfoRequest = vi
     .fn()
     .mockReturnValueOnce(initial.promise)
     .mockReturnValueOnce(next.promise)
     .mockRejectedValueOnce(new Error("unavailable"))
+    .mockReturnValueOnce(recovery.promise)
     .mockResolvedValue(gatewaySystemInfo);
   const { page, state, check, tick, unmount } = await setup(systemInfoRequest);
   expect(state().placeholders).toBeGreaterThan(0);
@@ -482,6 +485,10 @@ it("shares one host and activity poll independently of ping and reports failed r
   });
   initial.resolve(gatewaySystemInfo);
   await check({ placeholders: 0, busy: "false", hostText: contains("Gateway") });
+  const hostElement = state().hostElement;
+  const sessionInput = input(page, "Default session");
+  editInput(page, "Default session", "kept-session");
+  sessionInput.focus();
   const loadedHostText = state().hostText;
   expect(state().activity).toContain("432 MB");
   expect(state().activity).toContain("42%");
@@ -490,6 +497,10 @@ it("shares one host and activity poll independently of ping and reports failed r
   expect(systemInfoRequest).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(1);
   await check({ placeholders: 0, hostText: loadedHostText, busy: "true", hostName: "Gateway" });
+  expect(state().hostElement).toBe(hostElement);
+  expect(input(page, "Default session")).toBe(sessionInput);
+  expect(sessionInput.value).toBe("kept-session");
+  expect(document.activeElement).toBe(sessionInput);
   expect(page.querySelectorAll('[role="meter"]').length).toBeGreaterThan(0);
   expect(systemInfoRequest.mock.calls.map(([method]) => method)).toEqual([
     "system.info",
@@ -520,7 +531,12 @@ it("shares one host and activity poll independently of ping and reports failed r
     hostName: "Fresh host",
     activity: contains("60%"),
   });
-  await tick(10_000, { activityFailed: false });
+  await tick(10_000, { activityFailed: true, busy: "true" });
+  recovery.resolve(gatewaySystemInfo);
+  await check({ activityFailed: false, busy: "false" });
+  expect(state().hostElement).toBe(hostElement);
+  expect(sessionInput.value).toBe("kept-session");
+  expect(document.activeElement).toBe(sessionInput);
   const hidden = deferred<SystemInfoResult>();
   systemInfoRequest.mockReturnValueOnce(hidden.promise);
   await vi.advanceTimersByTimeAsync(10_000);
@@ -717,19 +733,7 @@ it.each(["response", "error", "response before rebinding"] as const)(
 
 it.each([
   ["transient", new Error("temporarily unavailable"), true],
-  [
-    "missing read scope",
-    new GatewayRequestError({
-      code: "FORBIDDEN",
-      message: "permission denied",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.read",
-        requiredScopes: ["operator.read"],
-      },
-    }),
-    false,
-  ],
+  ["missing read scope", missingReadScopeErrorFixture(), false],
 ] as const)("preserves the polling policy after a %s error", async (_kind, error, retry) => {
   vi.useFakeTimers();
   const request = vi

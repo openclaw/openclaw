@@ -9,6 +9,7 @@ import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admi
 import { closeWorkerTaskPoolResources } from "./worker-task-pool-registry.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 import {
+  expectCalls,
   holdExit,
   reply,
   request,
@@ -88,8 +89,7 @@ function trackedTask(
   return {
     ...pool.runTask(input, { ...options, onInputConsumed: consumed, onExecutionSettled: settled }),
     expectHeld() {
-      expect(consumed).not.toHaveBeenCalled();
-      expect(settled).not.toHaveBeenCalled();
+      expectCalls(0, consumed, settled);
     },
     expectReleased(retired: boolean) {
       expect(consumed).toHaveBeenCalledOnce();
@@ -421,9 +421,8 @@ it("cancels a queued task without preparing its input or stopping the occupied w
   await rejected;
   await queued.close();
 
-  expect(prepare).not.toHaveBeenCalled();
+  expectCalls(0, prepare, worker.terminate);
   queued.expectReleased(false);
-  expect(worker.terminate).not.toHaveBeenCalled();
   expect(worker.posted).toHaveBeenCalledOnce();
   await finishTask(active, "active");
 });

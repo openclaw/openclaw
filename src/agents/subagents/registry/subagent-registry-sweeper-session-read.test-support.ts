@@ -199,7 +199,6 @@ export function registerSubagentSweepRetainedAuthorityTests(
         const attachmentRoot = resolveSubagentSessionAttachmentRootDir({
           agentId: "main",
           childSessionKey: entry.childSessionKey,
-          env: state.env,
         });
         const attachmentDir = path.join(attachmentRoot, attachmentId);
         const siblingDir = path.join(attachmentRoot, randomUUID());

@@ -4,6 +4,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
   "ui.prefs.accent":
     "Control UI accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured accent color or theme default.",
+  "ui.prefs.locale":
+    "Language for the Control UI, as a supported locale id such as en, de, or zh-CN. Leave unset to follow the browser or system language. Set it from Settings → Appearance → Language. It does not set the assistant's timezone (agents.defaults.userTimezone).",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -24,7 +26,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.slots.memory":
     'Select the active memory plugin by id, or "none" to disable memory plugins.',
   "plugins.slots.contextEngine":
-    "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
+    "Selects the registered context engine ID. Plugins with different plugin and engine IDs declare contextEngineIds in their manifest so OpenClaw can load the owner.",
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
@@ -177,11 +179,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, '⚠️ Memory maintenance temporarily failed; continuing your reply.'). Disabled by default to keep context maintenance silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
-    "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
+    "Pre-compaction memory flush settings that run an agentic memory write with the active session model and its normal fallback chain before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":
     "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
-  "agents.defaults.compaction.memoryFlush.model":
-    "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":

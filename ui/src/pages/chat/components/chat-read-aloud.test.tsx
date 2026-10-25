@@ -121,7 +121,7 @@ it.each([false, true])(
     flush();
     expect(pause).toHaveBeenCalledTimes(2);
     expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech");
-    expect(readButton(view)).toBe(button);
+    await waitForSolid(() => expect(readButton(view)).toBe(button));
   },
 );
 
@@ -205,7 +205,7 @@ it.each([
     configSnapshot: null,
     bootstrapConfig: scenario.bootstrapConfig,
   });
-  runtimeConfig.ensureLoaded.mockImplementation(async () => {
+  runtimeConfig.ensureDisplayLoaded.mockImplementation(async () => {
     const config = { tts: {} };
     Object.assign(runtimeConfig.state, {
       configSnapshot: scenario.configOnly ? { config } : { runtimeConfig: config },
@@ -216,7 +216,7 @@ it.each([
   await waitForSolid(() => {
     expect(Boolean(view.queryByRole("button", { name: "Read aloud" }))).toBe(scenario.visible);
   });
-  expect(runtimeConfig.ensureLoaded).toHaveBeenCalledTimes(scenario.loaded ? 1 : 0);
+  expect(runtimeConfig.ensureDisplayLoaded).toHaveBeenCalledTimes(scenario.loaded ? 1 : 0);
 });
 
 it.each(["bootstrap", "config-only"])(
@@ -235,7 +235,7 @@ it.each(["bootstrap", "config-only"])(
     audio[0]!.dispatchEvent(new Event("ended"));
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request).toHaveBeenNthCalledWith(2, "tts.speak", { text: "is working." });
-    expect(runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
+    expect(runtimeConfig.ensureDisplayLoaded).not.toHaveBeenCalled();
   },
 );
 
@@ -251,12 +251,47 @@ it("does not play a synthesis result after the message is unmounted", async () =
 });
 
 it("shows a Gateway synthesis failure instead of starting another speech provider", async () => {
-  request.mockRejectedValue(new Error("Local speech endpoint unavailable"));
+  const retry = createDeferred<TtsSpeakResult>();
+  request
+    .mockRejectedValueOnce(new Error("Local speech endpoint unavailable"))
+    .mockReturnValueOnce(retry.promise);
   const view = mount();
-  readButton(view).click();
+  const button = readButton(view);
+  button.click();
   await waitForSolid(() =>
     expect(view.getByRole("status").textContent).toContain("Local speech endpoint unavailable"),
   );
   expect(request).toHaveBeenCalledOnce();
   expect(play).toHaveBeenCalledOnce();
+  expect(readButton(view)).toBe(button);
+  button.click();
+  await waitForSolid(() => expect(readButton(view, "Stop reading")).toBe(button));
+  expect(view.queryByRole("status")).toBeNull();
+  expect(createUrl).not.toHaveBeenCalled();
+  retry.resolve(speech);
+  await waitForSolid(() => expect(audio[0]?.src).toBe("blob:synthetic-speech"));
+  expect(view.queryByRole("status")).toBeNull();
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("stops same-tick playback and ignores its late synthesis during a new playback", async () => {
+  const view = mount();
+  const button = readButton(view);
+  button.click();
+  button.click();
+  expect(request).toHaveBeenCalledOnce();
+  await waitForSolid(() => expect(readButton(view)).toBe(button));
+
+  const next = createDeferred<TtsSpeakResult>();
+  request.mockReturnValueOnce(next.promise);
+  button.click();
+  await waitForSolid(() => expect(readButton(view, "Stop reading")).toBe(button));
+  pending.resolve(speech);
+  await pending.promise;
+  await Promise.resolve();
+  expect(createUrl).not.toHaveBeenCalled();
+  expect(readButton(view, "Stop reading")).toBe(button);
+  next.resolve(speech);
+  await waitForSolid(() => expect(audio[0]?.src).toBe("blob:synthetic-speech"));
+  expect(request).toHaveBeenCalledTimes(2);
 });

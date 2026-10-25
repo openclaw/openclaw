@@ -84,17 +84,29 @@ Late cleanup recovery leaves retained state for the next Gateway instead of
 retrying against a closed store. Failed writes with an unknown outcome still
 report an error and remain fenced until recovery reads the stored state.
 
-After a Gateway restart, the parent owns continuation of the user's task.
-Interrupted sub-agents are finalized through their normal completion path instead
-of automatically relaunched. Their results tell the parent that execution was
-interrupted and that partially completed actions need checking. A parent waiting
-for its child batch receives the settled results, including children that finished
-before the restart, and decides what work remains.
+After a Gateway restart, unfinished sub-agents with a recorded restart interruption
+resume in their retained session once the original operator's current authority
+is restored. This includes visible dashboard children and interruptions saved in
+the session before the registry's shutdown listener finished. Automatic recovery
+uses the same owner as `sessions.recover`; it does not notify the parent that work
+settled while the child can still resume. They check uncertain tool outcomes before continuing. The registry
+keeps the original task and parent completion ownership, including late delivery
+when the parent's own turn already finished. Explicit Stop and cancellation remain
+terminal. Children without verifiable ownership or restorable authority report their
+interruption through the normal completion path.
+
+Previously settled restart interruptions are not replayed automatically. An operator
+can resume a retained interrupted child with `sessions.recover {"key":"<child-session-key>"}`
+after checking that the parent has not already replaced the work. The native registry
+interruption is sufficient; no main-session tombstone or database edit is needed.
 
 Detached orphan reads, restored requester wakes, and cleanup share a bounded
 background budget per Gateway. A large retained backlog waits there instead of
 filling the reader task limit needed by reconnecting clients. Queued cleanup stays
 tracked through restart drain and checks its original ownership before proceeding.
+Delivery releases that preparation budget when the Gateway accepts its input,
+while the registry keeps tracking the result. A queued completion never blocks
+the preparation of an earlier input in the same mailbox.
 
 Operator-admitted children retain bounded source evidence with their run record.
 Before continuing the requester after restart, the Gateway revalidates the current
@@ -128,6 +140,11 @@ completed requester turn without executing or delivering it again. Unfinished
 main-session turns continue through normal restart recovery with the original
 operator restrictions. If the original authority is unavailable, the task stays
 owed instead of running with broader permissions.
+
+If a recovered requester finishes without a durable final reply, completion
+delivery records the failure and keeps the child result. It does not queue another
+model turn just to report that failed recovery. Inspect the retained result and
+continue explicitly after resolving the original error.
 
 Completion replay uses the same captured requester identity as the original
 input. Optional fields absent from that identity stay absent after reload, so

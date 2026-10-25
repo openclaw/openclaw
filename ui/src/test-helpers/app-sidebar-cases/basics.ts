@@ -18,7 +18,7 @@ import { agentList, sessionList } from "./compact.test-support.ts";
 import { settleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
-await import("../../components/viewer-facepile.ts");
+await import("../../components/solid/viewer-facepile.tsx");
 
 const MAIN = "agent:main:main";
 const RESEARCH = "agent:research:main";
@@ -275,7 +275,7 @@ it("switches the Skills owner without opening an agent conversation", async () =
   expect(onNavigate).not.toHaveBeenCalled();
 });
 
-it("keeps the identity card available offline with reconnect and retry actions", async () => {
+it("keeps the identity card available during recovery and offers retry only offline", async () => {
   const { sidebar, find } = await mountAgentSidebar(undefined, null);
   const onRetryConnect = vi.fn();
   sidebar.onRetryConnect = onRetryConnect;
@@ -303,7 +303,16 @@ it("keeps the identity card available offline with reconnect and retry actions",
   card?.click();
   await sidebar.updateComplete;
   const menu = find<HTMLElement>(".sidebar-identity-menu");
+  expect(menu).not.toBeNull();
+  expect(menu?.querySelector('[data-value="command:retry-connect"]')).toBeNull();
+  expect(onRetryConnect).not.toHaveBeenCalled();
+
+  sidebar.connectionStatus = "offline";
+  await sidebar.updateComplete;
+  expect(find(".sidebar-identity-card")).toBe(card);
+  expect(card?.getAttribute("data-connection-status")).toBe("offline");
   const retry = menu?.querySelector<HTMLElement>('[data-value="command:retry-connect"]');
+  expect(retry).not.toBeNull();
   retry?.click();
   await vi.waitFor(() => expect(onRetryConnect).toHaveBeenCalledOnce());
 
@@ -430,7 +439,7 @@ it("keeps main-session activity on its agent header without duplicate main or su
   expect(findAll('[data-agent-id="main"][href="/chat/main"]')).toHaveLength(1);
   expect(find(`[data-session-key="${key}"]`)).toBeNull();
   expect(find(`[data-child-session-toggle="${key}"]`)).toBeNull();
-  expect(find("[data-session-key=CHILD]")).toBeNull();
+  expect(find(`[data-session-key="${CHILD}"]`)).toBeNull();
   expect(find(`${header} .session-glyph__ring[aria-label="Active run"]`)).not.toBeNull();
 
   const result = harness.sessions.state.result!;

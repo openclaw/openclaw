@@ -599,7 +599,16 @@ describe("Auto response admission", () => {
         expect((await eligibleJobs(workflow, github)).jobs["auto-response"]).toBe(false);
         await expect(
           runBarnacleAutoResponse({
-            github: {},
+            expectedAppId: 2729701,
+            github: {
+              rest: {
+                issues: {
+                  get: async () => ({
+                    data: { number: 123, state: "open", author_association: association },
+                  }),
+                },
+              },
+            },
             context: { payload: github.event },
             core: { info() {} },
           }),

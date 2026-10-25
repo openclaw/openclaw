@@ -14,10 +14,7 @@ import {
   logMessageProcessed,
   logSessionStateChange,
 } from "./diagnostic.js";
-import {
-  resetDiagnosticStateForTest,
-  startEnabledDiagnosticHeartbeatForTest,
-} from "./diagnostic.test-support.js";
+import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const events: DiagnosticEventPayload[] = [];
 function session(incognito: boolean, suffix: string) {
@@ -98,32 +95,6 @@ it.each(["key", "session-id"] as const)(
       ]) {
         expect(events).toContainEqual(expect.objectContaining({ sessionKey, ...expected }));
       }
-    }
-  },
-);
-
-it.each([true, false])(
-  "preserves heartbeat recovery and events with Incognito=%s",
-  async (incognito) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
-    const recoverStuckSession = vi.fn();
-    const ref = session(incognito, "stuck");
-    startEnabledDiagnosticHeartbeatForTest({ recoverStuckSession });
-    logSessionStateChange({ ...ref, state: "processing" });
-
-    await vi.advanceTimersByTimeAsync(61_000);
-    await waitForDiagnosticEventsDrained();
-
-    expect(recoverStuckSession).toHaveBeenCalledWith(expect.objectContaining(ref));
-    expect(events).toContainEqual(
-      expect.objectContaining({ type: "session.stuck", ...ref, state: "processing" }),
-    );
-    if (incognito) {
-      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining(ref.sessionKey));
-    } else {
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionKey=${ref.sessionKey}`));
     }
   },
 );

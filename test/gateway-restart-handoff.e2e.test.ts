@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { statSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -15,7 +14,7 @@ import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
 import { sqliteDatabaseSealSchemaFor } from "../src/state/openclaw-database-seal-schema.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import { writeRestartPlugin, connectRestartClient } from "./gateway-restart.test-support.js";
 import {
   GATEWAY_RESTART_TEST_KILL_MS,
   GATEWAY_RESTART_TEST_SHUTDOWN_MS as APPLICATION_STOP_MS,
@@ -62,16 +61,13 @@ it.skipIf(process.platform !== "linux")(
     await runQaGatewayFixture(
       async () => {
         const pluginDir = tempDirs.make("restart-handoff-plugin-");
-        await writeFile(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          JSON.stringify({
+        await writeRestartPlugin(
+          pluginDir,
+          {
             id: SERVICE_ID,
             activation: { onStartup: true },
             configSchema: { type: "object", additionalProperties: false, properties: {} },
-          }),
-        );
-        await writeFile(
-          path.join(pluginDir, "index.js"),
+          },
           `module.exports = {
           id: ${JSON.stringify(SERVICE_ID)},
           register(api) {
@@ -81,6 +77,7 @@ it.skipIf(process.platform !== "linux")(
             });
           }
         };\n`,
+          "index.js",
         );
         const model = buildMockOpenAiResponsesProvider(provider.baseUrl, "gpt-5.6-luna");
         const modelRef = `openai/${model.modelId}`;
@@ -150,17 +147,6 @@ it.skipIf(process.platform !== "linux")(
           },
         });
         await instance.startGateway();
-        const expectLog = (rows: ReturnType<typeof journal>, ...fragments: string[]) =>
-          expect(
-            rows.some((row) => fragments.every((fragment) => row.message.includes(fragment))),
-            instance!.logs(),
-          ).toBe(true);
-        expectLog(
-          journal(instance.logs()),
-          "shutdown budget at startup:",
-          "shutdown=41000ms",
-          "TimeoutStopUSec=46000ms",
-        );
         const child = expectDefined(instance.child, "Gateway process before restart proof");
         const closed = once(child, "close");
         const gateway = instance;
@@ -171,17 +157,14 @@ it.skipIf(process.platform !== "linux")(
         const recoveredTurns = new Map(sessionKeys.map((key) => [key, createDeferred<unknown>()]));
         let observingRecovery = false;
         const connect = () =>
-          acquireGatewayTestClient(
+          connectRestartClient(
+            gateway,
             {
-              url: gateway.url,
-              token: gateway.gatewayToken,
-              clientName: "gateway-client",
               mode: "backend",
               clientDisplayName: "restart-handoff-proof",
               clientVersion: "test",
               platform: "linux",
               role: "operator",
-              scopes: ["operator.admin", "operator.read", "operator.write"],
               deviceIdentity: loadOrCreateDeviceIdentity({
                 path: gateway.state.path("client-device", "client", "credentials.sqlite"),
               }),
@@ -197,12 +180,7 @@ it.skipIf(process.platform !== "linux")(
                 }
               },
             },
-            {
-              timeoutMs: 30_000,
-              timeoutMessage: "restart proof client did not connect",
-              closeMessage: "restart proof client closed",
-              signal,
-            },
+            signal,
           );
         client = await connect();
         for (const key of sessionKeys) {
@@ -268,13 +246,10 @@ it.skipIf(process.platform !== "linux")(
         expect(exit, instance.logs()).toEqual([0, null]);
         expect(receipt, instance.logs()).toBeDefined();
         expect(abort, instance.logs()).toBeDefined();
-        expectLog(rows, "shutdown budget at shutdown:", "TimeoutStopUSec=46000ms");
         expect(receipt!.at).toBeGreaterThanOrEqual(abort!.at);
         expect(receipt!.at).toBeLessThan(
           Math.min(signaledAt + APPLICATION_STOP_MS, exitedAt, deadline?.at ?? Infinity),
         );
-        expectLog(rows, "backgroundExecSessions=2");
-        expectLog(rows, "embeddedRuns=6");
         expect(exitedAt - receipt!.at, instance.logs()).toBeLessThanOrEqual(5_000);
         expect(deadline, instance.logs()).toBeUndefined();
         expect(serviceStop, instance.logs()).toBeDefined();

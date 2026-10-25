@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
-import { prepareSkillBundle } from "../library/bundle.js";
 import { escapeSkillXml, formatSkillsCompactForPrompt } from "../loading/skill-contract.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
@@ -309,9 +308,6 @@ it.runIf(process.platform !== "win32")(
     const staleDir = await writeSkill("stale");
     const snapshot = await loadSnapshot();
     expect((await prepare(snapshot))?.skills).toHaveLength(2);
-    const retained = await materialize((await prepare(structuredClone(snapshot)))!);
-    // The tolerated skip keeps the surviving delivery's retained identity intact.
-    expect(retained.snapshot.resolvedSkills![0]!.bundleFingerprint).toBeDefined();
 
     await fs.rm(staleDir, { recursive: true });
     await fs.symlink(path.join(workspace, "missing-stale-target"), staleDir, "dir");
@@ -325,57 +321,6 @@ it.runIf(process.platform !== "win32")(
     );
   },
 );
-
-it("stamps retained delivery identities on resolved entries and keeps them across source edits", async () => {
-  const directory = await writeSkill("guide");
-  const scriptPath = path.join(directory, "scripts/check.sh");
-  await fs.mkdir(path.dirname(scriptPath));
-  await fs.writeFile(scriptPath, "#!/bin/sh\nprintf before\n");
-  const snapshot = await loadSnapshot();
-  const first = (await prepare(snapshot))!;
-  // Discovery's SKILL.md-only content hash and the delivered bundle revision
-  // are distinct semantics: neither may be compared against the other.
-  expect(snapshot.resolvedSkills![0]!.contentHash).not.toBe(first.skills[0]!.revision);
-  const retained = await materialize(first, {
-    sessionId: "fingerprint-session",
-    workspaceDir: workspace,
-  });
-  const skill = retained.snapshot.resolvedSkills![0]!;
-  // Worker identity equals the supplied revision, by the integrity check.
-  expect(skill.bundleFingerprint).toBe(first.skills[0]!.revision);
-  expect(skill.bundleFingerprint).toBe(skill.contentHash);
-  // Discovery A / deliver B / disk C: source edits after delivery never
-  // re-identify the retained generation. The edit touches only a support
-  // file so the next delivery's new identity is attributable to it alone.
-  await fs.writeFile(scriptPath, "#!/bin/sh\nprintf after\n");
-  expect(await fs.readFile(path.join(directory, "SKILL.md"), "utf8")).toBe(markdown);
-  expect(skill.bundleFingerprint).toBe(first.skills[0]!.revision);
-  // A support-file-only edit (SKILL.md unchanged) still produces a new
-  // bundle identity next delivery.
-  const supportEdited = (await prepare(structuredClone(snapshot)))!;
-  expect(supportEdited.skills[0]!.revision).not.toBe(first.skills[0]!.revision);
-  const refreshed = await materialize(supportEdited);
-  expect(refreshed.snapshot.resolvedSkills![0]!.bundleFingerprint).toBe(
-    supportEdited.skills[0]!.revision,
-  );
-  expect(refreshed.snapshot.resolvedSkills![0]!.bundleFingerprint).not.toBe(
-    skill.bundleFingerprint,
-  );
-});
-
-it("identifies deliveries whose SKILL.md has no instruction bytes", async () => {
-  const files = [{ path: "SKILL.md", content: "", encoding: "utf8" as const }];
-  const revision = prepareSkillBundle(files).revision;
-  const materialized = await materialize({
-    version: 1,
-    skills: [{ name: "empty", description: "Empty skill", revision, files }],
-  });
-  const skill = materialized.snapshot.resolvedSkills![0]!;
-  // Bundle identity covers the whole tree: zero-instruction deliveries still
-  // settle a qualifying delivery identity.
-  expect(skill.bundleFingerprint).toBe(revision);
-  expect(await fs.readFile(skill.filePath, "utf8")).toBe("");
-});
 
 it("names an unavailable explicit skill and root", async () => {
   await writeSkill("visible");

@@ -7,6 +7,7 @@ import { expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 import { gatewayWorkAdmissionActual } from "./run-loop-mocks.test-support.js";
 import { registerTimedOutGatewayStopTests } from "./run-loop-stop-timeout.test-support.js";
 import {
@@ -88,8 +89,7 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
           startupOperation: expect.any(Function),
           gatewayStateOwner,
         });
-        expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
-        expect(f.flushLogger).toHaveBeenCalledOnce();
+        expectCallCount(1, f.stopManagedProviderLocalServices, f.flushLogger);
         expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
         expect(f.armShutdownHardExitWatchdog).not.toHaveBeenCalled();
       } finally {
@@ -112,8 +112,7 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
           expect(runtime.exit).not.toHaveBeenCalled();
           closing.release();
           await expect(exited).resolves.toBe(0);
-          expect(runtime.exit).toHaveBeenCalledOnce();
-          expect(start).toHaveBeenCalledOnce();
+          expectCallCount(1, runtime.exit, start);
           expect(
             (await f.acquireGatewayLock.mock.results[0]?.value)?.release,
           ).toHaveBeenCalledOnce();
@@ -198,8 +197,7 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
             flushing.release();
             await expect(exited).resolves.toBe(failed ? 1 : code);
             expect(runtime.exit).toHaveBeenCalledOnce();
-            expect(close).toHaveBeenCalledTimes(restart ? 2 : 1);
-            expect(start).toHaveBeenCalledTimes(restart ? 2 : 1);
+            expectCallCount(restart ? 2 : 1, close, start);
             expect(
               (await f.acquireGatewayLock.mock.results.at(-1)?.value)?.release,
             ).toHaveBeenCalledOnce();
@@ -274,8 +272,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       try {
         captureSignal("SIGTERM")();
         await vi.advanceTimersByTimeAsync(deadlineMs - 1);
-        expect(close).toHaveBeenCalledOnce();
-        expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+        expectCallCount(1, close, f.stopManagedProviderLocalServices);
         expect(runtime.exit).not.toHaveBeenCalled();
         await advanceWithoutCalls(1, runtime.exit);
         await vi.advanceTimersByTimeAsync(2_000);

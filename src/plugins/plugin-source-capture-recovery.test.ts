@@ -481,9 +481,8 @@ it.each([
 it("reclaims aged tokenless roots and retries locked roots", async () => {
   const stateTemp = path.join(stateDir, "tmp");
   fs.mkdirSync(stateTemp);
-  const create = (parent: string, name: string) => {
-    return path.dirname(write(parent, path.join(name, "source.js"), "payload"));
-  };
+  const create = (parent: string, name: string) =>
+    path.dirname(write(parent, path.join(name, "source.js"), "payload"));
   const old = Array.from({ length: 87 }, (_, index) =>
     create(tmpdir(), `openclaw-plugin-build-${index}`),
   );
@@ -499,12 +498,9 @@ it("reclaims aged tokenless roots and retries locked roots", async () => {
   // Filesystem timestamps use the real clock even when Date is faked.
   fs.utimesSync(fresh, new Date(), new Date());
   const remove = fsPromises.rm.bind(fsPromises);
-  const probe = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
-    if (target === busy) {
-      throw locked;
-    }
-    await remove(target, options);
-  });
+  const probe = vi
+    .spyOn(fsPromises, "rm")
+    .mockImplementation(refusePath(remove, (target) => target === busy));
   await sweepPluginSourceCapturesForTest(stateDir);
   expect(old.filter((directory) => fs.existsSync(directory))).toHaveLength(0);
   expectExists(catalog);

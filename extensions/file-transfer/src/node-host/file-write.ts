@@ -8,7 +8,7 @@ import {
   resolveAbsolutePathForWrite,
   root,
 } from "openclaw/plugin-sdk/security-runtime";
-import { inspectStrictBase64 } from "../shared/base64.js";
+import { inspectStrictBase64, normalizeBase64ForCompare } from "../shared/base64.js";
 import {
   fileIdentity,
   matchesFileIdentity,
@@ -23,7 +23,6 @@ import {
   openBoundWriteRoot,
   symlinkRedirectError,
   writeFsSafeError,
-  type FileWriteError,
 } from "./file-write-path.js";
 import { rejectCanonicalPathChange } from "./path-errors.js";
 
@@ -41,87 +40,6 @@ type FileWriteParams = {
   expectedCanonicalPath?: unknown;
   expectedBinding?: unknown;
 };
-
-async function writeBoundTarget(input: {
-  binding: Extract<PathBinding, { kind: "write" }>;
-  buffer: Buffer;
-  canonicalTargetPath: string;
-  rejectHardlinks: boolean;
-}): Promise<
-  { ok: true; path: string; overwritten: boolean; identity: FileIdentity } | FileWriteError
-> {
-  const expectedTarget =
-    input.binding.targetDevice && input.binding.targetInode
-      ? { device: input.binding.targetDevice, inode: input.binding.targetInode }
-      : undefined;
-  if (expectedTarget) {
-    let handle: Awaited<ReturnType<typeof fs.open>>;
-    try {
-      handle = await fs.open(input.canonicalTargetPath, "r+");
-    } catch {
-      return err(
-        "CANONICAL_PATH_CHANGED",
-        "filesystem identity differs from the authorized target",
-        input.canonicalTargetPath,
-      );
-    }
-    try {
-      const stats = await handle.stat({ bigint: true });
-      if (!stats.isFile() || !matchesFileIdentity(stats, expectedTarget)) {
-        return err(
-          "CANONICAL_PATH_CHANGED",
-          "filesystem identity differs from the authorized target",
-          input.canonicalTargetPath,
-        );
-      }
-      // Workspace document writes must not modify aliases outside their allowed path.
-      // Ordinary file.write retains its existing inode-preserving behavior.
-      if (input.rejectHardlinks && stats.nlink > 1n) {
-        return err("HARDLINK_TARGET_DENIED", "refusing to overwrite a file with hard links");
-      }
-      // Preserve the inode authorized by the binding while fs-safe owns write rollback.
-      await overwriteFileHandle(handle, input.buffer);
-      await handle.sync();
-      return {
-        ok: true,
-        path: input.canonicalTargetPath,
-        overwritten: true,
-        identity: fileIdentity(stats),
-      };
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
-  }
-
-  const anchor = await openBoundWriteRoot(input);
-  if (!anchor.ok) {
-    return anchor;
-  }
-  const { anchorRoot, relativeTarget } = anchor;
-  try {
-    await anchorRoot.create(relativeTarget, input.buffer, { mkdir: true });
-    await using opened = await anchorRoot.open(relativeTarget);
-    const stats = await opened.handle.stat({ bigint: true });
-    return {
-      ok: true,
-      path: opened.realPath,
-      overwritten: false,
-      identity: fileIdentity(stats),
-    };
-  } catch (error) {
-    if (error instanceof FsSafeError && error.code === "already-exists") {
-      return err(
-        "CANONICAL_PATH_CHANGED",
-        "filesystem identity differs from the authorized target",
-        input.canonicalTargetPath,
-      );
-    }
-    if (error instanceof FsSafeError) {
-      return writeFsSafeError(error, input.canonicalTargetPath);
-    }
-    return err("WRITE_ERROR", `failed to write file: ${String(error)}`);
-  }
-}
 
 export async function handleFileWrite(params: Partial<FileWriteParams> & Record<string, unknown>) {
   const rawPath = typeof params?.path === "string" ? params.path : "";
@@ -163,9 +81,7 @@ export async function handleFileWrite(params: Partial<FileWriteParams> & Record<
   // Buffer decoding is permissive; verify the round trip, including padding bits.
   const buf = Buffer.from(contentBase64, "base64");
   const reEncoded = buf.toString("base64");
-  const normalize = (s: string): string =>
-    s.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
-  if (normalize(reEncoded) !== normalize(contentBase64)) {
+  if (normalizeBase64ForCompare(reEncoded) !== normalizeBase64ForCompare(contentBase64)) {
     return err("INVALID_BASE64", "contentBase64 is not valid base64");
   }
 
@@ -294,23 +210,84 @@ export async function handleFileWrite(params: Partial<FileWriteParams> & Record<
   }
 
   if (expectedBinding?.kind === "write") {
-    const writeResult = await writeBoundTarget({
-      binding: expectedBinding,
-      buffer: buf,
-      canonicalTargetPath,
-      rejectHardlinks,
-    });
-    if (!writeResult.ok) {
-      return writeResult;
+    const expectedTarget =
+      expectedBinding.targetDevice && expectedBinding.targetInode
+        ? { device: expectedBinding.targetDevice, inode: expectedBinding.targetInode }
+        : undefined;
+    if (expectedTarget) {
+      let handle: Awaited<ReturnType<typeof fs.open>>;
+      try {
+        handle = await fs.open(canonicalTargetPath, "r+");
+      } catch {
+        return err(
+          "CANONICAL_PATH_CHANGED",
+          "filesystem identity differs from the authorized target",
+          canonicalTargetPath,
+        );
+      }
+      try {
+        const stats = await handle.stat({ bigint: true });
+        if (!stats.isFile() || !matchesFileIdentity(stats, expectedTarget)) {
+          return err(
+            "CANONICAL_PATH_CHANGED",
+            "filesystem identity differs from the authorized target",
+            canonicalTargetPath,
+          );
+        }
+        // Workspace document writes must not modify aliases outside their allowed path.
+        // Ordinary file.write retains its existing inode-preserving behavior.
+        if (rejectHardlinks && stats.nlink > 1n) {
+          return err("HARDLINK_TARGET_DENIED", "refusing to overwrite a file with hard links");
+        }
+        // Preserve the inode authorized by the binding while fs-safe owns write rollback.
+        await overwriteFileHandle(handle, buf);
+        await handle.sync();
+        return {
+          ok: true as const,
+          path: canonicalTargetPath,
+          size: buf.length,
+          sha256: computedSha256,
+          overwritten: true,
+          binding: { kind: "existing", ...fileIdentity(stats) } satisfies PathBinding,
+        };
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
     }
-    return {
-      ok: true as const,
-      path: writeResult.path,
-      size: buf.length,
-      sha256: computedSha256,
-      overwritten: writeResult.overwritten,
-      binding: { kind: "existing", ...writeResult.identity } satisfies PathBinding,
-    };
+
+    const anchor = await openBoundWriteRoot({
+      binding: expectedBinding,
+      canonicalTargetPath,
+    });
+    if (!anchor.ok) {
+      return anchor;
+    }
+    const { anchorRoot, relativeTarget } = anchor;
+    try {
+      await anchorRoot.create(relativeTarget, buf, { mkdir: true });
+      await using opened = await anchorRoot.open(relativeTarget);
+      const stats = await opened.handle.stat({ bigint: true });
+      return {
+        ok: true as const,
+        path: opened.realPath,
+        size: buf.length,
+        sha256: computedSha256,
+        overwritten: false,
+        binding: { kind: "existing", ...fileIdentity(stats) } satisfies PathBinding,
+      };
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "already-exists") {
+        return err(
+          "CANONICAL_PATH_CHANGED",
+          "filesystem identity differs from the authorized target",
+          canonicalTargetPath,
+        );
+      }
+      if (error instanceof FsSafeError) {
+        return writeFsSafeError(error, canonicalTargetPath);
+      }
+      return err("WRITE_ERROR", `failed to write file: ${String(error)}`);
+    }
   }
 
   const parentRoot = await root(parentDir);

@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sha256Base64Url } from "../../infra/crypto-digest.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
 
@@ -82,6 +83,14 @@ export function getToolResultProjectionKeys(
   });
 }
 
+// Unambiguous keys depend only on the message and survive attempt-state recreation.
+// Ambiguous keys retain their branch owner's separate weak slot.
+const canonicalProjectionKeyScope = {};
+const boundProjectionKeys = new WeakMap<
+  AgentMessage,
+  WeakMap<object, { key: string; message: AgentMessage }>
+>();
+
 /** Keep canonical transcript identity when provider replay rewrites tool-call ids. */
 export function bindToolResultPromptProjectionKeys(
   messages: AgentMessage[],
@@ -90,7 +99,28 @@ export function bindToolResultPromptProjectionKeys(
   const keys = getToolResultProjectionKeys(messages, projectionState);
   return messages.map((message, index) => {
     const key = keys[index];
-    return key ? Object.assign({}, message, { [TOOL_RESULT_PROJECTION_KEY]: key }) : message;
+    if (!key) {
+      return message;
+    }
+    const scope =
+      key === getToolResultProjectionBaseKey(message)
+        ? canonicalProjectionKeyScope
+        : projectionState;
+    let bound = boundProjectionKeys.get(message);
+    const cached = bound?.get(scope);
+    if (cached?.key === key) {
+      return cached.message;
+    }
+    const projected = Object.assign({}, message, { [TOOL_RESULT_PROJECTION_KEY]: key });
+    if (isDeeplyFrozenPlainData(message)) {
+      freezeJsonSnapshot(projected);
+      if (!bound) {
+        bound = new WeakMap();
+        boundProjectionKeys.set(message, bound);
+      }
+      bound.set(scope, { key, message: projected });
+    }
+    return projected;
   });
 }
 

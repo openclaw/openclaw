@@ -193,7 +193,6 @@ describe("ExecApprovalManager lifetime", () => {
           cronConfig: { triggers: { enabled: true } },
           log: createNoopLogger(),
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: async () => ({ status: "ok" }),
         });
         const entered = createDeferredCore();
@@ -266,6 +265,7 @@ describe("ExecApprovalManager lifetime", () => {
                 {
                   execPolicy,
                   streamExecApproval: {
+                    createdAtMs: proposal.job.createdAtMs,
                     policyKey,
                     binding: cronStreamExecApprovalBinding(proposal),
                     consumption,

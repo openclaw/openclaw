@@ -10,11 +10,10 @@ import {
 } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
-  ChatComposerPersistence,
   loadChatComposerState as load,
-  restoreChatComposerState as restore,
   persistChatComposerState as persist,
-} from "./composer-persistence.ts";
+} from "./composer-draft-storage.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import * as durableComposer from "./durable-composer-persistence.ts";
 
 type ReadResult = Awaited<ReturnType<typeof draftStore.readDurableComposerDraft>>;
@@ -221,6 +220,25 @@ it.each([false, true])(
   },
 );
 
+it("retires pending restoration on stop and restores again after restart", async () => {
+  const state = createState();
+  const { pending, read, persistence } = pendingRestore(state);
+  await settleStorage();
+  expect(read).toHaveBeenCalledOnce();
+
+  persistence.stop();
+  pending.resolve(foundDraft("Saved draft"));
+  await settleStorage();
+  expect(state.chatMessage).toBe("");
+  expect(load(state, state.sessionKey).snapshot).toBeNull();
+
+  persistence.start();
+  await settleStorage();
+  expect(state.chatMessage).toBe("Saved draft");
+  expect(load(state, state.sessionKey).snapshot?.draft).toBe("Saved draft");
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
 it("captures once per restore admission while pending, settled, reset, and switching scope", async () => {
   const capture = vi.spyOn(durableComposer, "captureDurableChatAttachments");
   const state = createState({ chatMessage: "Saved draft" });
@@ -350,7 +368,7 @@ it("persists empty goal selection and versions cancellation", () => {
   persistence.persistNow();
   const revision = load(state, state.sessionKey).revisions.latestAttempt;
   const restored = createState({ client: null, connected: false });
-  expect(restore(restored)).toBe(true);
+  expect(new ChatComposerPersistence(() => restored).restore()).toBe(true);
   expect(restored).toMatchObject({
     chatGoalDraftMode: state.chatGoalDraftMode,
     chatReplyTarget: state.chatReplyTarget,

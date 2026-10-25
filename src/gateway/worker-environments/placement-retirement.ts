@@ -33,6 +33,6 @@ export function retireWorkerSessionPlacement(
   if (!result) {
     return undefined;
   }
-  publishPlacementTurnClaimCleared(db, sessionId, input.expectedState, true);
+  publishPlacementTurnClaimCleared(db, sessionId, input.expectedState);
   return result;
 }

@@ -1,6 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createMainThreadStallMonitor, runWithMainThreadTask } from "./main-thread-stall.js";
+import {
+  createMainThreadStallMonitor,
+  getMainThreadTaskName,
+  runWithMainThreadTask,
+} from "./main-thread-stall.js";
 
 const monitors: ReturnType<typeof createMainThreadStallMonitor>[] = [];
 afterEach(() => {
@@ -56,6 +61,73 @@ describe("main-thread stall attribution", () => {
     ready.resolve();
     await operation;
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
+  });
+
+  it("restores same-name phases after nested work throws", () => {
+    const { monitor, elapse } = fixture();
+    const task = "gateway:rpc:sessions.list";
+    const failed = new Error("row preparation failed");
+    runWithMainThreadTask(task, () => {
+      runWithMainThreadTask(
+        task,
+        () => {
+          elapse(10);
+          expect(() =>
+            runWithMainThreadTask(
+              task,
+              () => {
+                expect(getMainThreadTaskName()).toBe(task);
+                elapse(300);
+                throw failed;
+              },
+              "agent-roster",
+            ),
+          ).toThrow(failed);
+          expect(getMainThreadTaskName()).toBe(task);
+          elapse(400);
+        },
+        "session-rows:select",
+      );
+    });
+    expect(getMainThreadTaskName()).toBeUndefined();
+    expect(monitor.drain()).toEqual({
+      stalls: [{ elapsedMs: 710, task: `${task}:session-rows:select`, taskMs: 400 }],
+      dropped: 0,
+      delayMaxMs: 710,
+    });
+  });
+
+  it("keeps overlapping callers across waits and synchronous owner-context reentry", async () => {
+    const { monitor, elapse } = fixture();
+    const ownerContext = AsyncLocalStorage.snapshot();
+    const ready = createDeferredCore();
+    const first = runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
+      await ready.promise;
+      expect(getMainThreadTaskName()).toBe("gateway:rpc:sessions.list");
+      runWithMainThreadTask(
+        getMainThreadTaskName()!,
+        () => {
+          ownerContext(() => {
+            expect(getMainThreadTaskName()).toBe("gateway:rpc:sessions.list");
+            elapse(300);
+          });
+        },
+        "session-rows:select",
+      );
+      await Promise.resolve();
+      expect(getMainThreadTaskName()).toBe("gateway:rpc:sessions.list");
+    });
+    await runWithMainThreadTask("scheduler:maintenance:refresh", async () => {
+      await Promise.resolve();
+      runWithMainThreadTask(getMainThreadTaskName()!, () => elapse(400), "agent-roster");
+      ready.resolve();
+    });
+    await first;
+    expect(getMainThreadTaskName()).toBeUndefined();
+    expect(monitor.drain().stalls).toEqual([
+      { elapsedMs: 400, task: "scheduler:maintenance:refresh:agent-roster", taskMs: 400 },
+      { elapsedMs: 300, task: "gateway:rpc:sessions.list:session-rows:select", taskMs: 300 },
+    ]);
   });
 
   it("starts a fresh observation when reset interrupts an active callback", () => {

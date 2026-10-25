@@ -11,7 +11,7 @@ import {
   verifyChainSegment,
   type AuditEntry,
 } from "../protocol/audit.js";
-import type { ReefAuditOperations } from "./audit-state-operation.js";
+import type { ReefAuditAppendEvent, ReefAuditOperations } from "./audit-state-operation.js";
 import {
   getReefAuditOperationState,
   openReefAuditStore,
@@ -49,6 +49,19 @@ describe("Reef SQLite audit state", () => {
   const key = new Uint8Array(32).fill(1);
   const open = (maxEntries = 2, signal?: AbortSignal) =>
     openReefAuditStore(runtime, key, maxEntries, signal);
+  const appendGroup = (audit: ReturnType<typeof open>, events: ReefAuditAppendEvent[]) => {
+    const state = getReefAuditOperationState(audit)!;
+    return state.head.createOperation!<ReefAuditOperations>(
+      [state.head, state.migration, state.entries],
+      { moduleName: "audit-state-operation-api.js", exportName: "executeReefAuditOperation" },
+    ).execute(
+      {
+        type: "append",
+        input: { head: 0, migration: 1, entries: 2, auditKey: key, maxEntries: 2, events },
+      },
+      { writeStores: [0, 2] },
+    );
+  };
   const heads = () =>
     runtime.state.openSyncKeyedStore<ReefAuditHeadRecord>({
       namespace: REEF_AUDIT_HEAD_NAMESPACE,
@@ -76,33 +89,12 @@ describe("Reef SQLite audit state", () => {
 
   it("commits an ordered event group with encryption and the retained suffix", async () => {
     const audit = open();
-    const state = getReefAuditOperationState(audit)!;
-    const operation = state.head.createOperation!<ReefAuditOperations>(
-      [state.head, state.migration, state.entries],
-      {
-        moduleName: "audit-state-operation-api.js",
-        exportName: "executeReefAuditOperation",
-      },
-    );
     await audit.appendEvent("before", {}, 9);
-    const result = await operation.execute(
-      {
-        type: "append",
-        input: {
-          head: 0,
-          migration: 1,
-          entries: 2,
-          auditKey: key,
-          maxEntries: 2,
-          events: [
-            { type: "proposal", payload: { text: "private text" }, ts: 10 },
-            { type: "verdict", payload: { reason: "private reason" }, ts: 11 },
-            { type: "envelope", payload: { id: 3 }, ts: 12 },
-          ],
-        },
-      },
-      { writeStores: [0, 2] },
-    );
+    const result = await appendGroup(audit, [
+      { type: "proposal", payload: { text: "private text" }, ts: 10 },
+      { type: "verdict", payload: { reason: "private reason" }, ts: 11 },
+      { type: "envelope", payload: { id: 3 }, ts: 12 },
+    ]);
     expect(result.value.map((entry) => entry.event.seq)).toEqual([2, 3, 4]);
     expect(decryptAuditText(result.value[0]!, key).event.payload).toEqual({ text: "private text" });
     expect(JSON.stringify(result.value)).not.toContain("private");
@@ -119,34 +111,13 @@ describe("Reef SQLite audit state", () => {
   });
 
   it("refuses an invalid event group without publishing a partial chain", async () => {
-    const audit = openReefAuditStore(createRuntime(stateDir), key, 2);
+    const audit = open();
     const initial = await audit.appendEvent("before", {}, 9);
-    const state = getReefAuditOperationState(audit)!;
-    const operation = state.head.createOperation!<ReefAuditOperations>(
-      [state.head, state.migration, state.entries],
-      {
-        moduleName: "audit-state-operation-api.js",
-        exportName: "executeReefAuditOperation",
-      },
-    );
     await expectAuditOperationError(
-      operation.execute(
-        {
-          type: "append",
-          input: {
-            head: 0,
-            migration: 1,
-            entries: 2,
-            auditKey: key,
-            maxEntries: 2,
-            events: [
-              { type: "valid", payload: {}, ts: 10 },
-              { type: "invalid", payload: {}, ts: -1 },
-            ],
-          },
-        },
-        { writeStores: [0, 2] },
-      ),
+      appendGroup(audit, [
+        { type: "valid", payload: {}, ts: 10 },
+        { type: "invalid", payload: {}, ts: -1 },
+      ]),
       "invalid audit event",
     );
     expect(await audit.entries()).toEqual([initial]);
@@ -229,11 +200,7 @@ describe("Reef SQLite audit state", () => {
   });
 
   it.each([1, 2])("retains a verifiable audit suffix with capacity %s", async (maxEntries) => {
-    const store = openReefAuditStore(
-      createRuntime(stateDir),
-      new Uint8Array(32).fill(1),
-      maxEntries,
-    );
+    const store = open(maxEntries);
     await store.appendEvent("one", { id: 1 }, 10);
     await store.appendEvent("two", { id: 2 }, 11);
     await store.appendEvent("three", { id: 3 }, 12);
@@ -297,19 +264,18 @@ describe("Reef SQLite audit state", () => {
   });
 
   it("reads empty audit history without creating a state database", async () => {
-    const store = openReefAuditStore(createRuntime(stateDir), new Uint8Array(32).fill(1));
-
+    const store = open();
     await expect(store.entries()).resolves.toEqual([]);
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
   });
 
   it("observes foreign appends on a new read of the retained suffix", async () => {
-    const current = openReefAuditStore(runtime, key, 1);
-    const reader = openReefAuditStore(runtime, key, 1);
+    const current = open(1);
+    const reader = open(1);
     await current.appendEvent("old", {}, 10);
-    expect((await reader.entries()).map((entry) => entry.event.type)).toEqual(["old"]);
+    expect(eventTypes(await reader.entries())).toEqual(["old"]);
     await current.appendEvent("new", {}, 11);
-    expect((await reader.entries()).map((entry) => entry.event.type)).toEqual(["new"]);
+    expect(eventTypes(await reader.entries())).toEqual(["new"]);
   });
 
   it("retains its captured audit source when routing changes before execution", async () => {

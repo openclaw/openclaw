@@ -19,18 +19,11 @@ import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import type { Skill } from "../skills/loading/skill-contract.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-identity.test-support.js";
-import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
-import {
-  createSandboxedReadTool,
-  createSkillInstructionDeliveryMarkers,
-  wrapReadToolWithSkillContent,
-  type SkillInstructionDeliveryCache,
-  type SkillInstructionDeliveryMarkers,
-} from "./agent-tools.read.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createSandboxedReadTool, wrapReadToolWithSkillContent } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -41,7 +34,6 @@ import {
 } from "./cron-creator-authority-context.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { createSyntheticSourceInfo } from "./sessions/source-info.js";
 import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
@@ -55,6 +47,7 @@ import {
   createHostSandboxFsBridge,
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
 
 const tinyPngBuffer = Buffer.from(
@@ -64,13 +57,7 @@ const tinyPngBuffer = Buffer.from(
 const avifHeaderBuffer = Buffer.from("00000018667479706176696600000000617669666d696631", "hex");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-completion-grant-");
-const openClawOnlyPlan = {
-  includeBaseCodingTools: false,
-  includeShellTools: false,
-  includeChannelTools: false,
-  includeOpenClawTools: true,
-  includePluginTools: false,
-};
+const openClawOnlyPlan = createOpenClawOnlyToolConstructionPlan();
 const pluginOnlyPlan = {
   ...openClawOnlyPlan,
   includeOpenClawTools: false,
@@ -88,14 +75,7 @@ const fullSkillResult: AgentToolResult<ReadToolDetails> = {
   details: { kind: "text", content: skillContent },
 };
 
-function skillReadTool(
-  execute: Parameters<typeof wrapReadToolWithSkillContent>[0]["execute"],
-  delivery?: {
-    bundleFingerprint?: string;
-    instructionDeliveryCache?: SkillInstructionDeliveryCache;
-    instructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
-  },
-) {
+function skillReadTool(execute: Parameters<typeof wrapReadToolWithSkillContent>[0]["execute"]) {
   return wrapReadToolWithSkillContent(
     {
       name: "read",
@@ -104,19 +84,8 @@ function skillReadTool(
       parameters: Type.Object({ path: Type.String() }),
       execute,
     },
-    [
-      {
-        filePath: skillLocator,
-        ...(delivery?.bundleFingerprint ? { bundleFingerprint: delivery.bundleFingerprint } : {}),
-      },
-    ],
-    {
-      instructionDeliveryCache:
-        delivery?.instructionDeliveryCache ?? new Map<string, Promise<boolean>>(),
-      ...(delivery?.instructionDeliveryMarkers
-        ? { instructionDeliveryMarkers: delivery.instructionDeliveryMarkers }
-        : {}),
-    },
+    [{ filePath: skillLocator }],
+    { instructionDeliveryCache: new Map<string, Promise<boolean>>() },
   );
 }
 
@@ -688,73 +657,6 @@ describe("createOpenClawCodingTools", () => {
     await expect(fs.readFile(boundFile, "utf8")).resolves.toBe('{"ready":true}\n');
   });
 
-  it("serves sandboxed skill instructions through the sandbox bridge, never host-retained content", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-skill-read-");
-    const hostSkillFile = path.join(workspaceDir, ".agents", "skills", "sandboxed", "SKILL.md");
-    await fs.mkdir(path.dirname(hostSkillFile), { recursive: true });
-    // The bridge-served tree deliberately diverges from the host-retained
-    // discovery bytes: a wrapper that serves the cached content would both
-    // bypass the guarded sandbox reader and attribute the read to the host
-    // bundle's stamp.
-    await fs.writeFile(hostSkillFile, "BRIDGE-SERVED instructions\n", "utf8");
-    const containerSkillPath = "/workspace/.agents/skills/sandboxed/SKILL.md";
-
-    const sandbox = createAgentToolsSandboxContext({ workspaceDir });
-    sandbox.fsBridge = createSandboxFsBridgeFromResolver((filePath) => {
-      const relativePath = path.posix.relative("/workspace", filePath);
-      return {
-        hostPath: path.join(workspaceDir, relativePath),
-        relativePath,
-        containerPath: filePath,
-      };
-    });
-
-    const skill: Skill = {
-      name: "sandboxed",
-      description: "Sandboxed fixture skill",
-      // Remapped sandbox entries carry container paths with no host file
-      // authority; retained discovery content and stamps are host-domain facts.
-      filePath: containerSkillPath,
-      baseDir: path.posix.dirname(containerSkillPath),
-      fileHost: "gateway",
-      sourceInfo: createSyntheticSourceInfo(containerSkillPath, { source: "gateway" }),
-      disableModelInvocation: false,
-      source: "gateway",
-      readContent: "HOST-RETAINED instructions\n",
-      bundleFingerprint: "fp-host-retained-stamp",
-    };
-    const markers = createSkillInstructionDeliveryMarkers();
-
-    const tools = createOpenClawCodingToolsInternal(
-      {
-        workspaceDir,
-        sandbox,
-        skillInstructionDeliveryMarkers: markers,
-      },
-      [skill],
-    );
-    const readTool = tools.find((tool) => tool.name === "read");
-    if (!readTool) {
-      throw new Error("missing read tool");
-    }
-    // Container-path form: the instruction read routes through the guarded
-    // bridge and serves the sandbox tree's own bytes.
-    const result = await readTool.execute("read-sandboxed-skill", {
-      path: containerSkillPath,
-    });
-    const text = extractToolText(result);
-    expect(text).toContain("BRIDGE-SERVED");
-    expect(text).not.toContain("HOST-RETAINED");
-    // Host-path form: the guarded reader rejects the request instead of the
-    // wrapper satisfying it from the host-retained cache.
-    await expect(
-      readTool.execute("read-sandboxed-host-path", { path: hostSkillFile }),
-    ).rejects.toThrow();
-    // No delivery identity settles for bridge-served instructions, so the
-    // activation cannot borrow the host bundle's stamp.
-    expect(markers.takeInvocationFingerprint("read-sandboxed-skill")).toBeUndefined();
-  });
-
   it("continues oversized data through the assembled shell-disabled read tool", async () => {
     const original = JSON.stringify({ generated: "x".repeat(52 * 1024) });
     const { root: workspaceDir } = await fileFixture("generated.json", original);
@@ -940,13 +842,12 @@ describe("createOpenClawCodingTools", () => {
       }),
     });
 
-    const persistedEnvelopeTools = createToolsForStoredSession(
-      storeTemplate,
-      "agent:main:acp:child",
-    );
-    expectNoSubagentControlTools(persistedEnvelopeTools);
+    const envelopeTools = createToolsForStoredSession(storeTemplate, "agent:main:acp:child");
+    expectNoSubagentControlTools(envelopeTools);
+    expect(lastCoreOptions().requesterIsSubagent).toBe(true);
 
     const restrictedTools = createToolsForStoredSession(storeTemplate, "agent:main:acp:plain");
+    expect(lastCoreOptions().requesterIsSubagent).toBe(false);
     expectToolNames(restrictedTools, ["sessions_spawn", "subagents"]);
 
     const ancestryTools = createToolsForStoredSession(storeTemplate, "agent:writer:acp:child");
@@ -970,16 +871,6 @@ describe("createOpenClawCodingTools", () => {
         allowed ? [] : ["browser"],
       );
     }
-  });
-
-  it("enables heartbeat response when visible replies are message-tool-only", () => {
-    expectToolSurface(
-      {
-        config: { messages: { visibleReplies: "message_tool" }, tools: { profile: "coding" } },
-        trigger: "heartbeat",
-      },
-      ["heartbeat_respond"],
-    );
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {
@@ -1237,18 +1128,12 @@ describe("createOpenClawCodingTools read behavior", () => {
 
   it("deduplicates sequential and concurrent successful skill reads within one attempt", async () => {
     const locator = skillLocator;
-    // SDK Map contract: a plugin-supplied bare Map owns delivery dedupe with no
-    // fingerprint marker surface. Marker-less reads must settle without throwing.
-    const instructionDeliveryCache = new Map<string, Promise<boolean>>();
     let releaseRead = (): void => undefined;
     const pendingRead = new Promise<AgentToolResult<ReadToolDetails>>((resolve) => {
       releaseRead = () => resolve(fullSkillResult);
     });
     const execute = vi.fn(() => pendingRead);
-    const tool = skillReadTool(execute, {
-      bundleFingerprint: "fp-generation-b",
-      instructionDeliveryCache,
-    });
+    const tool = skillReadTool(execute);
 
     const first = tool.execute("first-skill-read", { path: locator });
     const concurrent = tool.execute("concurrent-skill-read", { path: locator });
@@ -1263,50 +1148,8 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps per-invocation markers when a failing read races a succeeding read of the same path", async () => {
-    const locator = "/skills/pond/SKILL.md";
-    const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
-    const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
-    const instructions = "# Pond\ncomplete instructions";
-    const fullResult = {
-      content: [{ type: "text", text: instructions }],
-      details: { kind: "text", content: instructions },
-    } as AgentToolResult<unknown>;
-    const execute = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("flaky skill read"))
-      .mockResolvedValueOnce(fullResult);
-    const tool = wrapReadToolWithSkillContent(
-      {
-        name: "read",
-        label: "read",
-        description: "read a file",
-        parameters: {},
-        execute,
-      } as never,
-      [{ filePath: locator, bundleFingerprint: "fp-generation-b" }],
-      { instructionDeliveryCache, instructionDeliveryMarkers },
-    );
-
-    const failing = tool.execute("failing-skill-read", { path: locator });
-    const succeeding = tool.execute("succeeding-skill-read", { path: locator });
-    await expect(failing).rejects.toThrow("flaky skill read");
-    expect(extractToolText(await succeeding)).toBe(instructions);
-    expect(execute).toHaveBeenCalledTimes(2);
-    // The failing invocation resets only its own association: the succeeding
-    // delivery settles through the retry and keeps the identity it established.
-    expect(
-      instructionDeliveryMarkers.takeInvocationFingerprint("failing-skill-read"),
-    ).toBeUndefined();
-    expect(instructionDeliveryMarkers.takeInvocationFingerprint("succeeding-skill-read")).toBe(
-      "fp-generation-b",
-    );
-  });
-
   it("retries skill reads after failures, whole-read refusals, and optional misses", async () => {
     const locator = skillLocator;
-    const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
-    const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
     const truncatedResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: "partial" }],
       details: {
@@ -1337,11 +1180,7 @@ describe("createOpenClawCodingTools read behavior", () => {
       .mockResolvedValueOnce(truncatedResult)
       .mockResolvedValueOnce(notFoundResult)
       .mockResolvedValueOnce(fullSkillResult);
-    const tool = skillReadTool(execute, {
-      bundleFingerprint: "fp-generation-b",
-      instructionDeliveryCache,
-      instructionDeliveryMarkers,
-    });
+    const tool = skillReadTool(execute);
 
     await expect(tool.execute("failed-skill-read", { path: locator })).rejects.toThrow(
       "transient read failure",
@@ -1354,117 +1193,10 @@ describe("createOpenClawCodingTools read behavior", () => {
         await tool.execute("optional-missing-skill-read", { path: locator, optional: true }),
       ),
     ).toContain("Optional file not found");
-    // Failed, oversized, and non-text outcomes are never qualifying deliveries:
-    // each invocation's marker is deleted with its reset settlement.
-    expect(
-      instructionDeliveryMarkers.takeInvocationFingerprint("failed-skill-read"),
-    ).toBeUndefined();
-    expect(
-      instructionDeliveryMarkers.takeInvocationFingerprint("oversized-skill-read"),
-    ).toBeUndefined();
-    expect(
-      instructionDeliveryMarkers.takeInvocationFingerprint("optional-missing-skill-read"),
-    ).toBeUndefined();
     expect(extractToolText(await tool.execute("retried-skill-read", { path: locator }))).toBe(
       "# Pond\ncomplete instructions",
     );
     expect(execute).toHaveBeenCalledTimes(4);
-    expect(instructionDeliveryMarkers.takeInvocationFingerprint("retried-skill-read")).toBe(
-      "fp-generation-b",
-    );
-  });
-
-  it("drops unconsumed invocation markers and settled identities when compaction clears the epoch", async () => {
-    const locator = "/skills/pond/SKILL.md";
-    const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
-    const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
-    const instructions = "# Pond\ncomplete instructions";
-    const fullResult = {
-      content: [{ type: "text", text: instructions }],
-      details: { kind: "text", content: instructions },
-    } as AgentToolResult<unknown>;
-    const truncatedResult = {
-      content: [{ type: "text", text: "partial" }],
-      details: { kind: "truncated" },
-    } as AgentToolResult<unknown>;
-    const execute = vi
-      .fn()
-      .mockResolvedValueOnce(fullResult)
-      .mockResolvedValueOnce(truncatedResult)
-      .mockResolvedValue(fullResult);
-    const tool = wrapReadToolWithSkillContent(
-      {
-        name: "read",
-        label: "read",
-        description: "read a file",
-        parameters: {},
-        execute,
-      } as never,
-      [{ filePath: locator, bundleFingerprint: "fp-generation-b" }],
-      { instructionDeliveryCache, instructionDeliveryMarkers },
-    );
-    await tool.execute("cleared-read", { path: locator });
-    expect(instructionDeliveryMarkers.takeInvocationFingerprint("cleared-read")).toBe(
-      "fp-generation-b",
-    );
-    await tool.execute("in-flight-read", { path: locator });
-    // An epoch clear drops settled identities and in-flight unconsumed markers alike.
-    // The compaction owner clears this delivery cache and the marker state
-    // together (attempt-execution-phase), so post-clear attribution waits for a
-    // fresh qualifying delivery below; retained-generation identity across
-    // materializations is pinned by the cross-materialization test above.
-    instructionDeliveryCache.clear();
-    instructionDeliveryMarkers.clear();
-    expect(instructionDeliveryMarkers.takeInvocationFingerprint("in-flight-read")).toBeUndefined();
-    // Post-clear, an oversized re-read has no qualifying delivery to inherit: omit.
-    expect(
-      extractToolText(await tool.execute("post-clear-oversized", { path: locator })),
-    ).toContain("cannot be partially served");
-    expect(
-      instructionDeliveryMarkers.takeInvocationFingerprint("post-clear-oversized"),
-    ).toBeUndefined();
-    // A fresh qualifying delivery re-establishes the marker; an identical value is allowed.
-    expect(extractToolText(await tool.execute("post-clear-fresh", { path: locator }))).toBe(
-      instructions,
-    );
-    expect(instructionDeliveryMarkers.takeInvocationFingerprint("post-clear-fresh")).toBe(
-      "fp-generation-b",
-    );
-  });
-
-  it("settles a qualifying delivery for empty skill instructions and omits identities for node locators", async () => {
-    const emptyLocator = "node://node-1/skills/pond/SKILL.md";
-    const plainLocator = "node://node-1/skills/plain/SKILL.md";
-    const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
-    const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
-    const tool = wrapReadToolWithSkillContent(
-      {
-        name: "read",
-        label: "read",
-        description: "read a file",
-        parameters: {},
-        execute: vi.fn(),
-      } as never,
-      [
-        { filePath: emptyLocator, readContent: "", bundleFingerprint: "fp-generation-b" },
-        { filePath: plainLocator, readContent: "# Plain\n" },
-      ],
-      { instructionDeliveryCache, instructionDeliveryMarkers },
-    );
-    // Bundle identity covers the whole tree: zero-instruction deliveries still settle.
-    expect(extractToolText(await tool.execute("empty-skill-read", { path: emptyLocator }))).toBe(
-      "File is empty (0 bytes).",
-    );
-    expect(instructionDeliveryMarkers.takeInvocationFingerprint("empty-skill-read")).toBe(
-      "fp-generation-b",
-    );
-    // node:// locators run no bundle preparation, so no identity is established.
-    expect(extractToolText(await tool.execute("plain-skill-read", { path: plainLocator }))).toBe(
-      "# Plain\n",
-    );
-    expect(
-      instructionDeliveryMarkers.takeInvocationFingerprint("plain-skill-read"),
-    ).toBeUndefined();
   });
 
   it("applies sandbox path guards to canonical path", async () => {

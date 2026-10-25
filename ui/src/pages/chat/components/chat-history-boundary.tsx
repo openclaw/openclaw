@@ -23,10 +23,14 @@ export function ChatHistoryBoundary(props: ChatHistoryBoundaryProps) {
       <button
         class="chat-history-boundary__action"
         type="button"
-        disabled={props.loading}
+        aria-disabled={props.loading ? "true" : undefined}
         aria-busy={props.loading ? "true" : "false"}
         aria-label={label()}
-        onClick={() => props.onShowEarlier()}
+        onClick={() => {
+          if (!props.loading) {
+            props.onShowEarlier();
+          }
+        }}
       >
         <span role="status">{label()}</span>
       </button>

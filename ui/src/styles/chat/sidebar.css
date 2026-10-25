@@ -109,7 +109,7 @@
   font-size: var(--control-ui-text-xs);
   line-height: 1.25;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -270,11 +270,10 @@
 }
 
 .chat-workspace-rail__file-name,
-.chat-workspace-rail__file-meta,
 .session-diff-menu__subject {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -284,6 +283,10 @@
 }
 
 .chat-workspace-rail__file-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   line-height: 1.1;
@@ -533,7 +536,7 @@ openclaw-session-discussion {
   overflow: hidden;
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -1322,12 +1325,6 @@ button.sidebar-image-view__image {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .sidebar-markdown-reader {
-    transition: none;
-  }
-}
-
 .review-unavailable {
   display: grid;
   flex: 1;
@@ -1384,7 +1381,7 @@ button.sidebar-image-view__image {
 .session-diff__branch-label {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
   font-family: var(--mono);
 }
@@ -1542,19 +1539,31 @@ button.sidebar-image-view__image {
 }
 
 .session-diff__old-path {
-  overflow: hidden;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
   max-width: 110px;
   flex-shrink: 1;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
+}
+
+.session-diff__old-path-text {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.session-diff__rename-arrow {
+  flex: none;
 }
 
 .session-diff__filename {
   overflow: hidden;
   flex-shrink: 0;
   max-width: 48%;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   color: var(--text-strong);
   font-weight: 550;
 }
@@ -1562,7 +1571,7 @@ button.sidebar-image-view__image {
 .session-diff__directory {
   overflow: hidden;
   min-width: 0;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -1860,7 +1869,7 @@ button.sidebar-image-view__image {
   background: color-mix(in srgb, var(--secondary) 70%, transparent);
   color: var(--text);
   font-size: var(--control-ui-text-xs);
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -1913,7 +1922,7 @@ openclaw-chat-files-panel,
 
 .sidebar-file-toolbar__type {
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -2220,7 +2229,7 @@ openclaw-session-diff:has(> .session-diff--desktop) {
 .session-diff__scope > span {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -2268,14 +2277,6 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   font-size: inherit;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-}
-
-.session-diff--desktop .chat-diffstat__add {
-  color: var(--ok);
-}
-
-.session-diff--desktop .chat-diffstat__del {
-  color: var(--destructive);
 }
 
 .session-diff--desktop .session-diff__file-toggle > .chat-diffstat {
@@ -2362,7 +2363,7 @@ openclaw-session-diff:has(> .session-diff--desktop) {
 }
 .session-diff__tree-name > span:last-child {
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 .session-diff__tree-row .chat-diffstat {
@@ -2376,11 +2377,9 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   max-width: 100%;
 }
 .session-diff__basename {
+  --text-overflow-fade-width: 12px;
   overflow: hidden;
   white-space: nowrap;
-}
-.session-diff__basename[data-overflow="true"] {
-  mask-image: linear-gradient(to right, black calc(100% - 12px), transparent);
 }
 .session-diff__extension {
   flex: none;
@@ -2393,7 +2392,7 @@ openclaw-session-diff:has(> .session-diff--desktop) {
 .session-diff-menu__jump-path small {
   color: var(--muted);
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
 }
 
 @container (max-width: 640px) {
@@ -2616,4 +2615,9 @@ openclaw-session-diff:has(> .session-diff--desktop) {
 
 .sidebar-file-mobile__fallback-download {
   padding: 0 16px 16px;
+}
+
+.chat-workspace-rail__path > span {
+  display: block;
+  overflow: hidden;
 }

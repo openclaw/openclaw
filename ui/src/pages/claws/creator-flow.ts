@@ -55,11 +55,13 @@ export class ClawCreatorFlow {
   private seenRevision: string | null = null;
   busy: "starting" | "reviewing" | "publishing" | null = null;
   review: ClawsDraftsReviewResult | null = null;
+  reviewRead: { result: Promise<void> } | null = null;
   reviewCurrent = false;
   choices: ClawDraftReviewChoices | null = null;
   modalOpen = false;
   publication: ClawsDraftsPublishResult | null = null;
   error: string | null = null;
+  presentationLifetime = Promise.withResolvers<void>();
 
   get hasActiveDraft() {
     return this.target !== null;
@@ -80,6 +82,11 @@ export class ClawCreatorFlow {
   readonly subscribe = this.listeners.subscribe;
 
   private readonly changed = this.listeners.publish;
+
+  retirePresentation() {
+    this.presentationLifetime.resolve();
+    this.presentationLifetime = Promise.withResolvers<void>();
+  }
 
   private mainSessionKey(agentId: string) {
     const mainKey = resolveUiConfiguredMainKey({
@@ -111,6 +118,7 @@ export class ClawCreatorFlow {
   }
 
   private reset(target: Target | null) {
+    this.retirePresentation();
     this.generation += 1;
     this.reviewRequest += 1;
     if (this.pollTimer) {
@@ -122,6 +130,7 @@ export class ClawCreatorFlow {
     this.target = target;
     this.seenRevision = null;
     this.review = null;
+    this.reviewRead = null;
     this.reviewCurrent = false;
     this.choices = null;
     this.modalOpen = false;
@@ -249,8 +258,7 @@ export class ClawCreatorFlow {
     }
     this.busy = "reviewing";
     const request = ++this.reviewRequest;
-    this.changed();
-    try {
+    const pending = (async () => {
       const result = await target.client.request<ClawsDraftsReviewResult>("claws.drafts.review", {
         agentId: target.agentId,
         draftId: target.draftId,
@@ -269,6 +277,11 @@ export class ClawCreatorFlow {
       };
       this.modalOpen = true;
       this.error = null;
+    })();
+    this.reviewRead = { result: pending };
+    this.changed();
+    try {
+      await pending;
     } catch (error) {
       if (this.current(target, generation) && request === this.reviewRequest) {
         this.error = formatUiError(error);
@@ -341,6 +354,7 @@ export class ClawCreatorFlow {
   }
 
   close() {
+    this.retirePresentation();
     this.modalOpen = false;
     this.changed();
   }

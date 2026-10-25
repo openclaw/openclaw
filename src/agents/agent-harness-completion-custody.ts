@@ -359,7 +359,7 @@ export function runWithAgentHarnessCompletionCustody<T>(
 }
 
 /** Revalidate the retained source at asynchronous delivery effect boundaries. */
-export function isAgentHarnessCompletionCustodyCurrent(
+function isAgentHarnessCompletionCustodyCurrent(
   custody: AgentHarnessCompletionCustody,
   scope: AgentHarnessCompletionScope,
 ): boolean {

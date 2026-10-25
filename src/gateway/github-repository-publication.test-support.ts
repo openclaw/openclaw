@@ -21,6 +21,14 @@ import type { SessionRepositoryCheckpointPayload } from "./worker-environments/s
 
 const mocks = githubPublicationTestMocks();
 export const repositoryPublicationTestUrl = "https://github.com/owner/repository/pull/1";
+export function observeRepositoryCommands(observe: (args: string[]) => void | Promise<void>) {
+  const transport = mocks.runCommand.getMockImplementation()!;
+  mocks.runCommand.mockImplementation(async (args: string[], options) => {
+    const result = await transport(args, options);
+    await observe(args);
+    return result;
+  });
+}
 const jsonResult = (value: unknown, code = 0) => commandResult(JSON.stringify(value), code);
 type PullRequest = Record<"url" | "state" | "body" | "headSha" | "headRef" | "baseRef", string> & {
   userId: number;
@@ -136,13 +144,7 @@ export async function createRepositoryPublicationFixture(
       }),
     );
     const workspaceTree = writeTree(baseTree, entries);
-    const raw = JSON.stringify({
-      version: 1,
-      baseCommit,
-      baseTree,
-      workspaceTree,
-      entries,
-    });
+    const raw = JSON.stringify({ version: 1, baseCommit, baseTree, workspaceTree, entries });
     await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), raw);
     const publicationDigest = "sha256:" + createHash("sha256").update(raw).digest("hex");
     const ref = "refs/openclaw/worker-results/" + suffix;

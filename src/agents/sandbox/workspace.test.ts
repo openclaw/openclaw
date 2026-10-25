@@ -10,9 +10,6 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
-import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import * as workspaceCopy from "../workspace-bootstrap-copy.js";
@@ -27,6 +24,7 @@ import {
   DEFAULT_SOUL_FILENAME,
   ensureSandboxWorkspace,
 } from "../workspace.js";
+import { acquireSandboxGatewayOwner } from "./registry.test-support.js";
 import { captureSandboxStateOwner } from "./state-owner.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -75,16 +73,7 @@ describe("ensureSandboxWorkspace", () => {
       });
       await fs.mkdir(sandbox);
       await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-        const owner = acquireGatewayStateOwner({
-          databasePath: resolveOpenClawStateSqlitePath(),
-          payload: {
-            pid: process.pid,
-            processNamespace: readGatewayLockProcessNamespace(),
-            createdAt: new Date().toISOString(),
-            configPath: path.join(root, "openclaw.json"),
-            role: "gateway",
-          },
-        });
+        const owner = acquireSandboxGatewayOwner(root);
         const guard = { assertHost: await captureSandboxStateOwner() };
         const replacementGuard = vi.fn();
         const entered = createDeferred();

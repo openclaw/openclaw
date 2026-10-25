@@ -57,7 +57,7 @@ function fixture(shadow = false) {
       label: "Forge",
       linkReader: {
         hosts: ["github.com"],
-        pathPattern: "^/[^/]+/[^/]+/(pull|issues)/[0-9]+$",
+        pathPattern: "^/[^/]+/[^/]+/(?:pull/[0-9]+|issues/[0-9]+|commit/[a-f0-9]{7,40})$",
         detailMethod: "forge.detail",
         previewMethod: "forge.preview",
       },
@@ -103,13 +103,13 @@ afterEach(async () => {
 });
 
 describe("generic link hovercards", () => {
-  it("keeps a rendered GitHub sign-in link ordinary while genuine issue and PR links preview", async () => {
+  it("keeps a rendered GitHub sign-in link ordinary while genuine issue, PR, and commit links preview", async () => {
     const view = fixture();
     const login = "https://github.com/login?return_to=%2Facme%2Fproject%2Fpull%2F42";
     view.pane.innerHTML = toSanitizedMarkdownHtml(
-      `[Sign in](${login}) · [Pull request](https://github.com/acme/project/pull/42) · [Issue](https://github.com/acme/project/issues/43)`,
+      `[Sign in](${login}) · [Pull request](https://github.com/acme/project/pull/42) · [Issue](https://github.com/acme/project/issues/43) · [Commit](https://github.com/acme/project/commit/abcdef0123456789)`,
     );
-    const [signIn, pull, issue] = view.pane.querySelectorAll<HTMLAnchorElement>("a");
+    const [signIn, pull, issue, commit] = view.pane.querySelectorAll<HTMLAnchorElement>("a");
     await hover(signIn!);
     focus(signIn!);
     await vi.advanceTimersByTimeAsync(300);
@@ -117,7 +117,7 @@ describe("generic link hovercards", () => {
     expect(view.request).not.toHaveBeenCalled();
     expect(document.querySelector(".link-hovercard, .link-reader-hovercard")).toBeNull();
     expect(signIn).toMatchObject({ href: login, target: "_blank", textContent: "Sign in" });
-    for (const anchor of [pull!, issue!]) {
+    for (const anchor of [pull!, issue!, commit!]) {
       view.request.mockResolvedValue({
         url: anchor.href,
         title: "Real resource",

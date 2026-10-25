@@ -8,7 +8,7 @@ import {
   buildOpenAICompletionsParams,
   buildOpenAICompletionsRequest,
 } from "./openai-completions-params.js";
-import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import { createAssistantOutput, makeCompletionsModel } from "./openai-completions.test-support.js";
 
 const model = makeCompletionsModel({
   provider: "openrouter",
@@ -195,19 +195,8 @@ describe("Completions cache markers", () => {
       const toolLoop: Context["messages"] = [
         ...context.messages,
         {
-          role: "assistant",
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
+          ...createAssistantOutput(model),
           content: [{ type: "toolCall", id: "call_1", name: "alpha", arguments: {} }],
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 2,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
           stopReason: "toolUse",
           timestamp: 2,
         },

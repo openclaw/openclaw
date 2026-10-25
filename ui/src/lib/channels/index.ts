@@ -24,10 +24,6 @@ type ChannelGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
-type ChannelLogoutResult = {
-  cleared: boolean;
-};
-
 type ChannelGatewaySnapshot = {
   client: ChannelGatewayClient | null;
   phase: ApplicationGatewayPhase;
@@ -36,14 +32,8 @@ type ChannelGatewaySnapshot = {
   } | null;
 };
 
-type ChannelGateway = {
-  readonly snapshot: ChannelGatewaySnapshot;
-  subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
-  subscribeEvents: (listener: GatewayEventListener) => () => void;
-};
-
 /** One admitted read; retirement settles even when the transport never responds. */
-export type ChannelPairingRead = {
+export type ChannelRead = {
   readonly completion: Promise<string | null>;
 };
 
@@ -54,12 +44,13 @@ export type ChannelsState = {
   channelsLoadingProbe?: boolean | null;
   channelsRefreshSeq?: number;
   channelsSnapshot: ChannelsStatusSnapshot | null;
+  channelsRead: ChannelRead | null;
   channelsError: string | null;
   channelsLastSuccess: number | null;
   pairingLoading: boolean;
   pairingRefreshSeq: number;
   pairingSnapshot: ChannelsPairingListResult | null;
-  pairingRead: ChannelPairingRead | null;
+  pairingRead: ChannelRead | null;
   /** Admitted mutation failure; read failures belong to their completion receipt. */
   pairingError: string | null;
   pairingLastSuccess: number | null;
@@ -178,14 +169,20 @@ function channelSnapshotAllowsScope(
   });
 }
 
-function createInitialChannelsState(snapshot: ChannelGatewaySnapshot): ChannelsState {
-  return {
-    client: snapshot.client ?? null,
-    connected: snapshot.phase === "connected",
+export function createChannelCapability(gateway: {
+  readonly snapshot: ChannelGatewaySnapshot;
+  subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
+  subscribeEvents: (listener: GatewayEventListener) => () => void;
+}) {
+  const initialSnapshot = gateway.snapshot;
+  const state: ChannelsState = {
+    client: initialSnapshot.client ?? null,
+    connected: initialSnapshot.phase === "connected",
     channelsLoading: false,
     channelsLoadingProbe: null,
     channelsRefreshSeq: 0,
     channelsSnapshot: null,
+    channelsRead: null,
     channelsError: null,
     channelsLastSuccess: null,
     pairingLoading: false,
@@ -201,21 +198,6 @@ function createInitialChannelsState(snapshot: ChannelGatewaySnapshot): ChannelsS
     whatsappLoginConnected: null,
     whatsappBusy: false,
   };
-}
-
-function removePairingRequestFromSnapshot(state: ChannelsState, requestId: string): void {
-  const snapshot = state.pairingSnapshot;
-  if (!snapshot || !snapshot.requests.some((request) => request.requestId === requestId)) {
-    return;
-  }
-  state.pairingSnapshot = {
-    ...snapshot,
-    requests: snapshot.requests.filter((request) => request.requestId !== requestId),
-  };
-}
-
-export function createChannelCapability(gateway: ChannelGateway) {
-  const state = createInitialChannelsState(gateway.snapshot);
   const lifecycle = { whatsappEpoch: 0, pairingEpoch: 0 };
   let settlePairingRead: ((error: string | null) => void) | undefined;
 
@@ -289,7 +271,13 @@ export function createChannelCapability(gateway: ChannelGateway) {
       if (!isCurrent()) {
         return null;
       }
-      removePairingRequestFromSnapshot(state, requestId);
+      const pairingSnapshot = state.pairingSnapshot;
+      if (pairingSnapshot?.requests.some((row) => row.requestId === requestId)) {
+        state.pairingSnapshot = {
+          ...pairingSnapshot,
+          requests: pairingSnapshot.requests.filter((row) => row.requestId !== requestId),
+        };
+      }
       invalidatePairingRefresh();
       await loadChannelPairing({ duringMutation: true });
       return isCurrent() ? { result } : null;
@@ -401,7 +389,9 @@ export function createChannelCapability(gateway: ChannelGateway) {
   function logoutWhatsApp(accountId?: string) {
     return runWhatsAppRequest(
       (client) =>
-        client.request<ChannelLogoutResult>("channels.logout", {
+        client.request<{
+          cleared: boolean;
+        }>("channels.logout", {
           channel: "whatsapp",
           ...(accountId ? { accountId } : {}),
         }),
@@ -424,6 +414,13 @@ export function createChannelCapability(gateway: ChannelGateway) {
   let currentWhatsAppAdminAccess = channelSnapshotAllowsScope(gateway.snapshot, "operator.admin");
   let disposed = false;
   let channelsInvalidated = false;
+  let settleChannelRead: ((error: string | null) => void) | undefined;
+
+  function retireChannelRead() {
+    settleChannelRead?.(null);
+    settleChannelRead = undefined;
+    state.channelsRead = null;
+  }
 
   const publish = () => {
     if (disposed) {
@@ -461,6 +458,10 @@ export function createChannelCapability(gateway: ChannelGateway) {
     if (!probe) {
       channelsInvalidated = false;
     }
+    retireChannelRead();
+    const { promise, resolve } = Promise.withResolvers<string | null>();
+    settleChannelRead = resolve;
+    state.channelsRead = { completion: promise };
     try {
       const res = await client.request<ChannelsStatusSnapshot | null>("channels.status", {
         probe,
@@ -486,8 +487,9 @@ export function createChannelCapability(gateway: ChannelGateway) {
       if (isCurrent()) {
         state.channelsLoading = false;
         state.channelsLoadingProbe = null;
+        resolve(state.channelsError);
         if (channelsInvalidated) {
-          await loadChannels(false);
+          await refreshChannels();
         }
       }
     }
@@ -522,6 +524,7 @@ export function createChannelCapability(gateway: ChannelGateway) {
     state.client = snapshot.client;
     state.connected = connected;
     if (clientChanged || connectionChanged || channelReadAccessChanged) {
+      retireChannelRead();
       channelsInvalidated = false;
       state.channelsLoading = false;
       state.channelsLoadingProbe = null;
@@ -602,6 +605,7 @@ export function createChannelCapability(gateway: ChannelGateway) {
         return;
       }
       disposed = true;
+      retireChannelRead();
       channelsInvalidated = false;
       state.channelsRefreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
       lifecycle.whatsappEpoch += 1;

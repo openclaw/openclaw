@@ -160,9 +160,6 @@ export type SkillSnapshot = {
   };
   version?: number;
   promptFormatVersion?: number;
-  /** Resource version the loaded-bundle identities were stamped at; a
-   * watcher-observed support-file edit advances it without a snapshot rebuild. */
-  resourceVersion?: number;
 };
 
 /** Filesystem reads run on the workspace host; catalog selection stays with the caller. */

@@ -8,8 +8,6 @@ import {
 } from "@modelcontextprotocol/client";
 import { ResultSchema } from "@modelcontextprotocol/core";
 import type { ProcessCleanupResult } from "../process/supervisor/types.js";
-import { connectMcpClient, disposeMcpClient } from "./mcp-client-lifecycle.js";
-import { isMcpRequestTimeoutError } from "./mcp-error.js";
 import { McpStdioFrameDecoder, McpStdioFrameError } from "./mcp-stdio-frame-decoder.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
@@ -146,30 +144,42 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
     stderr = Buffer.concat([stderr, chunk]).subarray(-MAX_STDERR_BYTES);
   };
   transport.stderr.on("data", onStderr);
-  const startup = connectMcpClient({
-    client: protocol,
-    transport,
-    timeoutMs: startupTimeoutMs,
-  }).catch((error: unknown) => {
-    fail(error instanceof Error ? error : errors.unavailable("proxy failed to start", error));
-    throw failure ?? error;
-  });
+  const startupDeadline = Date.now() + startupTimeoutMs;
+  const startup = import("./mcp-client-lifecycle.js")
+    .then(({ connectMcpClient }) => {
+      if (stopped || failure) {
+        throw failure ?? errors.unavailable("proxy is stopping");
+      }
+      const remainingMs = startupDeadline - Date.now();
+      if (remainingMs <= 0) {
+        throw errors.unavailable(`initialize timed out after ${startupTimeoutMs}ms`);
+      }
+      return connectMcpClient({ client: protocol, transport, timeoutMs: remainingMs });
+    })
+    .catch((error: unknown) => {
+      fail(error instanceof Error ? error : errors.unavailable("proxy failed to start", error));
+      throw failure ?? error;
+    });
   void startup.catch(() => {});
 
   function beginShutdown(): void {
-    shutdown ??= disposeMcpClient({
-      client: protocol,
-      transport,
-      transportType: "stdio",
-      detachStderr: () => transport.stderr.off("data", onStderr),
-      onCleanupError: (error) => {
-        cleanupError = error;
-      },
-    }).then((outcome) => {
-      if (outcome !== "closed") {
-        throw errors.unavailable("proxy cleanup could not be confirmed", cleanupError);
-      }
-    });
+    shutdown ??= import("./mcp-client-lifecycle.js")
+      .then(({ disposeMcpClient }) =>
+        disposeMcpClient({
+          client: protocol,
+          transport,
+          transportType: "stdio",
+          detachStderr: () => transport.stderr.off("data", onStderr),
+          onCleanupError: (error) => {
+            cleanupError = error;
+          },
+        }),
+      )
+      .then((outcome) => {
+        if (outcome !== "closed") {
+          throw errors.unavailable("proxy cleanup could not be confirmed", cleanupError);
+        }
+      });
     void shutdown.catch(() => {});
   }
 
@@ -209,6 +219,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
         maxTotalTimeout: timeoutMs,
       });
     } catch (error) {
+      const { isMcpRequestTimeoutError } = await import("./mcp-error.js");
       if (isMcpRequestTimeoutError(error)) {
         fail(errors.unavailable(`${method} timed out after ${timeoutMs}ms`));
       }

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
-import * as scheduledTasks from "../../daemon/schtasks.js";
+import * as scheduledTasks from "../../daemon/schtasks-control.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";

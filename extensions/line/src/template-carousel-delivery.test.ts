@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { deliverLineAutoReply } from "./auto-reply-delivery.js";
-import {
-  baseDeliveryParams,
-  createDeps,
-  createQuickReply,
-  LINE_TEST_CFG,
-} from "./auto-reply-delivery.test-helpers.js";
+import { createDeps, createQuickReply, LINE_TEST_CFG } from "./auto-reply-delivery.test-helpers.js";
 import { createRuntime } from "./channel.sendPayload.test-support.js";
+import { deliver } from "./delivery.test-support.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { recordLineQuoteToken } from "./quote-tokens.js";
 import { setLineRuntime } from "./runtime.js";
@@ -113,11 +108,7 @@ describe("LINE carousel fallback delivery", () => {
   it("keeps the auto-reply fallback and ordinary text in the same reply", async () => {
     const { replyMessageLine } = createDeps({ buildTemplateMessageFromPayload });
 
-    await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "After", channelData: { line: lineData } },
-      lineData,
-    });
+    await deliver({ text: "After", channelData: { line: lineData } }, lineData);
 
     expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith(
       "token",

@@ -327,7 +327,6 @@ describe("status-runtime-shared", () => {
       deep: false,
       deepTimeoutMs: 1234,
       includeFilesystem: true,
-      includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
     });
   });

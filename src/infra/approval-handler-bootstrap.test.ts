@@ -137,6 +137,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const unsubscribe = vi.fn();
     const routeCoordinator = createApprovalNativeRouteCoordinator();
     const gatewayRuntime: GatewayNativeApprovalRuntime = {
+      getRuntimeConfig: () => ({}),
       request: vi.fn().mockResolvedValue([]),
       requestRoute: vi.fn().mockResolvedValue({}),
       routeCoordinator,

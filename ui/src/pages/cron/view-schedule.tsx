@@ -6,6 +6,7 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
+import { parseCronScheduleAt } from "../../lib/cron/form-schedule.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -35,8 +36,8 @@ function describeFormSchedule(form: CronFormState): string | null {
     return Number(amount) === 1 ? t(singular) : t(plural, { amount });
   }
   if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    return Number.isFinite(ms) ? t("cron.form.summaryOnce", { at: formatMs(ms) }) : null;
+    const at = parseCronScheduleAt(form.scheduleAt);
+    return at ? t("cron.form.summaryOnce", { at: formatMs(Date.parse(at)) }) : null;
   }
   if (form.scheduleKind === "cron") {
     const expr = form.cronExpr.trim();

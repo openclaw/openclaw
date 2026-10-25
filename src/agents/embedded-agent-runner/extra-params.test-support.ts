@@ -52,7 +52,7 @@ export const testing = {
 };
 
 type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
-  headers?: Record<string, string>;
+  headers?: SimpleStreamOptions["headers"];
   options?: SimpleStreamOptions;
   payload: TPayload;
 };
@@ -65,7 +65,7 @@ type ExtraParamsApi =
 type RunExtraParamsCaseParams<TPayload extends Record<string, unknown>> = {
   applyModelId?: string;
   applyProvider?: string;
-  callerHeaders?: Record<string, string>;
+  callerHeaders?: SimpleStreamOptions["headers"];
   cfg?: OpenClawConfig;
   model: Model<ExtraParamsApi>;
   mockProviderRuntime?: boolean;

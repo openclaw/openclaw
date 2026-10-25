@@ -1,6 +1,6 @@
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, type MockInstance, vi } from "vitest";
 import type { PluginRuntime } from "../api.js";
-import { createLineSendReceipt } from "./send-receipt.js";
 import * as send from "./send.js";
 import * as templates from "./template-messages.js";
 
@@ -16,7 +16,13 @@ export function lineResult(messageId: string, chatId = "c1") {
   return {
     messageId,
     chatId,
-    receipt: createLineSendReceipt({ messageIds: [messageId], chatId, kind: "text" }),
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [
+        { channel: "line", messageId, chatId, conversationId: chatId, meta: { messageCount: 1 } },
+      ],
+      threadId: chatId,
+      kind: "text",
+    }),
   };
 }
 

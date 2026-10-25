@@ -3,7 +3,11 @@ import { createComponent, createSignal, flush, merge } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { mountChatPaneHeader, openNativeMenu } from "./chat-pane-header.test-support.ts";
+import {
+  mountChatPaneHeader,
+  openNativeMenu,
+  selectNativeMenu,
+} from "./chat-pane-header.test-support.ts";
 import {
   ChatSessionVersionsMobile,
   type ChatSessionVersionsMobileProps,
@@ -16,16 +20,16 @@ afterEach(() => {
   }
 });
 
-it("hides one branch and lists multiple branches with the active tip marked", async () => {
-  const one = mountChatPaneHeader(containers, {
+it("hides unavailable versions without an empty host and lists multiple branches", async () => {
+  const header = mountChatPaneHeader(containers, {
     branches: [{ leafEntryId: "only", headline: "Only path", messageCount: 1, active: true }],
   });
   await waitForSolid(() => {
-    expect(one.container.querySelector("openclaw-chat-pane-versions-menu")).not.toBeNull();
-    expect(one.container.querySelector(".chat-pane__branches-trigger")).toBeNull();
+    expect(header.container.querySelector("openclaw-chat-pane-versions-menu")).toBeNull();
   });
 
-  const multiple = mountChatPaneHeader(containers, {
+  header.update({
+    catalog: true,
     branches: [
       { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
       {
@@ -37,23 +41,25 @@ it("hides one branch and lists multiple branches with the active tip marked", as
       },
     ],
   });
+  expect(header.container.querySelector("openclaw-chat-pane-versions-menu")).toBeNull();
+  header.update({ catalog: false });
   await waitForSolid(() =>
-    expect(multiple.container.querySelector(".chat-pane__branches-menu")).not.toBeNull(),
+    expect(header.container.querySelector(".chat-pane__branches-menu")).not.toBeNull(),
   );
-  const menu = multiple.container.querySelector(".chat-pane__branches-menu")!;
+  const menu = header.container.querySelector(".chat-pane__branches-menu")!;
   const trigger = menu.querySelector<HTMLButtonElement>(".oc-menu-trigger");
   expect(trigger?.classList.contains("chat-pane__branches-trigger")).toBe(true);
   await openNativeMenu(menu);
-  const items = multiple.container.querySelectorAll(".chat-pane__branch-item");
+  const items = header.container.querySelectorAll(".chat-pane__branch-item");
   expect(items).toHaveLength(2);
   expect(items[0]?.textContent).toContain("Current work");
   expect(items[0]?.getAttribute("data-active")).toBe("true");
   expect(items[0]?.querySelector(".chat-pane__branch-active")).not.toBeNull();
   expect(items[1]?.textContent).toContain("Earlier idea");
 
-  multiple.container.querySelector<HTMLButtonElement>('[data-value="other"]')?.click();
+  header.container.querySelector<HTMLButtonElement>('[data-value="other"]')?.click();
   await Promise.resolve();
-  expect(multiple.props.onBranchSelect).toHaveBeenCalledWith("other");
+  expect(header.props.onBranchSelect).toHaveBeenCalledWith("other");
 });
 
 it("disables branch switching while the agent is working", async () => {
@@ -76,6 +82,32 @@ it("disables branch switching while the agent is working", async () => {
   container.querySelector<HTMLButtonElement>('[data-value="other"]')?.click();
   await Promise.resolve();
   expect(props.onBranchSelect).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("keeps version choices live with merged chrome %s", async (mergedChrome) => {
+  const first = vi.fn();
+  const next = vi.fn();
+  const active = { leafEntryId: "active", headline: "Current", messageCount: 1, active: true };
+  const { container, update } = mountChatPaneHeader(containers, {
+    mergedChrome,
+    branches: [active, { ...active, leafEntryId: "before", active: false }],
+    onBranchSelect: first,
+  });
+  const menu = container.querySelector(".chat-pane__branches-menu")!;
+  await openNativeMenu(menu);
+  update({
+    branches: [active, { ...active, leafEntryId: "after", headline: "Updated", active: false }],
+    onBranchSelect: next,
+    branchSwitchDisabledReason: "Busy",
+  });
+  expect(container.querySelector(".chat-pane__branches-menu")).toBe(menu);
+  expect(menu.querySelector('[data-value="before"]')).toBeNull();
+  expect(menu.querySelector('[data-value="after"]')?.textContent).toContain("Updated");
+  expect(menu.querySelector<HTMLButtonElement>(".oc-menu-trigger")?.disabled).toBe(true);
+  update({ branchSwitchDisabledReason: null });
+  await selectNativeMenu(menu, "after");
+  expect(next).toHaveBeenCalledExactlyOnceWith("after");
+  expect(first).not.toHaveBeenCalled();
 });
 
 it("keeps mobile order and selection authoritative across active-first receipts, and resets on scope change", () => {

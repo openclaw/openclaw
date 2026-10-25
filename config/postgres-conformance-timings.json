@@ -288,10 +288,6 @@
       "group": "unit-fast-isolated",
       "seconds": 0.608
     },
-    "src/infra/database-engine/conversation-batches.conformance.test.ts": {
-      "group": "infra",
-      "seconds": 11.293
-    },
     "src/infra/database-engine/delivery-queue-retention.conformance.test.ts": {
       "group": "infra",
       "seconds": 4.507
@@ -376,10 +372,6 @@
       "group": "unit-fast",
       "seconds": 6.732
     },
-    "src/infra/database-engine/pending-input.conformance.test.ts": {
-      "group": "infra",
-      "seconds": 7.89
-    },
     "src/infra/database-engine/physical-facts.test.ts": {
       "group": "infra",
       "seconds": 2.154
@@ -387,10 +379,6 @@
     "src/infra/database-engine/plugin-port-roots.test.ts": {
       "group": "unit-fast",
       "seconds": 2.641
-    },
-    "src/infra/database-engine/plugin-registry.conformance.test.ts": {
-      "group": "infra",
-      "seconds": 12.264
     },
     "src/infra/database-engine/port-command-refusals.postgres.test.ts": {
       "group": "infra",
@@ -512,14 +500,6 @@
       "group": "infra",
       "seconds": 4.47
     },
-    "src/infra/database-engine/subagent-registry.conformance.test.ts": {
-      "group": "infra",
-      "seconds": 9.132
-    },
-    "src/infra/database-engine/team-reports-port.postgres.test.ts": {
-      "group": "infra",
-      "seconds": 5.407
-    },
     "src/infra/database-engine/transcript-identity-insert.conformance.test.ts": {
       "group": "infra",
       "seconds": 6.156
@@ -531,10 +511,6 @@
     "src/infra/database-engine/transcript-reader.conformance.test.ts": {
       "group": "unit-fast",
       "seconds": 4.357
-    },
-    "src/infra/database-engine/transcript-reports.conformance.test.ts": {
-      "group": "infra",
-      "seconds": 11.785
     },
     "src/infra/database-engine/update-command.conformance.test.ts": {
       "group": "infra",
@@ -583,10 +559,6 @@
     "src/infra/postgres-sync/session-publication.postgres.test.ts": {
       "group": "infra",
       "seconds": 14.842
-    },
-    "src/infra/postgres-sync/transaction.test.ts": {
-      "group": "infra",
-      "seconds": 1.254
     },
     "src/infra/postgres-sync/transcript-hydration.postgres.test.ts": {
       "group": "infra",

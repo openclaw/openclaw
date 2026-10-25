@@ -1,3 +1,4 @@
+import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { setDiscordPolicyBindings } from "./channel-policy-state.js";
@@ -16,6 +17,27 @@ function guildConfig(guild: Record<string, unknown>) {
 
 const denied = { requireMention: true, tools: { deny: ["exec"] } };
 const allowed = { requireMention: false, tools: { allow: ["exec"] } };
+const allow = (name: string) => ({ allow: [name] });
+
+function group(cfg: OpenClawConfig, groupId: string, senderId?: string, accountId?: string) {
+  return { cfg, groupSpace: "guild", groupId, senderId, accountId };
+}
+
+function expectPolicy(context: ChannelGroupContext, tools: unknown, mention?: boolean) {
+  expect(toolPolicy(context)).toEqual(tools);
+  if (mention !== undefined) {
+    expect(requiresMention(context)).toBe(mention);
+  }
+}
+
+function boundContext(channelKey = "ops", groupId = "246") {
+  setDiscordPolicyBindings("default", [{ guildKey: "guild", channelKey, channelId: "246" }]);
+  return {
+    groupSpace: "guild",
+    groupId,
+    groupChannel: `#${channelKey.replace(/^#/, "")}`,
+  };
+}
 
 describe("discord group policy", () => {
   afterEach(() => {
@@ -23,32 +45,61 @@ describe("discord group policy", () => {
     setDiscordPolicyBindings("work", []);
   });
 
-  it.each(["ops", "#ops", "2026"])("binds resolved name key %s to its channel id", (channelKey) => {
+  it("prefers channel policy, then guild policy, with sender-specific overrides", () => {
+    const channel = {
+      requireMention: true,
+      tools: allow("message.channel"),
+      toolsBySender: { "id:user:channel-admin": { deny: ["exec"] } },
+    };
     const cfg = guildConfig({
-      ...denied,
-      channels: {
-        [channelKey]: {
-          ...allowed,
-          toolsBySender: { "id:alice": { allow: ["privileged"] } },
-        },
+      requireMention: false,
+      tools: allow("message.guild"),
+      toolsBySender: { "id:user:guild-admin": allow("sessions.list") },
+      channels: { "123": channel },
+    });
+    expectPolicy(group(cfg, "123", "user:channel-admin"), { deny: ["exec"] }, true);
+    expectPolicy(group(cfg, "123", "user:someone"), allow("message.channel"));
+    expect(toolPolicy(group(cfg, "missing", "user:guild-admin"))).toEqual(allow("sessions.list"));
+    expectPolicy(group(cfg, "missing", "user:someone"), allow("message.guild"), false);
+  });
+
+  it.each(["work", "Work"])("honors account %s guild and channel overrides", (accountKey) => {
+    const accountGuild = {
+      requireMention: false,
+      tools: allow("message.account"),
+      channels: { "123": { requireMention: true, tools: allow("message.account-channel") } },
+    };
+    const cfg = createCfg({
+      guilds: { guild: { requireMention: true, tools: allow("message.root") } },
+      accounts: { [accountKey]: { guilds: { guild: accountGuild } } },
+    });
+    expectPolicy(group(cfg, "missing", undefined, "work"), allow("message.account"), false);
+    expectPolicy(group(cfg, "123", undefined, "work"), allow("message.account-channel"), true);
+  });
+
+  it("keeps mixed-case account guild policies isolated per account", () => {
+    const cfg = createCfg({
+      guilds: { guild: { requireMention: true, tools: allow("message.root") } },
+      accounts: {
+        Work: { guilds: { guild: { requireMention: false, tools: { deny: ["exec"] } } } },
+        Ops: { guilds: { guild: { requireMention: true, tools: allow("exec") } } },
+        Bare: {},
       },
     });
-    setDiscordPolicyBindings("default", [{ guildKey: "guild", channelKey, channelId: "246" }]);
-    const context = { cfg, groupSpace: "guild", groupChannel: `#${channelKey.replace(/^#/, "")}` };
+    expectPolicy(group(cfg, "missing", undefined, "work"), { deny: ["exec"] }, false);
+    expectPolicy(group(cfg, "missing", undefined, "ops"), allow("exec"), true);
+    expectPolicy(group(cfg, "missing", undefined, "bare"), allow("message.root"), true);
+  });
 
-    expect(toolPolicy({ ...context, groupId: "999" })).toEqual({ deny: ["exec"] });
-    expect(toolPolicy({ ...context, groupId: "999", senderId: "alice" })).toEqual({
-      deny: ["exec"],
-    });
-    expect(requiresMention({ ...context, groupId: "999" })).toBe(true);
-    expect(toolPolicy({ ...context, groupId: "246" })).toEqual({ allow: ["exec"] });
-    expect(requiresMention({ ...context, groupId: "246" })).toBe(false);
-    expect(toolPolicy({ ...context, groupId: "246", senderId: "alice" })).toEqual({
-      allow: ["privileged"],
-    });
-    expect(toolPolicy({ ...context, groupId: "246", groupChannel: "#general" })).toEqual({
-      allow: ["exec"],
-    });
+  it.each(["ops", "#ops", "2026"])("binds resolved name key %s to its channel id", (channelKey) => {
+    const channel = { ...allowed, toolsBySender: { "id:alice": allow("privileged") } };
+    const cfg = guildConfig({ ...denied, channels: { [channelKey]: channel } });
+    const context = { cfg, ...boundContext(channelKey) };
+    expectPolicy({ ...context, groupId: "999" }, denied.tools, true);
+    expectPolicy({ ...context, groupId: "999", senderId: "alice" }, denied.tools);
+    expectPolicy(context, allowed.tools, false);
+    expectPolicy({ ...context, senderId: "alice" }, allow("privileged"));
+    expectPolicy({ ...context, groupChannel: "#general" }, allowed.tools);
   });
 
   it("keeps unresolved name keys matching by name within their own account", () => {
@@ -61,24 +112,16 @@ describe("discord group policy", () => {
       groupChannel: "#ops",
     };
 
-    expect(toolPolicy(context)).toEqual({ allow: ["exec"] });
-    expect(requiresMention(context)).toBe(false);
-    expect(toolPolicy({ ...context, accountId: "work" })).toEqual({ deny: ["exec"] });
+    expectPolicy(context, allowed.tools, false);
+    expectPolicy({ ...context, accountId: "work" }, denied.tools);
   });
 
   it("prefers an id entry over a matching name entry", () => {
-    setDiscordPolicyBindings("default", [
-      { guildKey: "guild", channelKey: "ops", channelId: "246" },
-    ]);
     const context = {
       cfg: guildConfig({ channels: { "246": denied, ops: allowed } }),
-      groupSpace: "guild",
-      groupId: "246",
-      groupChannel: "#ops",
+      ...boundContext(),
     };
-
-    expect(toolPolicy(context)).toEqual({ deny: ["exec"] });
-    expect(requiresMention(context)).toBe(true);
+    expectPolicy(context, denied.tools, true);
   });
 
   it("prefers a channel sender policy over the guild plain policy", () => {
@@ -93,18 +136,11 @@ describe("discord group policy", () => {
   });
 
   it("does not use a channel wildcard as fallback", () => {
-    expect(
-      toolPolicy({
-        cfg: guildConfig({
-          tools: { allow: ["guild"] },
-          channels: {
-            "*": { tools: { deny: ["channel-wildcard"] } },
-          },
-        }),
-        groupSpace: "guild",
-        groupId: "missing",
-      }),
-    ).toEqual({ allow: ["guild"] });
+    const cfg = guildConfig({
+      tools: allow("guild"),
+      channels: { "*": { tools: { deny: ["channel-wildcard"] } } },
+    });
+    expectPolicy(group(cfg, "missing"), allow("guild"));
   });
 
   it("uses the wildcard guild only when no guild matches", () => {
@@ -115,10 +151,8 @@ describe("discord group policy", () => {
       },
     });
 
-    expect(requiresMention({ cfg, groupSpace: "exact" })).toBe(true);
-    expect(toolPolicy({ cfg, groupSpace: "exact" })).toBeUndefined();
-    expect(requiresMention({ cfg, groupSpace: "missing" })).toBe(false);
-    expect(toolPolicy({ cfg, groupSpace: "missing" })).toEqual({ allow: ["wildcard"] });
+    expectPolicy({ cfg, groupSpace: "exact" }, undefined, true);
+    expectPolicy({ cfg, groupSpace: "missing" }, allow("wildcard"), false);
   });
 
   it("matches normalized and hash-prefixed channel slugs", () => {
@@ -129,25 +163,16 @@ describe("discord group policy", () => {
       },
     });
 
-    expect(toolPolicy({ cfg, groupSpace: "guild", groupChannel: "#General" })).toEqual({
-      allow: ["normalized"],
-    });
-    expect(toolPolicy({ cfg, groupSpace: "guild", groupChannel: "Ops Room" })).toEqual({
-      allow: ["hash"],
-    });
+    expectPolicy({ cfg, groupSpace: "guild", groupChannel: "#General" }, allow("normalized"));
+    expectPolicy({ cfg, groupSpace: "guild", groupChannel: "Ops Room" }, allow("hash"));
   });
 
   it("keeps an account empty guild map from inheriting root guilds", () => {
-    expect(
-      requiresMention({
-        cfg: createCfg({
-          guilds: { guild: { requireMention: false } },
-          accounts: { work: { guilds: {} } },
-        }),
-        accountId: "work",
-        groupSpace: "guild",
-      }),
-    ).toBe(true);
+    const cfg = createCfg({
+      guilds: { guild: { requireMention: false } },
+      accounts: { work: { guilds: {} } },
+    });
+    expect(requiresMention({ cfg, accountId: "work", groupSpace: "guild" })).toBe(true);
   });
 
   it("keeps slash-bearing flat scope keys collision-free", () => {
@@ -158,9 +183,7 @@ describe("discord group policy", () => {
       },
     });
 
-    expect(toolPolicy({ cfg, groupSpace: "a/channel:b" })).toEqual({ allow: ["slash-guild"] });
-    expect(toolPolicy({ cfg, groupSpace: "a", groupId: "b" })).toEqual({
-      allow: ["nested-channel"],
-    });
+    expectPolicy({ cfg, groupSpace: "a/channel:b" }, allow("slash-guild"));
+    expectPolicy({ cfg, groupSpace: "a", groupId: "b" }, allow("nested-channel"));
   });
 });

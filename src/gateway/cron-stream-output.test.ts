@@ -8,6 +8,9 @@ import {
   fakeSupervisor,
   job,
   settle,
+  flushStreamOutput,
+  streamBatchArgs as batchArgs,
+  streamStateArgs as stateArgs,
 } from "./cron-stream-watchers.test-helpers.js";
 
 vi.mock("./cron-stream-matcher.js", () => ({
@@ -17,18 +20,6 @@ vi.mock("./cron-stream-matcher.js", () => ({
   },
 }));
 
-const batchArgs = (text: string) => [
-  expect.any(Object),
-  text,
-  expect.any(String),
-  expect.any(String),
-];
-const stateArgs = (patch: Record<string, number>) => [
-  "stream-job",
-  expect.objectContaining(patch),
-  expect.any(String),
-  expect.any(String),
-];
 const fixture = () => createCronStreamWatcherFixture({ minIntervalMs: 1 });
 function blockedBatch(result: "busy" | "fired") {
   const gate = createDeferred();
@@ -41,11 +32,7 @@ function blockedBatch(result: "busy" | "fired") {
     .mockResolvedValue("fired");
   return { fireBatch, releaseFirst: gate.resolve };
 }
-async function flush(ms = 100) {
-  await settle();
-  await vi.advanceTimersByTimeAsync(ms);
-  await settle();
-}
+const flush = (ms = 100) => flushStreamOutput(ms);
 
 describe("cron stream output", () => {
   beforeEach(() => {

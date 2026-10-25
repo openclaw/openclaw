@@ -6,6 +6,7 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { convertPcmToMulaw8k } from "../talk/audio-codec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import type { MeetingChromeTransportConfig } from "./chrome-transport-types.js";
 import { createMeetingPluginConfigSchema } from "./plugin-config.js";
@@ -185,16 +186,19 @@ const launchParams = {
   mode: "agent" as const,
   url: "https://example.test/meeting",
 };
+function openedTab(targetId = "tracked-tab", openedByPlugin = false) {
+  browserMocks.open.mockResolvedValue({
+    launched: true,
+    browser: { inCall: true },
+    tab: { targetId, openedByPlugin },
+  });
+}
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   browserMocks.resolveLocal.mockResolvedValue(vi.fn());
   browserMocks.resolveNode.mockResolvedValue("node-1");
-  browserMocks.open.mockResolvedValue({
-    launched: true,
-    browser: { inCall: true },
-    tab: { targetId: "tracked-tab", openedByPlugin: false },
-  });
+  openedTab();
   browserMocks.leave.mockResolvedValue({ left: true, note: "Left meeting." });
 });
 afterEach(() => vi.restoreAllMocks());
@@ -250,7 +254,6 @@ describe("meeting Chrome transport", () => {
     expect(browserMocks.leave).toHaveBeenCalledTimes(testCase.expectedLeaves * 2);
     const recovered = await launch();
     expect(recovered.audioBridge).toEqual({ type: "command-pair", ...engine });
-    expect(recovered.audioBridge?.providerId).toBe("openai");
   });
 
   it.each(["rollback", "owned-constructor", "owned-dispose", "owned-node-stop"] as const)(
@@ -278,11 +281,7 @@ describe("meeting Chrome transport", () => {
           nodeAudioTransport.dispose.mockRejectedValueOnce(cleanupFailure);
         }
       }
-      browserMocks.open.mockResolvedValue({
-        launched: true,
-        browser: { inCall: true },
-        tab: { targetId: "owned-tab", openedByPlugin: true },
-      });
+      openedTab("owned-tab", true);
       let startAttempted = false;
       const runtime = createPluginRuntime();
       const invoke = vi.spyOn(runtime.nodes, "invoke").mockImplementation(async ({ params }) => {
@@ -352,13 +351,8 @@ describe("meeting Chrome transport", () => {
     });
     const runtime = { nodes: { invoke } } as unknown as PluginRuntime;
 
-    const result = await transport.launchOnNode({
-      ...launchParams,
-      runtime,
-    });
-
-    expect(result.audioBridge?.type).toBe("node-command-pair");
-    expect(result.audioBridge?.providerId).toBe("openai");
+    const result = await transport.launchOnNode({ ...launchParams, runtime });
+    expect(result.audioBridge).toMatchObject({ type: "node-command-pair", providerId: "openai" });
     expect(runtime.nodes.invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         params: expect.objectContaining({
@@ -398,13 +392,7 @@ class InputContractProcess extends EventEmitter {
 }
 
 describe("Chrome configured audio input contract", () => {
-  beforeEach(() => {
-    browserMocks.open.mockResolvedValue({
-      launched: true,
-      browser: { inCall: true },
-      tab: { targetId: "audio-tab", openedByPlugin: false },
-    });
-  });
+  beforeEach(() => openedTab("audio-tab"));
   it.each(
     (["local", "node"] as const).flatMap((host) =>
       (["agent", "bidi"] as const).flatMap((mode) =>
@@ -477,14 +465,9 @@ describe("Chrome configured audio input contract", () => {
       browserMocks.resolveLocal.mockResolvedValue(callBrowser);
       browserMocks.callNode.mockImplementation(callBrowser);
       const runtime = createPluginRuntime();
-      vi.spyOn(runtime.system, "runCommandWithTimeout").mockResolvedValue({
-        stdout: "BlackHole 2ch",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
+      vi.spyOn(runtime.system, "runCommandWithTimeout").mockResolvedValue(
+        createCommandResult({ stdout: "BlackHole 2ch" }),
+      );
       const invoke = vi.spyOn(runtime.nodes, "invoke").mockImplementation(async ({ params }) => {
         const request = params as { action: string };
         if (request.action === "start") {

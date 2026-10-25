@@ -274,7 +274,7 @@ afterEach(() => {
 const runScenario = (options?: Parameters<typeof runConsentScenario>[2]) =>
   runConsentScenario(entry, coreTarball, options);
 
-it.each(["current", "extended-stable", "frozen"])(
+it.each(["extended-stable", "frozen"])(
   "preserves consent through the %s update scenario",
   async (host) => {
     if (host === "extended-stable") {

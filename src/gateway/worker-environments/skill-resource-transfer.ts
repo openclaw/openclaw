@@ -5,15 +5,10 @@ import {
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
 } from "../../skills/library/bundle.js";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
-import type { Skill } from "../../skills/loading/skill-contract.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import {
-  isWorkspaceSkillReadPath,
-  resolveSkillReadPath,
-} from "../../skills/workspace-skill-read-path.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -205,7 +200,7 @@ export async function transferSkillResources(params: {
         .map((skill) => skill.sourcePath)
         .filter((sourcePath): sourcePath is string => sourcePath !== undefined),
     );
-    const resolvedSkills = structuredClone(params.snapshot.resolvedSkills ?? []).filter(
+    const resolvedSkills = (params.snapshot.resolvedSkills ?? []).filter(
       (skill) => skill.filePath.startsWith("node://") || deliveredSourcePaths.has(skill.filePath),
     );
     const skippedSkillNames = new Set(
@@ -220,26 +215,11 @@ export async function transferSkillResources(params: {
       ...resolvedSkills.map((skill) => skill.name),
       ...delivery.skills.map((skill) => skill.name),
     ]);
-    const skills = structuredClone(params.snapshot.skills).filter(
+    const skills = params.snapshot.skills.filter(
       (skill) => !skippedSkillNames.has(skill.name) || retainedSkillNames.has(skill.name),
     );
     const deliveredSkills: NonNullable<SkillSnapshot["resolvedSkills"]> = [];
     const mounts: Array<{ hostPath: string; containerPath: string }> = [];
-    // Delivery prep disambiguates same-path Gateway/workspace collisions by
-    // rewriting the workspace skill's source path to a workspace-skill:// read
-    // path, so a raw-path match cannot tell the two identities apart and would
-    // map one bundle onto the other's entry. Match the immutable admitted
-    // identity — name plus the same host-aware source/read path delivery prep
-    // used — in every catalog projection, never a raw path alone.
-    const matchesDeliveryIdentity = (
-      candidate: Skill,
-      skill: (typeof delivery.skills)[number],
-    ): boolean =>
-      candidate.name === skill.name &&
-      Boolean(skill.sourcePath) &&
-      (isWorkspaceSkillReadPath(skill.sourcePath!)
-        ? resolveSkillReadPath(candidate) === skill.sourcePath
-        : candidate.filePath === skill.sourcePath);
     for (const [index, skill] of delivery.skills.entries()) {
       const bundle = prepareSkillBundle(skill.files);
       for (const file of bundle.files) {
@@ -273,9 +253,10 @@ export async function transferSkillResources(params: {
           }
         } while (offset < file.bytes.length);
       }
-      const selected = resolvedSkills.find((candidate) =>
-        matchesDeliveryIdentity(candidate, skill),
+      const selectedIndex = resolvedSkills.findIndex(
+        (candidate) => candidate.filePath === skill.sourcePath,
       );
+      const selected = resolvedSkills[selectedIndex];
       const sourceBase =
         selected?.baseDir ?? (skill.sourcePath ? path.dirname(skill.sourcePath) : undefined);
       if (!sourceBase) {
@@ -302,15 +283,12 @@ export async function transferSkillResources(params: {
             baseDir: remoteBase,
           }),
         contentHash: bundle.revision,
-        bundleFingerprint: bundle.revision,
         readContent: bundle.files.find((file) => file.path === "SKILL.md")!.bytes.toString("utf8"),
       });
       delete delivered.locationNote;
       deliveredSkills.push(delivered);
       if (selected) {
-        Object.assign(selected, delivered);
-        delete selected.fileHost;
-        delete selected.locationNote;
+        resolvedSkills[selectedIndex] = delivered;
       }
     }
     await flush();

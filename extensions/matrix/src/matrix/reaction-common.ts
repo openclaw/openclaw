@@ -31,18 +31,10 @@ type MatrixReactionEventLike = {
   event_id?: string | null;
 };
 
-function normalizeMatrixReactionMessageId(messageId: string): string {
-  const normalized = messageId.trim();
+function normalizeMatrixReactionValue(value: string, field: "messageId" | "emoji"): string {
+  const normalized = value.trim();
   if (!normalized) {
-    throw new Error("Matrix reaction requires a messageId");
-  }
-  return normalized;
-}
-
-function normalizeMatrixReactionEmoji(emoji: string): string {
-  const normalized = emoji.trim();
-  if (!normalized) {
-    throw new Error("Matrix reaction requires an emoji");
+    throw new Error(`Matrix reaction requires ${field === "emoji" ? "an emoji" : "a messageId"}`);
   }
   return normalized;
 }
@@ -54,14 +46,14 @@ export function buildMatrixReactionContent(
   return {
     "m.relates_to": {
       rel_type: MATRIX_ANNOTATION_RELATION_TYPE,
-      event_id: normalizeMatrixReactionMessageId(messageId),
-      key: normalizeMatrixReactionEmoji(emoji),
+      event_id: normalizeMatrixReactionValue(messageId, "messageId"),
+      key: normalizeMatrixReactionValue(emoji, "emoji"),
     },
   };
 }
 
 export function buildMatrixReactionRelationsPath(roomId: string, messageId: string): string {
-  return `/_matrix/client/v1/rooms/${encodeURIComponent(roomId)}/relations/${encodeURIComponent(normalizeMatrixReactionMessageId(messageId))}/${MATRIX_ANNOTATION_RELATION_TYPE}/${MATRIX_REACTION_EVENT_TYPE}`;
+  return `/_matrix/client/v1/rooms/${encodeURIComponent(roomId)}/relations/${encodeURIComponent(normalizeMatrixReactionValue(messageId, "messageId"))}/${MATRIX_ANNOTATION_RELATION_TYPE}/${MATRIX_REACTION_EVENT_TYPE}`;
 }
 
 export function extractMatrixReactionAnnotation(

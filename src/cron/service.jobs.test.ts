@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { normalizeCronJobPatch } from "./normalize.js";
 import { DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS } from "./script-payload.js";
+import { cronTestInput, cronTestJob } from "./service.fixture-builders.test-support.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import {
   computeJobNextRunAtMs,
@@ -17,15 +18,14 @@ import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 const NOW = Date.parse("2026-07-21T12:00:00.000Z");
 const WEBHOOK = "https://example.invalid/cron";
-const input = (overrides: Partial<CronJobCreate> = {}): CronJobCreate => ({
-  name: "job",
-  enabled: true,
-  schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "main",
-  wakeMode: "now",
-  payload: { kind: "systemEvent", text: "tick" },
-  ...overrides,
-});
+const input = (overrides: Partial<CronJobCreate> = {}) =>
+  cronTestInput({
+    name: "job",
+    sessionTarget: "main",
+    wakeMode: "now",
+    payload: { kind: "systemEvent", text: "tick" },
+    ...overrides,
+  });
 
 type AgentPayload = Extract<CronJob["payload"], { kind: "agentTurn" }>;
 const agentPayload = (overrides: Partial<AgentPayload> = {}): AgentPayload => ({
@@ -37,14 +37,8 @@ const agentPayload = (overrides: Partial<AgentPayload> = {}): AgentPayload => ({
 const agentInput = (overrides: Partial<CronJobCreate> = {}) =>
   input({ sessionTarget: "isolated", payload: agentPayload(), ...overrides });
 
-const fixtureJob = (overrides: Partial<CronJob> = {}): CronJob => ({
-  ...input(),
-  id: "job",
-  createdAtMs: NOW,
-  updatedAtMs: NOW,
-  state: {},
-  ...overrides,
-});
+const fixtureJob = (overrides: Partial<CronJob> = {}) =>
+  cronTestJob({ ...input(), id: "job", createdAtMs: NOW, updatedAtMs: NOW, ...overrides });
 
 const agentJob = (delivery?: CronJob["delivery"], overrides: Partial<CronJob> = {}) =>
   fixtureJob({ ...agentInput(), delivery, ...overrides });
@@ -138,20 +132,6 @@ it("validates and trims webhook failure destinations", () => {
   failureDestination.to = `  ${WEBHOOK}  `;
   applyJobPatch(current, { enabled: true });
   expect(current.delivery?.failureDestination?.to).toBe(WEBHOOK);
-});
-
-it("updates authored agent settings without changing the message", () => {
-  const current = agentJob();
-  const settings = {
-    lightContext: true,
-    model: "openai/gpt-5",
-    fallbacks: ["anthropic/claude-haiku-3-5"],
-    thinking: "low",
-    toolsAllow: ["read", "write"],
-  };
-  const expected = structuredClone(agentPayload(settings));
-  applyJobPatch(current, { payload: { kind: "agentTurn", ...settings } });
-  expect(current.payload).toEqual(expected);
 });
 
 it("preserves default tool authority when replacing a system payload", () => {

@@ -1,9 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationContextRequest,
-} from "../../../app/context.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 /* @vitest-environment jsdom */
@@ -29,17 +26,7 @@ async function mountAttachment(
       subscribe: () => () => {},
     },
   } as unknown as ApplicationContext;
-  panel.addEventListener("context-request", (event) => {
-    // SAFETY: This listener handles the native application context protocol.
-    const contextRequest = event as ApplicationContextRequest;
-    if (
-      contextRequest.context === applicationContext &&
-      contextRequest.contextTarget.localName === "openclaw-chat-html-preview"
-    ) {
-      event.stopPropagation();
-      contextRequest.callback(previewContext);
-    }
-  });
+  const wrapper = createApplicationContextProvider(previewContext);
   panel.content = {
     kind: "attachment",
     attachmentKind: "document",
@@ -48,7 +35,8 @@ async function mountAttachment(
     mimeType: "text/plain",
     ...overrides,
   };
-  document.body.append(panel);
+  wrapper.append(panel);
+  document.body.append(wrapper);
   await panel.updateComplete;
   return panel;
 }

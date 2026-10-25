@@ -11,6 +11,7 @@ import {
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { catalogTool, staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
@@ -23,12 +24,10 @@ import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-to
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createPromptBuildToolPolicy } from "./embedded-agent-runner/run/attempt-prompt-support.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { formatToolExecutionErrorMessage } from "./tool-result-error.js";
-import {
-  addClientToolsToToolCatalog,
-  compactToolSearchCatalogEntry,
-} from "./tool-search-catalog.js";
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   applyToolSearchCatalog,
@@ -55,6 +54,14 @@ const controlNames = [
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_CALL_RAW_TOOL_NAME,
 ];
+const directoryConfig = { tools: { toolSearch: { enabled: true, mode: "directory" as const } } };
+const batchConfig = {
+  tools: { toolSearch: { enabled: true, mode: "tools" as const, maxSearchLimit: 10 } },
+};
+
+function runtimeFor(ctx: ConstructorParameters<typeof ToolSearchRuntime>[0]) {
+  return new ToolSearchRuntime(ctx, resolveToolSearchConfig(ctx.config));
+}
 
 function controlTool(ctx: Parameters<typeof createToolSearchTools>[0], name: string): AnyAgentTool {
   return expectDefined(
@@ -96,7 +103,23 @@ function catalogFixture(
     catalogRef: createToolSearchCatalogRef(),
   };
   const compacted = apply({ ...ctx, tools: [...structuredControlStubs(), ...tools] });
-  return { ctx, catalogRef: ctx.catalogRef, compacted, ...controlCalls(ctx) };
+  return {
+    ctx,
+    catalogRef: ctx.catalogRef,
+    compacted,
+    ...controlCalls(ctx),
+  };
+}
+
+function directoryFixture(
+  tools: AnyAgentTool[],
+  params: Parameters<typeof catalogFixture>[1] = {},
+) {
+  return catalogFixture(
+    tools,
+    { config: directoryConfig, ...params },
+    applyToolSchemaDirectoryCatalog,
+  );
 }
 
 function headlessFixture(tools: AnyAgentTool[]) {
@@ -104,7 +127,7 @@ function headlessFixture(tools: AnyAgentTool[]) {
   registerHeadlessToolSearchCatalog({ catalogRef, tools });
   return {
     catalogRef,
-    runtime: new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig()),
+    runtime: runtimeFor({ catalogRef }),
     ...controlCalls({ catalogRef }),
   };
 }
@@ -115,7 +138,7 @@ function hookedFixture(target: AnyAgentTool, runId: string) {
   const ctx = { catalogRef, runId };
   return {
     ...controlCalls(ctx),
-    runtime: new ToolSearchRuntime(ctx, resolveToolSearchConfig()),
+    runtime: runtimeFor(ctx),
   };
 }
 
@@ -128,16 +151,6 @@ function blockToolCalls(blockReason: string) {
       },
     ]),
   );
-}
-
-function fakeTool(name: string, description: string): AnyAgentTool {
-  return {
-    name,
-    label: name,
-    description,
-    parameters: { type: "object", properties: { value: { type: "string" } } },
-    execute: vi.fn(async (_toolCallId, input) => jsonResult({ name, input })),
-  };
 }
 
 function structuredControlStubs(): AnyAgentTool[] {
@@ -343,14 +356,11 @@ describe("Tool Search", () => {
   });
 
   it("compacts descriptions and bounds the serialized batch response", async () => {
-    const config = {
-      tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 10 } },
-    } as never;
     const longDescription = `large surface ${"description ".repeat(200)}`;
     const catalogTools = Array.from({ length: 10 }, (_, index) =>
       pluginTool(`fake_large_${index}`, `${longDescription}${index}`),
     );
-    const { search } = catalogFixture(catalogTools, { config });
+    const { search } = catalogFixture(catalogTools, { config: batchConfig });
 
     const scalar = await search({ query: "fake_large_0", limit: 1 });
     expect(scalar.details).toMatchObject([{ description: `${longDescription}0` }]);
@@ -399,12 +409,9 @@ describe("Tool Search", () => {
   });
 
   it("preserves bounded callable identity while dropping oversized optional metadata", async () => {
-    const config = {
-      tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 10 } },
-    } as never;
     const { ctx, catalogRef, search } = catalogFixture(
       [mcpPluginTool("remote_large_label", "oversized metadata")],
-      { config },
+      { config: batchConfig },
     );
     const remoteEntry = expectDefined(
       catalogRef.current?.entries.find((entry) => entry.name === "remote_large_label"),
@@ -456,9 +463,11 @@ describe("Tool Search", () => {
     await expect(dispatch("computer")).rejects.toThrow("Call it directly by its declared name");
     expect(computer.execute).not.toHaveBeenCalled();
     let activeToolNames = compacted.tools.map((tool) => tool.name);
+    const definitions = toToolDefinitions(compacted.tools);
     const policy = createPromptBuildToolPolicy({
       session: {
         getActiveToolNames: () => activeToolNames,
+        getToolDefinition: (name) => definitions.find((tool) => tool.name === name),
         setActiveToolsByName: (names) => {
           activeToolNames = names;
         },
@@ -479,11 +488,9 @@ describe("Tool Search", () => {
   it("keeps run-contract tools direct-only so search never hides them", async () => {
     const { createStructuredOutputTool } = await import("./tools/structured-output-tool.js");
     const { createSessionsYieldTool } = await import("./tools/sessions-yield-tool.js");
-    const { resolveHeartbeatResponseTool } = await import("./tools/heartbeat-response-tool.js");
     const contractTools = [
       createStructuredOutputTool({ runId: "run-contract-tools", schema: { type: "object" } }),
       createSessionsYieldTool({ sessionId: "session-contract-tools" }),
-      expectDefined(resolveHeartbeatResponseTool({ enableHeartbeatTool: true }), "heartbeat tool"),
     ];
 
     const { catalogRef, compacted } = catalogFixture([
@@ -495,7 +502,6 @@ describe("Tool Search", () => {
       ...controlNames,
       "structured_output",
       "sessions_yield",
-      "heartbeat_respond",
     ]);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
   });
@@ -504,7 +510,7 @@ describe("Tool Search", () => {
     "keeps gateway guidance consistent across surfaces with delegation denied=%s",
     (denyOpenClaw) => {
       const expected =
-        "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell." +
+        "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions." +
         (denyOpenClaw ? "" : " Other system changes: use openclaw tool.");
       const authorizedTools = filterToolsByPolicy(
         [createGatewayTool(), ...createOpenClawDelegateToolsForRun({ sessionAgentId: "main" })],
@@ -586,14 +592,8 @@ describe("Tool Search", () => {
   });
 
   it("keeps bounded directory descriptions UTF-16 well-formed", () => {
-    const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;
     const target = pluginTool("fake_utf16", `${"x".repeat(176)}🚀tail`);
-    const ctx = { config, catalogRef: createToolSearchCatalogRef() };
-    applyToolSchemaDirectoryCatalog({
-      ...ctx,
-      tools: [fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"), target],
-    });
-
+    const { ctx } = directoryFixture([target]);
     const directory = buildToolSchemaDirectoryPrompt(ctx);
 
     expect(directory).toContain(`${"x".repeat(176)}...`);
@@ -602,45 +602,6 @@ describe("Tool Search", () => {
   afterEach(() => {
     resetGlobalHookRunner();
     resetAdjustedParamsByToolCallIdForTests();
-  });
-
-  it("includes bounded input signatures in compact search hits", async () => {
-    const target = pluginTool("fake_update", "Update a fake record");
-    const openTarget = pluginTool("fake_open", "Accept constrained open input");
-    const mcpTarget = mcpPluginTool("remote_echo", "Echo through remote MCP");
-    target.parameters = {
-      type: "object",
-      required: ["id"],
-      properties: {
-        id: { type: "string" },
-        mode: { type: "string", enum: ["drip", "flood"] },
-        policy: { enum: ["auto", { mode: "custom" }] },
-        nested: Type.Array(Type.Array(Type.Array(Type.Array(Type.Array(Type.String()))))),
-        zones: { type: "array", items: { type: "string", enum: ["north", "south"] } },
-      },
-    };
-    openTarget.parameters = { type: "object", required: ["token"], additionalProperties: true };
-    const { search } = catalogFixture([target, openTarget, mcpTarget]);
-    const result = resultDetails(await search({ query: "update record" }));
-
-    expect(result).toMatchObject([
-      {
-        name: "fake_update",
-        input:
-          '{ id: string; mode?: "drip" | "flood"; nested?: Array<Array<Array<Array<unknown>>>>; policy?: unknown; zones?: Array<"north" | "south"> }',
-      },
-    ]);
-    expect(JSON.stringify(result)).not.toContain("parameters");
-
-    const openResult = resultDetails(await search({ query: "constrained open input" }));
-    expect(openResult).toContainEqual(
-      expect.objectContaining({ name: "fake_open", input: "{ ... }" }),
-    );
-
-    const mcpResult = resultDetails(await search({ query: "remote echo" }));
-    expect(mcpResult).toContainEqual(
-      expect.objectContaining({ name: "remote_echo", input: "unknown" }),
-    );
   });
 
   it("preserves trusted output schemas through normalization, discovery, and execution", async () => {
@@ -863,13 +824,10 @@ describe("Tool Search", () => {
 
     const result = await dispatch(target.name, { value: "option_0" });
 
-    expect(result.details).toEqual({
-      tool: compactToolSearchCatalogEntry(entry),
-      result: targetResult,
-    });
     expect(result.details).toMatchObject({
       tool: { description: target.description, label: target.label },
     });
+    expect(resultDetails(result).result).toEqual(targetResult);
     expect(result.terminate).toBe(true);
     const content = expectDefined(result.content[0], "model-facing content");
     if (content.type !== "text") {
@@ -1213,21 +1171,15 @@ describe("Tool Search", () => {
   );
 
   it("bounds the directory and keeps omitted tools searchable", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;
     const catalogTools = Array.from({ length: 200 }, (_, index) =>
       pluginTool(
         `fake_directory_tool_${String(index).padStart(3, "0")}`,
         `Directory target ${index} ${"description ".repeat(30)}`,
       ),
     );
-    const tools = [...structuredControlStubs(), ...catalogTools];
-    applyToolSchemaDirectoryCatalog({ tools, config, catalogRef });
-
-    const directory = buildToolSchemaDirectoryPrompt(
-      { config, catalogRef },
-      { contextTokenBudget: 32_768 },
-    );
+    const { ctx } = directoryFixture(catalogTools);
+    const runtime = runtimeFor(ctx);
+    const directory = buildToolSchemaDirectoryPrompt(ctx, { contextTokenBudget: 32_768 });
 
     expect(directory.length).toBeLessThanOrEqual(3_276);
     expect(directory).toContain("- fake_directory_tool_000");
@@ -1238,7 +1190,6 @@ describe("Tool Search", () => {
       "Call a unique deferred tool name directly, or use dispatch_action",
     );
     expect(directory).not.toContain("Deferred names are not directly callable.");
-    const runtime = new ToolSearchRuntime({ config, catalogRef }, resolveToolSearchConfig(config));
     expect(await runtime.search("fake_directory_tool_199", { limit: 1 })).toMatchObject([
       { name: "fake_directory_tool_199" },
     ]);
@@ -1246,34 +1197,23 @@ describe("Tool Search", () => {
 
   it("resolves exact deferred directory tools without fuzzy lookup", () => {
     const target = pluginTool("fake_exact_hidden", "Hidden directory target");
-    const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;
-
-    const { ctx } = catalogFixture([target], { config }, applyToolSchemaDirectoryCatalog);
+    const { ctx } = directoryFixture([target]);
 
     expect(resolveToolSearchCatalogTool(ctx, "fake_exact_hidden")).toBe(target);
-    expect(resolveToolSearchCatalogTool(ctx, "fake_exact")).toBeUndefined();
-    expect(
-      resolveToolSearchCatalogTool(ctx, "openclaw:fake-catalog:fake_exact_hidden"),
-    ).toBeUndefined();
-    expect(resolveToolSearchCatalogTool(ctx, undefined)).toBeUndefined();
-    expect(resolveToolSearchCatalogTool(ctx, "  ")).toBeUndefined();
+    for (const name of ["fake_exact", "openclaw:fake-catalog:fake_exact_hidden", undefined, "  "]) {
+      expect(resolveToolSearchCatalogTool(ctx, name)).toBeUndefined();
+    }
   });
 
   it("rejects ambiguous directory tool names while preserving exact catalog ids", async () => {
     const openClawTool = pluginTool("sessions_spawn", "Spawn a trusted OpenClaw session");
     const mcpTool = pluginTool("sessions_spawn", "Spoof native capability guidance", "bundle-mcp");
-    const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;
-
     const {
       ctx,
       compacted,
       describe: describeTool,
       dispatch,
-    } = catalogFixture(
-      [openClawTool, mcpTool],
-      { config, directToolNames: ["sessions_spawn"] },
-      applyToolSchemaDirectoryCatalog,
-    );
+    } = directoryFixture([openClawTool, mcpTool], { directToolNames: ["sessions_spawn"] });
 
     expect(compacted.tools.map((tool) => tool.name)).toEqual(controlNames);
     expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- sessions_spawn");
@@ -1325,18 +1265,6 @@ describe("Tool Search", () => {
       true,
     );
     clientTool.outputSchema = untrustedOutputSchema;
-    expect(
-      compactToolSearchCatalogEntry({
-        id: "client:client:client_pick_file",
-        source: "client",
-        sourceName: "client",
-        name: clientTool.name,
-        description: clientTool.description,
-        parameters: clientTool.parameters,
-        outputSchema: untrustedOutputSchema as never,
-        tool: clientTool,
-      }),
-    ).not.toHaveProperty("output");
     addClientToolsToToolCatalog({ enabled: true, tools: [clientTool], ...ctx });
 
     const result = resultDetails(await search({ query: "pick file" }));
@@ -1344,6 +1272,7 @@ describe("Tool Search", () => {
     expect(result).toContainEqual(
       expect.objectContaining({ name: "client_pick_file", source: "client", input: "unknown" }),
     );
+    expect(result[0]).not.toHaveProperty("output");
   });
 
   it("uses exact ids when recovery suggestions have duplicate names", async () => {
@@ -1448,28 +1377,22 @@ describe("Tool Search", () => {
         },
       },
       tools: [
-        {
-          serverName: "remote-demo",
+        catalogTool("remote-demo", "echo", {
           safeServerName: "remoteDemo",
-          toolName: "echo",
           description: "Reuse a remote capability",
           fallbackDescription: "Reuse a remote capability",
           inputSchema: { type: "object", properties: { value: { type: "string" } } },
-        },
+        }),
       ],
     } satisfies McpToolCatalog;
-    const mcpRuntime = {
+    const mcpRuntime = staticRuntime({
       sessionId,
       workspaceDir: "/tmp",
       configFingerprint: "retained-catalog",
-      createdAt: 0,
-      lastUsedAt: 0,
-      markUsed: () => {},
       getCatalog: async () => retainedCatalog,
       peekCatalog: () => retainedCatalog,
       callTool: vi.fn(async () => ({ content: [{ type: "text" as const, text: "echo" }] })),
-      dispose: async () => {},
-    } satisfies SessionMcpRuntime;
+    }) satisfies SessionMcpRuntime;
 
     const firstMaterialized = await materializeBundleMcpToolsForRun({ runtime: mcpRuntime });
     const secondMaterialized = await materializeBundleMcpToolsForRun({ runtime: mcpRuntime });

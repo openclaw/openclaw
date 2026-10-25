@@ -20,7 +20,6 @@ import {
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
-import { createSkillInstructionDeliveryMarkers } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
@@ -190,7 +189,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   // generation so retained tool-result text cannot authorize stale coordinates.
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
   const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
-  const skillInstructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
   const nestedToolActivityState = createAttemptNestedToolActivityState();
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
@@ -236,6 +234,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     modelId: attempt.modelId,
     modelApi: attempt.model.api,
     modelBaseUrl: attempt.model.baseUrl,
+    modelParams: attempt.model.params,
     modelContextWindowTokens: attempt.contextTokenBudget ?? attempt.model.contextWindow,
     modelHasVision: attempt.model.input?.includes("image") ?? false,
     workspaceDir: params.setup.effectiveWorkspace,
@@ -388,14 +387,11 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
         computerContextEpoch,
         skillInstructionDeliveryCache,
-        skillInstructionDeliveryMarkers,
         registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
         inboundEventKind: attempt.currentInboundEventKind,
         inputProvenance: attempt.inputProvenance,
         disableMessageTool: attempt.disableMessageTool,
         forceMessageTool: attempt.forceMessageTool,
-        enableHeartbeatTool: attempt.enableHeartbeatTool,
-        forceHeartbeatTool: attempt.forceHeartbeatTool,
         inheritedToolAllowlistRef: inheritedToolAllowlist,
         additionalInheritedToolNamesRef,
         cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
@@ -526,7 +522,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       codeModeSkills,
       computerContextEpoch,
       skillInstructionDeliveryCache,
-      skillInstructionDeliveryMarkers,
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
       effectiveToolsAllow,

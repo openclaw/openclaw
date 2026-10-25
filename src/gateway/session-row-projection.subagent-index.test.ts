@@ -28,7 +28,12 @@ import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { writeRow } from "./session-row-projection-read-fixtures.test-support.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { watchRowFacts as observeRowFacts } from "./session-row-projection.read-fixture.test-support.js";
+import {
+  createTestProjection,
+  holdForeground,
+  holdSubagentExecution,
+  watchRowFacts as observeRowFacts,
+} from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => {
@@ -69,9 +74,7 @@ it("settles a registry revision after persisting an already absent run", async (
     try {
       await projection.ensureMaterialized();
       expect(projection.needsMaterialization).toBe(false);
-
       persistRegistryFixture(subagentRuns, ["already-absent-run"]);
-
       expect(projection.dirtyRowCount).toBe(0);
       remainingRefreshes = 10;
       await projection.ensureMaterialized();
@@ -109,6 +112,11 @@ it.each([
       const resetsIdentity = kind.endsWith("reset");
       const changesIdentity = replacesIdentity || resetsIdentity;
       const previousSessionId = replacesIdentity ? "archive-before-replacement" : sessionId;
+      const archivedEntry = {
+        sessionId,
+        archivedAt: expect.any(Number),
+        ...(resetsIdentity ? { lifecycleRevision: "after-reset" } : {}),
+      };
       const anchorKey = "agent:main:archive-recovery-anchor";
       writeRow(anchorKey, { sessionId: "archive-recovery-anchor" });
       if (kind !== "new") {
@@ -209,7 +217,7 @@ it.each([
           replaceSessionEntrySync(target, { sessionId, updatedAt: 2, archivedAt: 2 });
         }
         const archived = loadSessionEntry(target);
-        expect(archived).toMatchObject({ sessionId, archivedAt: expect.any(Number) });
+        expect(archived).toMatchObject(archivedEntry);
         if (kind === "native reset") {
           expect(projection.sharingTarget(query)).toBeNull();
         } else {
@@ -224,9 +232,8 @@ it.each([
           const pending = projection.capture(query);
           expect(pending?.entry).toBeUndefined();
           expect(pending?.storedEntry).toMatchObject({
-            sessionId,
+            ...archivedEntry,
             archivedAt: archived?.archivedAt,
-            ...(resetsIdentity ? { lifecycleRevision: "after-reset" } : {}),
           });
           if (replacesIdentity) {
             expect(
@@ -240,9 +247,8 @@ it.each([
         if (changesIdentity) {
           expect(projection.isCurrent(captured!)).toBe(false);
           expect(projection.capture(query)?.entry).toMatchObject({
-            sessionId,
+            ...archivedEntry,
             archivedAt: archived?.archivedAt,
-            ...(resetsIdentity ? { lifecycleRevision: "after-reset" } : {}),
           });
         }
         const active = await listProjectedSessions({ projection, opts: { archived: false } });
@@ -291,6 +297,7 @@ it.each([
         completion: { required: false },
         delivery: { status: "not_required" },
       };
+      using _ = holdSubagentExecution(run.runId, child);
       subagentRuns.set(run.runId, run);
       if (archived) {
         persistRegistryFixture(subagentRuns);
@@ -318,7 +325,8 @@ it.each([
             swarmRequesterSessionKey: nextParent,
           };
           subagentRuns.set(run.runId, replacement);
-          expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : parent);
+          // Control reflects the current executor immediately; navigation waits for publication.
+          expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : nextParent);
           if (publication === "broad-ownership") {
             publishSubagentRunChanges();
           } else {
@@ -365,39 +373,32 @@ it("keeps current row facts when the subagent snapshot changes during a list", a
     const scope = { agentId: "main", sessionKey: "agent:main:dashboard:registry-refresh" };
     const entry = { sessionId: "registry-refresh", updatedAt: 1, label: "Previous" };
     replaceSessionEntrySync(scope, entry);
-    const release = projectionWork.retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    try {
-      await projection.ensureMaterialized();
-      const reads: string[][] = [];
-      observeRowFacts((owner) => async (input) => {
-        const reply = await owner.readRowFacts(input);
-        reads.push([...input.sessionKeys]);
-        if (reads.length === 1) {
-          const previous = getSubagentSessionListReadSnapshotIdentity();
-          const run = createSubagentRunRecord({
-            runId: "unrelated-refresh-run",
-            childSessionKey: "agent:main:unrelated-child",
-            requesterSessionKey: "agent:main:unrelated-parent",
-            generation: 1,
-            completion: { required: false },
-            delivery: { status: "not_required" },
-          });
-          persistRegistryFixture(new Map([[run.runId, run]]));
-          expect(getSubagentSessionListReadSnapshotIdentity()).not.toBe(previous);
-        }
-        return reply;
-      });
-      replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Current" });
-      sessionChanges.emit({ ...scope, factsInvalidated: true });
-      const result = await listProjectedSessions({ projection, opts: { limit: 1 } });
-      expect(result.sessions).toEqual([
-        expect.objectContaining({ key: scope.sessionKey, label: "Current" }),
-      ]);
-      expect(reads).toEqual([[scope.sessionKey]]);
-    } finally {
-      projection.dispose();
-      release();
-    }
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const reads: string[][] = [];
+    observeRowFacts((owner) => async (input) => {
+      const reply = await owner.readRowFacts(input);
+      reads.push([...input.sessionKeys]);
+      if (reads.length === 1) {
+        const previous = getSubagentSessionListReadSnapshotIdentity();
+        const run = createSubagentRunRecord({
+          runId: "unrelated-refresh-run",
+          childSessionKey: "agent:main:unrelated-child",
+          requesterSessionKey: "agent:main:unrelated-parent",
+          generation: 1,
+          completion: { required: false },
+          delivery: { status: "not_required" },
+        });
+        persistRegistryFixture(new Map([[run.runId, run]]));
+        expect(getSubagentSessionListReadSnapshotIdentity()).not.toBe(previous);
+      }
+      return reply;
+    });
+    replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Current" });
+    sessionChanges.emit({ ...scope, factsInvalidated: true });
+    const result = await listProjectedSessions({ projection, opts: { limit: 1 } });
+    expect(result.sessions).toMatchObject([{ key: scope.sessionKey, label: "Current" }]);
+    expect(reads).toEqual([[scope.sessionKey]]);
   });
 });

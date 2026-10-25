@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ImageContent, UserMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
@@ -145,14 +146,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
         ...timestampedTextAssistant("", timestamp + 60001),
         content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "tool output" }],
-        isError: false,
-        timestamp: timestamp + 60002,
-      },
+      makeTextToolResult("call_1", "read", "tool output", false, timestamp + 60002),
     ];
     const output = normalizeMessagesForLlmBoundary(input, options);
     expect(contentOf(output[0])).toBe(stamped(`${conversation}Old ask`));

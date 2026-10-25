@@ -231,9 +231,8 @@ export async function createUpdateUtf8CommandTransportFixture(
       }
     }
     if (
-      argv.length === 3 &&
-      argv[2] === "--check" &&
-      path.basename(argv[1] ?? "") ===
+      argv.at(-1) === "--check" &&
+      path.basename(argv.at(-2) ?? "") ===
         path.basename(runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath)
     ) {
       // These CLI fixture packages do not implement the delegated post-core worker.

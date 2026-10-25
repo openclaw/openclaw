@@ -1,7 +1,6 @@
 import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import {
   buildEffectiveManifestProviderConfig,
@@ -10,7 +9,6 @@ import {
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
 } from "./provider-catalog.js";
-import type { ProviderCatalogContext } from "./types.js";
 
 describe("manifest model size projection", () => {
   const providerId = "local-models";
@@ -54,28 +52,53 @@ describe("manifest model size projection", () => {
   });
 });
 
+describe("manifest model family projection", () => {
+  const providerId = "family-host";
+  const row = { contextWindow: 32_768, maxTokens: 8192 };
+  const catalog: ModelCatalogProvider = {
+    baseUrl: "https://family.example/v1",
+    api: "openai-completions",
+    family: "meta",
+    models: [
+      { id: "inherits", ...row },
+      { id: "declares", family: "zai", ...row },
+    ],
+  };
+
+  it.each([
+    ["raw manifest", () => buildManifestModelProviderConfig({ providerId, catalog }).models],
+    [
+      "effective manifest",
+      () =>
+        buildEffectiveManifestProviderConfig(
+          normalizeModelCatalogProviderRows({
+            provider: providerId,
+            providerCatalog: catalog,
+            source: "manifest",
+          }),
+        )?.models,
+    ],
+    [
+      "catalog augmentation",
+      () =>
+        buildManifestProviderCatalogFamily({
+          surfaces: [{ id: providerId, label: "Family host", catalog }],
+        }).augmentModelCatalog(),
+    ],
+  ])("gives rows their declared or provider family through %s", (_name, project) => {
+    expect(Object.fromEntries((project() ?? []).map((model) => [model.id, model.family]))).toEqual({
+      inherits: "meta",
+      declares: "zai",
+    });
+  });
+});
+
 function createProviderConfig(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
     api: "openai-completions",
     baseUrl: "https://default.example/v1",
     models: [],
     ...overrides,
-  };
-}
-
-function createCatalogContext(params: {
-  config?: OpenClawConfig;
-  apiKeys?: Record<string, string | undefined>;
-}): ProviderCatalogContext {
-  return {
-    config: params.config ?? {},
-    env: {},
-    resolveProviderApiKey: (providerId) => ({
-      apiKey: providerId ? params.apiKeys?.[providerId] : undefined,
-    }),
-    resolveProviderAuth: () => {
-      throw new Error("Catalog must use API-key resolution");
-    },
   };
 }
 
@@ -146,14 +169,17 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       "https://api.z.ai/custom",
     ],
   ] as const)("%s", async (_name, providerId, apiKey, explicitUrl, expectedUrl) => {
-    const ctx = createCatalogContext({
-      apiKeys: { [providerId]: apiKey },
-      config: explicitUrl
-        ? { models: { providers: { [providerId]: { baseUrl: explicitUrl, models: [] } } } }
-        : {},
-    });
     const result = await buildSingleProviderApiKeyCatalog({
-      ctx,
+      ctx: {
+        config: explicitUrl
+          ? { models: { providers: { [providerId]: { baseUrl: explicitUrl, models: [] } } } }
+          : {},
+        env: {},
+        resolveProviderApiKey: (id) => ({ apiKey: id === providerId ? apiKey : undefined }),
+        resolveProviderAuth: () => {
+          throw new Error("Catalog must use API-key resolution");
+        },
+      },
       providerId,
       allowExplicitBaseUrl: explicitUrl ? true : undefined,
       buildProvider: () =>

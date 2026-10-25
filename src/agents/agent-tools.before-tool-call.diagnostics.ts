@@ -27,7 +27,6 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { hasActiveDiagnosticTracePropagation } from "../infra/diagnostic-trace-propagation.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -58,6 +57,7 @@ import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import { getSkillInstructionFingerprint } from "./skill-instruction-result.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
@@ -134,7 +134,8 @@ export function prepareToolTerminalPresentation({
   }
   let project: ToolTerminalPresentationProjector | undefined;
   if (formatter) {
-    // Retain isolated formatter inputs, not the executable tool or its hook context.
+    // Formatters observe post-execution mutations, then stay isolated from later middleware.
+    // The pre-execution custody snapshot intentionally cannot replace this capture.
     const formatterParams = observer ? structuredClone(toolParams) : toolParams;
     project = (result) => {
       try {
@@ -306,25 +307,10 @@ export function resolveToolDiagnosticIdentity(tool: AnyAgentTool): ToolDiagnosti
 
 export type SkillUsageMatch = {
   skillFile?: string;
-  /** Retained bundle identity associated with this invocation's delivery, when established. */
-  skillFingerprint?: string;
   skillName: string;
   skillSource: SkillTelemetrySource;
   activation: "command" | "read";
 };
-
-/**
- * Gate for the retained bundle fingerprint on a skill usage match: the field
- * rides the payload only while an exporter-owned tracing consumer is active.
- * Delivery producers stamp retained bundle identities for integrity reasons
- * regardless of tracing, so a receipt or entry-carried stamp reaching this
- * matcher on a tracing-off (metrics-only) install must never continue into a
- * diagnostic event that internal listeners can observe. Accounting is never
- * gated: the skill usage event itself always emits.
- */
-function gatedSkillFingerprint(fingerprint: string | undefined): string | undefined {
-  return hasActiveDiagnosticTracePropagation() ? fingerprint : undefined;
-}
 
 function canonicalSkillFile(value: string | undefined): string | undefined {
   const skillFile = value?.trim();
@@ -335,35 +321,21 @@ function canonicalSkillFile(value: string | undefined): string | undefined {
 
 function resolvedSkillUsageMatch(params: {
   activation: SkillUsageMatch["activation"];
-  // Delivery producers stamp the retained bundle identity on the projection
-  // entries consumers read, so the matcher accepts it alongside the identifying
-  // fields main's narrowed contract already carries.
-  skill: Pick<Skill, "name" | "filePath"> &
-    Partial<Pick<Skill, "source" | "sourceInfo" | "bundleFingerprint">>;
+  skill: Pick<Skill, "name" | "filePath"> & Partial<Pick<Skill, "source" | "sourceInfo">>;
 }): SkillUsageMatch {
   const skillFile = canonicalSkillFile(params.skill.filePath);
-  const skillFingerprint = gatedSkillFingerprint(params.skill.bundleFingerprint);
   return {
     skillName: params.skill.name.trim(),
     skillSource: resolveSkillTelemetrySource(params.skill),
     activation: params.activation,
     ...(skillFile ? { skillFile } : {}),
-    // Entry-carried identity is the retained generation stamped by a delivery
-    // producer: the local/worker materialization routes, the transfer adapter,
-    // and the tracing-gated ordinary-local preparation stamp the projection
-    // entries consumers actually read. The tracing gate keeps a producer's
-    // integrity stamp from exposing a fingerprint while tracing is inactive.
-    ...(skillFingerprint ? { skillFingerprint } : {}),
   };
 }
 
 function findResolvedSkillUsageMatch(params: {
-  activation: SkillUsageMatch["activation"];
   skillName: string;
   skillSource: SkillTelemetrySource;
   snapshot?: SkillSnapshot;
-  /** Never fall back to a same-name singleton whose source differs. */
-  exactSource?: boolean;
 }): SkillUsageMatch | undefined {
   const skillName = params.skillName.trim();
   const candidates = (params.snapshot?.resolvedSkills ?? []).filter(
@@ -371,8 +343,8 @@ function findResolvedSkillUsageMatch(params: {
   );
   const skill =
     candidates.find((candidate) => resolveSkillTelemetrySource(candidate) === params.skillSource) ??
-    (params.exactSource ? undefined : candidates.length === 1 ? candidates[0] : undefined);
-  return skill ? resolvedSkillUsageMatch({ activation: params.activation, skill }) : undefined;
+    (candidates.length === 1 ? candidates[0] : undefined);
+  return skill ? resolvedSkillUsageMatch({ activation: "command", skill }) : undefined;
 }
 
 function resolveRelativeToolPath(candidate: string, ctx?: HookContext): string | undefined {
@@ -433,7 +405,6 @@ export function findSkillUsageMatch(params: {
   toolName: string;
   toolParams: unknown;
   ctx?: HookContext;
-  toolCallId?: string;
 }): SkillUsageMatch | undefined {
   const command = params.ctx?.skillCommand;
   if (command) {
@@ -441,37 +412,16 @@ export function findSkillUsageMatch(params: {
     if (!commandToolName || commandToolName === params.toolName) {
       const skillSource = resolveSkillTelemetrySourceValue(command.skillSource);
       const snapshotMatch = findResolvedSkillUsageMatch({
-        activation: "command",
         skillName: command.skillName,
         skillSource,
         snapshot: params.ctx?.skillsSnapshot,
-        // The dispatch identity is exact: a same-name singleton from another
-        // source family never lends its file or stamp to the command.
-        exactSource: true,
       });
-      // Direct tool dispatch (tool-dispatch) supplies the session-preparation
-      // snapshot, which no bundle-identity producer stamps: coverage on that
-      // route omits by design — a command fingerprint exists only when this
-      // snapshot's resolved entry itself carries a retained-generation stamp
-      // (the embedded-attempt producer) and the dispatched file matches it.
-      // Adding a stamp there would be a new delivery producer; see the PR's
-      // coverage table for the documented omission.
-      const commandFile = canonicalSkillFile(command.skillFile);
-      const skillFile = commandFile ?? snapshotMatch?.skillFile;
-      // The dispatched command file must be the stamped resolved entry's own
-      // file: a name/source match alone is not identity, so a relocated or
-      // refreshed command never borrows another generation's stamp and an
-      // unassociated dispatch omits.
-      const associatedFingerprint =
-        snapshotMatch && commandFile !== undefined && snapshotMatch.skillFile === commandFile
-          ? gatedSkillFingerprint(snapshotMatch.skillFingerprint)
-          : undefined;
+      const skillFile = canonicalSkillFile(command.skillFile) ?? snapshotMatch?.skillFile;
       return {
         skillName: command.skillName,
         skillSource,
         activation: "command",
         ...(skillFile ? { skillFile } : {}),
-        ...(associatedFingerprint ? { skillFingerprint: associatedFingerprint } : {}),
       };
     }
   }
@@ -491,37 +441,14 @@ export function findSkillUsageMatch(params: {
     const usage = params.ctx?.skillUsagePaths?.find(
       (entry) => entry.skillName === skill.name && entry.readPath === skill.filePath,
     );
-    // The invocation's serving read captured the entry's retained
-    // loaded-bundle identity into its delivery receipt; consume it first. A
-    // receipt exists only when the serving boundary established one: it
-    // resolves the entry's retained fingerprint by lookup after the serving
-    // read settles, and an epoch clear that crossed that read leaves no
-    // receipt — so without a receipt the emission omits the fingerprint
-    // instead of attaching an unestablished identity.
-    const receipt =
-      typeof params.toolCallId === "string"
-        ? params.ctx?.skillInstructionDeliveryMarkers?.takeInvocationFingerprint(params.toolCallId)
-        : undefined;
-    // A serving receipt carries the entry's retained loaded-bundle identity:
-    // the worker materialization, session, transfer, and tracing-gated
-    // ordinary-local producers stamp it, and some stamp regardless of tracing,
-    // so the same gate keeps a retained value from reaching internal
-    // diagnostic listeners while tracing is inactive.
-    const gatedReceipt = gatedSkillFingerprint(receipt);
-    if (usage) {
-      return {
-        skillFile: usage.skillFile,
-        skillName: usage.skillName,
-        skillSource: usage.skillSource,
-        activation: "read",
-        ...(gatedReceipt ? { skillFingerprint: gatedReceipt } : {}),
-      };
-    }
-    const { skillFingerprint: _entryStamp, ...fallback } = resolvedSkillUsageMatch({
-      activation: "read",
-      skill,
-    });
-    return gatedReceipt ? { ...fallback, skillFingerprint: gatedReceipt } : fallback;
+    return usage
+      ? {
+          skillFile: usage.skillFile,
+          skillName: usage.skillName,
+          skillSource: usage.skillSource,
+          activation: "read",
+        }
+      : resolvedSkillUsageMatch({ activation: "read", skill });
   }
   if (params.toolName !== "read") {
     return undefined;
@@ -531,19 +458,7 @@ export function findSkillUsageMatch(params: {
     return undefined;
   }
   if (params.ctx?.skillsSnapshot?.resolvedSkills?.length) {
-    const instructionMatch = findSkillInstructionMatch(params.ctx.skillsSnapshot, candidate);
-    if (!instructionMatch) {
-      return undefined;
-    }
-    // Read activations attribute this invocation's delivery marker, never the
-    // current snapshot: an already-served generation outlives later materializations.
-    const marker =
-      typeof params.toolCallId === "string"
-        ? params.ctx?.skillInstructionDeliveryMarkers?.takeInvocationFingerprint(params.toolCallId)
-        : undefined;
-    const gatedMarker = gatedSkillFingerprint(marker);
-    const { skillFingerprint: _entryFingerprint, ...readMatch } = instructionMatch;
-    return gatedMarker ? { ...readMatch, skillFingerprint: gatedMarker } : readMatch;
+    return findSkillInstructionMatch(params.ctx.skillsSnapshot, candidate);
   }
   const match = params.ctx?.skillUsagePaths?.findLast(
     (entry) => path.resolve(entry.readPath) === candidate,
@@ -567,7 +482,9 @@ export function recordSkillUsed(params: {
   match: SkillUsageMatch;
   toolName: string;
   toolCallId?: string;
+  result?: unknown;
 }): void {
+  const skillFingerprint = getSkillInstructionFingerprint(params.result);
   recordRunSkillUsage({
     runId: params.ctx?.runId,
     name: params.match.skillName,
@@ -591,14 +508,7 @@ export function recordSkillUsed(params: {
       skillName: params.match.skillName,
       skillSource: params.match.skillSource,
       activation: params.match.activation,
-      // The shared emission owner applies the tracing gate once more: a
-      // match constructed off this module's matcher paths (or a producer
-      // stamp that survived them) never exposes a fingerprint while tracing
-      // is inactive, while the skill.used event and skill accounting stay
-      // fully intact.
-      ...(gatedSkillFingerprint(params.match.skillFingerprint)
-        ? { skillFingerprint: params.match.skillFingerprint }
-        : {}),
+      ...(skillFingerprint ? { skillFingerprint } : {}),
       toolName: params.toolName,
       ...(params.toolCallId && { toolCallId: params.toolCallId }),
     },

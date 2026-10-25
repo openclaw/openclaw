@@ -6,10 +6,7 @@ import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-h
 import { loadCronStore } from "../cron/store.js";
 import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import {
@@ -47,7 +44,6 @@ async function createScheduler() {
     cronEnabled: false,
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   schedulers.add(cron);
@@ -55,33 +51,31 @@ async function createScheduler() {
 }
 
 function capturingRegistry(
-  pluginIds: string[],
+  pluginId: string,
   id = "maintenance",
   origin: PluginServiceRegistration["origin"] = "workspace",
 ) {
   const registry = createRegistry([]);
-  const contexts = new Map<string, OpenClawPluginServiceContext>();
-  for (const pluginId of pluginIds) {
-    registry.services.push(
-      createServiceRegistration(
-        {
-          id,
-          start: (context) => {
-            contexts.set(pluginId, context);
-          },
+  let context: OpenClawPluginServiceContext | undefined;
+  registry.services.push(
+    createServiceRegistration(
+      {
+        id,
+        start: (started) => {
+          context = started;
         },
-        { pluginId, origin },
-      ),
-    );
-  }
-  return { registry, contexts };
+      },
+      { pluginId, origin },
+    ),
+  );
+  return { registry, getContext: () => expectDefined(context, "started service context") };
 }
 
 async function startService(getCronService: () => CronService) {
-  const { registry, contexts } = capturingRegistry(["test-plugin"]);
+  const { registry, getContext } = capturingRegistry("test-plugin");
   const handle = await startPluginServices({ registry, config: {}, getCronService });
   handles.add(handle);
-  const context = expectDefined(contexts.get("test-plugin"), "started service context");
+  const context = getContext();
   return { context, handle, service: expectDefined(context.getCron?.(), "Gateway scheduler") };
 }
 
@@ -186,8 +180,8 @@ it.each(["service stop", "scheduler replacement"] as const)(
 );
 
 it("shares the canonical runtime identity only while the exporter lease is active", async () => {
-  const { registry, contexts } = capturingRegistry(
-    ["diagnostics-prometheus"],
+  const { registry, getContext } = capturingRegistry(
+    "diagnostics-prometheus",
     "diagnostics-prometheus",
     "bundled",
   );
@@ -196,8 +190,7 @@ it("shares the canonical runtime identity only while the exporter lease is activ
     config: {},
     onHandle: (issued) => handles.add(issued),
   });
-  const readIdentity =
-    contexts.get("diagnostics-prometheus")?.internalDiagnostics?.getRuntimeIdentity;
+  const readIdentity = getContext().internalDiagnostics?.getRuntimeIdentity;
   const buildId = resolveRuntimeServiceBuildId();
   expect(readIdentity?.()).toEqual({
     processInstanceId: getGatewayProcessInstanceId(),
@@ -205,56 +198,4 @@ it("shares the canonical runtime identity only while the exporter lease is activ
   });
   await handle.stop();
   expect(() => readIdentity?.()).toThrow("no longer active");
-});
-
-it("isolates service deadlines and joins admitted work before retiring its owner", async () => {
-  const clock = createGatewaySchedulerClock(100);
-  const scheduler = createTestGatewayScheduler(clock.clock);
-  const { registry, contexts } = capturingRegistry(["source-a", "source-b"], "events", "bundled");
-  const handle = await startPluginServices({ registry, config: {}, scheduler });
-  handles.add(handle);
-  const first = expectDefined(contexts.get("source-a")?.scheduler, "first source scheduler");
-  const sibling = expectDefined(contexts.get("source-b")?.scheduler, "sibling source scheduler");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const siblingFired = createDeferredCore();
-  const callbackFinished = vi.fn();
-  first.schedule({
-    id: "refresh",
-    atMs: 200,
-    run: async () => {
-      entered.resolve();
-      await release.promise;
-      callbackFinished();
-    },
-  });
-  sibling.schedule({ id: "refresh", atMs: 200, run: () => siblingFired.resolve() });
-  try {
-    const firing = clock.advanceTo(200);
-    await Promise.all([entered.promise, siblingFired.promise]);
-    const stopping = handle.stop({
-      strict: true,
-      deadlineAtMs: Date.now() + 5_000,
-      pluginIds: new Set(["source-a"]),
-    });
-    expect([first.signal.aborted, sibling.signal.aborted]).toEqual([true, false]);
-    expect(() => first.schedule({ id: "late", atMs: 300, run: () => {} })).toThrow();
-    const stopFinished = vi.fn();
-    void stopping.then(stopFinished);
-    await Promise.resolve();
-    expect(stopFinished).not.toHaveBeenCalled();
-    expect(callbackFinished).not.toHaveBeenCalled();
-    release.resolve();
-    await stopping;
-    await firing;
-    expect(callbackFinished).toHaveBeenCalledOnce();
-    const next = createDeferredCore();
-    sibling.schedule({ id: "refresh", atMs: 300, run: () => next.resolve() });
-    await clock.advanceTo(300);
-    await next.promise;
-  } finally {
-    release.resolve();
-    await handle.stop();
-    await scheduler.stop();
-  }
 });

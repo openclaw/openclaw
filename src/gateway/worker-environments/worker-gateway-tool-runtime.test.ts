@@ -19,20 +19,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 
-const identity: WorkerConnectionIdentity = {
-  environmentId: "environment",
-  credentialHash: "credential-hash",
-  bundleHash: "a".repeat(64),
+const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(null, {
   sessionId: "session",
   runId: "run",
-  turnClaim: null,
-  ownerEpoch: 1,
-  rpcSetVersion: 1,
   protocolFeatures: ["worker-gateway-tools-v1"],
   credentialExpiresAtMs: 1,
-};
+});
 const policy: WorkerToolSurface["policy"] = {
   workspaceOnly: true,
   readOnly: false,

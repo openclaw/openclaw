@@ -1,4 +1,3 @@
-import { crc32, deflateSync } from "node:zlib";
 import type { Locator, Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { StoredComposerState } from "../lib/chat/outbox-store.ts";
@@ -11,14 +10,12 @@ import {
   countOutboxPayloads,
   readOutboxQueue,
   readOutboxPayloadBytes,
+  sizedOutboxPng,
 } from "./chat-outbox-payloads.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const largePngBytes = 2_404_765;
 const smallPngBytes = 25_536;
-const storageError =
-  "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
-
 async function expectImages(images: Locator, count: number) {
   await expect.poll(() => images.count()).toBe(count);
   await expect
@@ -49,45 +46,10 @@ async function readImageBytes(images: Locator) {
   );
 }
 
-function pngChunk(type: string, data: Buffer): Buffer {
-  const chunk = Buffer.alloc(data.length + 12);
-  chunk.writeUInt32BE(data.length, 0);
-  chunk.write(type, 4, "ascii");
-  data.copy(chunk, 8);
-  chunk.writeUInt32BE(crc32(chunk.subarray(4, -4)), chunk.length - 4);
-  return chunk;
-}
-
-function sizedPng(size: number, color: number): Buffer {
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(1, 0);
-  header.writeUInt32BE(1, 4);
-  header[8] = 8;
-  header[9] = 6;
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  const ihdr = pngChunk("IHDR", header);
-  const idat = pngChunk("IDAT", deflateSync(Buffer.from([0, color, 100, 180, 255])));
-  const iend = pngChunk("IEND", Buffer.alloc(0));
-  // A CRC-covered tEXt ancillary chunk pads a decodable PNG, not trailing junk.
-  const padding = Buffer.alloc(
-    size - signature.length - ihdr.length - idat.length - iend.length - 12,
-    120,
-  );
-  padding.write("Padding\0", 0, "ascii");
-  return Buffer.concat([signature, ihdr, pngChunk("tEXt", padding), idat, iend]);
-}
-
 async function observeMockSends(page: Page) {
   return page.evaluateHandle(() => {
-    const sends: Array<{
-      message: string;
-      queueMode?: string;
-      sessionKey: string;
-      runId: string;
-      durableBeforeSend: boolean;
-      storedSendState?: string;
-      attachments: Array<{ fileName: string; mimeType: string; sizeBytes: number }>;
-    }> = [];
+    const sends: Array<{ runId: string; durableBeforeSend: boolean; storedSendState?: string }> =
+      [];
     // oxlint-disable-next-line typescript/unbound-method -- Preserve the mock method for call(this, raw) and restore it on teardown.
     const send = WebSocket.prototype.send;
     // Observe the existing mock transport synchronously; storage and admission
@@ -115,9 +77,6 @@ async function observeMockSends(page: Page) {
           const persisted = queue.find((item) => item.sendRunId === params.idempotencyKey);
           const attachments = params.attachments ?? [];
           sends.push({
-            message: params.message,
-            queueMode: params.queueMode,
-            sessionKey: params.sessionKey,
             runId: params.idempotencyKey,
             durableBeforeSend:
               persisted?.text === params.message &&
@@ -133,11 +92,6 @@ async function observeMockSends(page: Page) {
                 );
               }),
             storedSendState: persisted?.sendState,
-            attachments: attachments.map((attachment) => ({
-              fileName: attachment.fileName,
-              mimeType: attachment.mimeType,
-              sizeBytes: atob(attachment.content).length,
-            })),
           });
         }
       }
@@ -195,69 +149,39 @@ suite.define(() => {
           const files = sizes.map((size, index) => ({
             name: `mock-${name}-${index + 1}.png`,
             mimeType: "image/png",
-            buffer: sizedPng(size, 60 + index * 100),
+            buffer: sizedOutboxPng(size, 60 + index * 100),
           }));
+          const expectedBytes = files.map((file) => file.buffer.toString("base64"));
           expect(files.map((file) => file.buffer.length)).toEqual(sizes);
           const message = `Mock Gateway: steer with ${name} PNG batch.`;
           await composer.fill(message);
           await pane.locator(".agent-chat__file-input").setInputFiles(files);
           const previews = pane.locator(".chat-attachment-thumb img");
           await expectImages(previews, files.length);
-          const acceptedBytes = await previews.evaluateAll(async (images) =>
-            Promise.all(
-              images.map(
-                async (image) => (await (await fetch((image as HTMLImageElement).src)).blob()).size,
-              ),
-            ),
-          );
-          expect(acceptedBytes).toEqual(sizes);
           await expect.poll(() => steer.isEnabled()).toBe(true);
           expect(await pane.locator(".chat-queue__item").count()).toBe(0);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           const observation = await observeMockSends(page);
           try {
             await steer.click();
-            const outcomeHandle = await page.waitForFunction(
-              ({ proof, error }) => {
-                const errorVisible = [...document.querySelectorAll('[role="alert"]')].some(
-                  (alert) => alert.textContent?.includes(error),
-                );
-                return proof.sends.length > 0 ? "sent" : errorVisible ? "storage-rejected" : false;
-              },
-              { proof: observation, error: storageError },
-            );
-            const outcome = await outcomeHandle.jsonValue();
-            await outcomeHandle.dispose();
+            await gateway.waitForRequest("chat.send");
             const sends = await observation.evaluate((proof) => proof.sends);
             const requests = await gateway.getRequests("chat.send");
-            const evidence = {
-              outcome,
-              sends,
-              draft: await composer.inputValue(),
-              attachmentPreviews: await previews.count(),
-              queueRows: await pane.locator(".chat-queue__item").count(),
-            };
-            // Failed admission must retain the entire draft, with no phantom queue
-            // entry or send. The success contract below still fails on that outcome.
-            if (outcome === "storage-rejected") {
-              expect(evidence).toMatchObject({
-                draft: message,
-                attachmentPreviews: files.length,
-                queueRows: 0,
-              });
-              await expectRequestCountStable(gateway, "chat.send", 0);
-            }
             const captureImages = pane.locator(".chat-attachment-thumb img, .chat-message-image");
             await expectImages(captureImages, files.length);
             await history.waitFor();
             await active.waitFor();
 
-            expect(outcome, JSON.stringify(evidence)).toBe("sent");
             const payload = (await readOutboxQueue(page))[0]?.attachmentPayload;
             assert(payload, "Expected admitted payload reference");
             expect(await countOutboxPayloads(page)).toBe(1);
-            const payloads = await readOutboxPayloadBytes(page, payload.key);
-            expect(payloads).toEqual(files.map((file) => file.buffer.toString("base64")));
+            expect(await readOutboxPayloadBytes(page, payload.key)).toEqual(expectedBytes);
+            expect(requests[0]?.params).toMatchObject({
+              message,
+              queueMode: "steer",
+              sessionKey: "agent:main:main",
+              idempotencyKey: sends[0]?.runId,
+            });
             expect(requests[0]?.params).toHaveProperty(
               "attachments",
               files.map((file) => ({
@@ -270,17 +194,9 @@ suite.define(() => {
             );
             expect(sends).toEqual([
               {
-                message,
-                queueMode: "steer",
-                sessionKey: "agent:main:main",
                 runId: expect.any(String),
                 durableBeforeSend: true,
                 storedSendState: "waiting-reconnect",
-                attachments: files.map((file) => ({
-                  fileName: file.name,
-                  mimeType: file.mimeType,
-                  sizeBytes: file.buffer.length,
-                })),
               },
             ]);
             await expect.poll(() => composer.inputValue()).toBe("");
@@ -309,8 +225,7 @@ suite.define(() => {
               .locator(".chat-group.user", { hasText: message })
               .locator(".chat-message-image");
             await expectImages(deliveredImages, files.length);
-            const deliveredBytes = await readImageBytes(deliveredImages);
-            expect(deliveredBytes).toEqual(files.map((file) => file.buffer.toString("base64")));
+            expect(await readImageBytes(deliveredImages)).toEqual(expectedBytes);
             await expect.poll(() => countOutboxPayloads(page)).toBe(0);
             await expectRequestCountStable(gateway, "chat.send", 1);
           } finally {

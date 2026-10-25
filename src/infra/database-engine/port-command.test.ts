@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeAll, expect, it } from "vitest";
 import "./database-suite-workers.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { seedPortSqlite } from "./port-command.integration.test-support.js";
 import { runDatabasePortTask } from "./port-command.worker.js";
@@ -27,7 +28,7 @@ function fixture(sql = "") {
   seedPortSqlite(
     sourcePath,
     `${metadata.sqlite};
-    INSERT INTO workboard_schema_migrations VALUES ('schema-3', 17);
+    INSERT INTO workboard_schema_migrations VALUES ('schema-${metadata.version}', 17);
     INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', ' {"a":1,"a":2} ', 1, 2);
     ${sql}`,
   );
@@ -43,6 +44,111 @@ async function inspectSource(sourcePath: string) {
   descriptor.inspectSqliteSource?.(db);
   return await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
 }
+
+it.each(["agent", "state"])(
+  "accepts legal first-use absence in %s inspection and completes only the private copy",
+  async (family) => {
+    const directory = tempDirs.make("port-first-use-");
+    const sourcePath = path.join(directory, "source.sqlite");
+    const current = await loadDatabasePortDescriptor(family);
+    const table = family === "agent" ? "session_nodes" : "agent_deletion_journal";
+    const extraTable = family === "agent" ? table : "agent_database_leases";
+    const column = family === "agent" ? "legacy_acp_migration_json" : "phase";
+    {
+      using db = openNodeSqliteDatabase(sourcePath);
+      db.exec([current, ...(current.fragments ?? [])].map((part) => part.sqlite).join("\n;\n"));
+      db.exec(`PRAGMA user_version = ${current.version}`);
+      if (family === "agent") {
+        db.exec(`INSERT INTO schema_meta VALUES ('primary', 'agent', ${current.version}, 'main', NULL, 1, 1);
+          ALTER TABLE session_nodes DROP COLUMN legacy_acp_migration_json;
+          ALTER TABLE session_key_contract DROP COLUMN canonical_ready;
+          INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+          VALUES ('agent:main:main', 'retained-session', '{"sessionId":"retained-session"}', 17);`);
+      } else {
+        db.exec(`INSERT INTO schema_meta VALUES ('primary', 'global', ${current.version}, NULL, NULL, 1, 1);
+          ALTER TABLE worker_workspace_pending_results DROP COLUMN repository_workspace_id;
+          ALTER TABLE user_profile_identities DROP COLUMN verified_email_json;
+          ALTER TABLE agent_deletion_journal DROP COLUMN phase;
+          INSERT INTO agent_deletion_journal (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
+          VALUES ('retired', '/retired/agent', '/retired/workspace', '/retired/sessions', 17);`);
+      }
+    }
+    const original = await hash(sourcePath);
+    await expect(inspect(sourcePath)).resolves.toMatchObject({ family, migrationRequired: true });
+    const copy = path.join(directory, "private.sqlite");
+    await fs.copyFile(sourcePath, copy);
+    const prepared = await runDatabasePortTask({ operation: "migrate", sourcePath: copy }, scope);
+    expect(prepared.verification.tables[table]?.rows).toBe(1);
+    await expect(inspect(copy)).resolves.toMatchObject({
+      migrationRequired: false,
+      verification: prepared.verification,
+    });
+    {
+      using db = openNodeSqliteDatabase(copy);
+      const row =
+        family === "agent"
+          ? db
+              .prepare("SELECT current_session_id, legacy_acp_migration_json FROM session_nodes")
+              .get()
+          : db.prepare("SELECT agent_id, phase FROM agent_deletion_journal").get();
+      expect(row).toEqual(
+        family === "agent"
+          ? { current_session_id: "retained-session", legacy_acp_migration_json: null }
+          : { agent_id: "retired", phase: null },
+      );
+    }
+    expect(await hash(sourcePath)).toBe(original);
+    {
+      using db = openNodeSqliteDatabase(sourcePath);
+      expect(
+        db.prepare(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`).get(column),
+      ).toBeUndefined();
+      db.exec(`ALTER TABLE ${extraTable} ADD COLUMN unported_data TEXT`);
+    }
+    await expect(inspect(sourcePath)).rejects.toThrow(
+      `Unknown or missing columns in ${extraTable}`,
+    );
+  },
+);
+
+it.each([false, true])(
+  "skips only empty retained state tables (pending columns: %s)",
+  async (pending) => {
+    const sourcePath = path.join(tempDirs.make("state-port-retained-"), "openclaw.sqlite");
+    const state = await loadStatePortDescriptor();
+    {
+      using db = openNodeSqliteDatabase(sourcePath);
+      db.exec([state, ...(state.fragments ?? [])].map((schema) => schema.sqlite).join("\n;\n"));
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+      INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, NULL, NULL, 1, 1);
+      CREATE TABLE fleet_cells (tenant_id TEXT PRIMARY KEY) STRICT;`);
+      if (pending) {
+        db.exec("ALTER TABLE agent_deletion_journal DROP COLUMN phase");
+      }
+    }
+    const original = await hash(sourcePath);
+    await expect(inspect(sourcePath)).resolves.toMatchObject({
+      family: "state",
+      migrationRequired: pending,
+      notes: ["Skipped empty retained SQLite table fleet_cells"],
+    });
+    expect(await hash(sourcePath)).toBe(original);
+    {
+      using db = openNodeSqliteDatabase(sourcePath);
+      db.exec("INSERT INTO fleet_cells VALUES ('retained')");
+    }
+    const populated = await hash(sourcePath);
+    await expect(inspect(sourcePath)).rejects.toThrow(
+      /fleet_cells contains rows.*preserve.*SQLite/i,
+    );
+    expect(await hash(sourcePath)).toBe(populated);
+    {
+      using db = openNodeSqliteDatabase(sourcePath);
+      db.exec("DELETE FROM fleet_cells; CREATE TABLE unknown_payload (id TEXT)");
+    }
+    await expect(inspect(sourcePath)).rejects.toThrow("Unknown SQLite table");
+  },
+);
 
 it.each([25, 27])("preserves the version %s backup shape and Doctor guidance", async (version) => {
   const directory = tempDirs.make("state-port-legacy-");
@@ -78,7 +184,7 @@ it("inspects without writing and refuses changed canonical SQLite data", async (
   expect(inspected).toMatchObject({
     family: "workboard",
     engine: "sqlite",
-    version: 3,
+    version: metadata.version,
     migrationRequired: false,
     verification: { tables: { workboard_boards: { rows: 1 } } },
   });

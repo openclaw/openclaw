@@ -61,6 +61,17 @@ function registerModule(
   ]);
 }
 
+function registerProbe(
+  rootDir: string,
+  id: string,
+  checker: Partial<NonNullable<PluginChannelCatalogEntry["channel"]["persistedAuthState"]>> = {},
+) {
+  registerModule(rootDir, {
+    id,
+    persistedAuthState: { specifier: "./auth-presence", exportName: "hasState", ...checker },
+  });
+}
+
 function probeState(
   channelId: string,
   env?: NodeJS.ProcessEnv,
@@ -90,8 +101,8 @@ afterEach(() => {
 describe("channel package-state probes", () => {
   it("awaits the selected async checker and never retries a refusal through the sync checker", async () => {
     const root = tempRoot("openclaw-package-state-async-");
-    fs.writeFileSync(
-      path.join(root, "auth-presence.js"),
+    writeProbe(
+      root,
       [
         "module.exports.hasState = () => { throw new Error('sync checker must not run'); };",
         "module.exports.hasStateAsync = async ({ env }) => {",
@@ -100,14 +111,7 @@ describe("channel package-state probes", () => {
         "};",
       ].join("\n"),
     );
-    registerModule(root, {
-      id: "fixture",
-      persistedAuthState: {
-        specifier: "./auth-presence",
-        exportName: "hasState",
-        exportNameAsync: "hasStateAsync",
-      },
-    });
+    registerProbe(root, "fixture", { exportNameAsync: "hasStateAsync" });
     const probe = (env: NodeJS.ProcessEnv) =>
       hasBundledChannelPackageStateAsync({
         metadataKey: "persistedAuthState",
@@ -126,23 +130,15 @@ describe("channel package-state probes", () => {
     const marker = path.join(root, "loaded");
     const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
     const database = resolveOpenClawStateSqlitePath(env);
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginRoot, "auth-presence.js"),
+    writeProbe(
+      pluginRoot,
       [
         `const fs = require("node:fs");`,
         `fs.writeFileSync(${JSON.stringify(marker)}, "loaded");`,
         `module.exports.hasState = () => fs.existsSync(${JSON.stringify(database)});`,
       ].join("\n"),
     );
-    registerModule(pluginRoot, {
-      id: "fixture",
-      persistedAuthState: {
-        specifier: "./auth-presence",
-        exportName: "hasState",
-        backingStore: "plugin-state",
-      },
-    });
+    registerProbe(pluginRoot, "fixture", { backingStore: "plugin-state" });
     const probe = () => probeState("fixture", env);
     expect(probe()).toBe(false);
     expect(fs.existsSync(database)).toBe(false);
@@ -188,10 +184,7 @@ describe("channel package-state probes", () => {
     writeProbe(sourceRoot, "module.exports.hasAnyWhatsAppAuth = () => true;\n");
     writeProbe(builtRoot, "module.exports.stale = () => false;\n");
 
-    registerModule(sourceRoot, {
-      id: "whatsapp",
-      persistedAuthState: { specifier: "./auth-presence", exportName: "hasAnyWhatsAppAuth" },
-    });
+    registerProbe(sourceRoot, "whatsapp", { exportName: "hasAnyWhatsAppAuth" });
     expect(probeState("whatsapp")).toBe(true);
   });
 
@@ -222,16 +215,12 @@ describe("channel package-state probes", () => {
   });
 
   it("reports a missing built package-state artifact as not found, not a boundary escape", () => {
-    // Reproduces a rebuild window: the catalog root is the built plugin dir while
-    // `dist/extensions/<id>` has not been re-emitted yet.
+    // The catalog can retain a built root while a rebuild has temporarily removed its artifacts.
     const root = tempRoot("openclaw-package-state-missing-");
     const builtRoot = path.join(root, "dist", "extensions", "matrix");
     fs.mkdirSync(builtRoot, { recursive: true });
 
-    registerModule(builtRoot, {
-      id: "matrix",
-      persistedAuthState: { specifier: "./auth-presence", exportName: "hasAnyMatrixAuth" },
-    });
+    registerProbe(builtRoot, "matrix", { exportName: "hasAnyMatrixAuth" });
     expect(probeState("matrix")).toBe(false);
     const warning = String(probeLogWarnMock.mock.calls.at(0)?.[0] ?? "");
     expect(warning).toContain("failed to load persistedAuthState checker for matrix");

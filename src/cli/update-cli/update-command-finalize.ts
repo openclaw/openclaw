@@ -40,6 +40,7 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import { refuseHostOwnedUpdate, reportHostOwnedUpdate } from "./host-owned.js";
 import {
+  parseUpdateChannel,
   parseUpdateTimeoutMs,
   readPackageVersion,
   resolveNodeRunner,
@@ -107,14 +108,7 @@ export async function updateFinalizeCommand(
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel !== undefined && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
+  const requestedChannel = parseUpdateChannel(opts.channel);
 
   let exitCode: number | undefined;
   await withCommandProcessScope(async (stopChildren) => {

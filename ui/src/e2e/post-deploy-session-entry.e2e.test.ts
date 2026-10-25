@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, rm } from "node:fs/promises";
 import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +26,7 @@ import {
   captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
+  refreshProductionControlUiE2e,
   resolvePlaywrightChromiumExecutablePath,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -62,9 +63,10 @@ describe("public-session post-deploy app handoff", () => {
 
   beforeAll(async () => {
     fixture = await mkdtemp(path.join(os.tmpdir(), "openclaw-post-deploy-entry-"));
-    for (const build of [buildA, buildB]) {
-      await buildProductionControlUiE2e(path.join(fixture, build), build);
-    }
+    await buildProductionControlUiE2e(path.join(fixture, buildA), buildA);
+    // Release identity lives in HTML and the worker; both builds use the same compiled source.
+    await cp(path.join(fixture, buildA), path.join(fixture, buildB), { recursive: true });
+    await refreshProductionControlUiE2e(path.join(fixture, buildB), buildB);
     state = await createOpenClawTestState({
       scenario: "minimal",
       label: "post-deploy-session-entry",

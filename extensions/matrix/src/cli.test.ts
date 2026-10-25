@@ -329,7 +329,6 @@ describe("matrix CLI verification commands", () => {
       backup: diagnosticMatrixBackup({ serverVersion: "2", activeVersion: "2" }),
     });
     mocks.profile.mockResolvedValue({
-      skipped: false,
       displayNameUpdated: true,
       avatarUpdated: false,
       resolvedAvatarUrl: null,
@@ -596,7 +595,7 @@ describe("matrix CLI verification commands", () => {
     expect(process.exitCode).toBe(0);
   });
 
-  it("passes loaded cfg to all verify subcommands", async () => {
+  it("passes loaded cfg to verify subcommands and prints verbose backup health", async () => {
     const fakeCfg = { channels: { matrix: {} } };
     mocks.loadConfig.mockReturnValue(fakeCfg);
 
@@ -626,6 +625,21 @@ describe("matrix CLI verification commands", () => {
     mocks.backupStatus.mockResolvedValue({});
     await runMatrixCli("verify backup status");
     expectCall(mocks.backupStatus, { cfg: fakeCfg });
+    mocks.backupStatus.mockResolvedValue(
+      diagnosticMatrixBackup({
+        serverVersion: "2",
+        activeVersion: null,
+        matchesDecryptionKey: false,
+        decryptionKeyCached: false,
+        keyLoadAttempted: true,
+      }),
+    );
+    await runMatrixCli("verify backup status", "--verbose");
+    expectLogs(
+      "Backup server version: 2",
+      "Backup active on this device: no",
+      "Backup trusted by this device: yes",
+    );
 
     await runMatrixCli("verify backup reset", "--yes");
     expectCall(mocks.resetBackup, { cfg: fakeCfg });
@@ -970,25 +984,6 @@ describe("matrix CLI verification commands", () => {
     expect(mocks.resetBackup).not.toHaveBeenCalled();
     expectFailure(
       "Backup reset failed: Refusing to reset Matrix room-key backup without --yes. If you accept losing unrecoverable history, re-run openclaw matrix verify backup reset --yes.",
-    );
-  });
-
-  it("prints backup health lines for verify backup status in verbose mode", async () => {
-    mocks.backupStatus.mockResolvedValue(
-      diagnosticMatrixBackup({
-        serverVersion: "2",
-        activeVersion: null,
-        matchesDecryptionKey: false,
-        decryptionKeyCached: false,
-        keyLoadAttempted: true,
-      }),
-    );
-    await runMatrixCli("verify backup status", "--verbose");
-
-    expectLogs(
-      "Backup server version: 2",
-      "Backup active on this device: no",
-      "Backup trusted by this device: yes",
     );
   });
 });

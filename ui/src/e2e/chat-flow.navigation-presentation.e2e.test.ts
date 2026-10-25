@@ -506,19 +506,14 @@ suite.define(() => {
       await expectTextContains(popover, "~190k / 200k · ~95%");
     } else {
       await expect.poll(() => popover.isVisible()).toBe(true);
-      for (const text of [
-        "46k / 200k · 23%",
-        "757.3k",
-        "42.3k",
-        "Est. cost",
-        "$0.023",
-        "Cost by Type",
-        "$0.0035",
-        "$0.018",
-        "$0.0015",
-        "$0.0005",
-      ]) {
+      for (const text of ["46k / 200k · 23%", "757.3k", "42.3k", "Cost", "$0.023"]) {
         await expectTextContains(popover, text);
+      }
+      const costBreakdown = await popover
+        .locator(".context-usage__stats > div[title]")
+        .getAttribute("title");
+      for (const amount of ["$0.0035", "$0.018", "$0.0015", "$0.0005"]) {
+        expect(costBreakdown).toContain(amount);
       }
       await page.keyboard.press("Escape");
       await expect.poll(() => popover.isHidden()).toBe(true);
@@ -594,7 +589,8 @@ suite.define(() => {
     );
     const pinnedSessionKey = "agent:main:session-pinned";
     const createdOrder = [pinnedSessionKey, ...createdSessionKeys];
-    const updatedOrder = [...createdSessionKeys.toReversed(), pinnedSessionKey];
+    // Personal pins lead the list in their Pinned section regardless of sort mode.
+    const updatedOrder = [pinnedSessionKey, ...createdSessionKeys.toReversed()];
     const sessions = {
       count: createdSessionKeys.length + 1,
       defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
@@ -628,12 +624,12 @@ suite.define(() => {
     await page
       .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
       .waitFor({ timeout: 10_000 });
-    // Personal shortcuts do not add a row to the ten-row Sessions page.
+    // Pinned rows sit above, and do not occupy, the ten-row Sessions page.
     const pinnedLink = page.locator(
-      `.sidebar-rail [data-sidebar-entry="session:${pinnedSessionKey}"] a`,
+      `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${pinnedSessionKey}"] a.sidebar-recent-session__link`,
     );
     await pinnedLink.waitFor();
-    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 10));
+    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
     await page.getByRole("button", { name: "Show more" }).click();
     await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
@@ -656,7 +652,7 @@ suite.define(() => {
       .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
       .locator(".sidebar-recent-session__name")
       .evaluate((label) => getComputedStyle(label).fontWeight);
-    expect(activeWeight).toBe("600");
+    expect(activeWeight).toBe(inactiveWeight);
     expect(inactiveWeight).toBe("500");
 
     const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
@@ -719,7 +715,7 @@ suite.define(() => {
     const label = row.locator(".sidebar-recent-session__name");
     const link = row.locator("a.sidebar-recent-session__link");
     const tree = row.locator("..");
-    const list = tree.locator("..");
+    const list = tree.locator('xpath=ancestor::*[@role="list"][1]');
     await expectText(label, readableTitle);
     expect(await list.getAttribute("role")).toBe("list");
     expect(await tree.getAttribute("role")).toBe("listitem");

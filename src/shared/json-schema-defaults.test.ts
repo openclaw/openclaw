@@ -20,14 +20,12 @@ describe("JSON Schema helpers", () => {
   });
 
   it("preserves pattern property key __proto__", () => {
+    const properties = () => Object.fromEntries([["__proto__", { type: "string" }]]);
     const normalized = normalizeJsonSchemaForTypeBox({
       type: "object",
-      patternProperties: Object.fromEntries([["__proto__", { type: "string" }]]),
+      patternProperties: properties(),
     });
-
-    expect(normalized).toMatchObject({
-      patternProperties: Object.fromEntries([["__proto__", { type: "string" }]]),
-    });
+    expect(normalized).toMatchObject({ patternProperties: properties() });
   });
 
   it("resolves local refs to array entries beyond config path index limits", () => {
@@ -52,6 +50,36 @@ describe("JSON Schema helpers", () => {
       "<schema>.type: unsupported JSON Schema type",
     );
   });
+
+  it("validates primitive keyword shapes in their established error order", () => {
+    for (const [schema, expected] of [
+      [{ title: 7 }, "<schema>.title: expected string"],
+      [{ maximum: "7" }, "<schema>.maximum: expected number"],
+      [{ minLength: -1 }, "<schema>.minLength: expected non-negative integer"],
+      [{ minLength: 1.5 }, "<schema>.minLength: expected non-negative integer"],
+      [{ readOnly: "false" }, "<schema>.readOnly: expected boolean"],
+      [
+        { readOnly: "false", minLength: -1, maximum: "7", title: 7 },
+        "<schema>.title: expected string",
+      ],
+      [{ readOnly: "false", minLength: -1, maximum: "7" }, "<schema>.maximum: expected number"],
+      [{ readOnly: "false", minLength: -1 }, "<schema>.minLength: expected non-negative integer"],
+    ] as const) {
+      expect(findJsonSchemaShapeError(schema)).toBe(expected);
+    }
+    expect(
+      findJsonSchemaShapeError({ title: "Title", maximum: 1.5, minLength: -0, readOnly: false }),
+    ).toBeUndefined();
+    expect(
+      findJsonSchemaShapeError({
+        title: undefined,
+        maximum: undefined,
+        minLength: undefined,
+        readOnly: undefined,
+      }),
+    ).toBeUndefined();
+  });
+
   const readPollution = () => (Object.prototype as Record<string, unknown>).polluted;
   const polluting = { type: "object", properties: { polluted: { default: "yes" } } };
 

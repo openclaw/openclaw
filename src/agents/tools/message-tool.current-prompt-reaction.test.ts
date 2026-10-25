@@ -141,7 +141,7 @@ function bindSource(input: Recorder) {
 function mintTurn(
   input: Recorder,
   executionRunId: string,
-  kind: { isHeartbeat?: boolean; internalEventExecution?: boolean } = {},
+  kind: { internalEventExecution?: boolean } = {},
   copied = false,
 ) {
   return mintReplyMessageActionTurnCapability(
@@ -170,7 +170,6 @@ function mintTurn(
       opts: {
         dashboardReadAdmission: { ...scope, runId, assertCurrent: run.assertSourceCurrent },
       },
-      isHeartbeat: kind.isHeartbeat === true,
     },
     executionRunId,
   );
@@ -256,10 +255,7 @@ it.each(["webchat", "discord"])(
   },
 );
 
-it.each([
-  ["webchat", { isHeartbeat: true }],
-  ["discord", { internalEventExecution: true }],
-])(
+it.each([["discord", { internalEventExecution: true }]])(
   "fails prompt reactions locally on a %s-routed run that mints no grant (%o)",
   async (currentChannelProvider, kind) => {
     const nextRunId = runId + "-next";

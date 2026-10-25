@@ -70,7 +70,9 @@ export function StepMarker(props: {
               ? "check"
               : props.outcome
                 ? "circleX"
-                : "clock"
+                : props.status === "pending"
+                  ? "circleDashed"
+                  : "clock"
           }
         />
       }

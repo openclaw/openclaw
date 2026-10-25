@@ -1,4 +1,3 @@
-/** Tests model fallback notice formatting and transition state tracking. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
@@ -28,6 +27,7 @@ function noticeState(
 }
 
 const activeFallbackState = noticeState();
+const clearedState = { selectedModel: undefined, activeModel: undefined, reason: undefined };
 const cliBackend = {
   id: "claude-cli",
   modelProvider: "anthropic",
@@ -66,9 +66,7 @@ const cliAliasTransition = {
 } satisfies Parameters<typeof resolveFallbackTransition>[0];
 
 describe("fallback-state", () => {
-  afterEach(() => {
-    cliBackendsTesting.resetDepsForTest();
-  });
+  afterEach(() => cliBackendsTesting.resetDepsForTest());
 
   it.each<[string, FallbackNoticeState | undefined, boolean, number, string?, string?]>([
     ["matching persisted refs", activeFallbackState, true, 2],
@@ -124,7 +122,7 @@ describe("fallback-state", () => {
       resolveDemoFallbackTransition({ ...refs, activeModel: refs.selectedModel, state }),
     ).toMatchObject({
       fallbackCleared: true,
-      nextState: { selectedModel: undefined, activeModel: undefined, reason: undefined },
+      nextState: clearedState,
     });
     expect(buildFallbackNotice(refs)).toContain("selected custom/custom/model");
     expect(
@@ -133,35 +131,25 @@ describe("fallback-state", () => {
   });
 
   it.each([
-    {
-      name: "formatted HTTP details",
-      error: "429 Too Many Requests: Claude Max usage limit reached, try again in 6 minutes.",
-      contains: ["HTTP 429: Too Many Requests", "Claude Max usage limit reached"],
-    },
-    {
-      name: "throttle details",
-      error: "ThrottlingException: Too many concurrent requests",
-      contains: ["ThrottlingException"],
-      not: "rate limit",
-    },
-    { name: "non-transient reason", error: "Unauthorized: invalid API key", exact: "rate limit" },
-    {
-      name: "UTF-16-safe truncation",
-      error: `429 ${"x".repeat(68)}😀tail`,
-      exact: `HTTP 429: ${"x".repeat(68)}…`,
-    },
-  ])("formats $name", ({ error, contains, exact, not }) => {
+    [
+      "429 Too Many Requests: Claude Max usage limit reached, try again in 6 minutes.",
+      [
+        expect.stringContaining("HTTP 429: Too Many Requests"),
+        expect.stringContaining("Claude Max usage limit reached"),
+      ],
+    ],
+    [
+      "ThrottlingException: Too many concurrent requests",
+      [expect.stringContaining("ThrottlingException"), expect.not.stringMatching(/^rate limit$/)],
+    ],
+    ["Unauthorized: invalid API key", ["rate limit"]],
+    [`429 ${"x".repeat(68)}😀tail`, [`HTTP 429: ${"x".repeat(68)}…`]],
+  ] as const)("formats fallback error %s", (error, expectations) => {
     const { reasonSummary } = resolveDemoFallbackTransition({
       attempts: [{ ...baseAttempt, error }],
     });
-    for (const part of contains ?? []) {
-      expect(reasonSummary).toContain(part);
-    }
-    if (exact !== undefined) {
-      expect(reasonSummary).toBe(exact);
-    }
-    if (not !== undefined) {
-      expect(reasonSummary).not.toBe(not);
+    for (const expected of expectations) {
+      expect(reasonSummary).toEqual(expected);
     }
   });
 
@@ -243,11 +231,7 @@ describe("fallback-state", () => {
         fallbackCleared: false,
         stateChanged: expectedStateChanged,
       });
-      expect(resolved.nextState).toEqual({
-        selectedModel: undefined,
-        activeModel: undefined,
-        reason: undefined,
-      });
+      expect(resolved.nextState).toEqual(clearedState);
       expect(buildFallbackNotice(params)).toBeNull();
       expect(
         resolveActiveFallbackState({
@@ -260,19 +244,9 @@ describe("fallback-state", () => {
     });
 
     it.each([
-      {
-        name: "different model",
-        activeProvider: "arcee",
-        activeModel: "arcee-ai/trinity-large-thinking",
-        activeRef: "arcee/arcee-ai/trinity-large-thinking",
-      },
-      {
-        name: "different provider",
-        activeProvider: "openrouter",
-        activeModel: "arcee-ai/trinity-large-preview",
-        activeRef: "openrouter/arcee-ai/trinity-large-preview",
-      },
-    ])("keeps a $name as a real fallback", ({ activeProvider, activeModel, activeRef }) => {
+      ["arcee", "arcee-ai/trinity-large-thinking", "arcee/arcee-ai/trinity-large-thinking"],
+      ["openrouter", "arcee-ai/trinity-large-preview", "openrouter/arcee-ai/trinity-large-preview"],
+    ])("keeps %s/%s as a real fallback", (activeProvider, activeModel, activeRef) => {
       const params = { ...base, activeProvider, activeModel };
 
       const resolved = resolveFallbackTransition(params);

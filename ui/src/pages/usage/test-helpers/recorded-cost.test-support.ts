@@ -1,9 +1,8 @@
 import {
   addCostUsageTotals,
-  cloneCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../../../../src/infra/session-cost-usage-totals.js";
-import { usageSession } from "../view.test-support.ts";
+import { usageSession, usageTotals } from "../view.test-support.ts";
 
 export function createRecordedCostUsage(updatedAt = Date.UTC(2026, 4, 14, 12)) {
   const sessions = [
@@ -27,7 +26,14 @@ export function createRecordedCostUsage(updatedAt = Date.UTC(2026, 4, 14, 12)) {
       const usage = session.usage!;
       const timestamp = session.updatedAt!;
       const date = new Date(timestamp).toISOString().slice(0, 10);
-      const day = { date, ...cloneCostUsageTotals(usage) };
+      const day = {
+        date,
+        ...usageTotals(usage.input, usage.totalCost, {
+          output: usage.output,
+          totalTokens: usage.totalTokens,
+          missingCostEntries: usage.missingCostEntries,
+        }),
+      };
       usage.activityDates = [date];
       usage.firstActivity = timestamp - 1_000;
       usage.lastActivity = timestamp;

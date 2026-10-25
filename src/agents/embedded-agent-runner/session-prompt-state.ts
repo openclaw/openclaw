@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
@@ -64,14 +65,6 @@ function describeTool(tool: AnyAgentTool): ToolDefinition {
   return { name: tool.name, description: tool.description, parameters: tool.parameters };
 }
 
-function sameToolDefinition(left: ToolDefinition, right: ToolDefinition | undefined): boolean {
-  return (
-    right !== undefined &&
-    left.description === right.description &&
-    stableStringify(left.parameters) === stableStringify(right.parameters)
-  );
-}
-
 /**
  * The session pins every tool definition it has sent, so a turn that builds fewer
  * tools keeps the provider prefix: retained definitions refuse their calls. New or
@@ -120,18 +113,25 @@ export function prepareSessionToolSurface(params: {
   const pinned = new Map(known?.tools.map((tool) => [tool.name, tool]));
   // Sibling guidance in a description follows the tools a turn built; the pin keeps
   // the session's wording while the parameters match.
+  let changed = !known;
   const tools = params.tools.map((tool) => {
     const pin = pinned.get(tool.name);
-    return pin &&
-      pin.description !== tool.description &&
-      stableStringify(pin.parameters) === stableStringify(tool.parameters)
+    if (changed && pin?.description === tool.description) {
+      return tool;
+    }
+    const sameParameters =
+      pin &&
+      (pin.parameters === tool.parameters ||
+        stableStringify(pin.parameters) === stableStringify(tool.parameters));
+    changed ||= !sameParameters;
+    return sameParameters && pin.description !== tool.description
       ? copyAgentToolMetadata(tool, { ...tool, description: pin.description })
       : tool;
   });
-  const current = tools.map(describeTool);
-  const built = new Set(current.map((tool) => tool.name));
+  const built = new Set(tools.map((tool) => tool.name));
   const retained = [...pinned.values()].filter((tool) => !built.has(tool.name));
-  if (!known || current.some((tool) => !sameToolDefinition(tool, pinned.get(tool.name)))) {
+  if (changed) {
+    const current = tools.map(describeTool);
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,
@@ -410,10 +410,12 @@ export function recordToolResultPromptProjection(
     cacheTtl,
     content: cacheTtl
       ? message.content
-      : message.content.flatMap((block) =>
-          isRecord(block) && block.type === "text" && typeof block.text === "string"
-            ? [{ type: "text" as const, text: block.text }]
-            : [],
+      : freezeJsonSnapshot(
+          message.content.flatMap((block) =>
+            isRecord(block) && block.type === "text" && typeof block.text === "string"
+              ? [{ type: "text" as const, text: block.text }]
+              : [],
+          ),
         ),
   });
 }

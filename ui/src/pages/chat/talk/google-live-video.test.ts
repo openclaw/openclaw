@@ -7,41 +7,13 @@ import {
   latestWebSocket,
 } from "./google-live.test-support.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./google-live.ts";
-import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
+import {
+  audioFixture,
+  cameraFixture,
+  prepareRealtimeTalkTestInput,
+  stubMedia as installMedia,
+} from "./input.test-support.ts";
 import type { RealtimeTalkCallbacks } from "./shared.ts";
-
-function audioFixture() {
-  const track = Object.assign(new EventTarget(), { stop: vi.fn() });
-  const stream = {
-    getAudioTracks: () => [track],
-    getTracks: () => [track],
-  } as unknown as MediaStream;
-  return { track, stream };
-}
-
-function cameraFixture(deviceId?: string) {
-  const track = Object.assign(new EventTarget(), {
-    stop: vi.fn(),
-    readyState: "live",
-    enabled: true,
-    muted: false,
-    ...(deviceId ? { getSettings: () => ({ deviceId }) } : {}),
-  });
-  const stream = {
-    getVideoTracks: () => [track],
-    getTracks: () => [track],
-  } as unknown as MediaStream;
-  return { track, stream };
-}
-
-function installMedia(...streams: MediaStream[]) {
-  const getUserMedia = vi.fn();
-  for (const stream of streams) {
-    getUserMedia.mockResolvedValueOnce(stream);
-  }
-  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-  return getUserMedia;
-}
 
 function mockVideoElements(readyState: (index: number) => number) {
   const videos: HTMLVideoElement[] = [];

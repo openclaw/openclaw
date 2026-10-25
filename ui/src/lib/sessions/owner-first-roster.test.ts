@@ -72,53 +72,46 @@ describe("owner-first session roster plan", () => {
     expect(sessions.state.result?.sessions.map((row) => row.key)).toContain(ownerTail.key);
   });
 
-  it("keeps foreign-owned rows published through a warm owner-first refresh", async () => {
-    const ownRow = makeRow("ada", 2);
-    const foreignRow = makeRow("bob", 1, "profile-bob");
-    const { sessions, emitEvent, request } = harness(() => sessionsResult([ownRow, foreignRow], 2));
+  it.each([false, true])(
+    "keeps foreign-owned rows through a warm refresh (fails: %s)",
+    async (fails) => {
+      const ownRow = makeRow("ada", 2);
+      const foreignRow = makeRow("bob", 1, "profile-bob");
+      let failRefresh = false;
+      const { sessions, emitEvent, request } = harness(() => {
+        if (failRefresh) {
+          throw new Error("session roster unavailable");
+        }
+        return sessionsResult([ownRow, foreignRow], 2);
+      });
 
-    await sessions.refresh({ agentId: "main", limit: 60, force: true });
-    expect(sessions.state.result?.sessions.map((row) => row.key)).toContain(foreignRow.key);
+      await sessions.refresh({ agentId: "main", limit: 60, force: true });
+      expect(sessions.state.result?.sessions).toHaveLength(2);
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toContain(foreignRow.key);
 
-    const publishedKeySets: string[][] = [];
-    const stop = sessions.subscribe((next) => {
-      if (next.result) {
-        publishedKeySets.push(next.result.sessions.map((row) => row.key));
+      const publishedKeySets: string[][] = [];
+      const stop = sessions.subscribe((next) => {
+        if (next.result) {
+          publishedKeySets.push(next.result.sessions.map((row) => row.key));
+        }
+      });
+      failRefresh = fails;
+      emitEvent(sessionChangedEvent(ownRow.key));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      stop();
+
+      expect(request.mock.calls).toHaveLength(2);
+      expect(publishedKeySets.length).toBeGreaterThan(0);
+      for (const keys of publishedKeySets) {
+        expect(keys).toContain(foreignRow.key);
       }
-    });
-    emitEvent(sessionChangedEvent(ownRow.key));
-    await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
-    stop();
-
-    expect(request.mock.calls).toHaveLength(2);
-    expect(publishedKeySets.length).toBeGreaterThan(0);
-    for (const keys of publishedKeySets) {
-      expect(keys).toContain(foreignRow.key);
-    }
-  });
-
-  it("keeps the previous roster when a warm owner-first refresh fails", async () => {
-    const ownRow = makeRow("ada", 2);
-    const foreignRow = makeRow("bob", 1, "profile-bob");
-    let failRefresh = false;
-    const { sessions, emitEvent } = harness(() => {
-      if (failRefresh) {
-        throw new Error("session roster unavailable");
+      if (fails) {
+        expect(sessions.state.error).not.toBeNull();
+        expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([
+          ownRow.key,
+          foreignRow.key,
+        ]);
       }
-      return sessionsResult([ownRow, foreignRow], 2);
-    });
-
-    await sessions.refresh({ agentId: "main", limit: 60, force: true });
-    expect(sessions.state.result?.sessions).toHaveLength(2);
-
-    failRefresh = true;
-    emitEvent(sessionChangedEvent(ownRow.key));
-    await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
-
-    expect(sessions.state.error).not.toBeNull();
-    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([
-      ownRow.key,
-      foreignRow.key,
-    ]);
-  });
+    },
+  );
 });

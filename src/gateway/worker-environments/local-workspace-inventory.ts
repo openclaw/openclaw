@@ -1,8 +1,13 @@
 import { isUtf8 } from "node:buffer";
+import { createHash } from "node:crypto";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
 import { manifestNodes } from "./workspace-manifest-comparison.js";
-import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import {
+  serializeWorkerWorkspaceManifest,
+  type WorkerWorkspaceManifest,
+} from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 export function decodeLocalWorkspaceGitPaths(listed: Buffer): string[] {
@@ -76,4 +81,45 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
     }
   }
   return paths;
+}
+
+/** Git archives omit accepted ignored leaves and empty directories; retain that overlay separately. */
+export async function captureLocalWorkspaceArchiveBaseline(params: {
+  root: string;
+  snapshotCommit: string;
+  manifest: WorkerWorkspaceManifest;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+}) {
+  const { signal, assertCurrent } = params;
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.snapshotCommit)) {
+    throw new Error("Invalid archive snapshot commit");
+  }
+  const listed = await requireGitBuffer(
+    params.root,
+    ["ls-tree", "-r", "-z", "--name-only", params.snapshotCommit],
+    {
+      signal,
+      beforeRun: assertCurrent,
+      maxOutputBytes: 64 * 1024 * 1024,
+    },
+  );
+  assertCurrent();
+  const paths = new Set(splitNullBuffer(listed).map((entry) => entry.toString("hex")));
+  const entries = params.manifest.entries.filter((entry) =>
+    paths.has(Buffer.from(entry.path).toString("hex")),
+  );
+  const directories = new Set<string>();
+  for (const entry of entries) {
+    for (const parent of workspacePathAncestors(entry.path)) {
+      directories.add(parent);
+    }
+  }
+  const base = serializeWorkerWorkspaceManifest({
+    ...params.manifest,
+    entries,
+    directories: [...directories].toSorted(),
+  });
+  const baseRef = "sha256:" + createHash("sha256").update(base).digest("hex");
+  return { rawManifest: base, manifestRef: baseRef };
 }

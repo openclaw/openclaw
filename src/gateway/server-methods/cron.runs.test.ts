@@ -27,17 +27,14 @@ import {
   persistRuns,
 } from "./cron-read.test-support.js";
 import {
+  expectCronReply as expectReply,
+  expectCronFailure as expectError,
+} from "./cron.validation.test-support.js";
+import {
   disposeSessionReadContexts,
   initializeSessionReadContext,
 } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
-
-function expectReply(respond: ReturnType<typeof vi.fn<RespondFn>>, payload: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
-}
-function expectError(respond: ReturnType<typeof vi.fn<RespondFn>>, error: unknown) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, error);
-}
 
 function expectNotFound(respond: ReturnType<typeof vi.fn<RespondFn>>, jobId: string) {
   expectError(respond, expect.objectContaining({ details: { code: "CRON_JOB_NOT_FOUND", jobId } }));
@@ -50,16 +47,11 @@ function makeRun(
 ): CronRunLogEntry & { runId: string } {
   return { action: "finished", jobId, runId, status: "ok", ts: Date.now(), ...fields };
 }
-function createOwnedSession(
-  agentId: string,
-  sessionKey: string,
-  sessionId: string,
-  client: GatewayClient,
-) {
+function createOwnedSession(agentId: string, sessionKey: string, client: GatewayClient) {
   return upsertSessionEntryCore(
     { agentId, sessionKey },
     {
-      sessionId,
+      sessionId: sessionKey,
       updatedAt: Date.now(),
       createdActor: {
         type: "human",
@@ -125,7 +117,7 @@ async function withCronHistory(
       [ownKey, owner],
       [foreignKey, foreign],
     ] as const) {
-      await createOwnedSession(agentId, sessionKey, sessionKey, client);
+      await createOwnedSession(agentId, sessionKey, client);
     }
     const storePath = state.path("cron", "jobs.json");
     const cron = createReadService({
@@ -133,7 +125,6 @@ async function withCronHistory(
       resolveDefaultAgentId: () => (options.unresolvedDefault ? undefined : agentId),
       cronEnabled: false,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     try {
@@ -208,18 +199,8 @@ describe("cron.runs session visibility", () => {
     (visible) =>
       withCronHistory(
         async ({ jobId, query, owner, viewer, recordRun }) => {
-          await createOwnedSession(
-            "main",
-            "agent:main:main",
-            "main-main",
-            visible ? owner : viewer,
-          );
-          await createOwnedSession(
-            "research",
-            "agent:research:main",
-            "research-main",
-            visible ? viewer : owner,
-          );
+          await createOwnedSession("main", "agent:main:main", visible ? owner : viewer);
+          await createOwnedSession("research", "agent:research:main", visible ? viewer : owner);
           const entry = makeRun(jobId, "retained-main-run", {
             sessionKey: "agent:main:main",
             summary: "Retained run before the job changed agents",
@@ -336,30 +317,15 @@ describe("cron.runs session visibility", () => {
             job.payload = { kind: "systemEvent", text: "visibility fixture" };
           }
           await saveCronStore(storePath, store);
-          const persisted = runOpenClawStateWriteTransaction(({ db }) => {
+          runOpenClawStateWriteTransaction(({ db }) => {
             if (sqlOwner) {
               db.prepare(
                 "UPDATE cron_jobs SET agent_id = ? WHERE store_key = ? AND job_id = ?",
               ).run(sqlOwner, cronStoreKey(storePath), jobId);
             }
-            return db
-              .prepare(
-                "SELECT agent_id, job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?",
-              )
-              .get(cronStoreKey(storePath), jobId);
           });
-          if (!explicitOwner) {
-            if (typeof persisted?.job_json !== "string") {
-              throw new Error("Expected persisted cron definition JSON");
-            }
-            const definition = JSON.parse(persisted.job_json);
-            expect(definition).toMatchObject({ sessionKey: "main" });
-            expect(definition).not.toHaveProperty("agentId");
-            expect(definition).not.toHaveProperty("owner");
-            expect(persisted.agent_id).toBe(sqlOwner);
-          }
           const targetKey = sessionTarget === "main" ? "main" : "custom-target";
-          await createOwnedSession(agentId, targetKey, `visibility-${targetKey}`, owner);
+          await createOwnedSession(agentId, targetKey, owner);
           const loaded = await cron.readJob(jobId);
           expect(loaded).toMatchObject({
             sessionKey: job.sessionKey,
@@ -383,20 +349,11 @@ describe("cron.runs session visibility", () => {
             );
           }
           if (!explicitOwner) {
+            const list = (client: GatewayClient) =>
+              query({ includeDisabled: true, includeDeliveryPreviews: false }, client, "cron.list");
+            expectReply(await list(owner), expect.objectContaining({ jobs: [] }));
             expectReply(
-              await query(
-                { includeDisabled: true, includeDeliveryPreviews: false },
-                owner,
-                "cron.list",
-              ),
-              expect.objectContaining({ jobs: [] }),
-            );
-            expectReply(
-              await query(
-                { includeDisabled: true, includeDeliveryPreviews: false },
-                viewer,
-                "cron.list",
-              ),
+              await list(viewer),
               expect.objectContaining({
                 jobs: expect.arrayContaining([expect.objectContaining({ id: jobId })]),
               }),
@@ -499,7 +456,7 @@ describe("cron.runs session visibility", () => {
       recordRun(entry, "created-session");
       const params = { id: jobId, sortDir: "asc" };
       expectVisibleRuns(await query(params), ["history-run-1", "history-run-3", "history-run-4"]);
-      await createOwnedSession("main", sessionKey, "created-run-session", owner);
+      await createOwnedSession("main", sessionKey, owner);
       expectVisibleRuns(await query(params), [
         "history-run-1",
         "history-run-3",

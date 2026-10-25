@@ -11,9 +11,10 @@ import {
   createSignal,
   lazy,
   onSettled,
+  type Element,
 } from "solid-js";
 import "../components/link-reader-hovercard-registration.ts";
-import { LazyElementStateView, LazyViewError } from "../components/solid/lazy-view-error.tsx";
+import { LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import { LoadingState } from "../components/solid/loading-state.tsx";
 import { installTitleTooltips } from "../components/tooltip-title.ts";
@@ -24,6 +25,7 @@ import {
   projectGateway,
 } from "../lib/reactive/application.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
+import { connectedElementRef, elementRef } from "../lib/reactive/element-ref.ts";
 import { projectI18n } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
@@ -39,18 +41,6 @@ import type {
   SolidReadinessShell,
 } from "./control-ui-readiness-solid.ts";
 import type { ControlUiReadiness } from "./control-ui-readiness.ts";
-import {
-  APPROVAL_PAGE_ELEMENT,
-  BROWSER_DOCUMENT_ELEMENT,
-  DASHBOARD_DOCUMENT_ELEMENT,
-  DESKTOP_PANEL_ELEMENT,
-  isOptionalElementDefined,
-  createLazyCustomElementRequests,
-  LOGIN_GATE_ELEMENT,
-  type OptionalCustomElement,
-  QUESTION_PAGE_ELEMENT,
-  TERMINAL_PANEL_ELEMENT,
-} from "./lazy-custom-element.ts";
 import { availableLinkReaders, availableLinkPreviewReaders } from "./link-reader-routing.ts";
 import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
@@ -58,6 +48,11 @@ import { isDesktopPanelAvailable } from "./panel-availability.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
 import { connectShellViewport } from "./shell-viewport.ts";
+import {
+  cancelStaleChunkRecovery,
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "./stale-chunk-reload.ts";
 
 const GatewayUrlConfirmation = lazy(
   () => import("../components/solid/gateway-url-confirmation.tsx"),
@@ -68,8 +63,34 @@ const FocusDashboard = lazy(() => import("./app-root-focus-view.tsx"), {
   export: "FocusDashboard",
 });
 
+const TerminalPanel = lazy(() => import("../components/terminal/terminal-panel-registration.tsx"), {
+  export: "TerminalPanelHost",
+});
+const DesktopPanel = lazy(() => import("../components/desktop/desktop-panel-solid.tsx"), {
+  export: "DesktopPanel",
+});
+const BrowserDocument = lazy(() => import("../components/browser/browser-document.tsx"), {
+  export: "BrowserDocument",
+});
+const BoardDocument = lazy(() => import("../components/board/board-document.tsx"), {
+  export: "OpenClawBoardDocument",
+});
+// Approval validators stay behind document URLs, outside the normal startup graph.
+const ApprovalPage = lazy(() => import("../pages/approval/approval-page.tsx"), {
+  export: "ApprovalPage",
+});
+const QuestionPage = lazy(() => import("../pages/question/question-page.tsx"), {
+  export: "QuestionPage",
+});
+const LoginGate = lazy(() => import("../components/login-gate-solid.tsx"), {
+  export: "LoginGate",
+});
+
 /** Mount into index.html's plain host; the returned disposer owns this application epoch. */
 export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplication()): () => void {
+  // render() appends to existing children; retire the HTML frame in the same
+  // task as the first Solid commit so it cannot remain beside the live app.
+  host.replaceChildren();
   return render(() => OpenClawApp(host, runtime), host);
 }
 
@@ -81,8 +102,8 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     create: typeof createSolidControlUiReadiness;
   }>();
   let shell: SolidReadinessShell | undefined;
-  let login: HTMLElement | undefined;
-  let terminalElement: (HTMLElement & { readonly available?: boolean }) | undefined;
+  const login = connectedElementRef<HTMLElement>();
+  const terminalElement = connectedElementRef<HTMLElement & { readonly available?: boolean }>();
   const translations = projectI18n(i18n);
   const t = translations.t;
   const gateway = projectGateway(context.gateway);
@@ -126,9 +147,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     runtime.cancelPendingGatewayConnection();
     setPendingGatewayUrl(null);
   };
-  const [focusDashboardRoute, setFocusDashboardRoute] = createSignal<FocusDashboardRouteState>({
-    kind: "loading",
-  });
+  const focusDashboardRoute = Promise.withResolvers<FocusDashboardRouteState>();
   let active = true;
   const focusDashboardAbort = new AbortController();
   const closeDocument = () => {
@@ -139,11 +158,14 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     }
   };
   const renderFocusEscape = createLegacyFocusEscape(closeDocument);
-  const lazyHost = { updateComplete: Promise.resolve() };
-  const loginGateLoader = createLazyCustomElementRequests(lazyHost);
-  const lazyCustomElements = createLazyCustomElementRequests(lazyHost, closeDocument);
-  const lazyState = projectOwner(lazyCustomElements, (owner) => owner.visibleState);
-  const loginLoadState = projectOwner(loginGateLoader, (owner) => owner.visibleState);
+  const notifyMounted = (element: HTMLElement) => {
+    // Lazy hosts commit after the root's initial readiness observation.
+    queueMicrotask(() => {
+      if (active && element.isConnected) {
+        readiness?.invalidate();
+      }
+    });
+  };
 
   const initialConnectPending = () =>
     runtime.documentMode === null &&
@@ -200,8 +222,6 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     gateway.revision();
     router.revision();
     selection.revision();
-    lazyState.revision();
-    loginLoadState.revision();
     startupPending();
     loginGatePinned();
     loginGatewayUrl();
@@ -209,7 +229,6 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     loginPassword();
     loginShowGatewaySecret();
     pendingGatewayUrl();
-    focusDashboardRoute();
     config.revision();
     theme.preferences.revision();
     theme.appliedPalette.revision();
@@ -240,22 +259,18 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
       });
     }
     if (focusTarget) {
-      const element = {
-        terminal: TERMINAL_PANEL_ELEMENT,
-        desktop: DESKTOP_PANEL_ELEMENT,
-        browser: BROWSER_DOCUMENT_ELEMENT,
-        dashboard: DASHBOARD_DOCUMENT_ELEMENT,
+      const component = {
+        terminal: TerminalPanel,
+        desktop: DesktopPanel,
+        browser: BrowserDocument,
+        dashboard: BoardDocument,
       }[focusTarget.kind];
-      if (!isOptionalElementDefined(element)) {
-        lazyCustomElements.request(element);
-      }
+      // Start at the original registration boundary; the rendered boundary owns errors.
+      void component.preload().catch(() => {});
     }
     if (runtime.documentMode) {
-      const element =
-        runtime.documentMode.kind === "approval" ? APPROVAL_PAGE_ELEMENT : QUESTION_PAGE_ELEMENT;
-      if (!isOptionalElementDefined(element)) {
-        lazyCustomElements.request(element);
-      }
+      const component = runtime.documentMode.kind === "approval" ? ApprovalPage : QuestionPage;
+      void component.preload().catch(() => {});
     }
     globalThis.dispatchEvent(new Event("openclaw-control-ui-rendered"));
     void runtime
@@ -273,7 +288,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
           }
           const result = await loadFocusDashboard(context, focusTarget, focusDashboardAbort.signal);
           if (!focusDashboardAbort.signal.aborted) {
-            setFocusDashboardRoute(result);
+            focusDashboardRoute.resolve(result);
           }
         }
       })
@@ -290,8 +305,6 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
       disconnectViewport();
       disconnectTooltips();
       focusDashboardAbort.abort();
-      lazyCustomElements.abandon();
-      loginGateLoader.abandon();
       runtime.stop();
     };
   });
@@ -312,21 +325,89 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
       </openclaw-route-fragment>
     );
   }
-  function LazyDocument(documentProps: { element: OptionalCustomElement }): SolidJSX.Element {
+  function DocumentLoading(): SolidJSX.Element {
     return (
-      <Show when={lazyState.read()?.element === documentProps.element && lazyState.read()}>
-        {(state) => (
-          <main class="connect-splash">
-            <openclaw-route-fragment style={{ display: "contents" }}>
-              <LazyElementStateView
-                state={state()}
-                onRetry={() => lazyCustomElements.retry()}
-                onClose={() => lazyCustomElements.close()}
+      <main class="connect-splash">
+        <openclaw-route-fragment style={{ display: "contents" }}>
+          <LoadingState />
+        </openclaw-route-fragment>
+      </main>
+    );
+  }
+  function LoadFailure(props: {
+    error: unknown;
+    reset: () => void;
+    label?: string;
+    onClose?: () => void;
+  }): SolidJSX.Element {
+    let current = true;
+    const stale = () => isStaleChunkImportError(props.error);
+    const retire = () => {
+      current = false;
+      if (stale()) {
+        cancelStaleChunkRecovery();
+      }
+    };
+    onSettled(() => {
+      readiness?.invalidate();
+      return retire;
+    });
+    const retry = async () => {
+      if (!stale() || !(await retryStaleChunkReloadWhenReachable({ canReload: () => current }))) {
+        if (current) {
+          props.reset();
+        }
+      }
+    };
+    const content = () => (
+      <openclaw-route-fragment style={{ display: "contents" }}>
+        <LazyViewError
+          actionLabel={props.label ? t("common.retry") : undefined}
+          error={props.error}
+          stale={stale()}
+          subtitle={props.label}
+          onRetry={() => void retry()}
+          onClose={
+            props.onClose
+              ? () => {
+                  retire();
+                  props.onClose?.();
+                }
+              : undefined
+          }
+        />
+      </openclaw-route-fragment>
+    );
+    return <>{props.label ? <main class="connect-splash">{content()}</main> : content()}</>;
+  }
+  function LazyRootBoundary(props: {
+    children: Element;
+    fallback: Element;
+    label?: string;
+    visible?: boolean;
+    onClose?: () => void;
+  }): SolidJSX.Element {
+    const [attempt, setAttempt] = createSignal(0);
+    return (
+      <Loading on={attempt()} fallback={props.fallback}>
+        <Errored
+          fallback={(error, reset) => (
+            <Show when={props.visible ?? true}>
+              <LoadFailure
+                error={error()}
+                reset={() => {
+                  setAttempt((value) => value + 1);
+                  reset();
+                }}
+                label={props.label}
+                onClose={props.onClose}
               />
-            </openclaw-route-fragment>
-          </main>
-        )}
-      </Show>
+            </Show>
+          )}
+        >
+          {props.children}
+        </Errored>
+      </Loading>
     );
   }
   function FocusPanels(panelProps: {
@@ -348,49 +429,53 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     };
     return (
       <>
-        <Show
-          when={terminal()}
-          fallback={
-            <openclaw-desktop-panel
-              prop:client={connected() ? snapshot().client : null}
-              prop:sessions={context.sessions}
-              prop:available={available()}
-              prop:documentMode={true}
-              prop:requestedSource={
-                panelProps.target.kind === "desktop" &&
-                panelProps.target.selector?.kind === "source"
-                  ? panelProps.target.selector.value
-                  : null
-              }
-              prop:sessionKey={
-                panelProps.target.kind === "desktop" &&
-                panelProps.target.selector?.kind === "session"
-                  ? panelProps.target.selector.value
-                  : null
-              }
-              prop:documentControl={
-                panelProps.target.kind === "desktop" ? panelProps.target.control : undefined
-              }
-              prop:onDocumentClose={closeDocument}
-            />
-          }
+        <LazyRootBoundary
+          label={terminal() ? "terminal panel" : "desktop panel"}
+          fallback={available() ? <DocumentLoading /> : undefined}
+          visible={available()}
+          onClose={closeDocument}
         >
-          <openclaw-terminal-panel
-            ref={(element) => (terminalElement = element)}
-            prop:client={snapshot().client}
-            prop:gatewayConnected={connected()}
-            prop:available={available()}
-            prop:agentId={agentId()}
-            prop:themeMode={themeMode()}
-            fullscreen
-          />
-          <openclaw-toast-host />
-        </Show>
+          <Show
+            when={terminal()}
+            fallback={
+              <DesktopPanel
+                client={connected() ? snapshot().client : null}
+                sessions={context.sessions}
+                available={available()}
+                documentMode={true}
+                requestedSource={
+                  panelProps.target.kind === "desktop" &&
+                  panelProps.target.selector?.kind === "source"
+                    ? panelProps.target.selector.value
+                    : null
+                }
+                sessionKey={
+                  panelProps.target.kind === "desktop" &&
+                  panelProps.target.selector?.kind === "session"
+                    ? panelProps.target.selector.value
+                    : null
+                }
+                documentControl={
+                  panelProps.target.kind === "desktop" ? panelProps.target.control : undefined
+                }
+                onDocumentClose={closeDocument}
+              />
+            }
+          >
+            <TerminalPanel
+              ref={[elementRef(terminalElement.bind), notifyMounted]}
+              client={snapshot().client}
+              gatewayConnected={connected()}
+              available={available()}
+              agentId={agentId()}
+              themeMode={themeMode()}
+              fullscreen={true}
+            />
+            <openclaw-toast-host />
+          </Show>
+        </LazyRootBoundary>
         <Show when={!connected() && snapshot().lastError === null}>
           <Splash />
-        </Show>
-        <Show when={available()}>
-          <LazyDocument element={terminal() ? TERMINAL_PANEL_ELEMENT : DESKTOP_PANEL_ELEMENT} />
         </Show>
         <Show when={!available() && (connected() || snapshot().lastError)}>
           <div class={terminal() ? "terminal-view-unavailable" : "desktop-view-unavailable"}>
@@ -404,40 +489,11 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     );
   }
   function Login(): SolidJSX.Element {
-    onSettled(() => {
-      if (!isOptionalElementDefined(LOGIN_GATE_ELEMENT) && !loginGateLoader.visibleState) {
-        loginGateLoader.preload(LOGIN_GATE_ELEMENT, { reportError: true });
-      }
-    });
-    const loadError = () => {
-      const state = loginLoadState.read();
-      return state?.status === "error" ? state : undefined;
-    };
-    const registered = () => {
-      lazyState.revision();
-      loginLoadState.revision();
-      return isOptionalElementDefined(LOGIN_GATE_ELEMENT);
-    };
     return (
-      <Show
-        when={registered()}
-        fallback={
-          <Show when={loadError()} fallback={<Splash />}>
-            {(state) => (
-              <openclaw-route-fragment style={{ display: "contents" }}>
-                <LazyViewError
-                  error={state().error}
-                  stale={state().stale}
-                  onRetry={() => loginGateLoader.retry()}
-                />
-              </openclaw-route-fragment>
-            )}
-          </Show>
-        }
-      >
-        <openclaw-login-gate
-          ref={(element) => (login = element)}
-          prop:props={{
+      <LazyRootBoundary fallback={<Splash />}>
+        <LoginGate
+          ref={[elementRef(login.bind), notifyMounted]}
+          props={{
             resourceBasePath: context.resourceBasePath,
             branding: context.theme.branding,
             connected: connected(),
@@ -480,7 +536,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             },
           }}
         />
-      </Show>
+      </LazyRootBoundary>
     );
   }
   function Shell(): SolidJSX.Element {
@@ -521,9 +577,11 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
         {(request) => {
           try {
             readiness = request.create(host, runtime, trackRoot, () => ({
-              login,
+              login: login.read() ?? undefined,
               shell,
-              terminal: shell?.element.isConnected ? shell.terminalPanel : terminalElement,
+              terminal: shell?.element.isConnected
+                ? shell.terminalPanel
+                : (terminalElement.read() ?? undefined),
             }));
           } catch (error) {
             readinessFailed(error);
@@ -543,37 +601,45 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
           </Match>
           <Match when={focusTarget?.kind === "browser" ? focusTarget : null}>
             {(target) => (
-              <>
-                <openclaw-browser-document
-                  prop:props={{
+              <LazyRootBoundary
+                label="browser panel"
+                fallback={<DocumentLoading />}
+                onClose={closeDocument}
+              >
+                <BrowserDocument
+                  props={{
                     context,
                     target: target(),
                     renderEscape: renderFocusEscape,
                   }}
                 />
-                <LazyDocument element={BROWSER_DOCUMENT_ELEMENT} />
-              </>
+              </LazyRootBoundary>
             )}
           </Match>
           <Match when={panelTarget}>{(target) => <FocusPanels target={target()} />}</Match>
           <Match when={focusTarget?.kind === "dashboard"}>
-            <Errored
-              fallback={(error, reset) => (
-                <LazyViewError error={error()} onRetry={reset} onClose={closeDocument} />
-              )}
+            <LazyRootBoundary
+              label="dashboard document"
+              fallback={<Splash />}
+              onClose={closeDocument}
             >
-              <Loading fallback={<Splash />}>
-                <FocusDashboard
-                  route={focusDashboardRoute()}
-                  snapshot={snapshot()}
-                  sessions={context.sessions}
-                  onClose={closeDocument}
-                  renderSplash={Splash}
-                  renderEscape={() => <Escape label={t("dashboardDocument.close")} />}
-                  renderLoading={() => <LazyDocument element={DASHBOARD_DOCUMENT_ELEMENT} />}
-                />
-              </Loading>
-            </Errored>
+              <FocusDashboard
+                route={focusDashboardRoute.promise}
+                onReady={() => readiness?.invalidate()}
+                snapshot={snapshot()}
+                renderSplash={Splash}
+                renderEscape={() => <Escape label={t("dashboardDocument.close")} />}
+                renderDocument={(documentProps) => (
+                  <BoardDocument
+                    {...documentProps}
+                    gatewaySnapshot={snapshot()}
+                    sessions={context.sessions}
+                    onDocumentClose={isNativeWebChromeHost() ? null : closeDocument}
+                    ref={notifyMounted}
+                  />
+                )}
+              />
+            </LazyRootBoundary>
           </Match>
           <Match when={coldPending()}>
             <Splash />
@@ -582,26 +648,23 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             <Login />
           </Match>
           <Match when={runtime.documentMode} keyed>
-            {(documentMode) => {
-              const element =
-                documentMode.kind === "approval" ? APPROVAL_PAGE_ELEMENT : QUESTION_PAGE_ELEMENT;
-              return (
-                <Show when={!(documentMode.kind === "approval" && pendingGatewayUrl())}>
-                  <Show
-                    when={lazyState.read()?.element === element}
-                    fallback={
-                      documentMode.kind === "approval" ? (
-                        <openclaw-approval-page prop:approvalId={documentMode.approvalId ?? ""} />
-                      ) : (
-                        <openclaw-question-page prop:questionId={documentMode.questionId ?? ""} />
-                      )
-                    }
-                  >
-                    <LazyDocument element={element} />
-                  </Show>
-                </Show>
-              );
-            }}
+            {(documentMode) => (
+              <Show when={!(documentMode.kind === "approval" && pendingGatewayUrl())}>
+                <LazyRootBoundary
+                  label={
+                    documentMode.kind === "approval" ? "approval page" : "openclaw-question-page"
+                  }
+                  fallback={<DocumentLoading />}
+                  onClose={closeDocument}
+                >
+                  {documentMode.kind === "approval" ? (
+                    <ApprovalPage approvalId={documentMode.approvalId ?? ""} />
+                  ) : (
+                    <QuestionPage questionId={documentMode.questionId ?? ""} />
+                  )}
+                </LazyRootBoundary>
+              </Show>
+            )}
           </Match>
           <Match when={true}>
             <Shell />

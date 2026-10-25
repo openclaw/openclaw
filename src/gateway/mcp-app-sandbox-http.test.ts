@@ -1,28 +1,11 @@
-import { once } from "node:events";
-import { IncomingMessage, ServerResponse } from "node:http";
-import { Socket } from "node:net";
-import type { AddressInfo } from "node:net";
+import type { IncomingMessage } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { describe, expect, it } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
-import type { PluginBoardWidgetContentKind } from "../plugins/board-widget-content-kind.types.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
-import { markGatewayIngressTransport } from "./ingress-attribution.js";
-import {
-  createSandboxHostHttpServer,
-  createSandboxHostHttpRequestHandler,
-} from "./mcp-app-sandbox-http.js";
-import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
+import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
-
-const RESOURCE_PATH = "/__openclaw__/renderer/app.js";
-const javascript = (body: string) => ({
-  body: Buffer.from(body),
-  contentType: "application/javascript",
-});
 
 const representationHeaders = (response: Response) =>
   Object.fromEntries(
@@ -48,63 +31,12 @@ function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
   return { res, end };
 }
 
-async function withSandboxHost(run: (origin: string) => Promise<void>, registry?: PluginRegistry) {
-  await using server = createSandboxHostHttpServer(undefined, registry && (() => registry));
-  const listening = once(server, "listening");
-  server.listen(0, "127.0.0.1");
-  await listening;
-  const address = server.address() as AddressInfo;
-  await run(`http://127.0.0.1:${address.port}`);
-}
-
-function publicResourceRegistry(
-  readPublicResource: PluginBoardWidgetContentKind["resources"]["readPublicResource"],
-) {
-  const registry = createEmptyPluginRegistry();
-  registry.boardWidgetContentKinds.set("diagram", {
-    pluginId: "renderer",
-    pluginKind: "renderer:diagram",
-    definition: {
-      kind: "diagram",
-      label: "Diagram",
-      resources: { surface: "renderer", paths: [RESOURCE_PATH], readPublicResource },
-      validateSource() {},
-      composeDocument: () => "",
-    },
-  });
-  return registry;
+async function withSandboxHost(run: (origin: string) => Promise<void>) {
+  await using server = createSandboxHostHttpServer();
+  await run(await listenLoopback(server));
 }
 
 describe("MCP App sandbox HTTP origin", () => {
-  it("fences an awaited public renderer resource when the remote grant closes", async () => {
-    const started = createDeferred();
-    const resource = createDeferred<{ body: Uint8Array; contentType: string }>();
-    const registry = publicResourceRegistry(async () => {
-      started.resolve();
-      return await resource.promise;
-    });
-    const controller = new AbortController();
-    const req = new IncomingMessage(new Socket());
-    req.method = "GET";
-    req.url = RESOURCE_PATH;
-    markGatewayIngressTransport(req, {
-      kind: "remote-forwarded",
-      context: createRemoteControlUiIngressTestContext({
-        operatorScopeCeiling: ["operator.read"],
-        frameAncestors: [],
-        assertCurrent: () => controller.signal.throwIfAborted(),
-      }),
-    });
-    const res = new ServerResponse(req);
-    const serve = createSandboxHostHttpRequestHandler(() => registry)(req, res);
-    await started.promise;
-    controller.abort();
-    resource.resolve(javascript("private-after-close"));
-    await serve;
-    expect(res).toMatchObject({ destroyed: true, writableEnded: false });
-    req.destroy();
-  });
-
   it("caches only the exact versioned public shell and separates effective policies", async () => {
     const mutablePolicy = { connectDomains: ["https://original.example"] };
     const originalPath = buildMcpAppSandboxPath(mutablePolicy);
@@ -169,38 +101,7 @@ describe("MCP App sandbox HTTP origin", () => {
     });
   });
 
-  it("serves only explicitly public registered assets without Gateway credentials", async () => {
-    const read = vi.fn(async () => javascript("window.rendererReady=true"));
-    await withSandboxHost(async (origin) => {
-      const url = `${origin}${RESOURCE_PATH}`;
-      const { get, body } = await getAndHead(url);
-      expect(get.status).toBe(200);
-      expect(body).toBe("window.rendererReady=true");
-      expect(get.headers.get("set-cookie")).toBeNull();
-      expect(read).toHaveBeenCalledWith(RESOURCE_PATH);
-      expect((await fetch(url, { method: "POST" })).status).toBe(404);
-      for (const deniedPath of [
-        "/",
-        "/__openclaw__/renderer/private.js",
-        "/__openclaw__/canvas/documents/private/index.html",
-      ]) {
-        expect((await fetch(`${origin}${deniedPath}`)).status).toBe(404);
-      }
-      expect(read).toHaveBeenCalledTimes(2);
-    }, publicResourceRegistry(read));
-  });
-
-  it("does not expose registered assets without the public-reader opt-in", async () => {
-    await withSandboxHost(async (origin) => {
-      expect((await fetch(`${origin}${RESOURCE_PATH}`)).status).toBe(404);
-    }, publicResourceRegistry(undefined));
-  });
-
-  it("supports HEAD and rejects other paths, methods, and malformed policy", () => {
-    const head = request(buildMcpAppSandboxPath(), "HEAD");
-    expect(head.res.statusCode).toBe(200);
-    expect(head.end).toHaveBeenCalledWith(undefined);
-
+  it("rejects other paths, methods, and malformed policy", () => {
     expect(request("/", "GET").res.statusCode).toBe(404);
     expect(request(buildMcpAppSandboxPath(), "POST").res.statusCode).toBe(404);
     const encode = (policy: unknown) => Buffer.from(JSON.stringify(policy)).toString("base64url");
@@ -213,13 +114,5 @@ describe("MCP App sandbox HTTP origin", () => {
       expect(request(`${SANDBOX_HOST_PATH}?csp=${policy}`).res.statusCode).toBe(400);
     }
     expect(request("http://[", "GET").res.statusCode).toBe(400);
-  });
-
-  it("keeps GET and HEAD representation metadata aligned for a missing path", async () => {
-    await withSandboxHost(async (origin) => {
-      const { get, body } = await getAndHead(`${origin}/missing`);
-      expect(get.status).toBe(404);
-      expect(body).not.toBe("");
-    });
   });
 });

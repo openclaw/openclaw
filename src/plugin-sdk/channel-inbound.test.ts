@@ -72,7 +72,7 @@ describe("channel-inbound public helpers", () => {
     async (surface) => {
       const callback = vi.fn();
       const replyOptions = {
-        isHeartbeat: true,
+        disableTools: true,
         internalEventExecution: { onStarted: callback },
         onReplyOperationOwned: callback,
       };
@@ -91,7 +91,7 @@ describe("channel-inbound public helpers", () => {
           dispatched = true;
           expect(params.replyOptions).not.toHaveProperty("internalEventExecution");
           expect(params.replyOptions).not.toHaveProperty("onReplyOperationOwned");
-          expect(params.replyOptions?.isHeartbeat).toBe(true);
+          expect(params.replyOptions?.disableTools).toBe(true);
           return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
         },
       } satisfies AssembledInboundReply;
@@ -109,7 +109,7 @@ describe("channel-inbound public helpers", () => {
     const calls: string[] = [];
     const callback = vi.fn();
     const replyOptions = {
-      isHeartbeat: true,
+      disableTools: true,
       internalEventExecution: { onStarted: callback },
       onReplyOperationOwned: callback,
     };
@@ -133,7 +133,7 @@ describe("channel-inbound public helpers", () => {
         calls.push("dispatch");
         expect(params.replyOptions).not.toHaveProperty("internalEventExecution");
         expect(params.replyOptions).not.toHaveProperty("onReplyOperationOwned");
-        expect(params.replyOptions?.isHeartbeat).toBe(true);
+        expect(params.replyOptions?.disableTools).toBe(true);
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
       },
     };

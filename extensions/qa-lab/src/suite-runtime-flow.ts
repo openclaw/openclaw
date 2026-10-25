@@ -19,6 +19,7 @@ import {
 } from "./execution-identity-storage-inspection.js";
 import {
   assertNoGatewayLogSentinels,
+  extractGatewayMessageText,
   formatGatewayLogSentinelSummary,
   scanGatewayLogSentinels,
 } from "./gateway-log-sentinel.js";
@@ -61,6 +62,7 @@ const qaSuiteScenarioIdentityDeps = {
   sleep,
   randomUUID,
   projectQaToolMessages,
+  extractGatewayMessageText,
   // YAML scenarios resolve these bindings by name; keep the registry statically visible.
   ensureImageGenerationConfigured: suiteRuntimeAgentMedia.ensureImageGenerationConfigured,
   extractMediaPathFromText: suiteRuntimeAgentMedia.extractMediaPathFromText,

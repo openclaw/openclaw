@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
@@ -11,17 +11,16 @@ import {
   seedSessionActorTranscriptContext as seed,
 } from "./session-actor-transcript-replica.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 type Bounded = Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
 const limits = { maxBytes: 4096, maxEvents: 8 };
 const sessionKey = "agent:main:test";
-const message = (id: string, parentId: string | null, role: string) => ({
-  type: "message",
-  id,
-  parentId,
-  timestamp: "2026-10-12T00:00:00.000Z",
-  message: { role, content: [{ type: "text", text: id }] },
-});
+const message = (id: string, parentId: string | null, role: string) =>
+  timedMessageEvent(id, parentId, "2026-10-12T00:00:00.000Z", {
+    role,
+    content: [{ type: "text", text: id }],
+  });
 
 function fixture() {
   const rows: SessionActorTranscriptRow[] = [
@@ -217,25 +216,37 @@ describe("actor transcript context replica", () => {
     expect(next?.tail).toEqual({ events: [], coveredAfterSeq: 3 });
   });
 
-  it("detaches the retained path from seed input and returned payload mutations", () => {
-    const { hot, prepared } = fixture();
-    const retained = seed(undefined, hot, prepared, limits);
-    const first = prepared.snapshot.events[1];
-    if (!isRecord(first)) {
-      throw new Error("Expected a message fixture");
-    }
-    first.id = "mutated-input";
-    const read = readContext(retained, hot, limits);
-    expect(read?.snapshot.events[1]).toEqual(message("user", null, "user"));
-    const returned = read?.snapshot.events[1];
-    if (!isRecord(returned)) {
-      throw new Error("Expected a retained message");
-    }
-    returned.id = "mutated-output";
-    expect(readContext(retained, hot, limits)?.snapshot.events[1]).toEqual(
-      message("user", null, "user"),
-    );
-  });
+  it.each(["complete", "window", "exact"])(
+    "isolates %s context payloads and navigation",
+    (mode) => {
+      const { hot, prepared } = fixture();
+      if (mode !== "complete") {
+        prepared.snapshot.truncated = true;
+        delete prepared.snapshot.completeActivePath;
+      }
+      if (mode === "exact") {
+        delete prepared.residentRows;
+      }
+      const retained = seed(undefined, hot, prepared, limits);
+      const first = prepared.snapshot.events[1];
+      assert(isRecord(first) && isRecord(first.message), "Expected a message fixture");
+      first.id = "mutated-input";
+      first.message.role = "mutated-input";
+      prepared.snapshot.parents.clear();
+      const read = readContext(retained, hot, limits);
+      expect(read?.snapshot.events[1]).toEqual(message("user", null, "user"));
+      expect(read?.snapshot.parents.get("reply")).toBe("user");
+      const returned = read?.snapshot.events[1];
+      assert(isRecord(returned) && isRecord(returned.message), "Expected a retained message");
+      returned.id = "mutated-output";
+      returned.message.role = "mutated-output";
+      read?.snapshot.parents.clear();
+      expect(readContext(retained, hot, limits)?.snapshot.events[1]).toEqual(
+        message("user", null, "user"),
+      );
+      expect(readContext(retained, hot, limits)?.snapshot.parents.get("reply")).toBe("user");
+    },
+  );
 
   it.each([
     "missing receipt",

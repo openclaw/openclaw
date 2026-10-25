@@ -7,7 +7,6 @@ import {
   expectRestartCloseCall,
   expectStopCloseCall,
   expectUncalled,
-  waitForLoopCondition,
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
@@ -99,22 +98,41 @@ export function registerExternalHandoffShutdownTests({
     { marker: "OPENCLAW_SUPERVISOR_MODE", value: "external", exitCode: undefined },
     { marker: "OPENCLAW_WINDOWS_TASK_NAME", value: "OpenClaw Gateway", exitCode: 75 },
   ])(
-    "releases the lock before supervised restart exit $exitCode",
+    "publishes after close, retains shared state, and releases the lock before supervised exit $exitCode",
     async ({ marker, value, exitCode }) => {
       supervise(exitCode, marker, value);
       const lockRelease = vi.fn(async () => {});
       acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
+      const closeGate = createLifecycleGate();
       const handoffGate = holdHandoff();
+      const sharedState = resolveGlobalMap<string, boolean>(Symbol("handoff"), "shared-state");
+      sharedState.set("live", true);
       await withEnvAsync({ OPENCLAW_GATEWAY_RESTART_TRACE: "1" }, () =>
-        withRunningGateway(async ({ captureSignal, runtime, exited }) => {
+        withRunningGateway(async ({ captureSignal, close, runtime, exited, loopPromise }) => {
+          close.mockImplementationOnce(closeGate.wait);
           captureSignal("SIGUSR2")();
-          await handoffGate.entered;
           try {
+            await awaitGateBeforeSettlement(closeGate.entered, loopPromise, "exit before close");
+            expect(close).toHaveBeenCalledWith(
+              expect.objectContaining({ retainSharedState: true }),
+            );
+            expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
+            closeGate.release();
+            await awaitGateBeforeSettlement(
+              handoffGate.entered,
+              loopPromise,
+              "exit before handoff",
+            );
+            expect(sharedState.get("live")).toBe(true);
             expect(runtime.exit).not.toHaveBeenCalled();
           } finally {
+            closeGate.release();
             handoffGate.release();
+            await Promise.allSettled([loopPromise]);
           }
+          await loopPromise;
           await expect(exited).resolves.toBe(exitCode ?? 0);
+          expect(sharedState.size).toBe(0);
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode ?? 0);
           expect(lockRelease).toHaveBeenCalledOnce();
           expect(lockRelease).toHaveBeenCalledBefore(runtime.exit);
@@ -128,54 +146,6 @@ export function registerExternalHandoffShutdownTests({
       );
     },
   );
-
-  it("falls back in-process when an external restart handoff cannot be persisted", async () => {
-    writeGatewayRestartHandoff.mockResolvedValueOnce(null);
-    supervise();
-    await withRunningGateway(async ({ captureSignal, start, runtime, exited }) => {
-      const sigint = captureSignal("SIGINT");
-      captureSignal("SIGUSR2")();
-      await waitForLoopCondition(
-        () => start.mock.calls.length === 2,
-        "external handoff failure did not restart in-process",
-      );
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
-      expect(gatewayLog.warn).toHaveBeenCalledWith(
-        "external supervisor restart handoff could not be persisted; falling back to in-process restart",
-      );
-      sigint();
-      await expect(exited).resolves.toBe(0);
-    });
-  });
-
-  it("publishes the handoff after server close and before shared-state cleanup", async () => {
-    const closeGate = createLifecycleGate();
-    const handoffGate = holdHandoff();
-    const sharedState = resolveGlobalMap<string, boolean>(Symbol("handoff"), "shared-state");
-    sharedState.set("live", true);
-    supervise();
-    await withRunningGateway(async ({ captureSignal, close, runtime, exited, loopPromise }) => {
-      close.mockImplementationOnce(closeGate.wait);
-      captureSignal("SIGUSR2")();
-      try {
-        await awaitGateBeforeSettlement(closeGate.entered, loopPromise, "exit before close");
-        expect(close).toHaveBeenCalledWith(expect.objectContaining({ retainSharedState: true }));
-        expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
-        closeGate.release();
-        await awaitGateBeforeSettlement(handoffGate.entered, loopPromise, "exit before handoff");
-        expect(sharedState.get("live")).toBe(true);
-        expect(runtime.exit).not.toHaveBeenCalled();
-      } finally {
-        closeGate.release();
-        handoffGate.release();
-        await Promise.allSettled([loopPromise]);
-      }
-      await loopPromise;
-      await expect(exited).resolves.toBe(0);
-      expect(sharedState.size).toBe(0);
-    });
-  });
 
   it("keeps the ordinary drain when a handoff refuses late terminal persistence", async () => {
     await withRunningGateway(async ({ captureSignal, close, exited }) => {

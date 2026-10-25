@@ -10,6 +10,75 @@ sidebarTitle: "Model helpers"
 
 Call a model, resolve model-selection policy, and resolve provider auth without importing host internals. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## Requester-admitted model catalog
+
+Feature-detect `api.runtime.capabilities?.includes("requester-model-catalog-v1")` before using the
+requester-bound `runtimeContext.models?.list()` reader. Command registrations
+opt in with `runtimeCapabilities: ["models"]`; tool factories receive the reader
+in their version-2 context. Older hosts, unauthorized commands, and invocations
+without an exact admitted requester/session leave it `undefined`.
+
+```typescript
+api.registerCommand({
+  name: "model-catalog",
+  description: "Show models admitted for this requester",
+  ...(api.runtime.capabilities?.includes("requester-model-catalog-v1")
+    ? { runtimeCapabilities: ["models"] as const }
+    : {}),
+  async handler(ctx) {
+    const catalog = await ctx.runtimeContext?.models?.list();
+    if (!catalog || catalog.state === "pending") {
+      return { text: "The requester model catalog is not prepared yet." };
+    }
+    return { text: catalog.models.map((model) => `${model.provider}/${model.id}`).join("\n") };
+  },
+});
+```
+
+The result contains an opaque `revision`, `state: "prepared" | "pending"`, and
+`models` with `id`, `provider`, `name`, optional `family`, optional `thinkingLevels`
+(level IDs), and optional `fastModes` (`false`, `true`, or `"auto"`). Restricted requesters also
+receive `selectionPolicy: { restricted: true, defaultModel: string | null }`.
+For a prepared result, a null default means there is no currently admitted
+default. While pending, it may also mean the default is not known yet.
+`fastModes` covers the boolean/`"auto"` fast toggle, not service tiers or
+`"ultrafast"`; absence means the prepared catalog makes no fast-toggle claim.
+
+Hosts advertising `requester-model-family-v1` add an optional `family` to rows
+whose provider or catalog metadata declares one: the developer lineage, named by
+that developer's own provider id, such as `anthropic`, `openai` or `google`. It is
+consistent across routes, so `anthropic/claude-opus-5-5`, `github-copilot/claude-opus-5.5`
+and `clawrouter/anthropic/claude-opus-5-5` all report `anthropic`. The value is a
+lowercase, hyphen-separated token; compare it only for equality. Absence means the
+host does not know the family, never that two models differ. A host without the
+capability carries no family at all. Do not infer families from model names.
+See [model family](/plugins/manifest/models#model-family) for its sources.
+
+This is the safe projection of the same saved-session, prepared inventory and
+role policy used by session-scoped `models.list`, without needing a Gateway
+client. Only prepared, available and manually selectable rows are included, including
+the current model when its native harness or inference worker owns authentication.
+Active-placement facts are read only from the invocation's bound Gateway context.
+A headless invocation without that context uses prepared host authentication and
+configured worker requirements only; it cannot infer an active worker placement
+or borrow another Gateway's authentication facts. This is admission metadata,
+not an inference health check. Pending inventory is
+never proof of availability. The reader does not trigger
+discovery or auth refresh, accept model/session/agent selectors, return auth
+profiles or credentials, or expose `apiKeySupported`. It cannot change a model
+or grant permission for a later inference request.
+
+Keep the reader within its command or tool invocation. `list()` can reject when
+config, auth/catalog publication, or the saved session changes during the read.
+Discard that result and retry once in the same still-admitted invocation; the
+next call selects the current config and published catalog instead of remaining
+pinned to a retired auth owner. If no current catalog is published yet it returns
+`pending`. A second rejection should be shown as temporarily unavailable, not
+retried in a loop. Session reset, requester revocation, plugin retirement, and
+invocation completion can permanently invalidate that reader; obtain a new
+admitted invocation rather than retaining it. Treat revisions as equality tokens
+for the public projection, not durable authorization or global catalog identity.
+
 ## Protected model egress for standalone commands
 
 `withConfiguredModelEgress` from `openclaw/plugin-sdk/secret-egress-runtime`
@@ -50,7 +119,11 @@ path; importing it alone does not load model or secret runtime code.
 The `openclaw/plugin-sdk/simple-completion-runtime` helpers support preparing a
 model once and completing with it repeatedly. Successful preparation retains the
 provider resources used by its `model`, `auth`, and `selection` fields. The host
-owns those resources, so callers can reuse the result without a disposer:
+owns those resources, so callers can reuse the result without a disposer.
+
+Preparation loads the selected provider and inference plugins without evaluating
+the agent's configured memory or context-engine plugins. Image preparation and
+one-shot decision inference use the same isolated plugin-loading scope.
 
 ```typescript
 const result = await prepareSimpleCompletionModelForAgent({ cfg, agentId });

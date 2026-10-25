@@ -531,7 +531,7 @@ describe("registerSlackMessageEvents", () => {
       ctx.recallSlackChannelType = () => "mpim";
       resolveChannelName.mockResolvedValue({ type: "channel" });
     } else if (mode === "lookup failure") {
-      resolveChannelName.mockRejectedValue(new Error("private lookup payload"));
+      resolveChannelName.mockResolvedValue({ lookupFailureCategory: "other" });
     }
     await handler({
       event: { ...makeAppMentionEvent(channel), channel_type: undefined },

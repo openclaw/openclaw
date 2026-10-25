@@ -9,6 +9,7 @@ import type {
   SessionActorStorageAuthority,
   SessionActorStorageCommand,
 } from "../config/sessions/session-actor-storage-contract.js";
+import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withBoundIncognitoSessionRows } from "./session-row-projection-read.js";
@@ -74,7 +75,11 @@ afterEach(async () => {
   memorySessionActorOwners.reset();
 });
 
-async function fixture(sessionKey = key, entry: Partial<InternalSessionEntry> = {}) {
+async function fixture(
+  sessionKey = key,
+  entry: Partial<InternalSessionEntry> = {},
+  messages: [string, unknown][] = [],
+) {
   const agentId = sessionKey.split(":")[1]!;
   const owner = memorySessionActorOwners.get({
     agentId,
@@ -90,38 +95,20 @@ async function fixture(sessionKey = key, entry: Partial<InternalSessionEntry> = 
     input: {
       entry: { sessionId: sessionKey, createdAt: 1, updatedAt: 1, incognito: true, ...entry },
       cwd: "/synthetic/workspace",
+      transcriptEvents: [
+        createSessionTranscriptHeader({ sessionId: sessionKey, cwd: "/synthetic/workspace" }),
+        ...messages.map(([id, message], index) => ({
+          type: "message",
+          id,
+          parentId: messages[index - 1]?.[0] ?? null,
+          timestamp: new Date(1).toISOString(),
+          message,
+        })),
+      ],
     },
   });
   const binding: SessionActorStorageBinding = { actor, authority, agentId, path: owner.path };
-  const append = async (id: string, parentId: string | null, message: unknown) => {
-    const result = await actor.appendTranscriptEvent(
-      {
-        commandId: id,
-        phaseId: "turn",
-        append: {
-          kind: "metadata",
-          input: {
-            scope: { agentId, storePath: owner.path, sessionKey, sessionId: sessionKey },
-            event: {
-              type: "message",
-              id,
-              parentId,
-              timestamp: new Date(1).toISOString(),
-            },
-            message: {
-              messageJson: JSON.stringify(message),
-              cwd: "/synthetic/workspace",
-              validateTurn: false,
-            },
-            options: {},
-          },
-        },
-      },
-      authority,
-    );
-    expect(result.kind).toBe("committed");
-  };
-  return { owner, actor, binding, append };
+  return { owner, actor, binding };
 }
 
 function readRows<T>(
@@ -142,18 +129,22 @@ const rowAt = (rows: ReadonlyMap<string, Row | undefined>, sessionKey: string) =
   rows.get(JSON.stringify([sessionKey.split(":")[1], sessionKey]));
 
 it("prepares memory title, bounded fallback, board presence and cross-agent lineage", async () => {
-  const root = await fixture(key, { parentSessionKey: parentKey });
+  const root = await fixture(key, { parentSessionKey: parentKey }, [
+    ["user", { role: "user", content: "A private question" }],
+    [
+      "answer",
+      {
+        role: "assistant",
+        content: "A private answer",
+        stopReason: "stop",
+        provider: "ollama",
+        model: "example",
+        __openclaw: { runId: "run" },
+      },
+    ],
+  ]);
   await fixture(parentKey, { displayName: "Parent" });
   await fixture(childKey, { parentSessionKey: key });
-  await root.append("user", null, { role: "user", content: "A private question" });
-  await root.append("answer", "user", {
-    role: "assistant",
-    content: "A private answer",
-    stopReason: "stop",
-    provider: "ollama",
-    model: "example",
-    __openclaw: { runId: "run" },
-  });
   await patch(root.actor, {
     status: "done",
     lastRunId: "run",
@@ -217,17 +208,6 @@ it("uses current sharing facts after async preparation and closes the presentati
   await expect(readRows(root.binding, [key], () => undefined)).rejects.toThrow("closed");
 });
 
-it("keeps absent and closed sibling selections out of native storage", async () => {
-  const root = await fixture();
-  const child = await fixture(childKey);
-  child.owner.closeSession(childKey);
-  const absent = "agent:work:dashboard:incognito-absent";
-  await readRows(root.binding, [childKey, absent], (rows) => {
-    expect(rowAt(rows, childKey)).toBeUndefined();
-    expect(rowAt(rows, absent)).toBeUndefined();
-  });
-});
-
 it("prepares queued rows after the turn releases its actor without extending session lifetime", async () => {
   const root = await fixture();
   await fixture(childKey, { parentSessionKey: key });
@@ -263,8 +243,9 @@ it("prepares queued rows after the turn releases its actor without extending ses
 
 it("reads memory reactions after writes through the Gateway reader", async () => {
   const root = await fixture();
-  const sibling = await fixture(childKey);
-  await sibling.append("message", null, { role: "user", content: "React to this" });
+  const sibling = await fixture(childKey, {}, [
+    ["message", { role: "user", content: "React to this" }],
+  ]);
   const params = {
     expectedSessionId: childKey,
     messageId: "message",

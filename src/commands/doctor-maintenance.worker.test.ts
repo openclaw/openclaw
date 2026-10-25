@@ -23,8 +23,7 @@ let { captureOpenClawStateWorkerContext } =
 let { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
 let { withEnvAsync } = await import("../test-utils/env.js");
 let { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
-let { maybeMigrateHeartbeatCadenceToCron } =
-  await import("./doctor-heartbeat-cadence-migration.js");
+let { maybeMigrateHeartbeatCadenceToCron } = await import("./doctor-heartbeat-retirement.js");
 let { beginDoctorMaintenance } = await import("./doctor-maintenance.js");
 
 async function reloadStateDirFixtureGraph() {
@@ -50,8 +49,7 @@ async function reloadStateDirFixtureGraph() {
   ({ executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js"));
   ({ withEnvAsync } = await import("../test-utils/env.js"));
   ({ withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js"));
-  ({ maybeMigrateHeartbeatCadenceToCron } =
-    await import("./doctor-heartbeat-cadence-migration.js"));
+  ({ maybeMigrateHeartbeatCadenceToCron } = await import("./doctor-heartbeat-retirement.js"));
   ({ beginDoctorMaintenance } = await import("./doctor-maintenance.js"));
 }
 

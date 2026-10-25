@@ -7,18 +7,23 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { GatewayRequestError } from "../../../ui/src/api/gateway.ts";
-import {
-  loadAgentFileContent,
-  saveAgentFile,
-  type AgentFilesState,
-} from "../../../ui/src/pages/agents/files.ts";
+import { createAgentFilePanel, retainAgentFileDrafts } from "../../../ui/src/pages/agents/files.ts";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.ts";
 import { createSandbox } from "../../agents/sandbox/fs-bridge.test-helpers.js";
 import { createRemoteShellSandboxFsBridge } from "../../agents/sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "../../agents/sandbox/remote-fs-bridge.test-helpers.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsHandlers } from "./agents.js";
-import type { RespondFn } from "./types.js";
+
+type EditorState = Parameters<typeof createAgentFilePanel>[0];
+
+function editorActions(editor: EditorState) {
+  return createAgentFilePanel(editor, {
+    canWrite: () => true,
+    isCurrent: () => true,
+  }).forAgent("main");
+}
 
 function hashContent(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
@@ -69,13 +74,7 @@ function registerFileTests(storage: "local" | "remote") {
     method: "agents.files.list" | "agents.files.get" | "agents.files.set",
     params: Record<string, unknown>,
   ) {
-    const respond = vi.fn<RespondFn>();
-    await agentsHandlers[method]?.({
-      req: { type: "req", id: method, method, params: {} },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
+    const respond = await callAgentHandler(agentsHandlers[method]!, method, params, {
       context: {
         getRuntimeConfig: () => ({ agents: { defaults: { workspace } } }),
         broadcast,
@@ -93,9 +92,9 @@ function registerFileTests(storage: "local" | "remote") {
   ) {
     return invokeFiles("agents.files.set", { agentId: "main", name, content, ...preconditions });
   }
-  function saveDraft(editor: AgentFilesState) {
-    const draft = expectDefined(editor.agentFileEditors[memory]?.draft, "editor draft");
-    return saveAgentFile(editor, "main", memory, draft);
+  function saveDraft(editor: EditorState) {
+    expectDefined(editor.agentFileEditors[memory]?.draft, "editor draft");
+    return editorActions(editor).onFileSave(memory);
   }
   function readFile(name = memory): string {
     return fs.readFileSync(path.join(storageDir, name), "utf8");
@@ -141,7 +140,11 @@ function registerFileTests(storage: "local" | "remote") {
   });
 
   async function loadEditor(draft: string) {
-    const editor: AgentFilesState = {
+    const editor: EditorState = {
+      agentsSelectedId: "main",
+      agentFileActive: memory,
+      agentFilesList: null,
+      agentsPanel: "files",
       client: createTestGatewayClient(async (method, params) => {
         if ((method !== "agents.files.get" && method !== "agents.files.set") || !isRecord(params)) {
           throw new Error(`Unexpected editor request: ${method}`);
@@ -155,16 +158,23 @@ function registerFileTests(storage: "local" | "remote") {
       }),
       connected: true,
       requestGeneration: 0,
-      agents: { recordFile: () => null },
+      agents: {
+        recordFile: () => null,
+        files: () => ({ list: null, loading: false, read: null }),
+        ensureFiles: async () => null,
+        refreshFiles: async () => null,
+      },
       agentFilesLoading: false,
-      agentFilesError: null,
+      agentFileRead: null,
+      agentFileOutcome: null,
       agentFileEditors: {},
       agentFileConflict: null,
       agentFileSaving: false,
       agentFileWriteRevisions: new Map(),
     };
-    expect(await loadAgentFileContent(editor, "main", memory)).toBe(true);
-    editor.agentFileEditors[memory] = { ...editor.agentFileEditors[memory], draft };
+    const actions = editorActions(editor);
+    expect(await actions.onSelectFile(memory)).toBe(true);
+    actions.onFileDraftChange(memory, draft);
     return editor;
   }
 
@@ -180,6 +190,54 @@ function registerFileTests(storage: "local" | "remote") {
     expect(readFile()).toBe(drafts[0]);
   });
 
+  it.each(["existing", "missing", "matching draft"])(
+    "keeps a retained draft bound to its original workspace (%s)",
+    async (variant) => {
+      if (variant !== "missing") {
+        writeFile(original);
+      }
+      const originalStorage = storageDir;
+      const editor = await loadEditor(edited);
+      const retained = expectDefined(
+        retainAgentFileDrafts({ ...editor, agentFileActive: memory }),
+        "retained draft",
+      );
+      workspace = fs.realpathSync(tempDirs.make("openclaw-replacement-workspace-"));
+      storageDir = workspace;
+      const replacement = variant === "matching draft" ? edited : original;
+      if (variant !== "missing") {
+        writeFile(replacement);
+      }
+      editor.agentFileEditors = retained.editors;
+      expect(await editorActions(editor).onSelectFile(memory)).toBe(true);
+
+      expect(await saveDraft(editor)).toBe(false);
+      expect(editor.agentFileConflict).toBe(memory);
+      expect((await editor.agentFileOutcome)?.error).toContain("workspace changed");
+      expect(editor.agentFileEditors[memory]?.draft).toBe(edited);
+      expect(retainAgentFileDrafts({ ...editor, agentFileActive: memory })).not.toBeNull();
+      expect(
+        variant === "missing" ? fs.existsSync(path.join(storageDir, memory)) : readFile(),
+      ).toBe(variant === "missing" ? false : replacement);
+
+      if (variant === "missing") {
+        expect(await editorActions(editor).onFileReload(memory)).toBe(true);
+        expect(editor.agentFileEditors[memory]?.draft).toBe("");
+        expect(fs.existsSync(path.join(storageDir, memory))).toBe(false);
+      } else {
+        expect(await editorActions(editor).onFileOverwrite(memory)).toBe(true);
+        expect(readFile()).toBe(edited);
+      }
+      expect(editor.agentFileConflict).toBeNull();
+      expect((await editor.agentFileOutcome)?.error).toBeUndefined();
+      expect(
+        variant === "missing"
+          ? fs.existsSync(path.join(originalStorage, memory))
+          : fs.readFileSync(path.join(originalStorage, memory), "utf8"),
+      ).toBe(variant === "missing" ? false : original);
+    },
+  );
+
   it.runIf(storage === "remote")("rejects unsupported create, permits blind writes", async () => {
     const bridge = expectDefined(remoteBridge, "remote workspace fixture");
     release?.();
@@ -192,7 +250,7 @@ function registerFileTests(storage: "local" | "remote") {
     });
     const editor = await loadEditor("unsaved new memory");
     expect(await saveDraft(editor)).toBe(false);
-    expect(editor.agentFilesError).toContain("Update its workspace provider");
+    expect((await editor.agentFileOutcome)?.error).toContain("Update its workspace provider");
     expect(editor.agentFileEditors[memory]?.draft).toBe("unsaved new memory");
     expect(fs.existsSync(path.join(storageDir, memory))).toBe(false);
 

@@ -102,11 +102,8 @@ async function runUsageCalls(
     {
       model,
       convertToLlm: (messages) =>
-        messages.filter(
-          (message): message is Message =>
-            message.role === "user" ||
-            message.role === "assistant" ||
-            message.role === "toolResult",
+        messages.filter((message): message is Message =>
+          ["user", "assistant", "toolResult"].includes(message.role),
         ),
       getFollowUpMessages: async () =>
         callIndex < calls.length

@@ -1,3 +1,4 @@
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { createSignal } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
@@ -9,6 +10,7 @@ import {
 } from "../../app/gateway-observers.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -43,17 +45,11 @@ type TestGateway = ApplicationContext["gateway"] & {
 
 export function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
   invalidateChatMetadataStore(client);
-  let snapshot: ApplicationGatewaySnapshot = {
+  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
   const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
@@ -117,6 +113,9 @@ export function createContext(
   const selectionListeners = new Set<(state: typeof selectionState) => void>();
   return {
     basePath: "",
+    router: createRouter({
+      routes: [definePage({ id: "cron", path: "/cron", component: () => ({}) })],
+    }),
     gateway,
     agentIdentity: createAgentIdentityCapability(gateway),
     agents: {

@@ -20,8 +20,8 @@ const jobId = "automation-result-job";
 type Invocation =
   NonNullable<AgentRunContext["cronRunsByJobId"]> extends Map<string, infer T> ? T : never;
 
-function createInvocation() {
-  const invocation: Invocation = { nextCheckEnabled: false, assertCurrent: () => {} };
+function createInvocation(nextCheckEnabled = false) {
+  const invocation: Invocation = { nextCheckEnabled, assertCurrent: () => {} };
   const claim = claimAgentRunContext(
     runId,
     {
@@ -49,6 +49,18 @@ describe("automation invocation tools", () => {
     clearAgentRunContext(runId);
   });
 
+  it.each(["inactive", "active", "paced"] as const)(
+    "describes available invocation actions for a %s automation",
+    (state) => {
+      const invocation = state === "inactive" ? undefined : createInvocation(state === "paced");
+      ownedClaim = invocation?.claim;
+      const tool = invocation?.tool ?? createTestCronTool({ runId, selfRemoveOnlyJobId: jobId });
+      expect(tool.description.includes("scratch_get")).toBe(state !== "inactive");
+      expect(tool.description.includes("record_result")).toBe(state !== "inactive");
+      expect(tool.description.includes("next_check")).toBe(state === "paced");
+    },
+  );
+
   it("accepts one concise structured result without dispatching another turn", async () => {
     const { invocation, claim, tool } = createInvocation();
     ownedClaim = claim;
@@ -70,6 +82,21 @@ describe("automation invocation tools", () => {
       }),
     ).rejects.toThrow("record_result already accepted");
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts no_change without boilerplate and rejects invalid meaningful summaries", async () => {
+    const { invocation, claim, tool } = createInvocation();
+    ownedClaim = claim;
+    for (const summary of [undefined, "   ", "x".repeat(2001)]) {
+      await expect(
+        tool.execute("invalid", { action: "record_result", outcome: "progress", summary }),
+      ).rejects.toThrow();
+      expect(invocation.result).toBeUndefined();
+    }
+    await expect(
+      tool.execute("quiet", { action: "record_result", outcome: "no_change" }),
+    ).resolves.toMatchObject({ details: { ok: true, outcome: "no_change" } });
+    expect(invocation.result).toEqual({ outcome: "no_change" });
   });
 
   it.each(["closed", "replacement", "released"] as const)(

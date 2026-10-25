@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { hasActiveDiagnosticTracePropagation } from "../../infra/diagnostic-trace-propagation.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
@@ -12,14 +11,9 @@ import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.j
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { isWorkspaceSkillReadPath, resolveSkillReadPath } from "../workspace-skill-read-path.js";
-import {
-  getSkillsResourceVersion,
-  getSkillsSnapshotVersion,
-  shouldRefreshSnapshotForVersion,
-} from "./refresh-state.js";
+import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";
 import { prepareRemoteSkillConnections } from "./remote-skills.js";
-import { stampDiscoveredSkillBundleIdentities } from "./resources.js";
 import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 
@@ -78,48 +72,6 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       )
     : undefined;
   const watcherWorkspaceDir = skillRoots?.agentWorkspaceDir ?? params.workspaceDir;
-  const resourceScope = normalizedRoots.executionWorkspaceDir
-    ? {
-        executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
-        ...(normalizedRoots.executionWorkspaceFileHost
-          ? { executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost }
-          : {}),
-      }
-    : undefined;
-  const resourceVersionBeforePreparation = getSkillsResourceVersion(
-    watcherWorkspaceDir,
-    resourceScope,
-  );
-  // A watcher-observed support-file edit advances the resource version without
-  // rebuilding the snapshot: refresh only the identity projections then, so a
-  // reused session snapshot never keeps emitting the previous bundle's
-  // fingerprint after the watcher reported the change. Zero work while tracing
-  // is inactive: the stamping pass itself is gated on the tracing consumer.
-  const refreshSnapshotIdentities = async (snapshot: SkillSnapshot): Promise<SkillSnapshot> => {
-    const currentResourceVersion = getSkillsResourceVersion(watcherWorkspaceDir, resourceScope);
-    if (
-      !snapshot.resolvedSkills?.length ||
-      (snapshot.resourceVersion ?? 0) >= currentResourceVersion ||
-      !hasActiveDiagnosticTracePropagation()
-    ) {
-      return snapshot;
-    }
-    const restamp = (entries: readonly Skill[]) =>
-      stampDiscoveredSkillBundleIdentities(entries, watcherWorkspaceDir, {
-        sourceScope: resourceScope,
-        recompute: true,
-      });
-    const resolvedSkills = await restamp(snapshot.resolvedSkills);
-    const discoverySkills = snapshot.discoverySkills
-      ? await restamp(snapshot.discoverySkills)
-      : undefined;
-    return {
-      ...snapshot,
-      resolvedSkills,
-      ...(discoverySkills ? { discoverySkills } : {}),
-      resourceVersion: currentResourceVersion,
-    };
-  };
   const versionBeforePreparation = getSkillsSnapshotVersion(watcherWorkspaceDir);
   await prepareRemoteSkillConnections();
   params.assertCurrent?.();
@@ -180,7 +132,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     (params.hydrateExisting === false || params.existingSnapshot.resolvedSkills !== undefined)
   ) {
     return {
-      snapshot: await refreshSnapshotIdentities(params.existingSnapshot),
+      snapshot: params.existingSnapshot,
       shouldRefresh,
     };
   }
@@ -228,7 +180,6 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       ...snapshot,
       ...(skillRoots ? { skillRoots } : {}),
       ...(librarySelections ? { librarySelections } : {}),
-      resourceVersion: resourceVersionBeforePreparation,
     };
   };
 
@@ -311,7 +262,6 @@ export async function resolveReusableWorkspaceSkillSnapshot(
         discoverySkills.filter((skill) => skill.name === name),
       ),
       discoverySkills,
-      resourceVersion: rebuilt.resourceVersion,
     };
   }
   if (!snapshot) {
@@ -324,10 +274,9 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       snapshotVersion: currentVersion,
     });
   }
-  const refreshedSnapshot = await refreshSnapshotIdentities(snapshot);
   params.assertCurrent?.();
   return {
-    snapshot: refreshedSnapshot,
+    snapshot,
     shouldRefresh,
   };
 }

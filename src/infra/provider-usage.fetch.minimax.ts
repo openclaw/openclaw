@@ -1,7 +1,7 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../utils.js";
-import { readTrimmedStringAlias } from "../utils/string-readers.js";
+import { readParsedField, readTrimmedStringAlias } from "../utils/string-readers.js";
 import {
   buildUsageErrorSnapshot,
   fetchUsageJson,
@@ -13,10 +13,6 @@ import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.
 type MinimaxBaseResp = {
   status_code?: number;
   status_msg?: string;
-};
-
-type FetchMinimaxUsageOptions = {
-  baseUrl?: string;
 };
 
 const DEFAULT_MINIMAX_USAGE_ORIGIN = "https://api.minimaxi.com";
@@ -148,13 +144,7 @@ function pickNumber(
   keys: readonly string[],
   parse = parseFiniteNumber,
 ): number | undefined {
-  for (const key of keys) {
-    const parsed = parse(record[key]);
-    if (parsed !== undefined) {
-      return parsed;
-    }
-  }
-  return undefined;
+  return readParsedField(record, keys, parse);
 }
 
 function parseEpoch(value: unknown): number | undefined {
@@ -368,7 +358,9 @@ export async function fetchMinimaxUsage(
   apiKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
-  options?: FetchMinimaxUsageOptions,
+  options?: {
+    baseUrl?: string;
+  },
 ): Promise<ProviderUsageSnapshot> {
   const parsed = await fetchUsageJson({
     provider: "minimax",

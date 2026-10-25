@@ -14,29 +14,17 @@ const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const helperPath = path.join(repoRoot, "ui/src/e2e/control-ui-e2e-suite.test-support.ts");
 
 type FixtureMode =
-  | "page-concurrent"
-  | "page-concurrent-timeout"
-  | "diagnostic-page-timeout"
-  | "diagnostic-tracked-timeout"
-  | "diagnostic-scenario-timeout"
-  | "tracked-close-success"
-  | "tracked-close-failure"
+  | `page-concurrent${"" | "-timeout"}`
+  | `diagnostic-${"page" | "tracked" | "scenario"}-timeout`
+  | `tracked-close-${"success" | "failure"}`
   | "concurrent-close"
   | "held-route-drain"
+  | "held-route-failure"
   | "close-failure"
   | "late-context"
   | "late-setup"
-  | "scenario-timeout"
-  | "scenario-noncooperative"
-  | "scenario-late-close"
-  | "scenario-close-failure"
-  | "scenario-root-drain"
-  | "scenario-root-leak"
-  | "resources-success"
-  | "resources-root-drain"
-  | "resources-close-failure"
-  | "resources-late-setup"
-  | "resources-browser-failure";
+  | `scenario-${"timeout" | "noncooperative" | "late-close" | "close-failure" | "root-drain" | "root-leak"}`
+  | `resources-${"success" | "root-drain" | "close-failure" | "late-setup" | "browser-failure"}`;
 
 type FixtureJournal = {
   closeCalls: number;
@@ -79,6 +67,7 @@ const state = vi.hoisted(() => {
     firstCleanupEvent: "", pendingCloseCalls: -1, fulfilledBeforeFetchRelease: [],
     heldBodyErrorRetained: false, contextCleanupEvent: "", callbackOutcomes: [],
     pendingPageReject: undefined,
+    heldRouteFault: new Error("synthetic held module route failure"),
     closeFault: new Error("synthetic context close failure") };
 });
 vi.mock("playwright", () => ({ chromium: { launch: async () => {
@@ -135,7 +124,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
         });
         return context;
       }
-      if (${JSON.stringify(mode)} === "held-route-drain") {
+      if (${JSON.stringify(mode)}.startsWith("held-route-")) {
         const handlers = [];
         const pending = new Set();
         const contextHandlers = [];
@@ -160,11 +149,21 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             const invocations = scope === "context" ? contextPending : pending;
             const registration = registrations.find(({ pattern }) => pattern.test(url));
             if (!registration) throw new Error("missing held-module route: " + name);
+            const handled = state.deferred();
             const route = {
               request: () => ({ url: () => url }),
-              fallback: async () => { state.events.push("fell through " + label); },
+              fallback: async () => {
+                state.events.push("fell through " + label);
+                handled.resolve();
+              },
+              abort: async () => {
+                state.events.push("aborted " + label);
+                handled.resolve();
+                record();
+              },
               fetch: async () => {
                 if (pageClosed) throw state.disposalFault;
+                if (label === "fault") throw state.heldRouteFault;
                 if (label === "later" || scope === "context") {
                   const started = scope === "context" ? state.contextFetchStarted : state.laterFetchStarted;
                   const gate = scope === "context" ? state.contextFetch : state.laterFetch;
@@ -181,10 +180,11 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
               fulfill: async () => {
                 if (pageClosed) throw state.disposalFault;
                 state.events.push("fulfilled " + label);
+                handled.resolve();
               },
             };
-            // Observe rejection immediately; teardown joins outcomes without hiding unknown faults.
-            const settled = registration.handler(route).then(
+            // Playwright joins both route handling and callback completion.
+            const settled = Promise.all([handled.promise, registration.handler(route)]).then(
               () => ({ label, status: "fulfilled" }),
               error => ({ label, status: "rejected", error }),
             );
@@ -500,6 +500,14 @@ suite.define(() => {
       });
       event("held callback joined");
     });
+  } else if (${JSON.stringify(mode)} === "held-route-failure") {
+    it("reports a settled held route failure during context cleanup", async () => {
+      await suite.withPage({}, async ({ page }) => {
+        await holdModuleResponse(page, /module-fault/u);
+        const outcome = await page.dispatchModule("module-fault", "fault");
+        expect(outcome.label).toBe("fault");
+      });
+    });
   } else if (${JSON.stringify(mode)} === "concurrent-close") {
     it("joins the first context close", async () => {
       const context = await suite.newBrowserContext({});
@@ -756,6 +764,23 @@ function runJoinedFixture(
   return run;
 }
 
+type FixtureResult = Awaited<ReturnType<typeof runFixture>>;
+
+function expectTestCounts(result: FixtureResult, passed: number, failed: number) {
+  expect(result.report, result.output).toMatchObject({
+    numPassedTests: passed,
+    numFailedTests: failed,
+  });
+}
+
+function expectClosed(result: FixtureResult, closeCalls: number, closed = true) {
+  expect(result.journal).toMatchObject({
+    closeCalls,
+    browserClosed: closed,
+    serverClosed: closed,
+  });
+}
+
 it.for(["page-concurrent", "page-concurrent-timeout"] as const)(
   "owns every concurrent page callback: %s",
   (mode, context) =>
@@ -768,8 +793,7 @@ it.for(["page-concurrent", "page-concurrent-timeout"] as const)(
         expect(result.output).toContain("retiring owned fork");
         expect(result.successorStarted).toBe(false);
       } else {
-        expect(result.report.numPassedTests, result.output).toBe(1);
-        expect(result.report.numFailedTests, result.output).toBe(0);
+        expectTestCounts(result, 1, 0);
       }
     }),
 );
@@ -781,7 +805,7 @@ it.for([
 ] as const)("captures a native timeout before its context closes: %s", (mode, context) =>
   runJoinedFixture(mode, context, (result) => {
     expect(result.code, result.output).toBe(1);
-    expect(result.report, result.output).toMatchObject({ numFailedTests: 1, numPassedTests: 1 });
+    expectTestCounts(result, 1, 1);
     expect(result.output).toContain("Test timed out in 50ms");
     expect(result.successorStarted).toBe(true);
     expect(result.journal.events).toEqual(["capture live page", "drain", "close", "successor"]);
@@ -809,18 +833,14 @@ it.for([
     );
     expect(JSON.stringify(result.captures[0]?.public)).not.toContain("private-");
     expect(result.captures[0]?.private.failure.message).toContain("Test timed out in 50ms");
-    expect(result.journal).toMatchObject({
-      closeCalls: 1,
-      browserClosed: true,
-      serverClosed: true,
-    });
+    expectClosed(result, 1);
   }),
 );
 
 it("drains held modules and cancels unrequested observations during cleanup", (context) =>
   runJoinedFixture("held-route-drain", context, (result) => {
     expect(result.code, result.output).toBe(0);
-    expect(result.report, result.output).toMatchObject({ numPassedTests: 2, numFailedTests: 0 });
+    expectTestCounts(result, 2, 0);
     expect(result.journal.callbackOutcomes).toEqual(
       ["first", "other", "later", "context", "late"].map((label) => ({
         label,
@@ -831,12 +851,11 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
     expect(result.journal.events).toContain("fulfilled later");
     expect(result.journal.events).toContain("fell through late");
     expect(result.journal.events).not.toContain("fetched late");
-    expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
-      result.journal.events.indexOf("drain"),
-    );
-    expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
-      result.journal.events.indexOf("close"),
-    );
+    for (const event of ["drain", "close"]) {
+      expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
+        result.journal.events.indexOf(event),
+      );
+    }
     expect(result.journal.events).toContain("held request settled");
     expect(result.journal.events.at(-1)).toBe("held callback joined");
     expect(result.journal).toMatchObject({
@@ -844,11 +863,17 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       contextCleanupEvent: "drain",
       pendingCloseCalls: 0,
       fulfilledBeforeFetchRelease: ["fulfilled first", "fulfilled other"],
-      closeCalls: 2,
       heldBodyErrorRetained: true,
-      browserClosed: true,
-      serverClosed: true,
     });
+    expectClosed(result, 2);
+  }));
+
+it("reports settled held route failures through context cleanup", (context) =>
+  runJoinedFixture("held-route-failure", context, (result) => {
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain("synthetic held module route failure");
+    expect(result.output).not.toContain("Unhandled Rejection");
+    expect(result.journal.events).toContain("aborted fault");
   }));
 
 it.for([
@@ -863,14 +888,9 @@ it.for([
     runJoinedFixture(mode, context, (result) => {
       const tracked = mode.startsWith("tracked-");
       expect(result.code, result.output).toBe(success ? 0 : 1);
-      expect(result.journal).toMatchObject({
-        closeCalls,
-        browserClosed: success,
-        serverClosed: success,
-      });
+      expectClosed(result, closeCalls, success);
       if (!tracked) {
-        expect(result.report.numPassedTests, result.output).toBe(success ? 1 : 0);
-        expect(result.report.numFailedTests, result.output).toBe(success ? 0 : 2);
+        expectTestCounts(result, success ? 1 : 0, success ? 0 : 2);
         expect(result.journal).toMatchObject({ arrived: true, published: false });
       }
       if (tracked || !success) {
@@ -930,8 +950,7 @@ it.for([
         expect(result.output).toContain(failure);
         expect(result.journal.events).not.toContain("released");
       } else {
-        expect(result.report.numPassedTests, result.output).toBe(2);
-        expect(result.report.numFailedTests, result.output).toBe(0);
+        expectTestCounts(result, 2, 0);
         expect(result.journal.events).toEqual(["acquired", "gateway closed", "released"]);
       }
       if (mode === "scenario-late-close") {

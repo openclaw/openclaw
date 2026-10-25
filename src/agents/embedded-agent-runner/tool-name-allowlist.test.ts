@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { findClientToolNameConflicts } from "../agent-tool-definition-adapter.js";
-import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
+import {
+  createClientToolDefinition as clientTool,
+  createStubTool,
+} from "../test-helpers/agent-tool-stubs.js";
 import { addClientToolsToToolCatalog } from "../tool-search-catalog.js";
 import {
   applyToolSearchCatalog,
@@ -16,12 +19,8 @@ import {
 } from "./tool-name-allowlist.js";
 
 const config = { tools: { toolSearch: true } } as never;
-const clientTools: ClientToolDefinition[] = [
-  {
-    type: "function",
-    function: { name: "client_pick_file", parameters: { type: "object", properties: {} } },
-  },
-];
+const clientTools = [clientTool("client_pick_file")];
+const toolsNamed = (...names: string[]) => names.map((name) => createStubTool(name));
 const compact = (
   tools: ReturnType<typeof createStubTool>[],
   catalogRef = createToolSearchCatalogRef(),
@@ -46,11 +45,7 @@ describe("tool name allowlists", () => {
   });
 
   it("keeps hidden core names available for client conflict admission", () => {
-    const uncompactedTools = [
-      createStubTool(TOOL_CALL_RAW_TOOL_NAME),
-      createStubTool("exec"),
-      createStubTool("message"),
-    ];
+    const uncompactedTools = toolsNamed(TOOL_CALL_RAW_TOOL_NAME, "exec", "message");
     const compacted = compact(uncompactedTools);
     const names = collectRegisteredToolNames(uncompactedTools);
 
@@ -58,15 +53,7 @@ describe("tool name allowlists", () => {
     expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec"]);
     expect(
       findClientToolNameConflicts({
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "exec",
-              parameters: { type: "object", properties: {} },
-            },
-          },
-        ],
+        tools: [clientTool("exec")],
         existingToolNames: [...names, ...AGENT_RESERVED_TOOL_NAMES],
       }),
     ).toEqual(["exec"]);
@@ -88,15 +75,7 @@ describe("tool name allowlists", () => {
     const allowlist = toSessionToolAllowlist(
       collectAllowedToolNames({
         tools: [createStubTool("exec"), createStubTool("read"), createStubTool("exec")],
-        clientTools: [
-          {
-            type: "function",
-            function: {
-              name: "image_generate",
-              parameters: { type: "object", properties: {} },
-            },
-          },
-        ],
+        clientTools: [clientTool("image_generate")],
       }),
     );
 
@@ -105,9 +84,9 @@ describe("tool name allowlists", () => {
 
   it("excludes client tool names when Tool Search compacts them into the catalog", () => {
     const catalogRef = createToolSearchCatalogRef();
-    const compacted = compact([createStubTool(TOOL_CALL_RAW_TOOL_NAME)], catalogRef);
+    const compacted = compact(toolsNamed(TOOL_CALL_RAW_TOOL_NAME), catalogRef);
     const clientToolSearch = addClientToolsToToolCatalog({
-      tools: [createStubTool("client_pick_file")],
+      tools: toolsNamed("client_pick_file"),
       enabled: true,
       catalogRef,
     });
@@ -120,11 +99,7 @@ describe("tool name allowlists", () => {
   });
 
   it("keeps hidden catalog tools valid for replay guards after Tool Search compaction", () => {
-    const uncompactedTools = [
-      createStubTool(TOOL_CALL_RAW_TOOL_NAME),
-      createStubTool("exec"),
-      createStubTool("fake_plugin_tool"),
-    ];
+    const uncompactedTools = toolsNamed(TOOL_CALL_RAW_TOOL_NAME, "exec", "fake_plugin_tool");
     const compacted = compact(uncompactedTools);
     expect(
       sessionAllowlist(compacted.tools, compacted.catalogRegistered ? undefined : clientTools),

@@ -51,7 +51,10 @@ export function createSetSessionConfigOptionRequest(
   return { sessionId, configId, value, _meta: {} } as unknown as SetSessionConfigOptionRequest;
 }
 
-export function createToolEvent(params: {
+export function createToolEvent({
+  sessionKey,
+  ...data
+}: {
   sessionKey: string;
   phase: "start" | "update" | "result";
   toolCallId: string;
@@ -64,17 +67,9 @@ export function createToolEvent(params: {
   return {
     event: "agent",
     payload: {
-      sessionKey: params.sessionKey,
+      sessionKey,
       stream: "tool",
-      data: {
-        phase: params.phase,
-        toolCallId: params.toolCallId,
-        name: params.name,
-        args: params.args,
-        partialResult: params.partialResult,
-        result: params.result,
-        isError: params.isError,
-      },
+      data,
     },
   } as unknown as EventFrame;
 }

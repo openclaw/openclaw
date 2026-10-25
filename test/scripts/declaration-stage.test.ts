@@ -46,7 +46,18 @@ function fixture() {
       concurrency,
     );
   const read = (file: string) => fs.readFileSync(path.join(dist, file), "utf8");
-  return { staging, dist, invocation, publish, read };
+  const publishGroups = (groups: Record<string, string>[]) => {
+    const sources = groups.map((_files, index) => ({
+      output: path.join(root, `group-${index}`),
+      required: [index === 0 ? "plugin-sdk/public.d.ts" : "plugin-sdk/private.d.ts"],
+    }));
+    return publish(
+      groups.map((files, index) => invocation(files, 0, sources[index]!.output)),
+      sources.flatMap((source) => source.required),
+      sources,
+    );
+  };
+  return { staging, dist, invocation, publish, publishGroups, read };
 }
 
 describe("canonical declaration stage", () => {
@@ -200,38 +211,19 @@ describe("canonical declaration stage", () => {
   );
   it("does not publish on missing entry", async () => {
     const { dist, invocation, publish, read } = fixture();
-    const invocations = [
-      invocation({ "plugin-sdk/public.d.ts": 'export type { Shared } from "../shared.js";' }),
-      invocation({ "shared.d.ts": "export type Shared = string;" }),
-    ];
     const before = fs.readdirSync(dist, { recursive: true }).map(String).toSorted();
-    await expect(
-      publish(invocations, ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"]),
-    ).rejects.toThrow();
+    await expect(publish([invocation({})])).rejects.toThrow("Missing canonical declaration");
     expect(fs.readdirSync(dist, { recursive: true }).map(String).toSorted()).toEqual(before);
     expect(read("plugin-sdk/obsolete.d.ts")).toBe("old");
   });
 
   it("publishes both groups with root chunks, preserves unrelated files, and prunes only owned entries", async () => {
-    const { staging, dist, invocation, publish, read } = fixture();
-    const first = path.join(staging, "..", "first");
-    const second = path.join(staging, "..", "second");
+    const { staging, dist, invocation, publish, publishGroups, read } = fixture();
     const publicFile = {
       "plugin-sdk/public.d.ts": 'export type { Shared } from "../shared.js";',
       "shared.d.ts": 'export type Shared = import("./z-leaf.js").Leaf;',
       "z-leaf.d.ts": "export type Leaf = string;",
     };
-    const invocations = [
-      invocation(publicFile, 0, first),
-      invocation(
-        {
-          "plugin-sdk/private.d.ts": 'export type { Shared } from "../shared.js";',
-          "shared.d.ts": publicFile["shared.d.ts"],
-        },
-        0,
-        second,
-      ),
-    ];
     const rename = fs.renameSync;
     const observed: string[] = [];
     const publication = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
@@ -251,14 +243,13 @@ describe("canonical declaration stage", () => {
       rename(source, target);
     });
     try {
-      await publish(
-        invocations,
-        ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
-        [
-          { output: first, required: ["plugin-sdk/public.d.ts"] },
-          { output: second, required: ["plugin-sdk/private.d.ts"] },
-        ],
-      );
+      await publishGroups([
+        publicFile,
+        {
+          "plugin-sdk/private.d.ts": 'export type { Shared } from "../shared.js";',
+          "shared.d.ts": publicFile["shared.d.ts"],
+        },
+      ]);
     } finally {
       publication.mockRestore();
     }
@@ -285,40 +276,23 @@ describe("canonical declaration stage", () => {
   it.each(["conflicting shared bytes", "misassigned entry"])(
     "rejects canonical group ownership with %s before publishing",
     async (failure) => {
-      const { staging, dist, invocation, publish, read } = fixture();
-      const first = path.join(staging, "..", "first");
-      const second = path.join(staging, "..", "second");
+      const { dist, publishGroups, read } = fixture();
       const publicFile = { "plugin-sdk/public.d.ts": "export {};" };
       await expect(
-        publish(
-          [
-            invocation(
-              {
-                ...(failure === "misassigned entry" ? {} : publicFile),
-                "shared.d.ts": "export type Shared = string;",
-              },
-              0,
-              first,
-            ),
-            invocation(
-              {
-                ...(failure === "misassigned entry" ? publicFile : {}),
-                "plugin-sdk/private.d.ts": "export {};",
-                "shared.d.ts":
-                  failure === "conflicting shared bytes"
-                    ? "export type Shared = number;"
-                    : "export type Shared = string;",
-              },
-              0,
-              second,
-            ),
-          ],
-          ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
-          [
-            { output: first, required: ["plugin-sdk/public.d.ts"] },
-            { output: second, required: ["plugin-sdk/private.d.ts"] },
-          ],
-        ),
+        publishGroups([
+          {
+            ...(failure === "misassigned entry" ? {} : publicFile),
+            "shared.d.ts": "export type Shared = string;",
+          },
+          {
+            ...(failure === "misassigned entry" ? publicFile : {}),
+            "plugin-sdk/private.d.ts": "export {};",
+            "shared.d.ts":
+              failure === "conflicting shared bytes"
+                ? "export type Shared = number;"
+                : "export type Shared = string;",
+          },
+        ]),
       ).rejects.toThrow(
         failure === "conflicting shared bytes"
           ? "Conflicting canonical declaration owners"

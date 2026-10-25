@@ -17,6 +17,7 @@ import {
 } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
+import * as cronStore from "./store.js";
 import { publishCronJobsStoreMutation } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
@@ -24,6 +25,37 @@ import { saveCronStoreInDatabase } from "./store/save.kernel.js";
 import type { CronEvent, CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-provisioning-" });
+
+it("reuses the loaded store across startup and adopts a committed publication on restart", async () => {
+  const { cron, state, clock, scheduler, job, runCommandJob, commitJob } = await createFixture();
+  const loads = vi.spyOn(cronStore, "loadCronJobsStoreWithConfigJobs");
+  try {
+    await cron.start();
+    expect(loads).toHaveBeenCalledTimes(1);
+    await cron.start();
+    expect(loads).toHaveBeenCalledTimes(1);
+
+    cron.stop();
+    await cron.waitForIdle();
+    await cron.start();
+    expect(loads).toHaveBeenCalledTimes(1);
+
+    cron.stop();
+    await cron.waitForIdle();
+    commitJob(true);
+    await cron.start();
+    expect(loads).toHaveBeenCalledTimes(2);
+    expect(cron.getJob(job.id)).toMatchObject(job);
+    clock.setTime(clock.clock.now() + 30_000);
+    await onTimer(state);
+    expect(runCommandJob).toHaveBeenCalledOnce();
+  } finally {
+    cron.stop();
+    await cron.waitForIdle();
+    await scheduler.stop();
+    loads.mockRestore();
+  }
+});
 
 async function createFixture(runSchedulerOwned?: CronServiceDeps["runSchedulerOwned"]) {
   const { storePath } = await makeStorePath();
@@ -37,7 +69,6 @@ async function createFixture(runSchedulerOwned?: CronServiceDeps["runSchedulerOw
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
     runCommandJob,
     runSchedulerOwned,

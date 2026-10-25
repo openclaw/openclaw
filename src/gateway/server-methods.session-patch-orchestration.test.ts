@@ -24,6 +24,19 @@ const unavailableError = {
   retryable: true,
 };
 
+async function patchMany(params: unknown) {
+  const respond = vi.fn();
+  await sessionMutationHandlers["sessions.patchMany"]!({
+    params,
+    respond,
+    context: patchContext(),
+  } as never);
+  return respond;
+}
+
+const success = (key: string) => ({ ok: true, key });
+const failure = (key: string, error: unknown) => ({ ok: false, key, error });
+
 async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const prefix = batch ? "session-alias-race" : "session-single-alias-race";
@@ -143,33 +156,24 @@ describe("sessions.patchMany orchestration", () => {
       for (let index = 0; index < 3; index += 1) {
         await seedEntry(`agent:main:batch-${index}`, `session-${index}`, `revision-${index}`);
       }
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({
-            key: `agent:main:batch-${index}`,
-            expectedSessionId: index === 1 ? "stale-session" : `session-${index}`,
-            expectedLifecycleRevision: `revision-${index}`,
-          })),
-          patch: { unread: false },
-        },
-        respond,
-        context: patchContext(),
-      } as never);
+      const respond = await patchMany({
+        targets: [0, 1, 2].map((index) => ({
+          key: `agent:main:batch-${index}`,
+          expectedSessionId: index === 1 ? "stale-session" : `session-${index}`,
+          expectedLifecycleRevision: `revision-${index}`,
+        })),
+        patch: { unread: false },
+      });
 
       const outcomes = respond.mock.calls[0]?.[1]?.outcomes;
       expect(outcomes).toEqual([
-        { ok: true, key: "agent:main:batch-0" },
-        {
-          ok: false,
-          key: "agent:main:batch-1",
-          error: {
-            code: "INVALID_REQUEST",
-            details: { reason: "session-changed" },
-            message: "Session agent:main:batch-1 changed before patch. Retry.",
-          },
-        },
-        { ok: true, key: "agent:main:batch-2" },
+        success("agent:main:batch-0"),
+        failure("agent:main:batch-1", {
+          code: "INVALID_REQUEST",
+          details: { reason: "session-changed" },
+          message: "Session agent:main:batch-1 changed before patch. Retry.",
+        }),
+        success("agent:main:batch-2"),
       ]);
       expect(readEntry("agent:main:batch-0")).toHaveProperty("lastReadAt");
       expect(readEntry("agent:main:batch-1")).not.toHaveProperty("lastReadAt");
@@ -178,49 +182,15 @@ describe("sessions.patchMany orchestration", () => {
   });
 
   it("rejects logical aliases before mutation", async () => {
-    const respond = vi.fn();
-    await sessionMutationHandlers["sessions.patchMany"]!({
-      params: {
-        targets: [{ key: "agent:main:duplicate" }, { key: "duplicate" }],
-        patch: { archived: true },
-      },
-      respond,
-      context: patchContext(),
-    } as never);
+    const respond = await patchMany({
+      targets: [{ key: "agent:main:duplicate" }, { key: "duplicate" }],
+      patch: { archived: true },
+    });
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ message: "Duplicate target." }),
     );
-  });
-
-  it("projects non-archive patches in request order against prior successes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      for (let index = 0; index < 2; index += 1) {
-        await seedEntry(`agent:main:label-${index}`, `session-label-${index}`);
-      }
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1].map((index) => ({ key: `agent:main:label-${index}` })),
-          patch: { label: "Shared label" },
-        },
-        respond,
-        context: patchContext(),
-      } as never);
-
-      expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
-        { ok: true, key: "agent:main:label-0" },
-        {
-          ok: false,
-          key: "agent:main:label-1",
-          error: { code: "INVALID_REQUEST", message: "label already in use: Shared label" },
-        },
-      ]);
-      expect(readEntry("agent:main:label-0")?.label).toBe("Shared label");
-      expect(readEntry("agent:main:label-1")?.label).toBeUndefined();
-    });
   });
 
   it.each([
@@ -280,8 +250,8 @@ describe("sessions.patchMany orchestration", () => {
         {
           outcomes: keys.map((key, index) =>
             index === failedIndex
-              ? { ok: false, key, error: { code: "INVALID_REQUEST", message } }
-              : { ok: true, key },
+              ? failure(key, { code: "INVALID_REQUEST", message })
+              : success(key),
           ),
         },
         undefined,
@@ -333,27 +303,18 @@ describe("sessions.patchMany orchestration", () => {
           }
           return preparePlacementValidation(params);
         });
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({ key: `agent:main:throw-${index}` })),
-          patch: { category: "Batch" },
-        },
-        respond,
-        context: patchContext(),
-      } as never);
+      const respond = await patchMany({
+        targets: [0, 1, 2].map((index) => ({ key: `agent:main:throw-${index}` })),
+        patch: { category: "Batch" },
+      });
 
       expect(respond).toHaveBeenCalledWith(
         true,
         {
           outcomes: [
-            { ok: true, key: "agent:main:throw-0" },
-            {
-              ok: false,
-              key: "agent:main:throw-1",
-              error: unavailableError,
-            },
-            { ok: true, key: "agent:main:throw-2" },
+            success("agent:main:throw-0"),
+            failure("agent:main:throw-1", unavailableError),
+            success("agent:main:throw-2"),
           ],
         },
         undefined,

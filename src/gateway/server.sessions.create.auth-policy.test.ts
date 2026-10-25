@@ -40,7 +40,19 @@ it("retains committed initial turns through fencing and denies their final write
     ...configIO.getRuntimeConfig(),
     gateway: { ...configIO.getRuntimeConfig().gateway, auth: { mode: "token", token } },
   });
-  const gateway = await createGatewaySuiteHarness({ serverOptions: { bind: "loopback" } });
+  const postAttach = await import("./server-startup-post-attach.js");
+  const startPostAttach = postAttach.startGatewayPostAttachRuntime;
+  let inputRecoverySettled: Promise<void> | undefined;
+  const captureRecovery = vi
+    .spyOn(postAttach, "startGatewayPostAttachRuntime")
+    .mockImplementation(async (...args) => {
+      const runtime = await startPostAttach(...args);
+      inputRecoverySettled = runtime.subagentRecoverySettled;
+      return runtime;
+    });
+  const gateway = await createGatewaySuiteHarness({
+    serverOptions: { bind: "loopback" },
+  }).finally(() => captureRecovery.mockRestore());
   const applyConfig = async (
     gatewayPatch: NonNullable<Parameters<typeof configIO.writeConfigFile>[0]["gateway"]>,
   ) => {
@@ -131,6 +143,8 @@ it("retains committed initial turns through fencing and denies their final write
     });
   try {
     await gateway.server.startupSettled;
+    assert(inputRecoverySettled);
+    await inputRecoverySettled;
     for (const scenario of cases) {
       const ws = await gateway.openWs({ origin: `http://127.0.0.1:${gateway.port}` });
       sockets.push(ws);

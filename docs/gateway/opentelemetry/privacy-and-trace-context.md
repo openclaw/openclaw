@@ -58,62 +58,12 @@ bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.
 
-Skill usage spans may carry `openclaw.skill.fingerprint`, a deterministic content
-fingerprint of the loaded skill bundle (SKILL.md plus support files). It is
-derived from bundle content and metadata (relative paths, sizes, executable
-bits, per-file hashes), not a random or anonymized id: identical bundles share
-it across runs and installations, so it enables correlation and
-candidate-match recognition rather than anonymization. The inclusion boundary
-is the bundle tree under the resource-reader sync policy (only `.git` and
-`node_modules` are excluded), so it covers support files even when the model
-never read them. The digest inputs are metadata and content-derived hashes,
-never raw content, but they still leak information about private inputs and
-edits. The fingerprint is exported with `captureContent` off, only on trace
-spans — never on counters or metrics — and reaches internal trusted diagnostic
-listeners only — including any in-process plugin subscribed through
-`onInternalDiagnosticEvent` in the Plugin SDK — not the public untrusted
-diagnostic projection.
-
-The fingerprint identifies the loaded skill bundle, not the exact bytes a
-particular delivery served: it is created when directory skills are discovered
-— once per loaded version per bundle directory, through the same bundle digest
-that backs resource delivery integrity — stamped on the loaded entry, and
-every `skill.used` emission looks that retained field up. Worker
-materialization, the remote transfer adapter, and library pins keep their own
-integrity-derived identities, and a skill that already carries a fingerprint
-is never re-hashed. The node session route is an omission rather than a
-producer: a node-hosted skill has no bundle directory on the Gateway, serves
-instructions without this bundle fingerprint, and so cannot be correlated or
-compared by fingerprint on that route. It is operator telemetry
-only — the fingerprint is never served to the model, and whether a delivery's
-served bytes exactly match the loaded bundle is delivery integrity's existing
-behavior, not this attribute's concern. A
-disclosed staleness race follows from that contract: an edit to a skill's
-source files after its bundle loaded is picked up by the skill watcher
-(`skills.load.watch`, on by default) within seconds, the reload recomputes
-the revision, and discovery restamps from the reloaded tree, so later spans
-carry
-the new fingerprint — but spans emitted between the edit and its reload
-carry the previously loaded bundle's fingerprint, and recorded emissions
-from a prior generation stay attributed to the bundle they were proven
-from. Routes that run without a
-watcher (for example the cron snapshot path, `watch: false`) carry the
-previously loaded identity until their next reload. A session discovered
-while tracing is inactive is recorded without bundle fingerprints; if
-tracing is enabled later in the same live session, the fingerprint appears
-only after the next skill edit advances the resource version — absence is
-the safe direction, and no span ever carries a fingerprint that does not
-match the served bundle.
-
-The fingerprint is emitted only while tracing is active: `skill.used` events on
-an install with no active tracing consumer (for example a metrics-only
-install) omit `skillFingerprint`, including when a skill's retained snapshot
-entry still carries a stamped identity from an integrity
-producer that stamps regardless of tracing. Any path while tracing is
-inactive omits the fingerprint, so an internal diagnostic listener never
-observes a fingerprint while no exporter-owned tracing consumer is active.
-Skill usage accounting itself is unaffected: the `skill.used` event still
-emits and still counts the skill's use.
+Skill-use spans can include a SHA-256 fingerprint of the instructions actually
+delivered while tracing is active, even with content capture disabled. This
+allows correlation of identical instruction bodies and comparison with known
+content; it is not anonymization. OpenClaw does not hash unread support files or
+the discovered skill catalog for this attribute, and does not export the body
+or file path. Metrics-only exporters do not request this hashing.
 
 When `diagnostics-otel` tracing is active, outbound model requests may include
 a W3C `traceparent` header from the actual exporter-owned model-call span.

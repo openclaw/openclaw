@@ -3,11 +3,10 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { startProcessWatchdogFixture } from "../../test/helpers/process-watchdog.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -88,14 +87,6 @@ function captureCustody() {
     });
   return { release: () => release?.(), restore: () => spy.mockRestore() };
 }
-
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts?.close();
-});
 
 it.each([
   ["owned", SCHEDULED_BACKUP_COMMAND, SCHEDULED_BACKUP_DECLARATION_KEY, true],
@@ -259,15 +250,6 @@ it.each([
   },
   {
     script: "setInterval(() => {}, 1000)",
-    options: { timeoutSeconds: 0.05 },
-    expected: {
-      error: "command timed out",
-      errorClassification: { kind: "reason", reason: "timeout" },
-      failureNotificationDetail: { kind: "command-timeout", mode: "wall-clock" },
-    },
-  },
-  {
-    script: "setInterval(() => {}, 1000)",
     options: { timeoutSeconds: 5, noOutputTimeoutSeconds: 0.05 },
     expected: {
       error: "command produced no output before noOutputTimeoutSeconds",
@@ -309,6 +291,8 @@ it.skipIf(process.platform === "win32")(
   "kills shell process groups on timeout",
   async ({ signal }) =>
     withTempDir("openclaw-cron-command-", async (tempDir) => {
+      const receipts = await openFixtureReceiptChannel();
+      await using _ = { [Symbol.asyncDispose]: () => receipts.close() };
       const childPidPath = path.join(tempDir, "child.pid");
       const childPath = path.join(tempDir, "child.mjs");
       await fs.writeFile(

@@ -18,7 +18,6 @@ export function createApprovalCard(params: {
   chatType?: "p2p" | "group";
   sessionKey?: string;
   confirmLabel?: string;
-  cancelLabel?: string;
 }): Record<string, unknown> {
   const context = buildFeishuCardInteractionContext(params);
 
@@ -38,7 +37,7 @@ export function createApprovalCard(params: {
         }),
       }),
       buildFeishuCardButton({
-        label: params.cancelLabel ?? "Cancel",
+        label: "Cancel",
         value: createFeishuCardInteractionEnvelope({
           k: "button",
           a: FEISHU_APPROVAL_CANCEL_ACTION,

@@ -9,6 +9,11 @@
   --sidebar-pad-x: 8px;
 }
 
+/* Preserve title space beside the rail, row insets, and the 44px menu target. */
+.shell--mobile-nav .sidebar--rail .sidebar-shell {
+  --sidebar-pad-x: 6px;
+}
+
 .sidebar-rail {
   --sidebar-rail-control-size: 36px;
   --sidebar-rail-action-size: 30px;
@@ -260,8 +265,9 @@
 }
 
 .sidebar-rail .sidebar-issues-button__count {
-  background: var(--accent);
-  color: var(--accent-foreground);
+  /* Bound lightness and chroma for white counts, preserving the accent hue. */
+  background: oklch(from var(--accent) min(l, 0.5) min(c, 0.22) h / 1);
+  color: var(--inbox-attention-foreground);
 }
 
 .sidebar-rail .session-glyph__badge--unread {
@@ -331,6 +337,12 @@
   transition:
     background var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
+}
+
+/* Match the session lists' 2px rhythm so adjacent hover/current fills read as
+   separate rows instead of merging into one block. */
+.sidebar-pages__entry + .sidebar-pages__entry {
+  margin-block-start: 2px;
 }
 
 .sidebar-pages__entry:hover {
@@ -481,24 +493,44 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   }
 }
 
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
-  --shell-controls-width: var(--shell-chrome-control-size);
-  --shell-nav-width: var(--shell-nav-rail-width);
-  grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+/* Resize the content once; reveal the fixed-width navigation on the compositor. */
+.shell--navigation-rail:not(.shell--mobile-nav) {
+  transition-property: grid-template-rows;
+
+  .shell-nav {
+    width: var(--shell-nav-expanded-width);
+    clip-path: inset(0);
+  }
+
+  &.shell--nav-collapsed {
+    --shell-controls-width: var(--shell-chrome-control-size);
+    --shell-nav-width: var(--shell-nav-rail-width);
+    grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+
+    .shell-nav {
+      clip-path: inset(0 calc(100% - var(--shell-nav-rail-width)) 0 0);
+
+      &:dir(rtl) {
+        clip-path: inset(0 0 0 calc(100% - var(--shell-nav-rail-width)));
+      }
+    }
+
+    .sidebar-shell {
+      display: none;
+    }
+  }
+
+  /* Connection controls may extend past the rail while it is collapsed. */
+  .shell-nav:has(.sidebar-connection-flag[data-open]) {
+    width: auto;
+    clip-path: none;
+  }
 }
 
 /* Legacy Mac hosts retain the expand + search cluster. */
 html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
   --shell-controls-width: 68px;
-}
-
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
-  display: flex;
-}
-
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .sidebar-shell {
-  display: none;
 }
 
 /* Keep identity and command access in the persistent rail. */

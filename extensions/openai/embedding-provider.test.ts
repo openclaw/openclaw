@@ -1,5 +1,4 @@
 // Exercise the provider, shared factory, and guarded HTTP transport together.
-import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
@@ -12,6 +11,7 @@ import {
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
 
 type EmbeddingBody = {
@@ -70,13 +70,8 @@ async function startEmbeddingServer(onRequest = respondWithEmbeddings) {
     })();
   });
   servers.push(server);
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback TCP address");
-  }
-  return { baseUrl: `http://127.0.0.1:${address.port}/tenant/v1`, requests };
+  const port = await listenOnLoopback(server);
+  return { baseUrl: `http://127.0.0.1:${port}/tenant/v1`, requests };
 }
 
 function createOptions(

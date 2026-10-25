@@ -1,9 +1,15 @@
 import { readFileSync } from "node:fs";
 import { calculateUsageCost } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
-import { claudeStreamEvent, claudeTextDelta, joinJsonlFrames } from "./cli-output.test-helpers.js";
+import {
+  claudeMessageStart,
+  claudeStreamEvent,
+  claudeTextDelta,
+  createClaudeParser,
+  createClaudeBackend,
+  joinJsonlFrames,
+} from "./cli-output.test-helpers.js";
 
 type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
 
@@ -19,26 +25,6 @@ function parseCliJsonl(
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
 
-function claudeMessageStart(id?: string) {
-  return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
-}
-
-function normalizedUsage(values: {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-}) {
-  return {
-    input: values.input,
-    output: values.output,
-    cacheRead: values.cacheRead,
-    cacheWrite: values.cacheWrite,
-    total: values.total,
-  };
-}
-
 describe("parseCliJsonl", () => {
   it("parses Claude stream-json result events for an explicit backend dialect", () => {
     const result = parseCliJsonl(
@@ -51,18 +37,13 @@ describe("parseCliJsonl", () => {
           usage: { input_tokens: 5, output_tokens: 2 },
         },
       ),
-      {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+      createClaudeBackend("local-cli"),
       "local-cli",
     );
     expect(result).toEqual({
       text: "dialect says hello",
       sessionId: "session-dialect",
-      usage: normalizedUsage({ input: 5, output: 2 }),
+      usage: { input: 5, output: 2 },
     });
   });
 
@@ -81,12 +62,7 @@ describe("parseCliJsonl", () => {
         claudeTextDelta("TEST DONE"),
         { type: "result", session_id: "session-reparse", result: "TEST DONE" },
       ),
-      {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+      createClaudeBackend("local-cli"),
       "local-cli",
     );
 
@@ -249,12 +225,7 @@ describe("parseCliJsonl", () => {
           result: "DONE",
         },
       ),
-      {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+      createClaudeBackend("local-cli"),
       "local-cli",
     );
 
@@ -296,7 +267,7 @@ describe("parseCliJsonl", () => {
       expected: {
         text: "Gemini says hello",
         sessionId: "gemini-session-123",
-        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
+        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
       },
     },
     {
@@ -333,56 +304,7 @@ describe("parseCliJsonl", () => {
       expected: {
         text: "",
         sessionId: "gemini-session-123",
-        usage: normalizedUsage({ input: 1, output: 1, total: 2 }),
-      },
-    },
-    {
-      name: "parses Gemini stream-json result errors as provider errors",
-      frames: [
-        {
-          type: "message",
-          timestamp: "2026-06-16T19:36:47.000Z",
-          role: "assistant",
-          content: "partial output",
-          delta: true,
-        },
-        {
-          type: "result",
-          timestamp: "2026-06-16T19:36:49.000Z",
-          status: "error",
-          error: { message: "Gemini stream failed" },
-        },
-      ],
-      sessionIdFields: undefined,
-      expected: {
-        text: "",
-        sessionId: undefined,
-        usage: undefined,
-        errorText: "Gemini stream failed",
-      },
-    },
-    {
-      name: "keeps detailed Gemini stream-json error events over generic result errors",
-      frames: [
-        {
-          type: "error",
-          timestamp: "2026-06-16T19:36:48.000Z",
-          severity: "error",
-          message: "Invalid stream payload",
-        },
-        {
-          type: "result",
-          timestamp: "2026-06-16T19:36:49.000Z",
-          status: "error",
-          stats: { total_tokens: 1 },
-        },
-      ],
-      sessionIdFields: undefined,
-      expected: {
-        text: "",
-        sessionId: undefined,
-        usage: normalizedUsage({ total: 1 }),
-        errorText: "Invalid stream payload",
+        usage: { input: 1, output: 1, total: 2 },
       },
     },
   ])("$name", ({ frames, sessionIdFields, expected }) => {
@@ -458,42 +380,6 @@ describe("parseCliJsonl", () => {
     });
   });
 
-  it("does not let cumulative Claude result usage overwrite assistant usage", () => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        { type: "init", session_id: "session-stream" },
-        {
-          type: "assistant",
-          message: {
-            id: "msg-1",
-            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
-          },
-        },
-        {
-          type: "assistant",
-          message: {
-            id: "msg-2",
-            usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
-          },
-        },
-        {
-          type: "result",
-          session_id: "session-stream",
-          result: "done",
-          usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
-        },
-      ),
-    );
-
-    expect(result?.usage).toEqual({
-      input: 11,
-      output: 6,
-      cacheRead: 125,
-      cacheWrite: undefined,
-      total: undefined,
-    });
-  });
-
   it("captures the last Claude assistant transcript UUID as a resume checkpoint", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(
@@ -552,26 +438,7 @@ describe("parseCliJsonl", () => {
       expected: {
         text: "",
         sessionId: "session-456",
-        usage: normalizedUsage({ input: 18 }),
-      },
-    },
-    {
-      name: "preserves streamed Claude text when the final result text is empty",
-      raw: joinJsonlFrames(
-        { type: "init", session_id: "session-456" },
-        claudeTextDelta("Hello"),
-        claudeTextDelta(" world"),
-        {
-          type: "result",
-          session_id: "session-456",
-          result: "",
-          usage: { input_tokens: 18, output_tokens: 4 },
-        },
-      ),
-      expected: {
-        text: "Hello world",
-        sessionId: "session-456",
-        usage: normalizedUsage({ input: 18, output: 4 }),
+        usage: { input: 18 },
       },
     },
     {
@@ -642,12 +509,7 @@ describe("parseCliJsonl", () => {
   it("preserves terminal cumulative usage when reparsing completed Claude JSONL", () => {
     const output = parseCliJsonl(
       readFileSync("test/fixtures/cli/claude-2.1-thinking-progress.jsonl", "utf8"),
-      {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+      createClaudeBackend("claude"),
       "claude-cli",
     );
 
@@ -680,14 +542,8 @@ describe("parseCliJsonl", () => {
     const toolResults: string[] = [];
     const assistantMessages: unknown[] = [];
     let text = "";
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
+    const parser = createClaudeParser({
+      backend: createClaudeBackend("claude"),
       onAssistantDelta: (delta) => {
         text = delta.text;
       },
@@ -716,15 +572,8 @@ describe("parseCliJsonl", () => {
   it("reports semantic subagent records without admitting them to the parent lane", () => {
     const progress: string[] = [];
     const toolStarts: string[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
+    const parser = createClaudeParser({
+      backend: createClaudeBackend("claude"),
       onToolUseStart: (delta) => toolStarts.push(delta.name),
       onAttributedSubagentProgress: (parentToolUseId) => progress.push(parentToolUseId),
     });

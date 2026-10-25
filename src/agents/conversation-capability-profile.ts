@@ -136,11 +136,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       }),
       senderIsOwner,
     });
-  const trustedGroup = resolveTrustedGroupId({
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    groupId: params.groupId,
-  });
+  const trustedGroup = resolveTrustedGroupId(params);
   // Group channel/space labels have no session-bound counterpart to verify
   // against; mask them whenever the trust check dropped the caller group id.
   const trustedGroupChannel = trustedGroup.dropped ? null : params.groupChannel;
@@ -165,7 +161,13 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
     conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),
   });
-  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const {
+    groupPolicy,
+    senderPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+    sessionInheritedToolPolicy,
+  } = requesterPolicies;
   const profilePolicy = mergeAlsoAllowPolicy(
     resolveToolProfilePolicy(effective.profile),
     resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.profile),
@@ -201,7 +203,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     profilePolicy,
     providerProfilePolicy,
     ...configuredOverridePolicies,
-    inheritedToolPolicy,
+    sessionInheritedToolPolicy,
     runtimeToolPolicy,
   ];
   const inheritedToolPolicyForSpawn =
@@ -267,6 +269,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       sandboxSessionRenameOnly,
       subagentPolicy,
       inheritedToolPolicy,
+      sessionInheritedToolPolicy,
       inheritedToolPolicyForSpawn,
       delegatedToolPolicy: requesterPolicies.delegatedToolPolicy,
       inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
