@@ -220,7 +220,7 @@ it("does not replay successfully flushed audio after a later frame fails", async
   session.sendAudio(Buffer.from("second"));
   await expect(session.connect()).rejects.toThrow("second frame failed");
   expect(session.isConnected()).toBe(false);
-  expect(onError).toHaveBeenCalledOnce();
+  expectError(onError, "second frame failed");
   await session.connect();
 
   expect(sentFrames).toEqual(["first", "second"]);
@@ -515,7 +515,6 @@ it.each([false, true])("resolves async URL/headers unless closed (close=%s)", as
 });
 
 it.each([
-  ["queued audio", "queued audio send failed"],
   ["provider setup", "nope"],
   ["pre-ready close", closedMessage],
   ["connection resolution", "connection unavailable"],
@@ -524,7 +523,6 @@ it.each([
   const options: SessionOptions = {
     readyOnOpen: false,
     onMessage: handleProviderEvent,
-    connectTimeoutMessage: timeoutMessage,
     connectClosedBeforeReadyMessage: closedMessage,
   };
   if (phase === "connection resolution") {
@@ -533,19 +531,12 @@ it.each([
     };
   } else if (phase === "socket construction") {
     options.url = message;
-  } else if (phase === "queued audio") {
-    options.sendAudio = () => {
-      throw new Error(message);
-    };
   }
   const { session, onError } = await setup(options, {
     closeOnConnection: phase === "pre-ready close",
     initialEvent:
       phase === "provider setup" ? { type: "error", message } : { type: "session.created" },
   });
-  if (phase === "queued audio") {
-    session.sendAudio(Buffer.from("queued"));
-  }
   await expect(session.connect()).rejects.toThrow(message);
   expect(session.isConnected()).toBe(false);
   expectError(onError, phase === "socket construction" ? /not a valid websocket URL/ : message);
