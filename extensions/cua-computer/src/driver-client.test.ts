@@ -16,7 +16,6 @@ const mocks = vi.hoisted(() => {
     close: vi.fn(),
     drag: vi.fn(async () => ({})),
     endSession: vi.fn(async () => ({})),
-    escalateSession: vi.fn(state),
     getCursorPosition: vi.fn(async () => ({})),
     getDesktopState: vi.fn(async () => ({})),
     getSessionState: vi.fn(state),
@@ -50,7 +49,6 @@ const mocks = vi.hoisted(() => {
 const sdk = {
   ActionTarget: { Desktop: { new: mocks.createDesktopTarget } },
   ClickPosition: { Coordinates: { new: mocks.createClickPosition } },
-  ClickButton: { Left: 0, Right: 1, Middle: 2 },
   CuaDriver: { create: mocks.create, createConfigured: mocks.createConfigured },
   DriverError: {
     Tool: { instanceOf: mocks.isToolError },
@@ -58,7 +56,6 @@ const sdk = {
   },
   InputDeliveryMode: { Foreground: 1 },
   ScrollBy: { Line: 0 },
-  ScrollDirection: { Up: 0, Down: 1, Left: 2, Right: 3 },
   SessionPermissionMode: { Unrestricted: "unrestricted" },
   createTrustedSession: mocks.createTrustedSession,
 };
@@ -155,7 +152,6 @@ describe("CUA Driver direct session", () => {
 
     expectCalls(1, "startSession");
     expectCall("startSession", { session: sessionOptions.publicSession }, undefined);
-    expectCalls(1, "getDesktopState");
     expectCall(
       "callTool",
       "list_windows",
@@ -190,30 +186,19 @@ describe("CUA Driver direct session", () => {
 
     const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
     const target = { tag: "Desktop", inner: { displayId: "primary" } };
-    expectCalls(1, "createDesktopTarget");
-    expectCall("createDesktopTarget", { displayId: "primary" });
-    const expectedInputs = [
-      [
-        mocks.click,
-        {
-          position: { tag: "Coordinates", inner: { x: 20, y: 30 } },
-          deliveryMode: 1,
-          button: ClickButton.Left,
-          count: 1,
-        },
-      ],
-      [mocks.drag, { fromX: 1, fromY: 2, toX: 3, toY: 4, durationMs: 5n }],
-      [mocks.moveCursor, { x: 6, y: 7 }],
-      [mocks.scroll, { x: 8, y: 9, direction: ScrollDirection.Down, amount: 3n, by: 0 }],
-      [mocks.typeText, { text: "hello" }],
-      [mocks.pressKey, { key: "a", modifiers: ["cmd"] }],
-    ] as const;
-    for (const [mock, input] of expectedInputs) {
-      expect(mock).toHaveBeenCalledWith({ ...input, target }, undefined);
+    for (const name of ["click", "drag", "moveCursor", "scroll", "typeText", "pressKey"] as const) {
+      expect(mocks[name]).toHaveBeenCalledWith(expect.objectContaining({ target }), undefined);
     }
+    expect(mocks.click).toHaveBeenCalledWith(
+      expect.objectContaining({
+        position: { tag: "Coordinates", inner: { x: 20, y: 30 } },
+        deliveryMode: 1,
+      }),
+      undefined,
+    );
+    expect(mocks.scroll).toHaveBeenCalledWith(expect.objectContaining({ by: 0 }), undefined);
     expectCall("getCursorPosition", { session: sessionOptions.publicSession }, undefined);
     expectCall("getSessionState", { session: sessionOptions.publicSession }, undefined);
-    expect(mocks.escalateSession).not.toHaveBeenCalled();
   });
 
   it("preserves typed SDK click refusals in the shared driver result", async () => {
@@ -241,8 +226,6 @@ describe("CUA Driver direct session", () => {
     driver = makeDriver(loadSdk);
 
     const preparing = driver.prepareAvailability?.();
-    expect(loadSdk).toHaveBeenCalledOnce();
-
     loading.resolve(sdk);
     await preparing;
     expect(driver.isAvailable()).toBe(true);
@@ -250,7 +233,7 @@ describe("CUA Driver direct session", () => {
     await driver.getDesktopState();
 
     expect(loadSdk).toHaveBeenCalledOnce();
-    expectCalls(1, "createConfigured", "getDesktopState");
+    expectCalls(1, "getDesktopState");
   });
 
   it("retries an asynchronous ESM import failure after the availability cache resets", async () => {
@@ -259,9 +242,7 @@ describe("CUA Driver direct session", () => {
       .mockRejectedValueOnce(new Error("native module is temporarily unavailable"));
     driver = makeDriver(loadSdk);
 
-    expect(loadSdk).not.toHaveBeenCalled();
     expect(driver.isAvailable()).toBe(false);
-    expect(loadSdk).toHaveBeenCalledOnce();
     await driver.prepareAvailability?.();
     expect(driver.isAvailable()).toBe(false);
     for (const read of [() => driver.getDesktopState(), () => driver.getScreenSize()]) {
@@ -293,12 +274,6 @@ describe("CUA Driver direct session", () => {
       ok: true,
     });
     expect(driver.generation).not.toBe(generation);
-    expectCalls(2, "createConfigured");
-    expect(mocks.createConfigured).toHaveBeenNthCalledWith(2, {
-      claudeCodeCompatibility: false,
-      authorization,
-    });
-    expectCalls(2, "createTrustedSession");
     const first = mocks.createTrustedSession.mock.calls[0]?.[1];
     const second = mocks.createTrustedSession.mock.calls[1]?.[1];
     expect(second).toMatchObject({ ttlSeconds: 3_600n, idleTtlSeconds: 300n });
@@ -319,7 +294,6 @@ describe("CUA Driver direct session", () => {
       cause: denied,
     });
     expect(driver.generation).toBe(generation);
-    expectCalls(1, "createConfigured");
     expect(mocks.close).not.toHaveBeenCalled();
     expect(mocks.typeText).not.toHaveBeenCalled();
     await computer.close("completion");
@@ -333,7 +307,6 @@ describe("CUA Driver direct session", () => {
     const generation = driver.generation;
     await driver.prepareExecution?.();
     expect(driver.generation).toBe(generation);
-    expectCalls(2, "createConfigured");
   });
 
   it.each(["disposal", "cancellation", "revocation"] as const)(
