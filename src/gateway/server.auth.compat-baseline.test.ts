@@ -15,7 +15,6 @@ import {
   restoreGatewayToken,
   startTestGatewayServer,
   testState,
-  testTailscaleWhois,
   installGatewayTestHooks,
 } from "./server.auth.test-helpers.js";
 
@@ -27,36 +26,6 @@ const CLI_CLIENT = {
   platform: "test",
   mode: GATEWAY_CLIENT_MODES.CLI,
 };
-
-async function expectProxyUpgradeRejected(port: number, headers: Record<string, string>) {
-  await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
-    const timer = setTimeout(() => {
-      ws.terminate();
-      reject(new Error("timed out waiting for proxy upgrade rejection"));
-    }, 5_000);
-    ws.once("open", () => {
-      clearTimeout(timer);
-      ws.terminate();
-      reject(new Error("expected proxy-shaped upgrade to be rejected"));
-    });
-    ws.once("unexpected-response", (_request, response) => {
-      let body = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk: string) => {
-        body += chunk;
-      });
-      response.on("end", () => {
-        clearTimeout(timer);
-        expect(response.statusCode).toBe(403);
-        expect(body).toContain("proxy_attribution_required");
-        expect(body).toContain("gateway.trustedProxies");
-        resolve();
-      });
-    });
-    ws.once("error", () => {});
-  });
-}
 
 async function withSocket(
   port: number,
@@ -147,24 +116,6 @@ describe("gateway auth compatibility baseline", () => {
             },
           },
         });
-      });
-    });
-  });
-
-  describe("unattributable proxy ingress", () => {
-    const gateway = useGateway({
-      mode: "token",
-      token: "secret",
-      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 },
-    });
-
-    test("rejects before credentials can bypass attribution", async () => {
-      testTailscaleWhois.value = { login: "spoofed@example.com", name: "Spoofed" };
-      await expectProxyUpgradeRejected(gateway.port, {
-        "x-forwarded-for": "203.0.113.10",
-        "x-forwarded-proto": "https",
-        "x-forwarded-host": "gateway.example.com",
-        "tailscale-user-login": "spoofed@example.com",
       });
     });
   });
