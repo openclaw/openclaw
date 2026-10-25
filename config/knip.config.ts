@@ -1102,6 +1102,10 @@ const config = {
     // PR2a admits physical facts now; PR2b routes state maintenance to these capabilities.
     // The full-tree test-aware scan still audits their boundary-test consumers.
     "src/infra/database-engine/physical-facts.ts": ["exports"],
+    // Focused config-migration and exec-approval tests exercise these semantic owners directly;
+    // the full-tree scan still audits both consumer contracts.
+    "src/commands/doctor/shared/context-engine-plugin-id-selector.ts": ["exports"],
+    "src/gateway/worker-environments/worker-exec-approval.ts": ["exports"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
     // Native-command tests exercise requester authorization and cancellation at this runtime gate.
