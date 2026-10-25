@@ -168,8 +168,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
   });
 
   it("supports allowMissing for short ids", () => {
-    setStore({});
-
     expect(resolve({ shortId: "deadbeef", allowMissing: true })).toEqual({
       ok: true,
       missing: true,
@@ -224,30 +222,23 @@ describe("resolveSessionKeyFromResolveParams", () => {
   it("bounds named-reference ambiguity after excluding deleted agents and non-UUID titles", () => {
     const store = candidates(() => ({ displayName: "Shared dashboard", boardFace: "dashboard" }));
     const keys = Object.keys(store);
+    const display = { displayName: "Shared dashboard", boardFace: "dashboard" as const };
     store["agent:deleted:thread:12345678-ffff-4000-8000-000000000000"] = session(
       "deleted-dashboard",
-      {
-        updatedAt: 200,
-        displayName: "Shared dashboard",
-        boardFace: "dashboard",
-      },
+      { ...display, updatedAt: 200 },
     );
     store["agent:main:literal"] = session("literal-dashboard", {
+      ...display,
       updatedAt: 300,
-      displayName: "Shared dashboard",
-      boardFace: "dashboard",
     });
     setStore(store, Object.fromEntries(Object.keys(store).map((key) => [key, "main"])));
     expect(resolve({ reference: { key: "agent:main:missing", slug: "shared-dashboard" } })).toEqual(
       {
         ok: true,
         ambiguous: true,
-        candidates: keys.slice(0, 10).map((key) => ({
-          key,
-          agentId: "main",
-          displayName: "Shared dashboard",
-          boardFace: "dashboard",
-        })),
+        candidates: keys
+          .slice(0, 10)
+          .map((key) => Object.assign({ key, agentId: "main" }, display)),
       },
     );
   });

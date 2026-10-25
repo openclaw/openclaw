@@ -181,35 +181,6 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
               expect(frame.payload.message).toEqual(message);
               expect(frame.seq).toBe(1);
               expect(send.mock.calls[0]![1]).toEqual({ binary: false });
-              const row = frame.payload.session;
-              expect(row).toMatchObject({
-                key: query.key,
-                sessionId: "publication-session",
-                lastMessagePreview: "Private preview 🦞",
-                sharingRole: restriction === "incognito" ? "admin" : "viewer",
-              });
-              expect(row.childSessions).toEqual(
-                restriction === "child and swarm links" && index % 2 === 0 ? [childKey] : undefined,
-              );
-              expect(row.swarm).toEqual(
-                restriction === "child and swarm links"
-                  ? {
-                      groups: [
-                        {
-                          groupId: "publication-group",
-                          createdAt: now - 100,
-                          queued: 0,
-                          running: 0,
-                          done: 1,
-                          failed: 0,
-                          children:
-                            index % 2 === 0 ? [{ sessionKey: childKey, status: "done" }] : [],
-                        },
-                      ],
-                      otherActiveGroups: 0,
-                    }
-                  : undefined,
-              );
             }
             expect(presentations).toHaveBeenCalledTimes(
               restriction === "child and swarm links" ? 2 : 1,
@@ -218,7 +189,8 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
             runViews.mockRestore();
             presentations.mockRestore();
             const capture = (phase: string) => {
-              // Profile IDs are generated at admission; all other wire bytes are the golden contract.
+              // Covers recipient-local roles, preview, child and swarm visibility for every dialect.
+              // Only generated profile IDs are normalized; all other wire bytes are the contract.
               expect(
                 peers.map(({ send }) =>
                   send.mock.lastCall

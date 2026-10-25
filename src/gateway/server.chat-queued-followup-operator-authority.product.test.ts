@@ -1,9 +1,7 @@
 // Load real Gateway/model owners before the fixture deadline.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import assert from "node:assert/strict";
 import { randomUUID, X509Certificate } from "node:crypto";
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
@@ -21,7 +19,11 @@ import { defaultRuntime } from "../runtime.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
+import {
+  closeProvider,
+  listenProvider,
+  writeToolCall,
+} from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
@@ -105,11 +107,9 @@ it(
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
-      await once(server.listen(0, "127.0.0.1"), "listening");
-      const address = server.address();
-      assert(address && typeof address !== "string");
-      providerUrl = `http://127.0.0.1:${address.port}`;
-      const model = buildMockOpenAiResponsesProvider(`${providerUrl}/v1`, "queued-authority");
+      const baseUrl = await listenProvider(server);
+      providerUrl = baseUrl.replace(/\/v1$/, "");
+      const model = buildMockOpenAiResponsesProvider(baseUrl, "queued-authority");
       const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
       const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
       const scopes: OperatorScope[] = ["operator.read", "operator.write"];
@@ -251,10 +251,7 @@ it(
         await disconnectGatewayClient(gateway.client);
       }
       await gateway?.server.close({ reason: "queued operator authority test complete" });
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeProvider(server);
       observeQueue.mockRestore();
       logError.mockRestore();
       await state.cleanup();
