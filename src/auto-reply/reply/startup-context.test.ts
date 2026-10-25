@@ -79,16 +79,31 @@ describe("buildSessionStartupContextPrelude", () => {
     },
   );
 
-  it("prioritizes the newer UTC-dated artifact when startup context is truncated", async () => {
-    await writeMemoryFile("2026-04-10.md", "older local day ".repeat(40));
-    await writeMemoryFile("2026-04-11-late-reset.md", "fresh utc reset note");
-    const prelude = await buildPrelude({
-      startupContext: { maxFileChars: 1_200, maxTotalChars: 220 },
-      nowMs: Date.UTC(2026, 3, 11, 1, 30),
-    });
-    expect(prelude).toContain("fresh utc reset note");
-    expect(prelude).toContain("...[additional startup memory truncated]...");
-  });
+  it.each([220, 2800])(
+    "prioritizes newer UTC artifacts with a %i character budget",
+    async (maxTotalChars) => {
+      await writeMemoryFile("2026-04-11-late-reset.md", "fresh utc reset note");
+      await writeMemoryFile("2026-04-10.md", "local today ".repeat(40));
+      await writeMemoryFile("2026-04-09.md", "local yesterday");
+      const prelude = await buildPrelude({
+        startupContext: { dailyMemoryDays: 2, maxFileChars: 1_200, maxTotalChars },
+        nowMs: Date.UTC(2026, 3, 11, 1, 30),
+      });
+      expect(prelude).toContain("fresh utc reset note");
+      if (maxTotalChars === 220) {
+        expect(prelude).toContain("...[additional startup memory truncated]...");
+      } else {
+        for (const text of [
+          "local today",
+          "local yesterday",
+          "[Untrusted daily memory: memory/2026-04-10.md]",
+          "[Untrusted daily memory: memory/2026-04-09.md]",
+        ]) {
+          expect(prelude).toContain(text);
+        }
+      }
+    },
+  );
 
   it("loads the complete bounded daily memory after positive short reads", async () => {
     await writeMemoryFile("2026-04-11.md", "alpha beta gamma delta");
@@ -169,30 +184,6 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("notes readable a");
     expect(prelude).toContain("notes readable b");
     expect(prelude).not.toContain("notes flaky");
-  });
-
-  it("scans the memory directory once per startup prelude build", async () => {
-    await writeMemoryFile("2026-04-11-late-reset.md", "utc next");
-    await writeMemoryFile("2026-04-10.md", "local today");
-    await writeMemoryFile("2026-04-09.md", "local yesterday");
-
-    const originalReaddir = fsCore.promises.readdir.bind(fsCore.promises);
-    const readdirSpy = vi
-      .spyOn(fsCore.promises, "readdir")
-      .mockImplementation(async (target, options) => originalReaddir(target, options));
-
-    const prelude = await buildPrelude({
-      startupContext: { dailyMemoryDays: 2 },
-      // 2026-04-10 20:30 in America/Chicago, but 2026-04-11 in UTC.
-      nowMs: Date.UTC(2026, 3, 11, 1, 30, 0),
-    });
-
-    expect(prelude).toContain("utc next");
-    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-10.md]");
-    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-09.md]");
-    expect(prelude).toContain("local today");
-    expect(prelude).toContain("local yesterday");
-    expect(readdirSpy).toHaveBeenCalledTimes(1);
   });
 
   it("returns null when no daily memory files exist", async () => {

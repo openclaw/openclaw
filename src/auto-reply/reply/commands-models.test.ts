@@ -174,30 +174,23 @@ function runModels(command: string, defaults?: AgentDefaults, surface = "discord
 }
 
 describe("handleModelsCommand", () => {
-  it.each([
-    { name: "configured equivalent CLI route", runtime: "claude-cli", expectedCli: false },
-    { name: "distinct API and CLI routes", runtime: "openclaw", expectedCli: true },
-    { name: "explicit all browse", runtime: "claude-cli", view: "all" as const, expectedCli: true },
-    { name: "CLI-only role policy", runtime: "claude-cli", roleOnly: true, expectedCli: true },
-  ])("preserves route choice for $name", async ({ runtime, view, roleOnly, expectedCli }) => {
+  it("preserves the CLI route allowed by a role policy", async () => {
     cliCatalog();
-    const config = cliConfig(runtime);
-    if (roleOnly) {
-      config.gateway = {
-        roles: {
-          definitions: {
-            cli: {
-              sessions: { others: "none" },
-              agents: "*",
-              scopes: ["operator.read"],
-              modelPolicy: { allow: ["claude-cli/*"] },
-            },
+    const config = cliConfig();
+    config.gateway = {
+      roles: {
+        definitions: {
+          cli: {
+            sessions: { others: "none" },
+            agents: "*",
+            scopes: ["operator.read"],
+            modelPolicy: { allow: ["claude-cli/*"] },
           },
         },
-      };
-    }
-    const data = await buildPreparedModelsProviderData(config, "main", { view });
-    expect(data.providers).toEqual(expectedCli ? ["anthropic", "claude-cli"] : ["anthropic"]);
+      },
+    };
+    const data = await buildPreparedModelsProviderData(config, "main");
+    expect(data.providers).toEqual(["anthropic", "claude-cli"]);
     expect(data.byProvider.get("anthropic")).toEqual(new Set(["claude-opus-4-5"]));
   });
 

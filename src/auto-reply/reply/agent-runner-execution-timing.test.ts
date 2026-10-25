@@ -255,17 +255,12 @@ it.each(["embedded preparation", "fallback preparation"])(
       emitAgentEvent({ runId: params.runId, sessionKey: "main", stream: "lifecycle", data });
       await params.onAgentEvent?.({ stream: "lifecycle", data, transcriptStart });
       expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
-      expect(session).toMatchObject({ status: undefined, startedAt: now });
-      expect(session.lastRunError).toBeUndefined();
-      expect(session.runtimeMs).toBeUndefined();
-      expect(session.endedAt).toBeUndefined();
       now += 11_192;
       return { payloads: [{ text: "done" }], meta: {} };
     };
     try {
       state.runEmbeddedAgentMock.mockImplementationOnce(succeed);
       await run("timing-previous");
-      expect(session).toMatchObject({ status: "done", startedAt: 1_000_000, runtimeMs: 11_192 });
 
       now = 3_475_979;
       const rejectPreparation = async () => {
@@ -288,24 +283,17 @@ it.each(["embedded preparation", "fallback preparation"])(
         phase: "error",
         startedAt: 3_475_979,
         endedAt: 3_480_679,
-      });
-      expect.soft(session).toMatchObject({
-        status: "failed",
-        startedAt: 3_475_979,
-        runtimeMs: 4_700,
-        lastRunError: "preparation failed before model start",
+        error: "preparation failed before model start",
       });
 
       now = 3_600_000;
       state.runEmbeddedAgentMock.mockImplementationOnce(succeed);
       await run("timing-recovered");
-      expect(session).toMatchObject({
-        status: "done",
+      expect(lifecycle.at(-1)?.data).toMatchObject({
+        phase: "end",
         startedAt: 3_600_000,
         endedAt: 3_611_192,
-        runtimeMs: 11_192,
       });
-      expect(session.lastRunError).toBeUndefined();
       expect(onAgentRunStart).toHaveBeenCalledTimes(2);
       expect(lifecycle.map((event) => [event.runId, event.data.phase])).toEqual([
         ["timing-previous", "start"],

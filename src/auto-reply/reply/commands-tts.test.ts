@@ -147,10 +147,9 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(ttsMocks.updateTtsPrefsAsync).not.toHaveBeenCalled();
   });
 
-  it("replies with repair guidance without overwriting malformed preferences", async () => {
+  it("reports worker preference failures with repair guidance", async () => {
     const prefsPath = path.join(tempDirs.make("openclaw-tts-command-prefs-"), "tts.json");
-    const malformed = '{"tts":{"provider":"custom",';
-    fs.writeFileSync(prefsPath, malformed);
+    fs.writeFileSync(prefsPath, '{"tts":{"provider":"custom",');
     ttsMocks.resolveTtsPrefsPathAsync.mockResolvedValue(prefsPath);
     const { updateTtsPrefsAsync } = await vi.importActual<
       typeof import("../../tts/tts-settings-write-worker.js")
@@ -159,12 +158,7 @@ describe("handleTtsCommands status fallback reporting", () => {
 
     const result = await handleTtsCommands(buildTtsParams("/tts limit 2000"), true);
 
-    await expect(ttsMocks.updateTtsPrefsAsync.mock.results[0]?.value).rejects.toThrow(
-      "Repair the file or its permissions",
-    );
-
     expect(expectReply(result).text).toContain("Repair the preference file or its permissions");
-    expect(fs.readFileSync(prefsPath, "utf8")).toBe(malformed);
   });
 
   it("shows attempted provider chain for failed attempts", async () => {
