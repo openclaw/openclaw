@@ -8,7 +8,10 @@ import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
 } from "./client-credential-readiness.js";
-import { readClientCredentialFileIdentity } from "./client-credential-receipt.js";
+import {
+  readClientCredentialFileIdentity,
+  type ClientCredentialReceipt,
+} from "./client-credential-receipt.js";
 import {
   openClientCredentialCustody,
   runClientCredentialOperation,
@@ -67,10 +70,68 @@ function createAnchor(source: DatabaseSync) {
     .run(storeId, namespace);
 }
 
-function bind(source: DatabaseSync, f: ReturnType<typeof fixture>) {
-  runSqliteImmediateTransactionSync(source, () =>
-    bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env }),
+type Fixture = ReturnType<typeof fixture>;
+
+function bindNow(source: DatabaseSync, f: Fixture) {
+  bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
+}
+
+function bind(source: DatabaseSync, f: Fixture) {
+  runSqliteImmediateTransactionSync(source, () => bindNow(source, f));
+}
+
+function postgresFixture() {
+  const f = fixture();
+  using source = openNodeSqliteDatabase(f.sourcePath);
+  createAnchor(source);
+  bind(source, f);
+  return f;
+}
+
+function editReceipt(
+  f: Fixture,
+  edit: (receipt: NonNullable<ReturnType<typeof readClientCredentialReceipt>>["receipt"]) => void,
+  phase: "copied" | "complete" = "complete",
+) {
+  using owner = openClientCredentialCustody(f.env, { migration: true })!;
+  const stored = readClientCredentialReceipt(owner.database)!;
+  edit(stored.receipt);
+  owner.transaction(() => writeClientCredentialReceipt(owner.database, stored.receipt, phase));
+}
+
+function failAfterCommit(f: Fixture, prepare: (source: DatabaseSync) => void) {
+  const source = openNodeSqliteDatabase(f.sourcePath);
+  try {
+    expect(() =>
+      runSqliteImmediateTransactionSync(source, () => prepare(source), {
+        withCommit(commit) {
+          commit();
+          throw new Error("fixture owner failed after native commit");
+        },
+      }),
+    ).toThrow("fixture owner failed after native commit");
+    expect(source.isOpen).toBe(false);
+  } finally {
+    if (source.isOpen) {
+      source.close();
+    }
+  }
+}
+
+function readIdentity(f: Fixture) {
+  return runClientCredentialOperation(
+    f.env,
+    { kind: "identity.read", identity_key: "primary" },
+    { readOnly: true },
   );
+}
+
+function expectSentinel(source: DatabaseSync, value: number) {
+  expect(source.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({ value });
+}
+
+function expectNoTable(source: DatabaseSync, name: string) {
+  expect(source.prepare("SELECT 1 FROM sqlite_schema WHERE name = ?").get(name)).toBeUndefined();
 }
 
 function localSnapshot(env: NodeJS.ProcessEnv) {
@@ -91,6 +152,32 @@ function localSnapshot(env: NodeJS.ProcessEnv) {
   };
 }
 
+const emptyMaterial = { identities: [], tokens: [], origins: [], sockets: [] };
+
+function expectBinding(
+  f: Fixture,
+  source: Partial<NonNullable<ClientCredentialReceipt["source"]>>,
+  previous?: ReturnType<typeof localSnapshot>,
+  sharedFile = readClientCredentialFileIdentity(f.sourcePath),
+) {
+  expect(localSnapshot(f.env)).toMatchObject({
+    ...(previous && {
+      identities: previous.identities,
+      tokens: previous.tokens,
+      origins: previous.origins,
+      sockets: previous.sockets,
+    }),
+    receipt: {
+      phase: "complete",
+      receipt: {
+        source,
+        sharedFile,
+        ...(previous && { legacyImports: previous.receipt!.receipt.legacyImports }),
+      },
+    },
+  });
+}
+
 function createSqliteSource(source: DatabaseSync, createdAt: number) {
   source.exec("CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, created_at INTEGER)");
   source.prepare("INSERT INTO schema_meta VALUES ('primary', ?)").run(createdAt);
@@ -106,24 +193,18 @@ function sqliteFixture() {
   return f;
 }
 
-function expectSqliteRebindRefused(f: ReturnType<typeof fixture>) {
+function expectSqliteRebindRefused(f: Fixture) {
   const previous = localSnapshot(f.env);
   fs.renameSync(f.sourcePath, `${f.sourcePath}.previous`);
   using source = openNodeSqliteDatabase(f.sourcePath);
   createSqliteSource(source, 23);
   expect(() => bind(source, f)).toThrow(/previous shared database/);
   expect(localSnapshot(f.env)).toEqual(previous);
-  expect(source.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({ value: 23 });
+  expectSentinel(source, 23);
 }
 
-function expectCredentialsReadable(f: ReturnType<typeof fixture>) {
-  expect(
-    runClientCredentialOperation(
-      f.env,
-      { kind: "identity.read", identity_key: "primary" },
-      { readOnly: true },
-    ),
-  ).toEqual({ kind: "identity", identity: f.identity });
+function expectCredentialsReadable(f: Fixture) {
+  expect(readIdentity(f)).toEqual({ kind: "identity", identity: f.identity });
   expect(
     runClientCredentialOperation(f.env, { kind: "token.read", key: f.token }, { readOnly: true }),
   ).toEqual({ kind: "token", token: f.token });
@@ -135,37 +216,14 @@ describe("fresh PostgreSQL client credential binding", () => {
     using source = openNodeSqliteDatabase(f.sourcePath);
     runSqliteImmediateTransactionSync(source, () => {
       createAnchor(source);
-      bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
+      bindNow(source, f);
     });
-    expect(
-      source.prepare("SELECT name FROM sqlite_schema WHERE name = 'schema_meta'").get(),
-    ).toBeUndefined();
-    expect(localSnapshot(f.env).receipt).toMatchObject({
-      phase: "complete",
-      receipt: {
-        source: {
-          kind: "canonical",
-          engine: "postgres",
-          identity: storeId,
-          generation: `bootstrap:${storeId}`,
-        },
-        sharedFile: readClientCredentialFileIdentity(f.sourcePath),
-      },
-    });
-    expectCredentialsReadable(f);
-  });
-
-  it("allows the same bootstrap to bind again without replacing local keys or tokens", () => {
-    const f = fixture();
-    using source = openNodeSqliteDatabase(f.sourcePath);
-    createAnchor(source);
-    bind(source, f);
-    const previous = localSnapshot(f.env);
-    bind(source, f);
-    expect(localSnapshot(f.env)).toMatchObject({
-      receipt: previous.receipt,
-      identities: previous.identities,
-      tokens: previous.tokens,
+    expectNoTable(source, "schema_meta");
+    expectBinding(f, {
+      kind: "canonical",
+      engine: "postgres",
+      identity: storeId,
+      generation: `bootstrap:${storeId}`,
     });
     expectCredentialsReadable(f);
   });
@@ -173,29 +231,10 @@ describe("fresh PostgreSQL client credential binding", () => {
   it("resumes a copied receipt on the same committed anchor without replacing local credentials", () => {
     const f = fixture();
     const previous = localSnapshot(f.env);
-    const source = openNodeSqliteDatabase(f.sourcePath);
-    try {
-      expect(() =>
-        runSqliteImmediateTransactionSync(
-          source,
-          () => {
-            createAnchor(source);
-            bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
-          },
-          {
-            withCommit(commit) {
-              commit();
-              throw new Error("fixture anchor owner failed after native commit");
-            },
-          },
-        ),
-      ).toThrow("fixture anchor owner failed after native commit");
-      expect(source.isOpen).toBe(false);
-    } finally {
-      if (source.isOpen) {
-        source.close();
-      }
-    }
+    failAfterCommit(f, (source) => {
+      createAnchor(source);
+      bindNow(source, f);
+    });
     const pending = localSnapshot(f.env);
     expect(pending.receipt).toEqual({
       phase: "copied",
@@ -210,76 +249,63 @@ describe("fresh PostgreSQL client credential binding", () => {
     expect(anchor).toEqual([{ store_id: storeId, engine: "postgres", schema: namespace }]);
     bind(resumed, f);
     expect(resumed.prepare("SELECT * FROM openclaw_engine_anchor").all()).toEqual(anchor);
-    expect(localSnapshot(f.env)).toMatchObject({
-      receipt: {
-        phase: "complete",
-        receipt: {
-          source: { engine: "postgres", identity: storeId, generation: `bootstrap:${storeId}` },
-          sharedFile: pending.receipt!.receipt.sharedFile,
-          legacyImports: previous.receipt!.receipt.legacyImports,
-        },
-      },
-      identities: previous.identities,
-      tokens: previous.tokens,
-      origins: previous.origins,
-      sockets: previous.sockets,
-    });
-    expectCredentialsReadable(f);
-  });
-
-  it("restores the exact completed receipt and readable credentials after a binding rolls back", () => {
-    const f = fixture();
-    using source = openNodeSqliteDatabase(f.sourcePath);
-    createAnchor(source);
-    bind(source, f);
-    const previous = localSnapshot(f.env);
-    expect(() =>
-      runSqliteImmediateTransactionSync(source, () => {
-        bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
-        source.exec("CREATE TABLE rolled_back_binding (value TEXT)");
-        throw new Error("fixture binding rollback");
-      }),
-    ).toThrow("fixture binding rollback");
-    expect(source.isTransaction).toBe(false);
-    expect(
-      source.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'rolled_back_binding'").get(),
-    ).toBeUndefined();
-    expect(localSnapshot(f.env)).toEqual(previous);
-    expectCredentialsReadable(f);
-    bind(source, f);
-    expectCredentialsReadable(f);
-  });
-
-  it("restores local-only claims after the first anchor rolls back and preserves them on retry", () => {
-    const f = fixture();
-    const previous = localSnapshot(f.env);
-    using source = openNodeSqliteDatabase(f.sourcePath);
-    expect(() =>
-      runSqliteImmediateTransactionSync(source, () => {
-        createAnchor(source);
-        bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
-        throw new Error("fixture first anchor rollback");
-      }),
-    ).toThrow("fixture first anchor rollback");
-    expect(
-      source.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'openclaw_engine_anchor'").get(),
-    ).toBeUndefined();
-    expect(localSnapshot(f.env)).toEqual(previous);
-    runSqliteImmediateTransactionSync(source, () => {
-      createAnchor(source);
-      bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
-    });
-    expect(localSnapshot(f.env).receipt?.receipt.legacyImports).toEqual(
-      previous.receipt!.receipt.legacyImports,
+    expectBinding(
+      f,
+      { engine: "postgres", identity: storeId, generation: `bootstrap:${storeId}` },
+      previous,
+      pending.receipt!.receipt.sharedFile,
     );
     expectCredentialsReadable(f);
   });
 
+  it.each([false, true])(
+    "restores claims after rollback and retry (existing binding=%s)",
+    (bound) => {
+      const f = bound ? postgresFixture() : fixture();
+      using source = openNodeSqliteDatabase(f.sourcePath);
+      const previous = localSnapshot(f.env);
+      expect(() =>
+        runSqliteImmediateTransactionSync(source, () => {
+          if (!bound) {
+            createAnchor(source);
+          }
+          bindNow(source, f);
+          source.exec("CREATE TABLE rolled_back_binding (value TEXT)");
+          throw new Error("fixture binding rollback");
+        }),
+      ).toThrow("fixture binding rollback");
+      expect(source.isTransaction).toBe(false);
+      expectNoTable(source, "rolled_back_binding");
+      if (!bound) {
+        expectNoTable(source, "openclaw_engine_anchor");
+      }
+      expect(localSnapshot(f.env)).toEqual(previous);
+      expectCredentialsReadable(f);
+      runSqliteImmediateTransactionSync(source, () => {
+        if (!bound) {
+          createAnchor(source);
+        }
+        bindNow(source, f);
+      });
+      if (bound) {
+        expect(localSnapshot(f.env)).toMatchObject({
+          receipt: previous.receipt,
+          identities: previous.identities,
+          tokens: previous.tokens,
+          origins: previous.origins,
+          sockets: previous.sockets,
+        });
+      }
+      expect(localSnapshot(f.env).receipt?.receipt.legacyImports).toEqual(
+        previous.receipt!.receipt.legacyImports,
+      );
+      expectCredentialsReadable(f);
+    },
+  );
+
   it("refuses a different durable store identity without changing local credentials or receipts", () => {
-    const f = fixture();
+    const f = postgresFixture();
     using source = openNodeSqliteDatabase(f.sourcePath);
-    createAnchor(source);
-    bind(source, f);
     const previous = localSnapshot(f.env);
     source.prepare("UPDATE openclaw_engine_anchor SET store_id = ?").run("another-store");
     expect(() => bind(source, f)).toThrow(/previous shared database/);
@@ -287,12 +313,7 @@ describe("fresh PostgreSQL client credential binding", () => {
   });
 
   it("refuses a replaced anchor file even when its durable store identity matches", () => {
-    const f = fixture();
-    {
-      using source = openNodeSqliteDatabase(f.sourcePath);
-      createAnchor(source);
-      bind(source, f);
-    }
+    const f = postgresFixture();
     const previous = localSnapshot(f.env);
     fs.renameSync(f.sourcePath, `${f.sourcePath}.previous`);
     using replacement = openNodeSqliteDatabase(f.sourcePath);
@@ -305,19 +326,12 @@ describe("fresh PostgreSQL client credential binding", () => {
   });
 
   it("refuses historical canonical migration provenance when the remote store looks fresh", () => {
-    const f = fixture();
+    const f = postgresFixture();
     using source = openNodeSqliteDatabase(f.sourcePath);
-    createAnchor(source);
-    bind(source, f);
-    {
-      using owner = openClientCredentialCustody(f.env, { migration: true })!;
-      const stored = readClientCredentialReceipt(owner.database)!;
-      stored.receipt.source!.generation = "7".repeat(64);
-      stored.receipt.source!.sha256 = "8".repeat(64);
-      owner.transaction(() =>
-        writeClientCredentialReceipt(owner.database, stored.receipt, "complete"),
-      );
-    }
+    editReceipt(f, (receipt) => {
+      receipt.source!.generation = "7".repeat(64);
+      receipt.source!.sha256 = "8".repeat(64);
+    });
     const previous = localSnapshot(f.env);
     expect(() => bind(source, f)).toThrow(/previous shared database/);
     expect(localSnapshot(f.env)).toEqual(previous);
@@ -371,26 +385,18 @@ describe("fresh SQLite client credential binding", () => {
       using source = openNodeSqliteDatabase(f.sourcePath);
       expect(() =>
         runSqliteImmediateTransactionSync(source, () => {
-          bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
+          bindNow(source, f);
           createSqliteSource(source, 23);
           throw new Error("fixture rebind rollback");
         }),
       ).toThrow("fixture rebind rollback");
       expect(source.isTransaction).toBe(false);
-      expect(
-        source.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'bootstrap_sentinel'").get(),
-      ).toBeUndefined();
+      expectNoTable(source, "bootstrap_sentinel");
       expect(localSnapshot(f.env)).toEqual(previous);
     }
     fs.renameSync(f.sourcePath, replacementPath);
     fs.renameSync(previousPath, f.sourcePath);
-    expect(
-      runClientCredentialOperation(
-        f.env,
-        { kind: "identity.read", identity_key: "primary" },
-        { readOnly: true },
-      ),
-    ).toEqual({ kind: "identity", identity: null });
+    expect(readIdentity(f)).toEqual({ kind: "identity", identity: null });
     // Restore the same replacement generation for retry after proving rollback readability.
     expect(localSnapshot(f.env)).toEqual(previous);
     fs.renameSync(f.sourcePath, previousPath);
@@ -398,21 +404,15 @@ describe("fresh SQLite client credential binding", () => {
     using retried = openNodeSqliteDatabase(f.sourcePath);
     runSqliteImmediateTransactionSync(retried, () => {
       createSqliteSource(retried, 23);
-      bindFreshClientCredentialStore(retried, { path: f.sourcePath, env: f.env });
+      bindNow(retried, f);
     });
-    expect(localSnapshot(f.env).receipt).toMatchObject({
-      phase: "complete",
-      receipt: {
-        source: { identity: `${fs.realpathSync(f.sourcePath)}:23` },
-        sharedFile: readClientCredentialFileIdentity(f.sourcePath),
-      },
-    });
-    expect(retried.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({ value: 23 });
+    expectBinding(f, { identity: `${fs.realpathSync(f.sourcePath)}:23` });
+    expectSentinel(retried, 23);
     expect(
       runClientCredentialOperation(f.env, { kind: "socket.read" }, { readOnly: true }),
     ).toEqual({ kind: "socket", socket: null });
     using first = openNodeSqliteDatabase(previousPath);
-    expect(first.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({ value: 17 });
+    expectSentinel(first, 17);
   });
 
   it("restores receipt absence after first-use rollback and permits a fresh retry", () => {
@@ -420,7 +420,7 @@ describe("fresh SQLite client credential binding", () => {
     using source = openNodeSqliteDatabase(f.sourcePath);
     expect(() =>
       runSqliteImmediateTransactionSync(source, () => {
-        bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
+        bindNow(source, f);
         createSqliteSource(source, 17);
         throw new Error("fixture first-use rollback");
       }),
@@ -428,26 +428,15 @@ describe("fresh SQLite client credential binding", () => {
     expect(localSnapshot(f.env)).toEqual({
       receipt: null,
       rawReceipt: [],
-      identities: [],
-      tokens: [],
-      origins: [],
-      sockets: [],
+      ...emptyMaterial,
     });
-    expect(
-      source.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'bootstrap_sentinel'").get(),
-    ).toBeUndefined();
+    expectNoTable(source, "bootstrap_sentinel");
     runSqliteImmediateTransactionSync(source, () => {
       createSqliteSource(source, 17);
-      bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
+      bindNow(source, f);
     });
     expect(localSnapshot(f.env).receipt?.phase).toBe("complete");
-    expect(
-      runClientCredentialOperation(
-        f.env,
-        { kind: "identity.read", identity_key: "primary" },
-        { readOnly: true },
-      ),
-    ).toEqual({ kind: "identity", identity: null });
+    expect(readIdentity(f)).toEqual({ kind: "identity", identity: null });
   });
 
   it.each([false, true])(
@@ -461,9 +450,9 @@ describe("fresh SQLite client credential binding", () => {
         source.exec("BEGIN IMMEDIATE");
       }
       try {
-        expect(() =>
-          bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env }),
-        ).toThrow("Client credential bootstrap has no source commit lifecycle");
+        expect(() => bindNow(source, f)).toThrow(
+          "Client credential bootstrap has no source commit lifecycle",
+        );
       } finally {
         if (source.isTransaction) {
           source.exec("ROLLBACK");
@@ -477,29 +466,10 @@ describe("fresh SQLite client credential binding", () => {
     const f = sqliteFixture();
     const previous = localSnapshot(f.env);
     fs.renameSync(f.sourcePath, `${f.sourcePath}.previous`);
-    const source = openNodeSqliteDatabase(f.sourcePath);
-    try {
-      expect(() =>
-        runSqliteImmediateTransactionSync(
-          source,
-          () => {
-            bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
-            createSqliteSource(source, 23);
-          },
-          {
-            withCommit(commit) {
-              commit();
-              throw new Error("fixture owner failed after native commit");
-            },
-          },
-        ),
-      ).toThrow("fixture owner failed after native commit");
-      expect(source.isOpen).toBe(false);
-    } finally {
-      if (source.isOpen) {
-        source.close();
-      }
-    }
+    failAfterCommit(f, (source) => {
+      bindNow(source, f);
+      createSqliteSource(source, 23);
+    });
     const pending = localSnapshot(f.env);
     expect(pending.rawReceipt).not.toEqual(previous.rawReceipt);
     expect(pending.receipt).toEqual({
@@ -511,25 +481,17 @@ describe("fresh SQLite client credential binding", () => {
         legacyImports: {},
       },
     });
-    expect(() =>
-      runClientCredentialOperation(
-        f.env,
-        { kind: "identity.read", identity_key: "primary" },
-        { readOnly: true },
-      ),
-    ).toThrow("migration is incomplete or stale");
+    expect(() => readIdentity(f)).toThrow("migration is incomplete or stale");
     const committedPath = `${f.sourcePath}.committed`;
     fs.renameSync(f.sourcePath, committedPath);
     using committed = openNodeSqliteDatabase(committedPath);
-    expect(committed.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({ value: 23 });
+    expectSentinel(committed, 23);
     using replacement = openNodeSqliteDatabase(f.sourcePath);
     createSqliteSource(replacement, 31);
     expect(() => bind(replacement, f)).toThrow(/previous shared database/);
     expect(localSnapshot(f.env)).toEqual(pending);
-    expect(committed.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({ value: 23 });
-    expect(replacement.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({
-      value: 31,
-    });
+    expectSentinel(committed, 23);
+    expectSentinel(replacement, 31);
   });
 
   it.each(["sqlite", "postgres"] as const)(
@@ -555,14 +517,9 @@ describe("fresh SQLite client credential binding", () => {
         createSqliteSource(first, 17);
         bind(first, f);
       }
-      {
-        using owner = openClientCredentialCustody(f.env, { migration: true })!;
-        const stored = readClientCredentialReceipt(owner.database)!;
-        stored.receipt.source = null;
-        owner.transaction(() =>
-          writeClientCredentialReceipt(owner.database, stored.receipt, "complete"),
-        );
-      }
+      editReceipt(f, (receipt) => {
+        receipt.source = null;
+      });
       const previous = localSnapshot(f.env);
       expect(previous.receipt?.receipt.source).toBeNull();
       expect(previous.receipt?.receipt.legacyImports).toHaveProperty("identity:primary", {
@@ -587,25 +544,17 @@ describe("fresh SQLite client credential binding", () => {
       fs.renameSync(f.sourcePath, `${f.sourcePath}.refused`);
       fs.renameSync(previousPath, f.sourcePath);
       using first = openNodeSqliteDatabase(f.sourcePath);
-      expect(first.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({ value: 17 });
+      expectSentinel(first, 17);
       expectCredentialsReadable(f);
 
       // The historical same-file bootstrap remains eligible for provenance enrichment.
       bind(first, f);
-      expect(localSnapshot(f.env)).toMatchObject({
-        receipt: {
-          phase: "complete",
-          receipt: {
-            source: { engine: "sqlite", identity: `${fs.realpathSync(f.sourcePath)}:17` },
-            sharedFile: previous.receipt!.receipt.sharedFile,
-            legacyImports: previous.receipt!.receipt.legacyImports,
-          },
-        },
-        identities: previous.identities,
-        tokens: previous.tokens,
-        origins: previous.origins,
-        sockets: previous.sockets,
-      });
+      expectBinding(
+        f,
+        { engine: "sqlite", identity: `${fs.realpathSync(f.sourcePath)}:17` },
+        previous,
+        previous.receipt!.receipt.sharedFile,
+      );
       expectCredentialsReadable(f);
     },
   );
@@ -616,10 +565,7 @@ describe("fresh SQLite client credential binding", () => {
     expect(previous.receipt?.receipt.legacyImports).toEqual({});
     expect(previous).toMatchObject({
       receipt: { phase: "complete" },
-      identities: [],
-      tokens: [],
-      origins: [],
-      sockets: [],
+      ...emptyMaterial,
     });
     const previousPath = `${f.sourcePath}.previous`;
     fs.renameSync(f.sourcePath, previousPath);
@@ -628,30 +574,22 @@ describe("fresh SQLite client credential binding", () => {
     bind(source, f);
     const nextSnapshot = localSnapshot(f.env);
     expect(nextSnapshot.receipt?.receipt.legacyImports).toEqual({});
-    expect(nextSnapshot).toMatchObject({
-      receipt: {
-        phase: "complete",
-        receipt: {
-          source: {
-            kind: "canonical",
-            engine: "sqlite",
-            identity: `${fs.realpathSync(f.sourcePath)}:23`,
-            generation: "bootstrap:23",
-          },
-          sharedFile: readClientCredentialFileIdentity(f.sourcePath),
-        },
+    expectBinding(
+      f,
+      {
+        kind: "canonical",
+        engine: "sqlite",
+        identity: `${fs.realpathSync(f.sourcePath)}:23`,
+        generation: "bootstrap:23",
       },
-      identities: [],
-      tokens: [],
-      origins: [],
-      sockets: [],
-    });
+      previous,
+    );
     expect(
       runClientCredentialOperation(f.env, { kind: "socket.read" }, { readOnly: true }),
     ).toEqual({ kind: "socket", socket: null });
     using first = openNodeSqliteDatabase(previousPath);
-    expect(first.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({ value: 17 });
-    expect(source.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({ value: 23 });
+    expectSentinel(first, 17);
+    expectSentinel(source, 23);
   });
 
   it.each(["identities", "tokens", "origins", "sockets"] as const)(
@@ -692,14 +630,9 @@ describe("fresh SQLite client credential binding", () => {
     { key: "auth:node", sha256: "7".repeat(64) },
   ] as const)("preserves consumed $key with digest $sha256", ({ key, sha256 }) => {
     const f = sqliteFixture();
-    {
-      using owner = openClientCredentialCustody(f.env, { migration: true })!;
-      const stored = readClientCredentialReceipt(owner.database)!;
-      stored.receipt.legacyImports[key] = { sha256 };
-      owner.transaction(() =>
-        writeClientCredentialReceipt(owner.database, stored.receipt, "complete"),
-      );
-    }
+    editReceipt(f, (receipt) => {
+      receipt.legacyImports[key] = { sha256 };
+    });
     expectSqliteRebindRefused(f);
   });
 
@@ -714,35 +647,30 @@ describe("fresh SQLite client credential binding", () => {
     "nonempty digest",
   ] as const)("preserves %s provenance even without local material", (provenance) => {
     const f = sqliteFixture();
-    {
-      using owner = openClientCredentialCustody(f.env, { migration: true })!;
-      const stored = readClientCredentialReceipt(owner.database)!;
-      const source = stored.receipt.source!;
-      if (provenance === "migrated") {
-        source.generation = "7".repeat(64);
-      } else if (provenance === "independent" || provenance === "native") {
-        source.engine = "native-v0";
-        if (provenance === "independent") {
-          source.kind = "independent";
+    editReceipt(
+      f,
+      (receipt) => {
+        const source = receipt.source!;
+        if (provenance === "migrated") {
+          source.generation = "7".repeat(64);
+        } else if (provenance === "independent" || provenance === "native") {
+          source.engine = "native-v0";
+          if (provenance === "independent") {
+            source.kind = "independent";
+          }
+        } else if (provenance === "inconsistent identity") {
+          source.identity = `${receipt.sharedFile!.path}:another-generation`;
+        } else if (provenance === "missing shared binding") {
+          receipt.sharedFile = null;
+        } else if (provenance === "empty bootstrap generation") {
+          source.generation = "bootstrap:";
+          source.identity = `${receipt.sharedFile!.path}:`;
+        } else if (provenance === "nonempty digest") {
+          source.sha256 = "8".repeat(64);
         }
-      } else if (provenance === "inconsistent identity") {
-        source.identity = `${stored.receipt.sharedFile!.path}:another-generation`;
-      } else if (provenance === "missing shared binding") {
-        stored.receipt.sharedFile = null;
-      } else if (provenance === "empty bootstrap generation") {
-        source.generation = "bootstrap:";
-        source.identity = `${stored.receipt.sharedFile!.path}:`;
-      } else if (provenance === "nonempty digest") {
-        source.sha256 = "8".repeat(64);
-      }
-      owner.transaction(() =>
-        writeClientCredentialReceipt(
-          owner.database,
-          stored.receipt,
-          provenance === "copied" ? "copied" : "complete",
-        ),
-      );
-    }
+      },
+      provenance === "copied" ? "copied" : "complete",
+    );
     expectSqliteRebindRefused(f);
   });
 
