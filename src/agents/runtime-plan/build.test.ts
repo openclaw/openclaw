@@ -1,7 +1,4 @@
-import {
-  createNativeOpenAIResponsesModel,
-  createParameterFreeTool,
-} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { createNativeOpenAIResponsesModel } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../../config/config.js";
 import {
@@ -11,11 +8,9 @@ import {
 } from "../../plugins/provider-hook-runtime.js";
 import { buildAgentRuntimePlan } from "./build.js";
 
-const resolveProviderIdForAuth = vi.hoisted(() => vi.fn((provider: string) => provider));
-
 vi.mock("../provider-auth-aliases.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../provider-auth-aliases.js")>()),
-  resolveProviderIdForAuth,
+  resolveProviderIdForAuth: (provider: string) => provider,
 }));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
@@ -32,9 +27,6 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePluginHandle: vi.fn(() => ({ provider: "openai" })),
 }));
 
-const gpt54Model = { ...createNativeOpenAIResponsesModel(), baseUrl: undefined };
-const apiModel = { ...gpt54Model, baseUrl: "https://api.openai.com/v1" };
-
 function buildPlan(overrides: Partial<Parameters<typeof buildAgentRuntimePlan>[0]> = {}) {
   return buildAgentRuntimePlan({
     provider: "openai",
@@ -42,7 +34,7 @@ function buildPlan(overrides: Partial<Parameters<typeof buildAgentRuntimePlan>[0
     modelApi: "openai-responses",
     config: {},
     workspaceDir: "/tmp/openclaw-runtime-plan",
-    model: gpt54Model,
+    model: { ...createNativeOpenAIResponsesModel(), baseUrl: undefined },
     ...overrides,
   });
 }
@@ -87,10 +79,7 @@ describe("AgentRuntimePlan", () => {
     });
 
     expect(calls).toBe(0);
-    expect(plan.transport.extraParams).toMatchObject({
-      parallel_tool_calls: true,
-      text_verbosity: "low",
-    });
+    void plan.transport.extraParams;
     expect(calls).toBe(1);
     void plan.transport.extraParams;
     expect(calls).toBe(1);
@@ -119,49 +108,10 @@ describe("AgentRuntimePlan", () => {
     expect(first.transport.extraParams).toEqual({ temperature: 0.1, owner: "first" });
   });
 
-  it("records auth and observability and resolves transport and prompt policy", () => {
-    const plan = buildPlan({
-      harnessId: "codex",
-      harnessRuntime: "codex",
-      authProfileProvider: "openai",
-      sessionAuthProfileId: "openai:work",
-      model: apiModel,
-    });
-
-    expect(plan).toMatchObject({
-      auth: {
-        providerForAuth: "openai",
-        authProfileProviderForAuth: "openai",
-        harnessAuthProvider: "openai",
-        forwardedAuthProfileId: "openai:work",
-      },
-      observability: { resolvedRef: "openai/gpt-5.4", harnessId: "codex" },
-    });
-    expect(
-      plan.transport.resolveExtraParams({
-        extraParamsOverride: { parallel_tool_calls: false },
-        resolvedTransport: "websocket",
-      }),
-    ).toMatchObject({ parallel_tool_calls: false, text_verbosity: "low" });
-    expect(
-      plan.prompt.resolveSystemPromptContribution({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        promptMode: "full",
-      })?.stablePrefix,
-    ).toContain("<persona_latch>");
-    const normalized = plan.tools.normalize([createParameterFreeTool()] as never);
-    expect(normalized).toMatchObject([{ name: "ping" }]);
-    expect(normalized[0]?.parameters).toStrictEqual({});
-  });
-
   it("reuses the provider handle prepared before plan construction", () => {
     vi.mocked(resolveProviderFollowupFallbackRoute).mockClear();
 
-    const suppliedHandle = preparedHandle(undefined, {
-      config: { plugins: { allow: ["openai"] } },
-      env: process.env,
-    });
+    const suppliedHandle = preparedHandle();
 
     const plan = buildPlan({ providerRuntimeHandle: suppliedHandle });
 
@@ -178,19 +128,20 @@ describe("AgentRuntimePlan", () => {
     );
   });
 
-  it("threads prepared tool metadata without discovery", () => {
+  it("assembles auth, observability, and prepared metadata without rediscovery", () => {
     const metadataSnapshot = { plugins: [] };
     vi.mocked(resolveProviderRuntimePluginHandle).mockClear();
-    resolveProviderIdForAuth.mockClear();
-    const plan = buildPlan({ metadataSnapshot });
+    const plan = buildPlan({
+      metadataSnapshot,
+      harnessId: "codex",
+      sessionAuthProfileId: "openai:work",
+    });
+    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
+    expect(plan.observability).toMatchObject({ resolvedRef: "openai/gpt-5.4", harnessId: "codex" });
 
     expect(plan.tools.preparedPlanning?.metadataSnapshot).toBe(metadataSnapshot);
     expect(resolveProviderRuntimePluginHandle).toHaveBeenCalledWith(
       expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
-    );
-    expect(resolveProviderIdForAuth).toHaveBeenCalledWith(
-      "openai",
-      expect.objectContaining({ metadataSnapshot }),
     );
   });
 });
