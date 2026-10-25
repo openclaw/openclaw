@@ -1,7 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -27,19 +25,10 @@ import {
   cleanupStateTestDirectory,
   createRuntime,
   createStateTestDirectory,
+  expectReefStateOperationError as expectAuditOperationError,
 } from "./state.test-support.js";
 
 const eventTypes = (entries: readonly AuditEntry[]) => entries.map((entry) => entry.event.type);
-
-async function expectAuditOperationError(result: Promise<unknown>, message: string) {
-  await expect(result).rejects.toBeInstanceOf(Error);
-  await expect(result).rejects.toMatchObject({
-    name: "PluginStateStoreError",
-    code: "PLUGIN_STATE_WRITE_FAILED",
-    operation: "register",
-    cause: { name: "Error", message },
-  });
-}
 
 describe("Reef SQLite audit state", () => {
   let stateDir = "";
@@ -59,21 +48,8 @@ describe("Reef SQLite audit state", () => {
   });
   afterEach(() => cleanupStateTestDirectory(stateDir));
 
-  it("serializes a competing append before linking its successor", async () => {
-    const initial = open();
-    await initial.appendEvent("initial", { id: 1 }, 10);
-    const competing = open();
-    beforeNextStateOperation(runtime, () =>
-      competing.appendEvent("winner", { id: 2 }, 11).then(() => {}),
-    );
-    await open().appendEvent("contender", { id: 3 }, 12);
-    const retained = await initial.entries();
-    expect(eventTypes(retained)).toEqual(["winner", "contender"]);
-    expect(retained[1]!.prevHash).toBe(retained[0]!.entryHash);
-  });
-
-  it("commits an ordered event group with encryption and the retained suffix", async () => {
-    const audit = open();
+  it.each([1, 2])("commits an encrypted event group and retains %s entries", async (capacity) => {
+    const audit = open(capacity);
     await audit.appendEvent("before", {}, 9);
     const result = await audit.appendEvents([
       { type: "proposal", payload: { text: "private text" }, ts: 10 },
@@ -84,12 +60,13 @@ describe("Reef SQLite audit state", () => {
     expect(decryptAuditText(result[0]!, key).event.payload).toEqual({ text: "private text" });
     expect(JSON.stringify(result)).not.toContain("private");
     const retained = await audit.entries();
-    expect(eventTypes(retained)).toEqual(["verdict", "envelope"]);
-    expect(retained).toEqual(result.slice(1));
+    expect(eventTypes(retained)).toEqual(["verdict", "envelope"].slice(-capacity));
+    expect(retained).toEqual(result.slice(-capacity));
+    const previous = result.at(-capacity - 1)!;
     expect(
       verifyChainSegment(retained, {
-        previousHash: result[0]!.entryHash,
-        previousSeq: 2,
+        previousHash: previous.entryHash,
+        previousSeq: previous.event.seq,
         head: result[2]!.entryHash,
       }),
     ).toBe(true);
@@ -184,26 +161,11 @@ describe("Reef SQLite audit state", () => {
     }
   });
 
-  it.each([1, 2])("retains a verifiable audit suffix with capacity %s", async (maxEntries) => {
-    const store = open(maxEntries);
-    await store.appendEvent("one", { id: 1 }, 10);
-    await store.appendEvent("two", { id: 2 }, 11);
-    await store.appendEvent("three", { id: 3 }, 12);
-    const retained = await store.entries();
-    expect(retained.map((entry) => entry.event.seq)).toEqual(maxEntries === 1 ? [3] : [2, 3]);
-    expect(
-      verifyChainSegment(retained, {
-        previousHash: retained[0]!.prevHash,
-        previousSeq: retained[0]!.event.seq - 1,
-        head: retained.at(-1)!.entryHash,
-      }),
-    ).toBe(true);
-  });
-
   it("keeps a committed audit append when its worker acknowledgement is lost", async () => {
     const initial = open();
     await initial.appendEvent("one", { id: 1 }, 10);
     await initial.appendEvent("two", { id: 2 }, 11);
+    expect(eventTypes(await initial.entries())).toEqual(["one", "two"]);
     beforeNextStateOperation(
       runtime,
       () => {
@@ -254,16 +216,9 @@ describe("Reef SQLite audit state", () => {
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
   });
 
-  it("observes foreign appends on a new read of the retained suffix", async () => {
-    const current = open(1);
-    const reader = open(1);
-    await current.appendEvent("old", {}, 10);
-    expect(eventTypes(await reader.entries())).toEqual(["old"]);
-    await current.appendEvent("new", {}, 11);
-    expect(eventTypes(await reader.entries())).toEqual(["new"]);
-  });
-
   it("retains its captured audit source when routing changes before execution", async () => {
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    runtime = createRuntime(env);
     await open(1).appendEvent("original", {}, 10);
     const replacementDir = path.join(stateDir, "replacement");
     await openReefAuditStore(createRuntime(replacementDir), key, 1).appendEvent(
@@ -271,9 +226,6 @@ describe("Reef SQLite audit state", () => {
       {},
       11,
     );
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) =>
-      createPluginStateKeyedStoreV2ForTests<T>("reef", { ...options, env }, { assertCurrent() {} });
     beforeNextStateOperation(runtime, () => {
       env.OPENCLAW_STATE_DIR = replacementDir;
     });

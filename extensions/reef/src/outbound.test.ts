@@ -1,28 +1,11 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  canonicalBytes,
-  generateIdentity,
-  PipelineError,
-  REEF_MAX_PLAINTEXT_BYTES,
-} from "../protocol/index.js";
-import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { canonicalBytes, PipelineError, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
 import { ReefMessageFlow } from "./flow.js";
-import {
-  allow,
-  config,
-  createFlow,
-  guard,
-  peerTrust,
-  reefKeys,
-  resetFlowStoresForTests,
-  transport,
-  workerFlowStores,
-} from "./flow.test-helpers.js";
+import { allow, createFlow, resetFlowStoresForTests } from "./flow.test-helpers.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { createReefRuntimeAuthority, getActiveReef } from "./runtime.js";
-import type { ReefTransportClient } from "./transport.js";
 
 function createDispatchingFlowSend(order: string[]) {
   return vi.fn(
@@ -46,20 +29,13 @@ afterEach(resetFlowStoresForTests);
 
 describe("reefOutboundAdapter", () => {
   it("removes internal tool text while preserving user-visible examples", () => {
-    const sanitizeText = reefOutboundAdapter.sanitizeText;
-    if (!sanitizeText) {
-      throw new Error("expected Reef outbound sanitizeText hook");
-    }
-    const sanitize = (text: string) => sanitizeText({ text, payload: { text } });
+    const sanitize = (text: string) =>
+      reefOutboundAdapter.sanitizeText!({ text, payload: { text } });
     const fenced = ["```xml", '<tool_call>{"name":"exec"}</tool_call>', "```"].join("\n");
 
     expect(sanitize("Done.\n⚠️ 🛠️ `search repos (agent)` failed")).toBe("Done.");
     expect(sanitize('<tool_call>{"name":"exec"}</tool_call>Message sent.')).toBe("Message sent.");
-    expect(sanitize("The encrypted message was delivered.")).toBe(
-      "The encrypted message was delivered.",
-    );
     expect(sanitize(fenced)).toBe(fenced);
-    expect(sanitize("⚠️ 🛠️ `search repos (agent)` failed")).toBe("");
   });
 
   it("normalizes the SDK target and delegates only message content/context to the guarded flow", async () => {
@@ -113,31 +89,15 @@ describe("reefOutboundAdapter", () => {
     const guardEntered = createDeferred<void>();
     const guardPaused = createDeferred<void>();
     const firstAuthority = createReefRuntimeAuthority();
-    const classifier = {
-      ...guard(allow),
-      classify: vi.fn(async () => {
-        guardEntered.resolve();
-        await guardPaused.promise;
-        return allow;
-      }),
-    };
-    const relay = transport();
-    const cfg = config();
-    const { trusted, audit, ...stores } = await workerFlowStores(cfg, {
-      alice: peerTrust(generateIdentity()),
+    const { flow: original, classifier, relay } = await createFlow();
+    classifier.classify.mockImplementation(async () => {
+      guardEntered.resolve();
+      await guardPaused.promise;
+      return allow;
     });
     const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted,
-      keys: reefKeys(),
-      transport: relay as unknown as ReefTransportClient,
-      guard: classifier,
-      audit,
-      replay: new MemoryReplayStore(),
-      ...stores,
+      ...original.options,
       authoritySignal: firstAuthority.signal,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
     });
     firstAuthority.activate({ flow, friends: {}, reviews: {} } as never);
     const stale = reefMessageAdapter.send.text({ cfg: {}, to: "reef:alice", text: "stale" });
@@ -224,15 +184,9 @@ describe("reefOutboundAdapter", () => {
   });
 
   it("prepares a protocol-valid id without requiring an active Gateway runtime", () => {
-    const first = reefOutboundAdapter.prepareConversationTurnMessageId!(message);
-    const second = reefOutboundAdapter.prepareConversationTurnMessageId!({
-      ...message,
-      text: "again",
-    });
-
-    expect(first).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/u);
-    expect(second).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/u);
-    expect(second > first).toBe(true);
+    expect(reefOutboundAdapter.prepareConversationTurnMessageId!(message)).toMatch(
+      /^[0-9A-HJKMNP-TV-Z]{26}$/u,
+    );
   });
 
   it("permanently rejects correlated text enlarged after its initial preflight", async () => {

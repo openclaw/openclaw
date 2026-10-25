@@ -1,12 +1,12 @@
-import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
+import { text } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
-import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
 import {
   ReefInboxConnection,
   ReefProtocolCompatibilityError,
@@ -14,7 +14,7 @@ import {
   createReefWebSocket,
   isRetryableReefRelayFailure,
 } from "./transport.js";
-import { createClient, signing, ts } from "./transport.test-helpers.js";
+import { createClient, ts } from "./transport.test-helpers.js";
 import type { RelayFriend } from "./types.js";
 
 type EffectAuthority = ReturnType<
@@ -88,13 +88,9 @@ async function listen(server: http.Server | WebSocketServer) {
   });
   if (server instanceof http.Server) {
     server.on("connection", (socket) => peers.add(socket));
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-  } else {
-    await once(server, "listening");
+    return await listenOnLoopback(server);
   }
+  await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Reef test server did not bind a TCP port");
@@ -219,21 +215,6 @@ it("normalizes connection loss while reading a successful response body", async 
     cause,
   });
 });
-function verifyRelaySignature(signature: string, path: string): boolean {
-  const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
-  const publicKey = createPublicKey({
-    key: Buffer.concat([spkiPrefix, Buffer.from(fromBase64url(signing.publicKey))]),
-    format: "der",
-    type: "spki",
-  });
-  return verifySignature(
-    null,
-    canonicalBytes({ method: "GET", path, ts, bodySha256: sha256Hex(new Uint8Array()) }),
-    publicKey,
-    Buffer.from(fromBase64url(signature)),
-  );
-}
-
 it("signs the relay canonical REST path including its query and emits auth headers", async () => {
   const { client, fetcher } = recordingClient({ entries: [], cursor: 5 });
 
@@ -248,10 +229,9 @@ it("signs the relay canonical REST path including its query and emits auth heade
   expect(Object.fromEntries(headers)).toMatchObject({
     "x-reef-handle": "alice",
     "x-reef-ts": String(ts),
-    "x-reef-sig": expect.any(String),
+    "x-reef-sig":
+      "1Zx-WD8JygVzq8pdTWULPiEZyoLuoJ1zyokkDRGlPWu_6fAKxEfJHPZkCQaZ8DIS4LERDqeh2z6-qlw7BtcoDw",
   });
-
-  expect(verifyRelaySignature(headers.get("x-reef-sig")!, "/v1/mail?after=5")).toBe(true);
 });
 
 it("puts WebSocket auth in the query but signs the bare relay path", () => {
@@ -261,9 +241,8 @@ it("puts WebSocket auth in the query but signs the bare relay path", () => {
   expect(Object.fromEntries(url.searchParams)).toEqual({
     handle: "alice",
     ts: String(ts),
-    sig: expect.any(String),
+    sig: "teC4QkpLUCMghGA-PkBGBMZFPxNeERmNfGCivaxpYhL8q81v6ReHRKEq2ZVvOd-FG3d3BbMjk-FcvoKjW5kwAA",
   });
-  expect(verifyRelaySignature(url.searchParams.get("sig")!, "/v1/mail/ws")).toBe(true);
 });
 
 it("binds friendship responses to the exact listed peer key snapshot", async () => {
@@ -380,27 +359,21 @@ it("redacts setup tokens and bearer sessions from loopback relay errors", async 
   const receivedAuthorization: string[] = [];
   const receivedSignatures: string[] = [];
   const receivedTokens: string[] = [];
-  const server = http.createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => chunks.push(chunk));
-    request.on("end", () => {
-      const body = Buffer.concat(chunks).toString("utf8");
-      const authorization = request.headers.authorization ?? "";
-      receivedAuthorization.push(authorization);
-      const signature = String(request.headers["x-reef-sig"] ?? "");
-      if (signature) {
-        receivedSignatures.push(signature);
-      }
-      const token = body ? (JSON.parse(body) as { token?: string }).token : undefined;
-      if (token) {
-        receivedTokens.push(token);
-      }
-      const reflectedCredential = authorization || token || signature;
-      response.writeHead(401, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({ error: `${reflectedCredential} relay rejected`, marker: "safe" }),
-      );
-    });
+  const server = http.createServer(async (request, response) => {
+    const body = await text(request);
+    const authorization = request.headers.authorization ?? "";
+    receivedAuthorization.push(authorization);
+    const signature = String(request.headers["x-reef-sig"] ?? "");
+    if (signature) {
+      receivedSignatures.push(signature);
+    }
+    const token = body ? (JSON.parse(body) as { token?: string }).token : undefined;
+    if (token) {
+      receivedTokens.push(token);
+    }
+    const reflectedCredential = authorization || token || signature;
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: `${reflectedCredential} relay rejected` }));
   });
   const port = await listen(server);
   const client = createClient(fetch, () => ts, `http://127.0.0.1:${port}`);

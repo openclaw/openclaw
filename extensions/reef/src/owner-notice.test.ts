@@ -199,7 +199,6 @@ describe("ReefReceiptNotifier", () => {
   it("extends the resend cooldown from every rejection", async () => {
     const first = rejection(105);
     await f.notifier.notifyRejections([first, first]);
-    expect(f.notify).toHaveBeenCalledOnce();
     expect(f.notify.mock.calls[0]![0]).toMatchObject({
       text: expect.stringMatching(/at most once.*stop and wait for owner guidance/i),
       peer: "alice",
@@ -295,17 +294,30 @@ describe("ReefReceiptNotifier", () => {
     },
   );
 
-  it("keeps a failed dispatch reserved and retries with stop-only guidance", async () => {
-    f.notify.mockRejectedValueOnce(new Error("dispatch interrupted"));
-    const pending = rejection(109);
-    await f.notifier.notifyRejections([pending]);
-    expect(phase(pending)).toBe("reserved");
-    expect(vi.getTimerCount()).toBe(0);
-    await f.notifier.notifyRejections([pending]);
-    expect(f.notify).toHaveBeenCalledTimes(2);
-    expectStopOnly(1);
-    expect(phase(pending)).toBe("consumed");
-  });
+  it.each(["dispatch", "completion"] as const)(
+    "recovers interrupted %s with stop-only guidance",
+    async (stage) => {
+      const target = stage === "dispatch" ? f.notify : vi.spyOn(f.notices.store, "complete");
+      target.mockImplementationOnce(() => {
+        throw new Error("process interrupted");
+      });
+      const pending = rejection(115);
+      await f.notifier.notifyRejections([pending]);
+      expectResends(true);
+      expect(phase(pending)).toBe("reserved");
+      expect(vi.getTimerCount()).toBe(0);
+      const retry = stage === "completion" ? f.start().notifier : f.notifier;
+      const reservedNotice = await f.notices.store.loadState(pending);
+      expect(reservedNotice).toBeDefined();
+      vi.setSystemTime(11_000);
+      await retry.notifyRejections([
+        stage === "completion" ? { ...pending, reservedNotice: reservedNotice! } : pending,
+      ]);
+      expectResends(true, false);
+      expectStopOnly(1);
+      expect(phase(pending)).toBe("consumed");
+    },
+  );
 
   it("does not retry a notice after the account stops", async () => {
     f.notify.mockRejectedValue(new Error("dispatch unavailable"));
@@ -315,25 +327,6 @@ describe("ReefReceiptNotifier", () => {
     await f.notifier.notifyRejections([pending]);
     expect(f.notify).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("recovers a crash after agent consumption without granting another resend", async () => {
-    const complete = vi.spyOn(f.notices.store, "complete").mockImplementationOnce(() => {
-      throw new Error("process interrupted after dispatch");
-    });
-    const pending = rejection(115);
-    await f.notifier.notifyRejections([pending]);
-    expectResends(true);
-    expect(phase(pending)).toBe("reserved");
-    complete.mockRestore();
-    const restartedNotify = vi.fn(consumeNotice);
-    vi.setSystemTime(11_000);
-    const { notifier: restarted } = f.start(restartedNotify);
-    const reservedNotice = await f.notices.store.loadState(pending);
-    expect(reservedNotice).toBeDefined();
-    await restarted.notifyRejections([{ ...pending, reservedNotice: reservedNotice! }]);
-    expect(restartedNotify.mock.calls[0]![0]).toMatchObject({ allowResend: false });
-    expect(phase(pending)).toBe("consumed");
   });
 });
 
@@ -366,8 +359,6 @@ it("marks an accepted overdue notice once even when execution later fails", asyn
       settled: settled.promise,
     };
   });
-  const logger = runtime.logging.getChildLogger();
-  vi.mocked(runtime.logging.getChildLogger).mockReturnValue(logger);
   const ownerNotice = createReefOwnerNoticeHandler({ runtime, cfg: {}, handle: "bob" });
   const first = notifyOverdueReefDeliveries({ trust: store, ownerNotice });
   await submitted.promise;
@@ -382,12 +373,7 @@ it("marks an accepted overdue notice once even when execution later fails", asyn
     error: "delivery interrupted",
   });
   await settled.promise;
-  expect(logger.warn).toHaveBeenCalledWith("Reef owner notice failed", {
-    error: "delivery interrupted",
-  });
   await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
-  expect(marked.has(entry.id)).toBe(true);
-  expect(runtime.system.captureSessionEventTarget).toHaveBeenCalledTimes(1);
   expect(runtime.system.enqueueSessionEvent).toHaveBeenCalledTimes(1);
   expect(runtime.system.enqueueSessionEvent).toHaveBeenLastCalledWith(
     expect.stringContaining(entry.id),

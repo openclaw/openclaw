@@ -2,15 +2,9 @@ import { randomBytes } from "@noble/hashes/utils.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreV2ForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   closeOpenClawStateDatabaseAsync,
   observeHostDataSql,
@@ -26,6 +20,7 @@ import {
   reefReplayStoreKey,
   type ReefReplayRecord,
 } from "./replay-store.js";
+import { createRuntime } from "./state.test-support.js";
 
 vi.mock("@noble/hashes/utils.js", { spy: true });
 
@@ -37,27 +32,19 @@ const key = reefReplayStoreKey("alice", id);
 function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
   const stateDir = temp.make("reef-replay-");
   const env = { OPENCLAW_STATE_DIR: stateDir };
-  const runtime = createPluginRuntimeMock();
+  const runtime = createRuntime(env);
   const options = {
     namespace: REEF_REPLAY_NAMESPACE,
     maxEntries,
     overflowPolicy: "reject-new" as const,
     defaultTtlMs: REEF_REPLAY_TTL_MS,
-    env,
   };
-  const store = createPluginStateKeyedStoreV2ForTests<ReefReplayRecord>("reef", options, {
-    assertCurrent() {},
-  });
-  const raw = createPluginStateSyncKeyedStoreForTests<ReefReplayRecord>("reef", options);
-  runtime.state.openSyncKeyedStore = <T>(opts: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", { ...opts, env });
+  const openStore = runtime.state.openKeyedStoreV2;
+  const store = openStore<ReefReplayRecord>(options);
+  const raw = runtime.state.openSyncKeyedStore<ReefReplayRecord>(options);
   runtime.state.openKeyedStoreV2 = <T>(opts: OpenAsyncKeyedStoreOptions) => {
     if (opts.retention === "retained" || opts.namespace !== REEF_REPLAY_NAMESPACE) {
-      return createPluginStateKeyedStoreV2ForTests<T>(
-        "reef",
-        { ...opts, env },
-        { assertCurrent() {} },
-      );
+      return openStore<T>(opts);
     }
     // The runtime's generic namespace selects this fixture's ReefReplayRecord store.
     return { ...store } as PluginStateKeyedStore<T, 2>;
@@ -69,7 +56,7 @@ function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
     { id, bodyHash: "b".repeat(64), auditHead: "c".repeat(64), status: "accepted" },
     identity.signing.secretKey,
   );
-  return { store, raw, runtime, open, receipt, env };
+  return { store, raw, open, receipt };
 }
 
 describe("Reef replay worker ownership", () => {
@@ -134,11 +121,9 @@ describe("Reef replay worker ownership", () => {
 
   it("rejects stale completion and cleanup after a conflicting successor takes ownership", async () => {
     const f = fixture();
-    const original = f.open();
-    await original.claim("alice", id, hash);
     const successor = f.open();
     const compare = f.store.compareAndApply!;
-    let takeover = true;
+    let takeover = false;
     f.store.compareAndApply = async (...args) => {
       if (takeover) {
         takeover = false;
@@ -149,8 +134,6 @@ describe("Reef replay worker ownership", () => {
     };
     // A fresh handle captures the instrumented worker method but owns its own claim.
     const stale = f.open();
-    await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
-    takeover = false;
     await stale.claim("alice", id, hash);
     takeover = true;
     await expect(stale.complete("alice", id, f.receipt, { text: "stale" })).rejects.toThrow(
