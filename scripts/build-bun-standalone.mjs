@@ -1002,7 +1002,6 @@ fs.writeFileSync(
     2,
   ),
 );
-// Shorter relative names keep the full graph below macOS's exec argument limit.
 const compileCwd = path.join(compileRoot, "runtime/dist");
 const bunIdentity = {
   version: Bun.version,
