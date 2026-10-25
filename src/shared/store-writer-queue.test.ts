@@ -102,7 +102,7 @@ it.each(["outer", "inner"] as const)("guards only live %s writer ownership", asy
   expectHeld(false);
 });
 
-it("marks synchronous idle and reentrant execution across runtime chunks", async () => {
+it("preserves reentrant timing and queues ordinary nested writes across chunks", async () => {
   const sibling = await siblingModule("store-writer-timing");
   const { queues, write, order } = createQueue();
   const outerTiming: StoreWriterTiming = {};
@@ -110,6 +110,7 @@ it("marks synchronous idle and reentrant execution across runtime chunks", async
   let clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
   const siblingWrite = createQueue("store", queues, sibling.runQueuedStoreWrite).write;
+  let queued: Promise<string> | undefined;
   const pending = write(
     "outer",
     async () => {
@@ -126,6 +127,12 @@ it("marks synchronous idle and reentrant execution across runtime chunks", async
       );
       expect(innerTiming.startedAt).toBe(5);
       const result = await inner;
+      queued = siblingWrite("ordinary", async () => {
+        order.push("ordinary");
+        return "queued-result";
+      });
+      await nextTurn();
+      expect(order).toEqual(["outer:start", "inner"]);
       order.push("outer:end");
       clock = 15;
       return result;
@@ -135,7 +142,8 @@ it("marks synchronous idle and reentrant execution across runtime chunks", async
   expect(order).toEqual(["outer:start", "inner"]);
   expect(outerTiming.startedAt).toBe(0);
   expect(await pending).toBe("result");
-  expect(order).toEqual(["outer:start", "inner", "outer:end"]);
+  await expect(queued).resolves.toBe("queued-result");
+  expect(order).toEqual(["outer:start", "inner", "outer:end", "ordinary"]);
   expect(innerTiming).toEqual({ startedAt: 5, finishedAt: 10, reentrant: true });
   expect(outerTiming).toEqual({ startedAt: 0, finishedAt: 15, reentrant: false });
   expect(queues.size).toBe(0);
@@ -325,28 +333,6 @@ it("reenters only keys covered by the active writer", async () => {
   );
   expect(value).toBe("covered");
   expect(expanded).not.toHaveBeenCalled();
-});
-
-it("queues ordinary nested writes behind the active writer", async () => {
-  const { queues, write, order } = createQueue();
-  const releaseOuter = makeGate();
-  let nested: Promise<unknown> | undefined;
-  const outer = write("outer", async () => {
-    order.push("outer:start");
-    nested = write("inner", async () => {
-      order.push("inner");
-      return "inner-result";
-    });
-    await releaseOuter.promise;
-    order.push("outer:end");
-    return "outer-result";
-  });
-  await nextTurn();
-  expect(order).toEqual(["outer:start"]);
-  releaseOuter.resolve();
-  await expect(Promise.all([outer, nested])).resolves.toEqual(["outer-result", "inner-result"]);
-  expect(order).toEqual(["outer:start", "outer:end", "inner"]);
-  expect(queues.size).toBe(0);
 });
 
 it.each(["clear", "drain"] as const)(

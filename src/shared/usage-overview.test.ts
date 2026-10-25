@@ -355,24 +355,6 @@ function aggregate(...summaries: Partial<SessionCostSummary>[]) {
   return accumulator.finish();
 }
 
-it("retains incomplete daily and model subtotals after merging complete rows", () => {
-  const date = "2026-05-15";
-  const marker = { state: "unavailable" as const };
-  const result = aggregate(
-    ...[marker, undefined].map((usageReport) => ({
-      usageReport,
-      dailyBreakdown: [{ ...usage(), date, tokens: 10, cost: 1, usageReport }],
-      dailyModelUsage: [{ date, model: "local", tokens: 10, cost: 1, count: 1, usageReport }],
-    })),
-  );
-  expect(result.daily).toEqual([
-    { date, tokens: 20, cost: 2, messages: 0, toolCalls: 0, errors: 0, usageReport: marker },
-  ]);
-  expect(result.modelDaily).toEqual([
-    { ...modelDay(date, "local", 20, 2, 2), usageReport: marker },
-  ]);
-});
-
 it("builds collision-free model identities with legacy unknown grouping", () => {
   expect(usageModelIdentity("fixture\0bedrock", "arn")).not.toBe(
     usageModelIdentity("fixture", "bedrock\0arn"),
@@ -465,7 +447,7 @@ it("merges models and providers by identity and ranks equal costs by token usage
   ]);
 });
 
-it("merges overlapping daily buckets and uses weighted latency summaries", () => {
+it("merges daily buckets, retains incomplete subtotals and weights latency", () => {
   const earlier = "2026-03-11";
   const later = "2026-03-12";
   const quick = latency(2, 50, 20, 90, 80);
@@ -475,10 +457,19 @@ it("merges overlapping daily buckets and uses weighted latency summaries", () =>
       latency: quick,
       dailyLatency: [{ date: later, ...quick }],
       dailyBreakdown: [
-        day(later, { input: 3, totalTokens: 3, totalCost: 4, inputCost: 4 }),
+        day(later, {
+          input: 3,
+          totalTokens: 3,
+          totalCost: 4,
+          inputCost: 4,
+          usageReport: unavailable,
+        }),
         day(earlier, { totalTokens: 5, totalCost: 6 }),
       ],
-      dailyModelUsage: [modelDay(later, "one", 3, 4, 2, "fixture")],
+      dailyModelUsage: [
+        { ...modelDay(later, "one", 0, 0, 0, "fixture"), usageReport: unavailable },
+        modelDay(later, "one", 3, 4, 2, "fixture"),
+      ],
     },
     {
       latency: slow,
@@ -506,7 +497,15 @@ it("merges overlapping daily buckets and uses weighted latency summaries", () =>
   ]);
   expect(aggregates.daily).toEqual([
     { date: earlier, tokens: 5, cost: 6, messages: 0, toolCalls: 0, errors: 0 },
-    { date: later, tokens: 10, cost: 12, messages: 9, toolCalls: 2, errors: 1 },
+    {
+      date: later,
+      tokens: 10,
+      cost: 12,
+      messages: 9,
+      toolCalls: 2,
+      errors: 1,
+      usageReport: unavailable,
+    },
   ]);
   expect(aggregates.costDaily).toEqual([
     { date: earlier, ...usage({ totalTokens: 5, totalCost: 6 }) },
@@ -516,13 +515,14 @@ it("merges overlapping daily buckets and uses weighted latency summaries", () =>
         { input: 3, inputCost: 4 },
         { cacheRead: 7, cacheReadCost: 8 },
         { totalTokens: 10, totalCost: 12 },
+        { usageReport: unavailable },
       ),
     },
   ]);
-  expect(aggregates.modelDaily?.map(({ date, model }) => [date, model])).toEqual([
-    [earlier, "one"],
-    [later, "two"],
-    [later, "one"],
+  expect(aggregates.modelDaily).toEqual([
+    modelDay(earlier, "one", 5, 6, 1, "fixture"),
+    modelDay(later, "two", 7, 8, 1, "fixture"),
+    { ...modelDay(later, "one", 3, 4, 2, "fixture"), usageReport: unavailable },
   ]);
 });
 
