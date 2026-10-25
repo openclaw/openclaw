@@ -86,11 +86,7 @@ describe("ClickClack discussion session events", () => {
     return { ...h, gateway, sessionKey };
   }
   it("does not overwrite a replacement attachment when metadata reconciliation settles late", async () => {
-    const h = fixture({
-      sessionId: "session-original",
-      label: "Original",
-      category: "Projects",
-    });
+    const h = fixture({ sessionId: "session-original", label: "Original", category: "Projects" });
     const sessionKey = "agent:main:event-concurrent-reset";
     const updateEntered = createDeferred<void>();
     const releaseUpdate = createDeferred<void>();
@@ -104,11 +100,7 @@ describe("ClickClack discussion session events", () => {
         await releaseUpdate.promise;
         return updateChannel(...args);
       });
-      h.setSessionEntry({
-        sessionId: "session-original",
-        label: "Renamed",
-        category: "Projects",
-      });
+      h.setSessionEntry({ sessionId: "session-original", label: "Renamed", category: "Projects" });
       reconcile = h.service.reconcile(sessionKey);
       await updateEntered.promise;
       h.setSessionEntry({
@@ -191,10 +183,7 @@ describe("ClickClack discussion session events", () => {
   it("does not poll bindings while gateway events are bound", async () => {
     const h = fixture(
       { label: "Polling" },
-      {
-        gatewayEvents: createGatewayEventsHarness().gatewayEvents,
-        startTimer: true,
-      },
+      { gatewayEvents: createGatewayEventsHarness().gatewayEvents, startTimer: true },
     );
     await h.service.open("agent:main:polling");
     const reconcileAll = vi.spyOn(h.service, "reconcileAll");

@@ -586,10 +586,14 @@ describe("ClickClack pending generation persistence", () => {
     expect(f.nativeNamespaces).not.toContain("discussion-binding-generations");
   });
 
-  it("quarantines an ambiguous create after reopening SQLite with a fresh runtime", async () => {
+  it("quarantines and retries the same pending generation after reopening SQLite", async () => {
     const f = generationFixture();
     vi.mocked(f.createChannel).mockRejectedValueOnce(new Error("lost create response"));
     await expect(f.service.open(sessionKey)).rejects.toThrow("lost create response");
+    const originalRef = f.createChannel.mock.calls[0]?.[1].external_ref;
+    expect(await generationStore(f.env).lookup(sessionKey)).toMatchObject({
+      pending: expect.objectContaining({ externalRef: originalRef }),
+    });
     await f.service.cleanup();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
@@ -603,7 +607,9 @@ describe("ClickClack pending generation persistence", () => {
         channelId: "unknown-created-room",
       }),
     ).resolves.toEqual({ state: "revoked" });
-    await expect(recovered.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+    await recovered.service.reconcileAll();
+    await expect(recovered.service.info(sessionKey)).resolves.toMatchObject({ state: "open" });
+    expect(recovered.createChannel.mock.calls[0]?.[1].external_ref).toBe(originalRef);
     const generations = generationStore(f.env);
     expect(await generations.lookup(sessionKey)).toBeUndefined();
   });

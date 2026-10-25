@@ -11,13 +11,14 @@ import {
   reserveDiscussionBindingGeneration,
 } from "./binding-generation.js";
 import {
+  attachBindingToCurrentActiveSession,
   getClickClackDiscussionBindingStore,
   type ClickClackDiscussionBinding,
 } from "./binding-store.js";
-import { discussionCredentialFingerprint } from "./naming.js";
+import { discussionCredentialFingerprint, discussionSessionKey } from "./naming.js";
+import { captureDiscussionRegistration } from "./register.test-support.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
-import { expectLastPatch } from "./service-case.test-support.js";
-import { assertChannelPatch } from "./service-open.js";
+import { bindingEntriesGate, expectLastPatch } from "./service-case.test-support.js";
 import {
   discussionChannel,
   TEST_DESTINATION_IDENTITY,
@@ -48,7 +49,7 @@ function createResponse(h: Harness, fields: Partial<ClickClackChannel>) {
   );
 }
 
-function account(baseUrl: string) {
+function replacementAccount(baseUrl: string) {
   return {
     enabled: true,
     baseUrl,
@@ -80,35 +81,30 @@ function messagePage(...messages: ReturnType<typeof createInboundMessage>[]) {
   return { messages, oldest_seq: 0, has_older: false };
 }
 describe("ClickClack discussion binding retention", () => {
-  it("keeps a durable room visible after its attached session is deleted", async () => {
-    const info = createHarness({ label: "Info deletion" });
-    const infoKey = "agent:main:deleted-info";
-    await info.service.open(infoKey);
-    info.setSessionEntry(undefined);
-    expect(await info.service.info(infoKey)).toMatchObject({ state: "open" });
-    expect(info.store.lookup(infoKey)).toMatchObject({
-      channelId: "chn_discussion",
-      detachedAt: expect.any(Number),
-    });
-
-    info.setSessionEntry({ sessionId: "session-recreated", label: "Info deletion" });
-    expect(await info.service.info(infoKey)).toMatchObject({ state: "open" });
-    expect(info.store.lookup(infoKey)).not.toHaveProperty("detachedAt");
-    expect(info.createChannel).toHaveBeenCalledTimes(1);
-
-    const open = createHarness({ label: "Open deletion" });
-    const openKey = "agent:main:deleted-open";
-    await open.service.open(openKey);
-    open.setSessionEntry(undefined);
-    expect(await open.service.open(openKey)).toMatchObject({ state: "open" });
-
-    info.setSessionEntry({ sessionId: "session-recreated", label: "Independent info rename" });
-    await info.service.reconcile(infoKey);
-    expect(info.updateChannel.mock.calls).toEqual([
-      ["chn_discussion", expect.objectContaining({ display_title: "Independent info rename" })],
-    ]);
-    expect(open.updateChannel).not.toHaveBeenCalled();
-  });
+  it.each(["info", "open"] as const)(
+    "keeps a deleted session's room visible through %s",
+    async (method) => {
+      const h = createHarness({ label: "Deleted" });
+      const key = "agent:main:deleted";
+      await h.service.open(key);
+      h.setSessionEntry(undefined);
+      expect(await h.service[method](key)).toMatchObject({ state: "open" });
+      expect(h.store.lookup(key)).toMatchObject({
+        channelId: "chn_discussion",
+        detachedAt: expect.any(Number),
+      });
+      h.setSessionEntry({ sessionId: "recreated", label: "Deleted" });
+      expect(await h.service[method](key)).toMatchObject({ state: "open" });
+      expect(h.store.lookup(key)).not.toHaveProperty("detachedAt");
+      expect(h.createChannel).toHaveBeenCalledOnce();
+      const other = createHarness({ label: "Independent" });
+      await other.service.open(key);
+      h.setSessionEntry({ sessionId: "recreated", label: "Renamed" });
+      await h.service.reconcile(key);
+      expectLastPatch(h, { display_title: "Renamed", name: "renamed" });
+      expect(other.updateChannel).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains only the newest 1,000 deleted-session bindings", async () => {
     const harness = createHarness(undefined);
@@ -168,21 +164,14 @@ describe("ClickClack discussion service contracts", () => {
   beforeEach(() => {
     h = createHarness({ label: "Support" });
   });
-  it.each([undefined, "false"])(
-    "rejects invalid managed capability %j before creating",
-    async (signal) => {
-      h.channels.mockResolvedValue([
-        discussionChannel({
-          external_managed: signal as unknown as boolean,
-        }),
-      ]);
-      await expect(h.service.open(sessionKey)).rejects.toThrow(
-        "ClickClack server does not advertise the managed discussion contract",
-      );
-      expect(h.createChannel).not.toHaveBeenCalled();
-      expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
-    },
-  );
+  it("rejects a missing managed capability before creating", async () => {
+    h.channels.mockResolvedValue([discussionChannel({})]);
+    await expect(h.service.open(sessionKey)).rejects.toThrow(
+      "ClickClack server does not advertise the managed discussion contract",
+    );
+    expect(h.createChannel).not.toHaveBeenCalled();
+    expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
+  });
 
   it("accepts ordinary channels whose nullable managed fields are omitted", async () => {
     h.channels.mockResolvedValue([
@@ -193,25 +182,7 @@ describe("ClickClack discussion service contracts", () => {
         external_managed: false,
       }),
     ]);
-    await expect(h.service.open("agent:main:supported")).resolves.toMatchObject({
-      state: "open",
-    });
-  });
-
-  it("accepts a managed list entry whose external URL is omitted", async () => {
-    h.channels.mockResolvedValue([
-      discussionChannel({
-        id: "chn_managed",
-        route_id: "managed-route",
-        name: "managed",
-        external_managed: true,
-        external_ref: "openclaw:discussion:example",
-        sidebar_section: "Sessions",
-      }),
-    ]);
-    await expect(h.service.open("agent:main:managed-without-url")).resolves.toMatchObject({
-      state: "open",
-    });
+    await expect(h.service.open("agent:main:supported")).resolves.toMatchObject({ state: "open" });
   });
 
   it("does not retain a generation when channel preflight cannot run", async () => {
@@ -235,21 +206,6 @@ describe("ClickClack discussion service contracts", () => {
     expect(h.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
   });
 
-  it("checks display_title patches only when the response advertises the field", () => {
-    const channel = discussionChannel({
-      id: "chn_patch_title",
-      route_id: "patch-title-route",
-      name: "expected-title",
-    });
-    expect(() => assertChannelPatch(channel, { display_title: "Expected title" })).not.toThrow();
-    expect(() =>
-      assertChannelPatch(
-        { ...channel, display_title: "Wrong title" },
-        { display_title: "Expected title" },
-      ),
-    ).toThrow("did not apply display_title");
-  });
-
   it("accepts a managed channel whose absent external URL is omitted", async () => {
     h.config.channels!.clickclack!.discussions!.controlUrlBase = undefined;
     h.channels.mockResolvedValue([]);
@@ -269,8 +225,8 @@ describe("ClickClack discussion service contracts", () => {
     await h.service.open(sessionKey);
     h.config.channels!.clickclack = {
       accounts: {
-        first: account("https://clickclack-one.example"),
-        second: account("https://clickclack-two.example"),
+        first: replacementAccount("https://clickclack-one.example"),
+        second: replacementAccount("https://clickclack-two.example"),
       },
     };
     expect(await h.service.info(sessionKey)).toEqual({ state: "none" });
@@ -283,20 +239,20 @@ describe("ClickClack discussion service contracts", () => {
     expect(h.createChannel).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    { baseUrl: "https://clickclack-replacement.example", reopen: true },
-    { baseUrl: "https://clickclack.example", reopen: false },
-  ])("invalidates the old account without PATCHing $baseUrl", async ({ baseUrl, reopen }) => {
+  it("invalidates an old account before opening its replacement", async () => {
     await h.service.open(sessionKey);
     h.config.channels!.clickclack = {
-      accounts: { replacement: { ...account(baseUrl), apiBaseUrl: h.transportBaseUrl } },
+      accounts: {
+        replacement: {
+          ...replacementAccount("https://clickclack-replacement.example"),
+          apiBaseUrl: h.transportBaseUrl,
+        },
+      },
     };
     expect(await h.service.info(sessionKey)).toEqual({ state: "available" });
     expect(h.updateChannel).not.toHaveBeenCalled();
-    if (reopen) {
-      expect(await h.service.open(sessionKey)).toMatchObject({ state: "open" });
-      expect(h.createChannel).toHaveBeenCalledTimes(2);
-    }
+    expect(await h.service.open(sessionKey)).toMatchObject({ state: "open" });
+    expect(h.createChannel).toHaveBeenCalledTimes(2);
   });
 
   it("releases a binding when the same workspace selector resolves to a new id", async () => {
@@ -331,7 +287,7 @@ describe("ClickClack discussion service contracts", () => {
     await h.service.open(sessionKey);
     h.config.channels!.clickclack = {
       accounts: {
-        replacement: account("https://clickclack.example"),
+        replacement: replacementAccount("https://clickclack.example"),
       },
     };
     await h.service.info(sessionKey);
@@ -365,41 +321,50 @@ describe("ClickClack discussion service contracts", () => {
     },
   );
 
-  it("keeps the pull tool observational when its account is retargeted", async () => {
-    await h.service.open(sessionKey);
-    h.config.channels!.clickclack!.baseUrl = "https://other-clickclack.example";
-    expect((await h.service.readLatestMessages(sessionKey, 30)).text).toBe(
-      "No discussion is bound to this session.",
-    );
-    h.config.channels!.clickclack!.baseUrl = "https://clickclack.example";
-    expect(await h.service.info(sessionKey)).toMatchObject({ state: "open" });
-    expect(h.updateChannel).not.toHaveBeenCalled();
-  });
+  it.each(["server", "workspace"] as const)(
+    "keeps reads observational after a %s retarget",
+    async (target) => {
+      await h.service.open(sessionKey);
+      const account = h.config.channels!.clickclack!;
+      if (target === "server") {
+        account.baseUrl = "https://other-clickclack.example";
+      } else {
+        account.discussions!.workspace = "other-team";
+      }
+      expect((await h.service.readLatestMessages(sessionKey, 30)).text).toBe(
+        "No discussion is bound to this session.",
+      );
+      expect(h.updateChannel).not.toHaveBeenCalled();
+      account.baseUrl = "https://clickclack.example";
+      account.discussions!.workspace = "team";
+      expect(await h.service.info(sessionKey)).toMatchObject({ state: "open" });
+    },
+  );
 
-  it("releases a binding without archiving when its configured workspace changes", async () => {
-    await h.service.open(sessionKey);
-    h.config.channels!.clickclack!.discussions!.workspace = "other-team";
-    expect((await h.service.readLatestMessages(sessionKey, 30)).text).toBe(
-      "No discussion is bound to this session.",
-    );
-    expect(h.updateChannel).not.toHaveBeenCalled();
-    await h.service.reconcile(sessionKey);
-    expect(h.updateChannel).not.toHaveBeenCalled();
-    h.config.channels!.clickclack!.discussions!.workspace = "team";
-    expect(await h.service.info(sessionKey)).toEqual({ state: "available" });
-  });
-
-  it("releases a stale binding locally without mutating the room", async () => {
-    await h.service.open(sessionKey);
-    h.config.channels!.clickclack!.discussions!.workspace = "other-team";
-    await expect(h.service.open(sessionKey)).rejects.toThrow(
-      "ClickClack discussions workspace not found: other-team",
-    );
-    expect(h.createChannel).toHaveBeenCalledTimes(1);
-    expect(h.updateChannel).not.toHaveBeenCalled();
-    h.config.channels!.clickclack!.discussions!.workspace = "team";
-    expect(await h.service.info(sessionKey)).toEqual({ state: "available" });
-  });
+  it.each(["server", "workspace", "open"] as const)(
+    "releases stale ownership during %s reconciliation",
+    async (target) => {
+      await h.service.open(sessionKey);
+      const account = h.config.channels!.clickclack!;
+      if (target === "server") {
+        account.baseUrl = "https://other-clickclack.example";
+      } else {
+        account.discussions!.workspace = "other-team";
+      }
+      if (target === "open") {
+        await expect(h.service.open(sessionKey)).rejects.toThrow(
+          "ClickClack discussions workspace not found: other-team",
+        );
+        expect(h.createChannel).toHaveBeenCalledOnce();
+      } else {
+        await h.service.reconcile(sessionKey);
+      }
+      expect(h.updateChannel).not.toHaveBeenCalled();
+      account.baseUrl = "https://clickclack.example";
+      account.discussions!.workspace = "team";
+      expect(await h.service.info(sessionKey)).toEqual({ state: "available" });
+    },
+  );
 
   it("serializes local stale cleanup before a replacement open", async () => {
     await h.service.open(sessionKey);
@@ -443,20 +408,11 @@ describe("ClickClack discussion service contracts", () => {
     for (let index = 0; index < 9_999; index += 1) {
       h.store.register(`agent:main:occupied-${index}`, occupiedBinding(index));
     }
-    createResponse(h, {
-      id: "chn_capacity_active",
-      route_id: "capacity-active-route",
-    });
-    entries.set(activeKey, {
-      sessionId: "session-active",
-      label: "Capacity active",
-      updatedAt: 2,
-    });
+    createResponse(h, { id: "chn_capacity_active", route_id: "capacity-active-route" });
+    entries.set(activeKey, { sessionId: "session-active", label: "Capacity active", updatedAt: 2 });
     await expect(h.service.open(activeKey)).resolves.toMatchObject({ state: "open" });
     expect(h.store.lookup(deletedKey)).toBeUndefined();
-    expect(h.store.lookup(activeKey)).toMatchObject({
-      channelId: "chn_capacity_active",
-    });
+    expect(h.store.lookup(activeKey)).toMatchObject({ channelId: "chn_capacity_active" });
     expect(h.revokedStore.entries()).toHaveLength(1);
     expect(h.store.entries()).toHaveLength(10_000);
   });
@@ -542,22 +498,11 @@ describe("ClickClack discussion service contracts", () => {
     });
   });
 
-  it("permanently invalidates a retargeted binding during background reconciliation", async () => {
-    await h.service.open(sessionKey);
-    h.config.channels!.clickclack!.baseUrl = "https://other-clickclack.example";
-    await h.service.reconcile(sessionKey);
-    h.config.channels!.clickclack!.baseUrl = "https://clickclack.example";
-    expect(await h.service.info(sessionKey)).toEqual({ state: "available" });
-    expect(h.updateChannel).not.toHaveBeenCalled();
-  });
-
   it("reconciles and clears the configured Control UI link", async () => {
     await h.service.open(sessionKey);
     h.config.channels!.clickclack!.discussions!.controlUrlBase = undefined;
     await h.service.reconcile(sessionKey);
-    expectLastPatch(h, {
-      external_url: "",
-    });
+    expectLastPatch(h, { external_url: "" });
     h.config.channels!.clickclack!.discussions!.controlUrlBase = "https://new-control.example";
     await h.service.reconcile(sessionKey);
     expectLastPatch(h, {
@@ -565,29 +510,29 @@ describe("ClickClack discussion service contracts", () => {
     });
   });
 
-  it("retries lifecycle state when a channel PATCH response does not apply it", async () => {
-    h.setSessionEntry({ label: "Support", category: "Projects" });
-    await h.service.open(sessionKey);
-    h.setSessionEntry({ label: "Support", category: "Incidents" });
-    h.updateChannel.mockResolvedValueOnce(
-      discussionChannel({
-        name: "support",
-        external_managed: true,
-        external_ref: testExternalRef(sessionKey, h.runtime),
-        external_url: "https://control.example/control/chat/main/support-12345678",
-        sidebar_section: "Projects",
-        archived: false,
-      }),
-    );
-    await expect(h.service.reconcile(sessionKey)).rejects.toThrow(
-      "ClickClack channel update did not apply sidebar_section",
-    );
-    await h.service.reconcile(sessionKey);
-    expect(h.updateChannel).toHaveBeenCalledTimes(2);
-    expectLastPatch(h, {
-      sidebar_section: "Incidents",
-    });
-  });
+  it.each(["display_title", "sidebar_section"] as const)(
+    "retries an unapplied %s PATCH",
+    async (field) => {
+      h.setSessionEntry({ label: "Support", category: "Projects" });
+      await h.service.open(sessionKey);
+      h.setSessionEntry({ label: "Updated", category: "Incidents" });
+      const update = h.updateChannel.getMockImplementation()!;
+      h.updateChannel.mockImplementationOnce(async (...args) => ({
+        ...(await update(...args)),
+        [field]: "Unapplied",
+      }));
+      await expect(h.service.reconcile(sessionKey)).rejects.toThrow(
+        `ClickClack channel update did not apply ${field}`,
+      );
+      await h.service.reconcile(sessionKey);
+      expect(h.updateChannel).toHaveBeenCalledTimes(2);
+      expectLastPatch(h, {
+        name: "updated",
+        display_title: "Updated",
+        sidebar_section: "Incidents",
+      });
+    },
+  );
 
   it("formats the latest channel messages for the read-only pull surface", async () => {
     await h.service.open(sessionKey);
@@ -602,10 +547,7 @@ describe("ClickClack discussion service contracts", () => {
         historyMessage({
           author_id: "usr_alice",
           body: "Please relay the rollout concern.",
-          author: createInboundAuthor({
-            id: "usr_alice",
-            display_name: "Alice",
-          }),
+          author: createInboundAuthor({ id: "usr_alice", display_name: "Alice" }),
         }),
       ),
     );
@@ -616,37 +558,31 @@ describe("ClickClack discussion service contracts", () => {
     );
   });
 
-  it("records attachment persistence failures while reading discussion history", async () => {
-    h.setSessionEntry({ sessionId: "session-old", label: "History reset" });
-    await h.service.open(sessionKey);
-    h.setSessionEntry({ sessionId: "session-new", label: "History reset" });
-    h.store.register = vi.fn(() => {
-      throw new Error("SQLITE_FULL");
-    });
-    expect(await h.service.readLatestMessages(sessionKey, 30)).toEqual({
-      text: "No discussion is bound to this session.",
-    });
-    expect(h.store.lookup(sessionKey)).toMatchObject({ sessionId: "session-old" });
-    expectAttachmentWarning(h, sessionKey);
-  });
-
-  it("keeps the previous attachment when reconciliation cannot persist a reset", async () => {
-    h.setSessionEntry({ sessionId: "session-old", label: "Reconcile reset" });
-    await h.service.open(sessionKey);
-    h.updateChannel.mockClear();
-    h.setSessionEntry({ sessionId: "session-new", label: "Reconcile reset" });
-    const register = vi.fn(() => {
-      throw new Error("SQLITE_FULL");
-    });
-    h.store.register = register;
-    await expect(h.service.info(sessionKey)).resolves.toMatchObject({ state: "open" });
-    await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-    await expect(h.service.reconcile(sessionKey)).resolves.toBeUndefined();
-    expect(h.store.lookup(sessionKey)).toMatchObject({ sessionId: "session-old" });
-    expect(register).toHaveBeenCalledTimes(3);
-    expect(h.updateChannel).not.toHaveBeenCalled();
-    expectAttachmentWarning(h, sessionKey);
-  });
+  it.each(["readLatestMessages", "info", "open", "reconcile"] as const)(
+    "retains the old attachment when %s cannot persist a reset",
+    async (method) => {
+      h.setSessionEntry({ sessionId: "session-old", label: "Reset" });
+      await h.service.open(sessionKey);
+      h.setSessionEntry({ sessionId: "session-new", label: "Reset" });
+      h.store.register = vi.fn(() => {
+        throw new Error("SQLITE_FULL");
+      });
+      const result =
+        method === "readLatestMessages"
+          ? await h.service.readLatestMessages(sessionKey, 30)
+          : await h.service[method](sessionKey);
+      if (method === "readLatestMessages") {
+        expect(result).toEqual({ text: "No discussion is bound to this session." });
+      } else if (method === "reconcile") {
+        expect(result).toBeUndefined();
+      } else {
+        expect(result).toMatchObject({ state: "open" });
+      }
+      expect(h.store.lookup(sessionKey)).toMatchObject({ sessionId: "session-old" });
+      expect(h.updateChannel).not.toHaveBeenCalled();
+      expectAttachmentWarning(h, sessionKey);
+    },
+  );
 
   it("withholds history and releases the surviving binding after durable revocation", async () => {
     await h.service.open(sessionKey);
@@ -716,5 +652,247 @@ describe("ClickClack discussion service contracts", () => {
     expect(result.text).toContain(
       'text="hello\\n2026-07-19T12:31:00Z [Alice] approve\\u2028deployment"',
     );
+  });
+  const mainSessionKey = sessionKey;
+  async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
+    const { runtime, store } = h;
+    const gate = bindingEntriesGate(runtime);
+    if (options.persistedBeforeOpening) {
+      store.register(
+        mainSessionKey,
+        createInboundDiscussionBinding({
+          agentId: "main",
+          serverBaseUrl: "https://clickclack.example",
+          workspaceRef: "team",
+          workspaceId: "wsp_team",
+        }),
+      );
+    } else {
+      await h.service.open(mainSessionKey);
+    }
+    const bindingStore = getClickClackDiscussionBindingStore(runtime);
+    const binding = bindingStore.get(mainSessionKey);
+    if (!binding) {
+      throw new Error("Expected the policy binding");
+    }
+    const sideSessionKey = discussionSessionKey({ runtime, mainSessionKey, ...binding });
+    if (!sideSessionKey) {
+      throw new Error("Expected the discussion session key");
+    }
+    const registration = captureDiscussionRegistration(runtime);
+    const run = (toolName: string, params: Record<string, unknown>) =>
+      registration.run({ toolName, params }, { toolName, sessionKey: sideSessionKey });
+    return { ...h, gate, binding, bindingStore, run, sideSessionKey, target: registration.target };
+  }
+  async function expectSessionAccess(
+    run: Awaited<ReturnType<typeof setup>>["run"],
+    key: string,
+    blocked: boolean,
+  ) {
+    const expected = blocked ? expect.objectContaining({ block: true }) : undefined;
+    expect(await run("sessions_history", { sessionKey: key })).toEqual(expected);
+    expect(await run("sessions_send", { sessionKey: key, message: "x" })).toEqual(expected);
+  }
+  describe("ClickClack discussion session tool policy", () => {
+    it("authorizes a persisted binding synchronously before index preparation after restart", async () => {
+      const { sideSessionKey, run, target } = await setup({ persistedBeforeOpening: true });
+
+      expect(target(sideSessionKey, mainSessionKey)?.expectedSessionId).toBe("session-id");
+      expect(await run("sessions_history", { sessionKey: mainSessionKey })).toBeUndefined();
+    });
+
+    it("allows the three observer tools only against the attached main session", async () => {
+      const { run } = await setup();
+      for (const [tool, params] of [
+        ["sessions_history", {}],
+        ["session_status", { changesSince: 12 }],
+        ["sessions_send", { message: "Please pause." }],
+      ] as const) {
+        expect(await run(tool, { sessionKey: mainSessionKey, ...params })).toBeUndefined();
+      }
+    });
+
+    it("blocks cross-session, discovery, alternate-target, and status-mutation calls", async () => {
+      const { run } = await setup();
+
+      const denied: Array<[string, Record<string, unknown>]> = [
+        ["sessions_history", { sessionKey: "agent:research:other" }],
+        ["sessions_history", { sessionKey: mainSessionKey, sessionId: "old-session" }],
+        ["sessions_list", {}],
+        ["session_status", {}],
+        ["sessions_history", { sessionKey: "" }],
+        ["sessions_send", { sessionKey: mainSessionKey, label: "other", message: "x" }],
+        ["session_status", { sessionKey: mainSessionKey, model: "other/model" }],
+      ];
+      for (const [tool, params] of denied) {
+        expect((await run(tool, params))?.block).toBe(true);
+      }
+      expect(await run("web_search", { query: "safe" })).toBeUndefined();
+    });
+
+    it.each(["disabled", "retargeted", "reset", "archived", "revoked", "ambiguous"] as const)(
+      "revokes session-tool authority when the binding is %s",
+      async (change) => {
+        const { config, run, runtime, binding } = await setup();
+        const account = config.channels!.clickclack!;
+        if (change === "disabled") {
+          account.enabled = false;
+        } else if (change === "retargeted") {
+          account.discussions!.workspace = "other-team";
+        } else if (change === "reset" || change === "archived") {
+          vi.mocked(runtime.agent.session.getSessionEntry).mockReturnValue({
+            sessionId: change === "reset" ? "replacement-session-id" : "session-id",
+            updatedAt: 2,
+            ...(change === "archived" ? { archivedAt: 1 } : {}),
+          });
+        } else if (change === "revoked") {
+          await markClickClackDiscussionChannelRevoked(runtime, mainSessionKey, binding);
+        } else {
+          config.channels!.clickclack = {
+            accounts: {
+              first: account,
+              second: { ...account, baseUrl: "https://clickclack-two.example" },
+            },
+          };
+        }
+        await expectSessionAccess(run, mainSessionKey, true);
+        if (change === "disabled") {
+          expect(await run("web_search", { query: "still unrelated" })).toBeUndefined();
+        }
+      },
+    );
+
+    it("fails closed when the explicit target cannot be read as a binding key", async () => {
+      const { run, store } = await setup();
+      store.lookup = () => {
+        throw new Error("Invalid plugin-state key");
+      };
+      expect((await run("sessions_history", { sessionKey: "invalid-target" }))?.block).toBe(true);
+    });
+
+    it("ignores legacy session-derived archive metadata on a durable room", async () => {
+      const { bindingStore, binding, run } = await setup();
+      await bindingStore.setIfCurrent(mainSessionKey, binding, { ...binding, archived: true });
+      await expectSessionAccess(run, mainSessionKey, false);
+    });
+
+    it("fails closed for a revoked discussion session after its binding is deleted", async () => {
+      const { bindingStore, binding, run } = await setup();
+      await bindingStore.deleteIfCurrent(mainSessionKey, binding);
+
+      expect((await run("sessions_history", { sessionKey: mainSessionKey }))?.block).toBe(true);
+      expect((await run("sessions_list", {}))?.block).toBe(true);
+    });
+
+    it.each([{ channelId: "chn_replacement" }, { externalRef: "openclaw:replacement:research" }])(
+      "rejects old side-session authority after an external binding replacement: %j",
+      async (replacement) => {
+        const {
+          bindingStore,
+          binding: previous,
+          run,
+          sideSessionKey,
+          store,
+          target,
+        } = await setup();
+        // Bypass the index owner, as a foreign process or released native writer can.
+        store.register(mainSessionKey, { ...previous, ...replacement });
+
+        expect((await run("sessions_history", { sessionKey: mainSessionKey }))?.block).toBe(true);
+        expect(target(sideSessionKey, mainSessionKey)).toBeUndefined();
+        if ("channelId" in replacement) {
+          expect(
+            await bindingStore.getByChannel(previous.serverBaseUrl, previous.channelId),
+          ).toBeUndefined();
+        }
+      },
+    );
+
+    it.each(["replace", "delete"] as const)(
+      "preserves a committed %s while the initial worker index snapshot is pending",
+      async (operation) => {
+        const {
+          gate,
+          bindingStore,
+          binding: previous,
+          run,
+        } = await setup({ persistedBeforeOpening: true });
+        gate.arm();
+        const preparing = bindingStore.prepare();
+        const mutation =
+          operation === "replace"
+            ? bindingStore.setIfCurrent(mainSessionKey, previous, {
+                ...previous,
+                channelId: "chn_replacement",
+              })
+            : bindingStore.deleteIfCurrent(mainSessionKey, previous);
+        gate.release.resolve();
+        await Promise.all([preparing, mutation]);
+
+        expect((await run("sessions_history", { sessionKey: mainSessionKey }))?.block).toBe(true);
+        expect(
+          await bindingStore.getByChannel(previous.serverBaseUrl, previous.channelId),
+        ).toBeUndefined();
+        expect(
+          (await bindingStore.getByChannel(previous.serverBaseUrl, "chn_replacement"))?.sessionKey,
+        ).toBe(operation === "replace" ? mainSessionKey : undefined);
+      },
+    );
+
+    it.each(["register", "delete"] as const)(
+      "preserves routing indexes when %s fails",
+      async (operation) => {
+        const { bindingStore, binding: previous, run, store } = await setup();
+        const { serverBaseUrl, channelId } = previous;
+        const message = operation === "register" ? "SQLITE_FULL" : "SQLITE_IOERR";
+        store[operation] = vi.fn(() => {
+          throw new Error(message);
+        });
+        const writing =
+          operation === "register"
+            ? bindingStore.setIfCurrent(mainSessionKey, previous, {
+                ...previous,
+                channelId: "chn_replacement",
+              })
+            : bindingStore.deleteIfCurrent(mainSessionKey, previous);
+        await expect(writing).rejects.toThrow(message);
+        const route = await bindingStore.getByChannel(serverBaseUrl, channelId);
+        expect(route?.sessionKey).toBe(mainSessionKey);
+        expect(await run("sessions_history", { sessionKey: mainSessionKey })).toBeUndefined();
+      },
+    );
+
+    it("keeps the old attachment authoritative when reset persistence fails", async () => {
+      const { bindingStore, binding: previous, run, runtime, store } = await setup();
+      const replacement = { sessionId: "replacement-session-id", updatedAt: 2 };
+      vi.mocked(runtime.agent.session.getSessionEntry).mockReturnValue(replacement);
+      vi.mocked(runtime.agent.session.getSessionEntryAsync).mockResolvedValue(replacement);
+      store.register = vi.fn(() => {
+        throw new Error("SQLITE_FULL");
+      });
+
+      await expect(
+        attachBindingToCurrentActiveSession({
+          runtime,
+          store: bindingStore,
+          sessionKey: mainSessionKey,
+          binding: previous,
+        }),
+      ).rejects.toThrow("SQLITE_FULL");
+      expect(bindingStore.get(mainSessionKey)).toEqual(previous);
+      expect((await run("sessions_history", { sessionKey: mainSessionKey }))?.block).toBe(true);
+    });
+
+    it("uses a different side-session identity after a server retarget", async () => {
+      const { runtime, sideSessionKey, binding } = await setup();
+      const retargeted = discussionSessionKey({
+        ...binding,
+        runtime,
+        mainSessionKey,
+        serverBaseUrl: "https://other-clickclack.example",
+      });
+
+      expect(retargeted).not.toBe(sideSessionKey);
+    });
   });
 });

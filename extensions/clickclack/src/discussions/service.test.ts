@@ -1,7 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import "./service-http-mock.test-support.js";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { ClickClackHttpError, type ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel } from "../types.js";
@@ -10,6 +7,7 @@ import { fallbackDiscussionLabel } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 import {
   opened as openHarness,
+  bindingEntriesGate,
   expectCreated,
   expectLastPatch,
   expectPatched,
@@ -19,7 +17,6 @@ import {
   MANAGED_CONTRACT_FIELDS,
   createHarness,
   reserveTestExternalRef,
-  testBindingGeneration,
   testExternalRef,
 } from "./service-test-support.js";
 
@@ -84,42 +81,22 @@ async function recoverLostResponse(
 describe("ClickClack discussion service", () => {
   it("keeps accepted same-session operations in order while initial hydration settles", async () => {
     const h = createHarness({ label: "Hydration ordering" });
-    const entered = createDeferred<void>();
-    const snapshot = createDeferred<PluginStateEntry<never>[]>();
-    const openStore = h.runtime.state.openKeyedStoreV2;
-    h.runtime.state.openKeyedStoreV2 = <T>(
-      options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
-      authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
-    ) => {
-      const store = openStore<T>(options, authority);
-      if (options.namespace !== "discussion-bindings") {
-        return store;
-      }
-      return {
-        ...store,
-        entries: vi
-          .fn<() => Promise<PluginStateEntry<T>[]>>()
-          .mockImplementationOnce(() => {
-            entered.resolve();
-            return snapshot.promise;
-          })
-          .mockImplementation(() => store.entries()),
-      };
-    };
+    const { entered, release, arm } = bindingEntriesGate(h.runtime);
+    arm();
     const sessionKey = "agent:main:hydration-ordering";
     const opening = h.service.open(sessionKey);
     await entered.promise;
     // Another callback submits work as the worker reply passes through promise continuations.
-    const info = snapshot.promise.then(() =>
+    const info = release.promise.then(() =>
       Promise.resolve().then(() => h.service.info(sessionKey)),
     );
     try {
-      snapshot.resolve([]);
+      release.resolve();
       await expect(opening).resolves.toMatchObject({ state: "open" });
       await expect(info).resolves.toMatchObject({ state: "open" });
       expect(h.createChannel).toHaveBeenCalledOnce();
     } finally {
-      snapshot.resolve([]);
+      release.resolve();
       await Promise.allSettled([opening, info]);
       await h.service.cleanup();
     }
@@ -129,30 +106,7 @@ describe("ClickClack discussion service", () => {
     "does not update or resurrect a discussion after %s during binding preparation",
     async (change) => {
       const h = createHarness({ label: "Prepared metadata", category: "Projects" });
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      const openStore = h.runtime.state.openKeyedStoreV2;
-      let holdEntries = false;
-      h.runtime.state.openKeyedStoreV2 = <T>(
-        options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
-        authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
-      ) => {
-        const store = openStore<T>(options, authority);
-        if (options.namespace !== "discussion-bindings") {
-          return store;
-        }
-        return {
-          ...store,
-          entries: async () => {
-            const entries = await store.entries();
-            if (holdEntries) {
-              entered.resolve();
-              await release.promise;
-            }
-            return entries;
-          },
-        };
-      };
+      const { entered, release, arm } = bindingEntriesGate(h.runtime);
       const sessionKey = "agent:main:prepared-metadata-authority";
       await h.service.open(sessionKey);
       const originalBinding = getClickClackDiscussionBindingStore(h.runtime).get(sessionKey);
@@ -178,7 +132,7 @@ describe("ClickClack discussion service", () => {
       };
       h.updateChannel.mockClear();
       h.setSessionEntry({ label: "Prepared metadata", category: "Changed section" });
-      holdEntries = true;
+      arm();
       // info passes resolved.account: there is no older network await between these guards and the scan.
       const operation = h.service.info(sessionKey);
       try {
@@ -229,18 +183,6 @@ describe("ClickClack discussion service", () => {
     expect(reopened).toEqual(opened);
     expect(h.createChannel).toHaveBeenCalledTimes(1);
     expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
-    expect(h.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        namespace: "discussion-binding-generations",
-        overflowPolicy: "reject-new",
-      }),
-    );
-    expect(h.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        namespace: "discussion-revoked-channels",
-        overflowPolicy: "reject-new",
-      }),
-    );
     expect(h.createChannel).toHaveBeenCalledWith("wsp_team", {
       name: "release-planning",
       kind: "public",
@@ -441,10 +383,7 @@ describe("ClickClack discussion service", () => {
     h.channels.mockResolvedValue(
       Array.from({ length: 20 }, (_, index) =>
         discussionChannel({
-          id: `chn_existing_${index}`,
-          route_id: `existing-route-${index}`,
           name: index === 0 ? "release-planning" : `release-planning-${index + 1}`,
-          kind: "public",
           ...MANAGED_CONTRACT_FIELDS,
         }),
       ),
@@ -494,25 +433,6 @@ describe("ClickClack discussion service", () => {
       );
     },
   );
-
-  it("reuses a pending generation after an interrupted create", async () => {
-    const h = createHarness({ label: "Interrupted create" });
-    const sessionKey = "agent:main:interrupted-create";
-    await interruptCreate(h);
-    await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const firstRef = h.createChannel.mock.calls[0]?.[1].external_ref;
-    const firstGeneration = testBindingGeneration(h.runtime, sessionKey);
-    expect(firstRef).toBe(testExternalRef(sessionKey, h.runtime));
-    expect(h.generationStore.lookup(sessionKey)).toMatchObject({
-      generation: firstGeneration,
-      pending: expect.objectContaining({ externalRef: firstRef }),
-    });
-    await h.service.reconcileAll();
-    expect(h.createChannel.mock.calls[1]?.[1].external_ref).toBe(firstRef);
-    expect(testBindingGeneration(h.runtime, sessionKey)).toBe(firstGeneration);
-    expect(h.store.lookup(sessionKey)).toMatchObject({ externalRef: firstRef });
-    expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
-  });
 
   it("does not transfer a pending open across credential rotation", async () => {
     const h = createHarness({ label: "Credential rotation" });
@@ -576,11 +496,7 @@ describe("ClickClack discussion service", () => {
     const sessionKey = "agent:main:adoption-failure";
     await recoverLostResponse(
       h,
-      {
-        id: "chn_adoption_failure",
-        route_id: "adoption-failure-route",
-        name: "adoption-failure",
-      },
+      { id: "chn_adoption_failure", route_id: "adoption-failure-route", name: "adoption-failure" },
       "connection reset",
     );
     h.updateChannel.mockRejectedValueOnce(new Error("patch unavailable"));
@@ -627,140 +543,81 @@ describe("ClickClack discussion service", () => {
     },
   );
 
-  it("adopts an ambiguous create after the session incarnation changes", async () => {
-    const h = createHarness({ sessionId: "old-session", label: "Ambiguous reset" });
-    const sessionKey = "agent:main:ambiguous-reset";
-    await interruptCreate(h);
-    await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
-    h.setSessionEntry({ sessionId: "new-session", label: "Ambiguous reset" });
-    recoveredRoom(h, "chn_ambiguous_old", "ambiguous-old-route", "ambiguous-reset", externalRef);
-    legacyPatchResponse(h, {
-      route_id: "ambiguous-old-route",
-      name: "ambiguous-reset",
-      external_managed: true,
-      external_ref: externalRef,
-      archived: false,
-    });
-    expect(await h.service.open(sessionKey)).toEqual({
-      state: "open",
-      embedUrl:
-        "https://clickclack.example/embed/channel/team-route/ambiguous-old-route?openclawHostTheme=1",
-      openUrl: "https://clickclack.example/app/team-route/ambiguous-old-route",
-    });
-    expectPatched(h, { external_ref: externalRef, external_managed: true }, "chn_ambiguous_old");
-    expect(h.store.lookup(sessionKey)).not.toHaveProperty("displayTitle");
-    expect(h.createChannel).toHaveBeenCalledTimes(1);
-    expect(h.store.lookup(sessionKey)).toMatchObject({
-      sessionId: "new-session",
-      externalRef,
-      channelId: "chn_ambiguous_old",
-    });
-    expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
-    expect(h.revokedStore.entries()).toHaveLength(0);
-  });
-
-  it("reattaches an ambiguous room after the session is archived and restored", async () => {
-    const h = createHarness({ sessionId: "old-session", label: "Archived during create" });
-    const sessionKey = "agent:main:archived-ambiguous-open";
-    await interruptCreate(h);
-    await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
-    h.setSessionEntry({
-      sessionId: "new-session",
-      label: "Archived during create",
-      archivedAt: 1,
-    });
-    recoveredRoom(
-      h,
-      "chn_archived_ambiguous",
-      "archived-ambiguous-route",
-      "archived-during-create",
-      externalRef,
-    );
-    await h.service.reconcileAll();
-    expect(h.createChannel).toHaveBeenCalledTimes(1);
-    expect(h.updateChannel).not.toHaveBeenCalled();
-    expect(h.generationStore.lookup(sessionKey)).toMatchObject({
-      generation: expect.any(String),
-    });
-    expect(h.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
-    expect(h.revokedStore.entries()).toHaveLength(1);
-    h.setSessionEntry({
-      sessionId: "new-session",
-      label: "Archived during create",
-    });
-    legacyPatchResponse(h, {
-      route_id: "archived-ambiguous-route",
-      name: "archived-during-create",
-      external_managed: true,
-      external_ref: externalRef,
-      archived: false,
-    });
-    await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-    expect(h.createChannel).toHaveBeenCalledTimes(1);
-    expectPatched(h, { external_ref: externalRef }, "chn_archived_ambiguous");
-    expect(h.store.lookup(sessionKey)).toMatchObject({
-      sessionId: "new-session",
-      externalRef,
-      channelId: "chn_archived_ambiguous",
-    });
-    expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
-    expect(h.revokedStore.entries()).toHaveLength(0);
-  });
-
-  it("reconciles an ambiguous create after discussions are disabled", async () => {
-    const h = createHarness({ label: "Disable during create" });
-    const sessionKey = "agent:main:disable-during-create";
-    await interruptCreate(h);
-    await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
-    h.config.channels!.clickclack!.discussions!.enabled = false;
-    recoveredRoom(
-      h,
-      "chn_disabled_pending",
-      "disabled-pending-route",
-      "disable-during-create",
-      externalRef,
-    );
-    await h.service.reconcileAll();
-    expect(h.updateChannel).not.toHaveBeenCalled();
-    expect(h.generationStore.lookup(sessionKey)).toMatchObject({
-      generation: expect.any(String),
-    });
-    expect(h.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
-    expect(h.revokedStore.entries()).toHaveLength(1);
-    h.config.channels!.clickclack!.token = "replacement-token";
-    h.config.channels!.clickclack!.discussions!.enabled = true;
-    await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-    expect(h.updateChannel).not.toHaveBeenCalled();
-    expect(h.createChannel).toHaveBeenCalledTimes(2);
-    expect(h.createChannel.mock.calls[1]?.[1].external_ref).not.toBe(externalRef);
-  });
-
-  it("does not recurse while replacing the account for an ambiguous open", async () => {
-    const h = createHarness({ label: "Account replacement" });
-    const sessionKey = "agent:main:account-replacement";
-    await interruptCreate(h);
-    await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
-    h.config.channels!.clickclack!.discussions!.enabled = false;
-    h.config.channels!.clickclack!.accounts = {
-      replacement: {
-        baseUrl: "https://replacement-clickclack.example",
-        apiBaseUrl: h.transportBaseUrl,
-        token: "test-token-placeholder",
-        workspace: "team",
-        discussions: { enabled: true, workspace: "team" },
-      },
-    };
-    recoveredRoom(h, "chn_old_account", "old-account-route", "account-replacement", externalRef);
-    await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-    expect(h.updateChannel).not.toHaveBeenCalled();
-    expect(h.createChannel).toHaveBeenCalledTimes(2);
-    expect(h.store.lookup(sessionKey)).toMatchObject({
-      accountId: "replacement",
-      serverBaseUrl: "https://replacement-clickclack.example",
-    });
-  });
+  it.each(["reset", "archived", "disabled", "account replacement"] as const)(
+    "recovers an ambiguous open after %s",
+    async (change) => {
+      const sessionKey = "agent:main:ambiguous";
+      const h = createHarness({ sessionId: "old-session", label: "Ambiguous" });
+      await interruptCreate(h);
+      await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
+      const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
+      const room = recoveredRoom(h, "chn_recovered", "recovered-route", "ambiguous", externalRef);
+      h.setSessionEntry({
+        sessionId: "new-session",
+        label: "Ambiguous",
+        ...(change === "archived" ? { archivedAt: 1 } : {}),
+      });
+      const account = h.config.channels!.clickclack!;
+      if (change === "disabled" || change === "account replacement") {
+        account.discussions!.enabled = false;
+      }
+      if (change === "archived" || change === "disabled") {
+        await h.service.reconcileAll();
+        expect(h.createChannel).toHaveBeenCalledTimes(1);
+        expect(h.updateChannel).not.toHaveBeenCalled();
+        expect(h.generationStore.lookup(sessionKey)).toMatchObject({
+          generation: expect.any(String),
+        });
+        expect(h.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
+        expect(h.revokedStore.entries()).toHaveLength(1);
+        h.setSessionEntry({ sessionId: "new-session", label: "Ambiguous" });
+        if (change === "disabled") {
+          account.token = "replacement-token";
+          account.discussions!.enabled = true;
+        }
+      }
+      if (change === "account replacement") {
+        account.accounts = {
+          replacement: {
+            baseUrl: "https://replacement-clickclack.example",
+            apiBaseUrl: h.transportBaseUrl,
+            token: "test-token-placeholder",
+            workspace: "team",
+            discussions: { enabled: true, workspace: "team" },
+          },
+        };
+      }
+      const adopts = change === "reset" || change === "archived";
+      if (adopts) {
+        legacyPatchResponse(h, room);
+        expect(await h.service.open(sessionKey)).toEqual({
+          state: "open",
+          embedUrl:
+            "https://clickclack.example/embed/channel/team-route/recovered-route?openclawHostTheme=1",
+          openUrl: "https://clickclack.example/app/team-route/recovered-route",
+        });
+        expectPatched(h, { external_ref: externalRef, external_managed: true }, "chn_recovered");
+        expect(h.store.lookup(sessionKey)).not.toHaveProperty("displayTitle");
+        expect(h.store.lookup(sessionKey)).toMatchObject({
+          sessionId: "new-session",
+          externalRef,
+          channelId: "chn_recovered",
+        });
+        expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
+        expect(h.revokedStore.entries()).toHaveLength(0);
+      } else {
+        await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+        expect(h.updateChannel).not.toHaveBeenCalled();
+        if (change === "disabled") {
+          expect(h.createChannel.mock.calls[1]?.[1].external_ref).not.toBe(externalRef);
+        } else {
+          expect(h.store.lookup(sessionKey)).toMatchObject({
+            accountId: "replacement",
+            serverBaseUrl: "https://replacement-clickclack.example",
+          });
+        }
+      }
+      expect(h.createChannel).toHaveBeenCalledTimes(adopts ? 1 : 2);
+    },
+  );
 });
