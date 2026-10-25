@@ -182,7 +182,7 @@ The agent has three tools for working with memory:
 
 - **`memory_search`** — finds relevant notes using semantic search, even when
   the wording differs from the original.
-- **`memory_get`** — reads a specific memory file or line range.
+- **`memory_get`** — reads a specific memory file, line range, or named section.
 - **`intent`** — creates, lists, or explicitly cancels event-conditioned
   standing intents. Time-based reminders continue to use scheduled tasks.
 
@@ -211,6 +211,26 @@ report the excerpt limitation instead of reading raw transcript files.
 `memory_get` reports unsupported paths as read errors, not missing arguments or a
 globally disabled memory service. Memory-file reads and optional wiki reads keep
 their existing range, continuation, and partial-corpus semantics.
+
+For Markdown memory files, pass `heading` to read one section without first
+looking up its line numbers. For example:
+
+```json
+{ "path": "memory/store-policy.md", "heading": "Refunds", "corpus": "memory" }
+```
+
+The heading must uniquely match the exact ATX heading text (`#` through `######`,
+without the leading markers or optional closing markers). Child sections are
+included; the next heading of equal or higher level ends the excerpt. Headings
+inside fenced code and leading YAML frontmatter are ignored. Setext headings and
+headings inside block quotes or lists are not supported by this selector.
+Missing or duplicate headings return an explicit error instead of guessing;
+omit `heading` and use `from`/`lines` to read those files by line.
+
+Existing line and character budgets still apply. If the result has `nextFrom`,
+repeat the same `heading` and pass `from: nextFrom` (an absolute source line) to
+continue within that section. The selector supports omitted corpus or
+`corpus: "memory"`, not `wiki` or `all`, and does not expand allowed file paths.
 
 ## Memory search
 

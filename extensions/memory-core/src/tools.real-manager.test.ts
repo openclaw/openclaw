@@ -91,6 +91,36 @@ describe("memory_search real manager", () => {
     vi.restoreAllMocks();
   });
 
+  it("reads a bounded section through memory_get and reports heading selection errors", async () => {
+    const cfg = keywordConfig();
+    await fs.writeFile(
+      path.join(fixture.paths.workspace, "MEMORY.md"),
+      "# Policy\n## Refunds\n30 days\n### Exceptions\nCustom excluded\n## Shipping\nOther\n## Duplicate\nOne\n## Duplicate\nTwo\n",
+    );
+    const get = createMemoryGetTool({ config: cfg, agentId: "main" })!;
+    const request = { path: "MEMORY.md", heading: "Refunds", corpus: "memory" };
+    expect((await get.execute("heading", request)).details).toEqual({
+      status: "ok",
+      path: "MEMORY.md",
+      from: 2,
+      lines: 4,
+      text: "## Refunds\n30 days\n### Exceptions\nCustom excluded",
+    });
+    for (const [heading, code] of [
+      ["Missing", "MEMORY_HEADING_NOT_FOUND"],
+      ["Duplicate", "MEMORY_HEADING_AMBIGUOUS"],
+    ]) {
+      expect((await get.execute("invalid-heading", { ...request, heading })).details).toMatchObject(
+        { status: "error", text: "", code },
+      );
+    }
+    for (const corpus of ["wiki", "all"]) {
+      expect(
+        (await get.execute("unsupported-corpus", { ...request, corpus })).details,
+      ).toMatchObject({ status: "error", text: "", code: "MEMORY_HEADING_UNSUPPORTED_CORPUS" });
+    }
+  });
+
   it.each([
     { name: "non-first system agent", systemAgent: true, pinned: false },
     { name: "pinned workspaces", systemAgent: false, pinned: true },
