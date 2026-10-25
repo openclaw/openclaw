@@ -12,7 +12,7 @@ import {
   workspacePackageExportAliasEntries,
 } from "../src/plugins/sdk-alias-workspace.ts";
 import { createStandaloneArtifactAdapter } from "./lib/bun-standalone-artifacts.mjs";
-import { bundleStandaloneModules } from "./lib/bun-standalone-bundle.mjs";
+import { bundleStandaloneModules, relinkStandaloneModules } from "./lib/bun-standalone-bundle.mjs";
 import { createStandaloneCodegenAdapter } from "./lib/bun-standalone-codegen.mjs";
 import {
   assertStandaloneCompiler,
@@ -793,13 +793,21 @@ do {
   result = await bundleStandaloneModules(
     { ...buildOptions, entrypoints: sourceEntrypoints() },
     Bun.build,
-    parse,
   );
   if (!result.success) {
     throw new AggregateError(result.logs, "Standalone bundle failed");
   }
   discoverMore = Boolean(sourceGraph) && sourceEntrypoints().length !== discoveredRoots;
 } while (discoverMore);
+result = await relinkStandaloneModules(
+  { ...buildOptions, entrypoints: sourceEntrypoints() },
+  result,
+  Bun.build,
+  parse,
+);
+if (!result.success) {
+  throw new AggregateError(result.logs, "Standalone final link failed");
+}
 if (sourceGraph) {
   for (const output of result.outputs) {
     if (/\.[cm]?js$/.test(output.path)) {
@@ -923,7 +931,7 @@ if (nativeTables === 0) {
   throw new Error("Standalone bundle omitted its native resource resolution table");
 }
 // Bun preserves CJS -> ESM requires as import.meta.require in split output.
-// The second split pass moves callers, so pin those edges to embedded entry names.
+// Native compilation can move callers again, so pin edges to embedded entry names.
 const splitRequireEdges = [];
 const compiledEntrySet = new Set(compiledEntries);
 for (const filename of compiledEntries) {

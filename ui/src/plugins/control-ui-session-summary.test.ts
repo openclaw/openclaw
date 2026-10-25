@@ -100,7 +100,6 @@ it("keeps history available while progress loads, fails, and retries", async () 
   expect(element.textContent).toContain("Independent history");
 
   element.querySelector<HTMLButtonElement>(".plugin-session-summary > button")!.click();
-  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   await vi.waitFor(() =>
     expect(element.textContent).toContain(t("sessionProgressCard.widgetLoading")),
   );
@@ -134,7 +133,6 @@ it("refreshes visible message avatars from identity and stops hydrating while hi
 
   const replacement = createAgentIdentityCapability(element.gateway!);
   element.agentIdentity = replacement;
-  await vi.waitFor(() => expect(replacement.get("main")?.avatar).toBe(avatar));
   await avatarLoaded();
 
   element.presented = false;

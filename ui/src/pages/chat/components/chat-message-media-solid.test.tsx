@@ -8,6 +8,7 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { stubManualIntersectionObserver } from "./chat-media-observer.test-support.ts";
 import { loadAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
@@ -268,30 +269,7 @@ it("retries a standalone native image after a failed preview", async () => {
 
 it("cancels an offscreen poster request and releases a parked poster without replacing its button", async () => {
   const intersections: ((visible: boolean) => void)[] = [];
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      private readonly targets = new Set<Element>();
-      constructor(private readonly callback: IntersectionObserverCallback) {}
-      observe(target: Element) {
-        this.targets.add(target);
-        intersections.push((isIntersecting) => {
-          if (this.targets.has(target)) {
-            this.callback(
-              [{ target, isIntersecting } as IntersectionObserverEntry],
-              this as unknown as IntersectionObserver,
-            );
-          }
-        });
-      }
-      unobserve(target: Element) {
-        this.targets.delete(target);
-      }
-      disconnect() {
-        this.targets.clear();
-      }
-    },
-  );
+  stubManualIntersectionObserver((_target, notify) => intersections.push(notify));
   const createObjectURL = vi.fn(() => "blob:video-poster");
   const revokeObjectURL = stubObjectUrls(createObjectURL);
   const first = createDeferred<Blob | null>();
