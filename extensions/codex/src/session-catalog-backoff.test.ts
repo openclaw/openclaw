@@ -66,6 +66,11 @@ function holdRpc() {
   });
   return { started, pending };
 }
+async function remoteControl(name: string) {
+  const factory = remoteCatalogFactory(name);
+  const source = (await factory.homesForAgent("main"))[0]!;
+  return { factory, source, control: factory.forRequest("main", source) };
+}
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.closeAndWait()));
   vi.restoreAllMocks();
@@ -144,9 +149,7 @@ it("settles a successful prefix recovery probe before the next activity check", 
     expect(method).toBe("thread/list");
     return nativePage(native, Number(params.cursor ?? 0), 64);
   });
-  const factory = remoteCatalogFactory("prefix-recovery");
-  const source = (await factory.homesForAgent("main"))[0]!;
-  const control = factory.forRequest("main", source);
+  const { factory, source, control } = await remoteControl("prefix-recovery");
   const harness = createClientHarness();
   await observeCodexCatalogClient(harness.client, {
     startOptions: source.appServer.start,
@@ -330,26 +333,13 @@ it("selects the recorded package for passive catalogs even with a user home", as
   });
 });
 
-it("leaves explicit homes cold until a catalog request admits them", async () => {
+it("keeps explicit homes cold until requested and retires their refresh loop on stop", async () => {
+  fakeClock();
   rpc.mockResolvedValue({ data: [] });
-  const factory = remoteCatalogFactory("retired-catalog");
+  const { factory, control } = await remoteControl("retired-catalog");
   await factory.start();
   expect(factory.hasActiveWork()).toBe(false);
   expectCalls(0);
-
-  const source = (await factory.homesForAgent("main"))[0]!;
-  await factory.forRequest("main", source).initialize();
-  expectCalls(1);
-  await factory.stop();
-  expect(factory.hasActiveWork()).toBe(false);
-});
-
-it("retires the resident refresh loop when its catalog owner stops", async () => {
-  fakeClock();
-  rpc.mockResolvedValue({ data: [] });
-  const factory = remoteCatalogFactory("retired-catalog");
-  const source = (await factory.homesForAgent("main"))[0]!;
-  const control = factory.forRequest("main", source);
   await control.initialize();
   expectCalls(1);
   await vi.advanceTimersByTimeAsync(15 * 60_000);
