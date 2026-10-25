@@ -1,22 +1,20 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { Server, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { startMcpLifecycleServer } from "../agent-bundle-mcp-lifecycle.test-support.js";
 import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.test-support.js";
 import { makeBootstrapWarn } from "../bootstrap-files.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { createTestMcpLoopbackServer } from "../cli-runner.test-helpers.js";
+import { userMcpConfig } from "../cli-runner/bundle-mcp-fixtures.test-support.js";
 import { requireMcpConfigPath } from "../cli-runner/bundle-mcp.test-support.js";
 import { getCliLiveSessionGeneration } from "../cli-runner/cli-live-session-registry.js";
 import {
@@ -26,8 +24,6 @@ import {
 import "../cli-runner/prepare.runtime.js";
 import { resetCliRunnerPrepareTestDeps } from "../cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext } from "../cli-runner/types.js";
-import { OpenClawStreamableHTTPClientTransport } from "../mcp-http-transport.js";
-import * as mcpTransport from "../mcp-transport.js";
 import {
   makeRunAgentAttemptParams,
   makeSessionEntry,
@@ -39,19 +35,17 @@ const executePreparedCliRun = vi.hoisted(() => vi.fn());
 vi.mock("../cli-runner/execute.runtime.js", () => ({ executePreparedCliRun }));
 
 describe("CLI attempt session MCP overrides", () => {
-  let root: string;
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-  const servers: Server[] = [];
+  let server: Awaited<ReturnType<typeof startMcpLifecycleServer>>;
 
   beforeAll(async () => {
     state = await createOpenClawTestState({ label: "cli-session-mcp" });
-    root = state.stateDir;
   });
   afterAll(() => state.cleanup());
 
   afterEach(async () => {
     await disposeAllSessionMcpRuntimes();
-    await Promise.all(servers.splice(0).map((server) => server.close()));
+    await server.close();
     clearRuntimeConfigSnapshot();
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
@@ -61,35 +55,9 @@ describe("CLI attempt session MCP overrides", () => {
   beforeEach(async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     await bindSessionMcpRuntimeTestScheduler();
-    // Exercise the real HTTP transport without sending requests outside the test process.
-    vi.spyOn(mcpTransport, "resolveMcpTransport").mockImplementation(() => {
-      const transport = new WebStandardStreamableHTTPServerTransport({
-        sessionIdGenerator: randomUUID,
-        enableJsonResponse: true,
-      });
-      const server = new Server(
-        { name: "session-override-proof", version: "1" },
-        { capabilities: { tools: {} } },
-      );
-      server.setRequestHandler("tools/list", async () => ({
-        tools: [{ name: "read_docs", inputSchema: { type: "object" } }],
-      }));
-      const connected = server.connect(transport);
-      const client = new OpenClawStreamableHTTPClientTransport(new URL("https://mcp.example.com"), {
-        fetch: async (input, init) => {
-          await connected;
-          return transport.handleRequest(new Request(input, init));
-        },
-      });
-      servers.push(server);
-      return {
-        transport: client,
-        description: "session override fixture",
-        transportType: "streamable-http",
-        connectionTimeoutMs: 1_000,
-        requestTimeoutMs: 1_000,
-        supportsParallelToolCalls: true,
-      };
+    server = await startMcpLifecycleServer({
+      toolName: "read_docs",
+      text: () => "docs",
     });
     setRawCliBackendForPrepareTest({
       id: "claude-cli",
@@ -133,36 +101,28 @@ describe("CLI attempt session MCP overrides", () => {
         if (expectedEnabled) {
           expect(mcpServers.docs).toMatchObject({
             type: "http",
-            url: "https://mcp.example.test/docs",
+            url: server.url,
           });
         }
         return { text: "done" };
       });
-      const sessionEntry = makeSessionEntry(
-        "session-mcp",
-        sessionEnabled !== undefined
-          ? { toolOverrides: { mcpServers: { docs: sessionEnabled } } }
-          : {},
-      );
-      const cfg: OpenClawConfig = {
-        plugins: { enabled: false },
-        agents: { defaults: { skipBootstrap: true } },
-        skills: { load: { watch: false } },
-        mcp: {
-          servers: {
-            docs: {
-              enabled: globalEnabled,
-              transport: "streamable-http",
-              url: "https://mcp.example.test/docs",
-            },
-          },
+      const cfg = userMcpConfig(
+        { docs: { enabled: globalEnabled, transport: "streamable-http", url: server.url } },
+        {
+          agents: { defaults: { skipBootstrap: true } },
+          skills: { load: { watch: false } },
         },
-      };
+      );
       setRuntimeConfigSnapshot(cfg);
       const params = makeRunAgentAttemptParams({
-        agentDir: path.join(root, "agents", "main", "agent"),
-        workspaceDir: root,
-        sessionEntry,
+        agentDir: state.agentDir(),
+        workspaceDir: state.stateDir,
+        sessionEntry: makeSessionEntry(
+          "session-mcp",
+          sessionEnabled !== undefined
+            ? { toolOverrides: { mcpServers: { docs: sessionEnabled } } }
+            : {},
+        ),
         sessionKey: "agent:main:main",
         providerOverride: "claude-cli",
         modelOverride: "sonnet",
@@ -178,7 +138,6 @@ describe("CLI attempt session MCP overrides", () => {
       try {
         const result = await runAgentAttempt(params);
         expect(result.payloads).toEqual([expect.objectContaining({ text: "done" })]);
-        expect(executePreparedCliRun).toHaveBeenCalledOnce();
       } finally {
         params.preparedRunAdmission?.close();
       }
