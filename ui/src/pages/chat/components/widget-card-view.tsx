@@ -42,8 +42,9 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
-import "./browser-tab-card.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import "./browser-tab-card.css";
+import { TranscriptRowKeyContext } from "./chat-transcript-layout.ts";
 import { WidgetCardMenu, type WidgetRawDetailsLabel } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
 import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
@@ -374,6 +375,7 @@ function WidgetContent(props: {
   options?: WidgetCardOptions;
   onExportSource: (source: WidgetExportSource) => void;
 }) {
+  const rowKey = useContext(TranscriptRowKeyContext);
   const managed = () =>
     props.preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(props.preview);
   const layoutKey = () => widgetPreviewLayoutKey(props.preview);
@@ -401,7 +403,7 @@ function WidgetContent(props: {
                   frameKey: props.preview.url?.trim() || props.preview.viewId?.trim(),
                   height: height(),
                   onHeightChange: (nextHeight) =>
-                    props.options?.widgetLayout?.write(layoutKey(), nextHeight),
+                    props.options?.widgetLayout?.write(layoutKey(), nextHeight, rowKey()),
                   sandbox: props.sandbox,
                   promptCapable: isInternalCanvasEntryUrl(props.preview.url),
                 }}
@@ -428,7 +430,7 @@ function WidgetContent(props: {
                     title={props.preview.title?.trim() || t("chat.toolCards.canvas")}
                     preferredHeight={height()}
                     onHeightChange={(nextHeight) =>
-                      props.options?.widgetLayout?.write(layoutKey(), nextHeight)
+                      props.options?.widgetLayout?.write(layoutKey(), nextHeight, rowKey())
                     }
                     allowScripts={props.sandbox.includes("allow-scripts")}
                     connectionGeneration={getCanvasWidgetFrameConnectionGeneration()}
@@ -449,7 +451,7 @@ function WidgetContent(props: {
                 viewId={app().viewId}
                 height={height()}
                 onHeightChange={(nextHeight: number) =>
-                  props.options?.widgetLayout?.write(layoutKey(), nextHeight)
+                  props.options?.widgetLayout?.write(layoutKey(), nextHeight, rowKey())
                 }
                 title={props.preview.title?.trim() || t("mcpApp.title")}
               />

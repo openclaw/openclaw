@@ -1,6 +1,8 @@
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,
@@ -263,11 +265,22 @@ export function projectTranscriptIndex(
     // New row keys measure expanded work immediately; existing keys keep their
     // cached height until ResizeObserver reports the changed layout.
     const rows: TranscriptRow<ChatRenderItem>[] = [];
+    const row = (item: ChatRenderItem, key = item.key): TranscriptRow<ChatRenderItem> => {
+      const messages = chatItemGroups(item).flatMap((group) =>
+        group.messages.map((source) => source.message),
+      );
+      const content = JSON.stringify(
+        messages.length
+          ? messages.map((message) => nativeHistoryMessageIdentity(message) ?? message)
+          : item,
+      );
+      return { kind: "item", key, item, revision: `${content.length}:${fnv1aUtf16(content)}` };
+    };
     for (const item of chain.transcriptItems) {
-      rows.push({ kind: "item", key: item.key, item });
+      rows.push(row(item));
       if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
         for (const group of item.groups) {
-          rows.push({ kind: "item", key: `${item.key}:${group.key}`, item: group });
+          rows.push(row(group, `${item.key}:${group.key}`));
         }
       }
       const parts = item.kind === "agent-run-frame" ? item.parts : [item];

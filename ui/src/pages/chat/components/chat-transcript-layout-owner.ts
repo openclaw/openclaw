@@ -1,3 +1,10 @@
+import type { Virtualizer } from "@tanstack/virtual-core";
+import { i18n } from "../../../i18n/index.ts";
+import { getExpandedToolCards, getExpandedUserMessages } from "../chat-thread.ts";
+import type { ChatWidgetLayout } from "../session-message-cache.ts";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   publishTranscriptScroll,
   readTranscriptViewport,
@@ -27,6 +34,68 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
+  ready = false;
+  rows: readonly TranscriptRow[] = [];
+  rowLayout?: ChatWidgetLayout;
+  private rowPresentation = "";
+  rowWidth = 0;
+
+  configureRows(props: ChatThreadProps, avatarPlacement: string): void {
+    this.ready = !props.loading;
+    this.rowLayout = props.widgetLayout;
+    const font = props.applicationContext?.theme.settings;
+    this.rowPresentation = JSON.stringify([
+      avatarPlacement,
+      props.chatBubbleMode,
+      i18n.getLocale(),
+      font?.fontChat,
+      font?.fontUi,
+      font?.theme,
+      font?.customTheme?.light["font-body"],
+      font?.customTheme?.dark["font-body"],
+      font?.customTheme?.light.mono,
+      font?.customTheme?.dark.mono,
+      props.showThinking,
+      props.showToolCalls,
+      props.persistCommentary,
+      typeof window === "undefined" ? 1 : window.devicePixelRatio,
+      ...getExpandedToolCards(props.sessionKey),
+      ...getExpandedUserMessages(props.sessionKey),
+    ]);
+  }
+
+  private rowLayoutKey(index: number, width = this.rowWidth): string | undefined {
+    const row = this.rows[index];
+    return width > 0 && row?.kind === "item" && row.revision
+      ? `row:v1:${width}:${this.rowPresentation}:${row.revision}:${JSON.stringify(row.key)}`
+      : undefined;
+  }
+
+  readonly rowMinimum = (index: number): number => {
+    const key = this.rowLayoutKey(index);
+    // Keep unchanged content reserved through independently committed lazy children.
+    // A new revision or layout retires it without guessing when every child has hydrated.
+    return key ? (this.rowLayout?.read(key) ?? 0) : 0;
+  };
+
+  readonly measureRow: typeof measureTranscriptRow = (element, entry, instance) => {
+    const size = measureTranscriptRow(element, entry, instance);
+    const index = instance.indexFromElement(element);
+    const width = entry?.borderBoxSize[0]?.inlineSize;
+    if (
+      this.rowLayout &&
+      width &&
+      this.ready &&
+      element.checkVisibility({ contentVisibilityAuto: true })
+    ) {
+      const key = this.rowLayoutKey(index, Math.round(width));
+      if (key) {
+        this.rowLayout.write(key, size);
+      }
+    }
+    return Math.max(size, this.rowMinimum(index));
+  };
+
   private viewport: HTMLDivElement | null = null;
   private observers: ResizeObserver[] = [];
   private composerFloat: HTMLElement | null = null;
