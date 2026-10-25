@@ -68,8 +68,8 @@ function bounds(parent: ParentNode, selector: string) {
   return element(parent, selector).getBoundingClientRect();
 }
 
-function element<T extends HTMLElement = HTMLElement>(parent: ParentNode, selector: string): T {
-  const found = parent.querySelector<T>(selector);
+function element(parent: ParentNode, selector: string) {
+  const found = parent.querySelector<HTMLElement>(selector);
   expect(found).toBeInstanceOf(HTMLElement);
   return found!;
 }
@@ -251,14 +251,14 @@ describe.runIf(browserMode)("skill bundle file preview", () => {
           ".search, openclaw-modal-actions, .chips, .item-meta, .state, .list-section, .detail-head, .foot, .chat-copy-btn, .code-block-copy, script",
         ),
       ).toBeNull();
-      const close = element<HTMLButtonElement>(preview, '[aria-label="Close"]');
+      const close = element(preview, '[aria-label="Close"]');
       expect(close.getBoundingClientRect().right).toBeLessThanOrEqual(width);
       expect(preview.querySelectorAll(".item")).toHaveLength(4);
       expect(preview.querySelectorAll("details")).toHaveLength(3);
       const markdown = element(preview, ".markdown").textContent;
       expect(markdown).toContain("Last complete instruction.");
       expect(markdown).not.toContain("truncated");
-      const binary = element<HTMLButtonElement>(preview, '[data-path="assets/image.png"]');
+      const binary = element(preview, '[data-path="assets/image.png"]');
       binary.click();
       await preview.updateComplete;
       expect(element(preview, ".detail-body").textContent).toContain(
