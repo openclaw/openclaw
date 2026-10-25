@@ -1,5 +1,6 @@
 import { controlUiAccentInk } from "./accent-contrast.ts";
 import { controlUiDocumentHead } from "./control-ui-document-head.ts";
+import { controlUiPaletteStyle } from "./control-ui-palette-style.ts";
 
 const ACCENT_CSS_VARIABLES = [
   "--ring",
@@ -34,14 +35,13 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
   const narrow = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
-  const revision = () =>
-    JSON.stringify([
-      root.dataset.theme,
-      root.dataset.themeMode,
-      root.getAttribute("style"),
-      narrow && hasChatShell,
-    ]);
-  if (!paletteChanged && systemChromeRevisions.get(root) === revision()) {
+  const revision = JSON.stringify([
+    root.dataset.theme,
+    root.dataset.themeMode,
+    controlUiPaletteStyle(root),
+    narrow && hasChatShell,
+  ]);
+  if (!paletteChanged && systemChromeRevisions.get(root) === revision) {
     return;
   }
   const computedStyle = getComputedStyle(root);
@@ -58,8 +58,7 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
     meta.content = background;
     meta.removeAttribute("media");
   }
-  // Include our own output so the next shell commit does not invalidate the sample.
-  systemChromeRevisions.set(root, revision());
+  systemChromeRevisions.set(root, revision);
 }
 
 export function applyControlUiAccent(userAccent?: string): void {
