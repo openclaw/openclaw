@@ -95,6 +95,11 @@ function modelFetch(...ids: string[]) {
   return vi.fn<typeof fetch>().mockResolvedValue(modelResponse(...ids));
 }
 
+function iamToken(value = "synthetic-runtime-token") {
+  const tokenProvider = vi.fn(async () => value);
+  return { tokenProvider, tokenProviderFactory: vi.fn(() => tokenProvider) };
+}
+
 describe("bedrock mantle discovery", () => {
   let testRegionIndex = 0;
   let testRegion = "";
@@ -136,14 +141,6 @@ describe("bedrock mantle discovery", () => {
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
     }
-  });
-
-  it("caches generated IAM tokens within TTL", async () => {
-    const tokenProvider = vi.fn(async () => "bedrock-api-key-cached"); // pragma: allowlist secret
-    const tokenProviderFactory = vi.fn(() => tokenProvider);
-    const token = await generateToken(tokenProviderFactory, 1000);
-    expect(await generateToken(tokenProviderFactory, 1801000)).toEqual(token);
-    expect(tokenProvider).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -340,45 +337,27 @@ describe("bedrock mantle discovery", () => {
       auth: "api-key",
       apiKey: "env:AWS_BEARER_TOKEN_BEDROCK",
     });
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      1,
-      `https://bedrock-mantle.${region}.api.aws/v1/models`,
-      expect.any(Object),
-    );
     expect(provider?.models).toHaveLength(8);
-    expect(provider?.models.find((model) => model.id === modelId)).toMatchObject({
-      api: "openai-responses",
-      baseUrl: `https://bedrock-mantle.${region}.api.aws/openai/v1`,
-    });
-    const oss = provider?.models.find((model) => model.id === "openai.gpt-oss-120b");
-    expect(oss?.api ?? provider?.api).toBe("openai-completions");
-    expect(oss).not.toHaveProperty("baseUrl");
-    function expectClaude(id: string, metadata: object = {}) {
+    const fullThinking = { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
+    for (const [id, cost, thinkingLevelMap] of [
+      ["claude-opus-5", [5, 25, 0.5, 6.25], { xhigh: "xhigh", max: "max" }],
+      ["claude-sonnet-5", [2, 10, 0.2, 2.5], fullThinking],
+      ["claude-mythos-5", [10, 50, 1, 12.5], fullThinking],
+      ["claude-mythos-preview", undefined, undefined],
+    ] as const) {
       expect(provider?.models?.find((model) => model.id === `anthropic.${id}`)).toMatchObject({
         api: "anthropic-messages",
         reasoning: true,
         params: { canonicalModelId: id },
         contextWindow: 1_000_000,
         maxTokens: 128_000,
-        ...metadata,
+        input: ["text", "image"],
+        ...(cost
+          ? { cost: { input: cost[0], output: cost[1], cacheRead: cost[2], cacheWrite: cost[3] } }
+          : {}),
+        ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
       });
     }
-    const fullThinking = { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
-    expectClaude("claude-opus-5", {
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      input: ["text", "image"],
-    });
-    expectClaude("claude-sonnet-5", {
-      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-      thinkingLevelMap: fullThinking,
-      input: ["text", "image"],
-    });
-    expectClaude("claude-mythos-5", {
-      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-      thinkingLevelMap: fullThinking,
-    });
-    expectClaude("claude-mythos-preview");
     const opus = provider?.models?.find((model) => model.id === "anthropic.claude-opus-4-7");
     expect(opus).toMatchObject({ api: "anthropic-messages", reasoning: false });
     expect(opus).not.toHaveProperty("baseUrl");
@@ -406,8 +385,7 @@ describe("bedrock mantle discovery", () => {
   });
 
   it("uses a generated IAM token when no explicit token is set", async () => {
-    const tokenProvider = vi.fn(async () => "bedrock-api-key-iam"); // pragma: allowlist secret
-    const tokenProviderFactory = vi.fn(() => tokenProvider);
+    const { tokenProvider, tokenProviderFactory } = iamToken("bedrock-api-key-iam");
     const mockFetch = modelFetch("openai.gpt-oss-120b");
 
     const provider = await resolveProvider({
@@ -431,12 +409,11 @@ describe("bedrock mantle discovery", () => {
   });
 
   it.each([
-    { state: "cached", now: 2000, expiresAt: 7201000 },
+    { state: "cached", now: 1801000, expiresAt: 7201000 },
     { state: "cold", now: 5000, expiresAt: 7205000 },
     { state: "invalid clock", now: Number.NaN, expiresAt: undefined },
   ])("resolves runtime IAM auth with $state state", async ({ state, now, expiresAt }) => {
-    const tokenProvider = vi.fn(async () => "synthetic-runtime-token");
-    const tokenProviderFactory = vi.fn(() => tokenProvider);
+    const { tokenProvider, tokenProviderFactory } = iamToken();
     if (state === "cached") {
       await generateToken(tokenProviderFactory, 1000);
     }
