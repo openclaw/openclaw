@@ -46,12 +46,6 @@ vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) =>
   buildPreparedModelsProviderData: callbackMocks.buildModelsProviderData,
 }));
 
-function sendJson(response: ServerResponse, result: unknown): void {
-  // Same-process model selection can stall past the loopback socket's idle timeout.
-  response.writeHead(200, { "content-type": "application/json", connection: "close" });
-  response.end(JSON.stringify({ ok: true, result }));
-}
-
 function sendError(response: ServerResponse, code: number, description: string) {
   response.writeHead(code, { "content-type": "application/json" });
   response.end(JSON.stringify({ ok: false, error_code: code, description }));
@@ -85,15 +79,24 @@ async function tapModel(
   });
 }
 
-async function withApi(
-  handler: (method: string, payload: Record<string, unknown>, response: ServerResponse) => void,
-  run: (apiRoot: string, requests: typeof http.requests) => Promise<void>,
+function serveApi(
+  handlers: Record<string, (payload: Record<string, unknown>, response: ServerResponse) => unknown>,
 ) {
   http.handleRequest = (method, payload, response) => {
-    handler(method, payload, response);
+    const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined;
+    if (method !== "answerCallbackQuery" && !handler) {
+      sendError(response, 404, method);
+      return true;
+    }
+    const result = method === "answerCallbackQuery" ? true : handler!(payload, response);
+    if (response.writableEnded) {
+      return true;
+    }
+    // Same-process model selection can outlive the loopback socket's idle timeout.
+    response.writeHead(200, { "content-type": "application/json", connection: "close" });
+    response.end(JSON.stringify({ ok: true, result }));
     return true;
   };
-  await run(http.cfg.channels.telegram.apiRoot, http.requests);
 }
 
 function configureRouter(apiRoot: string, storePath: string, media = false) {
@@ -179,214 +182,192 @@ describe("Telegram model callback loopback", () => {
   it("browses equivalent routes and selects the retained runtime and an opaque model over HTTP", async () => {
     const stateDir = sessionDirs.make();
     let sentMessage: Record<string, unknown> | undefined;
-    await withApi(
-      (method, payload, response) => {
-        if (method === "sendMessage") {
-          const replyMarkup = payload.reply_markup as
-            | { inline_keyboard?: Array<Array<{ callback_data?: string }>> }
-            | undefined;
-          for (const button of replyMarkup?.inline_keyboard?.flat() ?? []) {
-            if (
-              typeof button.callback_data !== "string" ||
-              Buffer.byteLength(button.callback_data, "utf8") > 64
-            ) {
-              sendError(response, 400, "BUTTON_DATA_INVALID");
-              return;
-            }
+    serveApi({
+      sendMessage: (payload, response) => {
+        const replyMarkup = payload.reply_markup as
+          | { inline_keyboard?: Array<Array<{ callback_data?: string }>> }
+          | undefined;
+        for (const button of replyMarkup?.inline_keyboard?.flat() ?? []) {
+          if (
+            typeof button.callback_data !== "string" ||
+            Buffer.byteLength(button.callback_data, "utf8") > 64
+          ) {
+            sendError(response, 400, "BUTTON_DATA_INVALID");
+            return;
           }
-          sentMessage = telegramMessage(88, {
-            text: payload.text,
-            reply_markup: replyMarkup,
-          });
-          sendJson(response, sentMessage);
-        } else if (method === "answerCallbackQuery") {
-          sendJson(response, true);
-        } else if (method === "editMessageText") {
-          sentMessage = {
-            ...sentMessage,
-            text: payload.text,
-            reply_markup: payload.reply_markup,
-          };
-          sendJson(response, sentMessage);
-        } else {
-          sendError(response, 404, method);
         }
+        sentMessage = telegramMessage(88, {
+          text: payload.text,
+          reply_markup: replyMarkup,
+        });
+        return sentMessage;
       },
-      async (apiRoot, requests) => {
-        const storePath = join(stateDir, "sessions.json");
-        const { config, bot, authorization } = configureRouter(apiRoot, storePath);
-        config.agents!.defaults!.models!["anthropic/claude-opus-4-6"] = {
-          agentRuntime: { id: "claude-cli" },
+      editMessageText: (payload) => {
+        sentMessage = {
+          ...sentMessage,
+          text: payload.text,
+          reply_markup: payload.reply_markup,
         };
-        const registry = createEmptyPluginRegistry();
-        registry.cliBackends.push({
-          pluginId: "anthropic",
-          source: "fixture",
-          backend: {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            config: { command: "unused-fixture-cli" },
-          },
-        });
-        setActivePluginRegistry(registry);
-        const catalog = [
-          { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
-          { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus (CLI)" },
-          { provider: PROVIDER, id: MODEL, name: MODEL, api: "ollama" as const },
-        ];
-        // Fix external inventory/auth facts; grouping, callback routing, HTTP and persistence stay real.
-        await mockPublishedModelRuntimeForTest({
-          config,
-          facts: {
-            authModes: { "claude-cli": "api_key" },
-            modelCatalog: { entries: catalog, routeVariants: catalog },
-          },
-          paths: { agentDir: join(stateDir, "agent"), workspaceDir: stateDir },
-          authStore: {
-            version: 1,
-            profiles: Object.fromEntries(
-              ["anthropic", "claude-cli", PROVIDER].map((provider) => [
-                provider,
-                { type: "api_key" as const, provider, key: "synthetic-key" },
-              ]),
-            ),
-          },
-        });
-        const actual = await vi.importActual<
-          typeof import("openclaw/plugin-sdk/models-provider-runtime")
-        >("openclaw/plugin-sdk/models-provider-runtime");
-        callbackMocks.buildModelsProviderData.mockImplementation(
-          actual.buildPreparedModelsProviderData,
-        );
-        await sendMessageTelegram(String(CHAT_ID), "Browse models:", {
-          cfg: config,
-          token: TOKEN,
-          buttons: [[{ text: "Browse providers", callback_data: "mdl_prov" }]],
-        });
+        return sentMessage;
+      },
+    });
+    const apiRoot = http.cfg.channels.telegram.apiRoot;
+    const requests = http.requests;
+    const storePath = join(stateDir, "sessions.json");
+    const { config, bot, authorization } = configureRouter(apiRoot, storePath);
+    config.agents!.defaults!.models!["anthropic/claude-opus-4-6"] = {
+      agentRuntime: { id: "claude-cli" },
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.cliBackends.push({
+      pluginId: "anthropic",
+      source: "fixture",
+      backend: {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "unused-fixture-cli" },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const catalog = [
+      { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+      { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus (CLI)" },
+      { provider: PROVIDER, id: MODEL, name: MODEL, api: "ollama" as const },
+    ];
+    // Fix external inventory/auth facts; grouping, callback routing, HTTP and persistence stay real.
+    await mockPublishedModelRuntimeForTest({
+      config,
+      facts: {
+        authModes: { "claude-cli": "api_key" },
+        modelCatalog: { entries: catalog, routeVariants: catalog },
+      },
+      paths: { agentDir: join(stateDir, "agent"), workspaceDir: stateDir },
+      authStore: {
+        version: 1,
+        profiles: Object.fromEntries(
+          ["anthropic", "claude-cli", PROVIDER].map((provider) => [
+            provider,
+            { type: "api_key" as const, provider, key: "synthetic-key" },
+          ]),
+        ),
+      },
+    });
+    const actual = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/models-provider-runtime")
+    >("openclaw/plugin-sdk/models-provider-runtime");
+    callbackMocks.buildModelsProviderData.mockImplementation(
+      actual.buildPreparedModelsProviderData,
+    );
+    await sendMessageTelegram(String(CHAT_ID), "Browse models:", {
+      cfg: config,
+      token: TOKEN,
+      buttons: [[{ text: "Browse providers", callback_data: "mdl_prov" }]],
+    });
 
-        let updateId = 0;
-        const tap = async (data: string) => {
-          if (!sentMessage) {
-            throw new Error("Expected the sent model keyboard message");
-          }
-          Object.values(authorization).forEach((mock) => mock.mockClear());
-          await tapModel(bot, data, sentMessage, ++updateId);
-          for (const check of Object.values(authorization)) {
-            expect(check).toHaveBeenCalled();
-          }
-        };
-        const renderedButtons = () =>
-          (
-            sentMessage?.reply_markup as {
-              inline_keyboard?: Array<Array<{ text: string; callback_data: string }>>;
-            }
-          )?.inline_keyboard?.flat() ?? [];
-        const selectButton = async (
-          predicate: (button: ReturnType<typeof renderedButtons>[number]) => boolean,
-        ) => {
-          const button = renderedButtons().find(predicate);
-          expect(button).toBeDefined();
-          await tap(button!.callback_data);
-        };
+    let updateId = 0;
+    const tap = async (data: string) => {
+      if (!sentMessage) {
+        throw new Error("Expected the sent model keyboard message");
+      }
+      Object.values(authorization).forEach((mock) => mock.mockClear());
+      await tapModel(bot, data, sentMessage, ++updateId);
+      for (const check of Object.values(authorization)) {
+        expect(check).toHaveBeenCalled();
+      }
+    };
+    const renderedButtons = () =>
+      (
+        sentMessage?.reply_markup as {
+          inline_keyboard?: Array<Array<{ text: string; callback_data: string }>>;
+        }
+      )?.inline_keyboard?.flat() ?? [];
+    const selectButton = async (
+      predicate: (button: ReturnType<typeof renderedButtons>[number]) => boolean,
+    ) => {
+      const button = renderedButtons().find(predicate);
+      expect(button).toBeDefined();
+      await tap(button!.callback_data);
+    };
 
-        await tap("mdl_prov");
-        expect(renderedButtons().map((button) => button.text)).toEqual([
-          "anthropic (1)",
-          "ollama (1)",
-        ]);
-        await selectButton((button) => button.text === "anthropic (1)");
-        await selectButton((button) => button.text.includes("Claude Opus"));
-        expect(requests.at(-1)?.fields.text).toContain(
-          "Runtime set to <b>claude-cli</b> from configured policy.",
-        );
-        const defaultEntry = await getSessionEntryAsync({
-          agentId: "main",
-          sessionKey: "agent:main:telegram:direct:1234",
-          storePath,
-        });
-        expect(defaultEntry).toBeDefined();
-        expect(defaultEntry?.modelOverride).toBeUndefined();
-        expect(defaultEntry?.agentRuntimeOverride).toBeUndefined();
+    await tap("mdl_prov");
+    expect(renderedButtons().map((button) => button.text)).toEqual(["anthropic (1)", "ollama (1)"]);
+    await selectButton((button) => button.text === "anthropic (1)");
+    await selectButton((button) => button.text.includes("Claude Opus"));
+    expect(requests.at(-1)?.fields.text).toContain(
+      "Runtime set to <b>claude-cli</b> from configured policy.",
+    );
+    const defaultEntry = await getSessionEntryAsync({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:1234",
+      storePath,
+    });
+    expect(defaultEntry).toBeDefined();
+    expect(defaultEntry?.modelOverride).toBeUndefined();
+    expect(defaultEntry?.agentRuntimeOverride).toBeUndefined();
 
-        await tap("mdl_prov");
-        await selectButton((button) => button.text === "ollama (1)");
-        const modelButton = renderedButtons().find((button) =>
-          button.callback_data.startsWith("mdl1~m:"),
-        );
-        expect(modelButton?.callback_data).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
-        expect(Buffer.byteLength(modelButton?.callback_data ?? "", "utf8")).toBeLessThanOrEqual(64);
-        await tap(modelButton!.callback_data);
+    await tap("mdl_prov");
+    await selectButton((button) => button.text === "ollama (1)");
+    const modelButton = renderedButtons().find((button) =>
+      button.callback_data.startsWith("mdl1~m:"),
+    );
+    expect(modelButton?.callback_data).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
+    expect(Buffer.byteLength(modelButton?.callback_data ?? "", "utf8")).toBeLessThanOrEqual(64);
+    await tap(modelButton!.callback_data);
 
-        expect(requests.map(({ method }) => method)).toEqual([
-          "sendMessage",
-          ...Array.from({ length: 6 }, () => ["answerCallbackQuery", "editMessageText"]).flat(),
-        ]);
-        expect(
-          (await listSessionEntriesAsync({ agentId: "main", storePath }))[0]?.entry,
-        ).toMatchObject({
-          providerOverride: PROVIDER,
-          modelOverride: MODEL,
-          modelOverrideSource: "user",
-          liveModelSwitchPending: true,
-        });
-        expect(requests.at(-1)?.fields.text).toContain(
-          `Model changed to <b>${PROVIDER}/${MODEL}</b>`,
-        );
+    expect((await listSessionEntriesAsync({ agentId: "main", storePath }))[0]?.entry).toMatchObject(
+      {
+        providerOverride: PROVIDER,
+        modelOverride: MODEL,
+        modelOverrideSource: "user",
+        liveModelSwitchPending: true,
       },
     );
+    expect(requests.at(-1)?.fields.text).toContain(`Model changed to <b>${PROVIDER}/${MODEL}</b>`);
   });
 
   it("clears stale buttons through the live router when a media callback message can't be edited or deleted", async () => {
     const stateDir = sessionDirs.make();
     const mediaMessage = telegramMessage(99, { caption: "Select a model:" });
 
-    await withApi(
-      (method, payload, response) => {
-        if (method === "answerCallbackQuery") {
-          sendJson(response, true);
-        } else if (method === "editMessageText") {
-          sendError(response, 400, "Bad Request: there is no text in the message to edit");
-        } else if (method === "deleteMessage") {
-          sendError(response, 400, "Bad Request: message can't be deleted");
-        } else if (method === "editMessageReplyMarkup") {
-          sendJson(response, { ...mediaMessage, reply_markup: payload.reply_markup });
-        } else if (method === "sendMessage") {
-          sendJson(response, telegramMessage(100, { text: payload.text }));
-        } else {
-          sendError(response, 404, method);
-        }
-      },
-      async (apiRoot, requests) => {
-        const storePath = join(stateDir, "sessions.json");
-        const { bot } = configureRouter(apiRoot, storePath, true);
-        const buttons = buildModelsKeyboard({
-          provider: PROVIDER,
-          models: [MODEL],
-          currentPage: 1,
-          totalPages: 1,
-        });
-        const callbackData = buttons?.[0]?.[0]?.callback_data;
-        expect(callbackData).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
+    serveApi({
+      editMessageText: (_payload, response) =>
+        sendError(response, 400, "Bad Request: there is no text in the message to edit"),
+      deleteMessage: (_payload, response) =>
+        sendError(response, 400, "Bad Request: message can't be deleted"),
+      editMessageReplyMarkup: (payload) => ({
+        ...mediaMessage,
+        reply_markup: payload.reply_markup,
+      }),
+      sendMessage: (payload) => telegramMessage(100, { text: payload.text }),
+    });
+    const apiRoot = http.cfg.channels.telegram.apiRoot;
+    const requests = http.requests;
+    const storePath = join(stateDir, "sessions.json");
+    const { bot } = configureRouter(apiRoot, storePath, true);
+    const buttons = buildModelsKeyboard({
+      provider: PROVIDER,
+      models: [MODEL],
+      currentPage: 1,
+      totalPages: 1,
+    });
+    const callbackData = buttons?.[0]?.[0]?.callback_data;
+    expect(callbackData).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
 
-        await tapModel(bot, callbackData, mediaMessage, 2);
+    await tapModel(bot, callbackData, mediaMessage, 2);
 
-        // Clear stale buttons before sending the replacement confirmation.
-        expect(requests.map(({ method }) => method)).toEqual([
-          "answerCallbackQuery",
-          "editMessageText",
-          "deleteMessage",
-          "editMessageReplyMarkup",
-          "sendMessage",
-        ]);
-        expect(requests[3]?.fields).toMatchObject({
-          chat_id: CHAT_ID,
-          message_id: 99,
-          reply_markup: { inline_keyboard: [] },
-        });
-        expect(requests.at(-1)?.fields.text).toContain(
-          `Model changed to <b>${PROVIDER}/${MODEL}</b>`,
-        );
-      },
-    );
+    // Clear stale buttons before sending the replacement confirmation.
+    expect(requests.map(({ method }) => method)).toEqual([
+      "answerCallbackQuery",
+      "editMessageText",
+      "deleteMessage",
+      "editMessageReplyMarkup",
+      "sendMessage",
+    ]);
+    expect(requests[3]?.fields).toMatchObject({
+      chat_id: CHAT_ID,
+      message_id: 99,
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(requests.at(-1)?.fields.text).toContain(`Model changed to <b>${PROVIDER}/${MODEL}</b>`);
   });
 });
