@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as base64 from "@openclaw/media-core/base64";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedResponse } from "../../test/helpers/provider-http.js";
 import { stubFetchResponse } from "../test-utils/camera-url-test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
@@ -80,22 +81,6 @@ async function expectOutput(dir: string, out: string, content: string | Buffer) 
     expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
   }
   expect(await fs.readdir(dir)).toEqual([path.basename(out)]);
-}
-
-function cancelTrackedResponse(init?: ResponseInit) {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode("ignored"));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 describe("nodes camera helpers", () => {
