@@ -278,6 +278,9 @@ export function renderSidebarAgentMenu(
     get disabled() {
       return Boolean(params.creationDisabledReason || params.pendingAgent);
     },
+    get focusableWhenDisabled() {
+      return Boolean(params.creationDisabledReason && !params.pendingAgent);
+    },
     get attributes() {
       return {
         "aria-description": params.creationDisabledReason ?? undefined,

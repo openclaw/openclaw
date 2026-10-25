@@ -64,6 +64,53 @@ afterEach(async () => {
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
+it("keeps disabled leaf explanations reachable without enabling activation", async () => {
+  const select = vi.fn();
+  const click = vi.fn();
+  mountMenu({
+    items: [
+      { id: "disabled", label: "Unavailable default", disabled: true },
+      {
+        id: "reason",
+        label: "Unavailable explained",
+        disabled: true,
+        focusableWhenDisabled: true,
+        attributes: { title: "Connect to continue", onClick: click },
+      },
+      {
+        id: "branch",
+        label: "Unavailable submenu",
+        disabled: true,
+        children: [{ id: "child", label: "Child" }],
+      },
+      { id: "allowed", label: "Allowed" },
+    ],
+    onSelect: select,
+  });
+  await openMenu();
+  const explained = item("Unavailable explained");
+  await expect.poll(() => document.activeElement).toBe(explained);
+  expect(explained.disabled).toBe(false);
+  expect(explained.getAttribute("aria-disabled")).toBe("true");
+  expect(getComputedStyle(explained).opacity).toBe("0.5");
+  expect(item("Unavailable default").disabled).toBe(true);
+  expect(item("Unavailable submenu").disabled).toBe(true);
+  await userEvent.keyboard("{ArrowDown}");
+  await expect.poll(() => document.activeElement).toBe(item("Allowed"));
+  await userEvent.keyboard("{ArrowUp}");
+  await expect.poll(() => document.activeElement).toBe(explained);
+  await userEvent.keyboard("{Enter}");
+  await userEvent.keyboard(" ");
+  explained.click();
+  explained.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  expect(click).not.toHaveBeenCalled();
+  expect(select).not.toHaveBeenCalled();
+  expect(surface().matches(":popover-open")).toBe(true);
+  await userEvent.keyboard("{ArrowDown}{Enter}");
+  expect(select).toHaveBeenCalledOnce();
+  expect(select.mock.calls[0]?.[0].id).toBe("allowed");
+});
+
 it("keeps autofocus and activation native for embedded buttons and links", async () => {
   const activate = vi.fn();
   const navigate = vi.fn((event: MouseEvent) => event.preventDefault());

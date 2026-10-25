@@ -51,7 +51,7 @@ describe("sidebar agent creation access", () => {
     await sidebar.updateComplete;
     const create = sidebar.querySelector<HTMLButtonElement>('[data-value="command:new-agent"]');
     expect(create).not.toBeNull();
-    expect(create?.disabled).toBe(true);
+    expect(create?.disabled).toBe(false);
     expect(create?.getAttribute("aria-disabled")).toBe("true");
     expect(create?.textContent?.trim()).toBe("Create new agent");
     expect(create?.getAttribute("title")).toBe(reason);
