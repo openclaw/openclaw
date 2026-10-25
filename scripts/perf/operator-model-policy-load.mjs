@@ -401,8 +401,10 @@ try {
   const repeat = async (interval, fn) => {
     let index = 0;
     // The duration and failure handlers stop this workload while it awaits RPCs.
-    // oxlint-disable-next-line no-unmodified-loop-condition
-    while (active) {
+    for (;;) {
+      if (!active) {
+        break;
+      }
       const at = performance.now();
       await fn(index++);
       if (active) {
