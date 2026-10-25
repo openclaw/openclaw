@@ -64,8 +64,14 @@ function expectWait(
   result: Awaited<ReturnType<typeof waitForReadiness>>,
   waitOutcome: string,
   elapsedMs: number,
+  expected: object = {},
 ) {
-  expect(result).toMatchObject({ waitOutcome, elapsedMs });
+  expect(result).toMatchObject({
+    healthy: waitOutcome === "healthy",
+    waitOutcome,
+    elapsedMs,
+    ...expected,
+  });
   expect(monotonicClock.nowMs).toBe(elapsedMs);
 }
 
@@ -201,13 +207,15 @@ it.each([
       token: "fixture-token",
       timeoutMs,
     });
-    expect(result).toMatchObject({
-      healthy: readyAtMs < timeoutMs,
-      waitOutcome: readyAtMs < timeoutMs ? "healthy" : "still-starting",
-      elapsedMs: Math.min(timeoutMs, readyAtMs),
-      runtime: { status: "running", pid: 8000 },
-      portUsage: { port: 19091 },
-    });
+    expectWait(
+      result,
+      readyAtMs < timeoutMs ? "healthy" : "still-starting",
+      Math.min(timeoutMs, readyAtMs),
+      {
+        runtime: { status: "running", pid: 8000 },
+        portUsage: { port: 19091 },
+      },
+    );
     expect(readRuntime).not.toHaveBeenCalled();
     if (readyAtMs < timeoutMs) {
       expectPartialCall(callGateway, {
@@ -245,12 +253,7 @@ it("waits for a legacy replacement after an observed owner lease dies", async ()
   });
   startedGateway();
   const result = await waitForReadiness({ timeoutMs: 5_000 });
-  expect(result).toMatchObject({
-    healthy: true,
-    waitOutcome: "healthy",
-    elapsedMs: 1_000,
-    runtime: { status: "running", pid: 9000 },
-  });
+  expectWait(result, "healthy", 1_000, { runtime: { status: "running", pid: 9000 } });
 });
 
 it.each([
@@ -337,11 +340,7 @@ it.each(
       serviceMode: context === "external" ? "external" : undefined,
     });
     if (state === "starting") {
-      expect(result).toMatchObject({
-        waitOutcome: "still-starting",
-        elapsedMs: 1_250,
-        runtime: { status: "running", pid: 8000 },
-      });
+      expectWait(result, "still-starting", 1_250, { runtime: { status: "running", pid: 8000 } });
     } else {
       expect(result).toBeUndefined();
       expect(monotonicClock.nowMs).toBe(0);
@@ -364,7 +363,6 @@ it.each(missingServiceCases)(
     startedGateway();
     const result = await waitForReadiness({ serviceMode, timeoutMs });
     expectWait(result, "healthy", readyAtMs);
-    expect(result?.healthy).toBe(true);
   },
 );
 
@@ -489,7 +487,7 @@ it.each(["loaded", "unverifiable", "absent", "stopped", "unknown"] as const)(
       expect(result).toBeUndefined();
       expect(monotonicClock.nowMs).toBe(0);
     } else {
-      expect(result).toMatchObject({ waitOutcome: "timeout", elapsedMs: 1_250 });
+      expectWait(result, "timeout", 1_250);
       if (owner === "stopped" || owner === "unknown") {
         expect(result).toMatchObject({ healthy: false, portUsage: { status: "free" } });
         expect(callGateway).not.toHaveBeenCalled();
@@ -503,8 +501,7 @@ it("still probes an unowned listener without an installed service", async () => 
   inspectPortUsage.mockResolvedValue(portUsage(18789, [{ pid: 8000 }]));
   callGateway.mockImplementation(gatewayHealthResponse());
   const result = await waitForGatewayDiagnosticReadiness({ config: noAuthConfig });
-  expect(result).toMatchObject({ healthy: true, waitOutcome: "healthy" });
-  expect(monotonicClock.nowMs).toBe(0);
+  expectWait(result, "healthy", 0);
 });
 
 it.each(["missing", "stopped"])(
@@ -516,7 +513,7 @@ it.each(["missing", "stopped"])(
     classifyPortListener.mockReturnValue("non_gateway");
     inspectPortUsage.mockResolvedValue(portUsage(18789, [{ pid: 4242, command: "socat" }]));
     const result = await waitForReadiness();
-    expect(result).toMatchObject({ healthy: false, waitOutcome: "port-held", elapsedMs: 0 });
+    expectWait(result, "port-held", 0);
     expect(result?.probeError).toContain("port 18789 is held by another process");
     expect(result?.probeError).toContain("openclaw gateway status --deep");
     if (!result) {
@@ -569,9 +566,5 @@ it.each(
   classifyPortListener.mockReturnValue("non_gateway");
   inspectPortUsage.mockResolvedValue(portUsage(18789, [{ pid: 4242, ppid: 1, command: "socat" }]));
   setup();
-  await expect(waitForReadiness()).resolves.toMatchObject({
-    healthy: false,
-    waitOutcome: "timeout",
-    elapsedMs: 1_250,
-  });
+  expectWait(await waitForReadiness(), "timeout", 1_250);
 });
