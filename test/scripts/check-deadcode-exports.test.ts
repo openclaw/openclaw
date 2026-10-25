@@ -33,6 +33,9 @@ describe("check-deadcode-exports", () => {
       "config/knip.config.ts!",
       "config/knip.all-exports.config.ts!",
       "config/knip.scripts-exports.config.ts!",
+      "scripts/generate-runtime-script-assets.mjs!",
+      "scripts/generate-static-validators.mts!",
+      "tsdown.config.ts!",
     ]);
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
     expectEntries(fullRootWorkspace.entry, [
@@ -96,6 +99,20 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
       "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
     );
+    expect(scriptRootWorkspace.vitest).toEqual({
+      config: [
+        "scripts/control-ui-parity/vitest.config.ts",
+        "scripts/control-ui-retention/vitest.config.ts",
+      ],
+    });
+    expect(knipConfig.workspaces["."].vitest).toEqual({
+      config: [
+        "vitest.config.{js,mjs,ts,cjs,mts,cts}",
+        "vitest.{workspace,projects}.{js,mjs,ts,cjs,mts,cts,json}",
+        "scripts/control-ui-parity/vitest.config.ts",
+        "scripts/control-ui-retention/vitest.config.ts",
+      ],
+    });
   });
 
   it.each([
@@ -176,6 +193,72 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
       "loadControlUiStartupCatalog",
     );
+  });
+
+  it("models ordinary UI Vite imports into the script workspace", () => {
+    const source = `import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";`;
+    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";',
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue("const config = {};");
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "isControlUiOptionalAsset",
+    );
+  });
+
+  it("models exact generated and module-hook named consumers", () => {
+    expect(knipConfig.workspaces["."].project).toContain("config/knip-dynamic-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(compiled).toContain(
+      'import { runtimeProcessDeployManifest as __dynamic0_0, runtimeProcessHelperManifest as __dynamic0_1, runtimeProcessWorkerDependencies as __dynamic0_2 } from "../src/infra/runtime-process-manifest.ts";',
+    );
+    expect(compiled).toContain(
+      'import { gatewayBenchTaskOperation as __dynamic1_0 } from "../scripts/lib/gateway-bench-worker-messages.ts";',
+    );
+    expect(compiled).toContain(
+      'import { fetchWithSsrFGuard as __dynamic2_0 } from "../extensions/team-reports/src/report-run.benchmark-fixtures.test-support.ts";',
+    );
+
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const source = readFileSync(file, options);
+      if (path.resolve(String(file)) === path.resolve("tsdown.config.ts")) {
+        return String(source).replace(
+          `import {
+  runtimeProcessDeployManifest,
+  runtimeProcessHelperManifest,
+  runtimeProcessWorkerDependencies,
+} from "./src/infra/runtime-process-manifest.ts";`,
+          "",
+        );
+      }
+      if (
+        path.resolve(String(file)) === path.resolve("scripts/lib/gateway-bench-worker-messages.ts")
+      ) {
+        return String(source).replace(
+          "import { gatewayBenchTaskOperation as benchmarkTaskOperation } from ${JSON.stringify(import.meta.url)};",
+          "",
+        );
+      }
+      if (
+        path.resolve(String(file)) === path.resolve("extensions/team-reports/src/sources/http.ts")
+      ) {
+        return String(source).replace(
+          'import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
+          "",
+        );
+      }
+      return source;
+    });
+    const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(withoutConsumers).not.toContain("runtimeProcessDeployManifest");
+    expect(withoutConsumers).not.toContain("runtimeProcessHelperManifest");
+    expect(withoutConsumers).not.toContain("runtimeProcessWorkerDependencies");
+    expect(withoutConsumers).not.toContain("gatewayBenchTaskOperation");
+    expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
   });
 
   it("models retained updater named exports without fabricating private imports", () => {
