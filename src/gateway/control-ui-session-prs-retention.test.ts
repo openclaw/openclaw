@@ -71,19 +71,22 @@ function mockCheckout(
 }
 
 function subscribe(
-  options: Pick<Parameters<typeof createSubscriptions>[0], "broadcastToConnIds"> & {
-    load: SessionPrLoader;
-  },
+  load: SessionPrLoader,
+  broadcastToConnIds: Parameters<typeof createSubscriptions>[0]["broadcastToConnIds"] = vi.fn(),
 ) {
-  const { load, ...deps } = options;
   spyOnSessionPrLoader(load);
   const subscriptions = createSubscriptions({
     scheduler: createTestGatewayScheduler("fake-timers"),
     prepareRead: fixture.prepareRead,
-    ...deps,
+    broadcastToConnIds,
   });
   subscriptionsToStop.add(subscriptions);
   return subscriptions;
+}
+
+async function pollAfter(subscriptions: ReturnType<typeof subscribe>, elapsed: number) {
+  vi.setSystemTime(Date.now() + elapsed);
+  await subscriptions.pollNow();
 }
 
 beforeEach(() => {
@@ -116,10 +119,7 @@ describe("watched session PR retention", () => {
       () => additions,
     );
     const broadcastToConnIds = vi.fn();
-    const subscriptions = subscribe({
-      broadcastToConnIds,
-      load: loadFromRoot("/watched/shared-checkout"),
-    });
+    const subscriptions = subscribe(loadFromRoot("/watched/shared-checkout"), broadcastToConnIds);
     const expectReads = (count: number) => {
       for (const type of ["checkout.context", "pull-request.branch-facts"]) {
         expect(localGitReads().filter(([operation]) => operation.type === type)).toHaveLength(
@@ -186,8 +186,13 @@ describe("watched session PR retention", () => {
         );
       }
     };
-    const subscriptions = subscribe({
-      broadcastToConnIds: (_event, payload) => {
+    const subscriptions = subscribe(
+      (params, cacheSignal) =>
+        loadPrs(params, {
+          cacheSignal,
+          resolveGitContext: async () => ({ ...testGitContext, branch: params.sessionKey }),
+        }),
+      (_event, payload) => {
         if (!isRecord(payload) || !isRecord(payload.sessions)) {
           throw new Error("invalid subscription event");
         }
@@ -199,18 +204,12 @@ describe("watched session PR retention", () => {
           snapshots.set(key, snapshot);
         }
       },
-      load: (params, cacheSignal) =>
-        loadPrs(params, {
-          cacheSignal,
-          resolveGitContext: async () => ({ ...testGitContext, branch: params.sessionKey }),
-        }),
-    });
+    );
     const keys = Array.from({ length: 101 }, (_, index) => `quota-${index}`);
     await subscriptions.replace("watcher", keys);
     expect(fetchImpl.mock.calls).toHaveLength(101);
     limited = true;
-    vi.setSystemTime(Date.now() + 90_001);
-    await subscriptions.pollNow();
+    await pollAfter(subscriptions, 90_001);
     const callsAtBackoff = fetchImpl.mock.calls.length;
     expect(callsAtBackoff).toBeGreaterThan(101);
     expectSnapshots(true);
@@ -219,8 +218,7 @@ describe("watched session PR retention", () => {
     expect(fetchImpl.mock.calls).toHaveLength(callsAtBackoff);
     expectSnapshots(true);
     limited = false;
-    vi.setSystemTime(Date.now() + 240_001);
-    await subscriptions.pollNow();
+    await pollAfter(subscriptions, 240_001);
     expect(fetchImpl.mock.calls).toHaveLength(callsAtBackoff + 101);
     expectSnapshots(false);
   });
@@ -232,23 +230,18 @@ describe("watched session PR retention", () => {
       () => "unchanged",
       (root) => root.slice("/watched/".length),
     );
-    const subscriptions = subscribe({
-      broadcastToConnIds: vi.fn(),
-      load: loadFromRoot((key) => `/watched/${key}`, signals),
-    });
+    const subscriptions = subscribe(loadFromRoot((key) => `/watched/${key}`, signals));
     await subscriptions.replace("first", watchedKeys(200));
     await subscriptions.replace("second", watchedKeys(100, 200));
     expect(fetchImpl.mock.calls).toHaveLength(300);
     expect(localGitReads()).toHaveLength(600);
 
     for (const elapsed of [60_000, 15_001]) {
-      vi.setSystemTime(Date.now() + elapsed);
-      await subscriptions.pollNow();
+      await pollAfter(subscriptions, elapsed);
       expect(fetchImpl.mock.calls).toHaveLength(300);
       expect(localGitReads()).toHaveLength(600);
     }
-    vi.setSystemTime(Date.now() + 225_000);
-    await subscriptions.pollNow();
+    await pollAfter(subscriptions, 225_000);
     expect(localGitReads()).toHaveLength(900);
     expect(signals.size).toBe(300);
     expect([...signals].map(listenerCount)).toEqual(Array<number>(300).fill(1));

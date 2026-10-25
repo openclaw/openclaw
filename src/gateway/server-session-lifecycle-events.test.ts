@@ -12,6 +12,7 @@ import {
   createActiveRun,
   createGatewayBroadcaster,
   createLifecycleEventBroadcastHandler,
+  expectAbsentFields,
   expectPrivateSessionInvalidation,
   fixedStoreRuntimeConfig,
   loadGatewaySessionEntryReadOnlyMock,
@@ -79,19 +80,31 @@ describe("createLifecycleEventBroadcastHandler", () => {
       const prepared = createDeferred();
       const entered = createDeferred();
       const query = { key: "agent:main:late-successor", agentId: "main" };
+      const original = {
+        sessionId: "original",
+        updatedAt: 1,
+        lifecycleRevision: "first",
+        label: "Original row",
+      };
+      const successor = {
+        sessionId: "successor",
+        updatedAt: 2,
+        lifecycleRevision: "next",
+        label: "Successor row",
+      };
+      const note = {
+        reason: "swarm-note",
+        swarmGroupId: "original-swarm",
+        kind: "log",
+        text: "Original private note",
+        label: "Old event label",
+        displayName: "Old event display",
+        parentSessionKey: "agent:main:old-parent",
+      } as const;
       const projection = createSessionRowProjectionFixture({
         cfg: {},
         agentId: query.agentId,
-        store: captured
-          ? {
-              [query.key]: {
-                sessionId: "original",
-                updatedAt: 1,
-                lifecycleRevision: "first",
-                label: "Original row",
-              },
-            }
-          : {},
+        store: captured ? { [query.key]: original } : {},
       });
       const prepareRows = projection.withPreparedExactRows.bind(projection);
       vi.spyOn(projection, "withPreparedExactRows").mockImplementation(async (...args) => {
@@ -105,13 +118,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       const pending = handler({
         agentId: query.agentId,
         sessionKey: query.key,
-        reason: "swarm-note",
-        swarmGroupId: "original-swarm",
-        kind: "log",
-        text: "Original private note",
-        label: "Old event label",
-        displayName: "Old event display",
-        parentSessionKey: "agent:main:old-parent",
+        ...note,
         catalogChanged: true,
       });
       try {
@@ -120,12 +127,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
           expect(broadcastToConnIds).not.toHaveBeenCalled();
         }
         if (replace) {
-          projection.setEntry(query.key, {
-            sessionId: "successor",
-            updatedAt: 2,
-            lifecycleRevision: "next",
-            label: "Successor row",
-          });
+          projection.setEntry(query.key, successor);
         }
         prepared.resolve();
         await pending;
@@ -148,15 +150,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
           expect(payload.displayName).not.toBe("Old event display");
           expect(payload.parentSessionKey).not.toBe("agent:main:old-parent");
         } else {
-          expect(payload).toMatchObject({
-            reason: "swarm-note",
-            swarmGroupId: "original-swarm",
-            kind: "log",
-            text: "Original private note",
-            label: "Old event label",
-            displayName: "Old event display",
-            parentSessionKey: "agent:main:old-parent",
-          });
+          expect(payload).toMatchObject(note);
           if (hasProjection) {
             expect(payload).toMatchObject({
               session: { sessionId: "original", lifecycleRevision: "first" },
@@ -270,9 +264,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
     if (agentId) {
       expect(payload).toMatchObject({ agentId: "ops", goal });
     } else {
-      expect(payload).not.toHaveProperty("agentId");
-      expect(payload).not.toHaveProperty("goal");
-      expect(payload).not.toHaveProperty("session.goal");
+      expectAbsentFields(payload, "agentId goal session.goal");
     }
     const runId = "run-before-finalize";
     registerAgentRunContext(runId, { sessionKey: "global", agentId: "ops" });
