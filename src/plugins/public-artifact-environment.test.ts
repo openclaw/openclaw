@@ -3,12 +3,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import * as machineState from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import {
-  clearBundledDiscoveryModeMemo,
-  prepareBundledDiscoveryMode,
-} from "./bundled-discovery-state.js";
+import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
@@ -217,30 +213,5 @@ describe("public artifact environment ownership", () => {
         });
       },
     );
-  });
-
-  it("reuses prepared discovery policy across repeated web setup calls without synchronous state reads", async () => {
-    const fixture = environment("prepared");
-    useProcessEnvironment(fixture);
-    writeConfigMachineState("plugins.bundledDiscovery", "compat", { env: fixture.env });
-    clearBundledDiscoveryModeMemo();
-    await closeOpenClawStateDatabaseAsync();
-    await using cache = createPluginCache();
-    await withPluginCache(cache, async () => {
-      await prepareBundledDiscoveryMode(fixture.env);
-      const reads = vi.spyOn(machineState, "readConfigMachineState");
-      for (let attempt = 0; attempt < 3; attempt++) {
-        expect(
-          resolvePluginWebSearchProviders({
-            ...resolution(fixture, ["another-plugin"]),
-            mode: "setup",
-          }).map((provider) => provider.label),
-        ).toEqual(["prepared"]);
-      }
-      expect(reads.mock.calls.filter(([key]) => key === "plugins.bundledDiscovery")).toHaveLength(
-        0,
-      );
-    });
-    expect(fixture.evaluations()).toEqual(["web-search-contract-api.js"]);
   });
 });

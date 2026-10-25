@@ -92,17 +92,11 @@ describe("reply_dispatch hook runner", () => {
             handler: async (_event, context) =>
               guard("first", async () => {
                 if (captured) {
-                  await nativeSubagentRuntime.spawn({
-                    requestId: "first",
-                    task: "active first hook",
-                  });
+                  await nativeSubagentRuntime.spawn({ requestId: "first", task: "active" });
                 }
                 detached = late.promise.then(() => {
                   const invoke = () =>
-                    nativeSubagentRuntime.spawn({
-                      requestId: "reopened",
-                      task: "must not start",
-                    });
+                    nativeSubagentRuntime.spawn({ requestId: "reopened", task: "blocked" });
                   if (!captured) {
                     return invoke();
                   }
@@ -129,10 +123,7 @@ describe("reply_dispatch hook runner", () => {
             pluginId: "next",
             handler: async () =>
               guard("next", async () => {
-                await nativeSubagentRuntime.spawn({
-                  requestId: "current",
-                  task: "current request",
-                });
+                await nativeSubagentRuntime.spawn({ requestId: "current", task: "current" });
                 nextStarted.resolve();
                 if (captured) {
                   await releaseNext.promise;
@@ -163,8 +154,8 @@ describe("reply_dispatch hook runner", () => {
         late.resolve();
         await expect(detached).rejects.toThrow("requester-bound");
         expect(spawn.mock.calls).toEqual([
-          ...(captured ? [[{ requestId: "first", task: "active first hook" }]] : []),
-          [{ requestId: "current", task: "current request" }],
+          ...(captured ? [[{ requestId: "first", task: "active" }]] : []),
+          [{ requestId: "current", task: "current" }],
         ]);
         releaseNext.resolve();
         await expect(work).resolves.toEqual(handledResult);

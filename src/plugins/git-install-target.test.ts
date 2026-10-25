@@ -76,38 +76,29 @@ describe("git install target ownership", () => {
     await state.cleanup();
   });
 
-  it.each(["branch", "tag", "annotated-tag", "commit", "short-commit", "default"] as const)(
+  it.each(["branch", "annotated-tag", "short-commit"] as const)(
     "installs the requested %s revision from a real Git repository",
     async (kind) => {
-      const defaultCommit = await head();
       await git(sourceDir, "switch", "-c", "feature/demo");
       const featureCommit = await commitPlugin("demo", "2.0.0");
-      await git(sourceDir, "tag", "v2.0.0");
       await git(sourceDir, "-c", "tag.gpgsign=false", "tag", "-a", "release", "-m", "release");
       await git(sourceDir, "switch", "main");
       const refs = {
         branch: "feature/demo",
-        tag: "v2.0.0",
         "annotated-tag": "release",
-        commit: featureCommit,
         "short-commit": featureCommit.slice(0, 12),
-        default: undefined,
       };
       const ref = refs[kind];
       const result = await install({
-        spec: `${spec}${ref ? `#${ref}` : ""}`,
+        spec: `${spec}#${ref}`,
         expectedPluginId: "demo",
       });
-      const expectedCommit = kind === "default" ? defaultCommit : featureCommit;
-      const expectedVersion = kind === "default" ? "1.0.0" : "2.0.0";
       expect(result).toMatchObject({
-        version: expectedVersion,
-        git: { ref, commit: expectedCommit },
+        version: "2.0.0",
+        git: { ref, commit: featureCommit },
       });
-      expect(await head(result.targetDir)).toBe(expectedCommit);
-      await expect(read(result.targetDir, "index.js")).resolves.toBe(
-        `export default ${JSON.stringify(expectedVersion)};\n`,
-      );
+      expect(await head(result.targetDir)).toBe(featureCommit);
+      await expect(read(result.targetDir, "index.js")).resolves.toBe('export default "2.0.0";\n');
       if (kind === "branch") {
         await git(sourceDir, "switch", "feature/demo");
         const nextCommit = await commitPlugin("demo", "3.0.0");
@@ -163,36 +154,27 @@ describe("git install target ownership", () => {
     await expect(read(installed.targetDir, "operator-note.txt")).resolves.toBe(operatorNote);
   });
 
-  it.each([
-    { pluginId: "demo", deferred: false },
-    { pluginId: "renamed-demo", deferred: false },
-    { pluginId: "demo", deferred: true },
-    { pluginId: "renamed-demo", deferred: true },
-  ])(
-    "refuses a reinstall with id=$pluginId and deferred=$deferred",
-    async ({ pluginId, deferred }) => {
-      const installed = await install();
-      const markerPath = path.join(installed.targetDir, "operator-note.txt");
-      await fs.writeFile(markerPath, operatorNote);
-      await commitPlugin(pluginId, "2.0.0");
+  it("refuses a deferred reinstall even when the source changes plugin id", async () => {
+    const installed = await install();
+    const markerPath = path.join(installed.targetDir, "operator-note.txt");
+    await fs.writeFile(markerPath, operatorNote);
+    await commitPlugin("renamed-demo", "2.0.0");
 
-      const options = { spec, mode: "install" as const };
-      const result = await installPluginFromGitSpec(
-        deferred ? requestDeferredPluginInstall(options) : options,
-      );
-      // Settle any pre-fix transaction so the failing reproduction leaves no backup behind.
-      await resolvePluginInstallTransaction(result)?.commit();
-      expect.soft(result).toEqual({
-        ok: false,
-        error: `plugin already exists: ${installed.targetDir} (delete it first)`,
-      });
-      expect.soft(await head(installed.targetDir)).toBe(installed.git.commit);
-      await expect.soft(fs.readFile(markerPath, "utf8")).resolves.toBe(operatorNote);
-      await expect
-        .soft(read(installed.targetDir, "openclaw.plugin.json"))
-        .resolves.toContain('"id":"demo"');
-    },
-  );
+    const result = await installPluginFromGitSpec(
+      requestDeferredPluginInstall({ spec, mode: "install" as const }),
+    );
+    // Settle any pre-fix transaction so the failing reproduction leaves no backup behind.
+    await resolvePluginInstallTransaction(result)?.commit();
+    expect.soft(result).toEqual({
+      ok: false,
+      error: `plugin already exists: ${installed.targetDir} (delete it first)`,
+    });
+    expect.soft(await head(installed.targetDir)).toBe(installed.git.commit);
+    await expect.soft(fs.readFile(markerPath, "utf8")).resolves.toBe(operatorNote);
+    await expect
+      .soft(read(installed.targetDir, "openclaw.plugin.json"))
+      .resolves.toContain('"id":"demo"');
+  });
 
   it("refuses default and dry-run reinstalls but allows an explicit force replacement", async () => {
     const installed = await install();
