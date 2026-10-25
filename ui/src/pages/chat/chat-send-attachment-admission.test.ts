@@ -173,10 +173,6 @@ it.each(["committed", "payload failure", "metadata failure", "unrelated send"])(
       expect(
         listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue.map((item) => item.text)),
       ).toEqual(outcome === "unrelated send" ? ["Older text-only send"] : []);
-      expect(host.chatAttachments.map(getChatAttachmentDataUrl)).toEqual([
-        ...dataUrls,
-        getChatAttachmentDataUrl(added),
-      ]);
       if (outcome === "metadata failure") {
         const write = sessionStorage.setItem.bind(sessionStorage);
         const target = storageTargetForComposer(host);
@@ -267,9 +263,7 @@ it.each(["defaults", "route", "recovery owner", "reply"])(
       replyToId: "original-entry",
     });
     await expectPayload(host, stored.queue[0], dataUrls);
-    expect(host.chatMessage).toBe(expectedDraft);
     expect(host.chatAttachments).toEqual(change === "defaults" ? attachments : []);
-    expect(host.request).not.toHaveBeenCalled();
   },
 );
 

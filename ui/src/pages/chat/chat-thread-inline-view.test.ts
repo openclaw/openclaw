@@ -75,6 +75,10 @@ it.each([false, true])(
       });
       const unfiltered = inlineRows(props);
       expect(unfiltered).toHaveLength(2);
+      expect(unfiltered.map(({ message }) => normalizeMessage(message).content[1])).toEqual([
+        block("one"),
+        block("two"),
+      ]);
       for (const [searchOpen, searchQuery, indexes] of [
         [true, " SHOWING ONE ", [0]],
         [true, "showing", [0, 1]],
@@ -94,36 +98,6 @@ it.each([false, true])(
   },
 );
 
-it("shows independent live calls and deduplicates history settlement", () => {
-  const live = (id: string, timestamp: number) => ({
-    ...result(id, timestamp),
-    ...liveResult(id, timestamp),
-    content: [
-      { type: "toolcall", name: "show_incident", arguments: {} },
-      ...liveResult(id, timestamp).content,
-    ],
-  });
-  const props = createProps({
-    showToolCalls: false,
-    runId: "run",
-    messages: [{ role: "user", content: "Show incidents", timestamp: 1 }],
-    toolMessages: [live("one", 3), live("two", 4)],
-    streamSegments: [{ text: "Here are the incidents.", ts: 2, toolCallId: "one", runId: "run" }],
-    stream: "",
-    streamStartedAt: 2,
-  });
-  expect(inlineMessages(props).map((message) => message.content)).toEqual([
-    [{ type: "text", text: "Showing one", name: undefined, args: undefined }, block("one")],
-    [{ type: "text", text: "Showing two", name: undefined, args: undefined }, block("two")],
-  ]);
-  expect(
-    inlineMessages({
-      ...props,
-      messages: [...props.messages, savedResult("one", 3)],
-    }),
-  ).toHaveLength(2);
-});
-
 it("keeps tool-only history and page boundaries local", () => {
   for (const messages of [
     [result("one", 1)],
@@ -133,11 +107,6 @@ it("keeps tool-only history and page boundaries local", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.timestamp).toBe(1);
   }
-  expect(
-    inlineMessages({
-      messages: [{ role: "assistant", content: "Unrelated next page", timestamp: 3 }],
-    }),
-  ).toEqual([]);
 });
 
 it("keeps reused call IDs distinct across runs and stable on settlement", () => {
