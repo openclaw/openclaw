@@ -34,12 +34,9 @@ afterEach(async () => {
 
 function fixture(owner = engineId, registered = true, selectedId = engineId) {
   const registry = createEmptyPluginRegistry();
-  const factory = vi.fn(() => ({
-    info: { id: selectedId, name: "Synthetic" },
-    ingest: async () => ({ ingested: false }),
-    assemble: async () => ({ messages: [], estimatedTokens: 0 }),
-    compact: async () => ({ ok: true, compacted: false, reason: "fixture" }),
-  }));
+  const factory = vi.fn(() =>
+    Object.assign(new LegacyContextEngine(), { info: { id: selectedId, name: "Synthetic" } }),
+  );
   registerContextEngineInRegistry(registry, "legacy", () => new LegacyContextEngine(), "core");
   if (registered) {
     registerContextEngineInRegistry(registry, selectedId, factory, `plugin:${owner}`);
@@ -61,19 +58,6 @@ async function resolve(path: "standalone" | "logical-turn", config: OpenClawConf
   }
   return result;
 }
-
-it("uses the default slot while plugins are disabled", async () => {
-  const { registry, factory } = fixture();
-  await withPluginRuntimeRegistryScope(registry, async () => {
-    expect(
-      await resolve("standalone", {
-        plugins: { enabled: false, slots: { contextEngine: "legacy" } },
-      }),
-    ).toEqual(legacySelection);
-    expect(await listContextEngineQuarantines()).toEqual([]);
-  });
-  expect(factory).not.toHaveBeenCalled();
-});
 
 it.each(["custom", "rejected", "default", "disabled"] as const)(
   "settles workspace attribution before constructing only a selected custom engine (%s)",
@@ -195,62 +179,41 @@ it.each([
   },
 );
 
-it.each(["standalone", "logical-turn"] as const)(
-  "%s enforces owner approval independently of the engine ID",
-  async (path) => {
-    for (const policy of [
-      {},
-      { allow: [engineId] },
-      { allow: [engineId], entries: { [ownerId]: { enabled: true } } },
-    ]) {
-      const { registry, factory } = fixture(ownerId);
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+const deniedPolicies = [
+  {},
+  { allow: [engineId] },
+  { allow: [engineId], entries: { [ownerId]: { enabled: true } } },
+];
+const ownerPolicies = [{ allow: [ownerId] }];
+const unrelatedPolicies = [{ allow: ["unrelated"] }];
+const disabledPolicies = [{ enabled: false }];
+it.each([
+  ["standalone", engineId, "legacy", disabledPolicies, false],
+  ["standalone", ownerId, "Synthetic-Engine", ownerPolicies, true],
+  ["logical-turn", ownerId, "Synthetic-Engine", ownerPolicies, true],
+  ["standalone", engineId, engineId, unrelatedPolicies, true],
+  ["logical-turn", engineId, engineId, unrelatedPolicies, true],
+  ["standalone", ownerId, engineId, deniedPolicies, false],
+  ["logical-turn", ownerId, engineId, deniedPolicies, false],
+] as const)(
+  "%s applies owner %s policy to exact engine ID %s (%j)",
+  async (path, owner, selectedId, policies, allowed) => {
+    for (const policy of policies) {
+      const { registry, factory } = fixture(owner, true, selectedId);
+      using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      using error = vi.spyOn(console, "error").mockImplementation(() => {});
       await withPluginRuntimeRegistryScope(registry, async () => {
         expect(
-          await resolve(path, { plugins: { ...policy, slots: { contextEngine: engineId } } }),
-        ).toEqual({ id: "legacy", owner: undefined, failure: undefined });
+          await resolve(path, {
+            plugins: { ...policy, slots: { contextEngine: selectedId } },
+          }),
+        ).toEqual(allowed ? { id: selectedId, owner, failure: undefined } : legacySelection);
         expect(await listContextEngineQuarantines()).toEqual([]);
       });
-      expect(factory).not.toHaveBeenCalled();
+      expect(factory).toHaveBeenCalledTimes(allowed ? 1 : 0);
       expect(warn).not.toHaveBeenCalled();
       expect(error).not.toHaveBeenCalled();
-      warn.mockRestore();
-      error.mockRestore();
     }
-  },
-);
-
-it.each(["standalone", "logical-turn"] as const)(
-  "%s selects an exact engine ID through its independently allowlisted owner",
-  async (path) => {
-    const selectedId = "Synthetic-Engine";
-    const { registry, factory } = fixture(ownerId, true, selectedId);
-    await withPluginRuntimeRegistryScope(registry, async () => {
-      expect(
-        await resolve(path, {
-          plugins: { allow: [ownerId], slots: { contextEngine: selectedId } },
-        }),
-      ).toEqual({ id: selectedId, owner: ownerId, failure: undefined });
-      expect(await listContextEngineQuarantines()).toEqual([]);
-    });
-    expect(factory).toHaveBeenCalledOnce();
-  },
-);
-
-it.each(["standalone", "logical-turn"] as const)(
-  "%s keeps equal-ID selection outside an unrelated allowlist",
-  async (path) => {
-    const { registry, factory } = fixture();
-    await withPluginRuntimeRegistryScope(registry, async () => {
-      expect(
-        await resolve(path, {
-          plugins: { allow: ["unrelated"], slots: { contextEngine: engineId } },
-        }),
-      ).toEqual({ id: engineId, owner: engineId, failure: undefined });
-      expect(await listContextEngineQuarantines()).toEqual([]);
-    });
-    expect(factory).toHaveBeenCalledOnce();
   },
 );
 

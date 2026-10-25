@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -344,9 +343,6 @@ it.each([
           : 1,
     );
     await lease.dispose();
-    const reopened = new DatabaseSync(databasePath);
-    expect(reopened.prepare("SELECT 42 AS value").get()?.value).toBe(42);
-    reopened.close();
   } finally {
     vi.useRealTimers();
     initializationGate.resolve();

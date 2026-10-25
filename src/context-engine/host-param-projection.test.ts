@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../agents/runtime/index.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { createPassthroughEngineMethods } from "./context-engine.test-support.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
@@ -66,25 +67,13 @@ async function registerProbeEngine(
 
 async function invokeHostParamMethods(engine: ContextEngine) {
   const abortSignal = new AbortController().signal;
-  await engine.assemble({
-    ...session,
-    messages: [message],
-    prompt: "hello",
-    runtimeSettings,
-  });
-  await engine.compact({
-    ...session,
-    sessionTarget,
-    runtimeSettings,
-    runtimeContext,
-    abortSignal,
-  });
+  const common = { ...session, runtimeSettings };
+  const runtime = { ...common, runtimeContext, abortSignal };
+  await engine.assemble({ ...common, messages: [message], prompt: "hello" });
+  await engine.compact({ ...runtime, sessionTarget });
   await engine.maintain?.({
-    ...session,
+    ...runtime,
     sessionFile: "/tmp/session-1.jsonl",
-    runtimeSettings,
-    runtimeContext,
-    abortSignal,
   });
   return abortSignal;
 }
@@ -95,13 +84,16 @@ function expectAbsent(call: unknown, keys: string[]) {
   }
 }
 
-async function disposeResolution(
-  resolution: Awaited<ReturnType<typeof resolveLogicalTurnContextEngines>>,
-) {
-  await Promise.allSettled([
-    resolution.configured.engine.dispose?.(),
-    resolution.fallback.engine.dispose?.(),
-  ]);
+async function resolveProbe(config: OpenClawConfig, logicalTurn = true) {
+  const turn = logicalTurn ? await resolveLogicalTurnContextEngines(config) : undefined;
+  const engine = turn?.configured.engine ?? (await resolveContextEngine(config));
+  return {
+    engine,
+    owner: turn?.configured.ownerPluginId,
+    async [Symbol.asyncDispose]() {
+      await Promise.allSettled([engine.dispose?.(), turn?.fallback.engine.dispose?.()]);
+    },
+  };
 }
 
 describe("context-engine host parameter projection", () => {
@@ -141,36 +133,23 @@ describe("context-engine host parameter projection", () => {
               ? ["runtimeSettings"]
               : undefined,
       });
-      const turn =
-        mode !== "declared-process" ? await resolveLogicalTurnContextEngines(config) : undefined;
-      const engine = turn?.configured.engine ?? (await resolveContextEngine(config));
-      try {
-        const abortSignal = await invokeHostParamMethods(engine);
-        const a = assemble.mock.calls[0]?.[0];
-        const c = compact.mock.calls[0]?.[0];
-        const m = maintain.mock.calls[0]?.[0];
-        const required = { sessionId: "session-1", runtimeSettings };
-        if (restricted) {
-          expect([a, c, m]).toMatchObject([required, { ...required, abortSignal }, required]);
-          expectAbsent(a, ["sessionKey", "prompt"]);
-          expectAbsent(c, ["sessionTarget", "runtimeContext"]);
-          expectAbsent(m, ["sessionKey", "runtimeContext", "abortSignal"]);
-        } else {
-          const common = { ...session, runtimeSettings };
-          const runtime = { ...common, runtimeContext: { tokenBudget: 1000 }, abortSignal };
-          expect(a).toMatchObject({ ...common, prompt: "hello" });
-          expect(c).toMatchObject({
-            ...runtime,
-            sessionTarget: { agentId: "main", sessionId: "session-1" },
-          });
-          expect(m).toMatchObject(runtime);
-        }
-      } finally {
-        if (turn) {
-          await disposeResolution(turn);
-        } else {
-          await engine.dispose?.();
-        }
+      await using resolved = await resolveProbe(config, mode !== "declared-process");
+      const abortSignal = await invokeHostParamMethods(resolved.engine);
+      const a = assemble.mock.calls[0]?.[0];
+      const c = compact.mock.calls[0]?.[0];
+      const m = maintain.mock.calls[0]?.[0];
+      const required = { sessionId: "session-1", runtimeSettings };
+      if (restricted) {
+        expect([a, c, m]).toMatchObject([required, { ...required, abortSignal }, required]);
+        expectAbsent(a, ["sessionKey", "prompt"]);
+        expectAbsent(c, ["sessionTarget", "runtimeContext"]);
+        expectAbsent(m, ["sessionKey", "runtimeContext", "abortSignal"]);
+      } else {
+        const common = { ...session, runtimeSettings };
+        const runtime = { ...common, runtimeContext, abortSignal };
+        expect(a).toMatchObject({ ...common, prompt: "hello" });
+        expect(c).toMatchObject({ ...runtime, sessionTarget });
+        expect(m).toMatchObject(runtime);
       }
     },
   );
@@ -179,7 +158,7 @@ describe("context-engine host parameter projection", () => {
     const { config, commitTurn } = await registerProbeEngine({
       acceptedHostParams: ["runtimeSettings"],
     });
-    const resolution = await resolveLogicalTurnContextEngines(config);
+    await using resolved = await resolveProbe(config);
     const admission = {
       agentId: "main",
       ...session,
@@ -193,7 +172,7 @@ describe("context-engine host parameter projection", () => {
       role: "user" as const,
     };
 
-    await resolution.configured.engine.commitTurn?.({
+    await resolved.engine.commitTurn?.({
       advancementKey: "turn-1",
       admission,
       terminal: {
@@ -218,7 +197,6 @@ describe("context-engine host parameter projection", () => {
       }),
     );
     expectAbsent(commitTurn.mock.calls[0]?.[0], ["sessionKey", "sessionTarget", "runtimeContext"]);
-    await disposeResolution(resolution);
   });
 
   it("does not retry validator-shaped engine failures", async () => {
@@ -265,34 +243,31 @@ describe("context-engine host parameter projection", () => {
       await registerContextEngineForOwner(engineId, () => sharedEngine, `test:${engineId}`);
 
       const config = { plugins: { slots: { contextEngine: engineId } } };
-      const firstTurn =
-        mode === "logical-turn" ? await resolveLogicalTurnContextEngines(config) : undefined;
-      const secondTurn =
-        mode === "logical-turn" ? await resolveLogicalTurnContextEngines(config) : undefined;
-      const first = firstTurn?.configured.engine ?? (await resolveContextEngine(config));
-      const second = secondTurn?.configured.engine ?? (await resolveContextEngine(config));
-      try {
-        expect(first.info).toEqual({ id: engineId, name: "Frozen Probe", acceptedHostParams: [] });
-        await first.assemble({ sessionId: "session-1", sessionKey: "first", messages: [message] });
-        await second.assemble({
-          sessionId: "session-2",
-          sessionKey: "second",
-          messages: [message],
-        });
+      await using first = await resolveProbe(config, mode === "logical-turn");
+      await using second = await resolveProbe(config, mode === "logical-turn");
+      expect(first.engine.info).toEqual({
+        id: engineId,
+        name: "Frozen Probe",
+        acceptedHostParams: [],
+      });
+      await first.engine.assemble({
+        sessionId: "session-1",
+        sessionKey: "first",
+        messages: [message],
+      });
+      await second.engine.assemble({
+        sessionId: "session-2",
+        sessionKey: "second",
+        messages: [message],
+      });
 
-        expect(assemble).toHaveBeenCalledTimes(2);
-        expect(assemble.mock.contexts[0]).toBe(sharedEngine);
-        expect(assemble.mock.contexts[1]).toBe(sharedEngine);
-        expect(assemble.mock.calls.map(([params]) => params)).toEqual([
-          { sessionId: "session-1", messages: [message] },
-          { sessionId: "session-2", messages: [message] },
-        ]);
-      } finally {
-        await Promise.allSettled([
-          firstTurn?.fallback.engine.dispose?.(),
-          secondTurn?.fallback.engine.dispose?.(),
-        ]);
-      }
+      expect(assemble).toHaveBeenCalledTimes(2);
+      expect(assemble.mock.contexts[0]).toBe(sharedEngine);
+      expect(assemble.mock.contexts[1]).toBe(sharedEngine);
+      expect(assemble.mock.calls.map(([params]) => params)).toEqual([
+        { sessionId: "session-1", messages: [message] },
+        { sessionId: "session-2", messages: [message] },
+      ]);
     },
   );
 
@@ -322,40 +297,33 @@ describe("context-engine host parameter projection", () => {
       `plugin:${engineId}`,
     );
     const config = { plugins: { slots: { contextEngine: engineId } } };
-    const processEngine = await resolveContextEngine(config);
+    await using process = await resolveProbe(config, false);
+    const processEngine = process.engine;
     await expect(
       processEngine.compact({ sessionId: "session-1", sessionKey: "agent:main:session-1" }),
     ).rejects.toBe(processFailure);
     const quarantine = await listContextEngineQuarantines();
     expect(quarantine).toEqual([expect.objectContaining({ engineId, operation: "compact" })]);
 
-    const resolution = await resolveLogicalTurnContextEngines(config);
-    try {
-      expect(resolution.configured.ownerPluginId).toBe(engineId);
-      expect(resolution.configured.engine.info).toBe(info);
-      const params = { sessionId: "session-1", sessionKey: "raw", messages: [message] };
-      const result = resolution.configured.engine.assemble(params);
-      expect(result).toBe(retainedPromise);
-      await expect(result).resolves.toEqual({ messages: [message], estimatedTokens: 0 });
+    await using resolved = await resolveProbe(config);
+    expect(resolved.owner).toBe(engineId);
+    expect(resolved.engine.info).toBe(info);
+    const params = { sessionId: "session-1", sessionKey: "raw", messages: [message] };
+    const result = resolved.engine.assemble(params);
+    expect(result).toBe(retainedPromise);
+    await expect(result).resolves.toEqual({ messages: [message], estimatedTokens: 0 });
 
-      let returned: ReturnType<ContextEngine["assemble"]> | undefined;
-      let thrown: unknown;
-      try {
-        returned = resolution.configured.engine.assemble(params);
-      } catch (error) {
-        thrown = error;
-      }
-      // Drain an accidental async rejection before asserting synchronous error identity.
-      await returned?.catch(() => {});
-      expect(thrown).toBe(syncFailure);
-      expect(assemble).toHaveBeenCalledTimes(2);
-      expect(await listContextEngineQuarantines()).toEqual(quarantine);
-    } finally {
-      await Promise.allSettled([
-        processEngine.dispose?.(),
-        resolution.configured.engine.dispose?.(),
-        resolution.fallback.engine.dispose?.(),
-      ]);
+    let returned: ReturnType<ContextEngine["assemble"]> | undefined;
+    let thrown: unknown;
+    try {
+      returned = resolved.engine.assemble(params);
+    } catch (error) {
+      thrown = error;
     }
+    // Drain an accidental async rejection before asserting synchronous error identity.
+    await returned?.catch(() => {});
+    expect(thrown).toBe(syncFailure);
+    expect(assemble).toHaveBeenCalledTimes(2);
+    expect(await listContextEngineQuarantines()).toEqual(quarantine);
   });
 });

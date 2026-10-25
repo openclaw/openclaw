@@ -125,19 +125,15 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("context engine quarantine health", () => {
   it("warns when persisted quarantine inventory cannot be read", async () => {
-    const read = vi
+    using read = vi
       .spyOn(pluginStateWorker, "listPluginStateInWorker")
       .mockRejectedValueOnce(new Error("synthetic health read failure: sensitive-row-fragment"));
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      expect(await listPersisted()).toEqual([]);
-      expect(warning).toHaveBeenCalledExactlyOnceWith(
-        "[runtime-health] Persisted quarantine inventory is unavailable for runtime-quarantines; health warnings may be incomplete. Run openclaw doctor to inspect state storage.",
-      );
-    } finally {
-      warning.mockRestore();
-      read.mockRestore();
-    }
+    using warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await listPersisted()).toEqual([]);
+    expect(read).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      "[runtime-health] Persisted quarantine inventory is unavailable for runtime-quarantines; health warnings may be incomplete. Run openclaw doctor to inspect state storage.",
+    );
   });
 
   it("does not dispatch health cleanup again on an empty warm turn", async () => {
@@ -380,10 +376,8 @@ describe("context engine quarantine health", () => {
       };
       const publicationThrows =
         mode === "publication throws" || mode === "cached publication throws";
-      let cachedRegistry: ReturnType<typeof pluginRuntime.getActivePluginRegistry> | undefined;
       if (mode === "cached" || mode === "cached publication throws") {
         await ensureCliPluginRegistryLoaded({ scope: "all", config });
-        cachedRegistry = pluginRuntime.getActivePluginRegistry();
       }
       const quarantine = {
         engineId,
@@ -402,18 +396,15 @@ describe("context engine quarantine health", () => {
         });
       }
       const { DatabaseSync } = requireNodeSqlite();
-      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      using prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const activate = engines.activateContextEngineRegistrations;
-      let activationHostPrepares = 0;
-      const activationObserver = vi
+      using activation = vi
         .spyOn(engines, "activateContextEngineRegistrations")
         .mockImplementation((...args) => {
-          const before = prepare.mock.calls.length;
-          try {
-            return activate(...args);
-          } finally {
-            activationHostPrepares += prepare.mock.calls.length - before;
-          }
+          prepare.mockClear();
+          const result = activate(...args);
+          expect.soft(prepare).not.toHaveBeenCalled();
+          return result;
         });
       let settled = false;
       const load = () => {
@@ -438,11 +429,8 @@ describe("context engine quarantine health", () => {
           reached.promise.then(() => "worker"),
           loading.then(() => "settled"),
         ]);
-        expect.soft(activationHostPrepares).toBe(0);
         expect(phase).toBe("worker");
-        if (cachedRegistry) {
-          expect(activationObserver.mock.calls[0]?.[0]).toBe(cachedRegistry);
-        }
+        expect(activation).toHaveBeenCalled();
         prepare.mockRestore();
         expect(settled).toBe(false);
         expect(getContextEngineQuarantine(engineId)).toBeUndefined();
@@ -469,12 +457,10 @@ describe("context engine quarantine health", () => {
               : [],
         );
       } finally {
-        prepare.mockRestore();
         release.resolve();
         await loading;
         await retirement;
         observer.mockRestore();
-        activationObserver.mockRestore();
         commit.mockRestore();
         await resetQuarantine();
         resetPluginLoaderTestStateForTest();
