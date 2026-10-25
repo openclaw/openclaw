@@ -42,26 +42,22 @@ export class TranscriptInitialRange {
       return;
     }
     const virtualizer = this.virtualizer();
-    for (let index = 0; index < virtualizer.options.count; index++) {
+    let start = virtualizer.options.count,
+      covered = 0;
+    for (let index = start - 1; index >= 0; index--) {
       const size = minimum(index);
       if (size) {
         virtualizer.resizeItem(index, size);
       }
-    }
-    if (!this.tailRows) {
-      return;
-    }
-    let start = virtualizer.options.count,
-      covered = 0;
-    while (start > 0 && covered < height) {
-      const size = minimum(--start);
-      if (!size) {
-        return;
+      if (size && start === index + 1 && covered < height) {
+        start = index;
+        covered += size;
       }
-      covered += size;
     }
-    this.tailRows = Math.max(1, virtualizer.options.count - start);
-    this.refresh();
+    if (this.tailRows && (covered >= height || start === 0)) {
+      this.tailRows = Math.max(1, virtualizer.options.count - start);
+      this.refresh();
+    }
   }
 
   extend(element: HTMLDivElement): boolean {

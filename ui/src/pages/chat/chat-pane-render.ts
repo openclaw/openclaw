@@ -57,9 +57,10 @@ import {
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
+import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
-import { createChatWidgetLayout } from "./session-message-cache.ts";
+import { createChatWidgetLayout, resolveChatSnapshotKey } from "./session-message-cache.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
@@ -69,6 +70,8 @@ registerChatSessionEnglish();
 const emptyTranscriptItems: [] = [];
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
+  private readonly widgetLayout = createTranscriptMemo<ReturnType<typeof createChatWidgetLayout>>();
+
   render(
     readProviderReview?: () => ChatProviderReviewOwner | undefined,
     readRealtimeTalkConversation?: ChatProps["readRealtimeTalkConversation"],
@@ -120,6 +123,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       this.context.runtimeConfig.state,
     );
     const currentAgentId = resolveChatAgentId(state);
+    const sessionScope = scopedAgentParamsForSession(state, state.sessionKey);
+    const widgetTarget = { sessionKey: state.sessionKey, ...sessionScope };
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     const catalog = catalogKey !== null;
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
@@ -652,15 +657,16 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       agentsList: state.agentsList,
       currentAgentId,
-      fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
+      fullMessageAgentId: sessionScope.agentId,
       loadFullAssistantMessage: createSidebarFullMessageLoader(state, this.context.gateway),
       onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
       canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
       boardProvider: board.provider,
-      widgetLayout: createChatWidgetLayout(state.chatMessagesBySession, state, {
-        sessionKey: state.sessionKey,
-        ...scopedAgentParamsForSession(state, state.sessionKey),
-      }),
+      widgetLayout: this.widgetLayout(
+        state.chatMessagesBySession,
+        [resolveChatSnapshotKey(state, widgetTarget), state.currentSessionId],
+        () => createChatWidgetLayout(state.chatMessagesBySession, state, widgetTarget),
+      ),
       onOpenSidebar: state.handleOpenSidebar,
       onRequestOpenImage: state.beginImageOpen,
       onOpenImage: state.handleOpenImage,

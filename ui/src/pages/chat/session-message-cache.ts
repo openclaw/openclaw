@@ -97,12 +97,10 @@ export function createChatWidgetLayout(
   // Reserve the admitted snapshot; new measurements belong to the next reload.
   let admitted = cache.get(cacheKey)?.snapshot;
   const current = () => {
-    const snapshot = cache.get(cacheKey)?.snapshot;
+    const snapshot =
+      resolveChatSnapshotKey(host, target) === cacheKey ? cache.get(cacheKey)?.snapshot : undefined;
     admitted ??= snapshot;
-    return resolveChatSnapshotKey(host, target) === cacheKey &&
-      snapshot?.sessionId === admitted?.sessionId
-      ? snapshot
-      : undefined;
+    return snapshot?.sessionId === admitted?.sessionId ? snapshot : undefined;
   };
   const invalidateRow = (rowKey: string | undefined, widgetKey?: string) => {
     const snapshot = current();
