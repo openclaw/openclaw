@@ -42,6 +42,28 @@ vi.mock("../../../packages/markdown-core/src/markdown-code-regions.js", async (i
   };
 });
 
+function expectOwnershipCorrection(
+  chunks: readonly string[],
+  options: { visibleBefore?: boolean; intermediateVisible?: boolean; replaces?: boolean } = {},
+) {
+  const stream = createAssistantVisibleStreamText("final_answer");
+  expect(stream.append(chunks[0]).text.includes("[tool:read] {}")).toBe(
+    options.visibleBefore ?? true,
+  );
+  for (const chunk of chunks.slice(1, -1)) {
+    stream.append(chunk);
+    if (options.intermediateVisible) {
+      expect(stream.text).toContain("[tool:read] {}");
+    }
+  }
+  const corrected = stream.append(chunks.at(-1)!);
+  if (options.replaces) {
+    expect(corrected.delta).toBeNull();
+  }
+  expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(chunks.join(""), "final_answer"));
+  expect(corrected.text.includes("[tool:read] {}")).toBe(!(options.visibleBefore ?? true));
+}
+
 it.each(["mixed", "leading", "repeated literal", "repeated hidden"])(
   "bounds Markdown work for %s output",
   (shape) => {
@@ -180,92 +202,54 @@ it("bounds classification work while invisible text streams", () => {
   expect(stream.replace("\u2060")).toEqual({ text: "", delta: null });
 });
 
-it("bounds Markdown ownership work for open tool calls and cited answers", () => {
-  const payload = "x".repeat(4_096);
-  const openCall = `[tool:write]\n{"path": "notes.txt", "content": "${payload}`;
-  const openCallStream = createTextProjection(assistantVisibleTextFilters("delivery", true));
-  markdownOwnershipWork.scannedCharacters = 0;
-  for (let offset = 0; offset < openCall.length; offset += 4) {
-    openCallStream.append(openCall.slice(offset, offset + 4));
+const citedProse = "Answer with citation [1]. ".repeat(128) + "Done.";
+it.each([
+  ["open call", '[tool:write]\n{"path": "notes.txt", "content": "' + "x".repeat(4_096), true],
+  ["cited answer", "[1]: https://example.test/reference\n```json\n{}\n```\n" + citedProse, false],
+  ["blank title", '[1]: https://example.test/reference\n"unfinished\n\n' + citedProse, false],
+  [
+    "bibliography",
+    Array.from({ length: 128 }, (_, i) => `[${i + 1}]: https://example.test/${i}`).join("\n") +
+      "\n\n",
+    false,
+  ],
+] as const)("bounds Markdown ownership work for %s", (_name, source, delivery) => {
+  const stream = delivery
+    ? createTextProjection(assistantVisibleTextFilters("delivery", true))
+    : createAssistantVisibleStreamText("final_answer");
+  const before = markdownOwnershipWork.scannedCharacters;
+  for (let offset = 0; offset < source.length; offset += 4) {
+    stream.append(source.slice(offset, offset + 4));
   }
-  expect(openCallStream.text).toBe(openCall);
-  expect(markdownOwnershipWork.scannedCharacters).toBeLessThan(openCall.length * 16);
-
-  const citedAnswer =
-    "[1]: https://example.test/reference\n```json\n{}\n```\n" +
-    "Answer with citation [1]. ".repeat(128) +
-    "Done.";
-  const citedStream = createAssistantVisibleStreamText("final_answer");
-  const beforeCitedAnswer = markdownOwnershipWork.scannedCharacters;
-  for (let offset = 0; offset < citedAnswer.length; offset += 4) {
-    citedStream.append(citedAnswer.slice(offset, offset + 4));
-  }
-  expect(citedStream.text).toBe(citedAnswer);
-  expect(markdownOwnershipWork.scannedCharacters - beforeCitedAnswer).toBeLessThan(
-    citedAnswer.length * 16,
+  expect(stream.text).toBe(
+    _name === "bibliography" ? sanitizeAssistantVisibleStreamText(source, "final_answer") : source,
   );
-
-  const settledAfterBlankTitle =
-    '[1]: https://example.test/reference\n"unfinished\n\n' +
-    "Answer with citation [1]. ".repeat(128) +
-    "Done.";
-  const settledTitleStream = createAssistantVisibleStreamText("final_answer");
-  const beforeSettledTitle = markdownOwnershipWork.scannedCharacters;
-  for (let offset = 0; offset < settledAfterBlankTitle.length; offset += 4) {
-    settledTitleStream.append(settledAfterBlankTitle.slice(offset, offset + 4));
-  }
-  expect(settledTitleStream.text).toBe(settledAfterBlankTitle);
-  expect(markdownOwnershipWork.scannedCharacters - beforeSettledTitle).toBeLessThan(
-    settledAfterBlankTitle.length * 16,
-  );
-
-  const bibliography =
-    Array.from({ length: 128 }, (_, index) => `[${index + 1}]: https://example.test/${index}`).join(
-      "\n",
-    ) + "\n\n";
-  const bibliographyStream = createAssistantVisibleStreamText("final_answer");
-  const beforeBibliography = markdownOwnershipWork.scannedCharacters;
-  for (let offset = 0; offset < bibliography.length; offset += 4) {
-    bibliographyStream.append(bibliography.slice(offset, offset + 4));
-  }
-  expect(bibliographyStream.text).toBe(
-    sanitizeAssistantVisibleStreamText(bibliography, "final_answer"),
-  );
-  expect(markdownOwnershipWork.scannedCharacters - beforeBibliography).toBeLessThan(
-    bibliography.length * 16,
-  );
-
-  const completedCall = '[tool:write]\n{"path":"notes.txt","content":"safe"}\n\n';
-  const completedCallStream = createAssistantVisibleStreamText("final_answer");
-  for (let offset = 0; offset < completedCall.length; offset += 4) {
-    completedCallStream.append(completedCall.slice(offset, offset + 4));
-  }
-  expect(completedCallStream.text).toBe("");
+  expect(markdownOwnershipWork.scannedCharacters - before).toBeLessThan(source.length * 16);
 });
 
-it("refreshes ownership when streamed link and container syntax changes Markdown ownership", () => {
-  const scenarios: Array<[string, string]> = [
-    ["[label](/url (title\n`x\n[tool:read] {}\nx` trailing\n", "))\n"],
-    ["[label](/url (title\n`x\n[tool:read] {}\nx` trailing\n)", ")\n"],
-    ["![example `x\n[tool:read] {}\nx`][id]\n\n> [id]:\n", "> /url\n"],
-    ["![example `x\n[tool:read] {}\nx`][id]\n\n- [id]:\n", "  /url\n"],
-    ['[label](/url "title\n`x\n[tool:read] {}\nx` trailing\n', '")\n'],
-    ['[label](/u(x) "title\n`x\n[tool:read] {}\nx` trailing\n', '")\n'],
-    ['[label](/u(x)\n"title\n`x\n[tool:read] {}\nx` trailing\n', '")\n'],
-  ];
-
-  for (const chunks of scenarios) {
-    const source = chunks.join("");
-    const stream = createAssistantVisibleStreamText("final_answer");
-    const pending = stream.append(chunks[0]);
-    expect(pending.text).toContain("[tool:read] {}");
-
-    const corrected = stream.append(chunks[1]);
-    expect(corrected.delta).toBeNull();
-    expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-    expect(corrected.text).not.toContain("[tool:read] {}");
+it("hides a completed tool call", () => {
+  const source = '[tool:write]\n{"path":"notes.txt","content":"safe"}\n\n';
+  const stream = createAssistantVisibleStreamText("final_answer");
+  for (let offset = 0; offset < source.length; offset += 4) {
+    stream.append(source.slice(offset, offset + 4));
   }
+  expect(stream.text).toBe("");
 });
+
+it.each([
+  ["[label](/url (title\n`x\n[tool:read] {}\nx` trailing\n", "))\n"],
+  ["[label](/url (title\n`x\n[tool:read] {}\nx` trailing\n)", ")\n"],
+  ["![example `x\n[tool:read] {}\nx`][id]\n\n> [id]:\n", "> /url\n"],
+  ["![example `x\n[tool:read] {}\nx`][id]\n\n- [id]:\n", "  /url\n"],
+  ['[label](/url "title\n`x\n[tool:read] {}\nx` trailing\n', '")\n'],
+  ['[label](/u(x) "title\n`x\n[tool:read] {}\nx` trailing\n', '")\n'],
+  ['[label](/u(x)\n"title\n`x\n[tool:read] {}\nx` trailing\n', '")\n'],
+])(
+  "refreshes ownership when streamed link and container syntax changes Markdown ownership",
+  (...chunks: string[]) => {
+    expectOwnershipCorrection(chunks, { replaces: true });
+  },
+);
 
 it.each([
   "![example `x\n[tool:read] {}\nx`][id]\n\nA | B\n--- | ---\n\n[id]: /url\n",
@@ -304,30 +288,16 @@ it.each([
   expect(expected.at(-1)?.includes("[tool:read] {}")).toBe(source.startsWith("````"));
 });
 
-it("rechecks ownership when a GFM table delimiter changes a paragraph", () => {
-  const scenarios = [
-    ["Intro `x\n[tool:read] {}\nx` | y\n", "--- ", "| ", "---", "\n"],
-    ["Intro `x\n[tool:read] {}\nx` |\n---", ":\n"],
-    ["Intro `x\n[tool:read] {}\nx` |\n --", ":\n"],
-    ["Intro `x\n[tool:read] {}\nx` |\n -", ":\n"],
-    ["Intro `x\n[tool:read] {}\nx` |\n:", "-\n"],
-    ["Intro `x\n[tool:read] {}\nx` |\n:", "--\n"],
-    ["Intro `x\n[tool:read] {}\nx` |   \n:", "-\n"],
-  ] as const;
-
-  for (const chunks of scenarios) {
-    const source = chunks.join("");
-    const stream = createAssistantVisibleStreamText("final_answer");
-
-    expect(stream.append(chunks[0]).text).toContain("[tool:read] {}");
-    for (const chunk of chunks.slice(1, -1)) {
-      stream.append(chunk);
-    }
-    const corrected = stream.append(chunks.at(-1)!);
-
-    expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-    expect(corrected.text).not.toContain("[tool:read] {}");
-  }
+it.each([
+  ["Intro `x\n[tool:read] {}\nx` | y\n", "--- ", "| ", "---", "\n"],
+  ["Intro `x\n[tool:read] {}\nx` |\n---", ":\n"],
+  ["Intro `x\n[tool:read] {}\nx` |\n --", ":\n"],
+  ["Intro `x\n[tool:read] {}\nx` |\n -", ":\n"],
+  ["Intro `x\n[tool:read] {}\nx` |\n:", "-\n"],
+  ["Intro `x\n[tool:read] {}\nx` |\n:", "--\n"],
+  ["Intro `x\n[tool:read] {}\nx` |   \n:", "-\n"],
+])("rechecks ownership when a GFM table delimiter changes a paragraph", (...chunks: string[]) => {
+  expectOwnershipCorrection(chunks);
 });
 
 it("refreshes ownership when a GFM table delimiter becomes invalid", () => {
@@ -340,30 +310,14 @@ it("refreshes ownership when a GFM table delimiter becomes invalid", () => {
   ];
 
   for (const prefix of prefixes) {
-    const source = prefix + suffix;
-    const stream = createAssistantVisibleStreamText("final_answer");
-
-    expect(stream.append(prefix).text).not.toContain("[tool:read] {}");
-
-    const corrected = stream.append(suffix);
-
-    expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-    expect(corrected.text).toContain("[tool:read] {}");
+    expectOwnershipCorrection([prefix, suffix], { visibleBefore: false });
   }
 });
 
 it("invalidates table ownership for a blockquoted delimiter row", () => {
   const prefix = "> Intro `x\n[tool:read] {}\n> x` |\n> ---:";
   const suffix = "x\n";
-  const source = prefix + suffix;
-  const stream = createAssistantVisibleStreamText("final_answer");
-
-  expect(stream.append(prefix).text).not.toContain("[tool:read] {}");
-
-  const corrected = stream.append(suffix);
-
-  expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-  expect(corrected.text).toContain("[tool:read] {}");
+  expectOwnershipCorrection([prefix, suffix], { visibleBefore: false });
 });
 
 it("refreshes link-title ownership across blockquote prefixes", () => {
@@ -372,18 +326,7 @@ it("refreshes link-title ownership across blockquote prefixes", () => {
     '> "\n> ',
     ")\n",
   ] as const;
-  const source = chunks.join("");
-  const stream = createAssistantVisibleStreamText("final_answer");
-  const pending = stream.append(chunks[0]);
-
-  expect(pending.text).toContain("[tool:read] {}");
-  stream.append(chunks[1]);
-  expect(stream.text).toContain("[tool:read] {}");
-
-  const corrected = stream.append(chunks[2]);
-
-  expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-  expect(corrected.text).not.toContain("[tool:read] {}");
+  expectOwnershipCorrection(chunks, { intermediateVisible: true });
 });
 
 it("refreshes link-title ownership across nested blockquote prefixes", () => {
@@ -403,17 +346,7 @@ it("refreshes link-title ownership across nested blockquote prefixes", () => {
   ] as const;
 
   for (const chunks of scenarios) {
-    const source = chunks.join("");
-    const stream = createAssistantVisibleStreamText("final_answer");
-
-    expect(stream.append(chunks[0]).text).toContain("[tool:read] {}");
-    stream.append(chunks[1]);
-    expect(stream.text).toContain("[tool:read] {}");
-
-    const corrected = stream.append(chunks[2]);
-
-    expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-    expect(corrected.text).not.toContain("[tool:read] {}");
+    expectOwnershipCorrection(chunks, { intermediateVisible: true });
   }
 });
 
@@ -424,42 +357,22 @@ it("checks repeated blockquote prefixes without exponential backtracking", () =>
   expect(canReuseMarkdownOwnership(previousText, `${previousText}!`, ownership)).toBe(true);
 });
 
-it("keeps an unfinished reference title pending after a trailing escape", () => {
-  const scenarios = [
-    ['[id]: /url\n"title\n`x\n[tool:read] {}\nx` trailing\\', 'a"'],
-    ['[id]: /url\n    "title\n`x\n[tool:read] {}\nx` trailing\n', '"'],
-  ] as const;
-
-  for (const chunks of scenarios) {
-    const source = chunks.join("");
-    const stream = createAssistantVisibleStreamText("final_answer");
-
-    expect(stream.append(chunks[0]).text).toContain("[tool:read] {}");
-    const corrected = stream.append(chunks[1]);
-
-    expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-    expect(corrected.text).not.toContain("[tool:read] {}");
-  }
+it.each([
+  ['[id]: /url\n"title\n`x\n[tool:read] {}\nx` trailing\\', 'a"'],
+  ['[id]: /url\n    "title\n`x\n[tool:read] {}\nx` trailing\n', '"'],
+])("keeps an unfinished reference title pending after a trailing escape", (...chunks: string[]) => {
+  expectOwnershipCorrection(chunks);
 });
 
-it("keeps a list-owned blockquote reference title pending until its quote closes", () => {
-  const scenarios = [
-    ['- item\n\n    > [id]: /url\n    > "title\n`x\n[tool:read] {}\nx` trailing\n    > ', '"\n'],
-    ['- item\n\n\t> [id]: /url\n\t> "title\n`x\n[tool:read] {}\nx` trailing\n    > ', '"\n'],
-  ] as const;
-
-  for (const chunks of scenarios) {
-    const source = chunks.join("");
-    const stream = createAssistantVisibleStreamText("final_answer");
-
-    expect(stream.append(chunks[0]).text).toContain("[tool:read] {}");
-
-    const corrected = stream.append(chunks[1]);
-
-    expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
-    expect(corrected.text).not.toContain("[tool:read] {}");
-  }
-});
+it.each([
+  ['- item\n\n    > [id]: /url\n    > "title\n`x\n[tool:read] {}\nx` trailing\n    > ', '"\n'],
+  ['- item\n\n\t> [id]: /url\n\t> "title\n`x\n[tool:read] {}\nx` trailing\n    > ', '"\n'],
+])(
+  "keeps a list-owned blockquote reference title pending until its quote closes",
+  (...chunks: string[]) => {
+    expectOwnershipCorrection(chunks);
+  },
+);
 
 it("rechecks ownership when an indentation-only line gains content", () => {
   const chunks = ["[tool:read] {}\n\n    ", "[tool:write] {}\n"] as const;
@@ -477,14 +390,7 @@ it("refreshes image-alt ownership when a long reference destination closes", () 
   const nestedListContinuationReferencePrefix = [
     "![example `x\n[tool:read] {}\nx`][id]",
     "",
-    "- level 1",
-    "  - level 2",
-    "    - level 3",
-    "      - level 4",
-    "        - level 5",
-    "          - level 6",
-    "            - level 7",
-    "              - level 8",
+    ...Array.from({ length: 8 }, (_, i) => "  ".repeat(i) + `- level ${i + 1}`),
     "",
     "                [id]: <./url",
   ].join("\n");
