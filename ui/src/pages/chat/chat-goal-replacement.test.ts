@@ -67,23 +67,54 @@ async function answer(label: string) {
   expect(control).toBeDefined();
   control!.click();
 }
-it.each(["start", "set", "create", ""])(
-  "edits instead of starting a second goal: %s",
-  async (action) => {
-    const { host } = fixture();
-    host.chatMessage = "/goal " + (action ? action + " " : "") + "Write rollout notes";
-    const pending = dialogs.track(handleSendChat(host));
+it.each(["edit", "replace", "structured"] as const)(
+  "confirms an existing goal through %s",
+  async (mode) => {
+    const running = mode !== "edit";
+    const { host, row } = fixture({
+      status: running ? "started" : "updated",
+      goalId: goal.id,
+      ...(running ? { action: "replace", runId: "resumed-turn" } : {}),
+      goal: {
+        ...goal,
+        status: running ? "active" : "paused",
+        objective: "Write rollout notes",
+        updatedAt: 3,
+      },
+    });
+    if (running) {
+      row.goal.status = "active";
+      host.chatRunId = "original-turn";
+      host.chatSending = true;
+    }
+    if (mode === "structured") {
+      host.chatMessage = "Write rollout notes";
+    }
+    const pending = dialogs.track(
+      handleSendChat(
+        host,
+        undefined,
+        mode === "structured"
+          ? { intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() } }
+          : undefined,
+      ),
+    );
     await answer("Replace objective");
     expect(await pending).toBe(true);
     expect(requestCalls(host.request, "sessions.goal.update")[0]?.[1]).toMatchObject({
-      action: "edit",
-      goalId: "goal-a",
+      action: running ? "replace" : "edit",
+      goalId: goal.id,
       sessionId: "session-a",
       objective: "Write rollout notes",
+      ...(running ? { expectedRunId: "original-turn", expectedGoalUpdatedAt: goal.updatedAt } : {}),
     });
     expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
     expect(requestCalls(host.request, "sessions.goal.clear")).toHaveLength(0);
-    expect(host.chatMessage).toBe("");
+    if (running) {
+      expect(host.chatRunId).toBe("resumed-turn");
+    } else {
+      expect(host.chatMessage).toBe("");
+    }
   },
 );
 it("opens confirmation during an executing goal and cancels without stopping work", async () => {
@@ -101,46 +132,6 @@ it("opens confirmation during an executing goal and cancels without stopping wor
   expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(0);
 });
 
-it.each(["", "start", "set", "create", "structured"])(
-  "confirms a running replacement through %s",
-  async (action) => {
-    const { host, row } = fixture({
-      status: "started",
-      action: "replace",
-      goalId: goal.id,
-      runId: "resumed-turn",
-      goal: { ...goal, status: "active", objective: "Write rollout notes", updatedAt: 3 },
-    });
-    row.goal.status = "active";
-    host.chatRunId = "original-turn";
-    host.chatSending = true;
-    host.chatMessage =
-      action === "structured"
-        ? "Write rollout notes"
-        : "/goal " + (action ? action + " " : "") + "Write rollout notes";
-    const pending = dialogs.track(
-      handleSendChat(
-        host,
-        undefined,
-        action === "structured"
-          ? { intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() } }
-          : undefined,
-      ),
-    );
-    await answer("Replace objective");
-    expect(await pending).toBe(true);
-    expect(requestCalls(host.request, "sessions.goal.update")[0]?.[1]).toMatchObject({
-      action: "replace",
-      goalId: goal.id,
-      sessionId: "session-a",
-      expectedRunId: "original-turn",
-      expectedGoalUpdatedAt: goal.updatedAt,
-      objective: "Write rollout notes",
-    });
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
-    expect(host.chatRunId).toBe("resumed-turn");
-  },
-);
 it.each(["finished", "new turn"])(
   "does not replace after the confirmed turn %s",
   async (transition) => {
@@ -231,6 +222,14 @@ it.each(["status", "edit", "pause", "resume", "complete", "done", "block", "bloc
   "leaves explicit %s syntax alone",
   (action) => {
     expect(chatGoalCreationObjective("/goal " + action + " note")).toBeUndefined();
+  },
+);
+it.each(["", "start", "set", "create"])(
+  "parses creation alias %s as the literal objective",
+  (action) => {
+    expect(chatGoalCreationObjective(`/goal ${action} Write rollout notes`)).toBe(
+      "Write rollout notes",
+    );
   },
 );
 it("preserves literal objective formatting and ignores non-goal commands", () => {
