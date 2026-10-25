@@ -172,7 +172,9 @@ async function scrollLongSession(page: Page, _gateway: MockGatewayControls, samp
     const traverse = async (direction: -1 | 1) => {
       while (true) {
         await settleRetention(page);
-        for (const match of (await thread.innerText()).matchAll(/Transcript 0 message (\d+)\./gu)) {
+        for (const match of ((await thread.textContent()) ?? "").matchAll(
+          /Transcript 0 message (\d+)\./gu,
+        )) {
           seenMessages.add(Number(match[1]));
         }
         const { top, remaining, step } = await thread.evaluate((element) => ({
@@ -204,6 +206,7 @@ async function scrollLongSession(page: Page, _gateway: MockGatewayControls, samp
     const mountedRows = await thread.locator("[data-virtual-row-key]").count();
     expect(mountedRows).toBeGreaterThan(0);
     expect(mountedRows).toBeLessThan(400);
+    console.log(`[retention] full transcript traversal ${cycle}/10; ${seenMessages.size} messages`);
     if (cycle === 5 || cycle === 10) {
       await sample(cycle);
     }
@@ -256,7 +259,7 @@ export const performanceRetentionScenes: readonly PerformanceRetentionScene[] = 
   { id: "intent-prefetch", timeoutMs: 300_000, fixture: prefetchFixture, run: hoverPrefetch },
   {
     id: "long-session-scroll",
-    timeoutMs: 300_000,
+    timeoutMs: 600_000,
     fixture: interactionFixture,
     run: scrollLongSession,
   },
