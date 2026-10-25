@@ -90,72 +90,41 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     },
   );
 
-  describe("SSRF policy", () => {
-    it.each([
-      {
-        name: "pins a default hostname without broad private-network access",
-        input: { modelBaseUrl: "https://api.minimax.io" },
-        policy: { hostnameAllowlist: ["api.minimax.io"] },
-      },
-      {
-        name: "preserves an explicitly configured loopback origin",
-        input: { modelBaseUrl: "https://localhost:8080" },
-        policy: {
-          hostnameAllowlist: ["localhost"],
-          allowedOrigins: ["https://localhost:8080"],
-        },
-      },
-      {
-        name: "lets explicit denial override configured origin trust",
-        input: { modelBaseUrl: "https://localhost:8080", allowPrivateNetwork: false },
-        policy: { hostnameAllowlist: ["localhost"] },
-      },
-      {
-        name: "preserves explicit private-network opt-in",
-        input: { modelBaseUrl: "https://custom-minimax.example.com", allowPrivateNetwork: true },
-        policy: {
-          hostnameAllowlist: ["custom-minimax.example.com"],
-          allowedOrigins: ["https://custom-minimax.example.com"],
-          allowPrivateNetwork: true,
-        },
-      },
-      {
-        name: "refuses metadata-like configured origin trust",
-        input: { modelBaseUrl: "https://metadata.minimax.local" },
-        policy: undefined,
-      },
-      {
-        name: "refuses link-local configured origin trust",
-        input: { modelBaseUrl: "https://169.254.1.1" },
-        policy: undefined,
-      },
-    ])("$name", async ({ input, policy }) => {
-      const opts = await requestOptions(input);
-      if (policy === undefined) {
+  it.each([
+    ["api.minimax.io", undefined, false],
+    ["localhost:8080", undefined, true],
+    ["localhost:8080", false, false],
+    ["custom-minimax.example.com", true, true],
+    ["metadata.minimax.local", undefined, undefined],
+    ["169.254.1.1", undefined, undefined],
+  ] as const)(
+    "SSRF policy for %s (private=%s, trusted=%s)",
+    async (host, allowPrivateNetwork, trusted) => {
+      const modelBaseUrl = `https://${host}`;
+      const opts = await requestOptions({ modelBaseUrl, allowPrivateNetwork });
+      if (trusted === undefined) {
         expect(opts?.policy).toBeUndefined();
       } else {
-        const expected = { allowedOrigins: undefined, allowPrivateNetwork: undefined, ...policy };
-        expect(opts?.policy).toBeDefined();
-        expect(opts?.policy.hostnameAllowlist).toEqual(expected.hostnameAllowlist);
-        expect(opts?.policy.allowedOrigins).toEqual(expected.allowedOrigins);
-        expect(opts?.policy.allowPrivateNetwork).toBe(expected.allowPrivateNetwork);
-        expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
+        expect(opts?.policy).toMatchObject({ hostnameAllowlist: [new URL(modelBaseUrl).hostname] });
+        expect(opts?.policy?.allowedOrigins).toEqual(trusted ? [modelBaseUrl] : undefined);
+        expect(opts?.policy?.allowPrivateNetwork).toBe(
+          allowPrivateNetwork === true ? true : undefined,
+        );
+        expect(opts?.policy?.dangerouslyAllowPrivateNetwork).toBeUndefined();
       }
-    });
+    },
+  );
 
-    it("carries model request proxy policy into the guarded fetch", async () => {
-      const opts = await requestOptions({
-        modelBaseUrl: "https://custom-minimax.example.com",
-        request: { proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" } },
-      });
-      expect(opts?.dispatcherPolicy).toEqual({
-        mode: "explicit-proxy",
-        proxyUrl: "https://proxy.example.com",
-      });
-      // Explicit proxy configuration keeps strict mode; ambient proxy auto-upgrade
-      // must not replace its dispatcher policy.
-      expect(opts?.mode).toBeUndefined();
+  it("carries model request proxy policy into the guarded fetch", async () => {
+    const opts = await requestOptions({
+      modelBaseUrl: "https://custom-minimax.example.com",
+      request: { proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" } },
     });
+    expect(opts?.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "https://proxy.example.com",
+    });
+    expect(opts?.mode).toBeUndefined();
   });
 
   it("bounds large provider error response bodies", async () => {

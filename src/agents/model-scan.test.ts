@@ -6,11 +6,14 @@ import { scanOpenRouterModels } from "./model-scan.js";
 
 const jsonResponse = (body: BodyInit) =>
   new Response(body, { status: 200, headers: { "content-type": "application/json" } });
-const createFetchFixture = (payload: unknown): typeof fetch =>
-  withFetchPreconnect(async () => jsonResponse(JSON.stringify(payload)));
+const useResponse = (response: Response) =>
+  vi.stubGlobal(
+    "fetch",
+    withFetchPreconnect(async () => response),
+  );
 
 const scan = (data: unknown[], options: Parameters<typeof scanOpenRouterModels>[0] = {}) => {
-  vi.stubGlobal("fetch", createFetchFixture({ data }));
+  useResponse(jsonResponse(JSON.stringify({ data })));
   return scanOpenRouterModels({ probe: false, ...options });
 };
 
@@ -59,17 +62,11 @@ describe("scanOpenRouterModels", () => {
   it("keeps independently sized MoE models when filtering by minimum parameters", async () => {
     const results = await scan(
       [
-        {
-          id: "meta-llama/llama4-maverick-17b-128e:free",
-          name: "Llama 4 Maverick 400B",
-        },
-        {
-          id: "meta-llama/llama4-scout-17b-16e:free",
-          name: "Llama 4 Scout",
-        },
-        { id: "qwen/qwen3-30b-a3b:free", name: "Qwen3 30B A3B" },
-        { id: "meta-llama/llama-70b:free", name: "Llama 70B" },
-      ],
+        ["meta-llama/llama4-maverick-17b-128e:free", "Llama 4 Maverick 400B"],
+        ["meta-llama/llama4-scout-17b-16e:free", "Llama 4 Scout"],
+        ["qwen/qwen3-30b-a3b:free", "Qwen3 30B A3B"],
+        ["meta-llama/llama-70b:free", "Llama 70B"],
+      ].map(([id, name]) => ({ id, name })),
       { minParamB: 100 },
     );
 
@@ -100,24 +97,20 @@ describe("scanOpenRouterModels", () => {
   it("cancels catalog error response bodies", async () => {
     const response = new Response("unavailable", { status: 503 });
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    const fetchImpl = withFetchPreconnect(async () => response);
-
-    vi.stubGlobal("fetch", fetchImpl);
+    useResponse(response);
     await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(/HTTP 503/);
 
     expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("bounds an oversized catalog success body and cancels the stream", async () => {
-    // An unbounded provider stream must be cancelled at the byte cap.
     const cancel = vi.fn(async () => undefined);
     let pullCount = 0;
-    const chunk = new Uint8Array(64 * 1024).fill(0x20); // 64 KiB of spaces
-    const fetchImpl = withFetchPreconnect(async () =>
+    const chunk = new Uint8Array(64 * 1024).fill(0x20);
+    useResponse(
       jsonResponse(
         new ReadableStream({
           start(controller) {
-            // Valid JSON array prefix so the body would parse if ever read in full.
             controller.enqueue(new TextEncoder().encode('{"data":['));
           },
           pull(controller) {
@@ -129,22 +122,20 @@ describe("scanOpenRouterModels", () => {
       ),
     );
 
-    vi.stubGlobal("fetch", fetchImpl);
     await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(
       /OpenRouter \/models: JSON response exceeds 16777216 bytes/,
     );
 
     expect(cancel).toHaveBeenCalledOnce();
     expect(pullCount).toBeGreaterThan(0);
-    expect(pullCount).toBeLessThan(16 * 1024 * 1024); // nowhere near draining forever
+    expect(pullCount).toBeLessThan(16 * 1024 * 1024);
   });
 
   it.each([
     ["body", "not json at all", /OpenRouter \/models: malformed JSON response/],
     ["envelope", "{}", /OpenRouter \/models.*malformed JSON response/],
   ] as const)("rejects a malformed catalog %s", async (_kind, body, error) => {
-    const fetchImpl = withFetchPreconnect(async () => jsonResponse(body));
-    vi.stubGlobal("fetch", fetchImpl);
+    useResponse(jsonResponse(body));
     await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(error);
   });
 
@@ -187,6 +178,10 @@ describe("scanOpenRouterModels", () => {
       }
       let interval: ReturnType<typeof setInterval> | undefined;
       let completionTimer: ReturnType<typeof setTimeout> | undefined;
+      const stop = () => {
+        clearInterval(interval);
+        clearTimeout(completionTimer);
+      };
       return jsonResponse(
         new ReadableStream<Uint8Array>({
           start(controller) {
@@ -204,17 +199,13 @@ describe("scanOpenRouterModels", () => {
               "abort",
               () => {
                 abortCount += 1;
-                clearInterval(interval);
-                clearTimeout(completionTimer);
+                stop();
                 controller.error(signal.reason);
               },
               { once: true },
             );
           },
-          cancel() {
-            clearInterval(interval);
-            clearTimeout(completionTimer);
-          },
+          cancel: stop,
         }),
       );
     });

@@ -1,7 +1,5 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cameraTempPath } from "../cli/nodes-camera.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   readFileUtf8AndCleanup,
@@ -77,6 +75,18 @@ async function expectNodeError(input: Record<string, unknown>, error: string | R
   await expect(executeNodes(input)).rejects.toThrow(error);
 }
 
+async function expectNoPublication(input: Record<string, unknown>, error: string | RegExp) {
+  const rename = vi.spyOn(fs, "rename");
+  try {
+    await expectNodeError(input, error);
+    expect(rename).not.toHaveBeenCalled();
+  } finally {
+    const paths = rename.mock.calls.map(([, destination]) => String(destination));
+    rename.mockRestore();
+    await Promise.all(paths.map((file) => fs.unlink(file).catch(() => {})));
+  }
+}
+
 function firstMediaUrl(result: NodesToolResult): string {
   const details = result.details as { media?: { mediaUrls?: string[] } } | undefined;
   const mediaUrl = details?.media?.mediaUrls?.[0];
@@ -118,16 +128,8 @@ it.each([
         payload: captures++ === index ? invalid : JPG_PAYLOAD,
       }),
     });
-    const rename = vi.spyOn(fs, "rename");
-    try {
-      await expectNodeError({ action: "camera_snap", facing: "both" }, error);
-      expect(rename).not.toHaveBeenCalled();
-      expect(captures).toBe(count);
-    } finally {
-      const publishedPaths = rename.mock.calls.map(([, destination]) => String(destination));
-      rename.mockRestore();
-      await Promise.all(publishedPaths.map((filePath) => fs.unlink(filePath).catch(() => {})));
-    }
+    await expectNoPublication({ action: "camera_snap", facing: "both" }, error);
+    expect(captures).toBe(count);
   },
 );
 
@@ -173,26 +175,10 @@ it.each([
 
 it("rejects an unsupported second photo before writing the first", async () => {
   setupNodeInvokeMock({ invokePayload: { photos: [PHOTO, { ...PHOTO, format: "webp" }] } });
-  const ids = [
-    "00000000-0000-4000-8000-000000000001",
-    "00000000-0000-4000-8000-000000000022",
-    "00000000-0000-4000-8000-000000000033",
-  ] as const;
-  const paths = ids.slice(1).map((id) => cameraTempPath({ kind: "snap", ext: "jpg", id }));
-  const randomUUID = vi.spyOn(crypto, "randomUUID");
-  for (const id of ids) {
-    randomUUID.mockReturnValueOnce(id);
-  }
-  try {
-    await expectNodeError(
-      { action: "photos_latest", limit: 2 },
-      /unsupported photos\.latest format/i,
-    );
-    await expect(fs.stat(paths[0]!)).rejects.toMatchObject({ code: "ENOENT" });
-  } finally {
-    randomUUID.mockRestore();
-    await Promise.all(paths.map((filePath) => fs.unlink(filePath).catch(() => undefined)));
-  }
+  await expectNoPublication(
+    { action: "photos_latest", limit: 2 },
+    /unsupported photos\.latest format/i,
+  );
 });
 
 it("returns an explicit model-facing result when no photos are available", async () => {
