@@ -20,7 +20,7 @@ import {
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
 import { textToolResult } from "./dynamic-tools.test-support.js";
-import { flattenCodexDynamicToolFunctions, type JsonValue } from "./protocol.js";
+import { flattenCodexDynamicToolFunctions as functions, type JsonValue } from "./protocol.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 function taskTool(name = "task") {
@@ -40,6 +40,13 @@ function taskTool(name = "task") {
 function policy(allow: string[], actions: string[] = ["read"]): OpenClawConfig {
   return { tools: { gatewayPolicy: { allow, actions: { task: actions } } } };
 }
+type BridgeOptions = Omit<Parameters<typeof createCodexDynamicToolBridge>[0], "signal">;
+const makeBridge = (options: BridgeOptions) =>
+  createCodexDynamicToolBridge({ signal: new AbortController().signal, ...options });
+const messageSpec = [{ name: "message" }];
+const readTaskSpec = [
+  { name: "task", inputSchema: { properties: { action: { enum: ["read"] } } } },
+];
 
 function call(
   bridge: ReturnType<typeof createCodexDynamicToolBridge>,
@@ -103,16 +110,13 @@ describe("Codex Gateway tool policy", () => {
       const invalidName = taskTool("");
       const poisonedExecute = unreadable("fuzzplugin_unreadable_execute", "execute");
 
-      const bridge = createCodexDynamicToolBridge({
+      const bridge = makeBridge({
         tools: [poisonedName, poisonedSchema, invalidName, poisonedExecute, taskTool("message")],
-        signal: new AbortController().signal,
         hookContext: scopedContext,
       });
 
-      expect(flattenCodexDynamicToolFunctions(bridge.availableSpecs)).toMatchObject([
-        { name: "message" },
-      ]);
-      expect(flattenCodexDynamicToolFunctions(bridge.specs)).toMatchObject([{ name: "message" }]);
+      expect(functions(bridge.availableSpecs)).toMatchObject(messageSpec);
+      expect(functions(bridge.specs)).toMatchObject(messageSpec);
       expect(bridge.telemetry.quarantinedTools).toEqual([
         {
           tool: "tool[0]",
@@ -135,19 +139,14 @@ describe("Codex Gateway tool policy", () => {
           ],
         },
       ]);
-      const registeredBridge = createCodexDynamicToolBridge({
+      const registeredBridge = makeBridge({
         tools: [poisonedExecute, taskTool("message")],
         registeredTools: [poisonedExecute, taskTool("message")],
-        signal: new AbortController().signal,
         hookContext: scopedContext,
       });
 
-      expect(flattenCodexDynamicToolFunctions(registeredBridge.availableSpecs)).toMatchObject([
-        { name: "message" },
-      ]);
-      expect(flattenCodexDynamicToolFunctions(registeredBridge.specs)).toMatchObject([
-        { name: "message" },
-      ]);
+      expect(functions(registeredBridge.availableSpecs)).toMatchObject(messageSpec);
+      expect(functions(registeredBridge.specs)).toMatchObject(messageSpec);
     },
   );
 
@@ -156,10 +155,9 @@ describe("Codex Gateway tool policy", () => {
     (source) => {
       const task = taskTool();
       expect(() =>
-        createCodexDynamicToolBridge({
+        makeBridge({
           tools: source === "available" ? [task] : [],
           registeredTools: source === "registered" ? [task] : undefined,
-          signal: new AbortController().signal,
           hookContext: { config: { tools: { gatewayPolicy: { allow: ["task"] } } } },
         }),
       ).toThrow("Gateway tool policy requires tools.gatewayPolicy.actions.task.");
@@ -172,21 +170,18 @@ describe("Codex Gateway tool policy", () => {
       const task = taskTool();
       const admin = taskTool("gateway");
       const config = policy(["task"]);
-      const bridge = createCodexDynamicToolBridge({
+      const bridge = makeBridge({
         tools: [task, admin],
         registeredTools: [task, admin].map(({ name, description, parameters }) => ({
           name,
           description,
           parameters,
         })),
-        signal: new AbortController().signal,
         loading,
         hookContext: { config },
       });
       for (const specs of [bridge.specs, bridge.availableSpecs]) {
-        expect(flattenCodexDynamicToolFunctions(specs)).toMatchObject([
-          { name: "task", inputSchema: { properties: { action: { enum: ["read"] } } } },
-        ]);
+        expect(functions(specs)).toMatchObject(readTaskSpec);
       }
       expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["task"]);
       expect(
@@ -205,23 +200,19 @@ describe("Codex Gateway tool policy", () => {
   it("preserves saved declarations while denying unavailable restored callbacks", async () => {
     const task = taskTool();
     const admin = taskTool("gateway");
-    const oldBridge = createCodexDynamicToolBridge({
+    const oldBridge = makeBridge({
       tools: [task, admin],
-      signal: new AbortController().signal,
       loading: "searchable",
     });
     const savedFingerprint = codexDynamicToolsFingerprint(oldBridge.specs);
     const config = policy(["task"]);
-    const resumed = createCodexDynamicToolBridge({
+    const resumed = makeBridge({
       tools: [task],
       registeredSpecs: oldBridge.specs,
-      signal: new AbortController().signal,
       hookContext: { config },
     });
     expect(codexDynamicToolsFingerprint(resumed.specs)).toBe(savedFingerprint);
-    expect(flattenCodexDynamicToolFunctions(resumed.availableSpecs)).toMatchObject([
-      { name: "task", inputSchema: { properties: { action: { enum: ["read"] } } } },
-    ]);
+    expect(functions(resumed.availableSpecs)).toMatchObject(readTaskSpec);
     expect(await call(resumed, "gateway", { action: "write" })).toMatchObject({ success: false });
     expect(admin.execute).not.toHaveBeenCalled();
     expect(await call(resumed, "task", { action: "write" })).toMatchObject({ success: false });
@@ -233,19 +224,15 @@ describe("Codex Gateway tool policy", () => {
   it("captures deployment policy without a hook context when constructing each bridge", async () => {
     const task = taskTool();
     setRuntimeConfigSnapshot(policy(["task"]));
-    const bridge = createCodexDynamicToolBridge({
-      tools: [task],
-      signal: new AbortController().signal,
-    });
+    const bridge = makeBridge({ tools: [task] });
     expect(await call(bridge, "task", { action: "write" })).toMatchObject({ success: false });
     expect(task.execute).not.toHaveBeenCalled();
     expect(await call(bridge, "task", { action: "read" })).toMatchObject({ success: true });
 
     setRuntimeConfigSnapshot(policy([]));
-    const replacement = createCodexDynamicToolBridge({
+    const replacement = makeBridge({
       tools: [task],
       registeredSpecs: bridge.specs,
-      signal: new AbortController().signal,
     });
     expect(replacement.availableTools).toEqual([]);
     expect(await call(replacement, "task", { action: "read" })).toMatchObject({ success: false });
@@ -283,9 +270,8 @@ describe("Codex Gateway tool policy", () => {
     const wrapped = wrapToolWithBeforeToolCallHook(task, {
       config: policy(["task"], ["read", "write"]),
     });
-    const bridge = createCodexDynamicToolBridge({
+    const bridge = makeBridge({
       tools: [wrapped],
-      signal: new AbortController().signal,
       hookContext: { config: policy(["task"]) },
     });
     expect(await call(bridge, "task", { action: "read", value: "input" })).toMatchObject({

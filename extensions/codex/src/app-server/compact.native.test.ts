@@ -297,14 +297,7 @@ it(
       expect(tokensAfter).toBeGreaterThan(0);
       const target = params.sessionTarget;
       assert(target?.sessionId && target.sessionKey && target.storePath);
-      const activities = (
-        await readSessionTranscriptEvents({
-          agentId: target.agentId,
-          sessionId: target.sessionId,
-          sessionKey: target.sessionKey,
-          storePath: target.storePath,
-        })
-      ).flatMap((event) =>
+      const activities = (await readSessionTranscriptEvents(target)).flatMap((event) =>
         isJsonObject(event) &&
         isJsonObject(event.message) &&
         event.message.customType === "openclaw.context-compaction"
@@ -330,8 +323,7 @@ it(
     } finally {
       try {
         if (client) {
-          const closed = await client.closeAndWait();
-          expect(closed).toMatchObject({ exited: true });
+          expect(await client.closeAndWait()).toMatchObject({ exited: true });
         }
       } finally {
         closeHost?.();

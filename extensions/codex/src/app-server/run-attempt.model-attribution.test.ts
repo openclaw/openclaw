@@ -258,8 +258,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
       },
     ]);
     sendTurn("completed", [{ type: "agentMessage", id: "answer", text: "Native answer." }]);
-    const result = await run;
-    expect(result).toEqual(
+    expect(await run).toEqual(
       expect.objectContaining({
         terminal: { kind: "ok" },
         runtimeModelSelection: { provider: "openai", model: "ready-native-model" },
@@ -286,8 +285,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     sendTurn("completed", [
       { type: "agentMessage", id: "second-answer", text: "Second native answer." },
     ]);
-    const second = await next;
-    expect(second).toEqual(
+    expect(await next).toEqual(
       expect.objectContaining({
         terminal: { kind: "ok" },
         assistantTexts: ["Second native answer."],

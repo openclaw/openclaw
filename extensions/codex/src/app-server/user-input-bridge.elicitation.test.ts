@@ -68,17 +68,31 @@ function createControlledGateway() {
       waits.get(id)?.({ status: "cancelled" });
     },
   );
+  const waitForAnswers = async (count: number) => {
+    await vi.waitFor(() =>
+      expect(gateway.calls.filter(({ method }) => method === "question.waitAnswer")).toHaveLength(
+        count,
+      ),
+    );
+  };
   return {
     ...gateway,
-    async waitForAnswers(count: number) {
-      await vi.waitFor(() =>
-        expect(gateway.calls.filter(({ method }) => method === "question.waitAnswer")).toHaveLength(
-          count,
-        ),
-      );
+    waitForAnswers,
+    async answerForm(count: number, name: string) {
+      await waitForAnswers(count);
+      expect(gateway.questions).toHaveLength(count);
+      const request = gateway.questions[count - 1]!;
+      waits.get(request.id)?.({ status: "answered", answers: { answers: { name: [name] } } });
+      return request;
     },
-    answer(questionId: string, answers: Record<string, string[]>) {
-      waits.get(questionId)?.({ status: "answered", answers: { answers } });
+    answerConfirmation(request: (typeof gateway.questions)[number], choice: string) {
+      expect(request.questions).toHaveLength(1);
+      const question = request.questions[0];
+      assert(isJsonObject(question) && typeof question.questionId === "string");
+      waits.get(request.id)?.({
+        status: "answered",
+        answers: { answers: { [question.questionId]: [choice] } },
+      });
     },
   };
 }
@@ -104,11 +118,7 @@ describe("Codex ordinary MCP elicitation adapter", () => {
       expect(settled).not.toHaveBeenCalled();
       const prompt = vi.mocked(params.onBlockReply!).mock.calls[0]?.[0];
       expect(prompt?.text).toContain(requestParams.message);
-      const request = gateway.questions[0]!;
-      expect(request.questions).toHaveLength(1);
-      const question = request.questions[0];
-      assert(isJsonObject(question) && typeof question.questionId === "string");
-      gateway.answer(request.id, { [question.questionId]: [testCase.choice] });
+      gateway.answerConfirmation(gateway.questions[0]!, testCase.choice);
       await expectResult(response, testCase.action, testCase.action === "accept" ? {} : null);
     } finally {
       await gateway.cancelPending();
@@ -124,15 +134,11 @@ describe("Codex ordinary MCP elicitation adapter", () => {
       await gateway.waitForAnswers(1);
       expect(gateway.questions).toHaveLength(1);
       const first = gateway.questions[0]!;
-      const question = first.questions[0];
-      assert(isJsonObject(question) && typeof question.questionId === "string");
       controller.abort();
-      gateway.answer(first.id, { [question.questionId]: ["Allow"] });
+      gateway.answerConfirmation(first, "Allow");
       await expectResult(confirmation, "cancel");
-      await gateway.waitForAnswers(2);
-      const second = gateway.questions[1]!;
+      const second = await gateway.answerForm(2, "Ada");
       expect(second.id).not.toBe(first.id);
-      gateway.answer(second.id, { name: ["Ada"] });
       await expectResult(successor, "accept", { name: "Ada" });
     } finally {
       await gateway.cancelPending();
@@ -181,10 +187,7 @@ describe("Codex ordinary MCP elicitation adapter", () => {
 
     controller.abort();
     await expectResult(first, "cancel");
-    await vi.waitFor(() => expect(gateway.questions).toHaveLength(2));
-    await gateway.waitForAnswers(2);
-    const queued = gateway.questions[1]!;
-    gateway.answer(queued.id, { name: ["Grace"] });
+    await gateway.answerForm(2, "Grace");
     await expectResult(second, "accept", { name: "Grace" });
   });
 
@@ -199,18 +202,11 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     void queued.then(queuedResult);
     controller.abort();
     await vi.waitFor(() => expect(queuedResult).toHaveBeenCalledOnce());
-    await expect(queued).resolves.toMatchObject({ action: "cancel" });
-    await gateway.waitForAnswers(1);
-    const current = gateway.questions[0]!;
-    gateway.answer(current.id, { name: ["Ada"] });
-    await expect(active).resolves.toMatchObject({ action: "accept" });
-    await vi.waitFor(() => expect(gateway.questions).toHaveLength(2));
-    await gateway.waitForAnswers(2);
-    gateway.answer(gateway.questions[1]!.id, { name: ["Grace"] });
-    await expect(successor).resolves.toMatchObject({
-      action: "accept",
-      content: { name: "Grace" },
-    });
+    await expectResult(queued, "cancel");
+    await gateway.answerForm(1, "Ada");
+    await expectResult(active, "accept", { name: "Ada" });
+    await gateway.answerForm(2, "Grace");
+    await expectResult(successor, "accept", { name: "Grace" });
   });
 
   it("lets lifecycle cancellation fence a late committed answer", async () => {
