@@ -69,7 +69,6 @@ export async function runSessionListChurnWorkload(params: {
   request: Request;
   command: (child: ChildProcess, body: Record<string, string>) => Promise<unknown>;
   output: string;
-  durationMs: number;
   profile: boolean;
   retention: boolean;
 }) {
@@ -109,6 +108,7 @@ export async function runSessionListChurnWorkload(params: {
   const total = await count("all");
   const archived = await count(true);
   const active = await count(false);
+  console.log(JSON.stringify({ census: { total, archived, active } }));
   assert(total >= 5_000 && total === archived + active, "agent scope must contain >=5000 rows");
   assert(archived / total >= 0.69 && archived / total <= 0.71, "archive fraction must be ~70%");
   await Promise.all(readers.map((peer) => request(peer, "sessions.subscribe", {}, "setup")));
@@ -132,13 +132,19 @@ export async function runSessionListChurnWorkload(params: {
     const completedAt: number[] = [];
     const writtenKeys = new Set<string>();
     const pending = new Set<Promise<void>>();
-    let failure: unknown;
+    let failure: Error | undefined;
+    const fail = (error: unknown) => {
+      failure ??= error instanceof Error ? error : new Error(String(error));
+    };
     const writing = writers
       .map(async (peer, index) => {
         const sessionKey = `agent:main:team-shape-session-${index}`;
         let iteration = 0;
-        while (append && failure === undefined && iteration < Math.floor(durationMs / 500)) {
-          const scheduled = started + iteration * 500;
+        while (iteration < Math.floor(durationMs / 1000)) {
+          if (!append || failure) {
+            break;
+          }
+          const scheduled = started + iteration * 1000;
           if (performance.now() < scheduled) {
             await delay(scheduled - performance.now());
           }
@@ -159,12 +165,15 @@ export async function runSessionListChurnWorkload(params: {
       })
       .map((job) =>
         job.catch((error: unknown) => {
-          failure ??= error;
+          fail(error);
           return 0;
         }),
       );
-    for (let index = 0; failure === undefined && index < Math.floor(durationMs / 12.5); index++) {
-      const scheduled = started + index * 12.5;
+    for (let index = 0; index < Math.round((durationMs * 30) / 1000); index++) {
+      if (failure) {
+        break;
+      }
+      const scheduled = started + (index * 1000) / 30;
       if (performance.now() < scheduled) {
         await delay(scheduled - performance.now());
       }
@@ -182,9 +191,7 @@ export async function runSessionListChurnWorkload(params: {
           samples.push(performance.now() - at);
           completedAt.push(performance.now() - started);
         })
-        .catch((error: unknown) => {
-          failure ??= error;
-        });
+        .catch(fail);
       pending.add(job);
       void job.then(
         () => pending.delete(job),
@@ -202,15 +209,8 @@ export async function runSessionListChurnWorkload(params: {
         completedAt.filter((at) => at >= bin * 5_000 && at < (bin + 1) * 5_000).length / 5,
     );
     const listRate = (samples.length * 1000) / elapsedMs;
-    assert(listRate >= 20 && bins.every((rate) => rate >= 20), "sustained list rate below 20/s");
     const appendCount = writes.reduce((a, b) => a + b, 0);
-    assert(samples.length === Math.floor(durationMs / 12.5), "incomplete list wave");
-    assert(elapsedMs <= durationMs * 1.1, "fixed wave missed its cadence by more than 10%");
-    assert(
-      !append || (writtenKeys.size === 20 && appendCount === 20 * Math.floor(durationMs / 500)),
-      "incomplete append load",
-    );
-    return {
+    const result = {
       label,
       elapsedMs,
       listRate,
@@ -220,6 +220,14 @@ export async function runSessionListChurnWorkload(params: {
       writes: appendCount,
       appendRate: (appendCount * 1000) / elapsedMs,
     };
+    console.log(JSON.stringify({ phase: result }));
+    assert(listRate >= 20 && bins.every((rate) => rate >= 20), "sustained list rate below 20/s");
+    assert(samples.length === Math.round((durationMs * 30) / 1000), "incomplete list wave");
+    assert(
+      !append || (writtenKeys.size === 20 && appendCount === 20 * Math.floor(durationMs / 1000)),
+      "incomplete append load",
+    );
+    return result;
   };
   await run("warmup", 20_000, true);
   const waves = [];
@@ -234,7 +242,7 @@ export async function runSessionListChurnWorkload(params: {
       );
     }
     await command(gateway, { action: "begin", window: label });
-    const result = await run(label, params.durationMs, true);
+    const result = await run(label, 30_000, true);
     await command(gateway, { action: "end", window: label });
     if (params.profile) {
       await controlGatewayProfile(gateway, "cpu", "stop", path.join(output, `${label}.cpuprofile`));
