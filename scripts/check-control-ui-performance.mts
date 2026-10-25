@@ -59,8 +59,8 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Fewer boot requests save 14,898 B across Chat JS/CSS. The consolidated
-  // Chat chunk measures 463,056 B; the cap retains 25,349 B headroom.
+  // Fewer boot requests save 15,022 B across Chat JS/CSS. The consolidated
+  // Chat chunk measures 463,077 B; the cap retains 25,328 B headroom.
   largestJsGzipBytes: 488_405,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.

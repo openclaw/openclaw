@@ -5,8 +5,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import * as nativeWorkerRecovery from "../../infra/gateway-native-worker-recovery.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import * as processRespawn from "../../infra/process-respawn.js";
 import * as admissionTurn from "../../infra/sqlite-database-admission-turn.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
@@ -321,7 +321,7 @@ it.each(["complete", "native-exit", "pool-timeout", "task-timeout", "stalled-ret
     const { stateDir, env, options } = fixture("agent-close");
     const events: string[] = [];
     using recovery = vi
-      .spyOn(processRespawn, "requestGatewayNativeWorkerRecovery")
+      .spyOn(nativeWorkerRecovery, "requestGatewayNativeWorkerRecovery")
       .mockResolvedValue({
         status: "report-only",
         reason: "Synthetic test has no Gateway process lifecycle.",

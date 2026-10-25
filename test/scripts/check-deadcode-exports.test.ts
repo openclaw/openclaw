@@ -321,6 +321,9 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(compiled).toContain(
       'import { r2Task as __dynamic12_0, r2SearchStart as __dynamic12_1, r2SearchMatch as __dynamic12_2, r2SearchBuild as __dynamic12_3, r2SearchEnd as __dynamic12_4, r2PresentCalled as __dynamic12_5, r2PresentMiss as __dynamic12_6, r2Presentation as __dynamic12_7, r2Consume as __dynamic12_8, r2Materialized as __dynamic12_9 } from "../scripts/perf/session-row-churn-probe.js";',
     );
+    expect(compiled).toMatch(
+      /import \{ recordTrajectoryFlush as __dynamic\d+_0 \} from "\.\.\/scripts\/perf\/trajectory-flush-preload\.mts";/u,
+    );
 
     const readFileSync = fs.readFileSync.bind(fs);
     const doctorConsumerPath = path.resolve("src/commands/config-preflight-snapshot.ts");
@@ -363,6 +366,14 @@ const catalog = module.loadControlUiSourceCatalog();`;
           "",
         );
       }
+      if (
+        path.resolve(String(file)) === path.resolve("scripts/perf/trajectory-flush-preload.mts")
+      ) {
+        return String(source).replace(
+          "import { recordTrajectoryFlush as __recordTrajectoryFlush } from ${JSON.stringify(import.meta.url)};",
+          "",
+        );
+      }
       if (path.resolve(String(file)) === doctorConsumerPath) {
         return String(source).replaceAll(").addDoctorLegacyIssues", ").consumeLegacyIssues");
       }
@@ -375,6 +386,7 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(withoutConsumers).not.toContain("gatewayBenchTaskOperation");
     expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
     expect(withoutConsumers).not.toContain("addDoctorLegacyIssues");
+    expect(withoutConsumers).not.toContain("recordTrajectoryFlush");
   });
 
   it("removes projected MCP and Python edges with their actual consumers", () => {

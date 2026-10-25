@@ -5,7 +5,10 @@ import type {
   PluginAcceptedDeclaredSurface,
   PluginInstallRecord,
 } from "../config/types.plugins.js";
-import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
+import {
+  inspectPluginCapabilityArtifact,
+  resolvePluginArtifactDeclaredSurface,
+} from "./capability-artifact.js";
 import { createManagedPluginArtifactConsentHandler } from "./capability-consent.js";
 import {
   type PluginCapabilityConsentReview,
@@ -356,6 +359,23 @@ it("rejects package extension entries that escape the installed artifact", () =>
 
   expect(() => resolvePluginArtifactDeclaredSurface(rootDir)).toThrow();
 });
+
+it.skipIf(process.platform === "win32")(
+  "reports the discovery rejection when a valid plugin artifact is world-writable",
+  () => {
+    const rootDir = createArtifactFixture(pluginFiles("permissions"));
+    fs.chmodSync(rootDir, 0o777);
+
+    expect(() => inspectPluginCapabilityArtifact(rootDir)).toThrow(
+      `blocked plugin candidate: world-writable path (${fs.realpathSync(rootDir)},`,
+    );
+
+    fs.chmodSync(rootDir, 0o755);
+    expect(inspectPluginCapabilityArtifact(rootDir)).toMatchObject({
+      manifest: { id: "permissions" },
+    });
+  },
+);
 
 it.each([
   { previous: ["read"], next: ["write", "read"], widened: { tools: ["write"] } },

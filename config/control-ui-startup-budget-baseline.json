@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 269706,
-  "reason": "Asset-delivery integration after #183367: same-host current-main/head builds consolidate unchanged eager/shared/Chat partitions and preserve the route-readiness changes. Startup remains five JS requests and one CSS request. Ratchet to the measured integrated head.",
+  "startupJsGzipBytes": 269744,
+  "reason": "Asset-delivery integration on db38cc106695: preserve the current streaming and presentation changes while consolidating unchanged eager/shared/Chat partitions. Same-host builds retain five startup JS requests and one CSS request. Ratchet to the measured integrated head.",
   "updatedAt": "2026-10-25"
 }
