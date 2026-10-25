@@ -8,12 +8,22 @@ import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
-import type { AgentFilesViewState } from "./files.ts";
 import { AgentFiles } from "./panels-files.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
-type Params = Parameters<typeof AgentFiles>[0] & AgentFilesViewState;
+type Params = Parameters<typeof AgentFiles>[0] &
+  Pick<
+    ReturnType<Parameters<typeof AgentFiles>[0]["readData"]>,
+    | "agentFilesList"
+    | "agentFileActive"
+    | "agentFileEditors"
+    | "agentFilesLoading"
+    | "agentFileRead"
+    | "agentFileOutcome"
+    | "agentFileSaving"
+    | "agentFileConflict"
+  >;
 
 let mounted: ReturnType<typeof mountSolid<Parameters<typeof AgentFiles>[0]>> | undefined;
 let tooltipProvider: HTMLElement;
@@ -56,24 +66,12 @@ function afterOwnTransition(
   });
 }
 
-function query<T extends Element = HTMLElement>(selector: string): T | null {
-  return container.querySelector<T>(selector);
-}
-
 function requireButton(selector: string): HTMLButtonElement {
-  const button = query<HTMLButtonElement>(selector);
+  const button = container.querySelector<HTMLButtonElement>(selector);
   if (!button) {
     throw new Error(`Missing file-preview button: ${selector}`);
   }
   return button;
-}
-
-function previewList(missing = false) {
-  return {
-    agentId: "main",
-    workspace: "/synthetic/workspace",
-    files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing }],
-  };
 }
 
 function renderPreview(
@@ -81,22 +79,36 @@ function renderPreview(
   onChange = (_name: string, _content: string) => {},
   overrides: Partial<Params> = {},
 ) {
-  const base = createAgentViewTestProps();
   const props: Params = {
-    ...base.readData(),
-    ...base.agentFiles,
     readData() {
-      return { ...base.readData(), ...this };
+      return { ...createAgentViewTestProps().readData(), ...this };
     },
-    presentationRetired: base.presentationRetired,
+    presentationRetired: createAgentViewTestProps().presentationRetired,
     agentId: "main",
-    agentFilesList: previewList(),
+    listRead: null,
+    agentFilesList: {
+      agentId: "main",
+      workspace: "/synthetic/workspace",
+      files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
+    },
+    agentFilesLoading: false,
+    agentFileRead: null,
+    agentFileOutcome: null,
     agentFileActive: "AGENTS.md",
+
+    agentFileSaving: false,
+    agentFileConflict: null,
     canWrite: true,
+    onLoadFiles: () => undefined,
+    onSelectFile: () => undefined,
     onFileDraftChange: (name, content) => {
       onChange(name, content);
       renderPreview(content, onChange, overrides);
     },
+    onFileReset: () => undefined,
+    onFileSave: () => undefined,
+    onFileReload: () => undefined,
+    onFileOverwrite: () => undefined,
     ...overrides,
     agentFileEditors: {
       "AGENTS.md": {
@@ -126,7 +138,11 @@ describe.runIf(browserMode)("agent file preview", () => {
       const draft =
         "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert(1)</script>\n\n![Remote](https://example.invalid/image.png)";
       renderPreview(draft, undefined, {
-        agentFilesList: previewList(missing),
+        agentFilesList: {
+          agentId: "main",
+          workspace: "/synthetic/workspace",
+          files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing }],
+        },
         agentFileEditors: createAgentFileEditors({
           content: { "AGENTS.md": draft },
         }),
@@ -136,18 +152,31 @@ describe.runIf(browserMode)("agent file preview", () => {
       const shown = afterOwnTransition(modal, "overlay-after-show");
       await userEvent.click(requireButton(".agent-file-header .agent-file-actions button"));
       await shown;
-      expect(query(".md-preview-dialog__path")?.textContent?.trim()).toBe("AGENTS.md");
-      expect(query(".md-preview-dialog__chip strong")?.textContent).toBe(status);
-      expect(query(".md-preview-dialog__meta")?.textContent).toContain(updated);
-      const reader = query(".md-preview-dialog__reader")!;
+      expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
+        "AGENTS.md",
+      );
+      expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(status);
+      expect(container.querySelector(".md-preview-dialog__meta")?.textContent).toContain(updated);
+      expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
+        "Markdown Preview",
+      );
+      const reader = container.querySelector(".md-preview-dialog__reader")!;
       expect(reader.querySelector("img")?.getAttribute("src")).toBe(
         "https://example.invalid/image.png",
       );
       expect(reader.querySelector("pre code")?.textContent).toBe("const answer = 42;\n");
       expect(reader.querySelector(".code-block-copy, script")).toBeNull();
-      expect(requireButton(".md-preview-expand-btn").getAttribute("aria-label")).toBe(
-        "Expand preview",
+      const actions = Array.from(
+        container.querySelectorAll<HTMLButtonElement>(".md-preview-dialog__actions button"),
       );
+      expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
+        "Expand preview",
+        "Close preview",
+      ]);
+      expect(actions.map((button) => button.textContent?.trim())).toEqual(["", ""]);
+      const footer = container.querySelector("openclaw-modal-actions.md-preview-dialog__footer");
+      expect(footer?.parentElement?.lastElementChild).toBe(footer);
+      expect(footer?.querySelector("button")?.textContent?.trim()).toBe("Edit file");
       const closed = afterOwnTransition(modal, "overlay-after-hide");
       await userEvent.keyboard("{Escape}");
       await closed;
@@ -160,7 +189,7 @@ describe.runIf(browserMode)("agent file preview", () => {
       const changes: string[] = [];
       let expectedDraft = "Unsaved file preview draft\n\n".repeat(80);
       renderPreview(expectedDraft, (_name, content) => changes.push(content));
-      const textarea = query<HTMLTextAreaElement>(".agent-file-textarea");
+      const textarea = container.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
       if (!textarea) {
         throw new Error("Missing agent file editor");
       }
@@ -184,11 +213,14 @@ describe.runIf(browserMode)("agent file preview", () => {
         await userEvent.keyboard("{Enter}");
         await shown;
         expect(dialog.open).toBe(true);
-        expect(query(".md-preview-dialog__reader")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-          expectedDraft.replace(/\s+/g, " ").trim(),
-        );
-        const panel = query(".md-preview-dialog__panel")!;
-        const body = query(".md-preview-dialog__body")!;
+        expect(
+          container
+            .querySelector(".md-preview-dialog__reader")
+            ?.textContent?.replace(/\s+/g, " ")
+            .trim(),
+        ).toBe(expectedDraft.replace(/\s+/g, " ").trim());
+        const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel")!;
+        const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
         const bounds = dialog.getBoundingClientRect();
         expect(panel.getBoundingClientRect().top).toBeGreaterThanOrEqual(bounds.top - 1);
         expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom + 1);
@@ -249,18 +281,18 @@ describe.runIf(browserMode)("agent file preview", () => {
       await userEvent.click(preview);
       await shown;
       expect(dialog.open).toBe(true);
-      const identity = query(".md-preview-dialog__header-main")!;
-      const actions = query(".md-preview-dialog__actions")!;
-      const meta = query(".md-preview-dialog__meta")!;
+      const identity = container.querySelector<HTMLElement>(".md-preview-dialog__header-main")!;
+      const actions = container.querySelector<HTMLElement>(".md-preview-dialog__actions")!;
+      const meta = container.querySelector<HTMLElement>(".md-preview-dialog__meta")!;
       const essentialChips = meta.querySelectorAll<HTMLDivElement>('[data-priority="essential"]');
       const secondaryMetadata = meta.querySelectorAll<HTMLElement>(
         '[data-priority="secondary"], .md-preview-dialog__chip > span',
       );
       expect(essentialChips).toHaveLength(3);
       expect(secondaryMetadata).toHaveLength(4);
-      const body = query(".md-preview-dialog__body")!;
+      const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
       const normalInset = getComputedStyle(body).paddingInlineStart;
-      const footer = query(".md-preview-dialog__footer")!;
+      const footer = container.querySelector<HTMLElement>(".md-preview-dialog__footer")!;
       const edit = footer.querySelector<HTMLButtonElement>("button")!;
       for (const mode of ["normal", "fullscreen", "return"]) {
         if (mode !== "normal") {

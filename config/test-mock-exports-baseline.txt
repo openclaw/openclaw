@@ -4193,7 +4193,6 @@
 ["src/commands/models/auth-logout.test.ts","../../gateway/server-methods/models-auth-refresh.js","5a71b112ae986cace48e889477ea089ee6dd5e20012a430110a675141104ab89",1]
 ["src/commands/models/auth-logout.test.ts","../../wizard/clack-prompter.js","ffcad2e2a66b1633a65039f7eb1cb73c51578395392dfd8c762fb79eb31a7189",1]
 ["src/commands/models/auth-logout.test.ts","./auth-refresh.js","e04c5549ea28d74d726992cc20dcbbf53985b269890d5aea450c04eb840e9a04",1]
-["src/commands/models/auth-logout.test.ts","./load-config.js","b3dc95c4979900cccac43d34a96193b685fc330623b71d19404067c3f00bc2aa",1]
 ["src/commands/models/auth.test.ts","../../agents/auth-profiles/profiles.js","93e00336e7982b68ea538edaba26eb1e063f8e7bb388f426a7b27a954a9173a4",1]
 ["src/commands/models/auth.test.ts","../../agents/workspace.js","2dc70e9f536eddf093101f053173e8a8c9258f9e8d35dae2abf6188ec7eb79e9",1]
 ["src/commands/models/auth.test.ts","../../gateway/call.js","5dcb69e081d58d5d5f79be17ecdfe40171dc7d15b911e33467b441c5d4bdf989",1]
