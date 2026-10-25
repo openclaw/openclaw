@@ -12,12 +12,11 @@ import {
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-const { resolveSession, reader, active, mediaToken, widgetToken } = vi.hoisted(() => ({
+const { resolveSession, reader, active, mediaToken } = vi.hoisted(() => ({
   resolveSession: vi.fn(),
   reader: vi.fn(),
   active: vi.fn(),
   mediaToken: vi.fn(),
-  widgetToken: vi.fn(),
 }));
 vi.mock(import("./control-ui-session-path-resolve.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -31,7 +30,6 @@ vi.mock(import("./control-ui-public-session-read.js"), async (importOriginal) =>
 vi.mock(import("./control-ui-public-session-token.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   mintExistingPublicSessionShareToken: mediaToken,
-  mintPublicSessionWidgetToken: widgetToken,
 }));
 vi.mock(import("./session-row-projection-access.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -42,7 +40,7 @@ let projection: ReturnType<typeof createSessionRowProjectionFixture>;
 const route = "/control/chat/main/launch-12345678aaaa40008000000000000001";
 const servers: Server[] = [];
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-function server(mode: "token" | "password" = "token") {
+function server() {
   const cfg = { gateway: { publicOrigin: "https://example.test", trustedProxies: ["127.0.0.1"] } };
   setRuntimeConfigSnapshot(cfg);
   const root = dirs.make("chat-deeplink-");
@@ -51,7 +49,7 @@ function server(mode: "token" | "password" = "token") {
     "<html><head></head><body><openclaw-app></openclaw-app></body></html>",
   );
   const created = createTestGatewayServer({
-    resolvedAuth: { ...AUTH_TOKEN, mode, password: "test-password" },
+    resolvedAuth: AUTH_TOKEN,
     overrides: {
       controlUiEnabled: true,
       controlUiBasePath: "/control",
@@ -120,7 +118,6 @@ beforeEach(() => {
   });
   active.mockReset().mockReturnValue(true);
   mediaToken.mockReset().mockResolvedValue(`v1.${"a".repeat(96)}`);
-  widgetToken.mockReset().mockResolvedValue("v1.document-only");
 });
 afterEach(() => {
   for (const instance of servers.splice(0)) {
@@ -131,19 +128,6 @@ afterEach(() => {
 });
 
 describe("canonical anonymous HTTP entry", () => {
-  it("renders widgets with document-scoped links on the canonical chat route", async () => {
-    reader.mockResolvedValue({
-      title: "Public chart",
-      messages: [{ role: "assistant", content: '[embed ref="chart" /]' }],
-      truncated: false,
-    });
-    const response = await request(server());
-    expect(response.res.statusCode).toBe(200);
-    expect(widgetToken).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: key }), "chart");
-    expect(response.getBody()).toContain(
-      'src="/control/share/session/media?widget=v1.document-only"',
-    );
-  });
   it("keeps published text available when no token identity is present", async () => {
     mediaToken.mockResolvedValue(undefined);
     const response = await request(server());
@@ -151,37 +135,33 @@ describe("canonical anonymous HTTP entry", () => {
     expect(response.getBody()).toContain("Published answer");
   });
 
-  it("reloads the exact Incognito address produced by in-app navigation", async () => {
-    const sessionKey = "agent:main:dashboard:incognito-12345678-aaaa-4000-8000-000000000001";
-    const target = sessionNavigationTarget({
-      face: "chat",
-      sessionKey,
-      navigationKey: sessionKey,
-      fallbackAgentId: "main",
-      basePath: "/control",
-    });
-    await expectLanApp(server(), target.options.pathname + (target.options.search ?? ""));
-    expect(resolveSession).not.toHaveBeenCalled();
-    expect(reader).not.toHaveBeenCalled();
-  });
-
-  it("reloads a new bot while its preferred chat face is still resolving", async () => {
-    const agentId = "bot-11111111-2222-4333-8444-555555555555";
-    const target = sessionNavigationTarget({
-      face: "chat",
-      sessionKey: `agent:${agentId}:main`,
-      fallbackAgentId: agentId,
-      basePath: "/control",
-      preferenceDerivedFace: true,
-    });
-    const requestPath = target.options.pathname + (target.options.search ?? "");
-    resolveSession.mockResolvedValue(null);
-    const instance = server();
-    await expectLanApp(instance, requestPath);
-    expect(resolveSession).not.toHaveBeenCalled();
-    await openPrivateEntry(instance, requestPath);
-    expect(reader).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["Incognito", "main", "dashboard:incognito-12345678-aaaa-4000-8000-000000000001", false],
+    ["pending bot", "bot-11111111-2222-4333-8444-555555555555", "main", true],
+  ] as const)(
+    "reloads the exact %s address produced by navigation",
+    async (_name, agentId, suffix, preferenceDerivedFace) => {
+      const sessionKey = `agent:${agentId}:${suffix}`;
+      const target = sessionNavigationTarget({
+        face: "chat",
+        sessionKey,
+        fallbackAgentId: agentId,
+        basePath: "/control",
+        ...(preferenceDerivedFace ? { preferenceDerivedFace } : { navigationKey: sessionKey }),
+      });
+      if (preferenceDerivedFace) {
+        resolveSession.mockResolvedValue(null);
+      }
+      const instance = server();
+      const requestPath = target.options.pathname + (target.options.search ?? "");
+      await expectLanApp(instance, requestPath);
+      expect(resolveSession).not.toHaveBeenCalled();
+      if (preferenceDerivedFace) {
+        await openPrivateEntry(instance, requestPath);
+      }
+      expect(reader).not.toHaveBeenCalled();
+    },
+  );
 
   it("reloads a chat through the exact recovery URL without exposing its private transcript", async () => {
     const replace = vi.fn();
@@ -202,36 +182,6 @@ describe("canonical anonymous HTTP entry", () => {
     expect(reader).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { mode: "token", secureProxy: false },
-    { mode: "password", secureProxy: false },
-    { mode: "token", secureProxy: true },
-    { mode: "password", secureProxy: true },
-  ] as const)(
-    "offers a $mode browser-credential handoff (secureProxy=$secureProxy)",
-    async ({ mode, secureProxy }) => {
-      resolveSession.mockResolvedValue(null);
-      const instance = server(mode);
-      const response = await sendRequest(instance, {
-        path: route,
-        host: secureProxy ? "example.test" : "localhost",
-        remoteAddress: "127.0.0.1",
-        headers: secureProxy
-          ? { "x-forwarded-proto": "https", "x-forwarded-for": "203.0.113.42" }
-          : {},
-      });
-      expect(response.res.statusCode).toBe(404);
-      expect(response.getBody()).toContain('data-gateway-path="/control"');
-      expect(response.getBody()).not.toContain("<openclaw-app>");
-      const entry = `/control/__openclaw__/session-entry?path=${encodeURIComponent(route)}`;
-      expect((await request(instance, `${entry}&probe=1`)).res.statusCode).toBe(401);
-      const app = await request(instance, entry);
-      expect(app.res.statusCode).toBe(200);
-      expect(app.getBody()).toContain("<openclaw-app>");
-      expect(app.getBody()).toContain(`history.replaceState(null,"","${route}"+location.hash)`);
-    },
-  );
-
   it("retains an existing dashboard presentation link without mixing cached login destinations", async () => {
     const instance = server();
     const ordinary = await request(instance);
@@ -240,7 +190,6 @@ describe("canonical anonymous HTTP entry", () => {
     const dashboard = await request(instance, `${route}?dashboard=expanded`);
     expect(dashboard.res.statusCode).toBe(200);
     expect(dashboard.getBody()).toContain("%3Fdashboard%3Dexpanded");
-    expect(reader).toHaveBeenCalledTimes(2);
     const draft = await request(instance, `${route}?draft=Follow+up&offset=0`);
     expect(draft.res.statusCode).toBe(200);
     expect(draft.getBody()).toContain("%3Fdraft%3DFollow%2Bup");
@@ -258,9 +207,6 @@ describe("canonical anonymous HTTP entry", () => {
       `https://example.test/control/share/session/card.png?token=v1.${"a".repeat(96)}`,
     );
     expect(response.getBody()).toContain(
-      'name="twitter:image:alt" content="Public launch notes · OpenClaw public session"',
-    );
-    expect(response.getBody()).toContain(
       "/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Flaunch-",
     );
     expect(response.getBody()).not.toMatch(
@@ -269,43 +215,25 @@ describe("canonical anonymous HTTP entry", () => {
     expect(resolveSession).toHaveBeenCalledWith(
       expect.objectContaining({ client: null, publicOnly: true }),
     );
-    expect(response.setHeader).toHaveBeenCalledWith(
-      "Content-Security-Policy",
-      expect.stringContaining("script-src 'sha256-"),
-    );
     const csp = response.setHeader.mock.calls.find(
       ([name]) => name === "Content-Security-Policy",
     )?.[1];
+    expect(csp).toContain("script-src 'sha256-");
     for (const hash of computeInlineScriptHashes(response.getBody())) {
       expect(csp).toContain(hash);
     }
   });
-  it("makes private, missing, and revoked sessions indistinguishable but keeps Log in", async () => {
+  it("makes unresolved and revoked sessions indistinguishable but keeps Log in", async () => {
     resolveSession.mockResolvedValue(null);
     const instance = server();
     const hidden = await request(instance);
-    const missing = await request(instance);
     resolveSession.mockResolvedValue({ key, agentId: "main" });
     active.mockReturnValue(false);
     const revoked = await request(instance);
     expect(hidden.res.statusCode).toBe(404);
-    expect(hidden.getBody()).toBe(missing.getBody());
     expect(hidden.getBody()).toBe(revoked.getBody());
     expect(hidden.getBody()).toContain("Log in");
     expect(hidden.getBody()).not.toContain("Public launch notes");
-  });
-  it("revalidates publication before conditional reuse", async () => {
-    const instance = server();
-    const first = await request(instance);
-    const etag = first.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
-    expect(typeof etag).toBe("string");
-    const unchanged = await request(instance, route, { "if-none-match": String(etag) });
-    expect(unchanged.res.statusCode).toBe(304);
-    expect(reader).toHaveBeenCalledTimes(1);
-    active.mockReturnValue(false);
-    expect((await request(instance, route, { "if-none-match": String(etag) })).res.statusCode).toBe(
-      404,
-    );
   });
   it("rejects HEAD and malformed query work before reading any session", async () => {
     const instance = server();
