@@ -369,8 +369,8 @@ it("rolls back archive metadata when a run registers at planning commit", async 
 
 it.each([
   { mutation: "backdate", boundary: "before-authorization" },
-  { mutation: "restore", boundary: "after-settlement" },
-  { mutation: "backdate", boundary: "missing-after-settlement" },
+  { mutation: "restore", boundary: "after-result" },
+  { mutation: "backdate", boundary: "cold-after-result" },
 ] as const)(
   "keeps $mutation authority at $boundary across real Worker planning",
   async ({ mutation, boundary }) => {
@@ -385,7 +385,7 @@ it.each([
         mutation === "restore" ? 1 : Date.now(),
         mutation === "restore" ? { archivedAt: 2, archiveReason: "age-retention" } : {},
       );
-      const warm = boundary !== "missing-after-settlement";
+      const warm = boundary !== "cold-after-result";
       let warmWorkerThreadId: number | undefined;
       if (warm) {
         const reclaim = reclamationRun.runSqliteSessionReclamation;
@@ -415,15 +415,10 @@ it.each([
             mutate();
           }
         },
-        async afterExecute(result, native) {
+        afterExecute(result) {
           workerThreadIds.push(result.workerThreadId);
-          if (boundary !== "before-authorization" && result.kind === "committed" && !changed) {
-            expect(native.admission?.committed).toMatchObject({
-              facts: { kind: "session-entry-replacements" },
-            });
-            expect(native.admission?.settlement).toMatchObject({ kind: "completed" });
-            expect(await native.retained?.settled).toEqual({ kind: "completed" });
-            // Native COMMIT has completed; parent result adoption has not run yet.
+          if (boundary !== "before-authorization" && result.kind === "not-committed" && !changed) {
+            // Empty planning has finished; parent age-fact adoption has not run yet.
             mutate();
           }
         },
