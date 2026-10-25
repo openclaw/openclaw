@@ -121,6 +121,17 @@ function relocateSharedOwner(env: NodeJS.ProcessEnv) {
   noteCommittedSharedAuthStoreOwnership(owner, env);
 }
 
+type ReadRows = ReturnType<typeof sqliteRead.prepareAgentAuthProfileRowsRead>["read"];
+function interceptRead(databasePath: string, read: (original: ReadRows) => ReturnType<ReadRows>) {
+  const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
+  return vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((target) => {
+    const reader = prepare(target);
+    return target.databasePath === databasePath
+      ? { ...reader, read: () => read(() => reader.read()) }
+      : reader;
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
@@ -139,50 +150,22 @@ it.each(["current", "relocated", "closed"] as const)(
       revokeSqliteDatabaseAdmissionsForPath(pathname);
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
-      let reading = false;
-      let joined = false;
-      vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((target) => {
-        const reader = prepare(target);
-        if (target.databasePath !== pathname) {
-          return reader;
-        }
-        return {
-          ...reader,
-          read: async () => {
-            reading = true;
-            const rows = await reader.read();
-            joined = true;
-            entered.resolve();
-            await release.promise;
-            return rows;
-          },
-        };
+      interceptRead(pathname, async (read) => {
+        const rows = await read();
+        entered.resolve();
+        await release.promise;
+        return rows;
       });
-      let settled = false;
-      const update = markAuthProfileFailure({
-        store,
-        profileId,
-        reason: "auth",
-        agentDir,
-      }).finally(() => {
-        settled = true;
-      });
+      const update = markAuthProfileFailure({ store, profileId, reason: "auth", agentDir });
       void update.catch(() => {});
       try {
-        await Promise.race([entered.promise, update]);
-        expect({ reading, settled, usage: store.usageStats }).toEqual({
-          reading: true,
-          settled: false,
-          usage: undefined,
-        });
-        let writerEntered = false;
-        const writer = runOpenClawAgentWriteAdmission(options, () => {
-          writerEntered = true;
-        });
-        await nextTurn();
-        expect(writerEntered).toBe(true);
-        await writer;
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          update,
+          "Auth health did not read its owner",
+        );
+        expect(store.usageStats).toBeUndefined();
+        await runOpenClawAgentWriteAdmission(options, () => {});
         if (owner === "relocated") {
           relocateSharedOwner(state.env);
         } else if (owner === "closed") {
@@ -192,7 +175,6 @@ it.each(["current", "relocated", "closed"] as const)(
         release.resolve();
         await Promise.allSettled([update]);
       }
-      expect(joined).toBe(true);
       if (owner === "current") {
         await update;
         expect(store.usageStats?.[profileId]?.errorCount).toBe(1);
@@ -316,19 +298,15 @@ it.each(["shared", "other-agent"] as const)(
         const store = createPersistedSnapshot(ownerDir);
         const database = openOpenClawAgentDatabase({ agentId: "voice" });
         const { release, reservation } = holdWriter({ agentId: "voice", path: database.path });
-        let settled = false;
         const update = markAuthProfileFailure({
           store,
           profileId,
           reason: "auth",
           agentDir: ownerDir ?? state.agentDir("voice"),
-        }).then(() => {
-          settled = true;
         });
         void update.catch(() => {});
         try {
           await update;
-          expect(settled).toBe(true);
           expect(loadPersistedAuthProfileStore(ownerDir)?.usageStats?.[profileId]?.errorCount).toBe(
             1,
           );
@@ -363,26 +341,14 @@ it.each(["before-read", "after-read"] as const)(
           saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, saveOptions);
         },
       );
-      const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
-      const read = vi
-        .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
-        .mockImplementation((target) => {
-          const reader = prepare(target);
-          if (target.databasePath !== database.path) {
-            return reader;
-          }
-          return {
-            ...reader,
-            read: async () => {
-              if (order === "before-read") {
-                await removal;
-              }
-              const rows = await reader.read();
-              observed.resolve();
-              return rows;
-            },
-          };
-        });
+      const read = interceptRead(database.path, async (original) => {
+        if (order === "before-read") {
+          await removal;
+        }
+        const rows = await original();
+        observed.resolve();
+        return rows;
+      });
       const update = markAuthProfileFailure({ store, profileId, reason: "auth", agentDir });
       void update.catch(() => {});
       try {

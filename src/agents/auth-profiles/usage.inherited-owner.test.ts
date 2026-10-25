@@ -237,7 +237,16 @@ describe("inherited auth-profile usage persistence", () => {
       },
       order: { anthropic: [profileId] },
       lastGood: { anthropic: profileId },
-      usageStats: { [profileId]: { lastUsed: 1 } },
+      usageStats: {
+        [profileId]: {
+          lastUsed: 1,
+          errorCount: 3,
+          blockedUntil: Date.now() + 60_000,
+          blockedReason: "subscription_limit",
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "rate_limit",
+        },
+      },
     };
     const contaminated: AuthProfileStore = {
       ...shared,
@@ -284,9 +293,16 @@ describe("inherited auth-profile usage persistence", () => {
     expectSharedOnly(ensureAuthProfileStore(mainAgentDir));
 
     await succeed(loaded, profileId, "anthropic", mainAgentDir);
-    expect(
-      loadPersistedAuthProfileStore(mainAgentDir)?.usageStats?.[profileId]?.lastUsed,
-    ).toBeGreaterThan(1);
+    for (const store of [loaded, loadPersistedAuthProfileStore(mainAgentDir)]) {
+      expect(store?.usageStats?.[profileId]?.lastUsed).toBeGreaterThan(1);
+      expect(store?.usageStats?.[profileId]).toMatchObject({
+        errorCount: 0,
+        blockedUntil: undefined,
+        blockedReason: undefined,
+        cooldownUntil: undefined,
+        cooldownReason: undefined,
+      });
+    }
     await removeAuthProfilesAcrossOwnerStores({
       profileIds: [profileId],
       agentDir: mainAgentDir,

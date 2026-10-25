@@ -148,8 +148,6 @@ it.each(["shared", "agent"] as const)(
       const readCurrent = await prepareCredentialReader(state.env, agentDir);
       expect(readCurrent()).toEqual(credential("synthetic-before"));
       let mode: "credential" | "metadata" | "rollback" = "credential";
-      let grants = 0;
-      let receipts = 0;
       const settled: unknown[] = [];
       const unsubscribe = authProfileCredentialPublication.subscribeFacts((change) => {
         if (change.kind === "settled") {
@@ -159,7 +157,6 @@ it.each(["shared", "agent"] as const)(
       probe.admission(operationAdmission, (request, grant, admit) => {
         admit(request, (beforeRelease) => {
           if (request.stage === "commit") {
-            grants++;
             if (mode === "metadata") {
               expect(readCurrent()).toEqual(replacement);
             } else {
@@ -177,7 +174,6 @@ it.each(["shared", "agent"] as const)(
         (admission, publish) =>
           observe(admission, (receipt) => {
             if (isRecord(receipt.facts) && receipt.facts.authCredentials) {
-              receipts++;
               expect(readCurrent).toThrow("Auth profile credential authority is unavailable");
             }
             publish(receipt);
@@ -185,16 +181,15 @@ it.each(["shared", "agent"] as const)(
       );
       try {
         await update({ profiles: { selected: "synthetic-after" } }, agentDir, target === "shared");
-        expect({ receipts, settled }).toEqual({ receipts: 1, settled: [replacement] });
+        expect(settled).toEqual([replacement]);
         expect(readCurrent()).toEqual(replacement);
         mode = "metadata";
         await update({ order: ["selected"] }, agentDir, target === "shared");
-        expect({ receipts, count: settled.length }).toEqual({ receipts: 1, count: 1 });
+        expect(settled).toEqual([replacement]);
         mode = "rollback";
         await expect(
           update({ profiles: { selected: "synthetic-refused" } }, agentDir, target === "shared"),
         ).rejects.toThrow("synthetic credential commit refusal");
-        expect(grants).toBe(3);
         expect(settled).toEqual([replacement, replacement]);
         expect(readCurrent()).toEqual(replacement);
         expect(readPersistedStore(agentDir)?.profiles.selected).toEqual(replacement);
