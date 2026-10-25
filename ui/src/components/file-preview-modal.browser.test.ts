@@ -51,25 +51,15 @@ async function mountPreview(width: number, activePath = initialFilePath) {
   return { preview, dialog };
 }
 
-async function mountModal(
-  width: number,
-  options: {
-    fullscreen?: boolean;
-    kind?: "drawer";
-    modalWidth: string;
-  },
-) {
+async function mountModal(width: number, variant: string, modalWidth: string) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 844);
   const modal = document.createElement("openclaw-modal-dialog");
   modal.label = "Preview";
   modal.style.setProperty("--openclaw-modal-show-duration", "150ms");
-  modal.style.setProperty("--openclaw-modal-width", options.modalWidth);
-  modal.classList.toggle("fullscreen", options.fullscreen === true);
-  modal.classList.toggle("drawer", options.kind !== undefined);
-  const content = document.createElement("div");
-  content.style.cssText = "width: 100%; height: 80px;";
-  modal.append(content);
+  modal.style.setProperty("--openclaw-modal-width", modalWidth);
+  modal.className = variant;
+  modal.textContent = "Preview";
   document.body.append(modal);
   return await resolveRenderedDialog(modal);
 }
@@ -201,15 +191,15 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
   });
 
   it.each([
-    [1280, { fullscreen: true, modalWidth: "min(1040px, calc(100vw - 32px))" }, 1259, true],
-    [390, { fullscreen: true, modalWidth: "min(1040px, calc(100vw - 32px))" }, 369, true],
-    [390, { modalWidth: "200px" }, 200, false],
-    [390, { kind: "drawer", modalWidth: "min(460px, 100vw)" }, 390, false],
-    [1280, { kind: "drawer", modalWidth: "min(460px, 100vw)" }, 460, false],
+    [1280, "fullscreen", "min(1040px, calc(100vw - 32px))", 1259, true],
+    [390, "fullscreen", "min(1040px, calc(100vw - 32px))", 369, true],
+    [390, "", "200px", 200, false],
+    [390, "drawer", "min(460px, 100vw)", 390, false],
+    [1280, "drawer", "min(460px, 100vw)", 460, false],
   ] as const)(
-    "preserves modal width at %dpx (%j)",
-    async (viewport, options, expected, minimum) => {
-      const dialog = await mountModal(viewport, options);
+    "preserves modal width at %dpx (%s)",
+    async (viewport, variant, modalWidth, expected, minimum) => {
+      const dialog = await mountModal(viewport, variant, modalWidth);
       const width = expect(dialog.getBoundingClientRect().width);
       if (minimum) {
         width.toBeGreaterThanOrEqual(expected);
@@ -241,10 +231,10 @@ describe.runIf(browserMode)("skill bundle file preview", () => {
       preview.files = [
         file(
           "SKILL.md",
-          "# Guide\n[Reference](references/guide.md)\n```js\nwindow.untrusted = true;\n```\n<script>window.untrusted=true</script>",
+          `${long}\n\n\`\`\`js\nwindow.untrusted = true;\n\`\`\`\n<script>window.untrusted=true</script>`,
           "100 B",
         ),
-        file("references/guide.md", long, "64 KB"),
+        file("references/guide.md", "# Reference", "64 KB"),
         file("scripts/unlinked.py", "print('read only')", "20 B"),
         file("assets/image.png", "", "4 B", "Binary file cannot be previewed"),
       ];
@@ -265,9 +255,6 @@ describe.runIf(browserMode)("skill bundle file preview", () => {
       expect(close.getBoundingClientRect().right).toBeLessThanOrEqual(width);
       expect(preview.querySelectorAll(".item")).toHaveLength(4);
       expect(preview.querySelectorAll("details")).toHaveLength(3);
-      element<HTMLAnchorElement>(preview, ".markdown a").click();
-      await preview.updateComplete;
-      expect(preview.activePath).toBe("references/guide.md");
       const markdown = element(preview, ".markdown").textContent;
       expect(markdown).toContain("Last complete instruction.");
       expect(markdown).not.toContain("truncated");

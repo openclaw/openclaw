@@ -238,7 +238,7 @@ it("keeps non-saving restrictions native when they arrive during a save", async 
   const controls = [
     ...view.container.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button"),
   ];
-  const toggle = controls[0]!;
+  const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
   toggle.focus();
   await userEvent.keyboard(" ");
   await expectFocusKeptWhileBusy(toggle);
@@ -257,21 +257,12 @@ it("keeps non-saving restrictions native when they arrive during a save", async 
   expect(view.onSize).not.toHaveBeenCalled();
   view.settle();
   expect(controls.every((control) => control.disabled)).toBe(true);
+  await userEvent.tab();
+  expect(document.activeElement).not.toBe(toggle);
+  await userEvent.keyboard(" ");
+  expect(view.onToggle).toHaveBeenCalledExactlyOnceWith(true);
+  expect(toggle.checked).toBe(true);
   view.setDisabled(false);
   flush();
   expect(controls.every((control) => !control.disabled)).toBe(true);
-});
-
-it("keeps a non-saving disabled switch out of keyboard navigation", async () => {
-  const onChange = vi.fn();
-  const view = mountSolid(() => (
-    <SettingsToggleRow title="Audit log" checked={false} disabled onChange={onChange} />
-  ));
-  const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
-  await userEvent.tab();
-  expect(toggle.disabled).toBe(true);
-  expect(document.activeElement).not.toBe(toggle);
-  await userEvent.keyboard(" ");
-  expect(onChange).not.toHaveBeenCalled();
-  expect(toggle.checked).toBe(false);
 });
