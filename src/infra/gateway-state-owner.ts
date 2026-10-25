@@ -249,7 +249,12 @@ function acquireOwnerFile(
       ) {
         // A serving Gateway cannot lend schema authority. An unregistered local
         // holder may need this host to service grants, so it cannot be waited on.
-        throw new GatewayStateOwnerContentionError(databasePath);
+        throw new GatewayStateOwnerContentionError(
+          databasePath,
+          undefined,
+          describeGatewayLockHolder(previous, pathname, "live"),
+          { pid: previous.pid, role: previous.role },
+        );
       }
     } catch (error) {
       if (extractErrorCode(error) !== "ENOENT") {

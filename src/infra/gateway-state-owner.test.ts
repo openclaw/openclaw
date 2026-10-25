@@ -66,6 +66,40 @@ function expectExistence(present: boolean, ...paths: string[]) {
 }
 
 describe("Gateway state ownership", () => {
+  it.each([0, 25])(
+    "names the live holder when schema admission is refused (budget %s)",
+    async (busyTimeoutMs) => {
+      await withTempDir("openclaw-owner-diagnostics-", async (root) => {
+        const databasePath = path.join(root, "openclaw.sqlite");
+        const seed = acquireGatewayStateOwner({ databasePath });
+        const marker = seed.path;
+        seed.release();
+        const payload = {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(root, "openclaw.json"),
+          role: "gateway",
+        };
+        fs.mkdirSync(path.dirname(marker), { recursive: true });
+        const bytes = JSON.stringify(payload);
+        fs.writeFileSync(marker, bytes);
+        try {
+          expect(() => acquireStateDatabaseSchemaLease(databasePath, { busyTimeoutMs })).toThrow(
+            expect.objectContaining({
+              name: "GatewayStateOwnerContentionError",
+              databasePath,
+              holder: { pid: process.pid, role: "gateway" },
+              message: expect.stringContaining(`holder ${process.pid}`),
+            }),
+          );
+          expect(fs.readFileSync(marker, "utf8")).toBe(bytes);
+        } finally {
+          fs.rmSync(marker, { force: true });
+        }
+      });
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "acquires Gateway ownership on healthy state storage when system tmp is exhausted",
     async () => {
