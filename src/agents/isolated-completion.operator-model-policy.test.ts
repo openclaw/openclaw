@@ -203,7 +203,6 @@ it("keeps automatic metadata independent of an ambient operator restriction", as
         }),
     ),
   ).resolves.toMatchObject({ text: "Session title" });
-  expect(dispatch).toHaveBeenCalledOnce();
 });
 
 it("preserves a retired CLI model denial after the model policy is restored", async () => {

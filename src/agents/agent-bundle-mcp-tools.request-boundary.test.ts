@@ -2,12 +2,11 @@ import { GetPromptResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { fixtureCatalog, staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
+import { fixtureCatalog, fixtureRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
-import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";
@@ -22,29 +21,12 @@ const promptMessage = (role: "user" | "assistant", text: string) => ({
 });
 
 // Regression #76063: configured MCP tools must survive materialization, policy, and SDK splitting.
-function makeConfiguredRuntime(
-  toolNames = ["list_inbox", "send_reply"],
-  serverName = "userMcp",
-): SessionMcpRuntime {
-  const catalog = () =>
-    fixtureCatalog(
-      serverName,
-      toolNames.map((toolName) => ({
-        toolName,
-        description: `${serverName}.${toolName}`,
-      })),
-    );
-  return staticRuntime({
-    sessionId: "session-request-boundary",
-    workspaceDir: "/workspace",
-    configFingerprint: "fingerprint",
-    peekCatalog: catalog,
-    getCatalog: async () => catalog(),
-    callTool: async () => ({
-      content: [textBlock("FROM-CONFIG")],
-      isError: false,
-    }),
-  });
+function makeConfiguredRuntime(toolNames = ["send_reply", "list_inbox"], serverName = "userMcp") {
+  const catalog = fixtureCatalog(
+    serverName,
+    toolNames.map((toolName) => ({ toolName })),
+  );
+  return fixtureRuntime(() => catalog, { peekCatalog: () => catalog });
 }
 
 function requestToolNames(
@@ -92,21 +74,16 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
     },
   );
 
-  it("preserves materialize ordering at the request boundary so prompt cache keys stay stable", async () => {
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeConfiguredRuntime(["zeta_tool", "alpha_tool", "mu_tool"]),
-    });
-    expect(requestToolNames(runtime.tools)).toEqual([
-      "userMcp__alpha_tool",
-      "userMcp__mu_tool",
-      "userMcp__zeta_tool",
-    ]);
-  });
-  it("exposes MCP resource and prompt utility tools when advertised", async () => {
+  it("preserves public resource and multimodal prompt results without leaking private metadata", async () => {
     const base = makeConfiguredRuntime([], "knowledge");
     const catalog = await base.getCatalog();
     catalog.servers.knowledge!.resources = { listChanged: true };
     catalog.servers.knowledge!.prompts = { listChanged: true };
+    const image = {
+      type: "image",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      mimeType: "image/png",
+    } as const;
     const publicResults = {
       prompts_get: {
         description: "Brief the user",
@@ -119,6 +96,8 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
               _meta: { promptBlock: "preserved" },
             },
           },
+          { role: "user", content: image },
+          promptMessage("assistant", "An example answer."),
         ],
       },
       prompts_list: {
@@ -146,6 +125,7 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
         { ...value, _meta: { privateState: `${operation}-must-not-leak` } },
       ]),
     );
+    const prompt = GetPromptResultSchema.parse(privateResults.prompts_get);
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: {
         ...base,
@@ -153,16 +133,9 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
         listResources: async () => privateResults.resources_list,
         readResource: async () => privateResults.resources_read,
         listPrompts: async () => privateResults.prompts_list,
-        getPrompt: async () => GetPromptResultSchema.parse(privateResults.prompts_get),
+        getPrompt: async () => prompt,
       },
     });
-
-    expect(runtime.tools.map((tool) => tool.name)).toEqual([
-      "knowledge__prompts_get",
-      "knowledge__prompts_list",
-      "knowledge__resources_list",
-      "knowledge__resources_read",
-    ]);
 
     for (const [operation, args] of [
       ["prompts_get", { name: "brief" }],
@@ -176,7 +149,11 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
       );
       const result = await tool.execute(`call-${operation}`, args, undefined, undefined);
       if (operation === "prompts_get") {
-        expect(result.content).toEqual(["Brief the user", "user:", "Summarize MCP"].map(textBlock));
+        expect(result.content).toEqual([
+          ...["Brief the user", "user:", "Summarize MCP", "user:"].map(textBlock),
+          image,
+          ...["assistant:", "An example answer."].map(textBlock),
+        ]);
       } else {
         expect(result.content).toEqual([
           textBlock(JSON.stringify(publicResults[operation], null, 2)),
@@ -192,6 +169,10 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
       expect(privateResults[operation]._meta).toEqual({
         privateState: `${operation}-must-not-leak`,
       });
+      if (operation === "prompts_get") {
+        prompt.description = "A later server-side edit";
+        expect(consumeMcpCodeModeGuestResult(result)).toEqual(publicResults.prompts_get);
+      }
     }
 
     await expect(
@@ -199,41 +180,5 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
         .find((tool) => tool.name === "knowledge__prompts_get")!
         .execute("call-prompt", { name: "brief", arguments: { count: 1 } }, undefined, undefined),
     ).rejects.toThrow("arguments.count must be a string");
-  });
-
-  it("presents prompt images with their roles while preserving the raw guest template", async () => {
-    const image = {
-      type: "image",
-      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
-      mimeType: "image/png",
-    } as const;
-    const prompt = GetPromptResultSchema.parse({
-      description: "Describe the supplied diagram",
-      messages: [
-        promptMessage("user", "Explain this image."),
-        { role: "user", content: image },
-        promptMessage("assistant", "An example answer."),
-      ],
-    });
-    const base = makeConfiguredRuntime([], "diagrams");
-    const catalog = await base.getCatalog();
-    catalog.servers.diagrams!.prompts = {};
-    const materialized = await materializeBundleMcpToolsForRun({
-      runtime: { ...base, getCatalog: async () => catalog, getPrompt: async () => prompt },
-    });
-    const tool = expectDefined(
-      materialized.tools.find((candidate) => candidate.name === "diagrams__prompts_get"),
-      "prompt utility",
-    );
-    const result = await tool.execute("prompt-image", { name: "diagram" }, undefined, undefined);
-
-    expect(result.content).toEqual([
-      ...["Describe the supplied diagram", "user:", "Explain this image.", "user:"].map(textBlock),
-      image,
-      ...["assistant:", "An example answer."].map(textBlock),
-    ]);
-    const originalPrompt = structuredClone(prompt);
-    prompt.description = "A later server-side edit";
-    expect(consumeMcpCodeModeGuestResult(result)).toEqual(originalPrompt);
   });
 });

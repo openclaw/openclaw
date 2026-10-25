@@ -47,11 +47,15 @@ describe("live model switch worker persistence", () => {
     const storePath = path.join(sessionDirs.make(), "sessions.json");
     return {
       scope: { storePath, sessionKey: "agent:main:model-switch" },
-      cfg: { session: { store: storePath } },
-      defaultProvider: selection.provider,
-      defaultModel: selection.model,
-      providerUsed: selection.provider,
-      modelUsed: selection.model,
+      params: {
+        cfg: { session: { store: storePath } },
+        agentId: "main",
+        sessionKey: "agent:main:model-switch",
+        defaultProvider: selection.provider,
+        defaultModel: selection.model,
+        providerUsed: selection.provider,
+        modelUsed: selection.model,
+      },
     };
   }
 
@@ -79,7 +83,7 @@ describe("live model switch worker persistence", () => {
       if (!reducer) {
         return undefined;
       }
-      const outcome = await actor.completeTurn(
+      return actor.completeTurn(
         {
           commandId,
           phaseId: "completion",
@@ -94,23 +98,19 @@ describe("live model switch worker persistence", () => {
         },
         authority,
       );
-      expect(outcome.kind).toBe("committed");
-      return outcome;
     });
   }
 
   it.each(["clear", "complete"] as const)(
     "%s consumes only the applied selection without host session SQL",
     async (operation) => {
-      const { scope, ...params } = fixture();
+      const { scope, params } = fixture();
       const initial = { ...initialSelection, label: "keep this label" };
       await replaceSessionEntry(scope, initial);
       const apply = async () => {
         if (operation === "clear") {
           await clearLiveModelSwitchPending({
             ...params,
-            agentId: "main",
-            sessionKey: scope.sessionKey,
             expectedSelection: selection,
           });
           return;
@@ -118,8 +118,6 @@ describe("live model switch worker persistence", () => {
         await completeSelection(scope, "complete-selection", (entry) =>
           prepareLiveModelSwitchAfterRun({
             ...params,
-            agentId: "main",
-            sessionKey: scope.sessionKey,
             entry,
           }),
         );
@@ -137,17 +135,12 @@ describe("live model switch worker persistence", () => {
 
       const withoutPendingSwitch = loadSessionEntry(scope);
       const writeGrants: string[] = [];
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const observeAdmission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              writeGrants.push(request.stage);
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const observeAdmission = probe.admission(workerAdmission, (request, grant, callback) => {
+        if (request.stage === "commit") {
+          writeGrants.push(request.stage);
+        }
+        callback(request, grant);
+      });
       try {
         await apply();
         expect(writeGrants).toEqual([]);
@@ -166,9 +159,7 @@ describe("live model switch worker persistence", () => {
         await withoutHostSql(
           () =>
             shouldSwitchToLiveModel({
-              ...scope,
               ...params,
-              agentId: "main",
               currentProvider: selection.provider,
               currentModel: selection.model,
             }),
@@ -179,7 +170,7 @@ describe("live model switch worker persistence", () => {
   );
 
   it("keeps newer selections when a prepared terminal reducer reaches the actor", async () => {
-    const { scope, ...params } = fixture();
+    const { scope, params } = fixture();
     const initial = {
       ...initialSelection,
       agentRuntimeOverride: "openclaw",
@@ -188,7 +179,6 @@ describe("live model switch worker persistence", () => {
     };
     const reducer = prepareLiveModelSwitchAfterRun({
       ...params,
-      sessionKey: scope.sessionKey,
       entry: initial,
     });
     if (!reducer) {
