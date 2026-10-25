@@ -246,7 +246,7 @@ try {
           const original = Object.entries;
           let count = 0;
           try {
-            Object.entries = (value) => {
+            Object.entries = (value: Parameters<typeof Object.entries>[0]) => {
               if (isRecord(value) && value.key === root && typeof value.sharingRole === "string") {
                 count++;
               }
