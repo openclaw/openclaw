@@ -10,6 +10,7 @@ import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -73,16 +74,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
         props.props?.sessionKey,
         props.props?.currentAgentId,
         props.props?.currentSessionId,
-        props.props?.selectedSession?.sessionId,
       ]);
     // Descriptor hydration does not replace the transcript's restored incarnation.
-    const identity = createMemo(() =>
-      JSON.stringify([
-        props.props?.sessionKey,
-        props.props?.currentAgentId,
-        props.props?.currentSessionId,
-      ]),
-    );
+    const identity = createMemo(readIdentity);
+    const readNavigationIdentity = () =>
+      JSON.stringify([readIdentity(), props.props?.selectedSession?.sessionId]);
     createScrollPosition(() => {
       const owner = processes();
       return {
@@ -103,6 +99,22 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const [sectionChoices, setSectionChoices] = createStore<
             Partial<Record<ChatDetailsDesktopSectionId, boolean>>
           >({});
+          createLayoutMeasurement(
+            () => props.props?.subagentSessionsHydrated,
+            (hydrated) => {
+              const layout = props.props?.widgetLayout;
+              const key = `details:v1:${props.scrollport?.clientWidth}:${getComputedStyle(host).font}:${document.documentElement.style.getPropertyValue("--control-ui-text-scale")}:${JSON.stringify([props.props?.desktopDisclosures?.expanded, sectionChoices])}`;
+              const height = host.firstElementChild?.getBoundingClientRect().height ?? 0;
+              return () => {
+                // Hold Progress in its saved slot until the preceding child roster is known.
+                host.style.minHeight = hydrated ? "" : `${layout?.read(key) ?? 0}px`;
+                if (hydrated) {
+                  layout?.write(key, height);
+                }
+              };
+            },
+            { targets: () => (props.desktop ? [host] : []), changeTiming: "sync" },
+          );
           const desktopPresentation = () =>
             props.desktop ? props.props?.desktopPresentation : undefined;
           const sectionExpanded = (section: ChatDetailsDesktopSectionId) =>
@@ -196,7 +208,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             if (!snapshot) {
               return null;
             }
-            const navigationIdentity = readIdentity();
+            const navigationIdentity = readNavigationIdentity();
             const current = () =>
               host.isConnected && props.presented && props.props?.outputs === snapshot;
             return {
@@ -208,7 +220,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               },
               onViewAll: () => {
                 // Native props can advance before the visible Outputs row settles.
-                if (host.isConnected && props.presented && readIdentity() === navigationIdentity) {
+                if (
+                  host.isConnected &&
+                  props.presented &&
+                  readNavigationIdentity() === navigationIdentity
+                ) {
                   props.props?.outputs?.onViewAll();
                 }
               },

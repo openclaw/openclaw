@@ -206,9 +206,11 @@ suite.define(() => {
         await gateway.waitForRequest("connect");
         await transcript.waitFor();
         await module.request;
-        await page
-          .locator(".chat-details[data-desktop] > openclaw-panel-loading-skeleton")
-          .waitFor();
+        expect(
+          await page
+            .locator(".chat-details[data-desktop] > openclaw-panel-loading-skeleton")
+            .count(),
+        ).toBe(0);
         await nextPaint(page);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         await gateway.resolveDeferred("connect");

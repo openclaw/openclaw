@@ -1,7 +1,9 @@
 import { expect, it, onTestFinished } from "vitest";
 import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { nextPaint } from "./chat-session-diff.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
@@ -11,11 +13,22 @@ import {
 const suite = createControlUiE2eSuite({ name: "Details loading" });
 
 suite.define(() => {
-  it("keeps the warm Details column blank until its composition loads after the transcript", async () => {
+  it("keeps warm Details blank while loading and Progress in its settled slot during roster hydration", async () => {
     await suite.withPage({ viewport: { width: 1700, height: 900 } }, async ({ page }) => {
       const sessionKey = "agent:main:00000000-0000-4000-8000-00000000d201";
       const text = "The cached transcript is ready before Details.";
-      await installMockGateway(page, {
+      const children = ["inspect", "verify"].map((name) => ({
+        key: `agent:main:subagent:${name}`,
+        sessionId: name,
+        kind: "direct" as const,
+        spawnedBy: sessionKey,
+        label: name,
+        status: "done" as const,
+      }));
+      const childQuery = { spawnedBy: sessionKey };
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "progressCard.get"],
+        deferredRequests: [{ method: "sessions.list", match: childQuery }],
         sessions: [
           {
             key: sessionKey,
@@ -28,13 +41,34 @@ suite.define(() => {
               repoRoot: "/workspace/details",
             },
           },
+          ...children,
         ],
+        methodResponses: {
+          "progressCard.get": {
+            card: {
+              sessionKey,
+              revision: 1,
+              updatedAt: 1,
+              steps: [{ step: "Keep progress stable", status: "in_progress" }],
+            },
+          },
+        },
         historyMessages: [
           { role: "assistant", content: text, __openclaw: { id: "details-cached", seq: 1 } },
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page.locator(".chat-details-desktop-section").first().waitFor();
+      await gateway.waitForRequest("sessions.list", { match: childQuery });
+      await gateway.resolveDeferred("sessions.list", undefined, { match: childQuery });
+      const subagents = page.locator('.chat-details [data-details-group="subagents"]');
+      await subagents.getByText("verify", { exact: true }).waitFor();
+      const progress = page.locator(".chat-details openclaw-chat-details-progress");
+      await progress.getByText("Keep progress stable", { exact: true }).waitFor();
+      await nextPaint(page);
+      const readOffset = (element: Element) =>
+        element.getBoundingClientRect().top -
+        element.closest(".chat-details")!.getBoundingClientRect().top;
+      const settledOffset = await progress.evaluate(readOffset);
       await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
       const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
         sessionKey,
@@ -49,6 +83,7 @@ suite.define(() => {
       );
       onTestFinished(module.release);
       await page.reload();
+      await gateway.waitForRequest("sessions.list", { match: childQuery });
       await page.locator(".chat-thread").getByText(text, { exact: true }).waitFor();
       const details = page.locator(".chat-details[data-open]");
       await details.waitFor();
@@ -61,6 +96,15 @@ suite.define(() => {
       module.release();
       await page.evaluate(`import(${JSON.stringify(moduleUrl)}).then(() => undefined)`);
       await details.locator(".chat-details-session").waitFor();
+      await progress.getByText("Keep progress stable", { exact: true }).waitFor();
+      await nextPaint(page);
+      expect(await subagents.count()).toBe(0);
+      const restoredOffset = await progress.evaluate(readOffset);
+      expect(restoredOffset).toBeCloseTo(settledOffset, 0);
+      await gateway.resolveDeferred("sessions.list", undefined, { match: childQuery });
+      await subagents.getByText("verify", { exact: true }).waitFor();
+      await nextPaint(page);
+      expect(await progress.evaluate(readOffset)).toBeCloseTo(restoredOffset, 0);
       expect(await details.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
       expect(await details.evaluate((panel) => panel.getBoundingClientRect().width)).toBe(width);
       expect(module.requests()).toBe(1);

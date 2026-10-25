@@ -2,7 +2,24 @@
 export function warmReloadProbe(options: { paneFrames?: boolean } = {}) {
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
-  const shifts: Array<{ at: number; value: number }> = [];
+  type LayoutShift = PerformanceEntry & {
+    hadRecentInput: boolean;
+    value: number;
+    sources: Array<{
+      node: Node | null;
+      previousRect: DOMRectReadOnly;
+      currentRect: DOMRectReadOnly;
+    }>;
+  };
+  const shifts: Array<{
+    at: number;
+    value: number;
+    sources: Array<{
+      path: string[];
+      previousRect: Pick<DOMRectReadOnly, "x" | "y" | "width" | "height">;
+      currentRect: Pick<DOMRectReadOnly, "x" | "y" | "width" | "height">;
+    }>;
+  }> = [];
   const states: Array<{ at: number; state: string }> = [];
   const reads: Array<{ at: number; store: string; hit: boolean }> = [];
   const transactions: Array<{
@@ -114,8 +131,25 @@ export function warmReloadProbe(options: { paneFrames?: boolean } = {}) {
   });
   observe("layout-shift", (entries) => {
     for (const entry of entries) {
-      if (!Reflect.get(entry, "hadRecentInput")) {
-        shifts.push({ at: entry.startTime, value: Reflect.get(entry, "value") });
+      const shift = entry as LayoutShift;
+      if (!shift.hadRecentInput) {
+        shifts.push({
+          at: shift.startTime,
+          value: shift.value,
+          sources: shift.sources.map((source) => {
+            const rect = ({ x, y, width, height }: DOMRectReadOnly) => ({ x, y, width, height });
+            const path: string[] = [];
+            let element = source.node instanceof Element ? source.node : source.node?.parentElement;
+            for (let depth = 0; element && depth < 5; depth++, element = element.parentElement) {
+              path.push(elementLabel(element));
+            }
+            return {
+              path,
+              previousRect: rect(source.previousRect),
+              currentRect: rect(source.currentRect),
+            };
+          }),
+        });
       }
     }
   });
