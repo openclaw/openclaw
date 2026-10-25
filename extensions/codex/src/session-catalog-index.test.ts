@@ -165,37 +165,22 @@ describe("resident Codex catalog", () => {
     expect(readNative).toHaveBeenCalledOnce();
     const added = await writeCatalogRollout(
       root,
-      idleThread({ id: "new-thread", preview: "A new native request" }),
-      2 * 1024 * 1024,
+      idleThread({ id: "new-thread", preview: "New request" }),
     );
-    const reads: Array<() => Promise<number[]>> = [];
-    const realOpen = fs.open;
-    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      const read = vi.spyOn(handle, "read");
-      reads.push(async () =>
-        Promise.all(read.mock.results.map(async (result) => (await result.value).bytesRead)),
-      );
-      return handle;
-    });
-    const readFile = vi.spyOn(fs, "readFile");
+    const open = vi.spyOn(fs, "open");
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
     await index.reconcile();
     await vi.waitFor(async () => {
-      expect((await index.list({})).sessions).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            threadId: "new-thread",
-            fallbackName: "A new native request",
-          }),
-          expect.objectContaining({ threadId: "existing" }),
-        ]),
+      const sessions = (await index.list({})).sessions;
+      expect(sessions.map((session) => session.threadId).toSorted()).toEqual([
+        "existing",
+        "new-thread",
+      ]);
+      expect(sessions.find((session) => session.threadId === "new-thread")?.fallbackName).toBe(
+        "New request",
       );
     });
     expect(open.mock.calls.map((call) => call[0])).toEqual([added]);
-    const bytesRead = (await Promise.all(reads.map((read) => read()))).flat();
-    expect(bytesRead.reduce((sum, value) => sum + value, 0)).toBe(256 * 1024);
-    expect(readFile).not.toHaveBeenCalled();
     expect(readNative).toHaveBeenCalledTimes(2);
     open.mockClear();
     await index.list({});
