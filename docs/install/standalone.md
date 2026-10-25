@@ -132,7 +132,8 @@ The build identity is derived from compiled modules, retained resources, compile
 target, and compilation options. Independent builds of identical prepared inputs
 share that identity; changing compiled code or native resources invalidates it.
 For reproducible preparation, set the same `OPENCLAW_BUILD_TIMESTAMP` when running
-`pnpm build` in each checkout. Compare executable hashes before timestamped signing;
+`pnpm build` in each checkout. Local cache freshness stamps are omitted from the
+standalone runtime. Compare executable hashes before timestamped signing;
 a matching build identity alone does not prove byte-identical executables.
 
 For breakpoints, the companion also retains the selected input runtime, its

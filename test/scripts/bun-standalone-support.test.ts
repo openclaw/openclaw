@@ -5,6 +5,10 @@ import { parse } from "acorn";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStandaloneArtifactAdapter } from "../../scripts/lib/bun-standalone-artifacts.mjs";
 import {
+  planStandaloneRuntime,
+  pruneStandaloneRuntime,
+} from "../../scripts/lib/bun-standalone-sidecar.mjs";
+import {
   assertStandaloneDestinations,
   compileStandaloneArtifacts,
   describeStandaloneNativeModules,
@@ -308,16 +312,48 @@ console.log(JSON.stringify([fingerprint(record), fingerprint({ ...record, source
   );
 
   it.skipIf(process.platform === "win32")(
-    "emits identical build stamps and executable bytes for independent copies of the same inputs",
+    "ignores local freshness stamps when building independent copies of the same inputs",
     async () => {
       const first = fixture();
       const second = fixture();
-      const [a, b] = await Promise.all([compile(first), compile(second)]);
+      const plans = [first, second].map((input, index) => {
+        fs.mkdirSync(path.join(input.runtimeRoot, "dist"));
+        fs.writeFileSync(
+          path.join(input.runtimeRoot, "dist/build-info.json"),
+          JSON.stringify({ commit: "a".repeat(40), builtAt: "2026-10-24T00:00:00.000Z" }),
+        );
+        fs.writeFileSync(
+          path.join(input.runtimeRoot, "dist/.buildstamp"),
+          JSON.stringify({ head: "a".repeat(40), builtAt: 1000 + index }),
+        );
+        fs.writeFileSync(
+          path.join(input.runtimeRoot, "dist/.runtime-postbuildstamp"),
+          JSON.stringify({ head: "a".repeat(40), syncedAt: 2000 + index }),
+        );
+        return planStandaloneRuntime(input.runtimeRoot, [
+          { source: "asset.txt", destination: "asset.txt", category: "dependencyAssets" },
+          {
+            source: "lib/test-sqlite.dylib",
+            destination: "lib/test-sqlite.dylib",
+            category: "nativeLibraries",
+          },
+        ]);
+      });
+      const [a, b] = await Promise.all([
+        compile(first, { resourcePlan: plans[0] }),
+        compile(second, { resourcePlan: plans[1] }),
+      ]);
       expect(a[0].build.id).toMatch(/^[a-f0-9]{64}$/);
       expect(b[0].build).toEqual(a[0].build);
       expect(fs.readFileSync(path.join(second.outputRoot, "openclaw"))).toEqual(
         fs.readFileSync(path.join(first.outputRoot, "openclaw")),
       );
+      for (const plan of plans) {
+        pruneStandaloneRuntime(plan);
+        expect(fs.existsSync(path.join(plan.root, "dist/build-info.json"))).toBe(true);
+        expect(fs.existsSync(path.join(plan.root, "dist/.buildstamp"))).toBe(false);
+        expect(fs.existsSync(path.join(plan.root, "dist/.runtime-postbuildstamp"))).toBe(false);
+      }
     },
   );
 
