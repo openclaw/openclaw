@@ -94,19 +94,16 @@ test.each([undefined, "session-a"])(
 );
 
 test.each([
-  {
-    name: "session id before archive",
-    patch: { archived: true, expectedSessionId: "sess-before-reset" },
-  },
-  {
-    name: "lifecycle revision before archive",
-    patch: { archived: true, expectedLifecycleRevision: "revision-before-reset" },
-  },
-  {
-    name: "lifecycle revision for metadata",
-    patch: { label: "Stale agent request", expectedLifecycleRevision: "revision-before-reset" },
-  },
-])("sessions.patch rejects a replaced $name without side effects", async ({ patch }) => {
+  ["session id before archive", { archived: true, expectedSessionId: "sess-before-reset" }],
+  [
+    "lifecycle revision before archive",
+    { archived: true, expectedLifecycleRevision: "revision-before-reset" },
+  ],
+  [
+    "lifecycle revision for metadata",
+    { label: "Stale agent request", expectedLifecycleRevision: "revision-before-reset" },
+  ],
+] as const)("sessions.patch rejects a replaced %s without side effects", async (_name, patch) => {
   const sessionKey = "agent:main:subagent:active-replacement";
   const replacementSessionId = "sess-active-after-reset";
   const { read } = await seedSession(
@@ -246,10 +243,7 @@ test("sessions.patch rejects stale permission replacement", async () => {
     permissionMode: "guarded",
   });
   await patch({ permissionMode: "read-only" });
-  const stale = await patch({
-    expectedPermissionMode: "guarded",
-    permissionMode: "full",
-  });
+  const stale = await patch({ expectedPermissionMode: "guarded", permissionMode: "full" });
 
   expect(stale).toMatchObject({
     ok: false,
@@ -380,19 +374,14 @@ describe("plugin session ownership", () => {
     await seed("other-plugin");
     const reset = await directSessionReq("sessions.reset", { key: sessionKey }, writeOptions);
     expectDenied(reset, "reset", sessionKey);
-    expect(readEntry()).toMatchObject({
-      sessionId,
-      pluginOwnerId: "other-plugin",
-    });
+    expect(readEntry()).toMatchObject({ sessionId, pluginOwnerId: "other-plugin" });
   });
 
   test("sessions.reset stamps plugin ownership when it materializes a missing session", async () => {
     const reset = await directSessionReq("sessions.reset", { key: sessionKey }, writeOptions);
 
     expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
-    expect(readEntry()).toMatchObject({
-      pluginOwnerId: "memory-core",
-    });
+    expect(readEntry()).toMatchObject({ pluginOwnerId: "memory-core" });
 
     const patched = await patch(sessionKey, "Reset-created plugin session", writeOptions);
 
@@ -420,10 +409,7 @@ describe("plugin session ownership", () => {
     });
 
     expectDenied(reset, "reset", sessionKey);
-    expect(readEntry()).toMatchObject({
-      pluginOwnerId: "other-plugin",
-      sessionId,
-    });
+    expect(readEntry()).toMatchObject({ pluginOwnerId: "other-plugin", sessionId });
   });
 
   test("sessions.patch limits plugin-runtime mutations to sessions owned by that plugin", async () => {
@@ -470,9 +456,7 @@ describe("plugin session ownership", () => {
 
     expect(patched.ok).toBe(false);
     expect(patched.error?.message).toContain("did not create it");
-    expect(readEntry()).toMatchObject({
-      pluginOwnerId: "other-plugin",
-    });
+    expect(readEntry()).toMatchObject({ pluginOwnerId: "other-plugin" });
     expect(readEntry()?.label).toBeUndefined();
   });
 });

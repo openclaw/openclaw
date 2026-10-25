@@ -75,24 +75,10 @@ class MockGatewayClient {
     gatewayClientState.requests = [];
   }
 
-  private async emitHelloOk(): Promise<void> {
-    const onHelloOk = this.opts.onHelloOk;
-    if (typeof onHelloOk === "function") {
-      await onHelloOk({
-        type: "hello-ok",
-        server: gatewayClientState.helloServer,
-        auth: gatewayClientState.helloAuth,
-      });
-    }
-  }
-
-  private emitClose(): void {
-    const onClose = this.opts.onClose;
-    if (typeof onClose === "function") {
-      onClose(gatewayClientState.close.code, gatewayClientState.close.reason, {
-        socketOpened: gatewayClientState.socketOpened,
-        transportValidated: gatewayClientState.transportValidated,
-      });
+  private emit(name: string, ...args: unknown[]) {
+    const callback = this.opts[name];
+    if (typeof callback === "function") {
+      return callback(...args);
     }
   }
 
@@ -103,24 +89,26 @@ class MockGatewayClient {
     }
     void Promise.resolve()
       .then(async () => {
-        if (gatewayClientState.startMode === "close") {
-          this.emitClose();
-          return;
-        }
         if (gatewayClientState.startMode === "connect-error-close") {
-          const onConnectError = this.opts.onConnectError;
-          if (typeof onConnectError === "function") {
-            const error = new MockGatewayClientRequestError({
-              message: gatewayClientState.connectError,
-              details: gatewayClientState.connectErrorDetails,
-            });
-            retainGatewayResponsePayload(error, undefined);
-            onConnectError(error);
-          }
-          this.emitClose();
+          const error = new MockGatewayClientRequestError({
+            message: gatewayClientState.connectError,
+            details: gatewayClientState.connectErrorDetails,
+          });
+          retainGatewayResponsePayload(error, undefined);
+          this.emit("onConnectError", error);
+        }
+        if (gatewayClientState.startMode !== "hello") {
+          this.emit("onClose", gatewayClientState.close.code, gatewayClientState.close.reason, {
+            socketOpened: gatewayClientState.socketOpened,
+            transportValidated: gatewayClientState.transportValidated,
+          });
           return;
         }
-        await this.emitHelloOk();
+        await this.emit("onHelloOk", {
+          type: "hello-ok",
+          server: gatewayClientState.helloServer,
+          auth: gatewayClientState.helloAuth,
+        });
       })
       .catch(() => {});
   }
@@ -299,15 +287,46 @@ describe("probeGateway", () => {
     expect(gatewayClientState.requests).toEqual([method]);
   });
 
-  it("surfaces immediate close failures before the probe timeout", async () => {
-    gatewayClientState.startMode = "close";
-    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
-    expectFields(result, {
-      ok: false,
-      error: "gateway closed (1008): pairing required",
-      close: { code: 1008, reason: "pairing required" },
-    });
-    expectFields(result.auth, { capability: "pairing_pending" });
+  it.each([
+    {
+      name: "surfaces immediate close failures before the probe timeout",
+      state: { startMode: "close" },
+      expected: {
+        ok: false,
+        error: "gateway closed (1008): pairing required",
+        close: { code: 1008, reason: "pairing required" },
+        auth: expect.objectContaining({ capability: "pairing_pending" }),
+      },
+    },
+    {
+      name: "prefers the structured connect error over the generic close reason",
+      state: { startMode: "connect-error-close", close: { code: 1008, reason: "connect failed" } },
+      expected: {
+        ok: false,
+        error: "scope upgrade pending approval (requestId: req-123)",
+        close: { code: 1008, reason: "connect failed" },
+        auth: expect.objectContaining({ capability: "pairing_pending" }),
+        connectLatencyMs: expect.any(Number),
+      },
+    },
+    {
+      name: "keeps probe capability unknown for temporary authentication lockouts",
+      state: {
+        startMode: "connect-error-close",
+        connectError: "unauthorized: too many failed authentication attempts (retry later)",
+        connectErrorDetails: { code: "AUTH_RATE_LIMITED" },
+        close: { code: 1008, reason: "connect failed" },
+      },
+      expected: { ok: false, auth: expect.objectContaining({ capability: "unknown" }) },
+    },
+    {
+      name: "keeps latency unknown when the opened transport fails validation",
+      state: { startMode: "connect-error-close", transportValidated: false },
+      expected: { connectLatencyMs: null },
+    },
+  ])("$name", async ({ state, expected }) => {
+    Object.assign(gatewayClientState, state);
+    expectFields(await runTokenLightweightProbe({ timeoutMs: 5_000 }), expected);
     expect(gatewayClientState.requests).toStrictEqual([]);
   });
 
@@ -326,39 +345,6 @@ describe("probeGateway", () => {
     gatewayClientState.helloAuth = undefined;
     const result = await runTokenLightweightProbe();
     expectFields(result.auth, { role: null, scopes: [], capability: "unknown" });
-  });
-
-  it("prefers the structured connect error over the generic close reason", async () => {
-    gatewayClientState.startMode = "connect-error-close";
-    gatewayClientState.socketOpened = true;
-    gatewayClientState.close = { code: 1008, reason: "connect failed" };
-    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
-    expectFields(result, {
-      ok: false,
-      error: "scope upgrade pending approval (requestId: req-123)",
-      close: { code: 1008, reason: "connect failed" },
-    });
-    expectFields(result.auth, { capability: "pairing_pending" });
-    expect(result.connectLatencyMs).not.toBeNull();
-  });
-
-  it("keeps probe capability unknown for temporary authentication lockouts", async () => {
-    gatewayClientState.startMode = "connect-error-close";
-    gatewayClientState.connectError =
-      "unauthorized: too many failed authentication attempts (retry later)";
-    gatewayClientState.connectErrorDetails = { code: "AUTH_RATE_LIMITED" };
-    gatewayClientState.close = { code: 1008, reason: "connect failed" };
-    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
-    expectFields(result, { ok: false });
-    expectFields(result.auth, { capability: "unknown" });
-  });
-
-  it("keeps latency unknown when the opened transport fails validation", async () => {
-    gatewayClientState.startMode = "connect-error-close";
-    gatewayClientState.socketOpened = true;
-    gatewayClientState.transportValidated = false;
-    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
-    expect(result.connectLatencyMs).toBeNull();
   });
 
   it("short-circuits later unpaired probes after repeated device-required closes", async () => {
