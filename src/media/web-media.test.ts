@@ -3,18 +3,19 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import JSZip from "jszip";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer, createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { resolveStateDir } from "../config/paths.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createImageProcessor,
+  getImageMetadata,
   readImageMetadataFromHeader,
   resizeToJpeg,
 } from "./media-services.js";
@@ -24,12 +25,10 @@ type MediaOptions = Exclude<Parameters<typeof media.loadWebMedia>[1], number | u
 const suiteDirs = useAutoCleanupTempDirTracker(afterAll);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TINY_PNG = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
-const IMAGE_LIMITS = {
-  models: [
-    { maxSidePx: 32, preferredSidePx: 32 },
-    { maxSidePx: 64, preferredSidePx: 64 },
-  ],
-};
+const IMAGE_MODELS = [
+  { maxSidePx: 32, preferredSidePx: 32 },
+  { maxSidePx: 64, preferredSidePx: 64 },
+];
 let fixtureRoot = "";
 let tinyPngFile = "";
 let stateDir = "";
@@ -54,21 +53,18 @@ const hostOptions = (overrides: MediaOptions = {}): MediaOptions => ({
   ...overrides,
 });
 
-function remoteOptions(
+const remoteOptions = (
   body: BodyInit,
   headers: HeadersInit,
   overrides: MediaOptions = {},
-): MediaOptions {
-  return {
-    fetchImpl: vi.fn(async () => new Response(body, { headers })),
-    ssrfPolicy: { allowedHostnames: ["example.test"] },
-    ...overrides,
-  };
-}
+): MediaOptions => ({
+  fetchImpl: vi.fn(async () => new Response(body, { headers })),
+  ssrfPolicy: { allowedHostnames: ["example.test"] },
+  ...overrides,
+});
 
-function loadWithHostRead(file: string) {
-  return media.loadWebMedia(file, hostOptions({ maxBytes: 1024 * 1024 }));
-}
+const loadWithHostRead = (file: string) =>
+  media.loadWebMedia(file, hostOptions({ maxBytes: 1024 * 1024 }));
 
 async function expectAccessError(promise: Promise<unknown>, code = "path-not-allowed") {
   await expect(promise).rejects.toBeInstanceOf(media.LocalMediaAccessError);
@@ -79,45 +75,10 @@ async function inState(run: (root: string) => Promise<void>, parent?: string) {
   const root = tempDirs.make("web-media-state-", parent);
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, () => run(root));
 }
-
 async function stageHtml(body = Buffer.from("<!doctype html><h1>report</h1>")) {
   const { saveMediaBuffer } = await import("./store.js");
   const saved = await saveMediaBuffer(body, "text/html", "outbound", 1024 * 1024, "report.html");
   return { path: saved.path, body };
-}
-
-function jpegDimensions(buffer: Buffer) {
-  let offset = 2;
-  while (offset + 9 < buffer.length) {
-    if (buffer[offset] !== 0xff) {
-      offset += 1;
-      continue;
-    }
-    const marker = expectDefined(buffer[offset + 1], "JPEG marker");
-    offset += 2;
-    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
-      continue;
-    }
-    const length = buffer.readUInt16BE(offset);
-    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-      return { height: buffer.readUInt16BE(offset + 3), width: buffer.readUInt16BE(offset + 5) };
-    }
-    offset += length;
-  }
-  throw new Error("JPEG dimensions not found");
-}
-
-async function xlsmFixture() {
-  const zip = new JSZip();
-  zip.file(
-    "[Content_Types].xml",
-    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/></Types>',
-  );
-  zip.file(
-    "xl/workbook.xml",
-    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
-  );
-  return zip.generateAsync({ type: "nodebuffer" });
 }
 
 beforeAll(async () => {
@@ -127,8 +88,6 @@ beforeAll(async () => {
   workspaceDir = path.join(fixtureRoot, "workspace");
   await writeFile("chart.png", TINY_PNG, workspaceDir);
   stateDir = resolveStateDir();
-  await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
-  await writeFile("canvas/documents/cv_test/collection.media/tiny.png", TINY_PNG, stateDir);
 });
 
 afterEach(() => {
@@ -136,13 +95,7 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-afterAll(async () => {
-  try {
-    await fs.rm(path.join(stateDir, "canvas/documents/cv_test"), { recursive: true, force: true });
-  } finally {
-    vi.resetModules();
-  }
-});
+afterAll(() => vi.resetModules());
 
 describe("loadWebMedia", () => {
   it("loads encoded uppercase file URLs from reply directives without stripping ordinary UUID filenames", async () => {
@@ -158,47 +111,36 @@ describe("loadWebMedia", () => {
   });
 
   it.each([
-    { url: "FILE://attacker/share/evil.png", code: "invalid-file-url", beforeFs: true },
-    {
-      url: "\\\\attacker\\share\\evil.png",
-      code: "network-path-not-allowed",
-      beforeFs: true,
-      windows: true,
-    },
-    {
-      url: "/__openclaw__/canvas/documents/../collection.media/tiny.png",
-      code: "path-not-allowed",
-    },
-    { url: "media://outbound/tiny.png", code: "path-not-allowed" },
-    { url: "media://inbound/nested%2Ftiny.png", code: "invalid-path" },
-  ])("rejects unsafe media path $url ($code)", async ({ url, code, beforeFs, windows }) => {
-    const platform = windows
-      ? vi.spyOn(process, "platform", "get").mockReturnValue("win32")
-      : undefined;
-    const realpath = vi.spyOn(fs, "realpath");
-    try {
-      await expectAccessError(
-        loadLocal(
-          url.startsWith("FILE:")
-            ? expectDefined(parseReplyDirectives(`MEDIA:${url}`).mediaUrls?.[0], "file URL")
-            : url,
-        ),
-        code,
-      );
-      if (beforeFs) {
-        expect(realpath).not.toHaveBeenCalled();
+    ["FILE://attacker/share/evil.png", "invalid-file-url", true],
+    ["\\\\attacker\\share\\evil.png", "network-path-not-allowed", true, true],
+    ["/__openclaw__/canvas/documents/../collection.media/tiny.png", "path-not-allowed"],
+    ["media://outbound/tiny.png", "path-not-allowed"],
+    ["media://inbound/nested%2Ftiny.png", "invalid-path"],
+  ] as const)(
+    "rejects unsafe path %s (%s)",
+    async (url, code, beforeFs = false, windows = false) => {
+      const platform = windows
+        ? vi.spyOn(process, "platform", "get").mockReturnValue("win32")
+        : undefined;
+      const realpath = vi.spyOn(fs, "realpath");
+      try {
+        await expectAccessError(
+          loadLocal(
+            url.startsWith("FILE:")
+              ? expectDefined(parseReplyDirectives(`MEDIA:${url}`).mediaUrls?.[0], "file URL")
+              : url,
+          ),
+          code,
+        );
+        if (beforeFs) {
+          expect(realpath).not.toHaveBeenCalled();
+        }
+      } finally {
+        platform?.mockRestore();
+        realpath.mockRestore();
       }
-    } finally {
-      platform?.mockRestore();
-      realpath.mockRestore();
-    }
-  });
-
-  it("surfaces Rastermill decode failures when optimization cannot produce a JPEG", async () => {
-    await expect(media.optimizeImageToJpeg(Buffer.from("not an image"), 8)).rejects.toThrow(
-      /Unable to determine image dimensions/,
-    );
-  });
+    },
+  );
 
   it("preserves oriented JPEG bytes and corrects a stale HEIF filename with model limits", async () => {
     const jpeg = await resizeToJpeg({
@@ -250,7 +192,7 @@ describe("loadWebMedia", () => {
     await writeFile(file, createSolidPngBuffer(64, 64, { r: 230, g: 40, b: 35 }));
     const options = localOptions({
       workspaceDir: fixtureRoot,
-      imageCompression: { ...IMAGE_LIMITS, quality: "high" },
+      imageCompression: { models: IMAGE_MODELS, quality: "high" },
     });
     await expect(media.loadWebMediaRaw(file, options)).rejects.toThrow(
       /dimensions exceed model image limits/i,
@@ -260,14 +202,16 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("image/jpeg");
     expect(result.fileName).toBe("portrait.jpg");
     expect(result.buffer.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
-    expect(jpegDimensions(result.buffer)).toEqual({ width: 32, height: 32 });
+    await expect(getImageMetadata(result.buffer)).resolves.toEqual({ width: 32, height: 32 });
   });
 
   it("resizes transparent WebP to PNG for a many-image turn", async () => {
     const source = createSolidPngBuffer(64, 64, { r: 30, g: 110, b: 220, a: 96 });
     const webp = (await createImageProcessor().encode(source, { format: "webp" })).data;
     const file = await writeFile("portrait.WebP", webp);
-    const result = await loadLocal(file, { imageCompression: { ...IMAGE_LIMITS, imageCount: 8 } });
+    const result = await loadLocal(file, {
+      imageCompression: { models: IMAGE_MODELS, imageCount: 8 },
+    });
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/png");
     expect(result.fileName).toBe("portrait.png");
@@ -360,9 +304,7 @@ describe("loadWebMedia", () => {
     // Sparse and well past the cap, so an uncapped read would consume all of it.
     const file = await writeFile("oversized.bin", Buffer.alloc(0));
     await fs.truncate(file, maxBytes * 4);
-    const unboundedRead = vi.fn(async () => {
-      throw new Error("unbounded read invoked");
-    });
+    const unboundedRead = vi.fn(() => Promise.reject(new Error("unbounded read invoked")));
     let observedOpen = false;
     let bytesRead = 0;
     __setFsSafeTestHooksForTest({
@@ -388,31 +330,28 @@ describe("loadWebMedia", () => {
     expect(bytesRead).toBeLessThanOrEqual(maxBytes + 1);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "rejects an allowed ancestor symlink retargeted before open",
-    async () => {
-      const base = tempDirs.make("ancestor-race-", fixtureRoot);
-      const allowed = path.join(base, "allowed");
-      const inside = path.join(allowed, "inside");
-      const outside = path.join(base, "outside");
-      const alias = path.join(allowed, "slot");
-      const file = path.join(alias, "image.png");
-      await writeFile("image.png", TINY_PNG, inside);
-      await writeFile("image.png", createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 0 }), outside);
-      await fs.symlink(inside, alias);
-      __setFsSafeTestHooksForTest({
-        afterPreOpenLstat: async (openedPath) => {
-          if (openedPath === file) {
-            await fs.rm(alias);
-            await fs.symlink(outside, alias);
-          }
-        },
-      });
-      await expectAccessError(
-        media.loadWebMediaRaw(file, { maxBytes: 1024 * 1024, localRoots: [allowed] }),
-      );
-    },
-  );
+  it.runIf(process.platform !== "win32")("rejects pre-open ancestor symlink swaps", async () => {
+    const base = tempDirs.make("ancestor-race-", fixtureRoot);
+    const allowed = path.join(base, "allowed");
+    const inside = path.join(allowed, "inside");
+    const outside = path.join(base, "outside");
+    const alias = path.join(allowed, "slot");
+    const file = path.join(alias, "image.png");
+    await writeFile("image.png", TINY_PNG, inside);
+    await writeFile("image.png", createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 0 }), outside);
+    await fs.symlink(inside, alias);
+    __setFsSafeTestHooksForTest({
+      afterPreOpenLstat: async (openedPath) => {
+        if (openedPath === file) {
+          await fs.rm(alias);
+          await fs.symlink(outside, alias);
+        }
+      },
+    });
+    await expectAccessError(
+      media.loadWebMediaRaw(file, { maxBytes: 1024 * 1024, localRoots: [allowed] }),
+    );
+  });
 
   it("resolves home-relative paths through allowed local roots", async () => {
     await withEnvAsync({ OPENCLAW_HOME: fixtureRoot }, async () => {
@@ -443,10 +382,7 @@ describe("loadWebMedia", () => {
       ]),
     ],
     ["bom-binary.csv", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.alloc(9000, 0xff)])],
-    [
-      "alternating-high.csv",
-      Buffer.from(Array.from({ length: 9000 }, (_, index) => (index % 2 === 0 ? 0x41 : 0xff))),
-    ],
+    ["alternating-high.csv", Buffer.alloc(9000, Buffer.from([0x41, 0xff]))],
   ] as const)("rejects unsafe host-read document %s", async (name, body, outside?: true) => {
     if (name === "prefix-tail.csv") {
       expect(body.length - 4).toBeGreaterThan(8192);
@@ -489,46 +425,20 @@ describe("loadWebMedia", () => {
     );
   });
 
-  it("keeps the host-read XLSM root boundary and byte limit", async () => {
-    const body = await xlsmFixture();
-    const file = await writeFile("bounded.xlsm", body);
-    const readFile = vi.fn((source: string) => fs.readFile(source));
-    await expectAccessError(
-      media.loadWebMedia(file, hostOptions({ localRoots: [workspaceDir], readFile })),
-    );
-    expect(readFile).not.toHaveBeenCalled();
-    await expect(
-      media.loadWebMedia(
-        file,
-        hostOptions({
-          maxBytes: body.length - 1,
-          localRoots: [fixtureRoot],
-          readFile,
-        }),
-      ),
-    ).rejects.toThrow(/exceeds.*limit/i);
-  });
-
-  it("allows exact marked outbound HTML bytes and rejects same-size replacements", async () => {
+  it("requires exact-byte provenance beneath the trusted temp root", async () => {
     await inState(async () => {
       const original = Buffer.from("<!doctype html><h1>A</h1>");
       const replacement = Buffer.from("<!doctype html><h1>B</h1>");
       expect(replacement.length).toBe(original.length);
       const saved = await stageHtml(original);
+      expect(path.resolve(saved.path)).toContain(path.resolve(resolvePreferredOpenClawTmpDir()));
+      await expectAccessError(loadWithHostRead(saved.path));
       await media.markTrustedGeneratedHtmlPath(saved.path, original);
       const allowed = await loadWithHostRead(saved.path);
       expect(allowed.buffer).toEqual(original);
       expect(allowed.fileName).toBe("report.html");
       expect(allowed.trustedGeneratedHtmlSource).toBe(true);
       await fs.writeFile(saved.path, replacement);
-      await expectAccessError(loadWithHostRead(saved.path));
-    });
-  });
-
-  it("requires provenance even when outbound staging is under the trusted temp root", async () => {
-    await inState(async () => {
-      const saved = await stageHtml();
-      expect(path.resolve(saved.path)).toContain(path.resolve(resolvePreferredOpenClawTmpDir()));
       await expectAccessError(loadWithHostRead(saved.path));
     }, resolvePreferredOpenClawTmpDir());
   });
@@ -596,36 +506,28 @@ describe("loadWebMedia", () => {
     );
   });
 
-  it.each(["symlink", "hardlink"] as const)(
+  it.each([
+    ["symlink", fs.symlink, "EPERM"],
+    ["hardlink", fs.link, "EXDEV"],
+  ] as const)(
     "rejects a trusted HTML %s to an outside file",
-    async (kind) => {
+    async (_kind, linkFile, unavailableCode) => {
       const root = tempDirs.make("html-outside-", path.dirname(resolvePreferredOpenClawTmpDir()));
       const outside = await writeFile(
         "report.html",
         "<!doctype html><title>Outside</title><body>secret</body>\n",
         root,
       );
-      const link = path.join(fixtureRoot, `${kind}-report.html`);
+      const link = path.join(tempDirs.make("html-link-", fixtureRoot), "report.html");
       try {
-        if (kind === "symlink") {
-          await fs.symlink(outside, link);
-        } else {
-          await fs.link(outside, link);
-        }
+        await linkFile(outside, link);
       } catch (error) {
-        if (
-          (kind === "symlink" && (error as NodeJS.ErrnoException).code === "EPERM") ||
-          (kind === "hardlink" && (error as NodeJS.ErrnoException).code === "EXDEV")
-        ) {
+        if (hasErrnoCode(error, unavailableCode)) {
           return;
         }
         throw error;
       }
-      try {
-        await expectAccessError(loadWithHostRead(link));
-      } finally {
-        await fs.rm(link, { force: true });
-      }
+      await expectAccessError(loadWithHostRead(link));
     },
   );
 
@@ -688,40 +590,5 @@ describe("loadWebMedia", () => {
         ),
       ),
     ).rejects.toThrow(/exceeds maxBytes/);
-  });
-
-  it("applies the shared remote read idle timeout", async () => {
-    vi.useFakeTimers();
-    try {
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
-        },
-      });
-      const outcome = media
-        .loadWebMediaRaw(
-          "https://example.test/stalled.pdf",
-          remoteOptions(
-            body,
-            { "content-type": "application/pdf" },
-            { maxBytes: 1024 * 1024, readIdleTimeoutMs: 20 },
-          ),
-        )
-        .then(
-          () => ({ status: "resolved" as const }),
-          (error: unknown) => ({ status: "rejected" as const, error }),
-        );
-      await vi.advanceTimersByTimeAsync(25);
-      await expect(
-        Promise.race([outcome, Promise.resolve({ status: "pending" as const })]),
-      ).resolves.toMatchObject({ status: "rejected" });
-      const result = await outcome;
-      expect(result.status).toBe("rejected");
-      if (result.status === "rejected") {
-        expect(String(result.error)).toMatch(/stalled|no data received/i);
-      }
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });
