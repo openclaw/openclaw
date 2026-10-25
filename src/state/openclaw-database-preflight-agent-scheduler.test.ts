@@ -112,6 +112,34 @@ it("shares one foreground wait across active and queued agent inspections", asyn
   ]);
 });
 
+it("bounds active inspections while preserving out-of-order results in input order", async () => {
+  await using f = fixture([0, 1, 2], true);
+  let active = 0;
+  let peak = 0;
+  const run = f.run(async (target, inspection) => {
+    peak = Math.max(peak, ++active);
+    try {
+      await inspectNumbered(f.pending, target, inspection);
+    } finally {
+      active--;
+    }
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect({ started: f.started, active }).toEqual({ started: [0, 1], active: 2 });
+  f.pending[1]!.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.started).toEqual([0, 1, 2]);
+  f.pending[2]!.resolve();
+  f.pending[0]!.resolve();
+  await run;
+  expect({ active, peak }).toEqual({ active: 0, peak: 2 });
+  expect(f.result.indeterminate.map((entry) => entry.path)).toEqual([
+    "agent-0",
+    "agent-1",
+    "agent-2",
+  ]);
+});
+
 it("keeps unowned custom stores in strict foreground admission", async () => {
   await using f = fixture(["custom.sqlite"], true);
   const run = f.run(
@@ -170,45 +198,4 @@ it("rejects a deferred failure while a strict store still prevents handoff", asy
   await expect(run).rejects.toBe(failure);
   expect(f.defer).not.toHaveBeenCalled();
   expect(f.started).toEqual([0, 1]);
-});
-
-it("bounds active inspections to the host's CPUs", async () => {
-  await using f = fixture([0, 1, 2]);
-  let active = 0;
-  let peak = 0;
-  const run = f.run(async (target) => {
-    active += 1;
-    peak = Math.max(peak, active);
-    try {
-      await f.pending[target]!.promise;
-    } finally {
-      active -= 1;
-    }
-  });
-  await Promise.resolve();
-  expect({ started: f.started, active, peak }).toEqual({ started: [0, 1], active: 2, peak: 2 });
-  f.pending[0]!.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  expect({ started: f.started, peak }).toEqual({ started: [0, 1, 2], peak: 2 });
-  f.releaseAll();
-  await run;
-  expect({ active, peak }).toEqual({ active: 0, peak: 2 });
-});
-
-it("preserves input result order when inspections finish out of order", async () => {
-  await using f = fixture([0, 1, 2]);
-  const run = f.run((target, inspection) => inspectNumbered(f.pending, target, inspection));
-  await Promise.resolve();
-  f.pending[1]!.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  f.pending[2]!.resolve();
-  f.pending[0]!.resolve();
-  await run;
-  expect(f.result.indeterminate.map((entry) => entry.path)).toEqual([
-    "agent-0",
-    "agent-1",
-    "agent-2",
-  ]);
 });

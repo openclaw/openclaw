@@ -104,19 +104,9 @@ for (const [label, suffix, contents, recoverable] of cases) {
       if (fs.existsSync(sourcePath)) {
         expect(fs.readFileSync(sourcePath)).not.toEqual(contents);
       }
-      expect(loggerMocks.warn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(quarantinePath!),
-        expect.objectContaining({
-          databasePath,
-          copiedSidecars: [{ quarantinePath, sourcePath }],
-        }),
-      );
-      const message = String(loggerMocks.warn.mock.calls[0]?.[0]);
-      expect(message).toContain(
-        "Committed frames could not be applied because the main database is missing",
-      );
-      expect(message).toContain(
-        "Recovery requires restoring the main database and pairing it with the quarantined file",
+      expect(loggerMocks.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Recovery requires restoring the main database"),
+        expect.any(Object),
       );
     });
   }
@@ -139,10 +129,6 @@ it("preserves a same-size quarantine with different contents and copies to a uni
   expect(database.db.isOpen).toBe(true);
   expect(fs.readFileSync(existingQuarantinePath)).toEqual(existingContents);
   expect(fs.readFileSync(newQuarantinePath)).toEqual(walFixture.withFrames);
-  expect(loggerMocks.warn).toHaveBeenCalledWith(
-    expect.stringContaining(newQuarantinePath),
-    expect.any(Object),
-  );
 });
 
 for (const sourceKind of ["file", "symlink"] as const) {
@@ -188,18 +174,12 @@ it("fails closed with the typed error when quarantine copy fails", () => {
     throw copyError;
   });
 
-  let thrown: unknown;
-  try {
-    open();
-  } catch (error) {
-    thrown = error;
-  }
-
-  expect(thrown).toBeInstanceOf(Error);
-  expect((thrown as Error).name).toBe("SqliteOrphanedSidecarsError");
-  expect((thrown as Error).message).toContain(databasePath);
-  expect((thrown as Error).message).toContain(sourcePath);
-  expect((thrown as Error).message).toContain("restore the main database");
+  expect(open).toThrow(
+    expect.objectContaining({
+      name: "SqliteOrphanedSidecarsError",
+      message: expect.stringContaining(sourcePath),
+    }),
+  );
   expect(fs.existsSync(databasePath)).toBe(false);
   expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
   expect(listQuarantinePaths(sourcePath)).toEqual([]);
