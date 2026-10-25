@@ -1,4 +1,3 @@
-// Covers approval session target resolution.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -78,6 +77,15 @@ function forwardingConfig(
   return { approvals: { exec: { enabled: true, mode, targets } } };
 }
 
+async function expectSelections(
+  options: Parameters<typeof selectAccount>[0],
+  selections: Record<string, boolean>,
+) {
+  for (const [accountId, selected] of Object.entries(selections)) {
+    expect(await selectAccount({ ...options, accountId })).toBe(selected);
+  }
+}
+
 describe("native approval account selection", () => {
   it("selects only the sole eligible account when no owner is recorded", async () => {
     expect(await selectAccount()).toBe(true);
@@ -94,13 +102,13 @@ describe("native approval account selection", () => {
   });
 
   it("selects the recorded account even when several accounts are eligible", async () => {
-    const request = buildRequest({
-      turnSourceChannel: "telegram",
-      turnSourceAccountId: "ops",
-    });
-    const options = { request, eligibleAccountIds: ["default", "ops"] };
-    expect(await selectAccount({ ...options, accountId: "ops" })).toBe(true);
-    expect(await selectAccount(options)).toBe(false);
+    await expectSelections(
+      {
+        request: buildRequest({ turnSourceChannel: "telegram", turnSourceAccountId: "ops" }),
+        eligibleAccountIds: ["default", "ops"],
+      },
+      { ops: true, default: false },
+    );
   });
 
   it("maps unscoped explicit targets to default and preserves scoped targets", async () => {
@@ -108,15 +116,10 @@ describe("native approval account selection", () => {
       { channel: "telegram", to: "owner" },
       { channel: "telegram", to: "ops-owner", accountId: "ops" },
     ]);
-    for (const [accountId, selected] of [
-      ["default", true],
-      ["ops", true],
-      ["other", false],
-    ] as const) {
-      expect(
-        await selectAccount({ cfg, accountId, eligibleAccountIds: ["default", "ops", "other"] }),
-      ).toBe(selected);
-    }
+    await expectSelections(
+      { cfg, eligibleAccountIds: ["default", "ops", "other"] },
+      { default: true, ops: true, other: false },
+    );
   });
 
   it("selects the source account and explicit targets in both mode", async () => {
@@ -134,20 +137,10 @@ describe("native approval account selection", () => {
       turnSourceAccountId: "ops",
     });
 
-    for (const [accountId, selected] of [
-      ["ops", true],
-      ["audit", true],
-      ["other", false],
-    ] as const) {
-      expect(
-        await selectAccount({
-          cfg,
-          request,
-          accountId,
-          eligibleAccountIds: ["ops", "audit", "other"],
-        }),
-      ).toBe(selected);
-    }
+    await expectSelections(
+      { cfg, request, eligibleAccountIds: ["ops", "audit", "other"] },
+      { ops: true, audit: true, other: false },
+    );
   });
 });
 
@@ -204,27 +197,6 @@ function buildPluginRequest(
     createdAtMs: 1000,
     expiresAtMs: 6000,
   };
-}
-
-async function resolveSlackPluginOriginTarget(params: {
-  cfg: OpenClawConfig;
-  turnSourceTo: string;
-}) {
-  return await resolveApprovalRequestOriginTargetAsync({
-    cfg: params.cfg,
-    request: buildPluginRequest({
-      turnSourceChannel: "slack",
-      turnSourceTo: params.turnSourceTo,
-    }),
-    channel: "slack",
-    accountId: "default",
-    resolveTurnSourceTarget: (request) =>
-      request.request.turnSourceChannel === "slack" && request.request.turnSourceTo
-        ? { to: request.request.turnSourceTo }
-        : null,
-    resolveSessionTarget: (sessionTarget) => ({ to: sessionTarget.to }),
-    targetsMatch: (a, b) => a.to === b.to,
-  });
 }
 
 describe("exec approval session target", () => {
@@ -334,20 +306,16 @@ describe("exec approval session target", () => {
   });
 
   it("rejects mismatched channel bindings before account checks", async () => {
-    const cfg = {};
     const request = buildRequest({
       turnSourceChannel: "discord",
       turnSourceAccountId: "work",
     });
 
-    expect(
-      await resolveApprovalRequestAccountIdAsync({ cfg, request, channel: "slack" }),
-    ).toBeNull();
+    const binding = accountBinding({}, request);
+    expect(await resolveApprovalRequestAccountIdAsync(binding)).toBeNull();
     expect(
       await doesApprovalRequestMatchChannelAccountAsync({
-        cfg,
-        request,
-        channel: "slack",
+        ...binding,
         accountId: "work",
       }),
     ).toBe(false);
@@ -361,18 +329,14 @@ describe("exec approval session target", () => {
       lastAccountId: "ops",
     });
     const request = buildRequest({
-      sessionKey: "agent:main:main",
       turnSourceChannel: "discord",
       turnSourceTo: "channel:D123",
       turnSourceAccountId: "work",
     });
 
-    expect(
-      await resolveApprovalRequestAccountIdAsync({ cfg, request, channel: "matrix" }),
-    ).toBeNull();
-    expect(
-      await resolveApprovalRequestChannelAccountIdAsync({ cfg, request, channel: "matrix" }),
-    ).toBe("ops");
+    const binding = accountBinding(cfg, request, "matrix");
+    expect(await resolveApprovalRequestAccountIdAsync(binding)).toBeNull();
+    expect(await resolveApprovalRequestChannelAccountIdAsync(binding)).toBe("ops");
   });
 
   it.each([
@@ -401,7 +365,20 @@ describe("exec approval session target", () => {
     "reconciles %s plugin turn-source and stored origin targets",
     async (_, turnSourceTo, expected) => {
       const cfg = await storeFixture({ lastChannel: "slack", lastTo: "channel:C123" });
-      expect(await resolveSlackPluginOriginTarget({ cfg, turnSourceTo })).toEqual(expected);
+      expect(
+        await resolveApprovalRequestOriginTargetAsync({
+          cfg,
+          request: buildPluginRequest({ turnSourceChannel: "slack", turnSourceTo }),
+          channel: "slack",
+          accountId: "default",
+          resolveTurnSourceTarget: (request) =>
+            request.request.turnSourceChannel === "slack" && request.request.turnSourceTo
+              ? { to: request.request.turnSourceTo }
+              : null,
+          resolveSessionTarget: (target) => ({ to: target.to }),
+          targetsMatch: (a, b) => a.to === b.to,
+        }),
+      ).toEqual(expected);
     },
   );
 
