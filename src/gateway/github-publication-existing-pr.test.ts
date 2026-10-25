@@ -96,13 +96,11 @@ async function fixture(fork = false, linked = true) {
   const mutations: string[][] = [];
   const remoteCommits = new Set([originalHead]);
   let branchHead = originalHead;
-  let beforePush: (() => Promise<void>) | undefined;
   let afterPush: (() => Promise<void>) | undefined;
   let beforeRead: ((endpoint: string) => Promise<void>) | undefined;
   let losePushResponse = false;
   mocks.runCommand.mockImplementation(async (argv: string[], options) => {
     if (argv.includes("push")) {
-      await beforePush?.();
       pushes.push(argv);
       const refspec = argv.at(-1)!;
       const [commit, ref] = refspec.split(":");
@@ -212,9 +210,6 @@ async function fixture(fork = false, linked = true) {
     },
     onRead(callback: typeof beforeRead) {
       beforeRead = callback;
-    },
-    onPush(callback: typeof beforePush) {
-      beforePush = callback;
     },
     afterPush(callback: typeof afterPush) {
       afterPush = callback;
