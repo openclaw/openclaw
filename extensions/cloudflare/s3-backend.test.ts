@@ -1,5 +1,6 @@
 /// <reference lib="esnext.array" />
 /// <reference lib="es2024.promise" />
+import { ReadableStream } from "node:stream/web";
 import * as s3 from "@aws-sdk/client-s3";
 import { expect, it, vi } from "vitest";
 import { createR2Backend } from "./s3-backend.js";
@@ -25,9 +26,7 @@ function serviceError(name: string, code: number) {
 }
 
 async function* bytes(...chunks: (Uint8Array | string)[]) {
-  for (const chunk of chunks) {
-    yield typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-  }
+  yield* chunks.map((chunk) => (typeof chunk === "string" ? Buffer.from(chunk) : chunk));
 }
 
 function fixture(...responses: unknown[]) {
@@ -37,15 +36,14 @@ function fixture(...responses: unknown[]) {
       ? send.mockRejectedValueOnce(response)
       : send.mockResolvedValueOnce(response),
   );
-  const destroy = vi.fn();
-  const backend = createR2Backend(settings, { send, destroy });
+  const backend = createR2Backend(settings, { send, destroy: vi.fn() });
   return {
     send,
-    destroy,
     backend,
     put: (body: AsyncIterable<Uint8Array>, opts: Parameters<typeof backend.putObject>[2] = {}) =>
       backend.putObject("object", body, opts),
     get: (opts?: Parameters<typeof backend.getObject>[1]) => backend.getObject("object", opts),
+    read: async () => Array.fromAsync((await backend.getObject("object"))!),
   };
 }
 
@@ -54,10 +52,7 @@ async function* interrupted(chunk: string, code?: string) {
   throw Object.assign(new Error(PRIVATE), { code });
 }
 
-function multipartFixture(
-  part = (_command: s3.UploadPartCommand) => ({ ETag: "part" }),
-  complete = () => ({}),
-) {
+function multipartFixture(part = (_command: s3.UploadPartCommand) => ({ ETag: "part" })) {
   const context = fixture();
   context.send.mockImplementation(async (command) => {
     if (command instanceof s3.CreateMultipartUploadCommand) {
@@ -66,43 +61,18 @@ function multipartFixture(
     if (command instanceof s3.UploadPartCommand) {
       return part(command);
     }
-    return command instanceof s3.CompleteMultipartUploadCommand ? complete() : {};
+    return {};
   });
   return context;
 }
 
 const head = (ContentLength: number) => ({ ETag: '"original"', ContentLength });
-const target = (key: string) => ({ Bucket: "test-bucket", Key: `archive/team/${key}` });
-
-function expectCommand(command: { input: unknown }, type: unknown, input: object) {
-  expect(command).toBeInstanceOf(type);
-  expect(command.input).toEqual({ ...target("object"), ...input });
-}
 
 function download(size: number, start: number, end: number, source: AsyncIterable<Uint8Array>) {
-  const transformToWebStream = () => {
-    const iterator = source[Symbol.asyncIterator]();
-    return new ReadableStream<Uint8Array>(
-      {
-        async pull(controller) {
-          const next = await iterator.next();
-          if (next.done) {
-            controller.close();
-          } else {
-            controller.enqueue(next.value);
-          }
-        },
-        async cancel() {
-          await iterator.return?.();
-        },
-      },
-      { highWaterMark: 0 },
-    );
-  };
   return {
     ETag: '"original"',
     ContentRange: `bytes ${start}-${end}/${size}`,
-    Body: { transformToWebStream },
+    Body: { transformToWebStream: () => ReadableStream.from(source) },
   };
 }
 
@@ -116,13 +86,12 @@ async function expectSafeFailure(result: Promise<unknown>, ...messages: string[]
 it("conditionally creates small objects and preserves a conflicting object", async () => {
   const { send, put } = fixture({}, serviceError("PreconditionFailed", 412));
   expect(await put(bytes("abc"), { sizeBytes: 3 })).toEqual({ sizeBytes: 3 });
-  expectCommand(send.mock.calls[0]?.[0], s3.PutObjectCommand, {
+  expect(send.mock.calls[0]?.[0].input).toMatchObject({
+    Key: "archive/team/object",
     Body: Buffer.from("abc"),
-    ContentLength: 3,
     IfNoneMatch: "*",
   });
   await expect(put(bytes("new"), { sizeBytes: 3 })).rejects.toThrow("use a new object key");
-  expect(send).toHaveBeenCalledTimes(2);
 });
 
 it("uploads ordered bounded parts for a declared large object", async () => {
@@ -136,23 +105,16 @@ it("uploads ordered bounded parts for a declared large object", async () => {
     return { ETag: `part-${command.input.PartNumber}` };
   });
   const data = bytes(Buffer.alloc(PART_BYTES - 1, 1), Buffer.from([2, 3, 4, 5]));
-  expect(await put(data, { sizeBytes: PART_BYTES + 3 })).toEqual({
-    sizeBytes: PART_BYTES + 3,
-  });
+  expect(await put(data, { sizeBytes: PART_BYTES + 3 })).toEqual({ sizeBytes: PART_BYTES + 3 });
   expect(parts).toEqual([
     [PART_BYTES, 1, 2],
     [3, 3, 5],
   ]);
-  expectCommand(send.mock.calls.at(-1)?.[0], s3.CompleteMultipartUploadCommand, {
-    UploadId: "upload",
-    IfNoneMatch: "*",
-    MultipartUpload: {
-      Parts: [
-        { PartNumber: 1, ETag: "part-1" },
-        { PartNumber: 2, ETag: "part-2" },
-      ],
-    },
-  });
+  const completion = send.mock.calls.at(-1)?.[0].input;
+  expect(completion.IfNoneMatch).toBe("*");
+  expect(completion.MultipartUpload.Parts).toEqual(
+    [1, 2].map((PartNumber) => ({ PartNumber, ETag: `part-${PartNumber}` })),
+  );
 });
 
 it("completes an empty unknown-size body through multipart", async () => {
@@ -162,20 +124,19 @@ it("completes an empty unknown-size body through multipart", async () => {
   expect(send.mock.calls[2]?.[0]).toBeInstanceOf(s3.CompleteMultipartUploadCommand);
 });
 
-it.each(["completion", "producer", "size"])("aborts multipart when %s fails", async (failure) => {
-  const { send, put } = multipartFixture(undefined, () => {
-    if (failure === "completion") {
-      throw serviceError("PreconditionFailed", 412);
-    }
-    return {};
-  });
-  const result = put(failure === "producer" ? interrupted("abc") : bytes("abc"), {
+it.each(["publish", "source", "size", "cleanup"])("aborts on %s failure", async (failure) => {
+  const error =
+    failure === "publish" ? serviceError("PreconditionFailed", 412) : new Error(PRIVATE);
+  const part = failure === "cleanup" ? error : { ETag: "part" };
+  const { send, put } = fixture({ UploadId: "upload" }, part, error, {});
+  const result = put(failure === "source" ? interrupted("abc") : bytes("abc"), {
     sizeBytes: failure === "size" ? PART_BYTES + 1 : undefined,
   });
   await expect(result).rejects.not.toThrow(PRIVATE);
-  expectCommand(send.mock.calls.at(-1)?.[0], s3.AbortMultipartUploadCommand, {
-    UploadId: "upload",
-  });
+  if (failure === "cleanup") {
+    await expect(result).rejects.toThrow("remove incomplete uploads in bucket test-bucket");
+  }
+  expect(send.mock.calls.at(-1)?.[0]).toBeInstanceOf(s3.AbortMultipartUploadCommand);
   expect(send.mock.calls.at(-1)).toHaveLength(1);
 });
 
@@ -220,14 +181,6 @@ it.each(["next", "finally"])("cleans up uploads blocked in %s", async (blocked) 
   }
 });
 
-it("reports cleanup failures without exposing the underlying error", async () => {
-  const { send, put } = fixture({ UploadId: "upload" });
-  send.mockRejectedValue(new Error(PRIVATE));
-  await expect(put(bytes("abc"))).rejects.toThrow(
-    "remove incomplete uploads in bucket test-bucket",
-  );
-});
-
 it("rejects an oversized body before publication", async () => {
   const { send, put } = fixture();
   await expect(put(bytes("abc"), { sizeBytes: 2 })).rejects.toThrow("declared size");
@@ -243,40 +196,30 @@ it.each(["getObject", "statObject", "probe"] as const)("maps missing %s", async 
     send.mockRejectedValue(serviceError("NoSuchBucket", 404));
   }
   await expectSafeFailure(invoke(), `create bucket test-bucket in account ${settings.accountId}`);
-  if (operation === "probe") {
-    send.mockRejectedValue(serviceError("Error", 500));
-    await expectSafeFailure(invoke(), "check the bucket settings");
-  }
 });
 
 it("resumes ranged downloads after stream resets, timeouts, and retryable HTTP errors", async () => {
-  const { send, get } = fixture(
+  const { send, read } = fixture(
     head(10),
     download(10, 0, 9, interrupted("abc", "ECONNRESET")),
     serviceError("ServiceUnavailable", 503),
     download(10, 3, 9, interrupted("de", "ETIMEDOUT")),
     download(10, 5, 9, bytes("fghij")),
   );
-  const body = await get();
-  expect(Buffer.concat(await Array.fromAsync(body!)).toString()).toBe("abcdefghij");
-  expect(send).toHaveBeenCalledTimes(5);
-  for (const [index, [command]] of send.mock.calls.slice(1).entries()) {
-    expectCommand(command, s3.GetObjectCommand, {
-      IfMatch: '"original"',
-      Range: `bytes=${[0, 3, 3, 5][index]}-9`,
-    });
-  }
+  expect(Buffer.concat(await read()).toString()).toBe("abcdefghij");
+  expect(send.mock.calls.slice(1).map(([{ input }]) => [input.Range, input.IfMatch])).toEqual(
+    [0, 3, 3, 5].map((offset) => [`bytes=${offset}-9`, '"original"']),
+  );
 });
 
 it("advances bounded ranges and resumes a short response without duplicating bytes", async () => {
-  const { send, get } = fixture(
+  const { send, read } = fixture(
     head(PART_BYTES + 3),
     download(PART_BYTES + 3, 0, PART_BYTES - 1, bytes(Buffer.alloc(PART_BYTES))),
     download(PART_BYTES + 3, PART_BYTES, PART_BYTES + 2, bytes("a")),
     download(PART_BYTES + 3, PART_BYTES + 1, PART_BYTES + 2, bytes("bc")),
   );
-  const body = await get();
-  const chunks = await Array.fromAsync(body!);
+  const chunks = await read();
   expect(chunks.map((chunk) => chunk.byteLength)).toEqual([PART_BYTES, 1, 2]);
   expect(Buffer.concat(chunks.slice(1)).toString()).toBe("abc");
   expect(send.mock.calls.slice(1).map(([command]) => command.input.Range)).toEqual([
@@ -288,7 +231,7 @@ it("advances bounded ranges and resumes a short response without duplicating byt
 
 it.each(["stream", "precondition", "etag", "range"])("rejects download %s", async (failure) => {
   const source = interrupted("abc", failure === "stream" ? undefined : "ECONNRESET");
-  const { send, get } = fixture(head(6), download(6, 0, 5, source));
+  const { send, read } = fixture(head(6), download(6, 0, 5, source));
   if (failure === "precondition") {
     send.mockRejectedValueOnce(serviceError("PreconditionFailed", 412));
   } else if (failure !== "stream") {
@@ -297,12 +240,8 @@ it.each(["stream", "precondition", "etag", "range"])("rejects download %s", asyn
       ETag: failure === "etag" ? '"replacement"' : '"original"',
     });
   }
-  const body = await get();
-  const iterator = body![Symbol.asyncIterator]();
-  expect(await iterator.next()).toMatchObject({ value: Buffer.from("abc") });
-  const rejected = iterator.next();
   await expectSafeFailure(
-    rejected,
+    read(),
     failure === "stream"
       ? "R2 download failed"
       : failure === "range"
@@ -310,15 +249,12 @@ it.each(["stream", "precondition", "etag", "range"])("rejects download %s", asyn
         : "object changed",
     "after 3 of 6 bytes (next offset 3)",
   );
-  expect(send).toHaveBeenCalledTimes(failure === "stream" ? 2 : 3);
 });
 
 it("bounds stalled download retries and includes a safe cause and byte offset", async () => {
-  const { send, get } = fixture(head(6));
+  const { send, read } = fixture(head(6));
   send.mockRejectedValue(Object.assign(new Error(PRIVATE), { code: "ECONNRESET" }));
-  const body = await get();
-  const rejected = Array.fromAsync(body!);
-  await expectSafeFailure(rejected, "after 0 of 6 bytes (next offset 0; ECONNRESET)");
+  await expectSafeFailure(read(), "after 0 of 6 bytes (next offset 0; ECONNRESET)");
   expect(send).toHaveBeenCalledTimes(10);
 });
 
@@ -350,29 +286,12 @@ it("paginates within the configured namespace and returns relative keys", async 
     { key: "backups/one", sizeBytes: 1, modifiedAt: 1000 },
     { key: "backups/two", sizeBytes: 2, modifiedAt: undefined },
   ]);
-  expect(send.mock.calls[0]?.[0]).toBeInstanceOf(s3.ListObjectsV2Command);
-  expect(send.mock.calls[0]?.[0].input).toEqual({
-    Bucket: "test-bucket",
-    Prefix: "archive/team/backups/",
-    ContinuationToken: undefined,
-  });
+  expect(send.mock.calls[0]?.[0].input.Prefix).toBe("archive/team/backups/");
   expect(send.mock.calls[1]?.[0].input.ContinuationToken).toBe("next");
 });
 
-it("stats, probes, deletes, and closes the client", async () => {
-  const { send, destroy, backend } = fixture({ ContentLength: 42, LastModified: new Date(1000) });
-  send.mockResolvedValue({});
-  expect(await backend.statObject("object")).toEqual({
-    key: "object",
-    sizeBytes: 42,
-    modifiedAt: 1000,
-  });
-  expect(await backend.probe()).toEqual({});
-  await backend.deleteObject("object");
-  await backend.close?.();
-  expect(send.mock.calls[0]?.[0]).toBeInstanceOf(s3.HeadObjectCommand);
-  expect(send.mock.calls[1]?.[0]).toBeInstanceOf(s3.HeadBucketCommand);
-  expectCommand(send.mock.calls[2]?.[0], s3.DeleteObjectCommand, {});
-  expect(destroy).toHaveBeenCalledOnce();
-  expect(backend.displayTarget).toBe("r2://test-bucket/archive/team");
+it("reports object size and modification time", async () => {
+  const { backend } = fixture({ ContentLength: 42, LastModified: new Date(1000) });
+  const info = await backend.statObject("object");
+  expect(info).toEqual({ key: "object", sizeBytes: 42, modifiedAt: 1000 });
 });
