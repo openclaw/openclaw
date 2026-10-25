@@ -2581,11 +2581,12 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: [
           "repairAcpSessionMetaKeysForDoctor",
+          "repairAcpSessionMetaKeysForDoctor.validate",
           "inspectAcpSessionClaimsForDoctor",
           "updateAcpSessionIdentityForDoctor",
         ],
         evidence:
-          "Doctor repair: src/commands/doctor-session-transcripts.ts:318. Plugin Doctor context: src/infra/state-migrations.plugin-doctor-context.ts:403,463, constructed by state-migrations.plugin-doctor.ts:200,325.",
+          "Doctor repair, including the synchronous createVerifiedSqliteSnapshot validation callback: src/commands/doctor-session-transcripts.ts:318. Plugin Doctor context: src/infra/state-migrations.plugin-doctor-context.ts:403,463, constructed by state-migrations.plugin-doctor.ts:200,325.",
       },
     ],
   ],
