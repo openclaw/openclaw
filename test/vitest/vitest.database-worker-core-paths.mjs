@@ -352,6 +352,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/session-updates.exec-preparation.test.ts",
   "src/status/status-plugin-health.runtime.test.ts",
   "src/agents/tool-schema-quarantine.test.ts",
+  "src/agents/sessions/session-manager.anchor-dedup-3state.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-transcript-recovery.test.ts",

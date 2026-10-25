@@ -1,5 +1,5 @@
 import {
-  readActiveTranscriptEntryAnchor,
+  readActiveTranscriptEntryAnchorStatus,
   readTranscriptMutationAtSync,
   validatePreparedAssistantAppendSync,
   type TranscriptEntryAnchor,
@@ -688,18 +688,28 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         "idempotencyKey" in current.message &&
         current.message.idempotencyKey === message.idempotencyKey
       ) {
-        const anchor = this.persistenceTarget
-          ? readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId: current.id })
-          : undefined;
-        if (this.persistenceTarget && !anchor) {
-          throw new Error(`Session transcript anchor was not returned: ${current.id}`);
+        // Detached managers have no durable store to certify against; dedup is purely
+        // in-memory here, so return the existing turn without an anchor.
+        if (!this.persistenceTarget) {
+          return { entryId: current.id, message: current.message, appended: false };
         }
-        return {
+        // One DB snapshot distinguishes a transiently dirty index (#152511, benign
+        // duplicate) from a clean-missing stale turn. Degrade to an idempotent no-op
+        // only when the cached turn IS the canonical current turn; a removed/rewritten/
+        // branched-away turn must reject, never be false-acknowledged.
+        const { anchor, indexDirty, cachedIdentityExists } = readActiveTranscriptEntryAnchorStatus({
+          ...this.persistenceTarget,
           entryId: current.id,
-          message: current.message,
-          ...(anchor ? { anchor } : {}),
-          appended: false,
-        };
+        });
+        if (anchor || (indexDirty && cachedIdentityExists)) {
+          return {
+            entryId: current.id,
+            message: current.message,
+            ...(anchor ? { anchor } : {}),
+            appended: false,
+          };
+        }
+        throw new Error(`Session transcript anchor was not returned: ${current.id}`);
       }
     }
     const entry: SessionMessageEntry = {
