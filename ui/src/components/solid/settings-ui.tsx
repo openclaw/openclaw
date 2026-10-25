@@ -174,6 +174,21 @@ export function SettingsSection(props: {
   );
 }
 
+export function SettingsSummary(props: { items: ReadonlyArray<{ label: string; value: number }> }) {
+  return (
+    <dl class="settings-summary">
+      <For each={props.items}>
+        {(item) => (
+          <div class="settings-group settings-summary__tile">
+            <dt>{item.label}</dt>
+            <dd>{item.value}</dd>
+          </div>
+        )}
+      </For>
+    </dl>
+  );
+}
+
 export function SettingsGroup(props: {
   children?: JSX.Element;
   danger?: boolean;

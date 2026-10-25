@@ -74,6 +74,12 @@ function SettingsPage() {
           subtitle="Shared settings layout and controls."
           actions={<Button label="Save" />}
         />
+        <settings.SettingsSummary
+          items={[
+            { label: "Enabled", value: 3 },
+            { label: "Available", value: 12 },
+          ]}
+        />
         <settings.SettingsSection
           title="General"
           description="A longer section description that wraps on narrow screens."

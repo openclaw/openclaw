@@ -4,25 +4,20 @@ import { expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { WizardStepControls } from "./wizard-step-controls.tsx";
+import { SensitiveInput } from "./sensitive-input.tsx";
 
-type Props = Parameters<typeof WizardStepControls>[0];
+type Props = Parameters<typeof SensitiveInput>[0];
 function fixture(props: (defaults: Props) => Props = (defaults) => defaults) {
-  const defaults: Props = {
-    step: { id: "secret", type: "text", sensitive: true },
-    inputId: "secret",
-    busy: false,
+  const defaults = {
+    id: "secret",
     value: "secret",
-    sensitiveRevealed: false,
-    onValueChange: vi.fn(),
-    onAnswer: vi.fn(),
-    onToggleSensitiveVisibility: vi.fn(),
+    revealed: false,
+    onInput: vi.fn(),
+    onToggle: vi.fn(),
   };
-  const { container } = mountSolid(() => createComponent(WizardStepControls, props(defaults)));
+  const { container } = mountSolid(() => createComponent(SensitiveInput, props(defaults)));
   return {
     ...defaults,
-    onInput: defaults.onValueChange,
-    onToggle: defaults.onToggleSensitiveVisibility,
     input: container.querySelector<HTMLInputElement>("[data-sensitive-value]")!,
     mask: container.querySelector<HTMLElement>(".oc-sensitive-mask[data-sensitive-mask]")!,
     maskText: container.querySelector<HTMLElement>("[data-sensitive-mask-text]")!,
@@ -32,7 +27,7 @@ function fixture(props: (defaults: Props) => Props = (defaults) => defaults) {
 it.each([false, true])("handles visibility and mask edits (revealed=%s)", (revealed) => {
   const { input, mask, maskText, toggle, onInput, onToggle } = fixture((defaults) => ({
     ...defaults,
-    sensitiveRevealed: revealed,
+    revealed,
   }));
   expect(input).toMatchObject({ type: revealed ? "text" : "password", value: "secret" });
   expect(mask.hidden).toBe(revealed);
@@ -70,7 +65,7 @@ it("keeps a controlled concealed value usable after clearing and restoring it", 
       get value() {
         return value();
       },
-      onValueChange: (next) => setValue(typeof next === "string" ? next : ""),
+      onInput: setValue,
     };
   });
   input.value = "";

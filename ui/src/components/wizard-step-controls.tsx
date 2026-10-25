@@ -7,9 +7,8 @@ import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
+import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
-import "./tooltip.ts";
-import { Icon } from "./solid/icon.tsx";
 import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 import "../styles/wizard-step-controls.css";
 
@@ -235,83 +234,6 @@ function Answer(props: WizardStepControlsProps & { label: string; onClick?: () =
   );
 }
 
-const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const maskedValue = (value: string) =>
-  "*".repeat(Array.from(graphemeSegmenter.segment(value)).length);
-
-function SensitiveInput(props: WizardStepControlsProps) {
-  let maskText: HTMLSpanElement | undefined;
-  const value = createMemo(() => (typeof props.value === "string" ? props.value : ""));
-  const visibilityLabel = () =>
-    t(props.sensitiveRevealed === true ? "configForm.hideValue" : "configForm.revealValue");
-  const syncMask = (input: HTMLInputElement) => {
-    if (maskText) {
-      maskText.textContent = props.sensitiveRevealed === true ? "" : maskedValue(input.value);
-      maskText.style.transform = `translateX(${-input.scrollLeft}px)`;
-    }
-  };
-  return (
-    <span
-      class="oc-sensitive-input"
-      data-sensitive-input
-      data-sensitive-mask-ready="true"
-      data-revealed={String(props.sensitiveRevealed === true)}
-    >
-      <span
-        class="oc-sensitive-mask"
-        aria-hidden="true"
-        data-sensitive-mask
-        hidden={props.sensitiveRevealed === true}
-      >
-        <span
-          ref={(element) => {
-            maskText = element;
-          }}
-          data-sensitive-mask-text
-        >
-          {props.sensitiveRevealed === true ? "" : maskedValue(value())}
-        </span>
-      </span>
-      <input
-        id={props.inputId}
-        class="input"
-        name="wizard-text"
-        type={props.sensitiveRevealed === true ? "text" : "password"}
-        autocomplete="off"
-        spellcheck="false"
-        placeholder={props.step.placeholder ?? ""}
-        value={value()}
-        disabled={props.busy}
-        aria-invalid={props.validationErrorId ? "true" : undefined}
-        aria-describedby={props.validationErrorId}
-        aria-label={props.step.message ? undefined : props.step.title || t("chat.questions.answer")}
-        data-sensitive-value
-        onInput={(event) => {
-          syncMask(event.currentTarget);
-          props.onValueChange(event.currentTarget.value);
-        }}
-        onChange={(event) => syncMask(event.currentTarget)}
-        onFocus={(event) => syncMask(event.currentTarget)}
-        onScroll={(event) => syncMask(event.currentTarget)}
-      />
-      <openclaw-tooltip prop:content={visibilityLabel()}>
-        <button
-          type="button"
-          class="oc-sensitive-toggle"
-          aria-label={visibilityLabel()}
-          aria-controls={props.inputId}
-          aria-pressed={props.sensitiveRevealed === true ? "true" : "false"}
-          data-sensitive-icon={props.sensitiveRevealed === true ? "eye-off" : "eye"}
-          disabled={props.busy}
-          onClick={() => props.onToggleSensitiveVisibility?.()}
-        >
-          <Icon name={props.sensitiveRevealed === true ? "eyeOff" : "eye"} />
-        </button>
-      </openclaw-tooltip>
-    </span>
-  );
-}
-
 function TextForm(props: WizardStepControlsProps) {
   // Channel drafts stay in the input until submit; unrelated refreshes must not overwrite them.
   const value = createMemo(() => (typeof props.value === "string" ? props.value : ""));
@@ -362,7 +284,18 @@ function TextForm(props: WizardStepControlsProps) {
           />
         }
       >
-        <SensitiveInput {...props} />
+        <SensitiveInput
+          id={props.inputId}
+          value={value()}
+          revealed={props.sensitiveRevealed === true}
+          placeholder={props.step.placeholder}
+          disabled={props.busy}
+          invalid={Boolean(props.validationErrorId)}
+          describedBy={props.validationErrorId}
+          label={props.step.message ? undefined : props.step.title || t("chat.questions.answer")}
+          onInput={props.onValueChange}
+          onToggle={() => props.onToggleSensitiveVisibility?.()}
+        />
       </Show>
       <Answer
         {...props}

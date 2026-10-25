@@ -5,9 +5,11 @@ import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
 import { getOrCreateWeakOwnerMap } from "../../../../src/shared/weak-owner-map.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
+import {
+  isHiddenAssistantStreamText,
+  shouldHideAssistantChatMessage,
+} from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
@@ -108,7 +110,7 @@ function finalAssistantReplyHasPullRequestLink(
   const isVisible = (text: string | null | undefined) =>
     typeof text === "string" && text.trim().length > 0 && !isHiddenAssistantStreamText(text);
   return (
-    ((isVisible(finalText) && !isAssistantHeartbeatAckForDisplay(payload.message)) ||
+    ((isVisible(finalText) && !shouldHideAssistantChatMessage(payload.message)) ||
       streamTexts.some(isVisible)) &&
     [finalText, ...streamTexts].some((text) => pullRequestLinksIn(text).length > 0)
   );
