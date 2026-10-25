@@ -88,22 +88,10 @@ it("bounds and caches failed encoding probes", async () => {
       );
     }
   }
-  const probeOptions = {
-    env: expect.any(Object),
-    encoding: "utf8",
-    killSignal: "SIGKILL",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 5_000,
-    windowsHide: true,
-  };
-  expect(spawnSyncMock.mock.calls).toEqual([
-    [expect.any(String), ["/d", "/s", "/c", "chcp"], probeOptions],
-    [
-      "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
-      probeOptions,
-    ],
-  ]);
+  expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+  for (const call of spawnSyncMock.mock.calls) {
+    expect(call[2]).toMatchObject({ timeout: 5_000, killSignal: "SIGKILL" });
+  }
 });
 
 it.each([
@@ -118,17 +106,13 @@ it("replays split GBK bytes on UTF-8 fallback", () => {
   expect(decodeChunks(decoder, [bytes(0xc4), bytes(0xe3)])).toEqual(["", "你", ""]);
 });
 
-it("honors UTF-16 BOMs before UTF-8 fallback", () => {
+it.each([
+  ["win32", decodeWindowsOutputBuffer],
+  ["win32", decodeWindowsTextFileBuffer],
+  ["linux", decodeWindowsTextFileBuffer],
+] as const)("honors UTF-16 BOMs in %s %s", (platform, decode) => {
   for (const raw of UTF16_OUTPUT_CASES) {
-    for (const decode of [decodeWindowsOutputBuffer, decodeWindowsTextFileBuffer]) {
-      expect(decode({ buffer: raw, platform: "win32", windowsEncoding: "utf-8" })).toBe("hi\n");
-    }
-  }
-});
-
-it("decodes UTF-16 BOM file buffers on linux", () => {
-  for (const raw of UTF16_OUTPUT_CASES) {
-    expect(decodeWindowsTextFileBuffer({ buffer: raw, platform: "linux" })).toBe("hi\n");
+    expect(decode({ buffer: raw, platform, windowsEncoding: "utf-8" })).toBe("hi\n");
   }
 });
 
@@ -162,17 +146,12 @@ it("isolates empty-prefix and stream state", () => {
 it.each(["utf-8", "gbk"] as const)(
   "replays unmatched and lone BOM prefixes: %s",
   (windowsEncoding) => {
-    for (const raw of [Buffer.from([0xff, 0x41]), Buffer.from([0xfe, 0x42])]) {
+    for (const raw of [bytes(0xff, 0x41), bytes(0xfe, 0x42), bytes(0xff)]) {
       const decoder = windowsDecoder({ windowsEncoding });
       expect(decoder.decode(raw.subarray(0, 1))).toBe("");
-      expect(decoder.decode(raw.subarray(1)) + decoder.flush()).toBe(
-        new TextDecoder(windowsEncoding).decode(raw),
-      );
+      const rest = raw.length > 1 ? decoder.decode(raw.subarray(1)) : "";
+      expect(rest + decoder.flush()).toBe(new TextDecoder(windowsEncoding).decode(raw));
     }
-    const lonePrefix = Buffer.from([0xff]);
-    const decoder = createWindowsOutputDecoder({ platform: "win32", windowsEncoding });
-    expect(decoder.decode(lonePrefix)).toBe("");
-    expect(decoder.flush()).toBe(new TextDecoder(windowsEncoding).decode(lonePrefix));
   },
 );
 

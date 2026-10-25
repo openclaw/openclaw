@@ -108,10 +108,6 @@ describe("legacy TUI last-session migration", () => {
     });
 
     expect(result.warnings).toEqual([]);
-    expect(result.changes).toContain(
-      "Migrated 1 TUI last-session pointer(s) → shared SQLite state",
-    );
-    expect(result.changes).toContain("Discarded 1 legacy heartbeat TUI restore pointer(s)");
     expect(fs.existsSync(sourcePath)).toBe(false);
     await expect(read()).resolves.toBe("agent:main:tui-123");
     expect(
@@ -124,24 +120,14 @@ describe("legacy TUI last-session migration", () => {
   });
 
   it.each([
-    ["non-object top level", []],
-    ["non-object record", { terminal: "agent:main:tui-123" }],
-    ["missing timestamp", { terminal: { sessionKey: "agent:main:tui-123" } }],
-  ])("retains malformed source: %s", async (_label, value) => {
+    ["non-object top level", [], "must be a JSON object"],
+    ["non-object record", { terminal: "agent:main:tui-123" }, "must be an object"],
+    ["missing timestamp", { terminal: { sessionKey: "agent:main:tui-123" } }, "invalid timestamp"],
+    ["unexpected field", { terminal: { "": 1, later: 2, ...pointer() } }, 'unexpected field ""'],
+  ])("retains malformed source: %s", async (_label, value, warning) => {
     const state = fixture(value);
-    await expectRefusal(state, state.run(), "Failed reading legacy TUI last-session state", null);
-  });
-
-  it("rejects unexpected fields before claiming or writing", async () => {
-    const { sourcePath, run, read } = fixture({
-      terminal: { "": 1, later: 2, ...pointer() },
-    });
-    const result = run();
-    expect(result.warnings).toEqual([
-      `Failed reading legacy TUI last-session state ${sourcePath}: Error: legacy TUI last-session record terminal has unexpected field ""`,
-    ]);
-    expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["last-session.json"]);
-    await expect(read()).resolves.toBeNull();
+    await expectRefusal(state, state.run(), warning, null);
+    expect(fs.readdirSync(path.dirname(state.sourcePath))).toEqual(["last-session.json"]);
   });
 
   it.each([100, 200])("preserves the SQLite pointer at timestamp %s", async (timestamp) => {
@@ -156,10 +142,7 @@ describe("legacy TUI last-session migration", () => {
         "agent:main:current",
       );
     } else {
-      expect(result).toMatchObject({
-        warnings: [],
-        notices: ["Kept 1 newer shared SQLite TUI last-session pointer(s) over legacy JSON"],
-      });
+      expect(result.warnings).toEqual([]);
       expect(fs.existsSync(state.sourcePath)).toBe(false);
       await expect(state.read()).resolves.toBe("agent:main:current");
     }

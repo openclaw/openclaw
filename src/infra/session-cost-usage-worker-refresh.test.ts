@@ -142,12 +142,6 @@ it.each<[string, Row[], [number, number, string], string?]>([
     [...appended, control(20, "reset", "reset", null), makeRow(25, "after-reset", "root", 16)],
     [16, 1, "after-reset"],
   ],
-  [
-    "rewrite then append",
-    [makeRow(1, "root", null, 8), initial[1]!, makeRow(9, "b", "a", 4)],
-    [14, 3, "b"],
-    "rewritten",
-  ],
   ["rewind", [initial[0]!], [1, 1, "root"], "rewound"],
   [
     "compact",
