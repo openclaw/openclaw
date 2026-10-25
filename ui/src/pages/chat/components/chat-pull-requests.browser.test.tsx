@@ -7,7 +7,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
-import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
+import { publication, pullRequest, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import { ChatPullRequests } from "./chat-pull-requests.tsx";
 import baseStyles from "../../../styles/base.css?inline";
 import desktopDetailsStyles from "../../../styles/chat/details-desktop.css?inline";
@@ -16,6 +16,14 @@ import layoutStyles from "../../../styles/chat/layout.css?inline";
 import componentsStyles from "../../../styles/components.css?inline";
 
 const container = document.createElement("div");
+const query = <T extends HTMLElement = HTMLElement>(
+  selector: string,
+  root: ParentNode = container,
+) => root.querySelector<T>(selector)!;
+const rect = (element: Element) => element.getBoundingClientRect();
+const styles = baseStyles + componentsStyles + layoutStyles + detailsStyles + desktopDetailsStyles;
+const visible = (element: HTMLElement) =>
+  expect.element(page.elementLocator(element)).toBeVisible();
 let mounted: ReturnType<typeof mountSolid> | undefined;
 let originalViewport: { width: number; height: number };
 beforeEach(() => {
@@ -62,16 +70,7 @@ it.each(["props", "owner", "parked"])(
             >
               <ChatPullRequests
                 pullRequests={[
-                  {
-                    number: 42,
-                    owner: "example",
-                    repo: "release-planning",
-                    branch: "review",
-                    title: "Review release checklist",
-                    url: "https://github.com/example/release-planning/pull/42",
-                    state: "open",
-                    checks: { state: "passing", passed: 4, failed: 0, skipped: 0, running: 0 },
-                  },
+                  pullRequest({ additions: undefined, deletions: undefined, checksUrl: undefined }),
                 ]}
                 status="ready"
                 presented={mode === "props" ? presented() : binding}
@@ -98,12 +97,10 @@ it.each(["props", "owner", "parked"])(
       flush();
     };
     draw(true);
-    await waitForSolid(() => expect(container.querySelector(".chat-pr__checks")).not.toBeNull());
-    const disclosure = container.querySelector<HTMLDetailsElement>(".chat-pr__checks")!;
-    const summary = disclosure.querySelector("summary")!;
-    const menu = page.elementLocator(
-      container.querySelector<HTMLElement>(".chat-pr__checks-menu")!,
-    );
+    await waitForSolid(() => expect(query(".chat-pr__checks")).not.toBeNull());
+    const disclosure = query<HTMLDetailsElement>(".chat-pr__checks");
+    const summary = query("summary", disclosure);
+    const menu = page.elementLocator(query(".chat-pr__checks-menu"));
     await page.elementLocator(summary).click();
     await expect.element(menu).toBeVisible();
 
@@ -113,7 +110,7 @@ it.each(["props", "owner", "parked"])(
 
     draw(true);
     await expect.element(menu).toBeVisible();
-    expect(container.querySelector(".chat-pr__checks")).toBe(disclosure);
+    expect(query(".chat-pr__checks")).toBe(disclosure);
     expect(disclosure.open).toBe(true);
     summary.focus();
     await userEvent.keyboard(" ");
@@ -159,7 +156,7 @@ it.each([
     mounted = mountSolid(
       () => (
         <>
-          <style>{`${baseStyles}${componentsStyles}${layoutStyles}${detailsStyles}${desktopDetailsStyles}`}</style>
+          <style>{styles}</style>
           <section
             class="chat-details"
             data-desktop
@@ -214,47 +211,35 @@ it.each([
       { container },
     );
     await waitForSolid(() =>
-      expect(
-        container.querySelector(".chat-environment__branch .chat-pr__actions-trigger"),
-      ).not.toBeNull(),
+      expect(query(".chat-environment__branch .chat-pr__actions-trigger")).not.toBeNull(),
     );
-    const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
-    const branchLabel = row.querySelector<HTMLElement>(".chat-environment__branch-name")!;
-    const diff = row.querySelector<HTMLElement>(".chat-pr__diff")!;
-    const trigger = row.querySelector<HTMLButtonElement>(".chat-pr__actions-trigger")!;
+    const row = query(".chat-environment__branch");
+    const branchLabel = query(".chat-environment__branch-name", row);
+    const diff = query(".chat-pr__diff", row);
+    const trigger = query<HTMLButtonElement>(".chat-pr__actions-trigger", row);
     const publish = page.getByRole("button", { name: "Create PR", exact: true });
     await expect.element(publish).toBeVisible();
-    const publishButton = row.querySelector<HTMLButtonElement>("button.chat-pr__create")!;
-    await expect.element(page.elementLocator(row)).toBeVisible();
-    await expect.element(page.elementLocator(trigger)).toBeVisible();
-    expect(row.querySelector(".chat-environment__row")!.getBoundingClientRect().height).toBe(32);
-    expect(publishButton.getBoundingClientRect().height).toBe(26);
-    expect(trigger.getBoundingClientRect().width).toBeGreaterThanOrEqual(26);
-    expect(row.getBoundingClientRect().left).toBeGreaterThanOrEqual(0);
-    expect(row.getBoundingClientRect().right).toBeLessThanOrEqual(viewport);
+    const publishButton = query<HTMLButtonElement>("button.chat-pr__create", row);
+    await visible(row);
+    await visible(trigger);
+    expect(rect(query(".chat-environment__row", row)).height).toBe(32);
+    expect(rect(publishButton).height).toBe(26);
+    expect(rect(trigger).width).toBeGreaterThanOrEqual(26);
+    expect(rect(row).left).toBeGreaterThanOrEqual(0);
+    expect(rect(row).right).toBeLessThanOrEqual(viewport);
     expect(branchLabel.textContent).toBe(branch.branch);
     expect(row.querySelector(".chat-pr__repo")).toBeNull();
-    expect(
-      Math.abs(branchLabel.getBoundingClientRect().left - diff.getBoundingClientRect().left),
-    ).toBeLessThanOrEqual(1);
-    expect(diff.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      branchLabel.getBoundingClientRect().bottom,
-    );
-    expect(
-      diff.getBoundingClientRect().top - branchLabel.getBoundingClientRect().bottom,
-    ).toBeLessThanOrEqual(12);
-    expect(diff.getBoundingClientRect().right).toBeLessThanOrEqual(
-      publishButton.getBoundingClientRect().left,
-    );
-    expect(publishButton.getBoundingClientRect().right).toBeLessThanOrEqual(
-      trigger.getBoundingClientRect().left,
-    );
+    expect(Math.abs(rect(branchLabel).left - rect(diff).left)).toBeLessThanOrEqual(1);
+    expect(rect(diff).top).toBeGreaterThanOrEqual(rect(branchLabel).bottom);
+    expect(rect(diff).top - rect(branchLabel).bottom).toBeLessThanOrEqual(12);
+    expect(rect(diff).right).toBeLessThanOrEqual(rect(publishButton).left);
+    expect(rect(publishButton).right).toBeLessThanOrEqual(rect(trigger).left);
     expect(diff.textContent).toContain("+2,819");
     expect(diff.textContent).toContain("−205");
     expect(getComputedStyle(diff).fontWeight).toBe("500");
     expect(getComputedStyle(diff).fontVariantNumeric).toBe("tabular-nums");
-    expect(branchLabel.getBoundingClientRect().width).toBeGreaterThan(40);
-    expect(branchLabel.getBoundingClientRect().height).toBeLessThanOrEqual(
+    expect(rect(branchLabel).width).toBeGreaterThan(40);
+    expect(rect(branchLabel).height).toBeLessThanOrEqual(
       Number.parseFloat(getComputedStyle(branchLabel).lineHeight) + 1,
     );
     expect(getComputedStyle(branchLabel).textOverflow).toBe("clip");
@@ -276,12 +261,8 @@ it.each([
     await expect.element(dismiss).toBeVisible();
     const personalChoice = page.getByRole("menuitemradio", { name: "@alice-tools", exact: true });
     await expect.element(personalChoice).toBeVisible();
-    const personalElement = row.querySelector<HTMLElement>(
-      '[role="menuitemradio"][value="personal"]',
-    )!;
-    expect(personalElement.closest('[role="menu"]')).toBe(
-      row.querySelector(".chat-pr-branch-menu"),
-    );
+    const personalElement = query('[role="menuitemradio"][value="personal"]', row);
+    expect(personalElement.closest('[role="menu"]')).toBe(query(".chat-pr-branch-menu", row));
     await personalChoice.click();
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("personal");
     await expect.element(menu).not.toBeVisible();
@@ -316,14 +297,13 @@ it.each([
     document.body.append(container);
     const onDismiss = vi.fn();
     const onOpenSessionDiff = vi.fn();
-    const pullRequest = {
+    const request = pullRequest({
       number: 173824,
       owner: "openclaw",
       repo,
       branch: "fix/sidebar-cards",
       title: "fix: keep long pull request titles readable in the session Details sidebar",
       url: "https://github.com/openclaw/" + repo + "/pull/173824",
-      state: "open" as const,
       additions: 383,
       deletions: 441,
       checks: {
@@ -333,7 +313,8 @@ it.each([
         skipped: 0,
         running: checks === "pending" ? 2 : 0,
       },
-    };
+      checksUrl: undefined,
+    });
     mounted = mountSolid(
       () => (
         <>
@@ -346,11 +327,11 @@ it.each([
                 selectedSession: undefined,
                 currentAgentId: "main",
                 messages: [],
-                pullRequests: [pullRequest, { ...pullRequest, number: 173825, state }],
+                pullRequests: [request, { ...request, number: 173825, state }],
                 pullRequestsBranch: {
-                  owner: pullRequest.owner,
+                  owner: request.owner,
                   repo,
-                  branch: pullRequest.branch,
+                  branch: request.branch,
                   additions: 12,
                   deletions: 3,
                 },
@@ -366,53 +347,39 @@ it.each([
     const host = container.querySelector("openclaw-chat-details-session")!;
     await host.updateComplete;
     await waitForSolid(() => expect(container.querySelector("a.chat-pr__link")).not.toBeNull());
-    const group = container.querySelector<HTMLDetailsElement>(
-      '[data-details-group="pull-requests"]',
-    )!;
-    const row = group.querySelector<HTMLElement>(".chat-pr")!;
-    const title = row.querySelector<HTMLElement>(".chat-pr__link")!;
-    const titleText = row.querySelector<HTMLElement>(".chat-pr__title")!;
-    await expect.element(page.elementLocator(title)).toBeVisible();
-    expect(title.getAttribute("href")).toBe(pullRequest.url);
+    const group = query<HTMLDetailsElement>('[data-details-group="pull-requests"]');
+    const row = query(".chat-pr", group);
+    const title = query(".chat-pr__link", row);
+    const titleText = query(".chat-pr__title", row);
+    await visible(title);
+    expect(title.getAttribute("href")).toBe(request.url);
     expect(title.getAttribute("aria-label")).toContain("openclaw/" + repo + "#173824");
-    expect(titleText.textContent).toBe(pullRequest.title);
+    expect(titleText.textContent).toBe(request.title);
     const expectTitleFade = (overflow: boolean) =>
       waitForSolid(() => {
         expect(titleText.scrollWidth > titleText.clientWidth + 1).toBe(overflow);
         expect(getComputedStyle(titleText).maskImage !== "none").toBe(overflow);
       });
     await expectTitleFade(true);
-    const details = container.querySelector<HTMLElement>(".chat-details")!;
+    const details = query(".chat-details");
     details.style.width = "1200px";
     await expectTitleFade(false);
     details.style.width = `${width}px`;
     await expectTitleFade(true);
     expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
-    expect(container.querySelector<HTMLElement>(".chat-details")!.scrollWidth).toBeLessThanOrEqual(
-      width,
-    );
-    expect(
-      row
-        .querySelector(".chat-pr__badge")
-        ?.classList.contains(
-          "chat-pr__badge--" +
-            (checks === "failing" ? "failed" : checks === "pending" ? "running" : "passed"),
-        ),
-    ).toBe(true);
+    expect(details.scrollWidth).toBeLessThanOrEqual(width);
+    const badge = checks === "failing" ? "failed" : checks === "pending" ? "running" : "passed";
+    expect(query(".chat-pr__badge", row).classList.contains(`chat-pr__badge--${badge}`)).toBe(true);
     expect(group.querySelectorAll(".chat-pr")).toHaveLength(2);
     expect(group.querySelectorAll(".chat-pr")[1]?.getAttribute("data-state")).toBe(state);
     // PR totals stay descriptive; the Environment diff opens this session’s changes.
     expect(row.querySelector("button.chat-pr__diff")).toBeNull();
-    const changes = container.querySelector<HTMLButtonElement>(
-      ".chat-environment__branch button.chat-pr__diff",
-    )!;
-    await expect.element(page.elementLocator(changes)).toBeVisible();
+    const changes = query<HTMLButtonElement>(".chat-environment__branch button.chat-pr__diff");
+    await visible(changes);
     expect(changes.textContent).toContain("+12");
     expect(changes.textContent).toContain("−3");
     expect(changes.closest("summary")).toBeNull();
-    expect(changes.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-      row.getBoundingClientRect().top,
-    );
+    expect(rect(changes).bottom).toBeLessThanOrEqual(rect(row).top);
     await page.elementLocator(changes).click();
     expect(onOpenSessionDiff).toHaveBeenCalledOnce();
     expect(group.open).toBe(true);
@@ -431,11 +398,9 @@ it.each([
       exact: true,
     });
     await expect.element(dismiss).toBeVisible();
-    const facts = row.querySelector<HTMLElement>(".chat-pr-menu__facts")!;
-    expect(facts.querySelector(".chat-pr-menu__repository")?.textContent).toContain(
-      "openclaw/" + repo,
-    );
-    expect(facts.querySelector(".chat-pr-menu__repository")?.textContent).toContain("#173824");
+    const facts = query(".chat-pr-menu__facts", row);
+    expect(query(".chat-pr-menu__repository", facts).textContent).toContain("openclaw/" + repo);
+    expect(query(".chat-pr-menu__repository", facts).textContent).toContain("#173824");
     expect(facts.textContent).toContain("+383");
     expect(facts.textContent).toContain("−441");
     expect(facts.textContent).toContain("Open");
@@ -460,6 +425,6 @@ it.each([
     expect(menu.matches(":popover-open")).toBe(false);
     await page.elementLocator(trigger).click();
     await dismiss.click();
-    expect(onDismiss).toHaveBeenCalledExactlyOnceWith(pullRequest);
+    expect(onDismiss).toHaveBeenCalledExactlyOnceWith(request);
   },
 );

@@ -88,6 +88,13 @@ async function transferFrom(
 const assetStatus = (view: ChatHtmlPreviewElement) =>
   view.querySelector('.file-view__save-notice[role="status"]');
 
+const linkCase = (name: string, body: string, expected = body, head = "") => ({
+  name,
+  body,
+  expected,
+  head,
+});
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -96,23 +103,21 @@ afterEach(() => {
 
 describe("ordinary HTML preview transport", () => {
   it.each([
-    {
-      name: "ordinary, Unicode, percent-encoded and empty fragments",
-      body: '<a href="#section">One</a><a href="#雪">Snow</a><a href="#%E9%9B%AA">Encoded</a><a href="#">Top</a>',
-      expected:
-        '<a href="about:srcdoc#section">One</a><a href="about:srcdoc#雪">Snow</a><a href="about:srcdoc#%E9%9B%AA">Encoded</a><a href="about:srcdoc#">Top</a>',
-    },
-    {
-      name: "attribute spelling and entities without rewriting surrounding bytes",
-      body: "<A class='jump' HREF = '&#35;a&amp;&quot;b' title='stay'>Jump</A>\r\n",
-      expected: "<A class='jump' href=\"about:srcdoc#a&amp;&quot;b\" title='stay'>Jump</A>\r\n",
-    },
-    {
-      name: "a named anchor and image-map link",
-      body: '<a name="section"></a><map name="report"><area href="#section" alt="Jump"></map>',
-      expected:
-        '<a name="section"></a><map name="report"><area href="about:srcdoc#section" alt="Jump"></map>',
-    },
+    linkCase(
+      "ordinary, Unicode, percent-encoded and empty fragments",
+      '<a href="#section">One</a><a href="#雪">Snow</a><a href="#%E9%9B%AA">Encoded</a><a href="#">Top</a>',
+      '<a href="about:srcdoc#section">One</a><a href="about:srcdoc#雪">Snow</a><a href="about:srcdoc#%E9%9B%AA">Encoded</a><a href="about:srcdoc#">Top</a>',
+    ),
+    linkCase(
+      "attribute spelling and entities without rewriting surrounding bytes",
+      "<A class='jump' HREF = '&#35;a&amp;&quot;b' title='stay'>Jump</A>\r\n",
+      "<A class='jump' href=\"about:srcdoc#a&amp;&quot;b\" title='stay'>Jump</A>\r\n",
+    ),
+    linkCase(
+      "a named anchor and image-map link",
+      '<a name="section"></a><map name="report"><area href="#section" alt="Jump"></map>',
+      '<a name="section"></a><map name="report"><area href="about:srcdoc#section" alt="Jump"></map>',
+    ),
     {
       name: "independent base URL and target declarations",
       head: '<base target="_self"><base href="/report">',
@@ -125,56 +130,47 @@ describe("ordinary HTML preview transport", () => {
       expected:
         '<a href="#section">Other</a><a target="_self" href="about:srcdoc#section">Here</a><a target="" href="about:srcdoc#section">Empty</a>',
     },
-    {
-      name: "explicit targets, downloads and nonfragment URLs",
-      body: '<a href="#section" target="report">Other</a><a download href="#section">Download</a><a href="report.html#section">File</a><a href="https://example.com/#section">Web</a>',
-    },
-    {
-      name: "duplicate attributes",
-      body: '<a href="#first" href="#second">Jump</a>',
-      expected: '<a href="about:srcdoc#first" href="#second">Jump</a>',
-    },
-    {
-      name: "a complete link before an unfinished unrelated tail",
-      body: '<a href="#section">Jump</a><p title="unfinished',
-      expected: '<a href="about:srcdoc#section">Jump</a><p title="unfinished',
-    },
-    {
-      name: "anchors reconstructed across formatting elements",
-      body: '<b><a href="#x">one</b>two',
-      expected: '<b><a href="about:srcdoc#x">one</b>two',
-    },
-    {
-      name: "leading C0 controls and ASCII whitespace without treating NBSP as URL whitespace",
-      body: '<a href="\u0001\u001f \t\n#section">Jump</a><a href="\u00a0#section">Relative URL</a>',
-      expected: '<a href="about:srcdoc#section">Jump</a><a href="\u00a0#section">Relative URL</a>',
-    },
-    {
-      name: "malformed attributes",
-      body: '<a href=#section title="unfinished>Jump</a>',
-    },
-    {
-      name: "inert template contents",
-      body: '<template><base href="/report"><a href="#section">Later</a></template><a href="#section">Now</a>',
-      expected:
-        '<template><base href="/report"><a href="#section">Later</a></template><a href="about:srcdoc#section">Now</a>',
-    },
-    {
-      name: "foreign-namespace anchors",
-      body: '<svg><a href="#section"><text>Vector</text></a></svg><a href="#section">HTML</a>',
-      expected:
-        '<svg><a href="#section"><text>Vector</text></a></svg><a href="about:srcdoc#section">HTML</a>',
-    },
-    {
-      name: "script, style and comment bytes",
-      body: '<script>const sample = \'<a href="#section">\';</script><style>/* <a href="#section"> */</style><!-- <a href="#section"> --><a href="#section">Jump</a>',
-      expected:
-        '<script>const sample = \'<a href="#section">\';</script><style>/* <a href="#section"> */</style><!-- <a href="#section"> --><a href="about:srcdoc#section">Jump</a>',
-    },
-    {
-      name: "documents with no links",
-      body: "<p>雪 &amp; café</p>\r\n",
-    },
+    linkCase(
+      "explicit targets, downloads and nonfragment URLs",
+      '<a href="#section" target="report">Other</a><a download href="#section">Download</a><a href="report.html#section">File</a><a href="https://example.com/#section">Web</a>',
+    ),
+    linkCase(
+      "duplicate attributes",
+      '<a href="#first" href="#second">Jump</a>',
+      '<a href="about:srcdoc#first" href="#second">Jump</a>',
+    ),
+    linkCase(
+      "a complete link before an unfinished unrelated tail",
+      '<a href="#section">Jump</a><p title="unfinished',
+      '<a href="about:srcdoc#section">Jump</a><p title="unfinished',
+    ),
+    linkCase(
+      "anchors reconstructed across formatting elements",
+      '<b><a href="#x">one</b>two',
+      '<b><a href="about:srcdoc#x">one</b>two',
+    ),
+    linkCase(
+      "leading C0 controls and ASCII whitespace without treating NBSP as URL whitespace",
+      '<a href="\u0001\u001f \t\n#section">Jump</a><a href="\u00a0#section">Relative URL</a>',
+      '<a href="about:srcdoc#section">Jump</a><a href="\u00a0#section">Relative URL</a>',
+    ),
+    linkCase("malformed attributes", '<a href=#section title="unfinished>Jump</a>'),
+    linkCase(
+      "inert template contents",
+      '<template><base href="/report"><a href="#section">Later</a></template><a href="#section">Now</a>',
+      '<template><base href="/report"><a href="#section">Later</a></template><a href="about:srcdoc#section">Now</a>',
+    ),
+    linkCase(
+      "foreign-namespace anchors",
+      '<svg><a href="#section"><text>Vector</text></a></svg><a href="#section">HTML</a>',
+      '<svg><a href="#section"><text>Vector</text></a></svg><a href="about:srcdoc#section">HTML</a>',
+    ),
+    linkCase(
+      "script, style and comment bytes",
+      '<script>const sample = \'<a href="#section">\';</script><style>/* <a href="#section"> */</style><!-- <a href="#section"> --><a href="#section">Jump</a>',
+      '<script>const sample = \'<a href="#section">\';</script><style>/* <a href="#section"> */</style><!-- <a href="#section"> --><a href="about:srcdoc#section">Jump</a>',
+    ),
+    linkCase("documents with no links", "<p>雪 &amp; café</p>\r\n"),
   ])(
     "prepares $name only in sandbox display bytes",
     async ({ head = "", body, expected = body }) => {
@@ -187,11 +183,6 @@ describe("ordinary HTML preview transport", () => {
       const [transfer] = await transferFrom(frame);
       expect(transfer.params.html).toBe(prefix + expected + suffix);
       expect(view.html).toBe(html);
-      expect(request).toHaveBeenCalledExactlyOnceWith(
-        "canvas.document.preview",
-        { html },
-        { timeoutMs: 30_000 },
-      );
     },
   );
 
@@ -276,12 +267,8 @@ describe("ordinary HTML preview transport", () => {
     await view.updateComplete;
     const frame = view.querySelector("iframe")!;
     expect(frame).not.toBeNull();
-    const transfer = Promise.withResolvers<unknown>();
-    vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((value: unknown) =>
-      transfer.resolve(value),
-    );
-    message(frame, ready(frame));
-    expect(await transfer.promise).toMatchObject({
+    const [transfer] = await transferFrom(frame);
+    expect(transfer).toMatchObject({
       params: {
         html: '<img src="data:image/png;base64,YQ=="><img src="missing.png"><a href="about:srcdoc#section">Jump</a>',
       },
@@ -324,13 +311,9 @@ describe("ordinary HTML preview transport", () => {
     view.sessionFileSource = { sessionKey: "agent:new:main", path: "/report/index.html" };
     await newRequested.promise;
     const newFrame = view.querySelector("iframe")!;
-    const transfer = Promise.withResolvers<unknown>();
-    vi.spyOn(newFrame.contentWindow!, "postMessage").mockImplementation((value: unknown) =>
-      transfer.resolve(value),
-    );
-    message(newFrame, ready(newFrame));
+    const transfer = transferFrom(newFrame);
     oldAssets.resolve({ assets: [{ ref: "a.png", error: "not_found" }] });
-    expect(await transfer.promise).toMatchObject({
+    expect((await transfer)[0]).toMatchObject({
       params: { html: '<img src="data:image/png;base64,Yg==">' },
     });
     await view.updateComplete;

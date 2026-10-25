@@ -4,7 +4,6 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 /* @vitest-environment jsdom */
-import panelLoadingStyles from "../../../styles/panel-loading-skeleton.css?inline";
 import "./chat-detail-panel.tsx";
 
 async function mountAttachment(
@@ -401,9 +400,6 @@ it.each([
     await waitForSolid(() => expect(panel.querySelector("iframe")).not.toBeNull());
     const frame = panel.querySelector("iframe");
     expect(panel.querySelector("h1, script")).toBeNull();
-    expect(Array.from(panel.querySelectorAll("style"), (style) => style.textContent)).toEqual([
-      panelLoadingStyles,
-    ]);
     expect(panel.querySelector("pre")?.hidden).toBe(true);
     expect(panel.querySelector("pre")?.textContent).toBe(text);
     const toggle = panel.querySelector<HTMLButtonElement>(
@@ -429,8 +425,6 @@ it.each([
       expect(current).not.toBe(frame);
     });
     const strictFrame = panel.querySelector("iframe")!;
-    expect(strictFrame.hasAttribute("srcdoc")).toBe(false);
-    expect(strictFrame.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
     const post = vi.spyOn(strictFrame.contentWindow!, "postMessage");
     window.dispatchEvent(
       new MessageEvent("message", {

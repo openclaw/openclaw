@@ -6,10 +6,7 @@ import type { GatewaySessionRow, SessionMembersListEvidenceResult } from "../../
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createMountedPanes, refreshPane } from "../chat-pane-mounted.test-support.ts";
-import {
-  createChatSessionSharingMobileAdapter,
-  type ChatSessionSharingMobileAdapter,
-} from "./chat-session-sharing-mobile-adapter.tsx";
+import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.tsx";
 import {
   ChatSessionAccessMobile,
   ChatSessionSharingMobile,
@@ -49,29 +46,43 @@ function prepared(overrides: Partial<PreparedChatSessionSharing> = {}): Prepared
   };
 }
 
-function accessFixture(initial: PreparedChatSessionSharing) {
+function sharingFixture(initial: PreparedChatSessionSharing, access = false) {
   const [source, setSource] = createSignal(initial);
-  let target: object | undefined = {};
+  let target: object | undefined = access ? {} : undefined;
   const applied = vi.fn();
+  let adapter!: ReturnType<typeof createChatSessionSharingMobileAdapter>;
   const view = mountSolid(() => {
-    const adapter = createChatSessionSharingMobileAdapter(source, {
+    adapter = createChatSessionSharingMobileAdapter(source, {
       onOpenSharing: vi.fn(),
       onOpenAccess: vi.fn(),
       onApplied: applied,
       accessTarget: () => target,
     });
-    return <ChatSessionAccessMobile {...adapter.access} />;
+    return access ? (
+      <ChatSessionAccessMobile {...adapter.access} />
+    ) : (
+      <ChatSessionSharingMobile {...adapter.sharing} />
+    );
   });
   return {
     ...view,
     applied,
     source,
     setSource,
+    get adapter() {
+      return adapter;
+    },
+    button: (name: RegExp) => view.getByRole("button", { name }),
+    expectDisabled: (name: RegExp, disabled: boolean) =>
+      waitForSolid(() =>
+        expect(view.getByRole("button", { name }).hasAttribute("disabled")).toBe(disabled),
+      ),
     replaceTarget: () => {
       target = {};
     },
   };
 }
+const accessFixture = (initial: PreparedChatSessionSharing) => sharingFixture(initial, true);
 
 it("keeps sharing busy through refresh and retires it for a same-key successor", async () => {
   const initial = prepared();
@@ -130,13 +141,8 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
   const source = pane.prepareSessionSharing(previous);
   const operation = vi.spyOn(source, "onVisibilityChange");
   const view = accessFixture(source);
-  view.getByRole("button", { name: /Shared/ }).click();
-  await waitForSolid(() =>
-    expect(
-      view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled"),
-      "sharing is busy after the visibility change starts",
-    ).toBe(true),
-  );
+  view.button(/Shared/).click();
+  await view.expectDisabled(/Shared/, true);
   // A delayed header render may check hydration while the write is pending.
   pane.syncSelectedSessionSharing(previous);
   // Hold every post-write read, including any competing header hydration.
@@ -144,10 +150,7 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
   response.resolve({});
   await refreshStarted.promise;
   flush();
-  expect(
-    view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled"),
-    "sharing stays busy while its refresh is pending",
-  ).toBe(true);
+  expect(view.button(/Shared/).hasAttribute("disabled")).toBe(true);
   expect(view.applied).not.toHaveBeenCalled();
   holdRefresh = false;
   rows[0] = replacement;
@@ -158,23 +161,16 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
     reason: "update",
     session: replacement,
   });
-  await waitForSolid(() =>
-    expect(
-      source.operationSignal?.aborted,
-      "the successor retires the original sharing scope",
-    ).toBe(true),
-  );
+  await waitForSolid(() => expect(source.operationSignal?.aborted).toBe(true));
   pane.syncSelectedSessionSharing(replacement);
   await waitForSolid(() =>
     expect(pane.prepareSessionSharing(replacement)?.state?.loading).toBe(false),
   );
   view.setSource(pane.prepareSessionSharing(replacement));
   await waitForSolid(() =>
-    expect(view.getByRole("button", { name: /Read-only/ }).getAttribute("aria-pressed")).toBe(
-      "true",
-    ),
+    expect(view.button(/Read-only/).getAttribute("aria-pressed")).toBe("true"),
   );
-  expect(view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled")).toBe(false);
+  expect(view.button(/Shared/).hasAttribute("disabled")).toBe(false);
   refresh.resolve(initial.state!.result!);
   await operation.mock.results[0]!.value;
   flush();
@@ -191,17 +187,13 @@ it("returns from Session access only after a confirmed native success", async ()
   ] satisfies ChatSessionSharingOutcome[]) {
     const pending = createDeferred<ChatSessionSharingOutcome>();
     change.mockReturnValueOnce(pending.promise);
-    view.getByRole("button", { name: /Draft/ }).click();
+    view.button(/Draft/).click();
     expect(change).toHaveBeenLastCalledWith("draft");
     expect(view.applied).not.toHaveBeenCalled();
-    await waitForSolid(() => {
-      expect(view.getByRole("button", { name: /Draft/ }).hasAttribute("disabled")).toBe(true);
-    });
+    await view.expectDisabled(/Draft/, true);
     pending.resolve(outcome);
     await pending.promise;
-    await waitForSolid(() => {
-      expect(view.getByRole("button", { name: /Draft/ }).hasAttribute("disabled")).toBe(false);
-    });
+    await view.expectDisabled(/Draft/, false);
     if (outcome.status === "success") {
       expect(view.applied).toHaveBeenCalledOnce();
     } else {
@@ -217,12 +209,12 @@ it("retains access controls through a rejected command and a held retry", async 
     .mockRejectedValueOnce(new Error("Visibility command failed"))
     .mockReturnValueOnce(retry.promise);
   const view = accessFixture(prepared({ onVisibilityChange: change }));
-  const draft = view.getByRole("button", { name: /Draft/ });
+  const draft = view.button(/Draft/);
   draft.click();
   await waitForSolid(() =>
     expect(view.queryByRole("alert")?.textContent).toContain("Visibility command failed"),
   );
-  expect(view.getByRole("button", { name: /Draft/ })).toBe(draft);
+  expect(view.button(/Draft/)).toBe(draft);
   expect(view.applied).not.toHaveBeenCalled();
   draft.click();
   await waitForSolid(() => {
@@ -231,7 +223,7 @@ it("retains access controls through a rejected command and a held retry", async 
   });
   retry.resolve({ status: "success" });
   await waitForSolid(() => expect(view.applied).toHaveBeenCalledOnce());
-  expect(view.getByRole("button", { name: /Draft/ })).toBe(draft);
+  expect(view.button(/Draft/)).toBe(draft);
 });
 
 it.each(["destination", "session"] as const)(
@@ -245,10 +237,8 @@ it.each(["destination", "session"] as const)(
     const view = accessFixture(
       prepared({ onVisibilityChange: change, operationSignal: lifetime.signal }),
     );
-    view.getByRole("button", { name: /Draft/ }).click();
-    await waitForSolid(() => {
-      expect(view.getByRole("button", { name: /Draft/ }).hasAttribute("disabled")).toBe(true);
-    });
+    view.button(/Draft/).click();
+    await view.expectDisabled(/Draft/, true);
     if (replacement === "destination") {
       view.replaceTarget();
     } else {
@@ -260,10 +250,8 @@ it.each(["destination", "session"] as const)(
         session: { ...view.source().session, sessionId: "replacement", visibility: "read-only" },
       });
       await waitForSolid(() => {
-        expect(view.getByRole("button", { name: /Read-only/ }).getAttribute("aria-pressed")).toBe(
-          "true",
-        );
-        expect(view.getByRole("button", { name: /Draft/ }).hasAttribute("disabled")).toBe(false);
+        expect(view.button(/Read-only/).getAttribute("aria-pressed")).toBe("true");
+        expect(view.button(/Draft/).hasAttribute("disabled")).toBe(false);
       });
     }
     flush();
@@ -283,16 +271,7 @@ it.each(["destination", "session"] as const)(
 
 it("hides members in Shared and restores them when authoritative visibility changes", () => {
   const initial = prepared();
-  const [source, setSource] = createSignal(initial);
-  const view = mountSolid(() => {
-    const adapter = createChatSessionSharingMobileAdapter(source, {
-      onOpenSharing: vi.fn(),
-      onOpenAccess: vi.fn(),
-      onApplied: vi.fn(),
-      accessTarget: () => undefined,
-    });
-    return <ChatSessionSharingMobile {...adapter.sharing} />;
-  });
+  const view = sharingFixture(initial);
   for (const visibility of [
     undefined,
     "read-only",
@@ -301,7 +280,7 @@ it("hides members in Shared and restores them when authoritative visibility chan
     "draft",
     "shared",
   ] as const) {
-    setSource({ ...initial, session: { ...initial.session, visibility } });
+    view.setSource({ ...initial, session: { ...initial.session, visibility } });
     flush();
     const visible = visibility === "read-only" || visibility === "suggest";
     expect(Boolean(view.queryByText("Permissions"))).toBe(visible);
@@ -332,17 +311,22 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
     onCopyPublicLink: copy,
   });
   initial.session.visibility = "read-only";
-  const [source, setSource] = createSignal(initial);
-  let adapter!: ChatSessionSharingMobileAdapter;
-  const view = mountSolid(() => {
-    adapter = createChatSessionSharingMobileAdapter(source, {
-      onOpenSharing: vi.fn(),
-      onOpenAccess: vi.fn(),
-      onApplied: vi.fn(),
-      accessTarget: () => undefined,
-    });
-    return <ChatSessionSharingMobile {...adapter.sharing} />;
-  });
+  const view = sharingFixture(initial);
+  const { setSource } = view;
+  const setPermission = (level: "read" | "send") => {
+    setSource((current) => ({
+      ...current,
+      state: {
+        ...current.state!,
+        result: {
+          ...current.state!.result!,
+          members: level === "send" ? [{ identityId: "member", addedBy: "owner", addedAt: 1 }] : [],
+          permissions: [{ identityId: "member", level, options: ["read", "send"] }],
+        },
+      },
+    }));
+    flush();
+  };
   const toggle = view.getByRole("switch") as HTMLInputElement;
   expect(toggle.checked).toBe(false);
   toggle.click();
@@ -385,36 +369,14 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
   expect(member).toHaveBeenCalledExactlyOnceWith("member", true);
   await waitForSolid(() => expect(permission.getAttribute("aria-expanded")).toBe("false"));
   expect(view.queryByRole("button", { name: /^Owner,/ })).toBeNull();
-  setSource((current) => ({
-    ...current,
-    state: {
-      ...current.state!,
-      result: {
-        ...current.state!.result!,
-        members: [{ identityId: "member", addedBy: "owner", addedAt: 1 }],
-        permissions: [{ identityId: "member", level: "send", options: ["read", "send"] }],
-      },
-    },
-  }));
-  flush();
+  setPermission("send");
   expect(view.getByRole("button", { name: "Pat Member, Can send" })).toBe(permission);
   await waitForSolid(() => expect(permission.getAttribute("aria-disabled")).toBeNull());
   permission.click();
   await waitForSolid(() => expect(permission.getAttribute("aria-expanded")).toBe("true"));
   view.getByRole("menuitemradio", { name: "Can read" }).click();
   expect(member).toHaveBeenLastCalledWith("member", false);
-  setSource((current) => ({
-    ...current,
-    state: {
-      ...current.state!,
-      result: {
-        ...current.state!.result!,
-        members: [],
-        permissions: [{ identityId: "member", level: "read", options: ["read", "send"] }],
-      },
-    },
-  }));
-  flush();
+  setPermission("read");
   expect(view.getByRole("button", { name: "Pat Member, Can read" })).toBe(permission);
   expect(permission.textContent).toContain("Can read");
   const copyButton = view.getByRole("button", { name: "Copy public link" });
@@ -423,7 +385,7 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
   expect(copy).toHaveBeenCalledOnce();
   setSource((current) => ({ ...current, session: { ...current.session, sharingRole: "member" } }));
   flush();
-  expect(adapter.available).toBe(false);
+  expect(view.adapter.available).toBe(false);
   expect(toggle.hasAttribute("disabled")).toBe(true);
   permission.click();
   expect(member).toHaveBeenCalledTimes(2);
@@ -433,19 +395,11 @@ it("reads native permission readiness and retains people through refresh and fai
   const initial = prepared();
   initial.session.visibility = "read-only";
   const read = createDeferred();
-  const [source, setSource] = createSignal<PreparedChatSessionSharing>({
+  const view = sharingFixture({
     ...initial,
     state: { loading: false, read: read.promise },
   });
-  const view = mountSolid(() => {
-    const adapter = createChatSessionSharingMobileAdapter(source, {
-      onOpenSharing: vi.fn(),
-      onOpenAccess: vi.fn(),
-      onApplied: vi.fn(),
-      accessTarget: () => undefined,
-    });
-    return <ChatSessionSharingMobile {...adapter.sharing} />;
-  });
+  const { setSource } = view;
   expect(view.getByRole("status", { name: "Loading…" }).getAttribute("aria-busy")).toBe("true");
   expect(view.queryByRole("button", { name: "Pat Member, Can read" })).toBeNull();
   setSource(initial);
