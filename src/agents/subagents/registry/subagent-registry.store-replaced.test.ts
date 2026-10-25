@@ -486,37 +486,28 @@ it.each([false, true])(
       const cfg = { session: { store: state.path("sessions.json") } };
       setRuntimeConfigSnapshot(cfg);
       vi.mocked(getRuntimeConfig).mockReturnValue(cfg);
-      const entries = ["successful", "interrupted", "quiet", "delivered"].map((kind) =>
-        createSubagentStoreRunFixture({
-          runId: `legacy-${kind}`,
-          childSessionKey: `agent:main:subagent:legacy-${kind}`,
-          expectsCompletionMessage: kind !== "quiet",
-          requesterStorePath: ["quiet", "delivered"].includes(kind) ? "old" : "current",
-          ...(kind === "delivered"
-            ? {
-                delivery: {
-                  status: "delivered",
-                  disposition: "delivered",
-                  deliveredAt: 260,
-                  announcedAt: 260,
-                },
-              }
-            : {}),
-          ...(kind === "interrupted"
-            ? {
-                execution: {
-                  status: "terminal",
-                  endedAt: 250,
-                  outcome: { status: "error", error: "Gateway restarted" },
-                },
-              }
-            : {}),
-        }),
-      );
       const wake = { status: "pending", attemptCount: 0 } as const;
       const delivered = { status: "delivered", deliveredAt: 260, announcedAt: 260 } as const;
       const terminal = { status: "terminal", endedAt: 250 } as const;
       const paused = { pauseReason: "sessions_yield", execution: terminal } as const;
+      const legacy = (kind: string, overrides: Partial<SubagentRunRecord> = {}) =>
+        createSubagentStoreRunFixture({
+          runId: `legacy-${kind}`,
+          childSessionKey: `agent:main:subagent:legacy-${kind}`,
+          requesterStorePath: "current",
+          ...overrides,
+        });
+      const entries = [
+        legacy("successful"),
+        legacy("interrupted", {
+          execution: { ...terminal, outcome: { status: "error", error: "Gateway restarted" } },
+        }),
+        legacy("quiet", { expectsCompletionMessage: false, requesterStorePath: "old" }),
+        legacy("delivered", {
+          requesterStorePath: "old",
+          delivery: { ...delivered, disposition: "delivered" },
+        }),
+      ];
       const legacyStates: Partial<SubagentRunRecord>[] = [
         { requesterSettleWake: wake, cleanupCompletedAt: 300, delivery: delivered },
         { requesterSettleWake: wake, cleanupCompletedAt: 300 },
@@ -526,11 +517,7 @@ it.each([false, true])(
         },
         { execution: terminal },
         { ...paused, requesterStorePath: "old" },
-        {
-          ...paused,
-          requesterStorePath: undefined,
-          delivery: delivered,
-        },
+        { ...paused, requesterStorePath: undefined, delivery: delivered },
         {
           ...paused,
           requesterSettleWake: { ...wake, pauseNotice: { acknowledgment: "Paused" } },
@@ -557,10 +544,8 @@ it.each([false, true])(
       ];
       for (const [index, overrides] of legacyStates.entries()) {
         const runId = overrides.runId ?? `legacy-state-${index}`;
-        const entry = createSubagentStoreRunFixture({
+        const entry = legacy(`state-${index}`, {
           runId,
-          childSessionKey: `agent:main:subagent:legacy-state-${index}`,
-          requesterStorePath: "current",
           completionTarget: "parent",
           ...overrides,
         });

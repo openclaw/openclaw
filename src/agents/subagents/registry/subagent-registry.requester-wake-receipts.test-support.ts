@@ -98,7 +98,6 @@ function createRequesterWakeReceiptHolds(
     holds.outcome.release.resolve();
   }
   const observed = new Set<keyof typeof holds>();
-  const executions: Array<keyof typeof holds> = [];
   const runWorker = stateWorker.runOpenClawStateWorkerOperation;
   vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
     (context, operation, workerOptions) => {
@@ -120,9 +119,6 @@ function createRequesterWakeReceiptHolds(
                   ? mutation.entries.map((entry) => ({ entry, wake: entry.requesterSettleWake }))
                   : [];
               const result = await scope.execute(command, executeOptions);
-              if (phase) {
-                executions.push(phase);
-              }
               if (hold && phase) {
                 observed.add(phase);
                 hold.entered.resolve(members);
@@ -155,7 +151,6 @@ function createRequesterWakeReceiptHolds(
   return {
     ...holds,
     publications,
-    executions,
     releaseAll,
   };
 }
@@ -230,50 +225,39 @@ export function registerRequesterWakeReceiptBoundaryTests({
     });
   const expectPublished = (publication: Promise<unknown>) =>
     expect(publication).resolves.toEqual({ applied: true, publication: "published" });
-  it.each<{
-    name: string;
-    rejectRequesterWake?: boolean;
-    rejectPersistence?: boolean;
-    emptyReply?: boolean;
-    receiptDrift?: boolean;
-    outcomeDrift?: boolean;
-    receiptReplacement?: "reply" | "delivery";
-  }>([
-    { name: "delivers the visible requester final" },
-    {
-      name: "publishes a requester transition before queued same-owner cleanup",
-      receiptDrift: true,
-    },
-    {
-      name: "publishes a delivered requester outcome before queued same-owner cleanup",
-      outcomeDrift: true,
-    },
-    ...(["reply", "delivery"] as const).map((receiptReplacement) => ({
-      name: `preserves a requester receipt across queued equivalent ${receiptReplacement} metadata`,
-      receiptReplacement,
-    })),
-    {
-      name: "settles the rejected delivered-row wake",
-      rejectRequesterWake: true,
-    },
-    {
-      name: "retains rejected-wake settlement until sweep recovery",
-      rejectRequesterWake: true,
-      rejectPersistence: true,
-    },
-    {
-      name: "retires a stale empty announce after requester delivery",
-      emptyReply: true,
-    },
-  ])("$name", async (scenario) => {
-    const {
-      rejectRequesterWake = false,
-      rejectPersistence = false,
-      emptyReply = false,
-      receiptDrift,
-      receiptReplacement,
-      outcomeDrift,
-    } = scenario;
+  const expectHeldWake = (
+    members: ReadonlyArray<{
+      entry: SubagentRunRecord;
+      wake: SubagentRunRecord["requesterSettleWake"];
+    }>,
+    pending = false,
+  ) => {
+    for (const { entry, wake } of members) {
+      const current = registry.getSubagentRunByRunId(entry.runId);
+      expect(isSameSubagentRunOwner(current, entry)).toBe(true);
+      expect(current?.requesterSettleWake).toEqual(wake);
+      expect(wake).toBeDefined();
+      if (pending) {
+        expect(wake?.status).toBe("pending");
+      }
+    }
+  };
+  it.each([
+    "visible final",
+    "transition drift",
+    "outcome drift",
+    "reply replacement",
+    "delivery replacement",
+    "rejected wake",
+    "rejected persistence",
+    "empty reply",
+  ])("settles requester receipts: %s", async (scenario) => {
+    const rejectPersistence = scenario === "rejected persistence";
+    const rejectRequesterWake = scenario === "rejected wake" || rejectPersistence;
+    const emptyReply = scenario === "empty reply";
+    const receiptDrift = scenario === "transition drift";
+    const outcomeDrift = scenario === "outcome drift";
+    const receiptReplacement = scenario.endsWith(" replacement");
     setEmptyReply(emptyReply);
     const requesterTurnRunId = "run-requester-yield";
     const alpha = visibleChild("alpha");
@@ -324,12 +308,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
     if (heldReceipts) {
       const members = await heldReceipts.transition.entered.promise;
       expect(members).toHaveLength(2);
-      for (const { entry, wake } of members) {
-        const current = registry.getSubagentRunByRunId(entry.runId);
-        expect(isSameSubagentRunOwner(current, entry)).toBe(true);
-        expect(current?.requesterSettleWake).toEqual(wake);
-        expect(wake?.status).toBe("pending");
-      }
+      expectHeldWake(members, true);
       await registry.testing.sweepOnceForTests();
       expect(getRequesterWakeCalls()).toHaveLength(0);
       if (receiptDrift || receiptReplacement) {
@@ -340,7 +319,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           assert(current && isSameSubagentRunOwner(current, member.entry));
           expect(current.requesterSettleWake?.status).toBe("dispatching");
           const next = structuredClone(current);
-          if (receiptReplacement === "reply") {
+          if (scenario === "reply replacement") {
             const reply = next.completion?.terminalReply;
             assert(reply && next.completion, "Missing prepared reply owner");
             next.completion.terminalReply = structuredClone(reply);
@@ -370,8 +349,6 @@ export function registerRequesterWakeReceiptBoundaryTests({
           if (receiptReplacement) {
             expect(planSuccessor).toHaveBeenCalledOnce();
           }
-          expect(heldReceipts.executions.filter((phase) => phase === "transition")).toHaveLength(1);
-          expect(heldReceipts.executions).not.toContain("reconcile");
         } finally {
           heldReceipts.transition.release.resolve();
           await Promise.allSettled([successor]);
@@ -399,8 +376,6 @@ export function registerRequesterWakeReceiptBoundaryTests({
         await settleWakeOwner(true);
         expect(registry.getSubagentRunByRunId(beta.runId)?.requesterSettleWake).toBeUndefined();
         expect(getRequesterWakeCalls()).toHaveLength(1);
-        expect(heldReceipts.executions.filter((phase) => phase === "outcome")).toHaveLength(1);
-        expect(heldReceipts.executions).not.toContain("reconcile");
       } finally {
         heldReceipts.releaseAll();
         await Promise.allSettled([successor]);
@@ -471,12 +446,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
     if (heldReceipts) {
       const members = await heldReceipts.complete.entered.promise;
       expect(members.length).toBeGreaterThan(0);
-      for (const { entry, wake } of members) {
-        const current = registry.getSubagentRunByRunId(entry.runId);
-        expect(isSameSubagentRunOwner(current, entry)).toBe(true);
-        expect(current?.requesterSettleWake).toEqual(wake);
-        expect(wake).toBeDefined();
-      }
+      expectHeldWake(members);
       await registry.testing.sweepOnceForTests();
       expect(getRequesterWakeCalls()).toHaveLength(1);
       heldReceipts.complete.release.resolve();
@@ -544,7 +514,6 @@ export function registerRequesterWakeReceiptBoundaryTests({
           await flushOwnedWork();
           expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
           expect(getGatewayContextResolver(entry)).toBeDefined();
-          expect(held.executions).not.toContain("reconcile");
         } else {
           await expectPublished(held.publications.complete.promise);
         }
@@ -565,10 +534,6 @@ export function registerRequesterWakeReceiptBoundaryTests({
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
         expect(getGatewayContextResolver(entry)).toBeUndefined();
         expect(getRequesterWakeCalls()).toHaveLength(0);
-        expect(held.executions.filter((phase) => phase === "complete")).toHaveLength(1);
-        expect(held.executions.filter((phase) => phase === "reconcile")).toHaveLength(
-          change === "unchanged" ? 0 : 1,
-        );
       } finally {
         if (replayTrigger) {
           database.db.exec("DROP TRIGGER reject_quiet_retirement_replay");

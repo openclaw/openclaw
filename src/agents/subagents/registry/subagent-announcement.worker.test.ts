@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import path from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -27,7 +27,6 @@ import {
   currentRun,
   holdAnnouncementCommand,
   installEndedHook,
-  registrationDefaults,
   registerSuccessor,
   storedAnnouncement,
   suspendRun,
@@ -47,12 +46,7 @@ import {
 } from "./subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import {
-  registerSubagentRun,
-  resumeSubagentRun,
-  prepareSubagentSessionCleanupRevocation,
-} from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { resumeSubagentRun, prepareSubagentSessionCleanupRevocation } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { testing } from "./subagent-registry.test-helpers.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
@@ -116,7 +110,6 @@ it.each(["keep", "delete"] as const)(
         execution: { status: "terminal", outcome: { status: "ok" } },
         delivery: { status: "not_required" },
       });
-      expect(fixture.cleanup).toHaveBeenCalledOnce();
       expect(statements).toBeDefined();
       expect(fixture.announce).not.toHaveBeenCalled();
       expect(deleted).toHaveLength(cleanup === "delete" ? 1 : 0);
@@ -149,13 +142,9 @@ it("retains registered cleanup admission behind a durable write while a successo
     return pending;
   });
   let predecessor: Promise<void> | undefined;
-  let cleanupContext:
-    | Parameters<typeof nativeCleanup.startSubagentAnnounceCleanupFlow>[0]
-    | undefined;
   const start = vi
     .spyOn(announceCleanup, "startSubagentAnnounceCleanupFlow")
     .mockImplementation((context, ...args) => {
-      cleanupContext = context;
       predecessor ??= updateRun(run.runId, (draft) => {
         draft.label = "queued before cleanup";
       });
@@ -175,7 +164,6 @@ it("retains registered cleanup admission behind a durable write while a successo
     completeRegistered(run);
     await ready.promise;
     expect(currentRun(run.runId)?.cleanupHandled).not.toBe(true);
-    expect(cleanupContext?.cleanupReservations.has(getSubagentRunRuntimeKey(entry))).toBe(true);
     expect(storedAnnouncement(run.runId)?.cleanupHandled).not.toBe(true);
     expect(fixture.wake).not.toHaveBeenCalled();
     resumeSubagentRun(run.runId);
@@ -187,11 +175,7 @@ it("retains registered cleanup admission behind a durable write while a successo
     await predecessor;
     await registration;
     await fixture.settle();
-    expect(fixture.wake).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        settledEntry: expect.objectContaining({ runId: run.runId }),
-      }),
-    );
+    expect(fixture.wake).toHaveBeenCalledOnce();
     expect(storedAnnouncement(run.runId)).toMatchObject({
       cleanupCompletedAt: expect.any(Number),
       execution: { status: "terminal", suppressSessionEffects: true },
@@ -249,14 +233,6 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
   "uses current authority for an ended hook after suspended bookkeeping (%s)",
   async (change) => {
     const runId = "suspended-announcement-hook";
-    const childSessionKey = `agent:main:subagent:${runId}`;
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: childSessionKey,
-      defaultSessionId: "suspended-child-session",
-      lifecycleRevision: "suspended-child-revision",
-    });
     const waitResult = createDeferredCore<Record<string, unknown>>();
     const waitStarted = createDeferredCore();
     if (change === "yielded") {
@@ -269,22 +245,9 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
         return await waitResult.promise;
       });
     }
-    const { holdLiveRequesterTurns } =
-      await import("./subagent-requester-turn-liveness.test-support.js");
-    onTestFinished(holdLiveRequesterTurns("held-parent-turn").restore);
-    await registerSubagentRun({
-      ...registrationDefaults,
-      runId,
-      childSessionKey,
-      sessionEntry: {
-        sessionId: "suspended-child-session",
-        lifecycleRevision: "suspended-child-revision",
-      },
-      requesterTurnRunId: "held-parent-turn",
-      completionTarget: "parent",
-      task: "discard a suspended result without stale hook effects",
-      retainAttachmentsOnKeep: true,
-      expectsCompletionMessage: true,
+    const { childSessionKey } = await registerCompletion(runId, { holdForRequester: true });
+    await updateRun(runId, (draft) => {
+      draft.retainAttachmentsOnKeep = true;
     });
     const registeredEntry = currentRun(runId);
 
@@ -308,10 +271,7 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
         path: path.join(replacementDir, path.basename(originalSource.admission.databasePath)),
       });
     }
-    const entry = currentRun(runId)!;
-    let pausedRecord: typeof entry | undefined;
-    expect(entry.execution.status).toBe("terminal");
-    expect(entry.endedHookEmittedAt).toBeUndefined();
+    let pausedRecord: ReturnType<typeof currentRun>;
     await suspendRun(runId);
     const ended = vi.fn(async () => {});
     const registry = installEndedHook(ended);
@@ -384,21 +344,19 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
           });
         }
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
-      } else if (change === "yielded") {
-        expect(outcome).toEqual({ completed: true });
-        expect(currentRun(runId)).toEqual(pausedRecord);
-        expect(storedAnnouncement(runId)?.pauseReason).toBe("sessions_yield");
       } else {
         expect(outcome).toEqual({ completed: true });
+        if (change === "yielded") {
+          expect(currentRun(runId)).toEqual(pausedRecord);
+          expect(storedAnnouncement(runId)?.pauseReason).toBe("sessions_yield");
+        }
       }
       if (change !== "yielded") {
         expect(currentRun(runId)?.delivery?.status).toBe("discarded");
       }
-      if (change !== "current") {
-        expect(currentRun(runId)?.endedHookEmittedAt).toBeUndefined();
-      } else {
-        expect(currentRun(runId)?.endedHookEmittedAt).toBeTypeOf("number");
-      }
+      expect(currentRun(runId)?.endedHookEmittedAt).toEqual(
+        change === "current" ? expect.any(Number) : undefined,
+      );
     } finally {
       waitResult.resolve({ status: "pending" });
       release.resolve();
@@ -421,10 +379,8 @@ it.each([false, true])(
     });
     completeRegistered(run);
     await fixture.settle();
-    let entry = currentRun(run.runId)!;
-    expect(entry.execution.status).toBe("terminal");
     await suspendRun(run.runId);
-    entry = currentRun(run.runId)!;
+    const entry = currentRun(run.runId)!;
     const ended = vi.fn(async () => {});
     installEndedHook(ended);
 

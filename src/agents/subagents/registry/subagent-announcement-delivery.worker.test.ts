@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation as runWorker, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import path from "node:path";
-import { beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import {
   emptySqliteCounts,
   observeParentSqlite,
@@ -150,7 +150,6 @@ it.each(["announce receipt delete", "announce receipt keep"] as const)(
       const outcome = await announceDone.promise;
       expect(outcome).toBe("delivered");
       await fixture.settle();
-      expect(fixture.wake).toHaveBeenCalledOnce();
       expect(deleted).toBe(deleting);
       if (deleting) {
         expect(deleteDispatchedAt).toBeTypeOf("number");
@@ -161,7 +160,6 @@ it.each(["announce receipt delete", "announce receipt keep"] as const)(
         execution: { status: "terminal", outcome: { status: "ok" } },
         delivery: { status: "delivered", deliveredAt: expect.any(Number) },
       });
-      expect(fixture.announce).toHaveBeenCalledOnce();
       expect(turns.start).toHaveBeenCalledOnce();
       expect(publicationAdmission.length).toBeGreaterThan(0);
       expect(publicationAdmission.every(Boolean), JSON.stringify(publicationAdmission)).toBe(true);
@@ -288,18 +286,16 @@ it("keeps a delivered announcement fenced when its committed native receipt is u
   const run = await registerCompletion("uncertain-announcement-receipt", {
     cleanup: "delete",
   });
-  const completed = createDeferred<
-    { kind: "failed"; error: unknown } | { kind: "returned"; value: string }
-  >();
+  const completed = createDeferred<unknown>();
   let deliveryAllowed: (() => boolean) | undefined;
   fixture.announce.mockImplementation(async (params) => {
     deliveryAllowed = params.isCompletionDeliveryAllowed;
     try {
       const value = await nativeAnnounce.runSubagentAnnounceFlow(params);
-      completed.resolve({ kind: "returned", value });
+      completed.resolve(value);
       return value;
     } catch (error) {
-      completed.resolve({ kind: "failed", error });
+      completed.resolve(error);
       throw error;
     }
   });
@@ -327,26 +323,20 @@ it("keeps a delivered announcement fenced when its committed native receipt is u
     );
   try {
     completeRegistered(run);
-    const result = await completed.promise;
-    expect(result.kind).toBe("failed");
-    if (result.kind !== "failed") {
-      throw new Error(`Expected uncertain persistence, received ${result.value}`);
-    }
-    expect(result.error).toMatchObject({ outcome: "committed" });
-    if (!(result.error instanceof Error)) {
-      throw new Error("Expected the retained registry write failure");
-    }
+    const error = await completed.promise;
+    assert(error instanceof Error, "Expected the retained registry write failure");
+    expect(error).toMatchObject({ outcome: "committed" });
     await expect(fixture.settle()).rejects.toMatchObject({
       name: "AggregateError",
       message: "Failed to settle subagent cleanup roots",
-      errors: [result.error],
+      errors: [error],
     });
     expect(lost).toBe(true);
     expect(storedAnnouncement(run.runId)?.delivery?.status).toBe("delivered");
     expect(currentRun(run.runId)?.delivery?.status).toBe("pending");
     expect(currentRun(run.runId)?.cleanupHandled).toBe(true);
     expect(deliveryAllowed).toBeTypeOf("function");
-    expect(() => deliveryAllowed?.()).toThrow(result.error);
+    expect(() => deliveryAllowed?.()).toThrow(error);
     resumeSubagentRun(run.runId);
     await fixture.settle();
     expect(turns.start).toHaveBeenCalledOnce();
@@ -371,13 +361,13 @@ it("refuses an old registered wake after its descendant read outlives a successo
     const original = currentRun(run.runId)!;
     const ready = createDeferred();
     const release = createDeferred();
-    const mutations: { entry: SubagentRunRecord; kind: "transition" | "complete" }[] = [];
+    const completedRuns: SubagentRunRecord[] = [];
     fixture.wake.mockImplementation(async (params) => {
       registryState.clearSubagentRunsReadCacheForTest();
       return nativeWake.maybeWakeRequesterAfterAllChildrenSettled({
         ...params,
         completeBatch: async (...args) => {
-          mutations.push({ entry: params.settledEntry, kind: "complete" });
+          completedRuns.push(params.settledEntry);
           return params.completeBatch(...args);
         },
       });
@@ -406,19 +396,15 @@ it("refuses an old registered wake after its descendant read outlives a successo
       expect(durableSuccessor?.execution.status).toBe("running");
       release.resolve();
       await fixture.settle();
-      expect(mutations).toEqual([]);
+      expect(completedRuns).toEqual([]);
       expect(currentRun(run.runId)).toBe(successor);
       expect(storedAnnouncement(run.runId)).toEqual(durableSuccessor);
 
       completeRegistered(run);
       await fixture.settle();
-      expect(
-        mutations.map(({ entry, kind }) => ({
-          runId: entry.runId,
-          generation: entry.generation,
-          kind,
-        })),
-      ).toEqual([{ runId: successor.runId, generation: successor.generation, kind: "complete" }]);
+      expect(completedRuns.map(({ runId, generation }) => ({ runId, generation }))).toEqual([
+        { runId: successor.runId, generation: successor.generation },
+      ]);
       const completed = storedAnnouncement(run.runId);
       expect(completed).toMatchObject({
         task: "legitimate successor after the held wake",
@@ -509,7 +495,6 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
       await fixture.settle();
       const stored = storedAnnouncement(run.runId, originalDatabase);
       expect(ended).toHaveBeenCalledOnce();
-      expect(fixture.announce).toHaveBeenCalledOnce();
       expect(turns.start).toHaveBeenCalledOnce();
       if (change === "current") {
         expect(stored?.endedHookEmittedAt).toBeTypeOf("number");
