@@ -1908,7 +1908,6 @@ src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
 src/state/openclaw-agent-db-permissions.ts
 src/state/openclaw-agent-db-read-error.ts
-src/state/openclaw-agent-db-readonly-companion.ts
 src/state/openclaw-agent-db-readonly-open.ts
 src/state/openclaw-agent-db-readonly-scope.ts
 src/state/openclaw-agent-db-readonly.ts
