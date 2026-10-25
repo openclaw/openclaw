@@ -65,37 +65,24 @@ function duplicateProviders() {
 }
 
 describe("onboard auth provider config merges", () => {
-  it("preserves provider-level settings when applying onboarding provider patches", () => {
-    const next = patchProviders(
-      {
-        custom: makeProvider(["model-a"], { timeoutSeconds: 900 }),
-        other: makeProvider(["other-a"], {
-          api: "openai-responses",
-          baseUrl: "https://other.example.com/v1",
-          timeoutSeconds: 300,
-        }),
-      },
-      {},
-      "merge",
-    );
-
-    expect(next.models?.providers?.custom).toMatchObject({
-      timeoutSeconds: 900,
-      baseUrl: newBaseUrl,
-    });
-    expect(modelIds(next, "custom")).toEqual(["model-b"]);
-    expect(next.models?.providers?.other?.timeoutSeconds).toBe(300);
-  });
-
   it.each([{ Custom: makeProvider(["model-a"], { timeoutSeconds: 900 }) }, duplicateProviders()])(
     "preserves canonical settings and removes variant provider keys: %j",
     (providers) => {
-      const next = patchProviders(providers);
-      expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
+      const next = patchProviders(
+        {
+          ...providers,
+          other: makeProvider(["other-a"], { timeoutSeconds: 300 }),
+        },
+        {},
+        "merge",
+      );
+      expect(Object.keys(next.models?.providers ?? {}).toSorted()).toEqual(["custom", "other"]);
       expect(next.models?.providers?.custom).toMatchObject({
         timeoutSeconds: 900,
         baseUrl: newBaseUrl,
       });
+      expect(modelIds(next, "custom")).toEqual(["model-b"]);
+      expect(next.models?.providers?.other?.timeoutSeconds).toBe(300);
     },
   );
 
