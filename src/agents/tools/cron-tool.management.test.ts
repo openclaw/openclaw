@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { handleToolsCommand } from "../../auto-reply/reply/commands-info.js";
+import { buildCommandTestParams } from "../../auto-reply/reply/commands.test-harness.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   getCronManagementAuthority,
@@ -231,6 +233,28 @@ it.each([false, true])(
     );
   },
 );
+
+it("does not advertise creation through command discovery in a management-only turn", async () => {
+  await withCronManagementCaller("inventory-command-run", async () => {
+    const params = buildCommandTestParams(
+      "/tools verbose",
+      { tools: { allow: ["automations"] }, plugins: { enabled: false } },
+      { Provider: "webchat", Surface: "webchat" },
+    );
+    params.provider = "";
+    params.model = "";
+    const result = await handleToolsCommand(params, true);
+    expect(result?.reply?.text).toContain("Automations");
+    expect(result?.reply?.text).not.toContain("add job");
+    expect(createCronTool().parameters).toHaveProperty("properties.action.enum", [
+      "list",
+      "get",
+      "update",
+      "run",
+      "remove",
+    ]);
+  });
+});
 
 it("visibly refuses unsupported next_check", async () => {
   await withAdminTool("unknown", undefined, async (tool, calls) => {
