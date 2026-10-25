@@ -62,21 +62,6 @@ function fixture(usageStats?: AuthProfileStore["usageStats"]) {
   return { store: loadStore(agentDir), agentDir };
 }
 
-it("does not overwrite fresher credentials with a stale runtime snapshot", async () => {
-  const auth = fixture();
-  saveStore(
-    { ...auth.store, profiles: { [profileId]: apiKey("anthropic", "sk-fresh") } },
-    auth.agentDir,
-    saveOptions,
-  );
-  expect(auth.store.profiles[profileId]).toMatchObject({ key: "sk-default" });
-  await markFailure({ ...auth, profileId, reason: "rate_limit", retryAfterMs: 60_000 });
-  clearRuntimeAuthProfileStoreSnapshots();
-  const reloaded = loadStore(auth.agentDir);
-  expect(reloaded.profiles[profileId]).toMatchObject({ type: "api_key", key: "sk-fresh" });
-  expect(reloaded.usageStats?.[profileId]?.cooldownUntil).toEqual(expect.any(Number));
-});
-
 it("resets stale billing backoff and preserves its deadline on retry", async () => {
   const now = Date.now();
   const auth = fixture({

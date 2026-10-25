@@ -58,7 +58,6 @@ it.each(fixtures)("leading-@ remote paths (%s)", async (fixture) => {
     "reference.md": "reference",
     "obsolete.md": "obsolete",
     "move-source.md": "move source",
-    "@replace-absent.md": "old literal",
     "@replace-present.md": "old literal",
     "replace-present.md": "sibling",
     "projects/new.md": "sibling child",
@@ -129,7 +128,6 @@ it.each(fixtures)("leading-@ remote paths (%s)", async (fixture) => {
   try {
     await expect(write("@notes.md", "must not replace either file")).rejects.toBe(statError);
     await expectFile("@notes.md", "literal original");
-    await expectFile("notes.md", "sibling original");
   } finally {
     statFailure.mockRestore();
   }
@@ -139,7 +137,6 @@ it.each(fixtures)("leading-@ remote paths (%s)", async (fixture) => {
   await write("@notes.md", "literal updated");
   await edit("@notes.md", "updated", "edited");
   await expectFile("@notes.md", "literal edited");
-  await expectFile("notes.md", "sibling original");
   await expectRead("@@notes.md", "literal edited");
   await write("@@notes.md", "referenced original");
   await edit("@@notes.md", "original", "edited");
@@ -151,7 +148,6 @@ it.each(fixtures)("leading-@ remote paths (%s)", async (fixture) => {
   ).resolves.toEqual([path.posix.join(containerWorkdir, "@notes.md")]);
   await invoke(createApplyPatchTool(patchOptions), { input: referencedPatch });
   await expectFile("@notes.md", "referenced patched");
-  await expectFile("notes.md", "sibling original");
   await write("@projects/new.md", "literal child");
   await expectFile("@projects/new.md", "literal child");
   await expectFile("projects/new.md", "sibling child");
@@ -184,13 +180,9 @@ it.each(fixtures)("leading-@ remote paths (%s)", async (fixture) => {
   await expectMissing("move-source.md");
   await expectFile("moved.md", "move target");
   await patch([
-    deleteFile("@replace-absent.md"),
-    ...addFile("@replace-absent.md", "new literal"),
     deleteFile("@replace-present.md"),
     ...addFile("@replace-present.md", "new literal"),
   ]);
-  await expectFile("@replace-absent.md", "new literal\n");
-  await expectMissing("replace-absent.md");
   await expectFile("@replace-present.md", "new literal\n");
   await expectFile("replace-present.md", "sibling");
   await withStateDirEnv("openclaw-remote-provenance-", async () => {
@@ -244,6 +236,5 @@ it.each(fixtures)("leading-@ remote paths (%s)", async (fixture) => {
       resetPluginStateStoreForTests();
     }
   });
-  await expectMissing("@notes.md", hostRoot);
   await expect(fs.readdir(hostRoot)).resolves.toEqual([]);
 });

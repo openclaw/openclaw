@@ -28,10 +28,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: mocks.getSupervisor }));
 vi.mock("../process/supervisor/adapters/child.js", () => ({
-  createChildAdapter: async (
-    ...args: Parameters<typeof import("../process/supervisor/adapters/child.js").createChildAdapter>
-  ) => ({
-    adapter: await mocks.createChildAdapter(...args),
+  createChildAdapter: async () => ({
+    adapter: await mocks.createChildAdapter(),
     ready: Promise.resolve(),
   }),
 }));
@@ -47,7 +45,15 @@ function createWrappedExec(sessionId: string, allowBackground = false) {
     createExecTool({ ...fullGatewayExec, notifyOnExit: false, allowBackground }),
     ref,
   );
-  return { tool, ref };
+  return {
+    run: (timeoutSeconds: number, signal?: AbortSignal) =>
+      tool.execute(
+        "call",
+        { command: "sleep 3600", timeoutSeconds, background: allowBackground },
+        signal,
+      ),
+    snapshot: () => getDiagnosticSessionActivitySnapshot(ref),
+  };
 }
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
@@ -75,7 +81,6 @@ function prepareChild() {
   return {
     kill,
     completed,
-    spawn,
     ready: async () => {
       await spawned.promise;
       await spawn.mock.results[0]?.value;
@@ -116,12 +121,12 @@ it("uses the supervisor deadline after preparation and returns its timeout as a 
     preparing.resolve();
     return preparation.promise;
   });
-  const { tool, ref } = createWrappedExec("prepared-deadline");
-  const execution = tool.execute("foreground", { command: "sleep 970", timeoutSeconds: 1400 });
+  const { run, snapshot } = createWrappedExec("prepared-deadline");
+  const execution = run(1400);
   await preparing.promise;
   await vi.advanceTimersByTimeAsync(30_000);
   await waitForDiagnosticEventsDrained();
-  expect(getDiagnosticSessionActivitySnapshot(ref).activeToolDeadlineAtMs).toBeUndefined();
+  expect(snapshot().activeToolDeadlineAtMs).toBeUndefined();
 
   const processStartedAt = Date.now();
   preparation.resolve({});
@@ -129,12 +134,12 @@ it("uses the supervisor deadline after preparation and returns its timeout as a 
   await vi.advanceTimersByTimeAsync(0);
   const deadline = processStartedAt + 1_400_000;
   const recoveryDeadline = deadline + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS;
-  expect(getDiagnosticSessionActivitySnapshot(ref).activeToolDeadlineAtMs).toBe(recoveryDeadline);
+  expect(snapshot().activeToolDeadlineAtMs).toBe(recoveryDeadline);
 
   await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS + 1);
-  const snapshot = getDiagnosticSessionActivitySnapshot(ref);
-  expect(snapshot.activeToolDeadlineAtMs).toBe(recoveryDeadline);
-  expect(resolveRunStaleThresholdMs(snapshot)).toBeGreaterThan(snapshot.lastProgressAgeMs!);
+  const active = snapshot();
+  expect(active.activeToolDeadlineAtMs).toBe(recoveryDeadline);
+  expect(resolveRunStaleThresholdMs(active)).toBeGreaterThan(active.lastProgressAgeMs!);
   expect(child.kill).not.toHaveBeenCalled();
 
   await vi.advanceTimersByTimeAsync(deadline - Date.now());
@@ -143,24 +148,24 @@ it("uses the supervisor deadline after preparation and returns its timeout as a 
   const result = await execution;
   expect(result.details).toMatchObject({ status: "failed", failureKind: "overall-timeout" });
   await waitForDiagnosticEventsDrained();
-  expect(getDiagnosticSessionActivitySnapshot(ref).activeToolDeadlineAtMs).toBeUndefined();
+  expect(snapshot().activeToolDeadlineAtMs).toBeUndefined();
 });
 
 it("keeps timeout cleanup local and bounds a cancellation that never settles", async () => {
   child.kill.mockImplementation(() => undefined);
-  const { tool, ref } = createWrappedExec("timeout-cleanup");
-  const execution = tool.execute("timeout", { command: "sleep 3600", timeoutSeconds: 300 });
+  const { run, snapshot } = createWrappedExec("timeout-cleanup");
+  const execution = run(300);
   await child.ready();
   await waitForDiagnosticEventsDrained();
   await vi.advanceTimersByTimeAsync(300_001);
   expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-  const duringCleanup = getDiagnosticSessionActivitySnapshot(ref);
+  const duringCleanup = snapshot();
   expect(resolveRunStaleThresholdMs(duringCleanup)).toBeGreaterThan(
     duringCleanup.lastProgressAgeMs!,
   );
 
   await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
-  const hungCleanup = getDiagnosticSessionActivitySnapshot(ref);
+  const hungCleanup = snapshot();
   expect(resolveRunStaleThresholdMs(hungCleanup)).toBeLessThan(hungCleanup.lastProgressAgeMs!);
   child.completed.resolve({ code: null, signal: "SIGKILL" });
   await expect(execution).resolves.toMatchObject({
@@ -169,20 +174,16 @@ it("keeps timeout cleanup local and bounds a cancellation that never settles", a
 });
 
 it("keeps a no-deadline exec recoverable and honors explicit cancellation", async () => {
-  const { tool, ref } = createWrappedExec("no-deadline");
+  const { run, snapshot } = createWrappedExec("no-deadline");
   const controller = new AbortController();
-  const execution = tool.execute(
-    "hung",
-    { command: "sleep 3600", timeoutSeconds: 0 },
-    controller.signal,
-  );
+  const execution = run(0, controller.signal);
   await child.ready();
   await vi.advanceTimersByTimeAsync(0);
   await waitForDiagnosticEventsDrained();
   await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS + 1);
-  const snapshot = getDiagnosticSessionActivitySnapshot(ref);
-  expect(snapshot.activeToolDeadlineAtMs).toBeUndefined();
-  expect(resolveRunStaleThresholdMs(snapshot)).toBeLessThan(snapshot.lastProgressAgeMs!);
+  const active = snapshot();
+  expect(active.activeToolDeadlineAtMs).toBeUndefined();
+  expect(resolveRunStaleThresholdMs(active)).toBeLessThan(active.lastProgressAgeMs!);
   const aborted = expect(execution).rejects.toMatchObject({ name: "AbortError" });
   controller.abort();
   await aborted;
@@ -190,17 +191,13 @@ it("keeps a no-deadline exec recoverable and honors explicit cancellation", asyn
 });
 
 it("releases foreground liveness when exec backgrounds without removing its process timeout", async () => {
-  const { tool, ref } = createWrappedExec("background-deadline", true);
+  const { run, snapshot } = createWrappedExec("background-deadline", true);
   const controller = new AbortController();
-  const result = await tool.execute(
-    "background",
-    { command: "sleep 30", timeoutSeconds: 1, background: true },
-    controller.signal,
-  );
+  const result = await run(1, controller.signal);
   expect(result.details).toMatchObject({ status: "running" });
   await vi.advanceTimersByTimeAsync(0);
   await waitForDiagnosticEventsDrained();
-  expect(getDiagnosticSessionActivitySnapshot(ref).activeToolDeadlineAtMs).toBeUndefined();
+  expect(snapshot().activeToolDeadlineAtMs).toBeUndefined();
   controller.abort();
   expect(child.kill).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1_000);
