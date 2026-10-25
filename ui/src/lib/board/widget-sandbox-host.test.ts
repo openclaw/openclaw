@@ -530,8 +530,11 @@ describe("document timeouts", () => {
       return new Response("<p>Slow success</p>");
     });
     const onError = vi.fn();
+    const frame = document.createElement("iframe");
+    frame.src = SANDBOX_URL;
     const f = createHost(
       {
+        frame,
         onError,
         onLoadFailed: onError,
         onUnauthorized: onError,
@@ -540,7 +543,6 @@ describe("document timeouts", () => {
       },
       fetchMock,
     );
-    f.frame.src = SANDBOX_URL;
     if (phase !== "proxy") {
       f.ready();
     }
