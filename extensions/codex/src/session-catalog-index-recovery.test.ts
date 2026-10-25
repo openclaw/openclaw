@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
@@ -69,6 +70,19 @@ async function provisional(id: string, fields: Partial<CodexThread> = {}) {
   });
   const readNative = vi.fn(async () => project([]));
   return { ...value, readNative };
+}
+
+// Linux inotify can deliver an in-place rewrite after the next scan already
+// reused the cached listing; deliver the scanner's notification deterministically.
+function watchRollouts() {
+  const watch = vi.spyOn(nodeFs, "watch");
+  return (file: string) => {
+    for (const result of watch.mock.results) {
+      if (result.type === "return") {
+        result.value.emit("change", "change", path.basename(file));
+      }
+    }
+  };
 }
 
 async function compress(file: string) {
@@ -145,13 +159,15 @@ it("publishes changed provisional rollout metadata alongside a concurrent native
     headers: {},
   };
   const homeId = await codexCatalogResidentHomeKey({ startOptions });
+  const notifyChanged = watchRollouts();
   const index = catalog(root, readNative, { homeId });
   const harness = createClientHarness();
   const opened = createDeferred<void>();
   const readAllowed = createDeferred<void>();
   try {
     await index.initialize();
-    await index.reconcile();
+    // The real startup scan timer can otherwise fire mid-rewrite and record a partial fingerprint.
+    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
     readNative.mockClear();
     await observeCodexCatalogClient(harness.client, { startOptions });
     const realOpen = fs.open;
@@ -164,6 +180,7 @@ it("publishes changed provisional rollout metadata alongside a concurrent native
       return handle;
     });
     await writeCatalogRollout(root, { ...original, cwd: "/workspace/changed" });
+    notifyChanged(file);
     const reconciling = index.reconcile();
     await opened.promise;
     harness.send({
@@ -187,6 +204,7 @@ it("publishes changed provisional rollout metadata alongside a concurrent native
 
 it("retries a failed rollout read after access recovers without a fingerprint change", async () => {
   const { root, file, original, readNative } = await provisional("unreadable-thread");
+  const notifyChanged = watchRollouts();
   const index = catalog(root, readNative);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   await index.initialize();
@@ -194,6 +212,7 @@ it("retries a failed rollout read after access recovers without a fingerprint ch
   await vi.advanceTimersByTimeAsync(0);
   await index.reconcile();
   await writeCatalogRollout(root, { ...original, cwd: "/workspace/changed" });
+  notifyChanged(file);
   const changed = await fs.stat(file);
   const realOpen = fs.open;
   let readable = false;
@@ -253,6 +272,7 @@ it("retains a known preview when a bounded rollout read cannot reach the first u
     name: null,
     preview,
   });
+  const notifyChanged = watchRollouts();
   const index = catalog(root, readNative);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   await index.initialize();
@@ -298,6 +318,7 @@ it("retains a known preview when a bounded rollout read cannot reach the first u
     ].join("\n"),
   );
   await fs.rename(replacement, file);
+  notifyChanged(file);
   await index.reconcile();
   expect(await firstSession(index)).toMatchObject({
     threadId: original.id,
