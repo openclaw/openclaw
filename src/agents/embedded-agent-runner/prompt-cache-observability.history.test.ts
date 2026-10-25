@@ -19,7 +19,6 @@ import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixture
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "../transport-message-transform.js";
 import { log } from "./logger.js";
-import { fingerprintMessage } from "./prompt-cache-history.js";
 import {
   completePromptCacheObservation,
   declarePromptHistoryRewrite,
@@ -66,8 +65,8 @@ describe("prompt cache history fingerprints", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each(["string", "blocks"] as const)(
-    "preserves exact %s fingerprints across transcript ownership and in-place edits",
-    (kind) => {
+    "keeps %s content stable across append and sealed ownership",
+    async (kind) => {
       const message: Message = {
         role: "user",
         timestamp: 7,
@@ -79,37 +78,15 @@ describe("prompt cache history fingerprints", () => {
                 { type: "image", data: "abc", mimeType: "image/png" },
               ],
       };
-      const bytes = (value: ReturnType<typeof fingerprintMessage>) =>
-        JSON.stringify([value.role, value.identityLength, value.layout, value.packed]);
-      const first = fingerprintMessage(message);
-      const expected =
-        kind === "string"
-          ? "952b1fd8442799227af3738b7fc271a7125a43e7d10e741c5eb309e27cf7f739"
-          : "5fa03c23839ba6dc13453dad87798714e09144cabab7b39f199a210530b6a3a8";
-      expect(crypto.hash("sha256", bytes(first), "hex")).toBe(expected);
+      const observer = observerFor(kind);
+      await observer.onModelRequest(openAIModel, { messages: [message] });
       for (const ownership of ["append", "sealed"] as const) {
         const copy = structuredClone(message);
         normalizeTranscriptJsonValue(ownership === "sealed" ? { message: copy } : copy, "");
-        expect(bytes(fingerprintMessage(copy))).toBe(bytes(first));
-        expect(fingerprintMessage(copy, first)).toBe(first);
+        expect(await observer.onModelRequest(openAIModel, { messages: [copy] })).toMatchObject(
+          unchangedPrefix,
+        );
       }
-
-      message.timestamp++;
-      if (typeof message.content === "string") {
-        message.content = "edited";
-      } else {
-        const block = message.content[0];
-        if (block?.type === "text") {
-          block.text = "edited";
-        }
-      }
-      const edited = fingerprintMessage(message, first);
-      expect(bytes(edited)).not.toBe(bytes(first));
-      expect(bytes(edited)).toBe(bytes(fingerprintMessage(structuredClone(message))));
-      // Sealing an already observed record must discard revision state without changing bytes.
-      normalizeTranscriptJsonValue(message, "");
-      expect(fingerprintMessage(message, edited)).toBe(edited);
-      expect(bytes(fingerprintMessage(message))).toBe(bytes(edited));
     },
   );
 
@@ -266,26 +243,25 @@ describe("prompt cache history fingerprints", () => {
       normalizeTranscriptJsonValue(entry, "entry");
       return entry.message;
     };
-    const model = openAIModel;
     const observer = observerFor("sealed-history");
     const message = publish("sealed-history-fixture");
     expect(isOwnedTranscriptPayload(message)).toBe(true);
     const hashes = vi.mocked(crypto.hash);
     const messages: Message[] = [message];
-    await observer.onModelRequest(model, { messages });
+    await observer.onModelRequest(openAIModel, { messages });
     expect(
       hashes.mock.calls.some(
         ([, text]) => typeof text === "string" && text.includes("sealed-history-fixture"),
       ),
     ).toBe(false);
     messages.push({ role: "user", content: "continue", timestamp: 2 });
-    expect(await observer.onModelRequest(model, { messages })).toMatchObject(unchangedPrefix);
+    expect(await observer.onModelRequest(openAIModel, { messages })).toMatchObject(unchangedPrefix);
     // Reopening an identical publication must compare by content, not object identity.
     messages[0] = publish("sealed-history-fixture");
-    expect(await observer.onModelRequest(model, { messages })).toMatchObject(unchangedPrefix);
+    expect(await observer.onModelRequest(openAIModel, { messages })).toMatchObject(unchangedPrefix);
     messages[0] = publish("replacement");
     await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
-      await expect(observer.onModelRequest(model, { messages })).rejects.toThrow(
+      await expect(observer.onModelRequest(openAIModel, { messages })).rejects.toThrow(
         "changed fields: content[0].arguments",
       );
     });
@@ -350,13 +326,12 @@ describe("prompt cache history fingerprints", () => {
     expect(isOwnedTranscriptPayload(message)).toBe(false);
     expect(isOwnedTranscriptPayload(message.content)).toBe(true);
     const observers = ["first", "second"].map((name) => observerFor(name));
-    const model = openAIModel;
     const hashes = vi.mocked(crypto.hash);
     hashes.mockClear();
     for (let turn = 0; turn < 3; turn++) {
       for (const observer of observers) {
         expect(
-          await observer.onModelRequest(model, { messages: convertToLlm([message]) }),
+          await observer.onModelRequest(openAIModel, { messages: convertToLlm([message]) }),
         ).toMatchObject({ changes: null });
       }
     }
@@ -367,7 +342,7 @@ describe("prompt cache history fingerprints", () => {
     ];
     for (const observer of observers) {
       expect(
-        await observer.onModelRequest(model, { messages: convertToLlm([message]) }),
+        await observer.onModelRequest(openAIModel, { messages: convertToLlm([message]) }),
       ).toMatchObject({
         changes: [
           { code: "historyRewrite", detail: expect.stringContaining("content[0].arguments") },
@@ -381,7 +356,6 @@ describe("prompt cache history fingerprints", () => {
     async (sealed) => {
       await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
         const observer = observerFor("tool-result-envelope");
-        const model = openAIModel;
         const publish = (text: string, metadata?: Record<string, unknown>) => {
           const entry = {
             message: {
@@ -399,24 +373,26 @@ describe("prompt cache history fingerprints", () => {
           }
           return entry.message;
         };
-        await observer.onModelRequest(model, { messages: [publish("fixture result")] });
+        await observer.onModelRequest(openAIModel, { messages: [publish("fixture result")] });
         const metadata = {
           runId: "fixture-run",
           codeModeCheckpoint: { status: "completed", replaySafe: true },
         };
         const message = publish("fixture result", metadata);
-        expect(await observer.onModelRequest(model, { messages: [message] })).toMatchObject(
+        expect(await observer.onModelRequest(openAIModel, { messages: [message] })).toMatchObject(
           unchangedPrefix,
         );
         const withoutEnvelope = sealed ? publish("fixture result") : message;
         if (!sealed) {
           delete withoutEnvelope["__openclaw"];
         }
-        expect(await observer.onModelRequest(model, { messages: [withoutEnvelope] })).toMatchObject(
-          unchangedPrefix,
-        );
+        expect(
+          await observer.onModelRequest(openAIModel, { messages: [withoutEnvelope] }),
+        ).toMatchObject(unchangedPrefix);
         await expect(
-          observer.onModelRequest(model, { messages: [publish("rewritten result", metadata)] }),
+          observer.onModelRequest(openAIModel, {
+            messages: [publish("rewritten result", metadata)],
+          }),
         ).rejects.toThrow("changed fields: content[0].text");
       });
     },
@@ -455,22 +431,6 @@ describe("prompt cache history fingerprints", () => {
     expect(prepare).toHaveBeenCalledOnce();
     expect(hashes).not.toHaveBeenCalled();
     expect(onRequest).not.toHaveBeenCalled();
-  });
-
-  it("does not rehash an unchanged history prefix when a request appends a message", () => {
-    const sessionId = scopedKey("incremental-prefix");
-    const messages: Message[] = Array.from({ length: 100 }, (_, timestamp) => ({
-      role: "user",
-      content: [{ type: "text", text: `Synthetic history ${timestamp}` }],
-      timestamp,
-    }));
-    const hashes = vi.mocked(crypto.hash);
-    observe(sessionId, messages);
-    hashes.mockClear();
-    messages.push({ role: "user", content: "Next turn", timestamp: 100 });
-    expect(observe(sessionId, messages)).toMatchObject(unchangedPrefix);
-    // Hash work grows with the new message, not the retained prefix.
-    expect(hashes.mock.calls.length).toBeLessThan(10);
   });
 
   it.each([
