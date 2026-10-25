@@ -10,6 +10,7 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
+import { deleteChannelIngressFailedEventsInDatabase } from "./ingress-queue.discard.worker.js";
 import * as kernel from "./ingress-queue.kernel.js";
 import type { ChannelIngressListInput } from "./ingress-queue.types.js";
 
@@ -106,6 +107,7 @@ export const channelIngressOperations = {
   "channelIngress.complete": write(kernel.completeChannelIngressInDatabase),
   "channelIngress.release": write(kernel.releaseChannelIngressInDatabase),
   "channelIngress.fail": write(kernel.failChannelIngressInDatabase),
+  "channelIngress.deleteFailed": write(deleteChannelIngressFailedEventsInDatabase),
   "channelIngress.delete": write(kernel.deleteChannelIngressInDatabase),
   "channelIngress.resubmit": write(kernel.resubmitChannelIngressInDatabase),
   "channelIngress.prune": write(kernel.pruneChannelIngressInDatabase),

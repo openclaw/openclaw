@@ -20,6 +20,12 @@ const channelsLogsCommandMock = vi.hoisted(() =>
   vi.fn(async (_options: { channel?: string }) => undefined),
 );
 const channelsDeadLettersMocks = vi.hoisted(() => ({
+  channelsDeadLettersDeleteCommand: vi.fn(
+    async (_eventId: string, _options: { account?: string; force?: boolean }) => undefined,
+  ),
+  channelsDeadLettersPurgeCommand: vi.fn(
+    async (_options: { account?: string; force?: boolean }) => undefined,
+  ),
   channelsDeadLettersListCommand: vi.fn(async (_options: { account?: string }) => undefined),
   channelsDeadLettersResubmitCommand: vi.fn(
     async (_eventId: string, _options: { account?: string }) => undefined,
@@ -163,6 +169,8 @@ describe("registerChannelsCli", () => {
     ["leaf precedence", "list", "parent", "leaf", "leaf"],
     ["blank parent", "resubmit", "", undefined, ""],
     ["blank leaf", "list", undefined, "", ""],
+    ["leaf precedence", "delete", "parent", "leaf", "leaf"],
+    ["parent", "purge", "ops", undefined, "ops"],
   ] as const)(
     "passes a %s --account to dead-letters %s",
     async (_label, leaf, parentAccount, leafAccount, expected) => {
@@ -171,20 +179,30 @@ describe("registerChannelsCli", () => {
         args.push("--account", parentAccount);
       }
       args.push(leaf);
-      if (leaf === "resubmit") {
+      if (leaf === "resubmit" || leaf === "delete") {
         args.push("event-1");
       }
       args.push("--channel", "telegram");
       if (leafAccount !== undefined) {
         args.push("--account", leafAccount);
       }
+      if (leaf === "delete" || leaf === "purge") {
+        args.push("--force");
+      }
       await runChannelsCli(args);
 
       const options =
         leaf === "list"
           ? channelsDeadLettersMocks.channelsDeadLettersListCommand.mock.calls[0]?.[0]
-          : channelsDeadLettersMocks.channelsDeadLettersResubmitCommand.mock.calls[0]?.[1];
+          : leaf === "resubmit"
+            ? channelsDeadLettersMocks.channelsDeadLettersResubmitCommand.mock.calls[0]?.[1]
+            : leaf === "delete"
+              ? channelsDeadLettersMocks.channelsDeadLettersDeleteCommand.mock.calls[0]?.[1]
+              : channelsDeadLettersMocks.channelsDeadLettersPurgeCommand.mock.calls[0]?.[0];
       expect(options?.account).toBe(expected);
+      if (leaf === "delete" || leaf === "purge") {
+        expect(options).toMatchObject({ force: true });
+      }
     },
   );
 

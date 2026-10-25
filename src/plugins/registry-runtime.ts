@@ -1,6 +1,9 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
-import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import {
+  createChannelIngressQueue,
+  type ChannelIngressQueue,
+} from "../channels/message/ingress-queue.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -238,9 +241,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 >[0],
                 "queue"
               > & {
-                queue?: ReturnType<
-                  typeof createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>
-                >;
+                queue?: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
                 accountId?: string;
                 stateDir?: string;
               },

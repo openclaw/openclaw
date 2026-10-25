@@ -4,12 +4,14 @@ import { createChannelIngressQueue } from "../../channels/message/ingress-queue.
 import { parseLogsPositiveInt } from "../../cli/logs-cli.options.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createClackPrompter } from "../../wizard/clack-prompter.js";
 
 type ChannelsDeadLettersOptions = {
   channel?: string;
   account?: string;
   limit?: string | number;
   json?: boolean;
+  force?: boolean;
 };
 
 function resolveScope(options: ChannelsDeadLettersOptions) {
@@ -25,6 +27,23 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   return { channelId, accountId };
 }
 
+async function confirmDestructiveAction(
+  message: string,
+  force: boolean | undefined,
+): Promise<void> {
+  if (force) {
+    return;
+  }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("Dead-letter deletion requires an interactive TTY or --force.");
+  }
+  const ok = await createClackPrompter().confirm({ message, initialValue: false });
+  if (!ok) {
+    throw new Error("Deletion cancelled.");
+  }
+}
+
+/** List retained ingress failures for one channel account. */
 export async function channelsDeadLettersListCommand(
   options: ChannelsDeadLettersOptions,
 ): Promise<void> {
@@ -85,4 +104,59 @@ export async function channelsDeadLettersResubmitCommand(
     throw new Error(`Ingress event ${eventId} has no retained payload and cannot be resubmitted.`);
   }
   throw new Error(`Ingress event ${eventId} was not found for ${channelId}/${accountId}.`);
+}
+
+/** Delete one failed ingress event after confirmation. */
+export async function channelsDeadLettersDeleteCommand(
+  eventId: string,
+  options: ChannelsDeadLettersOptions,
+): Promise<void> {
+  const { channelId, accountId } = resolveScope(options);
+  const queue = createChannelIngressQueue({ channelId, accountId });
+  if (!queue.listFailed) {
+    throw new Error("This runtime does not support dead-letter deletion.");
+  }
+  const entry = (await queue.listFailed({ limit: "all" })).find((item) => item.id === eventId);
+  if (!entry) {
+    throw new Error(`Ingress event ${eventId} was not found as a failed event.`);
+  }
+  await confirmDestructiveAction(
+    `Delete failed ingress event ${eventId} from ${channelId}/${accountId}? This removes its duplicate barrier.`,
+    options.force,
+  );
+  const deleted = await queue.deleteFailed([entry]);
+  if (deleted === 0) {
+    throw new Error(`Ingress event ${eventId} changed after confirmation and was not deleted.`);
+  }
+  if (options.json) {
+    defaultRuntime.writeJson({ channelId, accountId, eventId, deleted: true });
+  } else {
+    defaultRuntime.log(
+      `${theme.success("Deleted")} failed channel ingress event ${sanitizeTerminalText(eventId)} (${channelId}/${accountId}). Replaying this id is now allowed.`,
+    );
+  }
+}
+
+/** Delete all currently failed ingress events for one channel account. */
+export async function channelsDeadLettersPurgeCommand(
+  options: ChannelsDeadLettersOptions,
+): Promise<void> {
+  const { channelId, accountId } = resolveScope(options);
+  const queue = createChannelIngressQueue({ channelId, accountId });
+  if (!queue.listFailed) {
+    throw new Error("This runtime does not support dead-letter deletion.");
+  }
+  const entries = await queue.listFailed({ limit: "all" });
+  await confirmDestructiveAction(
+    `Delete ${entries.length} failed ingress event(s) from ${channelId}/${accountId}? This removes duplicate barriers.`,
+    options.force,
+  );
+  const deleted = await queue.deleteFailed(entries);
+  if (options.json) {
+    defaultRuntime.writeJson({ channelId, accountId, deleted });
+  } else {
+    defaultRuntime.log(
+      `${theme.success("Deleted")} ${deleted} failed channel ingress event(s) (${channelId}/${accountId}). Replaying these ids is now allowed.`,
+    );
+  }
 }

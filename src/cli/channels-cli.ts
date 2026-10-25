@@ -300,7 +300,7 @@ export async function registerChannelsCli(
 
   const deadLetters = channels
     .command("dead-letters")
-    .description("Inspect and resubmit failed inbound channel events")
+    .description("Inspect, recover, and delete failed inbound channel events")
     .option("--account <id>", "Account id", "default");
 
   deadLetters
@@ -333,6 +333,43 @@ export async function registerChannelsCli(
         const { channelsDeadLettersResubmitCommand } =
           await import("../commands/channels/dead-letters.js");
         await channelsDeadLettersResubmitCommand(eventId, {
+          ...opts,
+          account: resolveStringOption(command, "account"),
+        });
+      });
+    });
+
+  deadLetters
+    .command("delete")
+    .description("Delete one failed inbound event")
+    .argument("<event-id>", "Ingress event id")
+    .requiredOption("--channel <name>", "Channel id")
+    .option("--account <id>", "Account id", "default")
+    .option("--force", "Skip confirmation", false)
+    .option("--json", "Output JSON", false)
+    .action(async (eventId, opts, command) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { channelsDeadLettersDeleteCommand } =
+          await import("../commands/channels/dead-letters.js");
+        await channelsDeadLettersDeleteCommand(eventId, {
+          ...opts,
+          account: resolveStringOption(command, "account"),
+        });
+      });
+    });
+
+  deadLetters
+    .command("purge")
+    .description("Delete all failed inbound events for one channel account")
+    .requiredOption("--channel <name>", "Channel id")
+    .option("--account <id>", "Account id", "default")
+    .option("--force", "Skip confirmation", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { channelsDeadLettersPurgeCommand } =
+          await import("../commands/channels/dead-letters.js");
+        await channelsDeadLettersPurgeCommand({
           ...opts,
           account: resolveStringOption(command, "account"),
         });

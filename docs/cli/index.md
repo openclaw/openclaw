@@ -198,7 +198,7 @@ openclaw [--dev] [--profile <name>] <command>
     capabilities
     resolve
     logs
-    dead-letters list|resubmit
+    dead-letters list|resubmit|delete|purge
     add
     remove
     login

@@ -81,6 +81,11 @@ export type ChannelIngressQueueDeadLetterRecord<
   lastAttemptAt?: number;
 };
 
+export type ChannelIngressFailedEventIdentity = Pick<
+  ChannelIngressQueueDeadLetterRecord,
+  "id" | "updatedAt" | "receivedAt" | "attempts"
+>;
+
 type ChannelIngressQueueResubmitResult<
   TPayload,
   TMetadata = unknown,

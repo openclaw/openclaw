@@ -10,6 +10,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/channels/message-access/x-requester.test.ts",
   "src/channels/message/ingress-drain.handoff.test.ts",
   "src/channels/message/ingress-queue.authority.test.ts",
+  "src/channels/message/ingress-queue.discard.test.ts",
   "src/agents/mcp-oauth-authorization.test.ts",
   "src/agents/mcp-oauth-refresh-boundary.test.ts",
   "src/agents/mcp-auth-profile-authorization.test.ts",

@@ -18,6 +18,7 @@ import {
 } from "./ingress-queue.codec.js";
 import type {
   ChannelIngressClaimRequest,
+  ChannelIngressFailedEventIdentity,
   ChannelIngressListInput,
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -91,7 +92,10 @@ export function createChannelIngressQueue<
 >(
   options: CreateChannelIngressQueueOptions,
   assertCurrent?: () => void,
-): ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata> {
+): ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata> & {
+  /** Core-only operator discard; not part of the Plugin SDK queue contract. */
+  deleteFailed(failures: readonly ChannelIngressFailedEventIdentity[]): Promise<number>;
+} {
   assertCurrent?.();
   const channelId = normalizePart(options.channelId, "unknown");
   const accountId = normalizePart(options.accountId, "default");
@@ -544,6 +548,21 @@ export function createChannelIngressQueue<
           };
       }
       return result satisfies never;
+    },
+    async deleteFailed(failures) {
+      assertCurrent?.();
+      if (failures.length === 0) {
+        return 0;
+      }
+      return execute("channelIngress.deleteFailed", {
+        queueName,
+        failures: failures.map(({ id, updatedAt, receivedAt, attempts }) => ({
+          id: idFrom(id),
+          updatedAt,
+          receivedAt,
+          attempts,
+        })),
+      });
     },
     delete: async (value) => await execute("channelIngress.delete", mutation(value, now())),
     recoverStaleClaims,
