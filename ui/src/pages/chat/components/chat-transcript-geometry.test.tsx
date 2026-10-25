@@ -4,8 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import type { ChatWidgetLayout } from "../session-message-cache.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import {
   render,
@@ -20,6 +22,7 @@ import {
   transcriptContainer,
 } from "./chat-transcript-fixture.test-support.tsx";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
+import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
@@ -50,6 +53,55 @@ function railState(viewport: HTMLElement) {
 
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
+
+it("reserves only the matching width and appearance, including text scale, width policy and recovery", () => {
+  const context = createInitializationContext();
+  const settings = {
+    ...context.theme.settings,
+    textScale: 100 as const,
+    chatMessageMaxWidth: "48rem",
+  };
+  const theme = { ...context.theme, settings, resolvedMode: "light" as const };
+  let cachedKey: string | undefined;
+  const widgetLayout: ChatWidgetLayout = {
+    read: (key) => {
+      cachedKey ??= key;
+      return key === cachedKey ? 300 : undefined;
+    },
+    write: vi.fn(),
+    invalidateRow: vi.fn(),
+  };
+  const props = threadProps("footprint-appearance", "agent:main:footprint", [], {
+    widgetLayout,
+    applicationContext: { ...context, theme },
+  });
+  const layout = new TranscriptLayoutOwner(() => {});
+  layout.rows = [{ kind: "item", key: "notice", item: null, revision: "notice-v1" }];
+  layout.rowWidth = 768;
+  const reserve = (version = 0) => {
+    layout.configureRows(props, "gutter", version);
+    return layout.rowMinimum(0);
+  };
+  expect(reserve()).toBe(300);
+  for (const patch of [{ textScale: 90 as const }, { chatMessageMaxWidth: undefined }]) {
+    props.applicationContext = {
+      ...context,
+      theme: { ...theme, settings: { ...settings, ...patch } },
+    };
+    expect(reserve()).toBe(0);
+  }
+  props.applicationContext = { ...context, theme: { ...theme, resolvedMode: "dark" } };
+  expect(reserve()).toBe(0);
+  props.applicationContext = { ...context, theme };
+  expect(reserve(1)).toBe(0);
+  expect(reserve()).toBe(300);
+  layout.rowWidth = 400;
+  expect(reserve()).toBe(0);
+  layout.rowWidth = 0;
+  expect(reserve()).toBe(0);
+  layout.rowWidth = 768;
+  expect(reserve()).toBe(300);
+});
 
 it.each([null, 4_800])(
   "keeps a bounded initial range before measured placement at offset %s",

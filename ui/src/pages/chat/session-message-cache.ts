@@ -82,6 +82,7 @@ export function createChatWidgetLayout(
   const [rowRevision, setRowRevision] = createSignal(0);
   const cacheKey = resolveChatSnapshotKey(host, target);
   let sessionId = cache.get(cacheKey)?.snapshot.sessionId;
+  // Only the admitted snapshot is reserved; later measurements belong to the next reload.
   let reservations: Record<string, number> | undefined;
   const current = () => {
     const snapshot = cache.get(cacheKey)?.snapshot;
