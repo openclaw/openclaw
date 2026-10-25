@@ -25,8 +25,8 @@ const mocks = vi.hoisted(() => {
   return {
     info,
     open,
-    read: vi.fn(createClient),
-    write: vi.fn(createClient),
+    read: vi.fn((_token: string) => createClient()),
+    write: vi.fn((_token: string) => createClient()),
   };
 });
 const { info, open, read, write } = mocks;

@@ -29,8 +29,18 @@ vi.mock("./desktop-generation-fingerprint.js", () => ({
   readMacOSDesktopGenerationFingerprint: mocks.read,
 }));
 
+class TestWatcher extends EventEmitter implements FSWatcher {
+  close = vi.fn();
+  ref() {
+    return this;
+  }
+  unref() {
+    return this;
+  }
+}
+
 let fingerprint: string;
-let watcher: EventEmitter & { close: ReturnType<typeof vi.fn> };
+let watcher: TestWatcher;
 let context: OpenClawPluginServiceContextV2;
 let service: ReturnType<typeof createCodexDesktopGenerationService>;
 let stopped: boolean;
@@ -44,9 +54,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   fingerprint = "before";
   stopped = false;
-  watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
+  watcher = new TestWatcher();
   mocks.read.mockReset().mockImplementation(async () => fingerprint);
-  mocks.watch.mockReset().mockImplementation(() => watcher as FSWatcher);
+  mocks.watch.mockReset().mockImplementation(() => watcher);
   context = {
     config: {},
     stateDir: "/unused",
