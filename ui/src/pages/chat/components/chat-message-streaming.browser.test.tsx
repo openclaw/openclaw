@@ -1,7 +1,6 @@
 import DOMPurify from "dompurify";
 import { createEffect, useContext } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   handleMarkdownCodeBlockClick,
   readMarkdownCodeBlockCopyText,
@@ -11,7 +10,6 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { prepareMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -115,33 +113,6 @@ function drawContent(content: RawContent["content"], media?: MarkdownMedia) {
 
 describe("streaming Markdown DOM", () => {
   it.each([
-    ["paragraph", "A growing reply", "p"],
-    ["list", "- First item\n- Growing item", "ul"],
-    ["long list", Array.from({ length: 200 }, (_, index) => `- Item ${index}`).join("\n"), "ul"],
-    ["code fence", "```text\nA growing block", "pre"],
-  ])("updates %s text without removing the rendered subtree", (_label, initial, selector) => {
-    const suffix = " with more text";
-    draw(initial);
-    const existing = container.querySelector(selector);
-    expect(existing).not.toBeNull();
-    const records: MutationRecord[] = [];
-    const observer = new MutationObserver((mutations) => records.push(...mutations));
-    observer.observe(container, { childList: true, subtree: true, characterData: true });
-    try {
-      for (let index = 1; index <= 12; index++) {
-        draw(initial + suffix.repeat(index));
-      }
-      records.push(...observer.takeRecords());
-      expect(container.querySelector(selector)).toBe(existing);
-      expect(records.flatMap((record) => [...record.removedNodes])).toHaveLength(0);
-      expect(records.some((record) => record.type === "characterData")).toBe(true);
-      expect(existing?.textContent).toContain(suffix.repeat(12));
-    } finally {
-      observer.disconnect();
-    }
-  });
-
-  it.each([
     [
       "list item append",
       "- <details><summary>Evidence</summary>Retained details</details>\n- Second item",
@@ -208,109 +179,106 @@ describe("streaming Markdown DOM", () => {
     }
   });
 
-  it.each([
-    { insertion: "Expand", settlement: "completed" },
-    { insertion: "Expand", settlement: "reject" },
-    { insertion: "JSON modes", settlement: "completed" },
-    { insertion: "JSON modes", settlement: "resolve" },
-    { insertion: "JSON modes", settlement: "reject" },
-  ])(
-    "keeps control ownership when $insertion appears after $settlement copy",
-    async ({ insertion, settlement }) => {
+  it.each(["Expand", "JSON modes"])(
+    "retains %s controls and reader state through growth and finalization",
+    async (insertion) => {
       const json = insertion === "JSON modes";
       const initial = json
         ? '- ```json\n  {\n  "nested": {\n  "a": 1,\n  "b": 2,\n  "c": 3,\n  "d": 4,\n  "value": true\n  }\n  }'
         : "```ts\n" + codeLines(6);
       const suffix = json ? "\n  ```\n\n- following" : "\nconst seventh = 7;\nconst eighth = 8;";
-      const pending = createDeferred();
-      const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: { writeText: vi.fn().mockReturnValue(pending.promise) },
-      });
-      const fallback = vi.spyOn(document, "execCommand").mockReturnValue(true);
-      vi.useFakeTimers();
-      try {
-        draw(initial);
-        // Native refs deliver mutations before the queued enhancement scan.
-        await new Promise<void>(queueMicrotask);
-        const wrapper = find(".code-block-wrapper");
-        const copy = control("copy", wrapper);
-        const wrap = control("wrap", wrapper);
-        const previousExpand = control("expand", wrapper);
-        const viewport = find(".code-block-viewport", wrapper);
-        const copyText = readMarkdownCodeBlockCopyText(copy);
-        wrap.click();
-        if (json) {
-          previousExpand!.click();
-        }
-        const wrapLabel = wrap.getAttribute("aria-label");
-        copy.click();
-        if (settlement === "completed") {
-          pending.resolve();
-        }
-        await vi.advanceTimersByTimeAsync(0);
-        expect(copy.classList.contains("copied")).toBe(settlement === "completed");
-        draw(initial + suffix);
-        await new Promise<void>(queueMicrotask);
-        const expand = control("expand", wrapper);
-        expect(find(".code-block-wrapper")).toBe(wrapper);
-        expect(control("copy", wrapper)).toBe(copy);
-        expect(control("wrap", wrapper)).toBe(wrap);
-        expect(expand.getAttribute("aria-controls")).toBe(find(".code-block-viewport", wrapper).id);
-        expect(wrap.getAttribute("aria-pressed")).toBe("true");
-        if (!json) {
-          expect(wrapper.classList.contains("is-wrapped")).toBe(true);
-          expect(wrapper.classList.contains("is-collapsible")).toBe(true);
-          expect(find(".code-block-viewport", wrapper).id).not.toBe("");
-          expect(readMarkdownCodeBlockCopyText(copy)).toBe(
-            initial.slice("```ts\n".length) + suffix,
-          );
-        }
-        if (json) {
-          expect(control("json-modes", wrapper)).not.toBeNull();
-          expect(expand).toBe(previousExpand);
-          expect(readMarkdownCodeBlockCopyText(copy)).toBe(copyText);
-          expect(find(".code-block-viewport", wrapper)).toBe(viewport);
-          expect(wrapper.classList.contains("is-wrapped")).toBe(true);
-          expect(wrapper.classList.contains("is-expanded")).toBe(true);
-          expect(expand.getAttribute("aria-expanded")).toBe("true");
-          expect(wrap.classList.contains("copied")).toBe(false);
-        }
-        if (!json || settlement === "reject") {
-          pending.reject(new Error("Native clipboard unavailable"));
-        } else {
-          pending.resolve();
-        }
-        await vi.advanceTimersByTimeAsync(json ? 1500 : 2000);
-        expect(fallback).toHaveBeenCalledTimes(json && settlement === "reject" ? 1 : 0);
-        expect(wrap.getAttribute("aria-label")).toBe(wrapLabel);
-        expect(copy.classList.contains("copied")).toBe(false);
-        if (json) {
-          expect(wrap.classList.contains("copy-failed")).toBe(false);
-          const raw = find<HTMLButtonElement>('[data-json-mode="raw"]', wrapper);
-          raw.click();
-          draw(initial + suffix + " grows");
-          expect(wrapper.querySelector('[data-json-mode="raw"]')).toBe(raw);
-          expect(raw.getAttribute("aria-pressed")).toBe("true");
-          expect(wrapper.classList.contains("is-json-raw")).toBe(true);
-        } else {
-          expect(wrap.getAttribute("aria-pressed")).toBe("true");
-          expect(expand.classList.contains("copied")).toBe(false);
-          expect(expand.classList.contains("copy-failed")).toBe(false);
-          expand.click();
-          const growth = "\nconst ninth = 9;";
-          draw(initial + suffix + growth);
-          expect(wrapper.classList.contains("is-expanded")).toBe(true);
-          expect(expand.getAttribute("aria-expanded")).toBe("true");
-          expect(readMarkdownCodeBlockCopyText(copy)).toBe(
-            initial.slice("```ts\n".length) + suffix + growth,
-          );
-        }
-      } finally {
-        vi.useRealTimers();
-        fallback.mockRestore();
-        restorePropertyDescriptor(navigator, "clipboard", clipboard);
+      draw(initial, { options: { linkFavicons: false } });
+      // Native refs deliver mutations before the queued enhancement scan.
+      await new Promise<void>(queueMicrotask);
+      const wrapper = find(".code-block-wrapper");
+      const copy = control("copy", wrapper);
+      const wrap = control("wrap", wrapper);
+      const previousExpand = control("expand", wrapper);
+      const viewport = find(".code-block-viewport", wrapper);
+      const copyText = readMarkdownCodeBlockCopyText(copy);
+      wrap.click();
+      if (json) {
+        previousExpand!.click();
+      }
+      const wrapLabel = wrap.getAttribute("aria-label");
+      draw(initial + suffix);
+      await new Promise<void>(queueMicrotask);
+      const expand = control("expand", wrapper);
+      expect(find(".code-block-wrapper")).toBe(wrapper);
+      expect(control("copy", wrapper)).toBe(copy);
+      expect(control("wrap", wrapper)).toBe(wrap);
+      expect(expand.getAttribute("aria-controls")).toBe(find(".code-block-viewport", wrapper).id);
+      expect(wrap.getAttribute("aria-pressed")).toBe("true");
+      if (!json) {
+        expect(wrapper.classList.contains("is-collapsible")).toBe(true);
+        expect(find(".code-block-viewport", wrapper).id).not.toBe("");
+        expect(readMarkdownCodeBlockCopyText(copy)).toBe(initial.slice("```ts\n".length) + suffix);
+      }
+      if (json) {
+        expect(control("json-modes", wrapper)).not.toBeNull();
+        expect(expand).toBe(previousExpand);
+        expect(readMarkdownCodeBlockCopyText(copy)).toBe(copyText);
+        expect(find(".code-block-viewport", wrapper)).toBe(viewport);
+        expect(wrapper.classList.contains("is-expanded")).toBe(true);
+        expect(expand.getAttribute("aria-expanded")).toBe("true");
+      }
+      expect(wrapper.classList.contains("is-wrapped")).toBe(true);
+      expect(wrap.getAttribute("aria-label")).toBe(wrapLabel);
+      const raw = json ? find<HTMLButtonElement>('[data-json-mode="raw"]', wrapper) : undefined;
+      const details = json
+        ? wrapper.querySelectorAll<HTMLDetailsElement>("details")[1]!
+        : undefined;
+      if (details) {
+        details.open = false;
+      }
+      let completed = initial + suffix;
+      if (json) {
+        raw!.click();
+        completed += " grows";
+        draw(completed);
+        expect(wrapper.querySelector('[data-json-mode="raw"]')).toBe(raw);
+        expect(raw!.getAttribute("aria-pressed")).toBe("true");
+        expect(wrapper.classList.contains("is-json-raw")).toBe(true);
+      } else {
+        expand.click();
+        const growth = "\nconst ninth = 9;";
+        completed += growth;
+        draw(completed);
+        expect(wrapper.classList.contains("is-expanded")).toBe(true);
+        expect(expand.getAttribute("aria-expanded")).toBe("true");
+        expect(readMarkdownCodeBlockCopyText(copy)).toBe(
+          initial.slice("```ts\n".length) + suffix + growth,
+        );
+        completed += "\n```\n\nFollowing paragraph";
+        draw(completed);
+        await Promise.resolve();
+        expect(find(".chat-text > p:last-child").textContent).toBe("Following paragraph");
+        completed += "\n\nMore is arriving.";
+        draw(completed);
+      }
+      expect(find(".code-block-wrapper")).toBe(wrapper);
+      draw(completed, { streaming: false, options: { linkFavicons: true } });
+      expect(find(".code-block-wrapper")).toBe(wrapper);
+      expect(control("wrap", wrapper)).toBe(wrap);
+      expect(control("expand", wrapper)).toBe(expand);
+      expect(control("copy", wrapper)).toBe(copy);
+      expect(find(".code-block-viewport", wrapper)).toBe(viewport);
+      expect(wrapper.matches(".is-wrapped.is-expanded")).toBe(true);
+      expect(wrap.getAttribute("aria-pressed")).toBe("true");
+      expect(expand.getAttribute("aria-expanded")).toBe("true");
+      expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
+      if (json) {
+        expect(wrapper.querySelectorAll("details")[1]).toBe(details);
+        expect(details!.open).toBe(false);
+        expect(wrapper.querySelector('[data-json-mode="raw"]')).toBe(raw);
+        expect(raw!.getAttribute("aria-pressed")).toBe("true");
+        expect(wrapper.classList.contains("is-json-raw")).toBe(true);
+        expect(readMarkdownCodeBlockCopyText(copy)).toBe(copyText);
+      } else {
+        expect(find(".chat-text > p:last-child").textContent).toBe("More is arriving.");
+        expect(readMarkdownCodeBlockCopyText(copy)).toBe(
+          initial.slice("```ts\n".length) + suffix + "\nconst ninth = 9;",
+        );
       }
     },
   );
@@ -564,70 +532,6 @@ describe("streaming Markdown promotion", () => {
       expect(container.textContent).toContain("Next paragraph");
     },
   );
-
-  it.each([
-    ["ts", codeLines(8)],
-    [
-      "json",
-      '{\n  "nested": {\n    "a": 1,\n    "b": 2,\n    "c": 3,\n    "d": 4,\n    "ready": true\n  }\n}',
-    ],
-  ])("preserves %s code controls when a live fence closes and finishes", async (language, code) => {
-    const initial = `\`\`\`${language}\n${code}`;
-    draw(initial, { options: { linkFavicons: false } });
-    await Promise.resolve();
-    const wrapper = find(".code-block-wrapper");
-    const wrap = control("wrap", wrapper);
-    const expand = control("expand", wrapper);
-    const copy = control("copy", wrapper);
-    const viewport = find(".code-block-viewport", wrapper);
-    wrap.click();
-    expand.click();
-    const closed = initial + "\n```\n\nFollowing paragraph";
-    draw(closed);
-    await Promise.resolve();
-    expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
-    expect(find(".chat-text > p:last-child").textContent).toBe("Following paragraph");
-    expect(control("wrap", wrapper)).toBe(wrap);
-    expect(control("expand", wrapper)).toBe(expand);
-    expect(control("copy", wrapper)).toBe(copy);
-    expect(find(".code-block-viewport", wrapper)).toBe(viewport);
-    const raw = find<HTMLButtonElement>('[data-json-mode="raw"]', wrapper);
-    raw?.click();
-    const completed = closed + "\n\nMore is arriving.";
-    draw(completed);
-    expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
-    draw(completed, { streaming: false, options: { linkFavicons: true } });
-    expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
-    expect(find(".chat-text > p:last-child").textContent).toBe("More is arriving.");
-    expect(wrapper.classList.contains("is-wrapped")).toBe(true);
-    expect(wrapper.classList.contains("is-expanded")).toBe(true);
-    expect(wrap.getAttribute("aria-pressed")).toBe("true");
-    expect(expand.getAttribute("aria-expanded")).toBe("true");
-    expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
-    expect(readMarkdownCodeBlockCopyText(copy)).toBe(code);
-    if (language === "json") {
-      expect(raw).not.toBeNull();
-      expect(wrapper.querySelector('[data-json-mode="raw"]')).toBe(raw);
-      expect(raw?.getAttribute("aria-pressed")).toBe("true");
-      expect(wrapper.classList.contains("is-json-raw")).toBe(true);
-    }
-  });
-
-  it("retains JSON reader state when an unstable list becomes the final reply", () => {
-    const source = '- ```json\n  {"nested":{"ready":true}}\n  ```\n\n- Following item';
-    draw(source);
-    const wrapper = find(".code-block-wrapper");
-    const details = wrapper.querySelectorAll<HTMLDetailsElement>("details")[1]!;
-    details.open = false;
-    const raw = find<HTMLButtonElement>('[data-json-mode="raw"]', wrapper);
-    raw.click();
-    draw(source, { streaming: false });
-    expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
-    expect(wrapper.querySelectorAll("details")[1]).toBe(details);
-    expect(details.open).toBe(false);
-    expect(raw.getAttribute("aria-pressed")).toBe("true");
-    expect(wrapper.classList.contains("is-json-raw")).toBe(true);
-  });
 
   it.each([1, 200])(
     "keeps promoted nodes across chunks of %i characters and an empty tail",

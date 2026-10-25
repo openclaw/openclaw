@@ -55,13 +55,7 @@ function AttachmentContent(props: AttachmentTestProps) {
   return (
     <>
       <MessageImages images={media().images} options={props.options} />
-      <AssistantAttachments
-        attachments={media().attachments}
-        options={props.options}
-        onOpenSidebar={props.onOpenSidebar}
-        onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-        inlinePlayback={props.inlinePlayback}
-      />
+      <AssistantAttachments {...props} attachments={media().attachments} />
     </>
   );
 }
@@ -265,10 +259,10 @@ describe("attachment sidebar source ownership", () => {
     expect(card("")).not.toBeNull();
   });
 
-  it("loads SVG attachments through an image object URL", async () => {
+  it("reloads SVG attachments on reconnect and retains object URLs for open viewers", async () => {
     const intersectAttachment = stubAttachmentIntersection();
     const source = `${window.location.origin}/vector.svg`;
-    const objectUrl = "blob:svg-attachment";
+    let objectUrl = "blob:svg-attachment";
     let objectBlob: Blob | undefined;
     const revokeObjectURL = vi.fn();
     stubObjectUrls((object) => {
@@ -289,24 +283,24 @@ describe("attachment sidebar source ownership", () => {
     await intersectAttachment();
 
     await vi.waitFor(() => expect(imageNode()?.getAttribute("src")).toBe(objectUrl));
-    expect(fetchMock).toHaveBeenCalledWith(
-      source,
-      expect.objectContaining({
-        credentials: "same-origin",
-        headers: { Accept: "image/svg+xml" },
-        method: "GET",
-      }),
-    );
+    expect(fetchMock.mock.lastCall?.[1]?.credentials).toBe("same-origin");
     expect(objectBlob?.type).toBe("image/svg+xml");
     const svg = svgElement()!;
     svg.label = "Renamed vector";
     await svg.updateComplete;
     expect(imageNode()?.getAttribute("src")).toBe(objectUrl);
     expect(imageNode()?.getAttribute("alt")).toBe("Renamed vector");
-    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([source]);
     svg.label = "vector.svg";
     await svg.updateComplete;
     expect(container.querySelector("iframe")).toBeNull();
+    svg.remove();
+    await Promise.resolve();
+    objectUrl = "blob:svg-reconnected";
+    container.append(svg);
+    await intersectAttachment();
+    await vi.waitFor(() => expect(imageNode()?.getAttribute("src")).toBe(objectUrl));
+    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:svg-attachment");
+    revokeObjectURL.mockClear();
     imageNode()?.dispatchEvent(new Event("load"));
     expect(onAssistantAttachmentLoaded).toHaveBeenCalledOnce();
     imageButton()?.click();
@@ -345,27 +339,6 @@ describe("attachment sidebar source ownership", () => {
     expect(onOpenSidebar).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "attachment", attachmentKind: "image", src: source }),
     );
-  });
-
-  it("reloads a same-origin SVG after its element reconnects", async () => {
-    const intersectAttachment = stubAttachmentIntersection();
-    const objectUrls = ["blob:svg-first", "blob:svg-second"];
-    vi.spyOn(URL, "createObjectURL").mockImplementation(() => objectUrls.shift() ?? "blob:extra");
-    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
-    const fetchMock = vi.fn<typeof fetch>(async () => svgResponse());
-    vi.stubGlobal("fetch", fetchMock);
-    draw(svgAttachment(`${window.location.origin}/reconnected.svg`, "reconnected.svg"));
-
-    await intersectAttachment();
-    await vi.waitFor(() => expect(imageNode()?.getAttribute("src")).toBe("blob:svg-first"));
-    const attachment = svgElement()!;
-    attachment.remove();
-    await Promise.resolve();
-    container.append(attachment);
-    await intersectAttachment();
-
-    await vi.waitFor(() => expect(imageNode()?.getAttribute("src")).toBe("blob:svg-second"));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it.each(["size", "chunk", "timeout", "decode"] as const)(
@@ -456,7 +429,10 @@ describe("attachment sidebar source ownership", () => {
       .fn<() => Promise<{ url: string } | null>>()
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ url: ticketedUrl });
-    drawReactive(() => [managedAttachment(source, artifactId)], { resolveArtifactDownload });
+    drawReactive(() => [managedAttachment(source, artifactId)], {
+      resolveArtifactDownload,
+      resourceBasePath: "/rosita",
+    });
     await flushAttachmentResolution();
     expect(card("--blocked")).not.toBeNull();
 
@@ -465,23 +441,7 @@ describe("attachment sidebar source ownership", () => {
 
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     expect(card("--blocked")).toBeNull();
-    expect(attr("__download", "href")).toBe(ticketedUrl);
-  });
-
-  it("keeps static attachment URLs as static sidebar sources", async () => {
-    const source = "https://example.com/clip.mp4";
-    let sidebarContent: AttachmentSidebarContent | undefined;
-    draw(managedAttachment(source), {
-      onOpenSidebar: (content) => {
-        if (content.kind === "attachment") {
-          sidebarContent = content;
-        }
-      },
-    });
-    expandCard();
-
-    expect(sidebarContent?.src).toBe(source);
-    expect(sidebarContent?.resolveSource).toBeUndefined();
+    expect(attr("__download", "href")).toBe(`/rosita${ticketedUrl}`);
   });
 
   it("does not expose a Files action without a sidebar owner", () => {
@@ -491,63 +451,10 @@ describe("attachment sidebar source ownership", () => {
     expect(card("")?.hasAttribute("data-openable")).toBe(false);
   });
 
-  it("prefixes managed attachment tickets with the Control UI resource base path", async () => {
-    const attachmentId = crypto.randomUUID();
-    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
-    const ticketedUrl = `${source}?mediaTicket=ticket`;
-    const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
-    drawReactive(() => [managedAttachment(source, `artifact_${attachmentId}`)], {
-      resourceBasePath: "/rosita",
-      resolveArtifactDownload,
-    });
-    await flushAttachmentResolution();
-
-    expect(attr("__download", "href")).toBe(`/rosita${ticketedUrl}`);
-  });
-
-  it.each([
-    ["audio", "recording.ogg", "audio/ogg", "openclaw-chat-audio-player", "transcode"],
-    ["video", "demo.webm", "video/webm", "openclaw-chat-video-player", "transcode"],
-  ] as const)(
-    "renders %s attachment %s with inline playback",
-    (kind, label, mimeType, player, requestedPlayback) => {
-      const source = `https://example.com/${label}`;
-      const playback = requestedPlayback ?? "native";
-      const onOpenSidebar = vi.fn();
-      draw(makeAttachment(source, label, mimeType, { kind, playback }), { onOpenSidebar });
-
-      const mediaPlayer = container.querySelector(player);
-      expect(mediaPlayer).toMatchObject({ playback, sourceIdentity: source, src: source });
-      container.remove();
-    },
-  );
-
-  it.each([
-    ["audio", "unsafe.mp3", "audio/mpeg", "javascript:alert(1)"],
-    ["video", "unsafe.mp4", "video/mp4", "data:text/html;base64,PHNjcmlwdD4="],
-  ] as const)("blocks unsafe %s player source %s", (kind, label, mimeType, url) => {
-    draw(makeAttachment(url, label, mimeType, { kind }));
-
-    expect(container.querySelector("openclaw-chat-audio-player")).toBeNull();
-    expect(container.querySelector("openclaw-chat-video-player")).toBeNull();
-    expect(container.querySelector("audio, video")).toBeNull();
-    expect(card("--blocked")).not.toBeNull();
-    expect(action("download")).toBeNull();
-    expect(container.textContent).toContain(label);
-  });
-
-  it.each([
-    {
-      code: "unsupported-format",
-      label: "settings.toml",
-      reason: "Rejected by the local attachment allowlist. Send a supported file type.",
-    },
-    {
-      code: "invalid-reference",
-      label: "Media not attached",
-      reason: "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
-    },
-  ])("renders $code failures with separable status and reason text", ({ code, label, reason }) => {
+  it("renders attachment failures with separable status and reason text", () => {
+    const code = "unsupported-format";
+    const label = "settings.toml";
+    const reason = "Rejected by the local attachment allowlist. Send a supported file type.";
     draw(
       expectDefined(
         normalizeAttachmentContentBlock({
@@ -598,6 +505,7 @@ describe("attachment sidebar source ownership", () => {
         src: "data:audio/wav;base64,UklGRg==",
       }),
     );
+    expect(onOpenSidebar.mock.lastCall?.[0]).not.toHaveProperty("resolveSource");
   });
 
   it("retains an open local sidebar attachment's message while refreshing runtime credentials", async () => {

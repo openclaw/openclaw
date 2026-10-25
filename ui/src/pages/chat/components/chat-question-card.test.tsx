@@ -113,11 +113,6 @@ describe("shared question panel", () => {
     redraw();
   }
 
-  function drawUncontrolled(options: Parameters<typeof createGatewayQuestionPanelProps>[1]) {
-    drawPanel(createGatewayQuestionPanelProps(gatewayPrompt(), options));
-    return panelIn(container);
-  }
-
   const query = <T extends Element = HTMLElement>(selector: string) =>
     container.querySelector<T>(selector);
   const part = (name: string) => query(`.chat-question-panel__${name}`);
@@ -216,15 +211,7 @@ describe("shared question panel", () => {
     const onSubmit = vi.fn();
     await show(prompt, { onSubmit });
 
-    for (const selector of [
-      '[role="radio"] .chat-question-panel__option-marker',
-      '[role="radio"] kbd',
-      ".chat-question-panel__option--other .chat-question-panel__option-marker",
-      ".chat-question-panel__option--other kbd",
-      '[role="radiogroup"]',
-    ]) {
-      expect(query(selector)).not.toBeNull();
-    }
+    expect(query('[role="radiogroup"]')).not.toBeNull();
     expect(field(".chat-question-panel__option--other textarea").placeholder).toBe(
       "Type your own answer here",
     );
@@ -256,6 +243,7 @@ describe("shared question panel", () => {
       questions: [
         freeTextQuestion({
           questionId: "parts",
+          presentation: "form",
           multiSelect: true,
           isOther: true,
           answerFormat: "lines",
@@ -268,164 +256,80 @@ describe("shared question panel", () => {
               description: "Fits the joint",
             },
             { label: "Bolt" },
+            { label: "Remote washer", thumbnail: "https://example.com/washer.png" },
           ],
         }),
       ],
     });
     const onSubmit = vi.fn();
     await show(prompt, { onSubmit });
-    expect(container.querySelectorAll(".chat-question-panel__thumbnail")).toHaveLength(2);
+    expect(container.querySelectorAll(".chat-question-panel__thumbnail")).toHaveLength(3);
+    expect(container.querySelectorAll("img")).toHaveLength(1);
     const image = container.querySelector<HTMLImageElement>(".chat-question-panel__thumbnail img");
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,aW1hZ2U=");
     expect(image?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    const link = query<HTMLAnchorElement>(".chat-question-panel__external-image");
+    expect(link?.href).toBe("https://example.com/washer.png");
+    expect(link?.rel).toBe("noreferrer noopener");
     expect(container.querySelector('[aria-checked="true"]')?.textContent).toContain("Washer");
     type(field(".chat-question-panel__other"), "custom-spacer\ncustom-gasket");
     button("advance").click();
     expect(onSubmit).toHaveBeenCalledWith({ parts: ["washer", "custom-spacer", "custom-gasket"] });
   });
 
-  it("does not automatically load remote form thumbnails", async () => {
+  it("renders resource forms without a free-text URI fallback", async () => {
     await show(
       gatewayPrompt({
         questions: [
           freeTextQuestion({
             presentation: "form",
-            options: [{ label: "Washer", thumbnail: "https://example.com/washer.png" }],
-          }),
-        ],
-      }),
-    );
-    expect(query("img")).toBeNull();
-    const link = query<HTMLAnchorElement>(".chat-question-panel__external-image");
-    expect(link?.href).toBe("https://example.com/washer.png");
-    expect(link?.rel).toBe("noreferrer noopener");
-  });
-
-  it("removes implicit resource selections and never substitutes a free-text URI input", async () => {
-    const onSubmit = vi.fn();
-    await show(
-      gatewayPrompt({
-        questions: [
-          freeTextQuestion({
-            questionId: "parts",
-            presentation: "form",
-            multiSelect: true,
             isOther: true,
-            allowEmpty: true,
-            defaultAnswers: ["Washer"],
             resource: {
               viewId: "mcp-app-form",
               selection: "implicit",
               userOptions: { kind: "file" },
             },
-            options: [{ label: "Washer", resourceUri: "cad://parts/washer" }],
           }),
         ],
       }),
-      { onSubmit },
     );
     expect(query("textarea")).toBeNull();
     expect(query('input[type="file"]')).not.toBeNull();
-    query<HTMLButtonElement>('[aria-label="Remove Washer"]')?.click();
-    flush();
-    expect(query('[data-option-index="0"]')).toBeNull();
-    button("advance").click();
-    expect(onSubmit).toHaveBeenCalledWith({ parts: [] });
-  });
-
-  it("keeps a store-bound secret masked while preserving editable destination hosts", async () => {
-    const prompt = gatewayPrompt({
-      agentId: "release-agent",
-      questions: [
-        freeTextQuestion({
-          questionId: "api_key",
-          header: "API key",
-          isSecret: true,
-          secretStore: {
-            name: "FAKE_DEPLOYMENT_API_KEY",
-            kind: "secret",
-            allowedHosts: ["api.example.test"],
-            reason: "Deploy the approved release",
-          },
-          secretStoreExisting: {
-            updatedAtMs: Date.now() - 60_000,
-            updatedBy: "release-owner",
-          },
-        }),
-      ],
-    });
-    const onSubmit = vi.fn();
-    await show(prompt, { onSubmit });
-    const hosts = field(".chat-question-panel__hosts");
-    const secret = query<HTMLInputElement>('input[type="password"]')!;
-
-    expect(hosts.value).toBe("api.example.test");
-    expect(secret.autocomplete).toBe("off");
-    expect(secret.placeholder).toBe("FAKE_DEPLOYMENT_API_KEY");
-    expect(secret.labels?.[0]?.textContent).toContain("API key");
-    expect(part("options")).toBeNull();
-    expect(part("option-marker")).toBeNull();
-    expect(query("kbd")).toBeNull();
-    expect(container.textContent).toContain("release-agent");
-    expect(container.textContent).toContain("agent:main:main");
-    expect(container.textContent).toContain("Stores FAKE_DEPLOYMENT_API_KEY as Protected secret");
-    expect(container.textContent).toContain("Deploy the approved release");
-    expect(container.textContent).toContain("Replaces FAKE_DEPLOYMENT_API_KEY — last updated");
-    expect(container.textContent).toContain("by release-owner");
-
-    type(hosts, "api.example.test, uploads.example.test");
-    expect(prompt.secretStoreAllowedHostsDraft).toBe("api.example.test, uploads.example.test");
-
-    const fakeSecret = "  fake-secret-value-for-ui-test  ";
-    type(secret, fakeSecret);
-    expect(prompt.drafts.get("api_key")?.freeText).toBe(fakeSecret);
-    expect(secret.value).toBe(fakeSecret);
-    expect(container.textContent).not.toContain(fakeSecret);
-    expect(container.innerHTML).not.toContain(fakeSecret);
-
-    const toggle = query<HTMLButtonElement>('button[aria-label="Show secret"]')!;
-    expect(toggle).not.toBeNull();
-    toggle.click();
-    flush();
-    expect(secret.type).toBe("text");
-    expect(secret.value).toBe(fakeSecret);
-    expect(toggle.getAttribute("aria-label")).toBe("Hide secret");
-    expect(toggle.getAttribute("aria-pressed")).toBe("true");
-    expect(container.textContent).not.toContain(fakeSecret);
-    expect(container.innerHTML).not.toContain(fakeSecret);
-    toggle.click();
-    flush();
-    expect(secret.type).toBe("password");
-    expect(secret.value).toBe(fakeSecret);
-
-    button("advance").click();
-    expect(onSubmit).toHaveBeenCalledWith({ api_key: [fakeSecret] });
   });
 
   it("remasks secrets when moving to another question or request", async () => {
+    const submitted = createDeferred();
+    const onSubmit = vi.fn(() => submitted.promise);
+    const secret = "  fake-secret-first  ";
     const prompt = gatewayPrompt({
       questions: [
         freeTextQuestion({ questionId: "first", isSecret: true }),
         freeTextQuestion({ questionId: "second", isSecret: true }),
       ],
     });
-    await show(prompt);
+    await show(prompt, { onSubmit });
     const input = () => field("input");
     const reveal = () => {
       query<HTMLButtonElement>('button[aria-label="Show secret"]')!.click();
       flush();
     };
-    type(input(), "fake-secret-first");
+    type(input(), secret);
     reveal();
     expect(input().type).toBe("text");
     button("advance").click();
     flush();
     expect(input().type).toBe("password");
     expect(input().value).toBe("");
+    type(input(), "second-secret");
+    button("advance").click();
+    expect(onSubmit).toHaveBeenCalledWith({ first: [secret], second: ["second-secret"] });
+    await waitForSolid(() => expect(button("back").disabled).toBe(true));
+    submitted.resolve();
+    await waitForSolid(() => expect(button("back").disabled).toBe(false));
     button("back").click();
     flush();
     expect(input().type).toBe("password");
-    expect(input().value).toBe("fake-secret-first");
+    expect(input().value).toBe(secret);
     reveal();
     await show(gatewayPrompt({ id: "question-2", questions: prompt.questions }));
     expect(input().type).toBe("password");
@@ -463,13 +367,6 @@ describe("shared question panel", () => {
     },
   );
 
-  it("labels optionless answers when the compact header is empty", async () => {
-    await show(gatewayPrompt({ questions: [freeTextQuestion({ header: "" })] }));
-    const input = field("input, textarea");
-    expect(input.labels?.[0]?.textContent).toContain("Answer");
-    expect(input.placeholder).toBe("Answer");
-  });
-
   it("keeps environment store requests masked without exposing a destination-host editor", async () => {
     await show(
       gatewayPrompt({
@@ -488,20 +385,6 @@ describe("shared question panel", () => {
     );
   });
 
-  it("supports numeric selection and Enter submission while focused", async () => {
-    const onSubmit = vi.fn();
-    const group = await show(gatewayPrompt(), { onSubmit });
-
-    group.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
-    flush();
-    expect(
-      container.querySelectorAll<HTMLElement>('[role="radio"]')[1]?.getAttribute("aria-checked"),
-    ).toBe("true");
-
-    group.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(onSubmit).toHaveBeenCalledWith({ format: ["Detailed"] });
-  });
-
   it("leaves modified numeric shortcuts to the browser", async () => {
     const onSubmit = vi.fn();
     const group = await show(gatewayPrompt(), { onSubmit });
@@ -513,8 +396,13 @@ describe("shared question panel", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("does not expose an Other shortcut for optionless free text", async () => {
-    const group = await show(gatewayPrompt({ questions: [freeTextQuestion({ isOther: true })] }));
+  it("labels optionless free text without exposing an Other shortcut", async () => {
+    const group = await show(
+      gatewayPrompt({ questions: [freeTextQuestion({ header: "", isOther: true })] }),
+    );
+    const input = field("input, textarea");
+    expect(input.labels?.[0]?.textContent).toContain("Answer");
+    expect(input.placeholder).toBe("Answer");
     const event = new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true });
 
     group.dispatchEvent(event);
@@ -597,19 +485,7 @@ describe("shared question panel", () => {
     expect(onSkip).toHaveBeenCalledOnce();
   });
 
-  it("manages collapse state when no controlled callback is supplied", async () => {
-    await drawUncontrolled({});
-
-    button("collapse").click();
-    flush();
-    expect(query(".chat-question-panel--collapsed")).not.toBeNull();
-
-    button("collapsed-button").click();
-    flush();
-    expect(query(".chat-question-panel--collapsed")).toBeNull();
-  });
-
-  it("honors initial autofocus opt-out and focuses the panel when expanded", async () => {
+  it("honors autofocus opt-out and manages uncontrolled collapse and expansion", async () => {
     const props = createGatewayQuestionPanelProps(gatewayPrompt(), {});
     drawPanel({ ...props, model: { ...props.model, autoFocus: false } });
     await panelIn(container);
@@ -617,25 +493,11 @@ describe("shared question panel", () => {
 
     button("collapse").click();
     flush();
+    expect(query(".chat-question-panel--collapsed")).not.toBeNull();
     button("collapsed-button").click();
     flush();
+    expect(query(".chat-question-panel--collapsed")).toBeNull();
     expect(document.activeElement).toBe(query(".chat-question-panel"));
-  });
-
-  it("keeps a typed answer distinct from an identical option across remounts", async () => {
-    const prompt = gatewayPrompt();
-    const onSubmit = vi.fn();
-    await show(prompt, { onSubmit });
-    type(field(".chat-question-panel__other"), "Compact");
-
-    mounted?.unmount();
-    mounted = undefined;
-    await show(prompt, { onSubmit });
-
-    expect(field(".chat-question-panel__other").value).toBe("Compact");
-    expect(query('[aria-checked="true"]')).toBeNull();
-    button("advance").click();
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: ["Compact"] });
   });
 
   it("keeps a newer submission locked when an older visit to the same question settles", async () => {

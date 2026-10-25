@@ -176,7 +176,7 @@ async function mount(props: Partial<ChatSessionSharingProps>, open = true) {
 }
 
 describe("chat session sharing menu", () => {
-  it("reads people only on opening and retains the latest member rows across reopening", async () => {
+  it("reads people on opening and retains roster and search across reopening and failed refresh", async () => {
     const onOpen = vi.fn();
     const readAvatar = vi.fn(() => undefined);
     const sharing = (count: number, selected = false) =>
@@ -207,9 +207,16 @@ describe("chat session sharing menu", () => {
     expect(readAvatar).not.toHaveBeenCalled();
     render(sharing(101), root);
     expect(onOpen).not.toHaveBeenCalled();
+    const initialRead = createDeferred();
+    render({ ...sharing(101), state: { loading: false, read: initialRead.promise } }, root);
     const panel = (await openMenu(root))!;
     expect(panel.matches(":popover-open")).toBe(true);
     expect(onOpen).toHaveBeenCalledOnce();
+    expect(root.querySelector('[role="status"][aria-label="Loading…"]')).not.toBeNull();
+    expect(item(root, "permission:person-100")).toBeNull();
+    render(sharing(101), root);
+    initialRead.resolve();
+    await waitForSolid(() => expect(item(root, "permission:person-100")).not.toBeNull());
     expect(readAvatar).toHaveBeenCalled();
     expect(root.querySelectorAll(".chat-pane__sharing-person")).toHaveLength(101);
     const member = memberRow(root, "person-100");
@@ -236,33 +243,28 @@ describe("chat session sharing menu", () => {
     expect(root.querySelector("input[data-search]")).toBe(search);
     expect(document.activeElement).toBe(search);
     expect(root.querySelectorAll(".chat-pane__sharing-person")).toHaveLength(1);
-  });
-
-  it("hides members in Shared and restores them when authoritative visibility changes", async () => {
-    const props = renderSharing({
-      state: aliceRoster({ owner }),
-      onPublicShareChange: vi.fn(),
-    });
-    const root = await mount(props);
-    for (const visibility of [
-      undefined,
-      "read-only",
-      "shared",
-      "suggest",
-      "draft",
-      "shared",
-    ] as const) {
-      render({ ...props, session: sharingSession({ visibility }) }, root);
-      const visible = visibility === "read-only" || visibility === "suggest";
-      expect(Boolean(part(root, "sharing-permissions"))).toBe(visible);
-      expect(Boolean(item(root, "permission:alice"))).toBe(visible);
-      expect(Boolean(root.querySelector('[aria-label="Search people…"]'))).toBe(visible);
-      expect(root.textContent).toContain("Session access");
-      expect(root.textContent).toContain("Link sharing");
-    }
-    expect(props.onMemberChange).not.toHaveBeenCalled();
-    expect(props.onVisibilityChange).not.toHaveBeenCalled();
-    expect(props.onPublicShareChange).not.toHaveBeenCalled();
+    const visible = memberRow(root, "person-101");
+    const expectRetained = () => {
+      expect(memberRow(root, "person-101")).toBe(visible);
+      expect(root.querySelector("input[data-search]")).toBe(search);
+      expect(search.value).toBe("Person 101");
+    };
+    const ready = sharing(102, true);
+    const refresh = createDeferred();
+    render({ ...ready, state: { ...ready.state!, loading: true, read: refresh.promise } }, root);
+    expectRetained();
+    render({ ...ready, state: { ...ready.state!, error: "Membership refresh failed" } }, root);
+    refresh.resolve();
+    await waitForSolid(() =>
+      expect(alert(root)?.textContent).toContain("Membership refresh failed"),
+    );
+    expectRetained();
+    const retry = createDeferred();
+    render({ ...ready, state: { ...ready.state!, loading: true, read: retry.promise } }, root);
+    render(ready, root);
+    retry.resolve();
+    await waitForSolid(() => expect(alert(root)).toBeNull());
+    expectRetained();
   });
 
   it("uses server choices for editable opaque human IDs and inherited participation", async () => {
@@ -321,11 +323,20 @@ describe("chat session sharing menu", () => {
     readOption.click();
     expect(onMemberChange).toHaveBeenLastCalledWith("channel:chn_design", false);
     render({ ...props, session: sharingSession({ visibility: "shared" }) }, root);
+    expect(part(root, "sharing-permissions")).toBeNull();
+    expect(item(root, "permission:channel:chn_design")).toBeNull();
+    expect(root.querySelector('[aria-label="Search people…"]')).toBeNull();
     readOption.click();
     expect(onMemberChange).toHaveBeenCalledTimes(2);
+    render({ ...props, session: sharingSession({ visibility: "suggest" }) }, root);
+    expect(item(root, "permission:channel:chn_design")).not.toBeNull();
+    expect(root.querySelector('[aria-label="Search people…"]')).not.toBeNull();
   });
 
-  it("keeps a world-readable draft session visibly public after its menu closes", async () => {
+  it("keeps public draft access separate from team visibility through copy and disable", async () => {
+    const onPublicShareChange = vi.fn();
+    const onCopyPublicLink = vi.fn();
+    const onVisibilityChange = vi.fn();
     const session = sharingSession({ visibility: "draft" });
     const state = sharingState({
       allowedVisibilities: ["draft", "read-only"],
@@ -335,9 +346,13 @@ describe("chat session sharing menu", () => {
       renderSharing({
         session,
         state: published ? state : sharingState({ ...state.result, publicShare: undefined }),
-        onPublicShareChange: vi.fn(),
+        onPublicShareChange,
+        onCopyPublicLink,
+        onVisibilityChange,
       });
     const root = await mount(renderIndicator(true));
+    expect(part(root, "sharing-permissions")).toBeNull();
+    expect(root.querySelector('[aria-label="Search people…"]')).toBeNull();
 
     const panel = part(root, "sharing-panel")!;
     panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -346,33 +361,16 @@ describe("chat session sharing menu", () => {
     const indicator = root.querySelector('.chat-pane__sharing-trigger[data-public="true"]');
     expect(indicator?.textContent?.trim()).toBe("Public");
     expect(indicator?.getAttribute("title")).toContain("anyone can read");
-
-    render(renderIndicator(false), root);
-    expect(root.querySelector('.chat-pane__sharing-trigger[data-public="true"]')).toBeNull();
-  });
-
-  it("keeps disabling public access separate from team visibility", async () => {
-    const onPublicShareChange = vi.fn();
-    const onCopyPublicLink = vi.fn();
-    const onVisibilityChange = vi.fn();
-    const root = await mount({
-      session: sharingSession({ visibility: "draft" }),
-      state: sharingState({
-        allowedVisibilities: ["draft", "shared"],
-        publicShare,
-      }),
-      onVisibilityChange,
-      onPublicShareChange,
-      onCopyPublicLink,
-    });
-    expect(root.textContent).toContain("Link sharing");
-    expect(root.textContent).toContain("The public link stays readable in Draft.");
     await select(root, "public:disable");
     expect(onPublicShareChange).toHaveBeenCalledWith(false);
     expect(onVisibilityChange).not.toHaveBeenCalled();
     await select(root, "public:copy");
     expect(onCopyPublicLink).toHaveBeenCalledOnce();
     expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
+    expect(root.textContent).toContain("Link sharing");
+    expect(root.textContent).toContain("The public link stays readable in Draft.");
+    render(renderIndicator(false), root);
+    expect(root.querySelector('.chat-pane__sharing-trigger[data-public="true"]')).toBeNull();
   });
 
   it("keeps the empty permissions status on command failure and clears it during retry", async () => {
@@ -450,49 +448,6 @@ describe("chat session sharing menu", () => {
       expect(onPublicShareChange).not.toHaveBeenCalled();
     },
   );
-
-  it("uses read readiness and retains the roster and search through a failed refresh", async () => {
-    const initialRead = createDeferred();
-    const props = renderSharing({
-      session: sharingSession({ visibility: "read-only" }),
-      state: { loading: false, read: initialRead.promise },
-    });
-    const root = await mount(props);
-    expect(root.querySelector('[role="status"][aria-label="Loading…"]')).not.toBeNull();
-    expect(item(root, "permission:alice")).toBeNull();
-    const ready = renderSharing({
-      session: sharingSession({ visibility: "read-only" }),
-      state: aliceRoster(),
-    });
-    render(ready, root);
-    initialRead.resolve();
-    await waitForSolid(() => expect(item(root, "permission:alice")).not.toBeNull());
-    const person = item(root, "permission:alice");
-    root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
-    await waitForSolid(() => expect(root.querySelector("input[type=search]")).not.toBeNull());
-    const search = root.querySelector<HTMLInputElement>("input[type=search]")!;
-    search.value = "Ali";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    const refresh = createDeferred();
-    render({ ...ready, state: { ...ready.state!, loading: true, read: refresh.promise } }, root);
-    expect(item(root, "permission:alice")).toBe(person);
-    expect(root.querySelector("input[type=search]")).toBe(search);
-    expect(search.value).toBe("Ali");
-    render({ ...ready, state: { ...ready.state!, error: "Membership refresh failed" } }, root);
-    refresh.resolve();
-    await waitForSolid(() =>
-      expect(alert(root)?.textContent).toContain("Membership refresh failed"),
-    );
-    expect(item(root, "permission:alice")).toBe(person);
-    expect(root.querySelector("input[type=search]")).toBe(search);
-    const retry = createDeferred();
-    render({ ...ready, state: { ...ready.state!, loading: true, read: retry.promise } }, root);
-    render(ready, root);
-    retry.resolve();
-    await waitForSolid(() => expect(alert(root)).toBeNull());
-    expect(item(root, "permission:alice")).toBe(person);
-    expect(search.value).toBe("Ali");
-  });
 
   it("shows the owner picker with policy-gated modes and known identities", async () => {
     const onVisibilityChange = vi.fn();
@@ -631,15 +586,21 @@ describe("chat session sharing menu", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("keeps visibility controls usable without member-list support", async () => {
+  it("keeps visibility-only controls usable through failure and a held retry", async () => {
     const onOpen = vi.fn();
-    const onVisibilityChange = vi.fn();
-    const root = await mount({
+    const failed = createDeferred();
+    const retry = createDeferred();
+    const onVisibilityChange = vi
+      .fn()
+      .mockReturnValueOnce(failed.promise)
+      .mockReturnValueOnce(retry.promise);
+    const props = renderSharing({
       allowedVisibilities: ["shared", "read-only"],
       membersAvailable: false,
       onOpen,
       onVisibilityChange,
     });
+    const root = await mount(props);
 
     expect(trigger(root).disabled).toBe(false);
     expect(part(root, "sharing-permissions")).toBeNull();
@@ -647,23 +608,6 @@ describe("chat session sharing menu", () => {
     await openAccess(root);
     expect(item(root, "visibility:read-only")).not.toBeNull();
 
-    await select(root, "visibility:read-only");
-    await backToOverview(root);
-    expect(part(root, "sharing-permissions")).toBeNull();
-    expect(root.textContent).not.toContain("Permissions");
-
-    expect(onOpen).toHaveBeenCalledOnce();
-    expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
-  });
-
-  it("retains the access controls through a rejected command and held retry", async () => {
-    const failed = createDeferred();
-    const retry = createDeferred();
-    const change = vi.fn().mockReturnValueOnce(failed.promise).mockReturnValueOnce(retry.promise);
-    const root = await mount({
-      allowedVisibilities: ["shared", "read-only"],
-      onVisibilityChange: change,
-    });
     await select(root, "visibility:read-only");
     const button = item(root, "visibility:read-only");
     expect(button?.disabled).toBe(true);
@@ -681,15 +625,12 @@ describe("chat session sharing menu", () => {
     retry.resolve();
     await waitForSolid(() => expect(button?.disabled).toBe(false));
     expect(item(root, "visibility:read-only")).toBe(button);
-  });
-
-  it("shows rejected sharing changes for visibility-only Gateways", async () => {
-    const root = await mount({
-      state: { loading: false, error: "Visibility update rejected" },
-      allowedVisibilities: ["shared", "read-only"],
-      membersAvailable: false,
-    });
-
+    await backToOverview(root);
+    expect(part(root, "sharing-permissions")).toBeNull();
+    expect(root.textContent).not.toContain("Permissions");
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
+    render({ ...props, state: { loading: false, error: "Visibility update rejected" } }, root);
     const error = part(root, "sharing-status--error");
     expect(error?.textContent).toContain("Visibility update rejected");
     expect(error?.getAttribute("role")).toBe("alert");
