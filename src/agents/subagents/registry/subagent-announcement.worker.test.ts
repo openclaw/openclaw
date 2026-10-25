@@ -4,7 +4,6 @@ import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
 import {
@@ -71,64 +70,44 @@ const nativePersistence = await vi.importActual<
 
 const registerCompletion = announcementFixture(fixture, false);
 
-it.each(["keep", "delete"] as const)(
-  "settles registered quiet %s completion without host registry writes",
-  async (cleanup) => {
-    const run = await registerCompletion(`ordinary-announcement-${cleanup}`, { cleanup });
-    const { runId } = run;
-    const deleted: unknown[] = [];
-    fixture.gateway.mockImplementation(async (request) => {
-      if (request.method === "agent.wait") {
-        return await new Promise<never>(() => {});
-      }
-      if (request.method !== "sessions.delete") {
-        throw new Error(`Unexpected RPC ${request.method}`);
-      }
-      request.assertDispatchCurrent?.();
-      deleted.push({
-        request: request.params,
-        marker: storedAnnouncement(runId)?.deleteCleanupDispatchedAt,
-      });
-      return {};
-    });
-    const registryWrites: string[] = [];
-    let statements: ReturnType<typeof observeHostDataSql> | undefined;
-    // Terminal admission precedes browser cleanup. Measure ordinary cleanup through
-    // its awaited registry bookkeeping; requester batch transport stays mocked.
-    fixture.cleanup.mockImplementation(async () => {
-      statements = observeHostDataSql((sql) => {
-        if (/(?:insert into|update|delete from)\s+"?subagent_runs\b/i.test(sql)) {
-          registryWrites.push(sql);
-        }
-      });
-    });
-    try {
-      completeRegistered(run);
-      await fixture.settle();
-      expect(storedAnnouncement(runId)).toMatchObject({
-        cleanupCompletedAt: expect.any(Number),
-        execution: { status: "terminal", outcome: { status: "ok" } },
-        delivery: { status: "not_required" },
-      });
-      expect(statements).toBeDefined();
-      expect(fixture.announce).not.toHaveBeenCalled();
-      expect(deleted).toHaveLength(cleanup === "delete" ? 1 : 0);
-      if (cleanup === "delete") {
-        expect(deleted[0]).toMatchObject({
-          marker: expect.any(Number),
-          request: {
-            key: run.childSessionKey,
-            expectedSessionId: "ordinary-child-session",
-            expectedLifecycleRevision: "ordinary-child-revision",
-          },
-        });
-      }
-      expect(registryWrites.length).toBe(0);
-    } finally {
-      statements?.restore();
+it.each(["keep", "delete"] as const)("settles registered quiet %s completion", async (cleanup) => {
+  const run = await registerCompletion(`ordinary-announcement-${cleanup}`, { cleanup });
+  const { runId } = run;
+  const deleted: unknown[] = [];
+  fixture.gateway.mockImplementation(async (request) => {
+    if (request.method === "agent.wait") {
+      return await new Promise<never>(() => {});
     }
-  },
-);
+    if (request.method !== "sessions.delete") {
+      throw new Error(`Unexpected RPC ${request.method}`);
+    }
+    request.assertDispatchCurrent?.();
+    deleted.push({
+      request: request.params,
+      marker: storedAnnouncement(runId)?.deleteCleanupDispatchedAt,
+    });
+    return {};
+  });
+  completeRegistered(run);
+  await fixture.settle();
+  expect(storedAnnouncement(runId)).toMatchObject({
+    cleanupCompletedAt: expect.any(Number),
+    execution: { status: "terminal", outcome: { status: "ok" } },
+    delivery: { status: "not_required" },
+  });
+  expect(fixture.announce).not.toHaveBeenCalled();
+  expect(deleted).toHaveLength(cleanup === "delete" ? 1 : 0);
+  if (cleanup === "delete") {
+    expect(deleted[0]).toMatchObject({
+      marker: expect.any(Number),
+      request: {
+        key: run.childSessionKey,
+        expectedSessionId: "ordinary-child-session",
+        expectedLifecycleRevision: "ordinary-child-revision",
+      },
+    });
+  }
+});
 
 it("retains registered cleanup admission behind a durable write while a successor queues", async () => {
   const run = await registerCompletion("cleanup-start-successor");

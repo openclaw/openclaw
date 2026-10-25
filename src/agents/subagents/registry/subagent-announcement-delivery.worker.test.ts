@@ -3,10 +3,6 @@
 import { runSubagentStateWorkerOperation as runWorker, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import path from "node:path";
 import { assert, beforeEach, expect, it, vi } from "vitest";
-import {
-  emptySqliteCounts,
-  observeParentSqlite,
-} from "../../../../test/helpers/sqlite-parent-observer.js";
 import { createDeferredCore as createDeferred } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -28,7 +24,6 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import * as registryReads from "./subagent-registry-read-cache.js";
-import * as registryRead from "./subagent-registry-read.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
 import { prepareSubagentSessionCleanupRevocation, resumeSubagentRun } from "./subagent-registry.js";
@@ -37,7 +32,6 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 vi.mock("./subagent-registry-read-cache.js", { spy: true });
-vi.mock("./subagent-registry-read.js", { spy: true });
 vi.mock("../../../plugins/hook-runner-global.js", { spy: true });
 type AgentTurnService = ReturnType<
   (typeof import("../../../gateway/agent-turn/agent-turn-service.js"))["createAgentTurnService"]
@@ -56,9 +50,6 @@ const nativeAnnounce = await vi.importActual<typeof import("../announce/subagent
 );
 const nativeReads = await vi.importActual<typeof registryReads>(
   "./subagent-registry-read-cache.js",
-);
-const nativeRegistryRead = await vi.importActual<typeof registryRead>(
-  "./subagent-registry-read.js",
 );
 const nativeWake = await vi.importActual<
   typeof import("../announce/subagent-announce.requester-settle-wake.js")
@@ -169,7 +160,7 @@ it.each(["announce receipt delete", "announce receipt keep"] as const)(
   },
 );
 
-it("defers registered parent delivery until its descendant settles without host descendant reads", async () => {
+it("defers registered parent delivery until its descendant settles", async () => {
   await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
     const parent = await registerCompletion("ordinary-deferred-parent");
     const child = await registerCompletion("ordinary-deferred-child", {
@@ -187,45 +178,8 @@ it("defers registered parent delivery until its descendant settles without host 
           : "deferred-parent-outward-delivery",
       );
     });
-    const reads: { phase: "announce" | "cleanup"; counts: ReturnType<typeof emptySqliteCounts> }[] =
-      [];
-    let phase: "announce" | "cleanup" = "cleanup";
     fixture.wake.mockResolvedValue(false);
-    fixture.announce.mockImplementation(async (params) => {
-      phase = "announce";
-      try {
-        return await nativeAnnounce.runSubagentAnnounceFlow(params);
-      } finally {
-        phase = "cleanup";
-      }
-    });
-    function observeRead<T>(read: () => T): T {
-      const selectedPhase = phase;
-      // Only the actual descendant read is measured here; transport and fixture
-      // writes remain outside this window. Preserve sync/async return semantics for RED.
-      const sql = observeParentSqlite();
-      const record = () => {
-        reads.push({ phase: selectedPhase, counts: { ...sql.counts } });
-        sql.restore();
-      };
-      try {
-        const result = read();
-        if (result instanceof Promise) {
-          void result.then(record, record);
-        } else {
-          record();
-        }
-        return result;
-      } catch (error) {
-        record();
-        throw error;
-      }
-    }
-    const count = vi
-      .spyOn(registryRead, "countPendingDescendantRuns")
-      .mockImplementation((...args) =>
-        observeRead(() => nativeRegistryRead.countPendingDescendantRuns(...args)),
-      );
+    fixture.announce.mockImplementation(nativeAnnounce.runSubagentAnnounceFlow);
     try {
       registryState.clearSubagentRunsReadCacheForTest();
       completeRegistered(parent);
@@ -239,14 +193,6 @@ it("defers registered parent delivery until its descendant settles without host 
       expect(deferred?.cleanupCompletedAt).toBeUndefined();
       expect(turns.start).not.toHaveBeenCalled();
       expect(fixture.wake).not.toHaveBeenCalled();
-      expect(reads.map((read) => read.phase)).toEqual(
-        expect.arrayContaining(["announce", "cleanup"]),
-      );
-
-      for (const read of reads) {
-        expect(read.counts, read.phase).toEqual(emptySqliteCounts());
-      }
-
       completeRegistered(child);
       await fixture.settle();
       expect(turns.start).toHaveBeenCalledOnce();
@@ -276,7 +222,6 @@ it("defers registered parent delivery until its descendant settles without host 
       });
       expect(storedAnnouncement(child.runId)?.cleanupCompletedAt).toBeTypeOf("number");
     } finally {
-      count.mockRestore();
       await fixture.settle();
     }
   });

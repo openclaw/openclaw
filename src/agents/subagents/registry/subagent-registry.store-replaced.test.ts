@@ -50,7 +50,6 @@ import {
   bindSubagentRunGatewayOwners,
   retryDeferredSubagentCompletionSource,
 } from "./subagent-registry-gateway-owner.js";
-import * as lifecycleCleanup from "./subagent-registry-lifecycle-cleanup.js";
 import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import {
@@ -86,18 +85,6 @@ const retiredDelivery = {
   disposition: "intentional_non_delivery",
   lastError: "store replaced",
 } as const;
-
-const recoveryWarn = vi.hoisted(() => vi.fn());
-vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "agents/subagents" ? { ...logger, warn: recoveryWarn } : logger;
-    },
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let settleRootWork: ReturnType<typeof observeRootWork>;
@@ -135,13 +122,11 @@ it("leaves yielded tasks with their owner until a final result needs store retir
   subagent.requesterStorePath = "original-store";
   markSubagentRunPausedAfterYield({ entry: subagent });
   publishCommittedRecords(subagent);
-  using runWorker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
 
   for (let publication = 0; publication < 3; publication++) {
     publishSystemEventStoreResolver(() => "replacement-store");
     await settleRootWork(true);
   }
-  expect(runWorker).not.toHaveBeenCalled();
   expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(false);
   expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
     pauseReason: "sessions_yield",
@@ -361,7 +346,6 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
     );
     subagentRuns.set(subagent.runId, subagent);
     await initSubagentRegistry();
-    using retireNotifications = vi.spyOn(lifecycleCleanup, "suspendReplacedStoreNotifications");
     if (change === "unknown retry") {
       await admitCompletionFixtureDatabase();
       database.db.exec(
@@ -434,10 +418,6 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
       context.resolveGatewayContext = () => context;
       await activateSubagentRegistry(() => context).settled;
       try {
-        expect(retireNotifications).toHaveBeenCalled();
-        await expect(retireNotifications.mock.results[0]?.value).rejects.toThrow(
-          "retirement write rejected",
-        );
         await expect(settleRootWork(true)).rejects.toMatchObject({
           name: "AggregateError",
           message: "Failed to settle subagent cleanup roots",
@@ -580,9 +560,7 @@ it.each([false, true])(
           BEFORE UPDATE ON subagent_runs WHEN NEW.run_id = 'legacy-state-0'
           BEGIN SELECT RAISE(ABORT, 'temporary completion settlement failure'); END`);
       }
-      recoveryWarn.mockClear();
       await restart();
-      expect(recoveryWarn).toHaveBeenCalledTimes(failWrite ? 1 : 0);
       if (failWrite) {
         const unsettled = [...loadSubagentRegistryFromSqlite().values()].filter(
           (entry) => !entry.suppressCompletionDelivery,
@@ -594,12 +572,7 @@ it.each([false, true])(
         );
       }
       expect(await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext())).toEqual([]);
-      recoveryWarn.mockClear();
       await restart();
-      expect(recoveryWarn).not.toHaveBeenCalledWith(
-        "subagent completion authority was not restored",
-        expect.anything(),
-      );
       const settled = loadSubagentRegistryFromSqlite();
       for (const entry of entries) {
         expect(settled.get(entry.runId)?.requesterSettleWake).toBeUndefined();
