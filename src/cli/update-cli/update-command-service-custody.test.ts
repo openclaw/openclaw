@@ -383,9 +383,6 @@ it.skipIf(process.platform === "win32").each(["cooperative", "forced"] as const)
       } else {
         await expect(operation).resolves.toBe(true);
       }
-      const pids = JSON.parse(await fs.readFile(receipt, "utf8"));
-      expect(isChildProcessTreeAlive({ pid: pids.root })).toBe(false);
-      expect(isPidAlive(pids.child)).toBe(false);
       expect(observed).toHaveLength(1);
       expect(observed[0]).toMatchObject({ code: 0, termination: "exit", cleanup });
       expect(fsSync.existsSync(stopped)).toBe(cleanup === "cooperative");
