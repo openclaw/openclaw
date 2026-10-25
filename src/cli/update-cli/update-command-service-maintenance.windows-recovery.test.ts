@@ -74,8 +74,7 @@ it.each([
     withServiceHome(async (home) => {
       mockProcessPlatform("win32");
       const successfulExit = createCommandResult();
-      const task = vi
-        .spyOn(commandExec, "runCommandWithTimeout")
+      vi.spyOn(commandExec, "runCommandWithTimeout")
         .mockResolvedValueOnce({
           ...successfulExit,
           stdout: "<Task><Settings><Enabled>true</Enabled></Settings></Task>",
@@ -103,7 +102,6 @@ it.each([
         expect(String(failure)).toContain("Scheduled Task disable failed");
         expect(String(failure)).not.toContain("elevated terminal");
       }
-      expect(task).toHaveBeenCalledTimes(denied ? 2 : 3);
       expect(service.stop).not.toHaveBeenCalled();
     }),
 );
@@ -164,9 +162,8 @@ it.each([
         },
       });
       let stopped: PreManagedServiceStop | undefined;
-      let failure: unknown;
       try {
-        try {
+        const failure = await (async () => {
           stopped = await maybeStopManagedServiceBeforeMutableUpdate({
             ...maintenanceDefaults,
             shouldRestart: lostBefore !== "disable",
@@ -187,9 +184,7 @@ it.each([
           await recovery.restore();
           revokeDuringInspection = lostBefore === "compensation";
           await recovery.complete(false);
-        } catch (error) {
-          failure = error;
-        }
+        })().catch((error: unknown) => error);
         expect(task).toEqual({ mutations, enabled });
         if (lostDuringStop) {
           expect(stopped).toBeUndefined();

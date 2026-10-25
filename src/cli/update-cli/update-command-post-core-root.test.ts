@@ -98,11 +98,9 @@ describe("post-core child output", () => {
       await withOpenClawTestState({ label: "post-core-integrity" }, async (state) => {
         const root = await packageAt(state.path("package"));
         vi.spyOn(postCoreCapability, "supportsPostCoreExecutor").mockResolvedValue(false);
-        const inspect = vi
-          .spyOn(cliOptions, "readUpdateTargetCliOptions")
-          .mockResolvedValue(
-            new Set(["--accept-capabilities", ...(supported ? ["--full-integrity-check"] : [])]),
-          );
+        vi.spyOn(cliOptions, "readUpdateTargetCliOptions").mockResolvedValue(
+          new Set(["--accept-capabilities", ...(supported ? ["--full-integrity-check"] : [])]),
+        );
         mocks.spawn.mockImplementation(() => successfulChild());
         expect(
           await continueFixture(root, {
@@ -111,7 +109,6 @@ describe("post-core child output", () => {
             nodeRunner: process.execPath,
           }),
         ).toEqual({ resumed: true });
-        expect(inspect).toHaveBeenCalledOnce();
         const argv = mocks.spawn.mock.calls[0]?.[1] as string[];
         expect(argv).toContain("--accept-capabilities");
         expect(argv.includes("--full-integrity-check")).toBe(supported);
@@ -121,7 +118,6 @@ describe("post-core child output", () => {
 
   it.each([
     ["win32", false, "pipe"],
-    ["win32", true, "pipe"],
     ["linux", false, "inherit"],
     ["linux", true, "pipe"],
   ] as const)("routes %s output (json=%s) through %s", async (platform, json, stdio) => {

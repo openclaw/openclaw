@@ -65,10 +65,8 @@ it("migrates retired heartbeat config with its backed-up state only once", async
       await updateMigrateCommand(backupRoot);
       const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
       expect(receipt.status).toBe("migrated");
-      expect(receipt.configFiles).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: state.configPath, raw: original }),
-        ]),
+      expect(receipt.configFiles).toContainEqual(
+        expect.objectContaining({ path: state.configPath, raw: original }),
       );
       const saved = JSON.parse(await readText(state.configPath));
       expect(saved.agents.defaults).not.toHaveProperty("heartbeat");
@@ -176,15 +174,13 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
             [agentPath, agentIdentity, { role: "agent", agentId: "main" }],
             [shared.path, sharedIdentity, { role: "global" }],
           ] as const) {
-            expect(preflight?.verifiedSnapshots).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  sourcePath: file,
-                  ...owner,
-                  dev: identity.dev,
-                  ino: identity.ino,
-                }),
-              ]),
+            expect(preflight?.verifiedSnapshots).toContainEqual(
+              expect.objectContaining({
+                sourcePath: file,
+                ...owner,
+                dev: identity.dev,
+                ino: identity.ino,
+              }),
             );
             expect(receipt.databaseIdentities[file]).toEqual({
               dev: Number(identity.dev),
