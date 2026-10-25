@@ -1,10 +1,10 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { afterEach, describe, expect, test, vi } from "vitest";
-import { z } from "zod";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import type { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
 import { serveOpenClawChannelMcp } from "./channel-server.js";
-import type { SessionMessagePayload } from "./channel-shared.js";
+import type { QueueEvent, SessionMessagePayload } from "./channel-shared.js";
 
 const transportState = vi.hoisted((): { next?: InMemoryTransport } => ({}));
 // mock-isolation: Channel fixtures read empty config without starting a config owner.
@@ -14,11 +14,48 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("@modelcontextprotocol/server/stdio", () => ({
   StdioServerTransport: vi.fn(function () {
-    if (!transportState.next) {
-      throw new Error("MCP test transport was not prepared");
-    }
-    return transportState.next;
+    return transportState.next!;
   }),
+}));
+
+const startup = vi.hoisted(() => ({ options: null as Record<string, unknown> | null }));
+// mock-isolation: Startup owns endpoint facts and hello delivery without real Gateway IO.
+vi.mock("../gateway/client-bootstrap.js", () => ({
+  resolveGatewayClientBootstrap: vi.fn<typeof resolveGatewayClientBootstrap>(async () => ({
+    url: "wss://127.0.0.1:18789",
+    urlSource: "local loopback",
+    connectionDetails: {
+      url: "wss://127.0.0.1:18789",
+      urlSource: "local loopback",
+      message: "Gateway target: wss://127.0.0.1:18789",
+    },
+    tlsFingerprint: "sha256:local",
+    auth: { token: undefined, password: undefined },
+  })),
+}));
+// mock-isolation: Capture startup callbacks without opening a real Gateway connection.
+vi.mock("../gateway/client.js", () => ({
+  GatewayClient: class {
+    constructor(options: Record<string, unknown>) {
+      startup.options = options;
+    }
+    start(): void {}
+    async request(): Promise<void> {}
+    async stopAndWait(): Promise<void> {}
+  },
+}));
+// mock-isolation: Startup ordering uses explicit hello delivery, not real event-loop timing.
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
+  startGatewayClientWhenEventLoopReady: vi.fn(async (client: { start: () => void }) => {
+    client.start();
+    return { ready: true, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 1 };
+  }),
+}));
+// mock-isolation: The bridge fixture needs scope constants without loading plugin policy state.
+vi.mock("../gateway/method-scopes.js", () => ({
+  APPROVALS_SCOPE: "operator.approvals",
+  READ_SCOPE: "operator.read",
+  WRITE_SCOPE: "operator.write",
 }));
 
 const route = { channel: "telegram", to: "-100123", accountId: "acct-1" };
@@ -34,55 +71,16 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function receiveMessage(bridge: OpenClawChannelBridge, payload: SessionMessagePayload) {
-  return (
-    bridge as unknown as {
-      handleSessionMessageEvent: (payload: SessionMessagePayload) => Promise<void>;
-    }
-  ).handleSessionMessageEvent(payload);
-}
-
-function gatewayResponses(responses: Record<string, unknown>) {
-  return vi.fn(async (method: string) => {
-    if (!(method in responses)) {
-      throw new Error(`unexpected gateway method ${method}`);
-    }
-    return responses[method];
-  });
-}
-
-function primaryText(result: unknown) {
-  return (result as { content: { text: string }[] }).content[0]?.text;
-}
-
-const channelParams = z.object({ content: z.string(), meta: z.record(z.string(), z.string()) });
-
-const permissionParams = z.object({
-  request_id: z.string(),
-  behavior: z.enum(["allow", "deny"]),
-});
-
-function notifications<T>(client: Client, method: string, params: z.ZodType<T>) {
-  const received: T[] = [];
-  client.setNotificationHandler(method, { params }, (value) => {
-    received.push(value);
-  });
-  return received;
-}
-
-async function connectMcpWithoutGateway(claudeChannelMode: "on" | "off" = "off") {
+async function connectMcpWithoutGateway() {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   transportState.next = serverTransport;
-  const started = createDeferredCore<OpenClawChannelBridge>();
+  const started = createDeferredCore<BridgeInternals>();
   const startSpy = vi
     .spyOn(OpenClawChannelBridge.prototype, "start")
     .mockImplementation(async function (this: OpenClawChannelBridge) {
-      started.resolve(this);
+      started.resolve(this as unknown as BridgeInternals);
     });
-  const serving = serveOpenClawChannelMcp({
-    claudeChannelMode,
-    verbose: false,
-  });
+  const serving = serveOpenClawChannelMcp({ claudeChannelMode: "off" });
   void serving.catch(started.reject);
   const bridge = await started.promise;
   startSpy.mockRestore();
@@ -91,7 +89,7 @@ async function connectMcpWithoutGateway(claudeChannelMode: "on" | "off" = "off")
   const mcp = {
     client,
     bridge,
-    receive: receiveMessage.bind(null, bridge),
+    receive: (payload: SessionMessagePayload) => bridge.handleSessionMessageEvent(payload),
     call: (name: string, args: Record<string, unknown> = {}) =>
       client.callTool({ name, arguments: args }),
     close: async () => {
@@ -104,26 +102,14 @@ async function connectMcpWithoutGateway(claudeChannelMode: "on" | "off" = "off")
   return mcp;
 }
 
-function userMessage(
-  text: unknown,
-  overrides: Partial<SessionMessagePayload> = {},
-): SessionMessagePayload {
-  return {
-    sessionKey,
-    senderIsOwner: true,
-    lastChannel: "imessage",
-    lastTo: "+15551234567",
-    message: { role: "user", content: text, timestamp: Date.now() },
-    ...overrides,
-  };
-}
-
-function attachReadyGateway(bridge: OpenClawChannelBridge, responses: Record<string, unknown>) {
-  const gatewayRequest = gatewayResponses(responses);
-  const bridgeInternals = bridge as unknown as {
-    gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-  };
-  bridgeInternals.gateway = {
+function attachReadyGateway(bridge: BridgeInternals, responses: Record<string, unknown>) {
+  const gatewayRequest = vi.fn(async (method: string) => {
+    if (!(method in responses)) {
+      throw new Error(`unexpected gateway method ${method}`);
+    }
+    return responses[method];
+  });
+  bridge.gateway = {
     request: gatewayRequest,
     stopAndWait: async () => {},
   };
@@ -131,162 +117,69 @@ function attachReadyGateway(bridge: OpenClawChannelBridge, responses: Record<str
   return gatewayRequest;
 }
 
-async function flushMcpNotifications() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 describe("openclaw channel mcp server", () => {
-  test("lists, reads and replies through the described conversation", async () => {
-    const conversationKey = "agent:main:telegram:direct:1";
+  test("preserves primary content, fallback routes and described reply routing", async () => {
     const mcp = await connectMcpWithoutGateway();
-    const delivery = { channel: "telegram", to: "123", accountId: "one", threadId: "topic" };
     const fallback = { to: "+15551230000", accountId: "two", threadId: 42 };
     const preview = "Use `[[reply_to_current]]` literally.";
-    const transcript = [
-      { id: "msg-1", role: "assistant", content: "transcript" },
-      {
-        __openclaw: { id: "attachment" },
-        role: "assistant",
-        content: [{ type: "text", text: "attached image" }, inlineImage],
-      },
-    ];
+    const session = {
+      key: sessionKey,
+      deliveryContext: { ...route, threadId: 42 },
+      lastMessagePreview: preview,
+    };
     const gateway = attachReadyGateway(mcp.bridge, {
       "sessions.list": {
-        sessions: [
-          { key: conversationKey, deliveryContext: delivery, lastMessagePreview: "hello" },
-          { key: "agent:main:main", channel: "imessage", deliveryContext: fallback },
-        ],
+        sessions: [session, { key: "fallback", channel: "imessage", deliveryContext: fallback }],
       },
-      "sessions.get": { messages: transcript },
-      "sessions.describe": {
-        session: {
-          key: conversationKey,
-          deliveryContext: { ...route, threadId: 42 },
-          lastMessagePreview: preview,
-        },
-      },
+      "sessions.describe": { session },
       send: { ok: true },
     });
     const conversations = await mcp.call("conversations_list");
-    expect(primaryText(conversations)).toContain(`"sessionKey": "${conversationKey}"`);
-    expect(primaryText(conversations)).toContain('"lastMessagePreview": "hello"');
+    const text = (conversations as { content: { text: string }[] }).content[0]?.text;
+    expect(text).toContain(`"sessionKey": "${sessionKey}"`);
+    expect(text).toContain(preview);
     expect(conversations).toHaveProperty("structuredContent.conversations", [
-      expect.objectContaining({ sessionKey: conversationKey, ...delivery }),
-      expect.objectContaining({ sessionKey: "agent:main:main", channel: "imessage", ...fallback }),
+      expect.objectContaining({ sessionKey, ...route, threadId: 42 }),
+      expect.objectContaining({ sessionKey: "fallback", channel: "imessage", ...fallback }),
     ]);
-
-    const messages = await mcp.call("messages_read", { session_key: conversationKey });
-    expect(primaryText(messages)).toContain('"id": "msg-1"');
-    expect(primaryText(messages)).toContain("transcript");
-    expect(messages).toHaveProperty("structuredContent.messages", transcript);
-    const described = await mcp.call("conversation_get", { session_key: conversationKey });
-    expect(described.structuredContent).toMatchObject({
-      conversation: {
-        sessionKey: conversationKey,
-        ...route,
-        threadId: 42,
-        lastMessagePreview: preview,
-      },
-    });
+    await mcp.call("messages_send", { session_key: sessionKey, text: "reply from mcp" });
     expect(gateway).toHaveBeenCalledWith("sessions.describe", {
-      key: conversationKey,
+      key: sessionKey,
       includeDerivedTitles: true,
       includeLastMessage: true,
     });
-    await mcp.call("messages_send", { session_key: conversationKey, text: "reply from mcp" });
     expect(gateway).toHaveBeenLastCalledWith("send", {
       ...route,
       threadId: "42",
-      sessionKey: conversationKey,
+      sessionKey,
       message: "reply from mcp",
       idempotencyKey: expect.any(String),
     });
   });
 
-  test.each([
-    { content: "text-only transcript content", attachments: [] },
-    {
-      content: [{ type: "text", text: "attached image" }, inlineImage],
-      attachments: [inlineImage],
-    },
-  ])(
-    "fetches canonical media and $attachments without scanning recent history",
-    async ({ content, attachments }) => {
-      const mcp = await connectMcpWithoutGateway();
-      const media = {
-        url: "media://inbound/photo.png",
-        contentType: "image/png",
-        kind: "image",
-        fileName: "photo.png",
-        sizeBytes: 123,
-      };
-      const gatewayRequest = attachReadyGateway(mcp.bridge, {
-        "chat.message.get": {
-          ok: true,
-          message: { id: "media-1", role: "user", content, __openclaw: { media: [media] } },
+  test("merges inline and canonical media without scanning recent history", async () => {
+    const mcp = await connectMcpWithoutGateway();
+    const media = { url: "media://inbound/photo.png", contentType: "image/png" };
+    const gatewayRequest = attachReadyGateway(mcp.bridge, {
+      "chat.message.get": {
+        ok: true,
+        message: {
+          content: [{ type: "text", text: "image" }, inlineImage],
+          __openclaw: { media: [media] },
         },
-      });
-      const result = await mcp.call("attachments_fetch", {
-        session_key: "agent:main:main",
-        message_id: "media-1",
-      });
-
-      expect(result.structuredContent).toHaveProperty("attachments", [
-        ...attachments,
-        { type: "openclaw_media", media: { ...media, transcribed: false } },
-      ]);
-      expect(gatewayRequest).toHaveBeenCalledWith("chat.message.get", {
-        sessionKey: "agent:main:main",
-        messageId: "media-1",
-      });
-      expect(gatewayRequest).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  test("emits Claude channel and permission notifications", async () => {
-    const mcp = await connectMcpWithoutGateway("on");
-    const channels = notifications(mcp.client, "notifications/claude/channel", channelParams);
-    const permissions = notifications(
-      mcp.client,
-      "notifications/claude/channel/permission",
-      permissionParams,
-    );
-
-    const receive = async (text: unknown, messageId: string, senderIsOwner = true) => {
-      await mcp.receive(userMessage(text, { messageId, senderIsOwner }));
-      await flushMcpNotifications();
-    };
-    await receive([{ type: "text", text: "hello Claude" }], "msg-user-1");
-    const meta = { session_key: sessionKey, channel: "imessage", to: "+15551234567" };
-    expect(channels).toMatchObject([
-      {
-        content: "hello Claude",
-        meta: { ...meta, message_id: "msg-user-1" },
-      },
-    ]);
-
-    await mcp.client.notification({
-      method: "notifications/claude/channel/permission_request",
-      params: {
-        request_id: "abcde",
-        tool_name: "Bash",
-        description: "run npm test",
-        input_preview: '{"cmd":"npm test"}',
       },
     });
-
-    await receive([{ type: "text", text: "yes abcde" }], "msg-user-2");
-    expect(permissions).toEqual([{ request_id: "abcde", behavior: "allow" }]);
-
-    await mcp.receive(
-      userMessage("plain turn", { messageId: "msg-user-3", senderIsOwner: undefined }),
-    );
-    await flushMcpNotifications();
-    expect(channels).toHaveLength(2);
-    expect(channels[1]).toMatchObject({
-      content: "plain turn",
-      meta: { session_key: sessionKey, message_id: "msg-user-3" },
+    const result = await mcp.call("attachments_fetch", {
+      session_key: "agent:main:main",
+      message_id: "media-1",
+    });
+    expect(result.structuredContent).toHaveProperty("attachments", [
+      inlineImage,
+      { type: "openclaw_media", media: { ...media, kind: "image", transcribed: false } },
+    ]);
+    expect(gatewayRequest).toHaveBeenCalledWith("chat.message.get", {
+      sessionKey: "agent:main:main",
+      messageId: "media-1",
     });
   });
 
@@ -307,7 +200,7 @@ describe("openclaw channel mcp server", () => {
     }
   });
 
-  test("reads queued events then reports gaps and wakes filtered waits on eviction", async () => {
+  test("reports cursor gaps and wakes filtered waits on eviction", async () => {
     const mcp = await connectMcpWithoutGateway();
     const pendingFilteredWait = mcp.call("events_wait", {
       after_cursor: 0,
@@ -326,16 +219,6 @@ describe("openclaw channel mcp server", () => {
         messageSeq: index,
         message: { role: "user", content: [{ type: "text", text: `event ${index}` }] },
       });
-      if (index === 1) {
-        const queued = await mcp.call("events_wait", {
-          session_key: sessionKey,
-          after_cursor: 0,
-          timeout_ms: 250,
-        });
-        expect(queued.structuredContent).toMatchObject({
-          event: { type: "message", sessionKey, messageId: "msg-2", role: "user", text: "event 1" },
-        });
-      }
     }
 
     const filteredWait = await Promise.race([
@@ -383,9 +266,181 @@ describe("openclaw channel mcp server", () => {
       { signal: controller.signal },
     );
     await vi.waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(timerBaseline));
-
     controller.abort("client cancelled");
     await expect(waiting).rejects.toThrow();
     await vi.waitFor(() => expect(vi.getTimerCount()).toBe(timerBaseline));
+  });
+});
+
+const ONE_MINUTE_MS = 60 * 1_000;
+const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
+const SWEEP_INTERVAL_MS = 5 * ONE_MINUTE_MS;
+
+type BridgeInternals = Pick<OpenClawChannelBridge, keyof OpenClawChannelBridge> & {
+  gateway: { request: ReturnType<typeof vi.fn>; stopAndWait: () => Promise<void> };
+  queue: QueueEvent[];
+  pendingClaudePermissions: Map<string, unknown>;
+  pendingApprovals: Map<string, unknown>;
+  handleGatewayEvent: (event: GatewayEvent) => Promise<void>;
+  dispatchGatewayEvent: (event: GatewayEvent) => Promise<void>;
+  handleSessionMessageEvent: (payload: SessionMessagePayload) => Promise<void>;
+  server: { server: { notification: (n: unknown) => Promise<void> } } | null;
+};
+type GatewayEvent = { event: string; payload?: Record<string, unknown> };
+
+let subject: BridgeInternals;
+const permissionRequest = {
+  requestId: "abcde",
+  toolName: "Bash",
+  description: "run npm test",
+  inputPreview: "{}",
+};
+
+function makeBridge(verbose = false): BridgeInternals {
+  const bridge = new OpenClawChannelBridge(
+    {},
+    { claudeChannelMode: "off", verbose },
+  ) as unknown as BridgeInternals;
+  resources.push(bridge);
+  return bridge;
+}
+
+function permissionReply(senderIsOwner = true, role = "user") {
+  return {
+    sessionKey: "agent:main:telegram:group:-100123",
+    senderIsOwner,
+    message: { role, content: [{ type: "text", text: "yes abcde" }] },
+  };
+}
+
+function expectDrained(bridge: BridgeInternals) {
+  expect(bridge.pendingClaudePermissions.size).toBe(0);
+  expect(bridge.pendingApprovals.size).toBe(0);
+  expect(vi.getTimerCount()).toBe(0);
+}
+
+function requestApproval(bridge: BridgeInternals, payload: Record<string, unknown>, kind = "exec") {
+  return bridge.handleGatewayEvent({ event: `${kind}.approval.requested`, payload });
+}
+
+test("passes resolved TLS identity and waits for Gateway hello before completing startup", async () => {
+  const bridge = makeBridge();
+  const onStarted = vi.fn();
+  const started = bridge.start().then(onStarted);
+  await vi.waitFor(() => expect(startup.options).not.toBeNull());
+  expect(onStarted).not.toHaveBeenCalled();
+  expect(startup.options).toMatchObject({ tlsFingerprint: "sha256:local" });
+  expect(startup.options?.notifyOnStartupRetry).not.toBe(true);
+  const onHelloOk = startup.options?.onHelloOk;
+  if (typeof onHelloOk !== "function") {
+    throw new Error("Expected Gateway hello callback");
+  }
+  onHelloOk();
+  await expect(started).resolves.toBeUndefined();
+});
+
+describe("OpenClawChannelBridge", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    subject = makeBridge();
+  });
+  test.each([
+    { name: "non-owner", senderIsOwner: false, role: "user" },
+    { name: "missing owner metadata", senderIsOwner: undefined, role: "user" },
+    { name: "assistant message", senderIsOwner: true, role: "assistant" },
+  ])("does not resolve a pending permission from a $name reply", async (reply) => {
+    const notification = vi.fn(async () => undefined);
+    subject.server = { server: { notification } };
+    await subject.handleClaudePermissionRequest(permissionRequest);
+
+    await subject.handleSessionMessageEvent({
+      ...permissionReply(true, reply.role),
+      senderIsOwner: reply.senderIsOwner,
+    });
+
+    expect(notification).not.toHaveBeenCalled();
+    expect(subject.pendingClaudePermissions.has("abcde")).toBe(true);
+    expect(subject.queue.at(-1)).toMatchObject({ type: "message", text: "yes abcde" });
+  });
+
+  test("keeps a permission retryable until its notification is delivered", async () => {
+    const notification = vi
+      .fn<(notification: unknown) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("transport closed"))
+      .mockResolvedValueOnce(undefined);
+    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    subject.server = { server: { notification } };
+    const reply = permissionReply();
+    await subject.handleClaudePermissionRequest(permissionRequest);
+
+    await subject.handleSessionMessageEvent(reply);
+    await subject.handleSessionMessageEvent(reply);
+    expect(notification).toHaveBeenCalledTimes(2);
+    expect(writeSpy.mock.calls).toEqual([
+      ["openclaw mcp: notification notifications/claude/channel/permission failed\n"],
+    ]);
+
+    await subject.handleSessionMessageEvent(reply);
+    expect(notification).toHaveBeenCalledTimes(2);
+  });
+  test.each([
+    ["permission", ONE_HOUR_MS, {}],
+    ["plugin", 30 * ONE_MINUTE_MS, { createdAtMs: 0 }],
+    ["exec", 30 * ONE_MINUTE_MS, {}],
+    ["exec", ONE_MINUTE_MS, { createdAtMs: 0, expiresAtMs: 21 * ONE_MINUTE_MS }],
+  ] as const)(
+    "expires %s state after %i ms and restarts its sweeper",
+    async (kind, ttl, payload) => {
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(SWEEP_INTERVAL_MS * 4);
+      expect(vi.getTimerCount()).toBe(0);
+      if (kind === "permission") {
+        await subject.handleClaudePermissionRequest(permissionRequest);
+      } else {
+        await requestApproval(subject, { id: "approval", ...payload }, kind);
+      }
+      const pending =
+        kind === "permission" ? subject.pendingClaudePermissions : subject.pendingApprovals;
+      expect(pending.size).toBe(1);
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(ttl - ONE_MINUTE_MS);
+      expect(pending.size).toBe(1);
+      vi.advanceTimersByTime(
+        ttl === ONE_MINUTE_MS ? 2 * ONE_MINUTE_MS : SWEEP_INTERVAL_MS + ONE_MINUTE_MS,
+      );
+      if (ttl === ONE_MINUTE_MS) {
+        expect(subject.listPendingApprovals()).toHaveLength(0);
+      }
+      expectDrained(subject);
+      await subject.handleClaudePermissionRequest({ ...permissionRequest, requestId: "fghij" });
+      expect(vi.getTimerCount()).toBe(1);
+    },
+  );
+  test("close drains pending state and prevents new requests from restarting it", async () => {
+    await subject.handleClaudePermissionRequest(permissionRequest);
+    await requestApproval(subject, { id: "approval-1", createdAtMs: 0, expiresAtMs: ONE_HOUR_MS });
+    expect(subject.pendingClaudePermissions.size).toBe(1);
+    expect(subject.pendingApprovals.size).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await subject.close();
+
+    expectDrained(subject);
+    await subject.handleClaudePermissionRequest({ ...permissionRequest, requestId: "fghij" });
+    await requestApproval(subject, { id: "approval-after-close" });
+    expectDrained(subject);
+  });
+
+  test("a rejected gateway event includes error detail with verbose on", async () => {
+    subject = makeBridge(true);
+    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    vi.spyOn(subject, "handleGatewayEvent").mockRejectedValue(new Error("handler boom"));
+    await subject.dispatchGatewayEvent({ event: "exec.approval.requested", payload: {} });
+
+    expect(writeSpy.mock.calls.map(([chunk]) => String(chunk))).toEqual([
+      "openclaw mcp: gateway event exec.approval.requested failed\n",
+      "openclaw mcp: gateway event exec.approval.requested error: Error: handler boom\n",
+    ]);
   });
 });

@@ -12,6 +12,7 @@ import {
   textResult,
   outcome,
   waitForStart,
+  withMcpConnection,
 } from "./tools-mcp.test-support.js";
 import { createToolsMcpServer } from "./tools-stdio-server.js";
 
@@ -182,17 +183,15 @@ describe("plugin tools MCP cancellation", () => {
   );
 
   it("does not execute a request queued in SDK microtasks when close starts", async () => {
-    const database = new DatabaseSync(":memory:");
+    using database = new DatabaseSync(":memory:");
     database.exec("CREATE TABLE calls (value INTEGER)");
     const tool = createTool("queued_write", async () => {
       database.prepare("INSERT INTO calls VALUES (1)").run();
       return toolResult("done");
     });
     const server = createToolsMcpServer({ name: "queued-admission", tools: [tool] });
-    const { client, outbound, connect } = createMcpConnection(server);
-    try {
-      await connect();
-      const sent = outbound.send({
+    await withMcpConnection(server, async (client) => {
+      const sent = client.transport!.send({
         jsonrpc: "2.0",
         id: "queued-before-close",
         method: "tools/call",
@@ -202,10 +201,6 @@ describe("plugin tools MCP cancellation", () => {
       await sent;
       await nextTurn();
       expect(database.prepare("SELECT count(*) AS count FROM calls").get()).toEqual({ count: 0 });
-    } finally {
-      await client.close();
-      await server.close();
-      database.close();
-    }
+    });
   });
 });
