@@ -4,12 +4,12 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { measureGatewayRestartTrace } from "../restart-trace.js";
-import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
-import { createWorkerReconcileCancellation } from "./provider-provisioning-cancellation.js";
 import type {
   WorkerEnvironmentReconcileCore,
   WorkerEnvironmentReconcileGuard,
-} from "./service.types.js";
+} from "./environment-reconcile.types.js";
+import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import { createWorkerReconcileCancellation } from "./provider-provisioning-cancellation.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 
 export function createWorkerReconcileTrace(record: { environmentId: string; providerId?: string }) {
@@ -96,7 +96,7 @@ export function createWorkerEnvironmentReconciler(options: {
   const readReconcileFailure = (environmentId: string) => {
     const failure = reconcileFailures.get(environmentId);
     if (!failure) {
-      return;
+      return undefined;
     }
     const current = store.get(environmentId);
     const previous = failure.record;
@@ -109,7 +109,7 @@ export function createWorkerEnvironmentReconciler(options: {
       current.destroyRequestedAtMs !== previous.destroyRequestedAtMs
     ) {
       reconcileFailures.delete(environmentId);
-      return;
+      return undefined;
     }
     return failure;
   };

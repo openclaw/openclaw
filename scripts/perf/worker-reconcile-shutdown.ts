@@ -353,12 +353,14 @@ async function main() {
             assert(attempts.length <= 4, "Backoff did not reduce retries");
           }
           assert(
-            inspectionEvents.some((event) => /15s budget/.test(event.reason ?? "")),
+            inspectionEvents.some((event) => event.reason?.includes("15s budget")),
             "No real inspection timeout observed",
           );
         } else {
           assert.equal(attempts.length, 1, "Restart must begin a new inspection");
-          assert(attempts[0].startedAtMs - readyAtMs <= 15_000, "Restart inherited retry delay");
+          const firstAttempt = attempts[0];
+          assert(firstAttempt, "Restart inspection was not recorded");
+          assert(firstAttempt.startedAtMs - readyAtMs <= 15_000, "Restart inherited retry delay");
         }
       } else if (phase === "initial") {
         assert.equal(record.state, "destroying", "Interrupted teardown must remain retryable");
