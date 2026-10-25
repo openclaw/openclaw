@@ -77,16 +77,34 @@ function migrate() {
   });
 }
 
+function storedRecord(legacy: Awaited<ReturnType<typeof writeLegacyRecord>>) {
+  const { path: originalPath, ...metadata } = legacy.record.original;
+  return {
+    ...legacy.record,
+    original: {
+      ...metadata,
+      mediaRoot: path.join(stateDir, "media"),
+      mediaId: path.basename(originalPath),
+      mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+    },
+  };
+}
+
 const absent = (pathname: string) =>
   expect(fsp.access(pathname)).rejects.toMatchObject({ code: "ENOENT" });
 const present = (...paths: string[]) => Promise.all(paths.map((pathname) => fsp.access(pathname)));
 const expiredRecord = { messageId: null, retentionClass: "transient" } as const;
 
-function withUnlink(effect: (target: fs.PathLike) => void) {
+function withUnlink(effect: (target: fs.PathLike) => void, after = false) {
   const unlink = fs.unlinkSync;
   using _ = vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
-    effect(target);
+    if (!after) {
+      effect(target);
+    }
     unlink(target);
+    if (after) {
+      effect(target);
+    }
   });
   return migrate();
 }
@@ -147,16 +165,7 @@ describe("legacy managed outgoing image migration", () => {
     );
     await absent(legacy.sourcePath);
     await present(legacy.originalPath);
-    expect(await legacy.read()).toEqual({
-      ...legacy.record,
-      original: {
-        ...legacy.record.original,
-        mediaRoot: path.join(stateDir, "media"),
-        mediaId: path.basename(legacy.originalPath),
-        mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-        path: undefined,
-      },
-    });
+    expect(await legacy.read()).toEqual(storedRecord(legacy));
     const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
@@ -203,22 +212,8 @@ describe("legacy managed outgoing image migration", () => {
     const second = await writeLegacyRecord({}, 2);
     await insertManagedImageRecord(
       {
-        attachmentId: second.record.attachmentId,
-        sessionKey: "agent:other:main",
+        ...storedRecord(second),
         messageId: "different-message",
-        createdAt: second.record.createdAt,
-        retentionClass: "history",
-        alt: "Different",
-        original: {
-          mediaRoot: path.join(stateDir, "media"),
-          mediaId: path.basename(second.originalPath),
-          mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-          contentType: "image/png",
-          width: 1,
-          height: 1,
-          sizeBytes: 1,
-          filename: "different.png",
-        },
       },
       stateDir,
     );
@@ -318,17 +313,11 @@ describe("legacy managed outgoing image migration", () => {
         messageId: "new-message",
         retentionClass: "history",
       });
-      const unlink = fs.unlinkSync;
-      let result: ReturnType<typeof migrate>;
-      {
-        using _ = vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
-          unlink(target);
-          if (target === first.sourcePath) {
-            fs.writeFileSync(second.sourcePath, changedJson);
-          }
-        });
-        result = migrate();
-      }
+      const result = withUnlink((target) => {
+        if (target === first.sourcePath) {
+          fs.writeFileSync(second.sourcePath, changedJson);
+        }
+      }, true);
 
       expect(result.warnings.join("\n")).toContain("source changed after doctor loaded it");
       expect(await fsp.readFile(second.sourcePath, "utf8")).toBe(changedJson);
