@@ -1,7 +1,10 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { assertSqliteSchemaContains as assertSchema } from "../../infra/sqlite-schema-contract.test-support.js";
@@ -135,6 +138,27 @@ it("writes shared reactions through their database owner", async () => {
   expect(hostSql.queries).toEqual([]);
   hostSql.restore();
   expect(read()[reaction.messageId]).toEqual([summary("👍")]);
+});
+
+it("adds a reaction with one combined quota and current-message read", () => {
+  write((database) => {
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["admission"],
+      (sql) =>
+        /^select/i.test(sql) && /\b(?:session_reactions|transcript_event_identities)\b/i.test(sql)
+          ? "admission"
+          : null,
+    );
+    try {
+      expect(setSessionReactionInDatabase(database, scope.sessionKey, reaction)).toEqual(
+        result([summary("👍")]),
+      );
+      expect(counter.counts.admission).toBe(2);
+    } finally {
+      counter.restore();
+    }
+  });
 });
 
 it("rolls back a reaction when the caller's authority expires at commit admission", async () => {
