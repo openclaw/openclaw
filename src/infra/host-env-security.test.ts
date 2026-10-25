@@ -17,7 +17,9 @@ import {
   setGatewayCredentialEnvKeys,
 } from "./host-env-security.js";
 
-const OPENCLAW_CLI_ENV_VALUE = "1";
+function expectEnv(baseEnv: NodeJS.ProcessEnv, expected: NodeJS.ProcessEnv) {
+  expect(sanitizeHostExecEnv({ baseEnv })).toEqual({ OPENCLAW_CLI: "1", ...expected });
+}
 
 function findSystemCommandPath(command: string) {
   if (process.platform === "win32") {
@@ -64,29 +66,20 @@ describe("sanitizeHostExecEnv", () => {
       OPENCLAW_WINDOWS_TASK_NAME: "Custom Gateway",
       OPENCLAW_GATEWAY_SERVICE_PID: "12345",
     };
-    expect(sanitizeHostExecEnv({ baseEnv: serviceEnv })).toEqual({
-      ...serviceEnv,
-      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
-    });
+    expectEnv(serviceEnv, serviceEnv);
   });
 
   it("removes dangerous inherited keys while preserving PATH", () => {
-    const env = sanitizeHostExecEnv({
-      baseEnv: {
+    expectEnv(
+      {
         PATH: "/usr/bin:/bin",
         LD_PRELOAD: "/tmp/pwn.so",
         OK: "1",
         GIT_ALLOW_PROTOCOL: "ext",
         GIT_PROTOCOL_FROM_USER: "1",
       },
-    });
-    expect(env).toEqual({
-      PATH: "/usr/bin:/bin",
-      OK: "1",
-      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
-      GIT_ALLOW_PROTOCOL: "",
-      GIT_PROTOCOL_FROM_USER: "0",
-    });
+      { PATH: "/usr/bin:/bin", OK: "1", GIT_ALLOW_PROTOCOL: "", GIT_PROTOCOL_FROM_USER: "0" },
+    );
   });
 
   it("withholds the env sources of Gateway credentials from inherited host exec env", () => {
@@ -97,11 +90,7 @@ describe("sanitizeHostExecEnv", () => {
     };
     try {
       setGatewayCredentialEnvKeys("test", ["openclaw_hook_token"]);
-      expect(sanitizeHostExecEnv({ baseEnv })).toEqual({
-        PATH: "/usr/bin:/bin",
-        OK: "1",
-        OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
-      });
+      expectEnv(baseEnv, { PATH: "/usr/bin:/bin", OK: "1" });
       // A command's own requested value is not the Gateway credential and still applies.
       expect(
         sanitizeHostExecEnv({ baseEnv, overrides: { OPENCLAW_HOOK_TOKEN: "requested" } })
@@ -110,10 +99,9 @@ describe("sanitizeHostExecEnv", () => {
       // Owners publish independently; clearing one keeps the other withheld.
       setGatewayCredentialEnvKeys("other", ["OK"]);
       setGatewayCredentialEnvKeys("test", []);
-      expect(sanitizeHostExecEnv({ baseEnv })).toEqual({
+      expectEnv(baseEnv, {
         PATH: "/usr/bin:/bin",
         OPENCLAW_HOOK_TOKEN: "synthetic-hook-token",
-        OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       });
     } finally {
       setGatewayCredentialEnvKeys("test", []);
@@ -123,23 +111,13 @@ describe("sanitizeHostExecEnv", () => {
   });
 
   it("drops non-string inherited values while preserving non-portable inherited keys", () => {
-    const env = sanitizeHostExecEnv({
-      baseEnv: {
-        PATH: "/usr/bin:/bin",
-        GOOD: "1",
-        BAD_NUMBER: 1 as unknown as string,
-        "NOT-PORTABLE": "x",
-        "ProgramFiles(x86)": "C:\\Program Files (x86)",
-      },
-    });
-
-    expect(env).toEqual({
-      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+    const preserved = {
       PATH: "/usr/bin:/bin",
       GOOD: "1",
       "NOT-PORTABLE": "x",
       "ProgramFiles(x86)": "C:\\Program Files (x86)",
-    });
+    };
+    expectEnv({ ...preserved, BAD_NUMBER: 1 as unknown as string }, preserved);
   });
 });
 
