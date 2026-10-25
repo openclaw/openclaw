@@ -6,6 +6,17 @@ private let chatSessionActionsLogger = Logger(
     category: "OpenClawChat")
 
 extension OpenClawChatViewModel {
+    var transport: any OpenClawChatTransport {
+        self.scopedSessionTransport ?? self.defaultTransport
+    }
+
+    public var currentSessionTarget: OpenClawChatSessionTarget {
+        OpenClawChatSessionTarget(
+            sessionKey: self.sessionKey,
+            agentID: OpenClawChatSessionKey.agentID(from: self.sessionKey) == nil
+                ? self.explicitSessionAgentID ?? self.activeAgentId : nil)
+    }
+
     public func deleteSession(_ sessionKey: String, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: sessionKey, agentID: agentID)
         let transport = self.transport

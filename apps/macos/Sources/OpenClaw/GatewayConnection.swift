@@ -1647,6 +1647,7 @@ extension GatewayConnection {
         agentID: String? = nil,
         limit: Int? = nil,
         maxChars: Int? = nil,
+        offset: Int? = nil,
         timeoutMs: Int? = nil,
         inputRunIDs: [String]? = nil,
         ifCurrentRoute route: Route? = nil) async throws -> OpenClawChatHistoryPayload
@@ -1657,19 +1658,10 @@ extension GatewayConnection {
             limit: limit,
             maxChars: maxChars,
             inputRunIDs: inputRunIDs,
+            offset: offset,
             timeoutMs: timeoutMs)
         let data = try await self.requestHistory(request, ifCurrentRoute: route)
         return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
-    }
-
-    func conversationOwnershipScope(sessionKey: String, agentID: String?) -> OpenClawChatSendOwnership.Scope {
-        let defaults = self.lastSnapshot?.snapshot.sessiondefaults
-        return OpenClawChatSendOwnership.Scope(
-            sessionKey: sessionKey,
-            agentID: agentID,
-            scope: defaults?["scope"]?.value as? String,
-            mainKey: defaults?["mainKey"]?.value as? String,
-            defaultAgentID: defaults?["defaultAgentId"]?.value as? String)
     }
 
     func chatSend(
