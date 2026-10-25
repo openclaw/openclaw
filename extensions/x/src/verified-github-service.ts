@@ -1,3 +1,4 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawPluginApi, OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -20,7 +21,8 @@ export function createXGitHubService(
       const readConfig = createRuntimeConfigReader(context.config);
       const cfg = readConfig();
       const allowlist = openXAllowlist(api.runtime);
-      activeAccounts = listXAccountIds(cfg);
+      // Spend, OAuth and status state is keyed by the runtime account id, not the authored config key.
+      activeAccounts = [...new Set(listXAccountIds(cfg).map(normalizeAccountId))];
       for (const accountId of activeAccounts) {
         allowlist.invalidate(accountId);
         const account = resolveXAccount(cfg, accountId);
