@@ -463,9 +463,11 @@ describe("app launch catalog", () => {
     };
     current.resolve({ servers: [server] });
     await current.promise;
-    await waitForSolid(() => expect(sidebar.textContent).toContain("Library"));
-    expect(thread.querySelector("button")).not.toBeNull();
-    expect(resources.querySelector("button")).not.toBeNull();
+    await waitForSolid(() => {
+      expect(sidebar.textContent).toContain("Library");
+      expect(thread.querySelector("button")).not.toBeNull();
+      expect(resources.querySelector("button")).not.toBeNull();
+    });
 
     thread.querySelector<HTMLButtonElement>("button")!.click();
     await waitForSolid(() =>
