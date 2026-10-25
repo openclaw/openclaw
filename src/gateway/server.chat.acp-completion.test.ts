@@ -14,7 +14,7 @@ import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { tryDispatchAcpReplyHook } from "../plugin-sdk/acpx.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
@@ -285,18 +285,12 @@ describe("Gateway ACP completion ownership", () => {
         },
       });
     });
-    const frames: Array<{
-      event?: string;
-      payload?: {
-        runId?: string;
-        state?: string;
-        seq?: number;
-        message?: unknown;
-        stream?: string;
-        data?: { phase?: string; reason?: string };
-        errorKind?: string;
-      };
-    }> = [];
+    type Payload = Partial<AgentEventPayload> & {
+      state?: string;
+      message?: unknown;
+      errorKind?: string;
+    };
+    const frames: Array<{ event?: string; payload?: Payload }> = [];
     let lifecycleStarted = createDeferred();
     let lifecycleDelivered = createDeferred();
     const capture = (data: Buffer) => {
@@ -327,16 +321,17 @@ describe("Gateway ACP completion ownership", () => {
         releaseTurn = createDeferred();
         lifecycleStarted = createDeferred();
         lifecycleDelivered = createDeferred();
+        const failed = scenario.fail || scenario.persistFail || scenario.rebound;
         const expectedState = scenario.rpcAbort
           ? "aborted"
-          : scenario.fail || scenario.persistFail || scenario.timeout || scenario.rebound
+          : failed || scenario.timeout
             ? "error"
             : scenario.cancel
               ? "aborted"
               : "final";
         const expectedStatus = scenario.rpcAbort
           ? "timeout"
-          : scenario.fail || scenario.persistFail || scenario.rebound
+          : failed
             ? "error"
             : scenario.cancel || scenario.timeout
               ? "timeout"
