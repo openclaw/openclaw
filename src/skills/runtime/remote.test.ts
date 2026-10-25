@@ -202,6 +202,7 @@ describe("skills-remote", () => {
   it.each([
     { command: "system.which", failure: "result" },
     { command: "system.run", failure: "throw" },
+    { command: "system.which", failure: "preflight" },
   ])(
     "clears stale bins after a probe failure ($command/$failure)",
     async ({ command, failure }) => {
@@ -215,6 +216,7 @@ describe("skills-remote", () => {
       });
       registryFor(nodeId, invoke, {
         get: () => testRemoteSession(nodeId, { commands: [command] }),
+        checkConnectivity: failure === "preflight" ? async () => probeTimeout() : undefined,
       });
       recordRemoteMacWithSystemWhich(nodeId);
       recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
@@ -222,32 +224,13 @@ describe("skills-remote", () => {
 
       await probe(nodeId, cfg);
 
-      expect(invoke.mock.calls.map(([params]) => params.command)).toEqual([command]);
+      expect(invoke.mock.calls.map(([params]) => params.command)).toEqual(
+        failure === "preflight" ? [] : [command],
+      );
       expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
       expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
     },
   );
-
-  it("skips remote bin probes when the node connectivity preflight fails", async () => {
-    await closeSkillsWatchers(true);
-    const { nodeId, bin, cfg, workspaceDir } = remoteFixture();
-    const invoke = vi.fn<NodeRegistry["invoke"]>(async () => successfulProbe(bin));
-    registryFor(nodeId, invoke, {
-      checkConnectivity: async () => ({
-        ok: false,
-        error: { code: "TIMEOUT", message: "node connectivity check timed out" },
-      }),
-    });
-    recordRemoteMacWithSystemWhich(nodeId);
-    recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
-    const before = getSkillsSnapshotVersion(workspaceDir);
-
-    await probe(nodeId, cfg);
-
-    expect(invoke).not.toHaveBeenCalled();
-    expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
-    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
-  });
 
   it("retries the bin probe when the node reconnects during preflight", async () => {
     await closeSkillsWatchers(true);
@@ -536,14 +519,10 @@ describe("skills-remote", () => {
       }
       await Promise.all([firstRefresh, replacementRefresh]);
 
-      expect(invoke).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({ expectedPairingGeneration: "generation-a" }),
-      );
-      expect(invoke).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ expectedPairingGeneration: "generation-b" }),
-      );
+      expect(invoke.mock.calls.map(([call]) => call.expectedPairingGeneration)).toEqual([
+        "generation-a",
+        "generation-b",
+      ]);
       expect(getRemoteSkillEligibility()?.hasBin(retiredBin) ?? false).toBe(false);
       expect(getRemoteSkillEligibility()?.hasBin(currentBin)).toBe(true);
       expect(getSkillsSnapshotVersion(workspaceDir)).toBe(beforeCompletion);
