@@ -7,7 +7,7 @@ import type { UserMessage } from "../../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../../media/media-facts.js";
 import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
-import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { suppressedInlineImageFacts } from "./image-media-facts.test-support.js";
 import {
@@ -129,9 +129,7 @@ describe("structured prompt media replay", () => {
   it("expands a home-relative path carried by a media fact", async () => {
     const homeDir = tempDirs.make("openclaw-fact-home-");
     await writeImage(homeDir, "Pictures/photo.png");
-    const envSnapshot = captureEnv(["HOME"]);
-    setTestEnvValue("HOME", homeDir);
-    try {
+    await withEnvAsync({ HOME: homeDir }, async () => {
       const result = await loadImages({
         prompt: "describe it",
         media: [{ path: "~/Pictures/photo.png", contentType: "image/png" }],
@@ -139,9 +137,7 @@ describe("structured prompt media replay", () => {
         localRoots: [homeDir],
       });
       expect(result.images).toHaveLength(1);
-    } finally {
-      envSnapshot.restore();
-    }
+    });
   });
 
   it("keeps same-spelled relative refs from different workspaces distinct", async () => {
