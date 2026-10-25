@@ -113,12 +113,33 @@ it("includes empty documents in length normalization without creating search hit
     { value: { id: "empty" }, terms: [] },
   ]);
 
-  expect(index).toMatchObject({ documentCount: 2, averageLength: 1 });
+  expect(index.averageLength).toBe(1);
   const hits = scoreLexical(index, [{ term: "needle", weight: 1 }]);
   expect(hits).toHaveLength(1);
   expect(hits[0]?.value).toBe(value);
   expect(hits[0]?.matchedLiteral).toBe(true);
   expect(hits[0]?.score).toBeCloseTo((Math.log(2) * 2 * 2.2) / (2 + 1.2 * 1.75));
+});
+
+it("preserves exact scores for nonadjacent repeated terms and sparse document positions", () => {
+  const index = buildLexicalIndex([
+    { value: "empty-first", terms: [] },
+    { value: "alpha-heavy", terms: ["alpha", "beta", "alpha"] },
+    { value: "empty-middle", terms: [] },
+    { value: "beta-heavy", terms: ["beta", "alpha", "beta"] },
+  ]);
+  // Four documents, two matches per term, average length 1.5, matching length 3.
+  const single = (Math.log(2) * 2.2) / (1 + 1.2 * 1.75);
+  const repeated = (Math.log(2) * (2 * 2.2)) / (2 + 1.2 * 1.75);
+  expect(scoreLexical(index, [{ term: "alpha", weight: 1 }])).toEqual([
+    { value: "alpha-heavy", score: repeated, matchedLiteral: true },
+    { value: "beta-heavy", score: single, matchedLiteral: true },
+  ]);
+  expect(scoreLexical(index, [{ term: "beta", weight: 1 }])).toEqual([
+    { value: "alpha-heavy", score: single, matchedLiteral: true },
+    { value: "beta-heavy", score: repeated, matchedLiteral: true },
+  ]);
+  expect(scoreLexical(index, [{ term: "absent", weight: 1 }])).toEqual([]);
 });
 
 it("indexes non-Latin text rather than discarding it", () => {

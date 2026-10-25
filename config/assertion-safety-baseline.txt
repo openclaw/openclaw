@@ -138,7 +138,6 @@ extensions/codex/src/session-cli.ts	1
 extensions/codex/src/session-upstream-activity.ts	1
 extensions/codex/src/web-search-provider.runtime.ts	1
 extensions/comfy/workflow-runtime.ts	2
-extensions/copilot-proxy/index.ts	1
 extensions/copilot/harness.ts	7
 extensions/copilot/src/attempt-config.ts	8
 extensions/copilot/src/attempt-execution.ts	2
@@ -1116,13 +1115,13 @@ src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4
 src/agents/embedded-agent-runner/run/attempt-client-tools.ts	1
 src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
-src/agents/embedded-agent-runner/run/attempt-history.ts	9
+src/agents/embedded-agent-runner/run/attempt-history.ts	8
 src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	5
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
 src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts	2
-src/agents/embedded-agent-runner/run/attempt-session-prepare.ts	2
+src/agents/embedded-agent-runner/run/attempt-session-prepare.ts	1
 src/agents/embedded-agent-runner/run/attempt-sessions-yield.ts	1
 src/agents/embedded-agent-runner/run/attempt-setup.ts	1
 src/agents/embedded-agent-runner/run/attempt-stop-reason-recovery.ts	1
@@ -1240,7 +1239,6 @@ src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/auth-storage.ts	1
 src/agents/sessions/extensions/loader.ts	2
 src/agents/sessions/extensions/runner.ts	14
-src/agents/sessions/extensions/types.ts	1
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/model-registry.ts	3
 src/agents/sessions/resolve-config-value.ts	1
@@ -1481,7 +1479,7 @@ src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	1
 src/cli/native-hook-relay-cli.ts	1
-src/cli/nodes-cli/register.pairing.ts	2
+src/cli/nodes-cli/register.pairing.ts	1
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	1
 src/cli/pairing-cli.ts	1
@@ -2182,7 +2180,6 @@ src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	2
 src/plugins/schema-validator.ts	4
-src/plugins/session-catalog-history-import.ts	1
 src/plugins/setup-registry.ts	2
 src/plugins/slots.ts	1
 src/plugins/toggle-config.ts	2

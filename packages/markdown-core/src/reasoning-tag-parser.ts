@@ -12,12 +12,10 @@ export {
   parseReasoningTagName,
   reduceReasoningText,
   scanReasoningTags,
-  REASONING_TAG_NAMES,
   findNextLineEnding,
   isInsideCode,
 } from "./reasoning-tag-syntax.js";
 export type { ReasoningTagTextDelta, ReductionState } from "./reasoning-tag-syntax.js";
-export { stripReasoningTagsFromMarkdown } from "./reasoning-tags-batch.js";
 
 const DISABLE_HTML_MARKDOWN = {
   disable: { null: ["htmlFlow", "htmlText"] },
@@ -356,13 +354,4 @@ export function findMarkdownCodeRegions(
   options?: MarkdownOwnershipOptions,
 ): MarkdownCodeRegion[] {
   return /[`~\t]| {4}/u.test(text) ? parseMarkdownOwnership(text, options).regions : [];
-}
-
-/** Returns parser-owned CommonMark/GFM code ranges, including their delimiters. */
-export function findMarkdownCodeSpans(text: string): Array<[number, number]> {
-  // CommonMark code needs a literal delimiter or indentation, even inside containers.
-  if (!/[`~\t]| {4}/u.test(text)) {
-    return [];
-  }
-  return parseMarkdownOwnership(text).codeSpans;
 }

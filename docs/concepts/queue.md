@@ -226,6 +226,10 @@ In `collect` mode, appending the combined
 turn and marking its source inputs consumed happen in one transaction. A browser
 reconnect can reconcile those source inputs even if it missed their final events.
 
+An unrelated announcement does not consume another active request's accepted input or include it
+in its model context. The original request keeps that input, including inputs combined by collect
+mode, for its own continuation.
+
 The chat displays recorded non-Web client sources separately from the sender, for example `Alice · via CLI`. Web sources are omitted from these labels, including in collected messages that also contain input from another client.
 Reported app names describe the submitting client; they do not establish a human identity or grant permissions.
 Collected messages retain their contributing client sources, and older messages without recorded sources keep their existing attribution.

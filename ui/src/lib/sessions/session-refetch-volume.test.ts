@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createSessionActivity } from "../../pages/activity/session-activity-owner.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -27,12 +28,7 @@ it("bounds list reads across two viewers and three streaming sessions for three 
     const client = createTestGatewayClient(
       gatewayRequest({
         "sessions.subscribe": () => ({ subscribed: true }),
-        "agents.list": () => ({
-          agents: [{ id: "main" }],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-        }),
+        "agents.list": () => makeBootRoster(),
         "sessions.list": (params) => {
           const query = params as { includeActivitySummary?: boolean; archived?: string };
           const owner = query.includeActivitySummary

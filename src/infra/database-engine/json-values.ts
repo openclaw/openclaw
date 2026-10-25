@@ -65,7 +65,9 @@ export function jsonOrderedArray(
   db: DatabaseSync | PostgresSqlConnection,
   value: Expression<string>,
   orderBy: readonly Expression<unknown>[],
-  nullOrder: "first" | "native" = "first",
+  // Use "not-null" only when every ORDER BY key is NOT NULL in the canonical schema;
+  // null placement is then irrelevant, and plain ASC matches the PG-native NOT NULL index ordering.
+  nullOrder: "first" | "not-null" = "first",
 ): AliasableExpression<string> {
   const postgres = isPostgresSqlConnection(db);
   let aggregate = expressionBuilder().fn.agg<string>(postgres ? "json_agg" : "json_group_array", [

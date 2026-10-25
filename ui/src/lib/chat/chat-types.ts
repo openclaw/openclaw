@@ -493,6 +493,8 @@ export type ToolCard = {
   resultMessageId?: string;
   /** Gateway display projection omitted content; the durable result may still be complete. */
   outputTruncated?: boolean;
+  /** Bounded external preview; does not authorize full-message recovery. */
+  catalogTruncated?: boolean;
   toolOutput?: ToolOutputMetadata;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;

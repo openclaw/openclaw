@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { once } from "node:events";
 import { createServer, type RequestListener, type Server } from "node:http";
-import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createSearxngWebSearchProvider } from "./searxng-search-provider.js";
 
 let server: Server, baseUrl: string, requests: number, respond: RequestListener;
@@ -18,8 +17,7 @@ beforeEach(async () => {
     requests++;
     respond(request, response);
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  await listenOnLoopback(server);
   const address = server.address();
   assert(address && typeof address !== "string", "Expected a TCP listener address");
   baseUrl = `http://127.0.0.1:${address.port}`;
@@ -27,7 +25,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   server.closeAllConnections();
-  await promisify(server.close.bind(server))();
+  await server[Symbol.asyncDispose]();
 });
 
 function createTool(

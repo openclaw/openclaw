@@ -4,19 +4,9 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 const pendingImport = vi.hoisted(() => {
-  let release!: () => void;
-  let started!: () => void;
-  return {
-    held: new Promise<void>((resolve) => {
-      release = resolve;
-    }),
-    started: new Promise<void>((resolve) => {
-      started = resolve;
-    }),
-    release: () => release(),
-    start: () => started(),
-    dispatchImports: 0,
-  };
+  const { promise: held, resolve: release } = Promise.withResolvers<void>();
+  const { promise: started, resolve: start } = Promise.withResolvers<void>();
+  return { held, started, release, start, dispatchImports: 0 };
 });
 vi.mock("./chat-live-events.runtime.ts", async (importOriginal) => {
   pendingImport.dispatchImports += 1;
@@ -209,10 +199,9 @@ it("preserves live ordering across one shared import and retires superseded pane
   expect(foreground.state.chatRunId).toBeNull();
 
   pendingImport.release();
-  await boundary.loadChatLiveEvents();
+  await vi.waitFor(() => expect(streamWrites).toHaveBeenCalledWith("First token"));
   await loadingHistory;
   await Promise.all(cutHistories.map(({ loading }) => loading));
-  expect(streamWrites).toHaveBeenCalledWith("First token");
   expect(foreground.state.chatRunUsageById?.get("run-1")?.outputTokens).toBe(3);
   expect(foreground.state.chatRunId).toBeNull();
   expect(JSON.stringify(foreground.state.chatMessages)).toContain("Complete answer");

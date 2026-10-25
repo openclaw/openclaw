@@ -46,20 +46,9 @@ async function startPrivateMusicServer(): Promise<{
   };
 }
 
-async function closeOpenServers() {
-  await Promise.all(
-    openServers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        }),
-    ),
-  );
-}
-
 describe("openrouter music generation provider transport", () => {
   afterEach(async () => {
-    await closeOpenServers();
+    await Promise.all(openServers.splice(0).map((server) => server[Symbol.asyncDispose]()));
   });
 
   it("denies private destinations even when the configured request policy opts in", async () => {

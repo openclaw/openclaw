@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/service-audit-mocks.js";
 import {
   auditGatewayServiceConfig as inspectGatewayServiceConfig,
+  checkManagedServiceEnvDrift,
   checkTokenDrift,
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES as codes,
@@ -523,5 +524,80 @@ describe("auditGatewayServiceConfig systemd", () => {
         level: "recommended",
       });
     }
+  });
+});
+
+describe("managed service environment drift", () => {
+  it.each([
+    { name: "changed value", durable: "new-value", drift: true },
+    { name: "removed value", durable: undefined, drift: true },
+    { name: "exact whitespace", durable: "old-value ", drift: true },
+    { name: "matching value", durable: "old-value", drift: false },
+    { name: "generated file snapshot", durable: "new-value", source: "file", drift: true },
+    {
+      name: "overlapping inline value",
+      durable: "new-value",
+      source: "inline-and-file",
+      drift: true,
+    },
+    { name: "non-durable SecretRef", durable: undefined, secretRef: true, drift: false },
+    { name: "durable SecretRef", durable: "new-value", secretRef: true, drift: true },
+    { name: "dynamic systemd value", durable: "new-value", systemd: true, drift: false },
+    {
+      name: "unrecorded file value",
+      durable: "new-value",
+      source: "file",
+      unrecorded: true,
+      drift: false,
+    },
+  ] as const)("$name", (scenario) => {
+    const result = checkManagedServiceEnvDrift({
+      command: {
+        programArguments: [],
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "unrecorded" in scenario ? "" : "TAVILY_API_KEY",
+          tavily_api_key: "old-value",
+          ...("systemd" in scenario ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" } : {}),
+        },
+        environmentValueSources:
+          "source" in scenario && scenario.source !== undefined
+            ? { TAVILY_API_KEY: scenario.source }
+            : undefined,
+      },
+      durableEnvironment: { TAVILY_API_KEY: scenario.durable },
+      secretRefKeys: "secretRef" in scenario ? ["tavily_api_key"] : [],
+      platform: "systemd" in scenario ? "linux" : "darwin",
+    });
+    expect(result?.environmentKeys ?? []).toEqual(scenario.drift ? ["TAVILY_API_KEY"] : []);
+    expect(JSON.stringify(result)).not.toMatch(/old-value|new-value/);
+  });
+
+  it("reports only portable managed names and leaves token drift to its owner", async () => {
+    const result = await audit(
+      {
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS:
+            "TAVILY_API_KEY,OPENCLAW_GATEWAY_TOKEN,OPENCLAW_SERVICE_VERSION,bad\\nkey",
+          TAVILY_API_KEY: "old-value",
+          OPENCLAW_GATEWAY_TOKEN: "old-token",
+          OPENCLAW_SERVICE_VERSION: "old-version",
+          "bad\nkey": "old-value",
+        },
+      },
+      {
+        platform: "darwin",
+        expectedDurableEnvironment: {
+          TAVILY_API_KEY: "new-value",
+          OPENCLAW_GATEWAY_TOKEN: "new-token",
+          OPENCLAW_SERVICE_VERSION: "new-version",
+        },
+      },
+    );
+    expectIssue(result, codes.gatewayEnvDrift, {
+      environmentKeys: ["TAVILY_API_KEY"],
+      detail: "drifted keys: TAVILY_API_KEY",
+      level: "recommended",
+    });
+    expect(JSON.stringify(result.issues)).not.toMatch(/old-value|new-value|old-token|new-token/);
   });
 });

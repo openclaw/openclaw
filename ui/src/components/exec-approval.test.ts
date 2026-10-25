@@ -160,6 +160,41 @@ describe("openclaw-exec-approval", () => {
     expect(container.querySelector(".exec-approval-card")).toBe(card);
   });
 
+  it("releases the clock while a retained modal shows an expired approval", async () => {
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    const cleared = vi.spyOn(globalThis, "clearInterval");
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const request = createExecRequest({ expiresAtMs: -1 });
+    const { dialog } = await renderOpenedApproval(request);
+    const card = query(".exec-approval-card");
+    const countdown = query(".exec-approval-countdown");
+    expect(countdown?.textContent?.trim()).toBe("expired");
+    expect(dialog.getAttribute("aria-description")).toBe("expired");
+    expect(intervals.mock.calls.filter(([, delay]) => delay === 1_000)).toHaveLength(0);
+
+    await renderApproval({ ...request, expiresAtMs: 2_000 });
+    expect(query(".exec-approval-card")).toBe(card);
+    expect(countdown?.textContent?.trim()).toBe("expires in 00:02");
+    expect(dialog.getAttribute("aria-description")).toBe("expires in 00:02");
+    const clockIntervals = intervals.mock.calls.flatMap(([tick, delay], index) =>
+      delay === 1_000 ? [{ tick, handle: intervals.mock.results[index]?.value }] : [],
+    );
+    expect(clockIntervals).toHaveLength(1);
+    const clock = clockIntervals[0];
+    if (typeof clock?.tick !== "function") {
+      throw new Error("Expected countdown interval");
+    }
+    nowMs = 2_000;
+    clock.tick();
+    flush();
+    await getRenderedModalDialog(container);
+    expect(query(".exec-approval-card")).toBe(card);
+    expect(countdown?.textContent?.trim()).toBe("expired");
+    expect(dialog.getAttribute("aria-description")).toBe("expired");
+    expect(cleared).toHaveBeenCalledWith(clock.handle);
+  });
+
   it("selects another queued request without changing queue order", async () => {
     const queue = [
       createExecRequest({ id: "approval-oldest", createdAtMs: 1 }),

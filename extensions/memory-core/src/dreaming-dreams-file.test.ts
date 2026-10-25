@@ -123,6 +123,31 @@ it("refuses to overwrite a symlinked DREAMS.md", async () => {
   await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("outside\n");
 });
 
+it("leaves DREAMS.md unchanged when it contains invalid UTF-8", async () => {
+  const bytes = Buffer.concat([Buffer.from("# Diary\n\nprior entry\n\n"), Buffer.from([0xff])]);
+  await fs.writeFile(dreamsPath, bytes);
+
+  await expect(
+    updateDreamsFile({
+      workspaceDir,
+      updater: () => ({ content: "# Rewritten\n", result: undefined }),
+    }),
+  ).rejects.toThrow(/must be valid UTF-8/);
+
+  expect(await fs.readFile(dreamsPath)).toEqual(bytes);
+});
+
+it("degrades malformed diary context to empty history so dreaming continues", async () => {
+  const bytes = Buffer.concat([
+    Buffer.from(renderDiary("*April 5, 2026*\n\nPrior diary entry")),
+    Buffer.from([0xff]),
+  ]);
+  await fs.writeFile(dreamsPath, bytes);
+
+  await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toEqual([]);
+  expect(await fs.readFile(dreamsPath)).toEqual(bytes);
+});
+
 it("publishes unchanged truncated context ending in an emoji", async () => {
   const prefix = "a".repeat(359);
   const body = `${prefix}😀tail`;
@@ -156,14 +181,17 @@ it("skips symlinked and non-file DREAMS.md when reading recent context", async (
   ).resolves.toEqual([]);
 });
 
-it("only optional diary context suppresses EPERM", async () => {
-  await fs.writeFile(dreamsPath, "# Existing\n");
-  const error = Object.assign(new Error("read denied"), { code: "EPERM" });
-  vi.spyOn(fs, "open").mockRejectedValue(error);
+it.each(["EPERM", "ERR_INVALID_UTF8"])(
+  "only optional diary context suppresses %s",
+  async (code) => {
+    await fs.writeFile(dreamsPath, "# Existing\n");
+    const error = Object.assign(new Error("read denied"), { code });
+    vi.spyOn(fs, "open").mockRejectedValue(error);
 
-  await expect(readDreamsFile(dreamsPath)).rejects.toBe(error);
-  await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toEqual([]);
-});
+    await expect(readDreamsFile(dreamsPath)).rejects.toBe(error);
+    await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toEqual([]);
+  },
+);
 
 it("preserves an undefined error code across optional context handling", async () => {
   const code = vi
@@ -276,6 +304,17 @@ The old diary entry stays.
         storage: { mode: "both", separateReports: false },
       }),
     ).rejects.toBe(failure);
+  });
+
+  it("leaves an inline daily file unchanged when it contains invalid UTF-8", async () => {
+    const targetPath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    const bytes = Buffer.concat([Buffer.from("# Daily\n\nprior entry\n\n"), Buffer.from([0xff])]);
+    await fs.writeFile(targetPath, bytes);
+
+    await expect(writePhase()).rejects.toThrow(/must be valid UTF-8/);
+
+    expect(await fs.readFile(targetPath)).toEqual(bytes);
   });
 });
 
