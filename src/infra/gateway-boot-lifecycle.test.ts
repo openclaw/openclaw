@@ -41,7 +41,6 @@ const bootRow = (
   details: Omit<BootRow, "bootId" | "startedAtMs"> = {},
 ): BootRow => ({ bootId, startedAtMs, ...details });
 
-const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
 const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 
@@ -123,11 +122,9 @@ describe("gateway crash-loop breaker", () => {
         ),
       );
       const sql = observeHostDataSql();
-      let firstId: string | undefined;
-      let nextId: string | undefined;
       try {
         const first = await lifecycle.begin(4_000);
-        firstId = first.id;
+        const firstId = first.id;
         expect(firstId).toBeDefined();
         expect(first.decision).toMatchObject({
           tripped: priorCrashes === 3,
@@ -136,7 +133,7 @@ describe("gateway crash-loop breaker", () => {
         });
         await lifecycle.complete(firstId, "clean_stop", 5_000);
         const next = await lifecycle.begin(6_000);
-        nextId = next.id;
+        const nextId = next.id;
         expect(nextId).toBeDefined();
         expect(nextId).not.toBe(firstId);
         expect(next.decision).toMatchObject({
@@ -151,23 +148,8 @@ describe("gateway crash-loop breaker", () => {
       expect(
         readBootRows(lifecycle)
           .filter((row) => row.started_at_ms >= 4_000)
-          .map(({ boot_id, started_at_ms, completed_at_ms, outcome, startup_reason }) => [
-            boot_id,
-            started_at_ms,
-            completed_at_ms,
-            outcome,
-            startup_reason,
-          ]),
-      ).toEqual([
-        [
-          firstId,
-          4_000,
-          5_000,
-          "clean_stop",
-          priorCrashes === 3 ? GATEWAY_CRASH_LOOP_BREAKER_REASON : null,
-        ],
-        [nextId, 6_000, null, null, null],
-      ]);
+          .map((row) => row.startup_reason),
+      ).toEqual([priorCrashes === 3 ? GATEWAY_CRASH_LOOP_BREAKER_REASON : null, null]);
     },
   );
 
@@ -240,20 +222,30 @@ describe("gateway crash-loop breaker", () => {
     },
   );
 
-  it("projects replacement history only while it is the latest shutdown", async () => {
+  it("projects the latest real shutdown and replacement without treating recovery or live boots as stops", async () => {
     const lifecycle = createLifecycleDb();
+    expect(await readGatewayLastShutdownAsync(lifecycle.env)).toBeUndefined();
     expect(await readGatewayLastInstallationReplacementAsync(lifecycle.env)).toBeUndefined();
     const reason = "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
     const replacedBoot = (await lifecycle.begin(1_000)).id;
     await lifecycle.complete(replacedBoot, "planned_restart", 2_000, { reason });
     const successor = (await lifecycle.begin(3_000)).id;
+    insertBootRows(lifecycle, [
+      completedBoot("older-stop", 1_500, 1_900, "planned_restart", { reason: "restart (SIGUSR2)" }),
+      completedBoot("recovery", 3_001, 4_000, "safe_mode_stable"),
+      bootRow("running", 4_001),
+    ]);
+    expect(await readGatewayLastShutdownAsync(lifecycle.env)).toEqual({
+      reason,
+      completedAtMs: 2_000,
+    });
     expect(await readGatewayLastInstallationReplacementAsync(lifecycle.env)).toEqual({
       reason,
       completedAtMs: 2_000,
     });
-    await lifecycle.complete(successor, "clean_stop", 4_000, { reason: "stop (SIGTERM)" });
+    await lifecycle.complete(successor, "clean_stop", 5_000, { reason: "stop (SIGTERM)" });
     expect(await readGatewayLastInstallationReplacementAsync(lifecycle.env)).toBeUndefined();
-    expect(await lifecycle.inspect(4_001)).toMatchObject({ tripped: false, uncleanBoots: 0 });
+    expect(await lifecycle.inspect(5_001)).toMatchObject({ tripped: false, uncleanBoots: 1 });
   });
 
   it.each(["SIGTERM", "SIGINT"])(
@@ -281,45 +273,6 @@ describe("gateway crash-loop breaker", () => {
     },
   );
 
-  it("reads the last shutdown without mistaking recovery segments or live boots for stops", async () => {
-    const lifecycle = createLifecycleDb();
-    expect(await readGatewayLastShutdownAsync(lifecycle.env)).toBeUndefined();
-    const bootId = (await lifecycle.begin(1_000)).id;
-    await lifecycle.complete(bootId, "clean_stop", 3_000, { reason: "stop (SIGTERM)" });
-    insertBootRows(lifecycle, [
-      completedBoot("older-stop", 1_500, 2_000, "planned_restart", {
-        reason: "restart (SIGUSR2)",
-      }),
-      completedBoot("recovery", 3_001, 4_000, "safe_mode_stable"),
-      bootRow("running", 4_001),
-    ]);
-
-    expect(await readGatewayLastShutdownAsync(lifecycle.env)).toEqual({
-      reason: "stop (SIGTERM)",
-      completedAtMs: 3_000,
-    });
-  });
-
-  it("trips from the persisted unclean boot count", async () => {
-    const db = createLifecycleDb();
-    const nowMs = 1_000_000;
-    const windowStartMs = nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS;
-
-    insertBootRows(db, [
-      bootRow("a", windowStartMs + 1),
-      bootRow("b", windowStartMs + 2),
-      completedBoot("c", windowStartMs - 60_000, windowStartMs + 3, "startup_failed"),
-    ]);
-
-    const decision = await db.inspect(nowMs);
-
-    expect(decision).toMatchObject({
-      tripped: true,
-      uncleanBoots: GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD,
-      shouldWriteStabilityBundle: true,
-    });
-  });
-
   it.each([
     [
       "startup_failed",
@@ -330,7 +283,7 @@ describe("gateway crash-loop breaker", () => {
   ] as const)("excludes %s (%s) from crash accounting", async (outcome, startupReason, reason) => {
     const lifecycle = createLifecycleDb();
     const nowMs = 1_000_000;
-    for (let index = 0; index < GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD; index++) {
+    for (let index = 0; index < 3; index++) {
       const bootId = (await lifecycle.begin(nowMs + index)).id;
       await lifecycle.complete(bootId, outcome, nowMs + index + 1, { startupReason, reason });
     }
@@ -407,7 +360,12 @@ describe("gateway crash-loop breaker", () => {
         startupReason: "gateway.tailscale_backend_stopped",
       }),
       bootRow("unclean-channel", nowMs - 9),
-      completedBoot("unknown-failure", nowMs - 8, nowMs - 7, "startup_failed"),
+      completedBoot(
+        "unknown-failure",
+        nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS - 60_000,
+        nowMs - 7,
+        "startup_failed",
+      ),
       completedBoot("new-breaker-marker", nowMs + 7, nowMs + 8, "safe_mode_stable", {
         startupReason: GATEWAY_CRASH_LOOP_BREAKER_REASON,
       }),

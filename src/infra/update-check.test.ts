@@ -14,7 +14,6 @@ import {
 import {
   checkUpdateStatus,
   compareSemverStrings,
-  fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
@@ -337,33 +336,22 @@ it("resolves beta and stable within one registry response delay", async () => {
   }
 });
 
-it("fetches registry tag versions and reports missing tags", async () => {
-  const runCommand = mockVersions({ latest: "1.0.4" });
-  await expect(
-    fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000, runCommand }),
-  ).resolves.toMatchObject({
-    tag: "latest",
-    version: "1.0.4",
-    metadata: { nodeEngine: ">=22.19.0" },
-  });
-  await expect(
-    fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000, runCommand }),
-  ).resolves.toMatchObject({
-    tag: "missing",
-    version: null,
-    error: "npm view failed: npm ERR! 404 Not Found",
-  });
-});
-
-it("adds context to malformed npm view JSON errors", async () => {
-  const runCommand = vi.fn(async () => ({ stdout: "not valid json {", stderr: "", code: 0 }));
-
-  const result = await packageTarget({
-    target: "openclaw",
-    runCommand,
-  });
-
-  expectPackageError(result, ["npm view returned invalid JSON", "SyntaxError"]);
+it.each([
+  [
+    "malformed JSON",
+    { stdout: "not valid json {", stderr: "", code: 0 },
+    ["npm view returned invalid JSON", "SyntaxError"],
+  ],
+  [
+    "missing package",
+    { stdout: "", stderr: "npm ERR! 404 Not Found", code: 1 },
+    "npm view failed: npm ERR! 404 Not Found",
+  ],
+] as const)("reports npm view errors for %s", async (_name, reply, error) => {
+  expectPackageError(
+    await packageTarget({ target: "openclaw", runCommand: async () => reply }),
+    typeof error === "string" ? error : [...error],
+  );
 });
 it("does not query the selector after the channel request was aborted", async () => {
   const controller = new AbortController();

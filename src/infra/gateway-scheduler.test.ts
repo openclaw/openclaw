@@ -115,50 +115,31 @@ describe("Gateway timed work", () => {
     await scheduler.stop();
   });
 
-  it.each(["root", "scope"] as const)(
+  it.each(["root", "scope", "scope-after-parent"] as const)(
     "releases the retiring caller while its %s abort signal remains reachable",
     async (kind) => {
       class RetiredOwner {
         close() {
           const { scheduler } = fixture();
           const owner = kind === "root" ? scheduler : scheduler.scope();
+          if (kind === "scope-after-parent") {
+            scheduler.beginClose();
+          }
           owner.beginClose();
-          return owner.signal;
+          return owner;
         }
       }
-      const signals = withNativeErrorStacks(() =>
+      const owners = withNativeErrorStacks(() =>
         Array.from({ length: 12 }, () => new RetiredOwner().close()),
       );
       // Collect after the closing call's execution frame has unwound.
       await nextTurn();
       expect(queryObjects(RetiredOwner)).toBe(0);
-      for (const signal of signals) {
-        expect(signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
+      for (const owner of owners) {
+        expect(owner.signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
       }
     },
   );
-
-  it("releases a scope's closing caller after its parent already aborted", async () => {
-    class RetiredCaller {
-      close(scope: ReturnType<GatewayScheduler["scope"]>) {
-        scope.beginClose();
-      }
-    }
-    const scopes = withNativeErrorStacks(() =>
-      Array.from({ length: 12 }, () => {
-        const { scheduler } = fixture();
-        const scope = scheduler.scope();
-        scheduler.beginClose();
-        new RetiredCaller().close(scope);
-        return scope;
-      }),
-    );
-    await nextTurn();
-    expect(queryObjects(RetiredCaller)).toBe(0);
-    for (const scope of scopes) {
-      expect(scope.signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
-    }
-  });
 
   it("does not wake or allocate async resources before a fractional deadline", async () => {
     const time = createGatewaySchedulerClock(1_000);
