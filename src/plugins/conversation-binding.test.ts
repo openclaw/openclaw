@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -8,6 +8,10 @@ import type {
   SessionBindingAdapter,
   SessionBindingBindInput,
   SessionBindingRecord,
+} from "../infra/outbound/session-binding-service.js";
+import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -20,11 +24,22 @@ import {
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
+  buildPluginBindingApprovalCustomId,
+  getCurrentPluginConversationBinding,
+  hasShownPluginBindingFallbackNotice,
+  markPluginBindingFallbackNoticeShown,
+  parsePluginBindingApprovalCustomId,
+  requestPluginConversationBinding,
+  resolvePluginConversationBindingApproval,
+} from "./conversation-binding.js";
+import {
   createDiscordCodexBindRequest,
   createTelegramCodexBindRequest,
 } from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
+import { setActivePluginRegistry } from "./runtime.js";
+import { bindPluginSessionConversation } from "./session-conversation-binding.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -92,13 +107,9 @@ const sessionBindingState = vi.hoisted(() => {
   };
 });
 
-const pluginRuntimeState = vi.hoisted(
-  () =>
-    ({
-      // The runtime mock is initialized before imports; beforeEach installs the real shared stub.
-      registry: null as unknown as PluginRegistry,
-    }) satisfies { registry: PluginRegistry },
-);
+const pluginRuntimeState = vi.hoisted<{ registry: PluginRegistry | null }>(() => ({
+  registry: null,
+}));
 
 vi.mock("./runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
@@ -111,18 +122,6 @@ vi.mock("./runtime.js", async () => {
     },
   };
 });
-
-let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
-let bindPluginSessionConversation: typeof import("./session-conversation-binding.js").bindPluginSessionConversation;
-let hasShownPluginBindingFallbackNotice: typeof import("./conversation-binding.js").hasShownPluginBindingFallbackNotice;
-let markPluginBindingFallbackNoticeShown: typeof import("./conversation-binding.js").markPluginBindingFallbackNoticeShown;
-let parsePluginBindingApprovalCustomId: typeof import("./conversation-binding.js").parsePluginBindingApprovalCustomId;
-let requestPluginConversationBinding: typeof import("./conversation-binding.js").requestPluginConversationBinding;
-let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
-let resolvePluginConversationBindingApproval: typeof import("./conversation-binding.js").resolvePluginConversationBindingApproval;
-let registerSessionBindingAdapter: typeof import("../infra/outbound/session-binding-service.js").registerSessionBindingAdapter;
-let unregisterSessionBindingAdapter: typeof import("../infra/outbound/session-binding-service.js").unregisterSessionBindingAdapter;
-let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
 type PluginBindingRequestInput = Parameters<typeof requestPluginConversationBinding>[0];
 type PluginBindingDecision = Parameters<
@@ -156,22 +155,6 @@ afterAll(async () => {
     process.env.OPENCLAW_STATE_DIR = previousStateDir;
   }
   cleanupTrackedTempDirs(tempDirs);
-});
-
-beforeAll(async () => {
-  ({
-    buildPluginBindingApprovalCustomId,
-    hasShownPluginBindingFallbackNotice,
-    markPluginBindingFallbackNoticeShown,
-    parsePluginBindingApprovalCustomId,
-    requestPluginConversationBinding,
-    getCurrentPluginConversationBinding,
-    resolvePluginConversationBindingApproval,
-  } = await import("./conversation-binding.js"));
-  ({ bindPluginSessionConversation } = await import("./session-conversation-binding.js"));
-  ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
-    await import("../infra/outbound/session-binding-service.js"));
-  ({ setActivePluginRegistry } = await import("./runtime.js"));
 });
 
 afterEach(async () => {
@@ -510,26 +493,6 @@ describe("plugin conversation binding approvals", () => {
     expect((await resolution).status).toBe("approved");
   });
 
-  it("refuses to claim a binding without plugin ownership metadata: agent:main:discord:channel:1", async () => {
-    const targetSessionKey = "agent:main:discord:channel:1";
-    sessionBindingState.setRecord({
-      bindingId: "binding-core",
-      targetSessionKey,
-      targetKind: "session",
-      conversation: { channel: "discord", accountId: "default", conversationId: "channel:1" },
-      status: "active",
-      boundAt: Date.now(),
-      metadata: { owner: "core" },
-    });
-    const result = await requestPluginConversationBinding(discordRequest("channel:1", "default"));
-    expect(result).toEqual({
-      status: "error",
-      message:
-        "This conversation is already bound by core routing and cannot be claimed by a plugin.",
-    });
-    expect(sessionBindingState.bind).not.toHaveBeenCalled();
-  });
-
   function holdWorkerOperation() {
     const entered = createDeferred();
     const release = createDeferred();
@@ -658,6 +621,7 @@ describe("plugin conversation binding approvals", () => {
             conversation: input.conversation,
             status: "active",
             boundAt: 1,
+            metadata: mode === "read" ? { owner: "core" } : undefined,
           });
         }
         release.resolve();
@@ -670,6 +634,11 @@ describe("plugin conversation binding approvals", () => {
         } else if (mode === "read") {
           expect(outcome).toMatchObject({
             value: { status: "error", message: expect.stringContaining("core routing") },
+          });
+          await expect(requestPluginConversationBinding(input)).resolves.toEqual({
+            status: "error",
+            message:
+              "This conversation is already bound by core routing and cannot be claimed by a plugin.",
           });
         } else {
           expect(outcome).toMatchObject({

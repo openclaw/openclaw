@@ -458,11 +458,13 @@ it("does not borrow another environment's Gateway graph through config identity"
 it.each([false, true])("reuses discovery through registration (legacy=%s)", async (legacy) => {
   const { root, env } = createCliFixture();
   const actionPath = path.join(root, "action.txt");
+  const markerPath = path.join(root, "register-runs.log");
   const plugin = writePlugin({
     dir: path.join(root, "plugin"),
     id: "invocation-cli",
     filename: "index.cjs",
-    registration: `    api.registerCli(({ program }) => program.command("prepared").action(() => require("node:fs").writeFileSync(${JSON.stringify(actionPath)}, api.registrationMode + ":" + api.pluginConfig.label)), {
+    registration: `    require("node:fs").appendFileSync(${JSON.stringify(markerPath)}, "register\\n");
+    api.registerCli(({ program }) => program.command("prepared").action(() => require("node:fs").writeFileSync(${JSON.stringify(actionPath)}, api.registrationMode + ":" + api.pluginConfig.label)), {
       descriptors: [{ name: "prepared", description: "Prepared command", hasSubcommands: false, machineOutput: () => true }],
     });`,
     configSchema: requiredLabel,
@@ -489,6 +491,7 @@ it.each([false, true])("reuses discovery through registration (legacy=%s)", asyn
   expect(commandNames(program)).toEqual(["prepared"]);
   await program.parseAsync(["prepared"], { from: "user" });
   expect(fs.readFileSync(actionPath, "utf8")).toBe("discovery:first");
+  expect(countRegisterRuns(markerPath)).toBe(1);
   const changedConfig = pluginConfig(plugin, { enabled: true, config: { label: "second" } });
   const changedProgram = await configuredProgram(changedConfig, env, options);
   await changedProgram.parseAsync(["prepared"], { from: "user" });
@@ -717,18 +720,6 @@ it.each([
     await instance?.dispose();
     await retirePluginCache(cache);
   }
-});
-
-it("runs a legacy external plugin register once across CLI bootstrap stages", async () => {
-  const { config, markerPath } = setupCountingCliPlugin();
-  const session = createPluginCliLoadSession();
-  onTestFinished(() => session.close());
-  const params = { cfg: config, env: process.env, primaryCommand: "counting-cli", session };
-  const ownerIds = await resolvePluginCliRootOwnerIds(params);
-  const descriptors = await loadPluginCliDescriptors(params);
-  expect(ownerIds).toEqual(["counting-cli"]);
-  expect(descriptors.map((entry) => entry.name)).toContain("counting-cli");
-  expect(countRegisterRuns(markerPath)).toBe(1);
 });
 
 it("keeps distinct load scopes on separate register passes", async () => {

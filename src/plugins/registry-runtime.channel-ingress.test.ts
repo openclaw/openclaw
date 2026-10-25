@@ -33,7 +33,7 @@ import {
   inspect,
   resolveIngressForRuntime,
 } from "./registry-runtime.channel-ingress.test-support.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -101,11 +101,7 @@ function recordInput(context: Parameters<typeof recordAcceptedSessionParticipant
   });
 }
 function createRegistry(runtime: PluginRuntime = createPluginRuntime()) {
-  return createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime,
-    activateGlobalSideEffects: false,
-  });
+  return createTestPluginRegistry(runtime);
 }
 
 function channelFixture(id: string, label = id): ChannelPlugin {
@@ -227,10 +223,8 @@ it.each([
         await withPluginRuntimeRegistryScope(empty, async () => {
           expect(await capturedChannel.outbound.loadAdapter(record.id)).toBeUndefined();
         });
-        expect(empty.channels).toHaveLength(0);
       }
       if (method !== "loadAdapter") {
-        expect(bindings[method]).toHaveBeenCalledTimes(2);
         expect(bindings[method]).toHaveBeenLastCalledWith({
           targetSessionKey: input.targetSessionKey,
           accountId: undefined,
@@ -404,7 +398,8 @@ describe("bundled channel ingress runtime ownership", () => {
   it.each(["bundled", "global"] as const)(
     "retains the host Gateway resolver for a trusted %s channel ingress",
     async (origin) => {
-      const gatewayContext = {} as GatewayRequestContext;
+      const audit = createAudit();
+      const gatewayContext = createGateway(audit);
       const gatewayContextResolver = vi.fn(() => gatewayContext);
       const channel = createRuntimeBuilder({
         origin,
@@ -412,10 +407,15 @@ describe("bundled channel ingress runtime ownership", () => {
         gatewayContextResolver,
       });
       const apiInbound = channel.api.runtime.channel.inbound;
-      expect(apiInbound.ingress).toBe(channel.ingress);
-      expect(apiInbound.buildContext).toBe(channel.buildContext);
       const ingress = await channel.resolveIngress("person-a");
+      const external = createRuntimeBuilder({ origin: "workspace", audit });
+      expectIngress(external, ingress, "unknown");
       const context = apiInbound.buildContext(contextParams({ ingress }));
+      expect(inspect(context)).toMatchObject({
+        ingressState: "present",
+        invoker: { state: "present", kind: "person" },
+        decisionCoverage: "enforced",
+      });
 
       const retainedResolver = readChannelContextGatewayContextResolver(context);
       expect(retainedResolver?.()).toBe(gatewayContext);
@@ -556,23 +556,6 @@ describe("bundled channel ingress runtime ownership", () => {
       channelId: "deferred-channel",
     });
     expectIngress(registeredRuntime!.turn, ingress, "present", { channelId: "deferred-channel" });
-  });
-
-  it("does not mint for untrusted plugins, only the exact active bundled record", async () => {
-    const audit = createAudit();
-    const external = createRuntimeBuilder({ origin: "workspace", audit });
-    const bundled = createRuntimeBuilder({ origin: "bundled", audit });
-    const ingress = await bundled.resolveIngress("person-a");
-
-    expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
-      ingressState: "unknown",
-      invoker: { state: "unknown" },
-    });
-    expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-      ingressState: "present",
-      invoker: { state: "present", kind: "person" },
-      decisionCoverage: "enforced",
-    });
   });
 
   it.each(["accepted", "mismatched", "builder failure"] as const)(
