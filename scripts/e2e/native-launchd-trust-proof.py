@@ -37,7 +37,8 @@ base_env.update({"CI": "1", "NPM_CONFIG_AUDIT": "false", "NPM_CONFIG_FUND": "fal
 results = {"candidateSha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
            "predecessorSha256": hashlib.sha256(predecessor.read_bytes()).hexdigest(),
            "predecessorVersion": "2026.10.7", "sourceCommit": os.environ["CANDIDATE_SHA"],
-           "platform": platform.platform(), "machine": platform.machine(), "cases": []}
+           "platform": platform.platform(), "machine": platform.machine(), "cases": [],
+           "status": "running", "cleanupStatus": "pending"}
 with tarfile.open(candidate, "r:gz") as archive:
     candidate_files = {entry.name.removeprefix("package/"): hashlib.sha256(archive.extractfile(entry).read()).hexdigest()
         for entry in archive.getmembers() if entry.isfile() and (
@@ -56,13 +57,40 @@ assert account_home == Path(__import__("pwd").getpwuid(os.getuid()).pw_dir).reso
 owned_states = []
 trusted_root = None
 
+def checkpoint():
+    pending = evidence / "RESULTS.json.tmp"
+    pending.write_text(json.dumps(results, indent=2) + "\n")
+    pending.replace(evidence / "RESULTS.json")
+
+results["originalBundleSha256"] = hashlib.sha256(original_bundle).hexdigest()
+checkpoint()
+
 def run(name, args, env=None, timeout=180, check=True):
     global serial
     serial += 1
-    r = subprocess.run([str(a) for a in args], env=env or base_env,
-                       text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                       timeout=timeout)
-    (evidence / f"{serial:03d}-{name}.log").write_text(r.stdout + "\n[stderr]\n" + r.stderr)
+    log = evidence / f"{serial:03d}-{name}.log"
+    receipt = evidence / f"{serial:03d}-{name}.json"
+    started = time.monotonic()
+    command = {"name": name, "startedUtc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "timeoutSeconds": timeout, "status": "running"}
+    receipt.write_text(json.dumps(command, indent=2) + "\n")
+    print(f"START {serial:03d} {name}", flush=True)
+    try:
+        r = subprocess.run([str(a) for a in args], env=env or base_env,
+                           text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        # TimeoutExpired may carry bytes even when subprocess.run uses text mode.
+        output = lambda value: value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+        log.write_text(output(error.stdout) + "\n[stderr]\n" + output(error.stderr))
+        command.update(status="timed-out", elapsedSeconds=time.monotonic() - started)
+        receipt.write_text(json.dumps(command, indent=2) + "\n")
+        print(f"TIMEOUT {serial:03d} {name}", flush=True)
+        raise
+    log.write_text(r.stdout + "\n[stderr]\n" + r.stderr)
+    command.update(status="returned", returncode=r.returncode, elapsedSeconds=time.monotonic() - started)
+    receipt.write_text(json.dumps(command, indent=2) + "\n")
+    print(f"DONE {serial:03d} {name}: {r.returncode}", flush=True)
     if check and r.returncode:
         raise RuntimeError(f"{name}: exit {r.returncode}; see numbered log")
     return r
@@ -189,6 +217,7 @@ def snapshot(env, name, expected_extra, prefix):
     assert selected, "Native executable identity is missing"
     results.setdefault("serviceProcesses", []).append({"name": name, "pid": int(pid), "launchdPid": int(supervisor_pid),
         "binaries": [{"path": str(x), "sha256": hashlib.sha256(x.read_bytes()).hexdigest()} for x in selected]})
+    checkpoint()
     return pid
 
 def sessions(cli, env, name):
@@ -208,6 +237,7 @@ def assert_candidate(cli, env, name):
         assert hashlib.sha256(installed_file.read_bytes()).hexdigest() == expected_sha, "Candidate distribution differs: " + filename
     results.setdefault("verifiedCandidateRoots", []).append({"name": name, "root": str(installed_root),
         "verifiedFileCount": len(candidate_files)})
+    checkpoint()
 
 def probe(cli, env, cfg, peer, expected, name, message="Reply with NATIVE_TLS_OK", required_history=None):
     cfg = json.loads(Path(env["OPENCLAW_CONFIG_PATH"]).read_text())
@@ -245,6 +275,7 @@ def probe(cli, env, cfg, peer, expected, name, message="Reply with NATIVE_TLS_OK
     results["cases"].append({"name": name, "expectedAllowed": expected, "httpEffects": count,
         "requiredHistoryMarkerPresent": True if required_history else None,
         "providerPayloadSha256": [hashlib.sha256(x.encode()).hexdigest() for x in peer["payloads"][payload_before:]]})
+    checkpoint()
 
 try:
     run("native-os", ["sw_vers"])
@@ -332,42 +363,71 @@ try:
         assert predecessor_sessions <= candidate_sessions, "Released-predecessor sessions were lost or reidentified"
         results.setdefault("retainedSessions", []).append({"scenario": scenario,
             "predecessor": sorted(predecessor_sessions), "candidate": sorted(candidate_sessions)})
+        checkpoint()
         run(scenario + "-uninstall", [cli, "gateway", "uninstall", "--json"], env, timeout=240)
-    results["status"] = "passed"
+    results["status"] = "behavior-passed-cleanup-pending"
+    checkpoint()
+    shutil.copyfile(evidence / "RESULTS.json", evidence / "BEHAVIOR-RESULTS.json")
 except Exception as error:
     results["status"] = "failed-or-blocked"
     results["failure"] = {"type": type(error).__name__, "message": str(error)}
+    checkpoint()
     raise
 finally:
     cleanup_failures = []
-    for label, env in labels:
-        run("cleanup-" + label, ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], env, check=False)
-        remaining = run("verify-retired-" + label, ["launchctl", "print", f"gui/{os.getuid()}/{label}"], env, check=False)
-        if remaining.returncode == 0:
-            cleanup_failures.append("LaunchAgent still registered: " + label)
-    for server in servers: server.shutdown(); server.server_close()
-    restore = root / "original-cert.pem"
-    restore.write_bytes(original_bundle)
-    run("restore-original-bundle", ["sudo", "cp", restore, "/etc/ssl/cert.pem"], check=False)
-    if trusted_root:
-        retired = run("retire-owned-trust", ["sudo", "security", "remove-trusted-cert", "-d", trusted_root], check=False)
-        if retired.returncode:
-            cleanup_failures.append("Owned system trust removal failed")
-    for state in owned_states:
-        gateway_log = state / "gateway.log"
-        if gateway_log.is_file():
-            shutil.copyfile(gateway_log, evidence / (state.name + "-gateway.log"))
-    results["retainedTaskStates"] = [str(x) for x in owned_states]
-    results["restoredBundleSha256"] = hashlib.sha256(Path("/etc/ssl/cert.pem").read_bytes()).hexdigest()
-    results["originalBundleSha256"] = hashlib.sha256(original_bundle).hexdigest()
-    if results["restoredBundleSha256"] != results["originalBundleSha256"]:
-        cleanup_failures.append("Original OS bundle was not restored")
-    results["cleanupFailures"] = cleanup_failures
-    if cleanup_failures:
-        results["status"] = "failed-or-blocked"
-    (evidence / "RESULTS.json").write_text(json.dumps(results, indent=2) + "\n")
-    # Only evidence is uploaded. Private keys, installed packages and HOME stay disposable.
-    manifest = {x.name: hashlib.sha256(x.read_bytes()).hexdigest() for x in evidence.iterdir() if x.is_file()}
-    (evidence / "MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    if cleanup_failures:
+    def cleanup_command(name, args, env=None):
+        try:
+            return run(name, args, env, check=False)
+        except Exception as error:
+            cleanup_failures.append(f"{name}: {type(error).__name__}: {error}")
+            return None
+
+    results["cleanupStatus"] = "running"
+    checkpoint()
+    cleanup_completed = False
+    try:
+        for state in owned_states:
+            gateway_log = state / "gateway.log"
+            if gateway_log.is_file():
+                shutil.copyfile(gateway_log, evidence / (state.name + "-gateway.log"))
+        results["retainedTaskStates"] = [str(x) for x in owned_states]
+        results["retiredLaunchAgents"] = []
+        for label, env in labels:
+            cleanup_command("cleanup-" + label, ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], env)
+            remaining = cleanup_command("verify-retired-" + label, ["launchctl", "print", f"gui/{os.getuid()}/{label}"], env)
+            if remaining is not None and remaining.returncode != 0:
+                results["retiredLaunchAgents"].append(label)
+            else:
+                cleanup_failures.append("LaunchAgent retirement unverified: " + label)
+            checkpoint()
+        for server in servers: server.shutdown(); server.server_close()
+        restore = root / "original-cert.pem"
+        restore.write_bytes(original_bundle)
+        cleanup_command("restore-original-bundle", ["sudo", "cp", restore, "/etc/ssl/cert.pem"])
+        results["restoredBundleSha256"] = hashlib.sha256(Path("/etc/ssl/cert.pem").read_bytes()).hexdigest()
+        if results["restoredBundleSha256"] != results["originalBundleSha256"]:
+            cleanup_failures.append("Original OS bundle was not restored")
+        checkpoint()
+        if trusted_root:
+            retired = cleanup_command("retire-owned-trust", ["sudo", "security", "remove-trusted-cert", "-d", trusted_root])
+            results["ownedTrustRemoved"] = retired is not None and retired.returncode == 0
+            if not results["ownedTrustRemoved"]:
+                cleanup_failures.append("Owned system trust removal failed")
+        cleanup_completed = True
+    except Exception as error:
+        cleanup_failures.append(f"{type(error).__name__}: {error}")
+    finally:
+        if not cleanup_completed:
+            cleanup_failures.append("Cleanup interrupted before completion")
+        results["cleanupFailures"] = cleanup_failures
+        results["cleanupStatus"] = "failed" if cleanup_failures else "passed"
+        if cleanup_failures:
+            results["status"] = "failed-or-blocked"
+        elif results["status"] == "behavior-passed-cleanup-pending":
+            results["status"] = "passed"
+        checkpoint()
+        # Only evidence is uploaded. Private keys, installed packages and HOME stay disposable.
+        manifest = {x.name: hashlib.sha256(x.read_bytes()).hexdigest() for x in evidence.iterdir() if x.is_file()}
+        (evidence / "MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    if cleanup_failures and "failure" not in results:
         raise RuntimeError("Native cleanup verification failed; see RESULTS.json")

@@ -15,10 +15,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  native-service-trust:
+  workflow-contracts:
     if: github.repository == 'openclaw/openclaw' && github.event.pull_request.number == 179898
     runs-on: xcode-27
-    timeout-minutes: 75
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,14 +26,6 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           submodules: false
-      - name: Require native launchd user domain before installing anything
-        run: |
-          set -euo pipefail
-          test "$(uname -s)" = Darwin
-          launchctl print "gui/$(id -u)" > "$RUNNER_TEMP/native-launchd-preflight.txt"
-          sw_vers
-          sysctl hw.logicalcpu hw.memsize
-          df -h "$RUNNER_TEMP"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1
@@ -66,6 +58,56 @@ jobs:
           node scripts/run-vitest.mjs test/scripts/ci-workflow*.test.ts \
             test/scripts/ci-swift-cache-lifetime.test.ts \
             test/scripts/macos-native-test-launch.test.ts --maxWorkers=1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: native-workflow-contracts-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-workflow-bash.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  native-service-trust:
+    needs: workflow-contracts
+    if: always() && github.repository == 'openclaw/openclaw' && github.event.pull_request.number == 179898
+    runs-on: xcode-27
+    timeout-minutes: 75
+    steps:
+      - name: Require successful workflow contracts
+        env:
+          CONTRACT_RESULT: ${{ needs.workflow-contracts.result }}
+        run: test "$CONTRACT_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+      - name: Require native launchd user domain before installing anything
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          launchctl print "gui/$(id -u)" > "$RUNNER_TEMP/native-launchd-preflight.txt"
+          sw_vers
+          sysctl hw.logicalcpu hw.memsize
+          df -h "$RUNNER_TEMP"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+          package-manager-cache: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+        with:
+          version: 12.12.1
+          run_install: false
+      - name: Provision Bash 5 for canonical package subprocesses
+        run: |
+          set -euo pipefail
+          if ! brew list --versions bash > /dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install bash
+          fi
+          workflow_bash="$(brew --prefix bash)/bin/bash"
+          "$workflow_bash" --noprofile --norc -c 'test "${BASH_VERSINFO[0]}" -ge 5'
+          dirname "$workflow_bash" >> "$GITHUB_PATH"
+          "$workflow_bash" --version | tee "$RUNNER_TEMP/native-workflow-bash.txt"
       - name: Build exact-source package and verify released predecessor
         env:
           CI: "true"
@@ -76,6 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          pnpm install --frozen-lockfile
           node scripts/package-openclaw-for-docker.mjs \
             --allow-unreleased-changelog \
             --output-dir "$RUNNER_TEMP/native-trust-candidate" \
@@ -87,7 +130,17 @@ jobs:
             45dc6dadab3ca4e5286262226d6b61554309435a5e83b5d25c803a3a12ef2f81 \
             "$RUNNER_TEMP/openclaw-predecessor.tgz" | shasum -a 256 -c -
           git rev-parse HEAD > "$RUNNER_TEMP/native-trust-source.txt"
-          shasum -a 256 "$RUNNER_TEMP/native-trust-candidate/openclaw-native-proof.tgz"
+          cp "$RUNNER_TEMP/native-trust-source.txt" "$RUNNER_TEMP/native-trust-candidate/source-sha.txt"
+          shasum -a 256 "$RUNNER_TEMP/native-trust-candidate/openclaw-native-proof.tgz" \
+            | tee "$RUNNER_TEMP/native-trust-candidate/SHA256SUMS"
+          tar -tzf "$RUNNER_TEMP/native-trust-candidate/openclaw-native-proof.tgz" \
+            > "$RUNNER_TEMP/native-trust-candidate/archive-entries.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-service-trust-package-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-trust-candidate
+          if-no-files-found: error
+          retention-days: 14
       - name: Exercise generated services, released-stable update and TLS provider effects
         env:
           CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
