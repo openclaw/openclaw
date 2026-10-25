@@ -98,22 +98,10 @@ async function createSessionWorktree(key: string) {
   return created.payload!.worktree;
 }
 
-function expectPreserved(
-  result: { ok: boolean; payload?: SessionsDeleteResult },
-  worktree: Worktree,
-  reason: string,
-) {
-  const { id, path: worktreePath, branch } = worktree;
-  expect(result).toMatchObject({
-    ok: true,
-    payload: { deleted: true, worktreePreserved: { id, path: worktreePath, branch, reason } },
-  });
-}
-
-async function expectWorktreePresent(worktree: Worktree, present: boolean) {
-  expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toEqual(
-    present ? undefined : expect.any(Number),
-  );
+async function expectWorktreePresent(worktree: Worktree, present = true) {
+  const record = getRegistryWorktree(process.env, worktree.id);
+  expect(record?.id).toBe(worktree.id);
+  expect(record?.removedAt).toEqual(present ? undefined : expect.any(Number));
   if (present) {
     await fs.access(worktree.path);
   } else {
@@ -372,9 +360,7 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
     successorWorktreeId = successorWorktree.id;
     expect(successorSessionId).not.toBe(predecessorSessionId);
     expect(successorWorktree.id).not.toBe(predecessorWorktree.id);
-    await fs.access(successorWorktree.path);
-    expect(getRegistryWorktree(process.env, successorWorktree.id)?.id).toBe(successorWorktree.id);
-    expect(getRegistryWorktree(process.env, successorWorktree.id)?.removedAt).toBeUndefined();
+    await expectWorktreePresent(successorWorktree);
     const persisted = loadSessionEntry({ sessionKey: key, storePath });
     expect(persisted).toMatchObject({
       sessionId: successorSessionId,
@@ -473,7 +459,14 @@ test.each([
 
     const preserved = outcome !== "finalized" && outcome !== "removed";
     if (preserved) {
-      expectPreserved(deleted, worktree, outcome);
+      const { id, path: worktreePath, branch } = worktree;
+      expect(deleted).toMatchObject({
+        ok: true,
+        payload: {
+          deleted: true,
+          worktreePreserved: { id, path: worktreePath, branch, reason: outcome },
+        },
+      });
     } else {
       expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
       expect(deleted.payload).not.toHaveProperty("worktreePreserved");

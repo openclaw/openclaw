@@ -151,15 +151,12 @@ export async function runTalkNodePermissionParity({
   const nativeExecutions = () =>
     observeNative.mock.calls.flatMap(([argv, options], index) => {
       const result = observeNative.mock.settledResults[index];
-      return argv.some((arg) => arg.includes(marker)) && result?.type === "fulfilled"
-        ? [
-            {
-              argv,
-              cwd: typeof options === "object" ? options.cwd : undefined,
-              result: result.value,
-            },
-          ]
-        : [];
+      if (!argv.some((arg) => arg.includes(marker)) || result?.type !== "fulfilled") {
+        return [];
+      }
+      return [
+        { argv, cwd: typeof options === "object" ? options.cwd : undefined, result: result.value },
+      ];
     });
   let requested = createDeferred<Record<string, unknown>>();
   let approvalEvents = 0;
@@ -456,9 +453,9 @@ export async function runTalkNodePermissionParity({
         cwd: workspace,
       })),
     );
-    const countInvokes = (command: string) =>
-      node.invokes.filter((frame) => frame.command === command).length;
-    expect(countInvokes("system.run")).toBe(publicOnly ? 0 : 6);
+    expect(node.invokes.filter((frame) => frame.command === "system.run")).toHaveLength(
+      publicOnly ? 0 : 6,
+    );
   } finally {
     context.getClientConnIds = originalConnections;
     provider.restore();

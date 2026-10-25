@@ -142,20 +142,17 @@ function fixtures(): RowFixture[] {
     modelOverride: "newer",
     modelOverrideSource: "user",
   };
+  const childEntry = (entry: Partial<SessionEntry> = {}): SessionEntry => ({
+    ...BASE_ENTRY,
+    parentSessionKey: PARENT,
+    ...entry,
+  });
   const childStore: Record<string, SessionEntry> = {
     [PARENT]: parentEntry,
-    [LIVE]: {
-      ...BASE_ENTRY,
-      sessionId: "live-session",
-      parentSessionKey: PARENT,
-    },
-    [ended]: { ...BASE_ENTRY, parentSessionKey: PARENT, status: "done", endedAt: START },
-    [unknown]: { ...BASE_ENTRY, parentSessionKey: PARENT },
-    "agent:main:subagent:stale": {
-      ...BASE_ENTRY,
-      parentSessionKey: PARENT,
-      updatedAt: START - 7_200_000,
-    },
+    [LIVE]: childEntry({ sessionId: "live-session" }),
+    [ended]: childEntry({ status: "done", endedAt: START }),
+    [unknown]: childEntry(),
+    "agent:main:subagent:stale": childEntry({ updatedAt: START - 7_200_000 }),
   };
   const liveRun = createSubagentRunRecord({
     runId: LIVE_RUN,

@@ -173,28 +173,16 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const names = ["read", "sessions_spawn", "automations", "gateway", "plugins", "nodes"];
     createTools.mockReturnValueOnce(names.map(makeTool)).mockReturnValueOnce(names.map(makeTool));
     const cfg = { gateway: { tools: { allow: ["gateway", "plugins"] } } };
-    const ownerResult = await resolveTools({ cfg, senderIsOwner: true });
-    const nonOwnerResult = await resolveTools({ cfg, senderIsOwner: false });
-    expect(toolNames(ownerResult)).toEqual(names);
-    expect(toolNames(nonOwnerResult)).toEqual(["read", "sessions_spawn"]);
+    expect(toolNames(await resolveTools({ cfg, senderIsOwner: true }))).toEqual(names);
+    expect(toolNames(await resolveTools({ cfg, senderIsOwner: false }))).toEqual([
+      "read",
+      "sessions_spawn",
+    ]);
     const args = readCreateToolsArgs(1);
-    const denied = [
-      "automations",
-      "gateway",
-      "plugins",
-      "screen",
-      "terminal",
-      "portal",
-      "conversations_list",
-      "conversations_send",
-      "conversations_turn",
-      "nodes",
-      "computer",
-      "mobile_ui",
-      "openclaw",
-      "intent",
-      "sessions",
-    ];
+    const denied =
+      "automations gateway plugins screen terminal portal conversations_list conversations_send conversations_turn nodes computer mobile_ui openclaw intent sessions".split(
+        " ",
+      );
     expect([args.pluginToolDenylist, args.inheritedToolDenylist]).toEqual([denied, denied]);
   });
 
@@ -348,31 +336,20 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     { execSession: { execHost: "node" }, execOverrides: { host: "gateway" } },
     { cfg: { agents: { defaults: { sandbox: { mode: "all" } } } } },
     { surface: "http" },
+    {
+      cfg: { agents: { defaults: { sandbox: { mode: "non-main" } } } },
+      sessionKey: "agent:main:main",
+      runtimePolicySessionKey: "agent:main:discord:default:direct:peer-42",
+      agentId: "main",
+    },
   ])("omits exec when host or surface policy forbids it: %j", async (overrides) => {
     mockTools("read", "exec", "nodes");
     await expectNoNodeExec(overrides);
   });
 
-  it("uses the runtime policy key for non-main sandbox classification", async () => {
-    await expectNoNodeExec({
-      cfg: {
-        agents: { defaults: { sandbox: { mode: "non-main" } } },
-      },
-      sessionKey: "agent:main:main",
-      runtimePolicySessionKey: "agent:main:discord:default:direct:peer-42",
-      agentId: "main",
-    });
-  });
-
   it("filters node exec through immutable sender-scoped policy", async () => {
     const result = await resolveNodeExecTools({
-      cfg: {
-        tools: {
-          toolsBySender: {
-            "id:blocked-sender": { deny: ["exec"] },
-          },
-        },
-      },
+      cfg: { tools: { toolsBySender: { "id:blocked-sender": { deny: ["exec"] } } } },
       sessionKey: "agent:main:discord:channel:dev",
       senderIsOwner: false,
       messageProvider: "discord",
@@ -390,9 +367,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
           ? { deny: ["exec"] }
           : undefined,
     );
-    getChannelPlugin.mockReturnValue({
-      groups: { resolveToolPolicy },
-    });
+    getChannelPlugin.mockReturnValue({ groups: { resolveToolPolicy } });
 
     const result = await resolveNodeExecTools({
       sessionKey: "agent:main:direct:child",
@@ -486,18 +461,10 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       delegationCapability: "report_only",
     });
     expect(toolNames(result)).toEqual(["read", "cron", "gateway", "nodes"]);
-    expect(readCreateToolsArgs().inheritedToolAllowlist).toEqual([
-      "read",
-      "automations",
-      "gateway",
-      "nodes",
-    ]);
-    expect(readCreateToolsArgs().cronCreatorToolAllowlist).toEqual([
-      { name: "read" },
-      { name: "automations" },
-      { name: "gateway" },
-      { name: "nodes" },
-    ]);
+    const args = readCreateToolsArgs();
+    const inherited = ["read", "automations", "gateway", "nodes"];
+    expect(args.inheritedToolAllowlist).toEqual(inherited);
+    expect(args.cronCreatorToolAllowlist).toEqual(inherited.map((name) => ({ name })));
   });
 
   it("narrows report-only loopback tools to their status actions", async () => {
