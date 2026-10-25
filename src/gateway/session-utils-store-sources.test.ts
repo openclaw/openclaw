@@ -96,6 +96,8 @@ function expectRegistered(
     expect.arrayContaining([expect.objectContaining(source(database))]),
   );
 }
+const sourcesOf = (prepared: Awaited<ReturnType<typeof prepareSourcesAsync>>) =>
+  resolveSources(expectDefined(prepared.request, "source routing request")).sources;
 function mainSources() {
   const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
   return { main, params: sourceParams(source(main)) };
@@ -145,6 +147,41 @@ function holdRegistryRead() {
       };
     });
   return { entered, resume, spy };
+}
+
+async function withHeldPreparation(
+  signal: AbortSignal,
+  run: (
+    held: ReturnType<typeof holdRegistryRead> &
+      ReturnType<typeof mainSources> & {
+        first: ReturnType<typeof prepareSourcesAsync>;
+        startSecond: () => ReturnType<typeof prepareSourcesAsync>;
+      },
+  ) => Promise<void>,
+) {
+  await withState(async () => {
+    const sources = mainSources();
+    const held = holdRegistryRead();
+    const first = prepareSourcesAsync(sources.params);
+    void first.catch(() => undefined);
+    let second: ReturnType<typeof prepareSourcesAsync> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(held.entered.promise, first, "Registry read not reached"),
+        signal,
+      );
+      await run({
+        ...sources,
+        ...held,
+        first,
+        startSecond: () => (second = prepareSourcesAsync(sources.params)),
+      });
+    } finally {
+      held.resume.resolve();
+      held.spy.mockRestore();
+      await Promise.allSettled([first, second]);
+    }
+  });
 }
 
 it.each([false, true])(
@@ -212,8 +249,6 @@ it.each([false, true])(
       if (fixed) {
         databases.push(openStore("added"));
       }
-      readdir.mockClear();
-      realpath.mockClear();
       const second = await prepare();
       expect(Object.keys(first.sources)).toEqual(agentIds);
       expect(Object.keys(second.sources)).toEqual([...agentIds, "added"]);
@@ -265,8 +300,7 @@ it.each(["alias", "missing-parent"] as const)(
       const prepared = await prepareSourcesAsync(
         sourceParams(currentSource, { session: { store: currentSource.path } }),
       );
-      const request = expectDefined(prepared.request, "source routing request");
-      expect(resolveSources(request).sources.main).toEqual([currentSource]);
+      expect(sourcesOf(prepared).main).toEqual([currentSource]);
       if (kind === "alias") {
         fs.unlinkSync(parent);
         fs.symlinkSync(replacement, parent, linkType);
@@ -275,7 +309,7 @@ it.each(["alias", "missing-parent"] as const)(
         fs.symlinkSync(replacement, parent, linkType);
       }
       invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
-      expect(resolveSources(request).sources.main).toEqual([]);
+      expect(sourcesOf(prepared).main).toEqual([]);
     });
   },
 );
@@ -311,8 +345,7 @@ it("captures fixed, missing, and retired routing without main-thread SQL", async
     }
     const request = expectDefined(prepared.request, "source routing request");
     expect(JSON.stringify(request)).not.toContain("not-a-routing-field");
-    const { sources } = resolveSources(request);
-    expect(sources).toEqual({
+    expect(sourcesOf(prepared)).toEqual({
       main: [currentSource],
       ops: [{ agentId: "ops", path: ops.path }],
       future: [{ agentId: "future", path: path.join(storeDir, "shared.future.sqlite") }],
@@ -344,8 +377,7 @@ it.each([false, true])(
         fs.mkdirSync(blockedPath);
       }
       const prepared = await pending;
-      const request = expectDefined(prepared.request, "source routing request");
-      expect(resolveSources(request).sources).toEqual({
+      expect(sourcesOf(prepared)).toEqual({
         main: [{ agentId: "main", path: main.path }],
         blocked: [],
       });
@@ -379,11 +411,12 @@ it("retains source preparation until directory or registry ownership changes", a
     }
     expect(realpath.mock.calls.length).toBe(revalidationReads);
     await Promise.resolve();
+    releasedDirectories.length = 0;
     replaceAlias(alias, replacement);
-    const request = expectDefined(first.request, "source routing request");
-    expect(resolveSources(request).sources.main).toEqual([]);
+    expect(sourcesOf(first).main).toEqual([]);
     await prepareSourcesAsync(params);
     expect(realpath).toHaveBeenCalled();
+    expect(releasedDirectories).not.toContain(path.dirname(alias));
 
     const ops = openOpenClawAgentDatabase({ agentId: "ops", env: state.env });
     const registered = await prepareSourcesAsync(params);
@@ -439,19 +472,6 @@ it("reuses shared watches and prunes retired registry source directories", async
   });
 });
 
-it("keeps shared directories observed after a source path changes", async () => {
-  await withState(async () => {
-    const { params, alias, replacement } = aliasSources();
-    const first = await prepareSourcesAsync(params);
-    releasedDirectories.length = 0;
-    replaceAlias(alias, replacement);
-    const request = expectDefined(first.request, "source routing request");
-    expect(resolveSources(request).sources.main).toEqual([]);
-    await prepareSourcesAsync(params);
-    expect(releasedDirectories).not.toContain(path.dirname(alias));
-  });
-});
-
 it("does not resume directory observation after its root closes during preparation", async () => {
   await withState(async () => {
     const { params } = mainSources();
@@ -475,65 +495,34 @@ it("does not resume directory observation after its root closes during preparati
 });
 
 it("shares pending source preparation", async ({ signal }) => {
-  await withState(async () => {
-    const { main, params } = mainSources();
-    const { entered, resume, spy } = holdRegistryRead();
-    const first = prepareSourcesAsync(params);
-    void first.catch(() => undefined);
-    let second: ReturnType<typeof prepareSourcesAsync> | undefined;
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, first, "Registry read not reached"),
-        signal,
-      );
-      second = prepareSourcesAsync(params);
-      resume.resolve();
-      const prepared = await withinTest(second, signal);
-      expect(await withinTest(first, signal)).toEqual(prepared);
-      expectRegistered(prepared, main);
-      expect(spy).toHaveBeenCalledOnce();
-    } finally {
-      resume.resolve();
-      spy.mockRestore();
-      await Promise.allSettled([first, second]);
-    }
+  await withHeldPreparation(signal, async ({ main, first, startSecond, resume, spy }) => {
+    const second = startSecond();
+    resume.resolve();
+    const prepared = await withinTest(second, signal);
+    expect(await withinTest(first, signal)).toEqual(prepared);
+    expectRegistered(prepared, main);
+    expect(spy).toHaveBeenCalledOnce();
   });
 });
 
 it("shares a pending registry rejection and recovers on the next request", async ({ signal }) => {
-  await withState(async () => {
-    const { main, params } = mainSources();
-    const { entered, resume, spy } = holdRegistryRead();
-    const first = prepareSourcesAsync(params);
-    void first.catch(() => undefined);
-    let second: ReturnType<typeof prepareSourcesAsync> | undefined;
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, first, "Registry read not reached"),
-        signal,
-      );
-      invalidateRegisteredAgentDatabasesMemo({ path: params.registryPath });
-      second = prepareSourcesAsync(params);
-      const settled = Promise.allSettled([first, second]);
-      resume.resolve();
-      const [one, two] = await withinTest(settled, signal);
-      if (one.status !== "rejected" || two.status !== "rejected") {
-        throw new Error("Both source readers must retain the invalidated registry rejection");
-      }
-      expect(one.reason).toMatchObject({ name: "AgentDatabaseRegistryChangedError" });
-      expect(two.reason).toBe(one.reason);
-      expect(spy).toHaveBeenCalledOnce();
-      expect(observedDirectories.some((entry) => entry.active)).toBe(false);
-
-      const recovered = await withinTest(prepareSourcesAsync(params), signal);
-      expectRegistered(recovered, main);
-      const request = expectDefined(recovered.request, "source routing request");
-      expect(resolveSources(request).sources.main).toEqual([source(main)]);
-      expect(spy).toHaveBeenCalledTimes(2);
-    } finally {
-      resume.resolve();
-      spy.mockRestore();
-      await Promise.allSettled([first, second]);
+  await withHeldPreparation(signal, async ({ main, params, first, startSecond, resume, spy }) => {
+    invalidateRegisteredAgentDatabasesMemo({ path: params.registryPath });
+    const second = startSecond();
+    const settled = Promise.allSettled([first, second]);
+    resume.resolve();
+    const [one, two] = await withinTest(settled, signal);
+    if (one.status !== "rejected" || two.status !== "rejected") {
+      throw new Error("Both source readers must retain the invalidated registry rejection");
     }
+    expect(one.reason).toMatchObject({ name: "AgentDatabaseRegistryChangedError" });
+    expect(two.reason).toBe(one.reason);
+    expect(spy).toHaveBeenCalledOnce();
+    expect(observedDirectories.some((entry) => entry.active)).toBe(false);
+
+    const recovered = await withinTest(prepareSourcesAsync(params), signal);
+    expectRegistered(recovered, main);
+    expect(sourcesOf(recovered).main).toEqual([source(main)]);
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });

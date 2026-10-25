@@ -118,6 +118,16 @@ function expectText(text: string | undefined, ...parts: string[]) {
     expect(text).toContain(part);
   }
 }
+function expectAbsent(text: string | undefined, ...parts: string[]) {
+  for (const part of parts) {
+    expect(text).not.toContain(part);
+  }
+}
+async function readPage(server: Server, params: Parameters<typeof send>[1] = {}) {
+  const response = await send(server, params);
+  expect(response.res.statusCode).toBe(200);
+  return response.getBody();
+}
 function expectLimited(response: ReturnType<typeof createResponse>) {
   expect(response.res.statusCode).toBe(429);
   expect(Number(responseHeader(response, "Retry-After"))).toBeGreaterThan(0);
@@ -159,33 +169,26 @@ describe("anonymous public session HTTP boundary", () => {
       ...PUBLIC_SESSION,
       messages: [{ role: "assistant", content: '[embed ref="chart" /]' }],
     });
-    const response = await send(createPublicGateway("/control"), { path: requestPath("/control") });
-    expect(response.res.statusCode).toBe(200);
+    const html = await readPage(createPublicGateway("/control"), { path: requestPath("/control") });
     expect(widgetToken).toHaveBeenCalledWith(LOCATOR, "chart");
-    expect(response.getBody()).toContain(
-      'src="/control/share/session/media?widget=v1.document-only"',
-    );
+    expect(html).toContain('src="/control/share/session/media?widget=v1.document-only"');
   });
   it("keeps the page available but omits frames for disabled hosting or unmintable references", async () => {
     reader.mockResolvedValue({
       ...PUBLIC_SESSION,
       messages: [{ role: "assistant", content: 'Chart below.\n\n[embed ref="chart" /]' }],
     });
-    const disabled = await send(
+    const disabled = await readPage(
       createPublicGateway("", {
         ...TEST_CONFIG,
         plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
       }),
-      { path: requestPath() },
     );
-    expect(disabled.res.statusCode).toBe(200);
-    expect(disabled.getBody()).toContain("Chart below.");
-    expect(disabled.getBody()).not.toContain("<iframe");
+    expect(disabled).toContain("Chart below.");
+    expectAbsent(disabled, "<iframe");
     expect(widgetToken).not.toHaveBeenCalled();
     widgetToken.mockResolvedValue(undefined);
-    const unmintable = await send(createPublicGateway(), { path: requestPath() });
-    expect(unmintable.res.statusCode).toBe(200);
-    expect(unmintable.getBody()).not.toContain("<iframe");
+    expectAbsent(await readPage(createPublicGateway()), "<iframe");
   });
   it.each(["", "/control"])(
     "serves only published text and keeps private APIs authenticated (%s)",
@@ -380,39 +383,20 @@ describe("anonymous public session HTTP boundary", () => {
   });
 
   it("keeps bearer navigation relative without an explicit external origin", async () => {
-    const response = await send(createPublicGateway("", {}));
-    expect(response.res.statusCode).toBe(200);
-    expect(response.getBody()).not.toContain('rel="canonical"');
-    expect(response.getBody()).not.toContain('property="og:url"');
-    expect(response.getBody()).toContain(`data-public-refresh-now href="${requestPath()}"`);
+    const html = await readPage(createPublicGateway("", {}));
+    expectAbsent(html, 'rel="canonical"', 'property="og:url"');
+    expect(html).toContain(`data-public-refresh-now href="${requestPath()}"`);
   });
 
-  it("rejects public bearer traffic over remote plaintext HTTP", async () => {
-    const response = await send(
-      createPublicGateway("", {
-        gateway: { publicOrigin: "http://gateway.example.test" },
-      }),
-      { remoteAddress: "203.0.113.12" },
-    );
-    expect(response.res.statusCode).toBe(404);
-    expect(tokenResolver).not.toHaveBeenCalled();
-    expect(reader).not.toHaveBeenCalled();
-  });
-
-  it("rejects a direct remote plaintext request despite an HTTPS public origin", async () => {
-    const response = await send(createPublicGateway(), { remoteAddress: "203.0.113.13" });
-    expect(response.res.statusCode).toBe(404);
-    expect(tokenResolver).not.toHaveBeenCalled();
-    expect(reader).not.toHaveBeenCalled();
-  });
-
-  it("rejects trusted-proxy traffic whose external hop was plaintext", async () => {
-    const response = await fromProxy(
-      createPublicGateway("", PROXY_CONFIG),
-      "203.0.113.14",
-      undefined,
-      "http",
-    );
+  it.each([
+    ["HTTP public origin", { gateway: { publicOrigin: "http://gateway.example.test" } }, false],
+    ["HTTPS public origin", TEST_CONFIG, false],
+    ["trusted proxy", PROXY_CONFIG, true],
+  ] as const)("rejects plaintext bearer ingress through %s", async (_name, config, proxy) => {
+    const server = createPublicGateway("", config);
+    const response = proxy
+      ? await fromProxy(server, "203.0.113.14", undefined, "http")
+      : await send(server, { remoteAddress: "203.0.113.12" });
     expect(response.res.statusCode).toBe(404);
     expect(tokenResolver).not.toHaveBeenCalled();
     expect(reader).not.toHaveBeenCalled();
@@ -458,9 +442,7 @@ describe("anonymous public session HTTP boundary", () => {
       sessionChanges.emit({ sessionKey: LOCATOR.sessionKey, scope: "runtime" });
       return PUBLIC_SESSION;
     });
-    const response = await send(server);
-    expect(response.res.statusCode).toBe(200);
-    expect(response.getBody()).toContain("The public viewer is ready.");
+    expect(await readPage(server)).toContain("The public viewer is ready.");
     expect(reader).toHaveBeenCalledTimes(1);
   });
 
@@ -495,9 +477,7 @@ describe("anonymous public session HTTP boundary", () => {
           return true;
         });
       }
-      const response = await send(server);
-      expect(response.res.statusCode).toBe(200);
-      expect(response.getBody()).toContain("Updated public title");
+      expect(await readPage(server)).toContain("Updated public title");
       expect(reader).toHaveBeenCalledTimes(2);
     },
   );
@@ -510,9 +490,7 @@ describe("anonymous public session HTTP boundary", () => {
       totalMessages: 1,
       truncated: false,
     });
-    const response = await send(server);
-    expect(response.res.statusCode).toBe(200);
-    const html = response.getBody();
+    const html = await readPage(server);
     expectText(
       html,
       `<title>${"a".repeat(199)} · OpenClaw</title>`,
@@ -520,7 +498,6 @@ describe("anonymous public session HTTP boundary", () => {
     );
     expect(html).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
     expectText(html, "Message shortened for this public view.", "b".repeat(32_767));
-    expect(html).not.toContain("UNIQUE_TAIL_MARKER");
-    expect(html).not.toContain("😀");
+    expectAbsent(html, "UNIQUE_TAIL_MARKER", "😀");
   });
 });

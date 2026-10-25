@@ -7,11 +7,7 @@ import type {
   SessionsForkResult,
   SessionsRewindResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   replaceSessionEntrySync,
@@ -46,6 +42,20 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 import * as sessionObserverModel from "./session-observer-model.js";
 
 type DatabaseExecution = ReturnType<typeof agentExecution.captureOpenClawAgentDatabaseExecution>;
+type Kernel = Awaited<ReturnType<typeof createGatewayCloseRace>>["kernel"];
+function createDispatch(
+  kernel: Kernel,
+  client = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }),
+) {
+  const options = {
+    client,
+    context: kernel.gatewayRequestContext,
+    methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
+  };
+  return <T>(method: string, params: unknown) =>
+    dispatchGatewayRequestInProcess<T>(method, params, options);
+}
+
 const scope = {
   agentId: "main",
   sessionKey: "agent:main:dashboard:accepted-close-rewind",
@@ -87,8 +97,7 @@ it("persists an accepted fork and queued rewind across the close prelude before 
 }) => {
   const race = await createGatewayCloseRace("gateway-session-rewind-close", signal);
   const { fixture, kernel } = race;
-  const waitForGate = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
-    withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
+  const waitForGate = createTestGate(signal);
   const rewindQueued = createDeferred();
   let forking: Promise<SessionsForkResult> | undefined;
   let rewinding: Promise<SessionsRewindResult> | undefined;
@@ -127,17 +136,9 @@ it("persists an accepted fork and queued rewind across the close prelude before 
     vi.spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
       (...args) => wrapExecution(capturePreparation(...args)),
     );
-    const dispatchOptions = {
-      client: createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }),
-      context: kernel.gatewayRequestContext,
-      methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
-    };
+    const dispatch = createDispatch(kernel);
     const params = { sessionKey: scope.sessionKey, entryId: "user-2" };
-    forking = dispatchGatewayRequestInProcess<SessionsForkResult>(
-      "sessions.fork",
-      params,
-      dispatchOptions,
-    );
+    forking = dispatch<SessionsForkResult>("sessions.fork", params);
     await race.waitForEntry(forking, "Fork settled before its accepted persistence could be held");
     const mutate = sessionController.runSessionMutation;
     vi.spyOn(sessionController, "runSessionMutation").mockImplementation(
@@ -147,11 +148,7 @@ it("persists an accepted fork and queued rewind across the close prelude before 
         return pending;
       },
     );
-    rewinding = dispatchGatewayRequestInProcess<SessionsRewindResult>(
-      "sessions.rewind",
-      params,
-      dispatchOptions,
-    );
+    rewinding = dispatch<SessionsRewindResult>("sessions.rewind", params);
     await waitForGate(
       rewindQueued.promise,
       rewinding,
@@ -161,9 +158,9 @@ it("persists an accepted fork and queued rewind across the close prelude before 
     expect(kernel.scheduler.signal.aborted).toBe(true);
     expect(race.closed).toBe(false);
     expect(database.db.isOpen).toBe(true);
-    await expect(
-      dispatchGatewayRequestInProcess("sessions.rewind", params, dispatchOptions),
-    ).rejects.toThrow("Gateway request entry is closed");
+    await expect(dispatch("sessions.rewind", params)).rejects.toThrow(
+      "Gateway request entry is closed",
+    );
 
     const [fork, result] = (await race.finish(Promise.all([forking, rewinding])))!;
     expect(fork).toMatchObject({
@@ -359,13 +356,8 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
       }
       return workerScope.execute(command, executeOptions);
     });
-    const dispatchOptions = {
-      client,
-      context: kernel.gatewayRequestContext,
-      methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
-    };
-    const chat = (message: string) =>
-      dispatchGatewayRequestInProcess("openclaw.chat", { sessionId, message }, dispatchOptions);
+    const dispatch = createDispatch(kernel, client);
+    const chat = (message: string) => dispatch("openclaw.chat", { sessionId, message });
     turning = chat("Accepted question");
     // Shutdown may revoke the reply; the accepted logbook still has to settle.
     void turning.catch(() => undefined);
