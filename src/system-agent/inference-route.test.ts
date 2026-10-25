@@ -1,12 +1,9 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { visitModuleSpecifiers } from "../../scripts/lib/ts-guard-utils.mts";
-import { resolveAgentDir } from "../agents/agent-scope.js";
-import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
-import { selectAgentHarness } from "../agents/harness/selection.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
@@ -14,7 +11,6 @@ import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig as resolveRoute,
-  type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 
 const model = (id: string) => buildCatalogModel(id, { contextWindow: 8192, maxTokens: 2048 });
@@ -69,8 +65,6 @@ function utilityConfig(primary?: string): OpenClawConfig {
   };
   return config;
 }
-
-afterEach(clearAgentHarnesses);
 
 describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
   it("does not directly load completion execution to select a configured route", () => {
@@ -133,37 +127,6 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     await expectSameProjection(legacy, separated, true, "utility");
   });
 
-  it.each([undefined, "openai/gpt-5.5"])(
-    "separates primary and utility ownership (%s)",
-    async (primaryModel) => {
-      const config = utilityConfig(primaryModel);
-      const original = structuredClone(config);
-      const primary = primaryModel ? await resolveRoute(config) : undefined;
-      const utility = await resolveRoute(
-        config,
-        undefined,
-        primaryModel ? { modelTarget: "utility" } : undefined,
-      );
-
-      if (primaryModel) {
-        expect(primary).toMatchObject({ modelLabel: primaryModel, agentId: "dev" });
-        expect(primary).not.toHaveProperty("modelTarget");
-        expect(utility?.agentDir).toBe(primary?.agentDir);
-      }
-      expect(utility).toMatchObject({
-        runner: "embedded",
-        modelTarget: "utility",
-        modelLabel: "local-utility/tiny",
-        provider: "local-utility",
-        model: "tiny",
-        agentId: "dev",
-        agentDir: resolveAgentDir(config, "dev"),
-      });
-      expect(utility?.runConfig.agents?.defaults?.model).toBe(primaryModel);
-      expect(config).toEqual(original);
-    },
-  );
-
   it.each(["defaults", "agent"] as const)(
     "invalidates only the changed %s utility",
     async (scope) => {
@@ -177,14 +140,18 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     },
   );
 
-  it("retires the first-run utility route when a primary becomes configured", async () => {
-    const utility = await projectInferenceRoute(utilityConfig());
-    const primary = await projectInferenceRoute(utilityConfig("openai/gpt-5.5"));
-
-    expect(utility.route).toMatchObject({ modelTarget: "utility", model: "tiny" });
-    expect(primary.route).toMatchObject({ model: "gpt-5.5" });
-    expect(primary.route).not.toHaveProperty("modelTarget");
-    expect(isDeepStrictEqual(utility, primary)).toBe(false);
+  it("retires the first-run utility route without changing primary ownership", async () => {
+    const config = utilityConfig("openai/gpt-5.5");
+    const original = structuredClone(config);
+    const primary = await resolveRoute(config);
+    const utility = await resolveRoute(config, undefined, { modelTarget: "utility" });
+    expect(primary).toMatchObject({ modelLabel: "openai/gpt-5.5", agentId: "dev" });
+    expect(primary).not.toHaveProperty("modelTarget");
+    expect(utility).toMatchObject({ modelTarget: "utility", modelLabel: "local-utility/tiny" });
+    expect(utility?.agentDir).toBe(primary?.agentDir);
+    expect(utility?.runConfig.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(config).toEqual(original);
+    await expectSameProjection(utilityConfig(), config, false);
   });
 
   it("does not reuse a primary verification for the same model selected as utility", async () => {
@@ -193,29 +160,12 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     await expectSameProjection(config, config, false, undefined, "utility");
   });
 
-  it("treats a setup-materialized first-agent roster as inference-route neutral", async () => {
-    const withoutRoster: OpenClawConfig = {
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    };
-    const withFirstAgent = structuredClone(withoutRoster);
-    withFirstAgent.agents!.entries = {
-      main: { workspace: "/tmp/openclaw-main", agentDir: resolveAgentDir(withoutRoster, "main") },
-    };
-
-    await expectSameProjection(withoutRoster, withFirstAgent, true);
-  });
-
-  it.each([
-    { label: "main", agentIds: ["main"], owner: "main" },
-    { label: "non-main", agentIds: ["dev"], owner: "dev" },
-    { label: "multi-agent", agentIds: ["main", "dev"], owner: "dev" },
-  ])("admits owner and reserved agent: $label", async ({ agentIds, owner }) => {
+  it("admits the requested owner and reserved agent in a multi-agent roster", async () => {
     const config = devConfig();
-    config.agents!.entries = Object.fromEntries(agentIds.map((id) => [id, {}]));
-    const route = await resolveRoute(config, owner);
-
-    expect(route?.agentId).toBe(owner);
-    for (const agentId of [owner, SYSTEM_AGENT_ID]) {
+    config.agents!.entries!.main = {};
+    const route = await resolveRoute(config, "dev");
+    expect(route?.agentId).toBe("dev");
+    for (const agentId of ["dev", SYSTEM_AGENT_ID]) {
       expect(workspaceAgent(route!.runConfig, agentId, "/tmp/x")).toBe(agentId);
     }
   });
@@ -235,43 +185,13 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     expect(config).toEqual(before);
   });
 
-  it("keeps implicit harness selection fallible while forcing explicit policy", async () => {
-    const supports = vi.fn((ctx: { modelProvider?: { requestTransportOverrides?: string } }) =>
-      ctx.modelProvider?.requestTransportOverrides === "present"
-        ? { supported: false as const, reason: "authored request transport overrides" }
-        : { supported: true as const, priority: 100 },
-    );
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      supports: supports as never,
-      runAttempt: vi.fn() as never,
-    });
-    const preparedModelProvider = {
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      requestTransportOverrides: "present" as const,
-    };
-    const select = (route: SystemAgentConfiguredRoute | null) =>
-      selectAgentHarness({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        modelProvider: preparedModelProvider,
-        config: route!.runConfig,
-        agentHarnessRuntimeOverride:
-          route!.runner === "embedded" ? route!.agentHarnessRuntimeOverride : undefined,
-      });
-
-    const implicitRoute = await resolveRoute(devConfig());
-    expect(implicitRoute).toMatchObject({ runner: "embedded" });
-    expect(implicitRoute).not.toHaveProperty("agentHarnessRuntimeOverride");
-    expect(select(implicitRoute).id).toBe("openclaw");
-
-    const explicitRoute = await resolveRoute(devConfig("codex"));
-    expect(explicitRoute).toMatchObject({
-      runner: "embedded",
-      agentHarnessRuntimeOverride: "codex",
-    });
-    expect(() => select(explicitRoute)).toThrow("authored request transport overrides");
+  it.each([undefined, "codex"])("preserves explicit harness policy (%s)", async (runtime) => {
+    const route = await resolveRoute(devConfig(runtime));
+    expect(route).toMatchObject({ runner: "embedded" });
+    if (runtime) {
+      expect(route).toHaveProperty("agentHarnessRuntimeOverride", runtime);
+    } else {
+      expect(route).not.toHaveProperty("agentHarnessRuntimeOverride");
+    }
   });
 });

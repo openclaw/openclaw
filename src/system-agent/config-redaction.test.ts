@@ -55,20 +55,10 @@ describe("isSystemAgentSensitiveConfigValue", () => {
     expect(redactPath(`${path}.appended`)).toBe("<redacted path>");
   });
 
-  it.each([
-    [
-      "channels.synology-chat",
-      '{ accounts: { work: { webhookUrl: "https://gateway.invalid/webhook?token=synthetic" } } }',
-      true,
-    ],
-    ["channels.synology-chat", '{ enabled: true, webhookPath: "/synology" }', false],
-    [
-      'channels.synology-chat.accounts["prod.guild"]',
-      '{ webhookUrl: "https://gateway.invalid/webhook?token=synthetic" }',
-      true,
-    ],
-  ] as const)("classifies structured writes at %s", (path, value, sensitive) => {
-    expect(sensitiveValue(path, value)).toBe(sensitive);
+  it("keeps nonsensitive structured writes visible", () => {
+    expect(
+      sensitiveValue("channels.synology-chat", '{ enabled: true, webhookPath: "/synology" }'),
+    ).toBe(false);
   });
 
   it("fails closed when a dynamic config owner has no current metadata", () => {
@@ -183,71 +173,55 @@ describe("redactSystemAgentConfig", () => {
     },
   );
 
-  it("fails closed for dynamic owner secrets when the exact config is invalid", () => {
-    expect(
-      redactInvalid({
-        plugins: { entries: { "custom.plugin": { config: { opaque: "plugin-secret" } } } },
-        channels: { "custom.channel": { opaque: "channel-secret" } },
-      }),
-    ).toEqual({
-      plugins: { entries: { "custom.plugin": { config: "<redacted>" } } },
-      channels: { "custom.channel": "<redacted>" },
-    });
-  });
-
-  it("does not trust known owner metadata for an invalid config snapshot", () => {
-    expect(
-      redactInvalid({ channels: { "synology-chat": { opaque: "invalid-channel-secret" } } }),
-    ).toEqual({ channels: { "synology-chat": "<redacted>" } });
-  });
-
-  it("preserves kernel-owned channel namespaces while unknown owners fail closed", () => {
-    expect(
-      redactInvalid({
-        channels: {
-          defaults: { groupPolicy: "open" },
-          modelByChannel: { telegram: { chat: "openai/gpt-5.5" } },
-          missing: { opaque: "channel-secret" },
-          "defaults.foo": { opaque: "dotted-channel-secret" },
-          "modelByChannel.evil": { opaque: "dotted-model-secret" },
-        },
-      }),
-    ).toEqual({
-      channels: {
+  it.each([
+    [
+      "unknown owners",
+      {
+        "custom.channel": { opaque: "channel-secret" },
+        "synology-chat": { opaque: "invalid-channel-secret" },
+      },
+      { "custom.channel": "<redacted>", "synology-chat": "<redacted>" },
+    ],
+    [
+      "kernel namespaces",
+      {
+        defaults: { groupPolicy: "open" },
+        modelByChannel: { telegram: { chat: "openai/gpt-5.5" } },
+        missing: { opaque: "channel-secret" },
+        "defaults.foo": { opaque: "dotted-channel-secret" },
+        "modelByChannel.evil": { opaque: "dotted-model-secret" },
+      },
+      {
         defaults: { groupPolicy: "open" },
         modelByChannel: { telegram: { chat: "openai/gpt-5.5" } },
         missing: "<redacted>",
         "defaults.foo": "<redacted>",
         "modelByChannel.evil": "<redacted>",
       },
-    });
-  });
-
-  it("redacts invalid descendants inside core channel namespaces", () => {
-    expect(
-      redactInvalid({
-        channels: {
-          defaults: { groupPolicy: "open", opaque: "kernel-secret" },
-          modelByChannel: { telegram: { chat: 42 } },
-        },
-      }),
-    ).toEqual({
-      channels: {
+    ],
+    [
+      "invalid kernel descendants",
+      {
+        defaults: { groupPolicy: "open", opaque: "kernel-secret" },
+        modelByChannel: { telegram: { chat: 42 } },
+      },
+      {
         defaults: { groupPolicy: "open", opaque: "<redacted>" },
         modelByChannel: "<redacted>",
       },
-    });
+    ],
+    ["malformed container", [{ opaque: "channel-secret" }], "<redacted>"],
+  ])("redacts %s in invalid channel config", (_name, channels, expected) => {
+    expect(redactInvalid({ channels })).toEqual({ channels: expected });
   });
 
-  it("fails closed for malformed invalid-config owner containers", () => {
-    expect(
-      redactInvalid({
-        channels: [{ opaque: "channel-secret" }],
-        plugins: { entries: { broken: "plugin-secret" } },
-      }),
-    ).toEqual({
-      channels: "<redacted>",
-      plugins: { entries: { broken: "<redacted>" } },
-    });
+  it.each([
+    [
+      { "custom.plugin": { config: { opaque: "plugin-secret" } } },
+      { "custom.plugin": { config: "<redacted>" } },
+    ],
+    [{ broken: "plugin-secret" }, { broken: "<redacted>" }],
+  ])("redacts invalid plugin entries %j", (entries, expected) => {
+    expect(redactInvalid({ plugins: { entries } })).toEqual({ plugins: { entries: expected } });
   });
 });

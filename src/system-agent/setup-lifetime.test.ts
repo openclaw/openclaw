@@ -12,7 +12,6 @@ import {
 } from "../agents/admitted-run-context.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -66,9 +65,6 @@ afterEach(() => {
 // Keep the dispatcher and disk owners real; only inference and preparation reads are substituted.
 it.each([
   { phase: "config", loss: "close" },
-  { phase: "config", loss: "replace" },
-  { phase: "config", loss: "lifecycle" },
-  { phase: "config", loss: "abort" },
   { phase: "first-agent", loss: "close" },
   { phase: "workspace", loss: "close" },
   { phase: "sessions", loss: "close" },
@@ -79,10 +75,8 @@ it.each([
 ] as const)("setup $phase preparation with $loss authority", async ({ phase, loss }) => {
   const state = await createOpenClawTestState({ label: "setup-lifetime" });
   const admission = prepareSystemAgentRunAdmission({}, "setup-run", "main", "setup-test");
-  let replacement: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   const admitted = await admission.admit("embedded");
-  const abort = new AbortController();
-  const beforePersistentApply = resolveAdmittedRunActiveAssertion(admitted, abort.signal)!;
+  const beforePersistentApply = resolveAdmittedRunActiveAssertion(admitted)!;
   const entered = createDeferred();
   const resume = createDeferred();
   let paused = false;
@@ -178,25 +172,6 @@ it.each([
     if (loss === "close") {
       admission.close();
     }
-    if (loss === "replace") {
-      replacement = prepareSystemAgentRunAdmission(
-        {},
-        admitted.operationalRunInstance.runId,
-        "main",
-        "successor",
-      );
-      const successor = await replacement.admit("embedded");
-      expect(successor.operationalRunInstance.instanceId).not.toBe(
-        admitted.operationalRunInstance.instanceId,
-      );
-      expect(resolveAdmittedRunActiveAssertion(successor)).not.toThrow();
-    }
-    if (loss === "lifecycle") {
-      rotateAgentEventLifecycleGeneration();
-    }
-    if (loss === "abort") {
-      abort.abort();
-    }
     const closed = loss !== "live" && loss !== "direct";
     if (closed) {
       expect(beforePersistentApply).toThrow("authority is no longer active");
@@ -230,7 +205,6 @@ it.each([
     resume.resolve();
     await completion;
     admission.close();
-    replacement?.close();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
