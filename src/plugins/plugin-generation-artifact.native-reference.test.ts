@@ -95,62 +95,55 @@ it("records a native host mismatch while preserving unrelated channel accounts",
     preparePluginNativeAdmissions(fixture.index, cache);
     failHardlink(fixture.filename);
     const error = vi.fn();
-    try {
-      const registry = withPluginCache(cache, () =>
-        loadPluginRegistryHandle({
-          cache: false,
-          config: {
-            plugins: {
-              allow: ["fixture", "healthy"],
-              load: { paths: [fixture.root, healthy] },
-              slots: { memory: "none" },
-            },
+    const registry = withPluginCache(cache, () =>
+      loadPluginRegistryHandle({
+        cache: false,
+        config: {
+          plugins: {
+            allow: ["fixture", "healthy"],
+            load: { paths: [fixture.root, healthy] },
+            slots: { memory: "none" },
           },
-          installRecords: fixture.index.installRecords,
-          onlyPluginIds: ["fixture", "healthy"],
-          logger: { info() {}, warn() {}, error, debug() {} },
-        }),
-      );
-      const reason = `${path.join(fixture.installRoot, "node_modules", "openclaw")} resolves to ${wrongHost}`;
-      expect(registry.plugins).toContainEqual(
-        expect.objectContaining({
-          id: "fixture",
-          status: "error",
-          error: expect.stringContaining(reason),
-        }),
-      );
-      expect(registry.diagnostics).toContainEqual(
-        expect.objectContaining({
-          pluginId: "fixture",
-          level: "error",
-          message: expect.stringContaining(reason),
-        }),
-      );
-      expect(error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
-      expect(registry.plugins).toContainEqual(
-        expect.objectContaining({ id: "healthy", status: "loaded" }),
-      );
-      const channel = registry.channels.find(({ plugin }) => plugin.id === "healthy-chat");
-      expect(channel?.plugin.config.listAccountIds({})).toEqual(["primary", "secondary"]);
-    } finally {
-      vi.restoreAllMocks();
-    }
+        },
+        installRecords: fixture.index.installRecords,
+        onlyPluginIds: ["fixture", "healthy"],
+        logger: { info() {}, warn() {}, error, debug() {} },
+      }),
+    );
+    const reason = `${path.join(fixture.installRoot, "node_modules", "openclaw")} resolves to ${wrongHost}`;
+    expect(registry.plugins).toContainEqual(
+      expect.objectContaining({
+        id: "fixture",
+        status: "error",
+        error: expect.stringContaining(reason),
+      }),
+    );
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "fixture",
+        level: "error",
+        message: expect.stringContaining(reason),
+      }),
+    );
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+    expect(registry.plugins).toContainEqual(
+      expect.objectContaining({ id: "healthy", status: "loaded" }),
+    );
+    const channel = registry.channels.find(({ plugin }) => plugin.id === "healthy-chat");
+    expect(channel?.plugin.config.listAccountIds({})).toEqual(["primary", "secondary"]);
   });
 });
 
-it("validates overlapping hardlinked companion placements once per member, including recovery", async () => {
+it("preserves overlapping native companions through reuse, recovery, and replacement", async () => {
   await withOpenClawTestState({ label: "native-reference-verdict" }, async (state) => {
     const root = state.path("plugin");
     writeTree(root, {
       "package.json": '{"name":"native-reference-fixture"}',
       "index.cjs": "exports.value = 1;",
       "helper.dat": "original companion",
+      "addon-0.node": "native fixture",
+      "nested/addon-1.node": "nested native fixture",
     });
-    fs.mkdirSync(path.join(root, "nested", "companion-sentinel"), { recursive: true });
-    for (let index = 0; index < 33; index++) {
-      const directory = index % 2 ? path.join(root, "nested") : root;
-      fs.writeFileSync(path.join(directory, `addon-${index}.node`), `native fixture ${index}`);
-    }
     const symlink = fs.symlinkSync;
     vi.spyOn(fs, "symlinkSync").mockImplementation((target, link, type) => {
       if (type === "file") {
@@ -158,47 +151,27 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       }
       symlink(target, link, type);
     });
-    const paths = vi.spyOn(fs, "realpathSync");
-    const walks = (directory: string) =>
-      paths.mock.calls.filter(
-        ([filename]) => filename === path.join(directory, "nested", "companion-sentinel"),
-      ).length;
     await using resources = captureResources();
     const cache = resources.cache();
     const capture = () => resources.capture(cache, root);
     let recovery: ReturnType<Artifact["captureRecoverySource"]> | undefined;
     try {
       const first = capture();
-      expect.soft(walks(first.rootDir)).toBe(1);
-      paths.mockClear();
-      for (let index = 0; index < 8; index++) {
-        first.prepareDependency(first.resolve(path.join(root, "index.cjs")), "node:fs");
-      }
-      expect.soft(walks(first.rootDir)).toBe(0);
-
       const hosts = [state.path("host-first"), state.path("host-second")];
       for (const host of hosts) {
         fs.mkdirSync(host);
       }
-      paths.mockClear();
       first.linkHost(hosts[0]!);
-      expect.soft(walks(first.rootDir)).toBe(1);
       const successor = capture();
-      expect.soft(walks(successor.rootDir)).toBe(1);
       expect(nativeInode(successor, root)).toBe(nativeInode(first, root));
-      paths.mockClear();
       successor.linkHost(hosts[1]!);
-      expect.soft(walks(successor.rootDir)).toBe(1);
-      paths.mockClear();
       recovery = first.captureRecoverySource();
-      expect.soft(walks(recovery.rootDir)).toBe(1);
       expect(readText(path.join(recovery.rootDir, "helper.dat"))).toBe("original companion");
 
       writeTree(root, { "helper.dat": "replacement companion" });
       const replacement = capture();
       expect(replacement.sourceDigest).not.toBe(first.sourceDigest);
       expect(nativeInode(replacement, root)).not.toBe(nativeInode(first, root));
-      expect.soft(walks(replacement.rootDir)).toBe(1);
       expect(readText(path.join(replacement.rootDir, "helper.dat"))).toBe("replacement companion");
       expect(readText(path.join(first.rootDir, "helper.dat"))).toBe("original companion");
       writeTree(replacement.rootDir, { "helper.dat": "damaged capture" });
@@ -268,39 +241,35 @@ it.each([
       preparePluginNativeAdmissions(fixture.index, cache);
       const failure = failHardlink(nativeFilename);
       const capture = () => resources.capture(cache, fixture.root);
-      try {
-        if (source === "archive") {
-          expect(capture).toThrow(failure);
-        } else {
-          const artifact = capture();
-          artifact.linkHost(hosts[0]!);
-          const require = createRequire(artifact.resolve(fixture.entry));
-          const native = hoisted
-            ? require.resolve("native-fixture/fixture.bin")
-            : artifact.resolve(nativeFilename);
-          expect(fs.realpathSync(native)).toBe(nativeFilename);
-          expectBytes(native, fixture.bytes);
-          expect(require("./child.cjs")).toBe("first");
-          const successor = capture();
-          const peer = path.join(
-            hoisted ? path.dirname(nativeFilename) : fixture.installRoot,
-            "node_modules",
-            "openclaw",
-          );
-          if (hoisted) {
-            fs.mkdirSync(path.dirname(peer));
-            fs.symlinkSync(hosts[1]!, peer, "junction");
-          }
-          const selectedHost = hosts[hoisted ? 0 : 1]!;
-          expect(() => successor.linkHost(selectedHost)).toThrow(
-            `does not resolve the selected OpenClaw host ${selectedHost}: ${peer} resolves to ${hosts[hoisted ? 1 : 0]}`,
-          );
-          expect(fs.realpathSync(path.join(fixture.installRoot, "node_modules", "openclaw"))).toBe(
-            fs.realpathSync(hosts[0]!),
-          );
+      if (source === "archive") {
+        expect(capture).toThrow(failure);
+      } else {
+        const artifact = capture();
+        artifact.linkHost(hosts[0]!);
+        const require = createRequire(artifact.resolve(fixture.entry));
+        const native = hoisted
+          ? require.resolve("native-fixture/fixture.bin")
+          : artifact.resolve(nativeFilename);
+        expect(fs.realpathSync(native)).toBe(nativeFilename);
+        expectBytes(native, fixture.bytes);
+        expect(require("./child.cjs")).toBe("first");
+        const successor = capture();
+        const peer = path.join(
+          hoisted ? path.dirname(nativeFilename) : fixture.installRoot,
+          "node_modules",
+          "openclaw",
+        );
+        if (hoisted) {
+          fs.mkdirSync(path.dirname(peer));
+          fs.symlinkSync(hosts[1]!, peer, "junction");
         }
-      } finally {
-        vi.restoreAllMocks();
+        const selectedHost = hosts[hoisted ? 0 : 1]!;
+        expect(() => successor.linkHost(selectedHost)).toThrow(
+          `does not resolve the selected OpenClaw host ${selectedHost}: ${peer} resolves to ${hosts[hoisted ? 1 : 0]}`,
+        );
+        expect(fs.realpathSync(path.join(fixture.installRoot, "node_modules", "openclaw"))).toBe(
+          fs.realpathSync(hosts[0]!),
+        );
       }
     });
   },

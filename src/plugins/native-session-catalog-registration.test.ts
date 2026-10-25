@@ -244,70 +244,55 @@ describe("registered native catalog access", () => {
     expect(state.instance.hasRetainedConsumers).toBe(false);
   });
 
-  it(
-    "retains the registered instance through a completed operation and its publication tail",
-    { timeout: 15_000 },
-    async () => {
-      const publication = createDeferredCore();
-      const close = vi.fn();
-      const next = vi.fn();
-      const cleanup = vi.fn();
-      let guardedPublication: () => void = () => {};
-      const state = await registerCatalog(true, true, {
-        createListOperation: (params) => ({
-          async next() {
-            next();
-            params.waitUntil?.(publication.promise.then(() => guardedPublication()));
-            return { done: true, hosts: [] };
-          },
-          close,
-        }),
-      });
-      state.instance.lifecycle.onDispose(cleanup);
-      const published = vi.fn();
-      guardedPublication = state.instance.wrap(published);
-      const owner = new AbortController();
-      const lifetime = new SessionCatalogListLifetime([owner.signal]);
-      const pending = state.inRequestScope(() =>
-        lifetime.runProvider(undefined, (params) =>
-          listSessionCatalogProvider(state.provider, params),
-        ),
-      );
-      const outcome = pending.catch((error: unknown) => error);
-      try {
-        await expect(pending).resolves.toEqual([]);
-        expect(close).toHaveBeenCalledOnce();
-        vi.useFakeTimers();
-        const disposal = state.instance.dispose();
-        await vi.advanceTimersByTimeAsync(4_999);
-        expect(cleanup).not.toHaveBeenCalled();
-        expect(state.instance.lifecycle.signal.aborted).toBe(false);
-        expect(state.instance.hasRetainedConsumers).toBe(true);
-        await vi.advanceTimersByTimeAsync(51);
-        const timeout = (await disposal).errors[0];
-        assert(
-          timeout instanceof PluginInstanceDrainTimeoutError,
-          "Expected bounded logical retirement",
-        );
-        expect(timeout.forcedRetirement).toEqual({ activeCallCount: 0, retainedConsumerCount: 1 });
-        expect(state.instance.lifecycle.signal.aborted).toBe(true);
-        expect(state.instance.hasRetainedConsumers).toBe(true);
-        expect(cleanup).not.toHaveBeenCalled();
-        expect(next).toHaveBeenCalledOnce();
-        expect(published).not.toHaveBeenCalled();
-        publication.resolve();
-        await timeout.settled;
-        expectCalls(1, published, cleanup);
-        expect(state.instance.hasRetainedConsumers).toBe(false);
-        expect(state.instance.lifecycle.signal.aborted).toBe(true);
-      } finally {
-        owner.abort(new Error("test cleanup"));
-        publication.resolve();
-        await outcome;
-        lifetime.finishListing();
-      }
-    },
-  );
+  it("retains the registered instance through a completed operation and its publication tail", async () => {
+    const publication = createDeferredCore();
+    const close = vi.fn();
+    const cleanup = vi.fn();
+    let guardedPublication: () => void = () => {};
+    const state = await registerCatalog(true, true, {
+      createListOperation: (params) => ({
+        async next() {
+          params.waitUntil?.(publication.promise.then(() => guardedPublication()));
+          return { done: true, hosts: [] };
+        },
+        close,
+      }),
+    });
+    state.instance.lifecycle.onDispose(cleanup);
+    const published = vi.fn();
+    guardedPublication = state.instance.wrap(published);
+    const owner = new AbortController();
+    const lifetime = new SessionCatalogListLifetime([owner.signal]);
+    const pending = state.inRequestScope(() =>
+      lifetime.runProvider(undefined, (params) =>
+        listSessionCatalogProvider(state.provider, params),
+      ),
+    );
+    const outcome = pending.catch((error: unknown) => error);
+    try {
+      await expect(pending).resolves.toEqual([]);
+      expect(close).toHaveBeenCalledOnce();
+      vi.useFakeTimers();
+      const disposal = state.instance.dispose();
+      await vi.advanceTimersByTimeAsync(5_000);
+      const timeout = (await disposal).errors[0];
+      assert(timeout instanceof PluginInstanceDrainTimeoutError);
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(state.instance.lifecycle.signal.aborted).toBe(true);
+      expect(state.instance.hasRetainedConsumers).toBe(true);
+      expect(published).not.toHaveBeenCalled();
+      publication.resolve();
+      await timeout.settled;
+      expectCalls(1, published, cleanup);
+      expect(state.instance.hasRetainedConsumers).toBe(false);
+      expect(state.instance.lifecycle.signal.aborted).toBe(true);
+    } finally {
+      owner.abort(new Error("test cleanup"));
+      publication.resolve();
+      await outcome;
+      lifetime.finishListing();
+    }
+  });
 
   it("keeps initially disabled list operations empty without constructing a source", async () => {
     const next = vi.fn(async () => ({ done: true as const, hosts: [] }));

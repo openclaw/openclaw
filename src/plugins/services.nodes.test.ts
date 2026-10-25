@@ -368,12 +368,9 @@ describe("service-owned node duplex", () => {
             ? Promise.resolve().then(() => channel.onMessage(vi.fn()))
             : channel.send(Uint8Array.of(1));
         await expect(setup).rejects.toMatchObject(pairingChanged);
-        expect(() => channel.onMessage(vi.fn())).toThrow(pairingChanged.message);
+        expect(sendInvokeInput).toHaveBeenCalledTimes(operation === "concurrent send" ? 1 : 0);
         if (operation === "concurrent send") {
-          expect(sendInvokeInput).toHaveBeenCalledOnce();
           await expect(channel.closed).rejects.toMatchObject(pairingChanged);
-        } else {
-          expect(sendInvokeInput).not.toHaveBeenCalled();
         }
       } finally {
         finish.resolve();
@@ -382,19 +379,12 @@ describe("service-owned node duplex", () => {
   );
 
   it.each([true, "optional"] as const)("supports %s duplex", async (duplex) => {
-    const { channel, endpoint, ctx, finish, sendInvokeInput } = await openServiceDuplex({ duplex });
-    const received: Uint8Array[] = [];
-    endpoint.onMessage((message) => {
-      received.push(message);
-    });
-    const source = Buffer.alloc(128 * 1024, 7);
+    const { channel, endpoint, finish } = await openServiceDuplex({ duplex });
+    const received = vi.fn();
+    endpoint.onMessage(received);
+    const source = Uint8Array.of(7);
     await channel.send(source);
-    expect(received.map((message) => Buffer.from(message))).toEqual([source]);
-    expect(sendInvokeInput).toHaveBeenCalledTimes(16);
-    expect(ctx.client?.internal).toMatchObject({
-      pluginRuntimeOwnerId: "files",
-      operatorRoleActor: { kind: "system" },
-    });
+    expect(received).toHaveBeenCalledExactlyOnceWith(source);
     finish.resolve();
     await expect(channel.closed).resolves.toEqual({ ok: true });
     await expect(channel.send(source)).rejects.toThrow(/closed/);

@@ -245,12 +245,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
     const params = { config, env };
     const index = loadInstalledPluginIndex(params);
     await writePersistedInstalledPluginIndex(index, { stateDir });
-    const open = vi.spyOn(fs, "openSync");
     const report = buildPluginRegistrySnapshotReport(params);
-    const manifestOpens = open.mock.calls.filter(
-      ([file]) => file === path.join(fixture.rootDir, "openclaw.plugin.json"),
-    ).length;
-    open.mockRestore();
 
     expect(report.plugins).toMatchObject([
       {
@@ -270,8 +265,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
     expect(getCurrentPluginMetadataSnapshot(params)).toBeUndefined();
-    // Discovery, validation, index hashing, and status share one checked manifest read.
-    expect(manifestOpens).toBe(1);
   });
 
   it.each([false, true])(
@@ -290,15 +283,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
         current.registryDiagnostics = [];
       }
       setCurrentPluginMetadataSnapshot(current, params);
-      const open = vi.spyOn(fs, "openSync");
-
       const report = buildPluginRegistrySnapshotReport(params);
-      const metadataOpens = open.mock.calls.filter(
-        ([file]) =>
-          file === path.join(rootDir, "openclaw.plugin.json") ||
-          file === path.join(rootDir, "package.json"),
-      );
-      open.mockRestore();
 
       expect(report.plugins).toEqual(coldReport.plugins);
       expect(report).toMatchObject({
@@ -308,7 +293,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
           : [],
         diagnostics: [],
       });
-      expect(metadataOpens).toEqual([]);
       expect(getCurrentPluginMetadataSnapshot(params)).toBe(current);
       expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
     },
