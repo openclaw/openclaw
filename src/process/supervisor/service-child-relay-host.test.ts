@@ -230,7 +230,6 @@ it("checks input authority after readiness before writing private stdin", async 
     releasePreparation.resolve();
     expect(await outcome).toBe(revoked);
     expect(inputWrites).not.toHaveBeenCalled();
-    expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
   } finally {
     releasePreparation.resolve();
     stub.control.destroy();

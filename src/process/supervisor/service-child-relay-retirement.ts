@@ -3,8 +3,16 @@ import { performance } from "node:perf_hooks";
 import { toErrorObject } from "../../infra/errors.js";
 import type { ProcessCleanupResult } from "./types.js";
 
-/** Transport loss asks a native owner to drain; killing it would abandon descendant custody. */
-export function stopServiceChildOwner(child: ChildProcess, retainDescendantCustody: boolean): void {
+/** Retain admitted transport for cancellation; transport loss asks the native owner to drain. */
+export function stopServiceChildOwner(
+  child: ChildProcess,
+  retainDescendantCustody: boolean,
+  cancelAdmitted?: () => void,
+): void {
+  if (cancelAdmitted) {
+    cancelAdmitted();
+    return;
+  }
   if (retainDescendantCustody) {
     if (child.connected) {
       child.disconnect();
