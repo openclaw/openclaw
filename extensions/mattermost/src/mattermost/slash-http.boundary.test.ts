@@ -22,6 +22,7 @@ type HeldRequest = {
   endedByServer: boolean;
   closedByServer: boolean;
 };
+type RequestTarget = { port: number; localAddress: string; authorization?: string };
 
 const CALLBACK_PATH = "/mattermost/slash";
 const TOKEN = "boundary-token";
@@ -53,18 +54,9 @@ function createRuntime(dispatch: ReturnType<typeof vi.fn>) {
   };
 }
 
-function openHeldRequest(params: {
-  port: number;
-  localAddress: string;
-  authorization?: string;
-  contentLength?: number;
-}): HeldRequest {
+function openHeldRequest(params: RequestTarget & { contentLength?: number }): HeldRequest {
   const held: HeldRequest = {
-    socket: connect({
-      host: "127.0.0.1",
-      port: params.port,
-      localAddress: params.localAddress,
-    }),
+    socket: connect({ host: "127.0.0.1", port: params.port, localAddress: params.localAddress }),
     statusCode: undefined,
     endedByServer: false,
     closedByServer: false,
@@ -95,12 +87,7 @@ function openHeldRequest(params: {
   return held;
 }
 
-async function postForm(params: {
-  port: number;
-  body: string;
-  localAddress: string;
-  authorization?: string;
-}): Promise<{ statusCode: number; body: string }> {
+async function postForm(params: RequestTarget & { body: string }) {
   const response = await new Promise<IncomingMessage>((resolve, reject) => {
     const req = request(
       {
@@ -122,6 +109,11 @@ async function postForm(params: {
     req.end(params.body);
   });
   return { statusCode: response.statusCode ?? 0, body: await text(response) };
+}
+
+function json(res: ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
 }
 
 type Boundary = {
@@ -174,43 +166,37 @@ async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) 
   const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
     if (req.url?.startsWith("/api/v4/commands/")) {
       const command = currentCommands.get(req.url.slice("/api/v4/commands/".length));
-      res.setHeader("content-type", "application/json");
-      res.statusCode = command ? 200 : 404;
-      res.end(
-        JSON.stringify(
-          command
-            ? {
-                id: command.id,
-                team_id: command.teamId,
-                trigger: command.trigger,
-                method: "P",
-                url: command.url,
-                token: command.token,
-                delete_at: 0,
-              }
-            : {},
-        ),
+      json(
+        res,
+        command ? 200 : 404,
+        command
+          ? {
+              id: command.id,
+              team_id: command.teamId,
+              trigger: command.trigger,
+              method: "P",
+              url: command.url,
+              token: command.token,
+              delete_at: 0,
+            }
+          : {},
       );
       return;
     }
     if (req.url?.startsWith("/api/v4/commands?")) {
-      res.setHeader("content-type", "application/json");
-      res.end("[]");
+      json(res, 200, []);
       return;
     }
     if (req.url === "/api/v4/channels/channel-1") {
       channelRequests();
-      res.setHeader("content-type", "application/json");
       void channelGate.then(() =>
-        res.end(
-          JSON.stringify({
-            id: "channel-1",
-            name: "town-square",
-            display_name: "Town Square",
-            type: "O",
-            team_id: "team-1",
-          }),
-        ),
+        json(res, 200, {
+          id: "channel-1",
+          name: "town-square",
+          display_name: "Town Square",
+          type: "O",
+          team_id: "team-1",
+        }),
       );
       return;
     }
@@ -322,12 +308,8 @@ async function fillCredentialPool(boundary: Boundary): Promise<HeldRequest[]> {
   );
   await vi.waitFor(() => expect(boundary.callbackSourceAddresses).toHaveLength(seen + 8));
   expect(held.every((entry) => entry.statusCode === undefined)).toBe(true);
-  await expectCredentialOverflow(boundary);
-  return held;
-}
-
-async function expectCredentialOverflow(boundary: Boundary) {
   expect((await boundary.post()).statusCode).toBe(429);
+  return held;
 }
 
 function holdPool(
@@ -358,9 +340,7 @@ async function drainCredentialPool(held: HeldRequest[], timeout = 1_000) {
 }
 
 describe("Mattermost slash HTTP boundary", () => {
-  afterEach(() => {
-    deactivateSlashCommands();
-  });
+  afterEach(() => deactivateSlashCommands());
 
   it("reserves authenticated capacity and bounds each pre-authentication pool at eight", async () => {
     await withBoundary(async ({ address, callbackSourceAddresses, validBody, dispatch }) => {
@@ -461,7 +441,7 @@ describe("Mattermost slash HTTP boundary", () => {
         await Promise.all(oldRuns);
         expect(boundary.errors).toHaveLength(2);
         // Old finally blocks must not release any of the eight newer admissions.
-        await expectCredentialOverflow(boundary);
+        expect((await boundary.post()).statusCode).toBe(429);
         await drainCredentialPool(held);
         await drainCredentialPool(await fillCredentialPool(boundary));
       } finally {

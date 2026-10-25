@@ -82,6 +82,11 @@ async function expectAccepted(promise: Promise<unknown>) {
   expect(error.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
 }
 
+function retryRequest(fetchImpl: typeof fetch) {
+  fetchFixture.current = fetchImpl;
+  return createMattermostDirectChannelWithRetry(createMattermostClient(clientParams), ["u1", "u2"]);
+}
+
 beforeEach(() => {
   prepareRequest = undefined;
   fetchFixture.current = vi.fn<typeof fetch>();
@@ -166,10 +171,7 @@ describe("Mattermost request boundary", () => {
   });
 
   it("releases null-body errors without unbounded response readers", async () => {
-    const response = jsonResponse(null, {
-      status: 503,
-      statusText: "Service Unavailable",
-    });
+    const response = jsonResponse(null, { status: 503, statusText: "Service Unavailable" });
     const json = vi.spyOn(response, "json");
     const text = vi.spyOn(response, "text");
     const { client, release } = guardedClient(response);
@@ -263,9 +265,7 @@ describe("Mattermost credential diagnostics", () => {
   it("decodes JSON escapes before redacting the request credential", async () => {
     const response = jsonResponse(
       String.raw`{"message":"Bearer\u0020\u0061bcdefghijklmnopqrstuvwxyz"}`,
-      {
-        status: 401,
-      },
+      { status: 401 },
     );
     const json = vi.spyOn(response, "json");
     const text = vi.spyOn(response, "text");
@@ -280,9 +280,7 @@ describe("Mattermost credential diagnostics", () => {
 
   it("redacts malformed JSON served with a JSON content type", async () => {
     const { client } = responseClient(
-      jsonResponse(`upstream error: Bearer ${botToken}`, {
-        status: 502,
-      }),
+      jsonResponse(`upstream error: Bearer ${botToken}`, { status: 502 }),
     );
     await expect(client.request("/users/me")).rejects.toThrow(
       "Mattermost API 502 : upstream error: ***",
@@ -320,15 +318,13 @@ describe("Mattermost credential diagnostics", () => {
 });
 
 describe("Mattermost post receipts", () => {
-  it("preserves accepted visibility when a post receipt cannot be decoded", async () => {
-    const { client, fetchImpl } = responseClient(jsonResponse("{"));
+  it.each([
+    ["undecodable", () => jsonResponse("{")],
+    ["no-content", () => new Response(null, { status: 204 })],
+  ] as const)("preserves accepted visibility for a %s post receipt", async (_name, response) => {
+    const { client, fetchImpl } = responseClient(response());
     await expectAccepted(createMattermostPost(client, postParams));
     expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it("preserves accepted visibility for a no-content post identity", async () => {
-    const { client } = responseClient(new Response(null, { status: 204 }));
-    await expectAccepted(createMattermostPost(client, postParams));
   });
 
   it("sends post attachments and trims the provider identity", async () => {
@@ -475,16 +471,16 @@ describe("Mattermost DM retries", () => {
     expect(onRetry.mock.calls[1]?.[1]).toBeLessThanOrEqual(250);
   });
 
-  it.each([
-    { status: 400, message: "Invalid request; upstream Mattermost API 503 Service Unavailable" },
-  ])("does not retry $status with misleading details: $message", async ({ status, message }) => {
-    const fetchImpl = (fetchFixture.current = vi.fn<typeof fetch>(async () =>
-      Response.json({ message }, { status }),
-    ));
-    const client = createMattermostClient(clientParams);
-    const outcome = expect(
-      createMattermostDirectChannelWithRetry(client, ["u1", "u2"]),
-    ).rejects.toThrow(`Mattermost API ${status}`);
+  it("does not retry HTTP 400 with misleading provider details", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json(
+        {
+          message: "Invalid request; upstream Mattermost API 503 Service Unavailable",
+        },
+        { status: 400 },
+      ),
+    );
+    const outcome = expect(retryRequest(fetchImpl)).rejects.toThrow("Mattermost API 400");
     await vi.runAllTimersAsync();
     await outcome;
     expect(fetchImpl).toHaveBeenCalledOnce();
@@ -495,11 +491,8 @@ describe("Mattermost DM retries", () => {
       cause: new Error("Mattermost API 503 Service Unavailable"),
       retryable: false,
     });
-    const fetchImpl = (fetchFixture.current = vi.fn<typeof fetch>().mockRejectedValue(failure));
-    const client = createMattermostClient(clientParams);
-    const outcome = expect(
-      createMattermostDirectChannelWithRetry(client, ["u1", "u2"]),
-    ).rejects.toBe(failure);
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(failure);
+    const outcome = expect(retryRequest(fetchImpl)).rejects.toBe(failure);
     await vi.runAllTimersAsync();
     await outcome;
     expect(fetchImpl).toHaveBeenCalledOnce();
@@ -508,11 +501,10 @@ describe("Mattermost DM retries", () => {
   it.each([400, 429, 503])(
     "preserves HTTP %s retry policy when the error response body fails",
     async (status) => {
-      const fetchImpl = (fetchFixture.current = vi.fn<typeof fetch>(async () =>
+      const fetchImpl = vi.fn<typeof fetch>(async () =>
         failingBody("pull", status, "network error"),
-      ));
-      const client = createMattermostClient(clientParams);
-      const outcome = rejection(createMattermostDirectChannelWithRetry(client, ["u1", "u2"]));
+      );
+      const outcome = rejection(retryRequest(fetchImpl));
       await vi.runAllTimersAsync();
       expect(fetchImpl).toHaveBeenCalledTimes(status === 429 || status >= 500 ? 4 : 1);
       expect(await outcome).toMatchObject({

@@ -18,9 +18,8 @@ type BuildPreparedModelsProviderData =
   typeof import("./runtime-api.js").buildPreparedModelsProviderData;
 type SlashDispatchParams = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
 
-const mockState = vi.hoisted(() => ({
-  readRequestBodyWithLimit: vi.fn(async () => "token=valid-token"),
-  parseSlashCommandPayload: vi.fn((): MattermostSlashCommandPayload => ({
+const fixtures = vi.hoisted(() => ({
+  payload: {
     token: "valid-token",
     command: "/oc_models",
     text: "models",
@@ -28,38 +27,8 @@ const mockState = vi.hoisted(() => ({
     user_id: "user-1",
     user_name: "alice",
     team_id: "team-1",
-  })),
-  resolveCommandText: vi.fn((_trigger: string, text: string) => text),
-  buildPreparedModelsProviderData: vi.fn<BuildPreparedModelsProviderData>(async () => ({
-    byProvider: new Map(),
-    providers: [],
-    resolvedDefault: { provider: "openai", model: "gpt-5.5" },
-    modelCatalog: [],
-    modelNames: new Map(),
-  })),
-  resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
-  authorizeMattermostCommandInvocation: vi.fn(() => ({
-    ok: true,
-    commandAuthorized: true,
-    channelInfo: { id: "chan-1", type: "O", name: "town-square", display_name: "Town Square" },
-    kind: "channel",
-    chatType: "channel",
-    channelName: "town-square",
-    channelDisplay: "Town Square",
-    roomLabel: "#town-square",
-  })),
-  createMattermostClient: vi.fn(() => ({})),
-  fetchMattermostChannel: vi.fn(async () => ({
-    id: "chan-1",
-    type: "O",
-    name: "town-square",
-    display_name: "Town Square",
-  })),
-  sendMessageMattermost: vi.fn<typeof import("./send.js").sendMessageMattermost>(
-    async (_target, content) => sentMessage(content),
-  ),
-  normalizeMattermostAllowList: vi.fn((value: unknown) => value),
-  getMattermostCommand: vi.fn(async () => ({
+  } satisfies MattermostSlashCommandPayload,
+  command: {
     id: "cmd-1",
     token: "valid-token",
     team_id: "team-1",
@@ -67,7 +36,41 @@ const mockState = vi.hoisted(() => ({
     method: "P",
     url: "https://gateway.example.com/slash",
     delete_at: 0,
+  },
+  channel: { id: "chan-1", type: "O", name: "town-square", display_name: "Town Square" },
+  catalog: () => ({
+    byProvider: new Map<string, Set<string>>(),
+    providers: new Array<string>(),
+    resolvedDefault: { provider: "openai", model: "gpt-5.5" },
+    modelCatalog: [],
+    modelNames: new Map<string, string>(),
+  }),
+}));
+const mockState = vi.hoisted(() => ({
+  readRequestBodyWithLimit: vi.fn(async () => "token=valid-token"),
+  parseSlashCommandPayload: vi.fn((): MattermostSlashCommandPayload => ({ ...fixtures.payload })),
+  resolveCommandText: vi.fn((_trigger: string, text: string) => text),
+  buildPreparedModelsProviderData: vi.fn<BuildPreparedModelsProviderData>(async () =>
+    fixtures.catalog(),
+  ),
+  resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
+  authorizeMattermostCommandInvocation: vi.fn(() => ({
+    ok: true,
+    commandAuthorized: true,
+    channelInfo: { ...fixtures.channel },
+    kind: "channel",
+    chatType: "channel",
+    channelName: "town-square",
+    channelDisplay: "Town Square",
+    roomLabel: "#town-square",
   })),
+  createMattermostClient: vi.fn(() => ({})),
+  fetchMattermostChannel: vi.fn(async () => ({ ...fixtures.channel })),
+  sendMessageMattermost: vi.fn<typeof import("./send.js").sendMessageMattermost>(
+    async (_target, content) => sentMessage(content),
+  ),
+  normalizeMattermostAllowList: vi.fn((value: unknown) => value),
+  getMattermostCommand: vi.fn(async () => ({ ...fixtures.command })),
   listMattermostCommands: vi.fn(async () => []),
   dispatchInbound: vi.fn(async (_params: SlashDispatchParams) => undefined),
   recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
@@ -154,7 +157,6 @@ let sendMattermostTyping: typeof import("./client.js").sendMattermostTyping;
 
 let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
 let clearMattermostSlashCommandValidationCacheForAccount: typeof import("./slash-http.js").clearMattermostSlashCommandValidationCacheForAccount;
-const callbackUrlFixture = "https://gateway.example.com/slash";
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
   const req = createMockIncomingRequest([body]);
@@ -198,7 +200,7 @@ function createHandler(cfg: OpenClawConfig, overrides: Partial<MattermostRegiste
         teamId: "team-1",
         trigger: "oc_models",
         token: "valid-token",
-        url: callbackUrlFixture,
+        url: fixtures.command.url,
         managed: false,
         ...overrides,
       },
@@ -211,6 +213,20 @@ async function expectProcessing(handler: ReturnType<typeof createHandler>) {
   await handler(createRequest(), response);
   expect(response.statusCode).toBe(200);
   expect(response.body).toContain("Processing");
+}
+
+function expectSent(text: unknown, options: Record<string, unknown>) {
+  expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
+    "channel:chan-1",
+    text,
+    expect.objectContaining(options),
+  );
+}
+
+function expectRecorded(fields: Record<string, unknown>) {
+  expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+    expect.objectContaining(fields),
+  );
 }
 
 describe("slash-http cfg threading", () => {
@@ -232,10 +248,7 @@ describe("slash-http cfg threading", () => {
     const refreshWarning = "Some models could not be refreshed.";
     const text = "Some models could not be refreshed.\n\nNo models available.";
     mockState.buildPreparedModelsProviderData.mockResolvedValueOnce({
-      byProvider: new Map(),
-      providers: [],
-      modelNames: new Map(),
-      modelCatalog: [],
+      ...fixtures.catalog(),
       resolvedDefault: { provider: "openai", model: "fixture-model" },
       refreshWarning,
     });
@@ -244,18 +257,12 @@ describe("slash-http cfg threading", () => {
     const deliveredText = `${text}\nPlatform-rendered note.`;
     mockState.sendMessageMattermost.mockResolvedValueOnce(sentMessage(deliveredText));
     await expectProcessing(handler);
-    expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
-      "channel:chan-1",
-      text,
-      expect.objectContaining({ cfg, accountId: "default" }),
-    );
-    expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandText: "models",
-        replyText: deliveredText,
-        commandId: expect.stringMatching(/^mattermost:default:chan-1:/),
-      }),
-    );
+    expectSent(text, { cfg, accountId: "default" });
+    expectRecorded({
+      commandText: "models",
+      replyText: deliveredText,
+      commandId: expect.stringMatching(/^mattermost:default:chan-1:/),
+    });
   });
 
   it.each(
@@ -308,10 +315,10 @@ describe("slash-http cfg threading", () => {
       mockState.resolveCommandText.mockReturnValueOnce(testCase.commandText);
       mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(testCase.entry);
       mockState.buildPreparedModelsProviderData.mockResolvedValueOnce({
+        ...fixtures.catalog(),
         byProvider: new Map([["openai", new Set(["fixture-model"])]]),
         providers: ["openai"],
         resolvedDefault: { provider: "openai", model: "fixture-model" },
-        modelCatalog: [],
         modelNames: new Map([["openai/fixture-model", "Fixture model"]]),
         refreshWarning: failed ? "Some models could not be refreshed." : undefined,
       });
@@ -349,37 +356,28 @@ describe("slash-http cfg threading", () => {
       );
       const sentText = mockState.sendMessageMattermost.mock.calls[0]?.[1];
       expect(sentText?.includes("Some models could not be refreshed.")).toBe(failed);
-      expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "agent-1",
-          sessionKey: "agent:agent-1:mattermost:session:1",
-          expectedSessionId: sessionEntry.sessionId,
-          commandText: testCase.commandText,
-          replyText: expect.stringContaining(testCase.text),
-        }),
-      );
+      expectRecorded({
+        agentId: "agent-1",
+        sessionKey: "agent:agent-1:mattermost:session:1",
+        expectedSessionId: sessionEntry.sessionId,
+        commandText: testCase.commandText,
+        replyText: expect.stringContaining(testCase.text),
+      });
     },
   );
 
   it("keeps the slash team scope on direct conversations", async () => {
     mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
     mockState.parseSlashCommandPayload.mockReturnValueOnce({
-      token: "valid-token",
+      ...fixtures.payload,
       command: "/oc_status",
       text: "status",
       channel_id: "dm-1",
-      user_id: "user-1",
-      user_name: "alice",
-      team_id: "team-1",
     });
     mockState.getMattermostCommand.mockResolvedValueOnce({
+      ...fixtures.command,
       id: "cmd-status",
-      token: "valid-token",
-      team_id: "team-1",
       trigger: "oc_status",
-      method: "P",
-      url: callbackUrlFixture,
-      delete_at: 0,
     });
     mockState.authorizeMattermostCommandInvocation.mockReturnValueOnce({
       ok: true,
@@ -409,13 +407,8 @@ describe("slash-http cfg threading", () => {
   describe("command typed in a thread", () => {
     beforeEach(() => {
       mockState.parseSlashCommandPayload.mockReturnValue({
-        token: "valid-token",
-        command: "/oc_models",
+        ...fixtures.payload,
         text: "status",
-        channel_id: "chan-1",
-        user_id: "user-1",
-        user_name: "alice",
-        team_id: "team-1",
         root_id: "root-1",
       });
     });
@@ -457,16 +450,8 @@ describe("slash-http cfg threading", () => {
     it("posts the model picker in the thread and records its session", async () => {
       await expectProcessing(createHandler({}));
 
-      expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
-        "channel:chan-1",
-        "No models available.",
-        expect.objectContaining({ replyToId: "root-1" }),
-      );
-      expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "agent:agent-1:mattermost:session:1:thread:root-1",
-        }),
-      );
+      expectSent("No models available.", { replyToId: "root-1" });
+      expectRecorded({ sessionKey: "agent:agent-1:mattermost:session:1:thread:root-1" });
     });
 
     it("posts the error fallback in the thread", async () => {
@@ -475,11 +460,7 @@ describe("slash-http cfg threading", () => {
 
       await expectProcessing(createHandler({}));
 
-      expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
-        "channel:chan-1",
-        "Sorry, something went wrong processing that command.",
-        expect.objectContaining({ replyToId: "root-1" }),
-      );
+      expectSent("Sorry, something went wrong processing that command.", { replyToId: "root-1" });
     });
   });
 });
