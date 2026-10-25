@@ -22,11 +22,15 @@ async function withConfig(
 ) {
   await withTempHome(async (home) => {
     const configDir = path.join(home, ".openclaw");
+    const configPath = path.join(configDir, "openclaw.json");
+    const raw = typeof config === "string" ? config : JSON.stringify(config);
     await fs.mkdir(configDir, { recursive: true });
-    for (const [name, value] of Object.entries({ "openclaw.json": config, ...includes })) {
+    await fs.writeFile(configPath, raw);
+    for (const [name, value] of Object.entries(includes)) {
       await fs.writeFile(path.join(configDir, name), JSON.stringify(value));
     }
-    await run(await readSnapshot(), path.join(configDir, "openclaw.json"));
+    await run(await readSnapshot(), configPath);
+    expect(await fs.readFile(configPath, "utf8")).toBe(raw);
   });
 }
 
@@ -40,15 +44,8 @@ function provenance(targetPath: string, at: string[], hasSiblingOverrides: boole
 
 describe("persisted implicit-main roster migration", () => {
   it("normalizes a commented pre-roster config in memory without rewriting it", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const raw = `// operator comment\n{ gateway: { mode: "local" } }\n`;
-      await fs.writeFile(configPath, raw);
-      const snapshot = await readSnapshot();
-
+    await withConfig(`// operator comment\n{ gateway: { mode: "local" } }\n`, (snapshot) => {
       expect(snapshot.sourceConfig.agents?.entries).toEqual({ main: {} });
-      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
     });
   });
 
@@ -280,10 +277,9 @@ describe("persisted implicit-main roster migration", () => {
   it.each([{ entries: {} }, { list: [] }])(
     "bootstraps a non-explicit empty roster without rewriting it: %j",
     async (agents) => {
-      await withConfig({ agents }, async (snapshot, configPath) => {
+      await withConfig({ agents }, (snapshot) => {
         expect(snapshot.valid).toBe(true);
         expect(snapshot.sourceConfig.agents?.entries).toEqual({ main: {} });
-        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({ agents });
       });
     },
   );
@@ -293,20 +289,17 @@ describe("persisted implicit-main roster migration", () => {
     ["duplicate defaults", { ops: {}, research: { default: true }, writer: { default: true } }],
     ["false default markers", { ops: { default: false }, research: { default: false } }],
   ])("rejects %s without inventing legacy ownership", async (_label, entries) => {
-    await withConfig({ agents: { entries } }, async (snapshot, configPath) => {
+    await withConfig({ agents: { entries } }, (snapshot) => {
       expect(snapshot.valid).toBe(false);
       expect(snapshot.issues).toContainEqual(
         expect.objectContaining({ path: expect.stringMatching(/^agents\.(entries|ownership)/) }),
       );
-      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
-        agents: { entries },
-      });
     });
   });
 
   it("requires Doctor for a shipped default marker without changing its owner or bytes", async () => {
     const entries = { ops: {}, research: { default: true } };
-    await withConfig({ agents: { entries } }, async (snapshot, configPath) => {
+    await withConfig({ agents: { entries } }, (snapshot) => {
       expect(snapshot.valid).toBe(false);
       expect(snapshot.sourceConfig.agents?.entries).toEqual(entries);
       expect(snapshot.legacyIssues).toContainEqual(
@@ -315,7 +308,6 @@ describe("persisted implicit-main roster migration", () => {
           message: expect.stringContaining("doctor --fix"),
         }),
       );
-      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({ agents: { entries } });
     });
   });
 

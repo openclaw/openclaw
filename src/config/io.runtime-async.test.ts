@@ -40,7 +40,11 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function fixture(config: unknown = { gateway: { mode: "local", port: 18789 } }) {
+const localConfig = (port = 18789, vars?: Record<string, string>) => ({
+  gateway: { mode: "local" as const, port },
+  ...(vars ? { env: { vars } } : {}),
+});
+function fixture(config: unknown = localConfig()) {
   const home = dirs.make("openclaw-runtime-config-async-");
   const state = path.join(home, "state");
   const workspace = path.join(home, "workspace");
@@ -189,7 +193,7 @@ it("rejects an invalid cold load without publishing config environment", async (
 
 it("keeps a pinned runtime readable when the captured launch directory is unavailable", async () => {
   fixture();
-  const current = { gateway: { mode: "local" as const, port: 19001 } };
+  const current = localConfig(19001);
   setRuntimeConfigSnapshot(current);
   vi.spyOn(process, "cwd").mockImplementation(() => {
     throw new Error("fixture launch directory removed");
@@ -204,10 +208,7 @@ it("keeps a pinned runtime readable when the captured launch directory is unavai
 
 it("publishes a config write's fallback reload without main-thread health SQL", async () => {
   const { configPath, state } = fixture();
-  const initial = {
-    gateway: { mode: "local" as const, port: 18789 },
-    env: { vars: { CONFIG_ASYNC_CONFIG: "initial", OPENCLAW_STATE_DIR: state } },
-  };
+  const initial = localConfig(18789, { CONFIG_ASYNC_CONFIG: "initial", OPENCLAW_STATE_DIR: state });
   fs.writeFileSync(configPath, JSON.stringify(initial));
   vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
   prepareConfigRuntimeEnv({ previousConfig: {}, nextConfig: initial }).publish().commit();
@@ -217,10 +218,9 @@ it("publishes a config write's fallback reload without main-thread health SQL", 
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
   try {
     await withPluginCache(createPluginCache(), () =>
-      writeConfigFile({
-        gateway: { mode: "local", port: 19001 },
-        env: { vars: { CONFIG_ASYNC_CONFIG: "committed", CONFIG_ASYNC_ADDED: "introduced" } },
-      }),
+      writeConfigFile(
+        localConfig(19001, { CONFIG_ASYNC_CONFIG: "committed", CONFIG_ASYNC_ADDED: "introduced" }),
+      ),
     );
     expect(getRuntimeConfigSnapshot()?.gateway?.port).toBe(19001);
     expect(getRuntimeConfigSourceSnapshot()?.gateway?.port).toBe(19001);
@@ -246,12 +246,9 @@ it.each(["replacement", "disk-only", "cancellation"] as const)(
   "preserves a newer owner's state when fallback reload encounters %s",
   async (change) => {
     const { home, state, configPath } = fixture();
-    const initial = { gateway: { mode: "local" as const, port: 18789 } };
-    const candidate = { gateway: { mode: "local" as const, port: 19001 } };
-    const replacement = {
-      gateway: { mode: "local" as const, port: 19002 },
-      env: { vars: { CONFIG_ASYNC_CONFIG: "newer-owner" } },
-    };
+    const initial = localConfig();
+    const candidate = localConfig(19001);
+    const replacement = localConfig(19002, { CONFIG_ASYNC_CONFIG: "newer-owner" });
     setRuntimeConfigSnapshot(initial, initial);
     const loading = createDeferredCore();
     const release = createDeferredCore();

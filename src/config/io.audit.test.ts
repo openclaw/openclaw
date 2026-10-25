@@ -20,11 +20,12 @@ import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 
 const metadata = { dev: "10", ino: "11", mode: 0o600, nlink: 1, uid: 501, gid: 20 };
 
-function redactionCase(name: string, prefix: string[], value: string, redacted = "***") {
+function redactionCase(name: string, command: string, value: string, redacted = "***") {
+  const prefix = command.split(" ");
   return [name, [...prefix, value], [...prefix, redacted]] as const;
 }
-function configCase(name: string, args: string[], value = "secret-value", redacted = "***") {
-  return redactionCase(name, ["openclaw", "config", ...args], value, redacted);
+function configCase(name: string, args: string, value = "secret-value", redacted = "***") {
+  return redactionCase(name, `openclaw config ${args}`, value, redacted);
 }
 
 function createAuditRecordBase(
@@ -79,9 +80,7 @@ const historicalRecord = {
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-audit-" });
 
-beforeAll(async () => {
-  await suiteRootTracker.setup();
-});
+beforeAll(() => suiteRootTracker.setup());
 
 it("sanitizes external records without adding write-process fields", () => {
   const record = sanitizeConfigAuditRecord({
@@ -101,9 +100,7 @@ it("sanitizes external records without adding write-process fields", () => {
   expect(record).toHaveProperty("issues", ["gateway.port: expected number"]);
 });
 
-afterAll(async () => {
-  await suiteRootTracker.cleanup();
-});
+afterAll(() => suiteRootTracker.cleanup());
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
@@ -196,35 +193,30 @@ it("caps caller-supplied processInfo argv at 8 entries before redaction", () => 
 });
 
 it.each([
-  redactionCase("dash-leading secret value", ["openclaw", "--password"], "-fake"),
-  configCase("boolean option", ["set", "--json", "channels.slack.token"], '"secret-value"'),
-  configCase("root value option", ["set", "--profile", "work", "channels.slack.token"]),
-  configCase("option before subcommand", ["--profile", "work", "set", "channels.slack.token"]),
+  redactionCase("dash-leading secret value", "openclaw --password", "-fake"),
+  configCase("boolean option", "set --json channels.slack.token", '"secret-value"'),
+  configCase("root value option", "set --profile work channels.slack.token"),
+  configCase("option before subcommand", "--profile work set channels.slack.token"),
   redactionCase(
     "root option value named config",
-    ["openclaw", "--profile", "config", "config", "set", "channels.slack.token"],
+    "openclaw --profile config config set channels.slack.token",
     "secret-value",
   ),
-  configCase("independent terminators", [
-    "--",
-    "set",
-    "--section=channels",
-    "channels.slack.token",
-  ]),
+  configCase("independent terminators", "-- set --section=channels channels.slack.token"),
   configCase(
     "dash-leading positional after inline option",
-    ["--profile=work", "set", "--", "channels.slack.token"],
+    "--profile=work set -- channels.slack.token",
     "--dash-value",
   ),
   configCase(
     "batch JSON after both positionals and an option terminator",
-    ["set", "ui.theme", "dark", "--"],
+    "set ui.theme dark --",
     '--batch-json={"value":"secret-value"}',
     "--batch-json=***",
   ),
   configCase(
     "config set batch JSON",
-    ["set", "--batch-json"],
+    "set --batch-json",
     '[{"path":"channels.slack.token","value":"secret-value"}]',
   ),
 ])("redacts $0 in persisted audit process info", (_name, argv, expected) => {
@@ -246,7 +238,6 @@ it("redacts historical config audit entries while preserving file and directory 
     `{not json\n${JSON.stringify(unredactedRecord)}\n${JSON.stringify(alreadyRedactedRecord)}\n`,
     { encoding: "utf-8", mode: 0o600 },
   );
-
   const deps = { env: {}, homedir: () => home };
   const result = await scrubConfigAuditLog(deps);
 

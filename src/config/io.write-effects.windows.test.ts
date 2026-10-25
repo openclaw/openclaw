@@ -27,6 +27,7 @@ import {
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const handshakeTimeout = WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS;
 const testTimeout = 4 * handshakeTimeout;
+const rollbackOptions = { durable: true, destinationHardlinks: "reject" as const };
 
 // The child owns an actual Windows handle that permits reads/writes, but not rename/delete.
 const holderScript = `
@@ -166,6 +167,10 @@ function identity(target: string) {
   const stat = fs.lstatSync(target, { bigint: true });
   return { ino: stat.ino, dev: stat.dev, raw: fs.readFileSync(target, "utf8") };
 }
+function expectRecoveryFiles(f: ReturnType<typeof fixture>) {
+  expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
+  expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+}
 
 describe.runIf(process.platform === "win32")("native Windows config fallback effects", () => {
   it(
@@ -187,15 +192,13 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
         await expect(
           f.rollback(io, rollbackProof, {
             preserveDirectoryMode: true,
-            durable: true,
-            destinationHardlinks: "reject",
+            ...rollbackOptions,
           }),
         ).resolves.toBe(true);
       });
       expect(fs.readFileSync(f.target, "utf8")).toBe(original);
-      expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
+      expectRecoveryFiles(f);
       expect(acl(f.target)).toBe(beforeAcl);
-      expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
     },
     testTimeout,
   );
@@ -222,18 +225,18 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
           expect(() => prepared.publish()).toThrow(f.refusal);
         } else {
           await expect(
-            f.rollback(instrumented, initial.captureRollbackProof(f.assertCurrent), {
-              durable: true,
-              destinationHardlinks: "reject",
-            }),
+            f.rollback(
+              instrumented,
+              initial.captureRollbackProof(f.assertCurrent),
+              rollbackOptions,
+            ),
           ).rejects.toBe(f.refusal);
         }
       });
       expect(writes).toBe(1);
       expect(observed?.raw).toHaveLength(3);
       expect(identity(f.target)).toEqual(observed);
-      expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
-      expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+      expectRecoveryFiles(f);
     },
   );
 
@@ -267,10 +270,7 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
             destinationWrites++;
           },
         });
-        const rollback = f.rollback(instrumented, rollbackProof, {
-          durable: true,
-          destinationHardlinks: "reject",
-        });
+        const rollback = f.rollback(instrumented, rollbackProof, rollbackOptions);
         if (replacement === "parent-directory") {
           await expect(rollback).rejects.toMatchObject({
             code: "EPERM",
@@ -293,8 +293,7 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
         });
         expect(fs.existsSync(movedParent)).toBe(false);
       }
-      expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
-      expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+      expectRecoveryFiles(f);
     },
   );
 });

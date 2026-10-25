@@ -111,9 +111,9 @@ describe("default install identity", () => {
       await fs.mkdir(stateDir);
       await writeConfig(home, ".clawdbot", "clawdbot.json");
       const env = { HOME: home };
-      expect(resolveConfigPathCandidate(env, () => home)).toBe(
-        path.join(stateDir, "openclaw.json"),
-      );
+      const configPath = path.join(stateDir, "openclaw.json");
+      expect(resolveConfigPathCandidate(env, () => home)).toBe(configPath);
+      expect(resolveDefaultConfigCandidates(env, () => home)).toEqual([configPath]);
       expect(isDefaultInstallIdentity(env, () => home)).toBe(true);
     });
   });
@@ -268,12 +268,6 @@ describe("state + config path candidates", () => {
         OPENCLAW_TEST_FAST: "1",
       });
     }
-  });
-
-  it("orders default config candidates in a stable order", () => {
-    expect(resolveDefaultConfigCandidates({}, () => accountHome)).toEqual([
-      path.join(path.resolve(accountHome), ".openclaw", "openclaw.json"),
-    ]);
   });
 
   it("resolves explicit canonical config selection without filesystem discovery", () => {

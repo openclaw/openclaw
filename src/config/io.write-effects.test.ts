@@ -15,6 +15,10 @@ import {
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 const fixture = () => createWriteEffectsFixture(fs.realpathSync(dirs.make("config-effects-")));
+function identity(file: string) {
+  const stat = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
+  return { raw: stat ? fs.readFileSync(file, "utf8") : null, ino: stat?.ino };
+}
 
 it.runIf(process.platform !== "win32").each([
   { name: "foreign state root", foreign: true, stateRoot: true, fileFailure: false },
@@ -226,8 +230,7 @@ it.each([
   const guarded = await prepareClosedWrite(f);
   const rollbackProof = guarded.captureRollbackProof(f.assertCurrent);
   let destinationFd: number | undefined;
-  let observed: string | null | undefined;
-  let observedInode: bigint | undefined;
+  let observed: ReturnType<typeof identity> | undefined;
   let parentMoved = false;
   let effects = 0;
   let effectsAtFault = 0;
@@ -250,8 +253,7 @@ it.each([
       // Preserve current bytes; an absent target uses the committed preimage.
       fs.writeFileSync(f.target, raw ?? content);
     }
-    observed = fs.existsSync(f.target) ? fs.readFileSync(f.target, "utf8") : null;
-    observedInode = fs.lstatSync(f.target, { bigint: true, throwIfNoEntry: false })?.ino;
+    observed = identity(f.target);
     effectsAtFault = effects;
   };
   const io = instrumentDestination(
@@ -303,10 +305,7 @@ it.each([
     ).rejects.toThrow();
     expect(observed).not.toBeUndefined();
     expect(effects).toBe(effectsAtFault);
-    expect(fs.existsSync(f.target) ? fs.readFileSync(f.target, "utf8") : null).toBe(observed);
-    expect(fs.lstatSync(f.target, { bigint: true, throwIfNoEntry: false })?.ino).toBe(
-      observedInode,
-    );
+    expect(identity(f.target)).toEqual(observed);
     expect(
       fs.readFileSync(`${parentMoved ? `${f.dir}-moved/channel.json` : f.target}.bak`, "utf8"),
     ).toBe(original);
