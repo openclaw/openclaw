@@ -97,57 +97,35 @@ function managedService(
 }
 
 describe("gateway host desktop source", () => {
-  it.each<
-    [string, Parameters<typeof listenRfb>[0], "ready" | "unsupported" | "needs-server", RegExp?]
-  >([
+  it.each<[string, Parameters<typeof listenRfb>[0], "ready" | "unsupported" | "needs-server"]>([
     ["VncAuth", { securityTypes: [2] }, "ready"],
     ["Screen Sharing", { banner: "RFB 003.889\n", securityTypes: [30] }, "ready"],
-    [
-      "unauthenticated VNC",
-      { securityTypes: [1] },
-      "unsupported",
-      /refusing unauthenticated VNC server/u,
-    ],
-    ["VeNCrypt", { securityTypes: [19] }, "unsupported", /VeNCrypt is not supported/u],
-    [
-      "another service",
-      { banner: "HTTP/1.1 200" },
-      "unsupported",
-      /occupied by a non-VNC service/u,
-    ],
-    ["missing server", undefined, "needs-server", /apt install tigervnc-standalone-server/u],
-  ])(
-    "classifies %s without enabling access and refuses unsupported sources",
-    async (_, server, state, error) => {
-      const port = await listenRfb(server);
-      const config = Object.freeze({
-        enabled: false,
-        port,
-        passwordFile: "/nonexistent/desktop-password",
-      });
-      const probeRfb = vi.spyOn(rfbProbe, "probeRfbServer");
-      await expect(inspectHostDesktop({ config })).resolves.toMatchObject({
-        status: { enabled: false, state: "disabled" },
-      });
-      expect(probeRfb).not.toHaveBeenCalled();
-      const readFile = vi.spyOn(fs, "readFile");
-      const inspection = await inspectHostDesktopSetup({ config, platform: "darwin" });
-      if (state === "ready") {
-        expect(inspection).toEqual({ state });
-      } else {
-        expect(inspection).toMatchObject({ state });
-      }
-      expect(readFile).not.toHaveBeenCalled();
-      expect(config.enabled).toBe(false);
-      if (error) {
-        const source = createHostDesktopSource({
-          config: { enabled: true, port },
-          platform: "linux",
-        });
-        await expect(source.acquire()).rejects.toThrow(error);
-      }
-    },
-  );
+    ["unauthenticated VNC", { securityTypes: [1] }, "unsupported"],
+    ["VeNCrypt", { securityTypes: [19] }, "unsupported"],
+    ["another service", { banner: "HTTP/1.1 200" }, "unsupported"],
+    ["missing server", undefined, "needs-server"],
+  ])("discovers %s for setup while desktop access stays disabled", async (_, server, state) => {
+    const port = await listenRfb(server);
+    const config = Object.freeze({
+      enabled: false,
+      port,
+      passwordFile: "/nonexistent/desktop-password",
+    });
+    const probeRfb = vi.spyOn(rfbProbe, "probeRfbServer");
+    await expect(inspectHostDesktop({ config })).resolves.toMatchObject({
+      status: { enabled: false, state: "disabled" },
+    });
+    expect(probeRfb).not.toHaveBeenCalled();
+    const readFile = vi.spyOn(fs, "readFile");
+    const inspection = await inspectHostDesktopSetup({ config, platform: "darwin" });
+    if (state === "ready") {
+      expect(inspection).toEqual({ state });
+    } else {
+      expect(inspection).toMatchObject({ state });
+    }
+    expect(readFile).not.toHaveBeenCalled();
+    expect(config.enabled).toBe(false);
+  });
 
   it("discovers managed setup without starting it and preserves attached-server precedence", async () => {
     const createManaged = vi.spyOn(managedLinux, "createManagedLinuxDesktop");
@@ -165,12 +143,31 @@ describe("gateway host desktop source", () => {
     expect(createManaged).not.toHaveBeenCalled();
   });
 
-  it.each(["prompt", "password-file", "default-port"] as const)(
+  it.each<[string, Parameters<typeof listenRfb>[0], string]>([
+    [
+      "unauthenticated VNC",
+      { securityTypes: [1] },
+      "refusing unauthenticated VNC server on 127.0.0.1:$PORT",
+    ],
+    ["VeNCrypt", { securityTypes: [19] }, "VeNCrypt is not supported"],
+    [
+      "a non-VNC occupant",
+      { banner: "HTTP/1.1 200" },
+      "desktop.host.port $PORT is occupied by a non-VNC service; configure desktop.host.port",
+    ],
+    ["an unreachable server", undefined, "apt install tigervnc-standalone-server"],
+  ])("refuses %s with setup guidance", async (_, server, error) => {
+    const port = await listenRfb(server);
+    const source = createHostDesktopSource({ config: { enabled: true, port }, platform: "linux" });
+    await expect(source.acquire()).rejects.toThrow(error.replace("$PORT", String(port)));
+  });
+
+  it.each(["prompt", "password-file", "explicit-port", "default-port", "managed"] as const)(
     "selects the configured VncAuth source (%s)",
     async (mode) => {
       const withPassword = mode === "password-file";
-      const managedMode = mode === "default-port";
-      const explicitPort = !managedMode;
+      const managedMode = mode !== "prompt" && mode !== "password-file";
+      const explicitPort = mode !== "default-port" && mode !== "managed";
       const port = explicitPort ? await listenRfb({ securityTypes: [2] }) : 5900;
       const password = "desktop-secret";
       let passwordFile: string | undefined;
@@ -183,7 +180,9 @@ describe("gateway host desktop source", () => {
 
       const managed = fakeManagedDesktop();
       if (!explicitPort) {
-        vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({ kind: "rfb", securityTypes: [2] });
+        vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue(
+          mode === "managed" ? { kind: "unreachable" } : { kind: "rfb", securityTypes: [2] },
+        );
       }
       const source = createHostDesktopSource({
         config: {
@@ -195,6 +194,14 @@ describe("gateway host desktop source", () => {
         platform: "linux",
         ...(managedMode ? { managedDesktop: managed.managed } : {}),
       });
+      if (mode === "managed") {
+        await expect(source.acquire()).resolves.toMatchObject({
+          attachment: { host: "127.0.0.1", port: 46_001 },
+          auth: "vnc-password",
+        });
+        expect(managed.acquire).toHaveBeenCalledOnce();
+        return;
+      }
       await expect(source.acquire()).resolves.toEqual({
         attachment: { kind: "tcp", host: "127.0.0.1", port },
         auth: "vnc-password",
@@ -230,6 +237,13 @@ describe("gateway host desktop source", () => {
     expect(observed.wsPath).not.toContain("operator");
     expect(observed.wsPath).not.toContain(password);
     expect(isSecretValueRegisteredForRedaction(password)).toBe(true);
+
+    await expect(
+      inspectHostDesktop({ config: { enabled: true, port }, platform: "darwin" }),
+    ).resolves.toMatchObject({
+      status: { state: "attached", security: "ARD" },
+      detail: `attached (127.0.0.1:${port}, security: ARD)`,
+    });
   });
 
   it.each(["available", "absent", "failed"] as const)(
@@ -266,6 +280,7 @@ describe("gateway host desktop source", () => {
       expect(JSON.stringify(observed)).not.toMatch(
         /native stderr|private\/audio|synthetic-secret/u,
       );
+      expect(start).not.toHaveBeenCalled();
       expect(await releaseDesktopObserverToken(observed.wsPath, requester)).toBe(true);
       expect(start).not.toHaveBeenCalled();
     },

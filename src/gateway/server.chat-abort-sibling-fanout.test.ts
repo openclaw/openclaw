@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
@@ -17,6 +17,8 @@ import {
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
+import * as swarm from "../agents/subagents/swarm/swarm-scheduler.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import {
   beginSessionEffect,
@@ -65,12 +67,15 @@ for (const [suffix, name] of [
     const replaceParent = suffix === "replacement";
     const parentRunId = `parent-${suffix}`;
     const parentKey = `agent:main:sibling-abort-${suffix}`;
+    const groupId = `sibling-abort-${suffix}`;
     const running = Array.from(
-      { length: fault ? 2 : 1 },
+      { length: fault ? 8 : 1 },
       (_, index) => `running-${suffix}-${index}`,
     );
     const firstRunId = expectDefined(running[0], "first running child");
-    const failedRunId = fault ? firstRunId : undefined;
+    const queued = fault ? [`queued-${suffix}-0`, `queued-${suffix}-1`] : [];
+    const selected = [...running, ...queued];
+    const failedRunId = fault ? running[3] : undefined;
     const sessionKey = (runId: string) => `agent:main:subagent:${runId}`;
     const stateDir = process.env.OPENCLAW_STATE_DIR!;
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -101,6 +106,10 @@ for (const [suffix, name] of [
     const releasedLeases = new Set<SessionEffectRef>();
     const interrupted: string[] = [];
     const firstInterrupted = createDeferred();
+    const slotReleaseResults: boolean[] = [];
+    const start = vi.fn(async () => {});
+    const reserve = (runId: string, maxConcurrent: number) =>
+      swarm.reserveSwarmRun({ groupId, runId, maxConcurrent, activeRunIds: running });
     let parentRequestId: string | undefined;
     let parentTerminal: Promise<PromiseSettledResult<unknown>> | undefined;
     let abortResponse: ReturnType<typeof fixture.rpcReq> | undefined;
@@ -113,6 +122,7 @@ for (const [suffix, name] of [
       response: Awaited<ReturnType<typeof fixture.rpcReq>>,
       shape: Record<string, unknown>,
     ) => expect(response, JSON.stringify(response.error)).toMatchObject(shape);
+    const runtimeKey = (runId: string) => getSubagentRunRuntimeKey(subagentRuns.get(runId)!);
 
     const cancellationInspected = createDeferred();
     // Hold the child's kill owner: an aborted parent no longer delays confirmation,
@@ -148,35 +158,42 @@ for (const [suffix, name] of [
           payload: { runId: parentRunId, status: "accepted" },
         });
         const parent = await parentStarted.promise;
+        expect(fixture.agentCommandMock).toHaveBeenCalledTimes(1);
 
-        for (const runId of running) {
+        for (const runId of selected) {
           const childStorePath = await seedSession(sessionKey(runId), `${runId}-session`);
-          // Recovery must observe the live owner when the run is registered.
-          leases.push(
-            await beginSessionEffect({
-              scope: storePath,
-              identities: [sessionKey(runId), `${runId}-session`],
-              resolveGatewayContext: expectDefined(
-                connectionObserver.context,
-                "Gateway fixture context",
-              ).resolveGatewayContext,
-              run: {
-                runId,
-                sessionKey: sessionKey(runId),
-                sessionId: `${runId}-session`,
-                agentId: "main",
-              },
-              assertAllowed: () => {},
-              onInterrupt: () => {
-                interrupted.push(runId);
-                firstInterrupted.resolve();
-                if (runId === failedRunId) {
-                  throw new Error("synthetic sibling interruption failure");
-                }
-                return { runId };
-              },
-            }),
-          );
+          if (running.includes(runId)) {
+            // Recovery must observe the live owner when the run is registered.
+            leases.push(
+              await beginSessionEffect({
+                scope: storePath,
+                identities: [sessionKey(runId), `${runId}-session`],
+                resolveGatewayContext: expectDefined(
+                  connectionObserver.context,
+                  "Gateway fixture context",
+                ).resolveGatewayContext,
+                run: {
+                  runId,
+                  sessionKey: sessionKey(runId),
+                  sessionId: `${runId}-session`,
+                  agentId: "main",
+                },
+                assertAllowed: () => {},
+                onInterrupt: () => {
+                  interrupted.push(runId);
+                  firstInterrupted.resolve();
+                  slotReleaseResults.push(swarm.releaseSwarmRun(runId));
+                  if (runId === failedRunId) {
+                    throw new Error("synthetic sibling interruption failure");
+                  }
+                  return { runId };
+                },
+              }),
+            );
+          }
+          if (queued.includes(runId)) {
+            expect(reserve(runId, 8)).toBe(true);
+          }
           await registerSubagentRun({
             runId,
             childSessionKey: sessionKey(runId),
@@ -192,14 +209,30 @@ for (const [suffix, name] of [
             task: runId,
             cleanup: "keep",
             collect: !replaceParent,
+            groupId,
+            queued: queued.includes(runId),
             expectsCompletionMessage: false,
           });
+          if (queued.includes(runId)) {
+            swarm.activateSwarmRun({ groupId, runId, start, onStartFailure: () => true });
+          }
         }
+        if (queued.length === 0) {
+          expect(reserve(firstRunId, 1)).toBe(false);
+        }
+        expect(running.every((runId) => swarm.isSwarmRunActive(runId))).toBe(true);
+        for (const runId of queued) {
+          expect(swarm.isSwarmRunWaitingForCapacity(runId, runtimeKey(runId))).toBe(true);
+        }
+        expect(leases).toHaveLength(running.length);
         for (const lease of leases) {
           void lease.released.then(() => {
             releasedLeases.add(lease);
           });
         }
+        const activeAdmissionCount = getSessionControllerWorkCount();
+        expect(activeAdmissionCount).toBeGreaterThanOrEqual(running.length);
+        expect(start).not.toHaveBeenCalled();
 
         parentTerminal = Promise.allSettled([
           fixture.onceMessage(
@@ -246,9 +279,11 @@ for (const [suffix, name] of [
         // No child may make sibling interruption wait for this fixture-owned cleanup.
         await expect.poll(() => interrupted.toSorted(), { timeout: 2_000 }).toEqual(running);
         expect(parent.abortSignal!.aborted).toBe(true);
+        expect(slotReleaseResults).toEqual(running.map(() => true));
         expect(releasedLeases.size).toBe(0);
         expect(getSessionControllerWorkCount()).toBeGreaterThanOrEqual(running.length);
         expect(responseSettled).toBe(false);
+        expect(start).not.toHaveBeenCalled();
         if (replaceParent) {
           acceptedKillIntent = structuredClone(
             expectDefined(subagentRuns.get(firstRunId)?.killIntent, "accepted child kill intent"),
@@ -306,7 +341,7 @@ for (const [suffix, name] of [
           loadSubagentRegistryFromSqlite(),
           parentKey,
         );
-        expect(persistedRuns.map((run) => run.runId).toSorted()).toEqual(running);
+        expect(persistedRuns.map((run) => run.runId).toSorted()).toEqual(selected.toSorted());
         for (const run of persistedRuns) {
           const { runId } = run;
           if (replaceParent && run.killIntent) {
@@ -327,7 +362,12 @@ for (const [suffix, name] of [
               taskCancellationAccepted: true,
             });
           }
+          if (queued.includes(runId)) {
+            expect(run.execution.startedAt).toBeUndefined();
+            expect(swarm.ownsSwarmRunReservation(runId, runtimeKey(runId))).toBe(false);
+          }
         }
+        expect(start).not.toHaveBeenCalled();
       },
       async () => {
         // Cleanup is unconditional, including the expected pre-fix fanout assertion failure.
@@ -349,12 +389,23 @@ for (const [suffix, name] of [
         }
       },
       async () => {
-        for (const runId of running) {
-          if (replaceParent) {
-            fixture.embeddedRunMock.activeIds.delete(`${runId}-session`);
+        const reservationReleases: Promise<void>[] = [];
+        try {
+          for (const runId of selected) {
+            if (replaceParent) {
+              fixture.embeddedRunMock.activeIds.delete(`${runId}-session`);
+            }
+            const hold = swarm.holdQueuedSwarmRun(runId);
+            if (hold) {
+              hold.withdraw();
+              reservationReleases.push(hold.release());
+            }
+            swarm.releaseSwarmRun(runId);
           }
+          socket.close();
+        } finally {
+          await Promise.all(reservationReleases);
         }
-        socket.close();
         expect(getSessionMutationCount()).toBe(0);
         expect(getSessionControllerWorkCount()).toBe(0);
       },

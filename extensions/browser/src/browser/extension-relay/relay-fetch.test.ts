@@ -41,7 +41,12 @@ function fixture(implementation: Sender = async () => ({})) {
       handle: stringField(await command("Fetch.takeResponseBodyAsStream", { requestId }), "stream"),
     };
   }
-  return { fetch, send, owner, emit, events, command, pause, stream };
+  function expectLatePauseIgnored() {
+    const count = events.length;
+    fetch.event("Fetch.requestPaused", { requestId: "late" });
+    expect(events).toHaveLength(count);
+  }
+  return { fetch, send, owner, emit, events, command, pause, stream, expectLatePauseIgnored };
 }
 
 const streamSender =
@@ -49,7 +54,7 @@ const streamSender =
   async (method) =>
     method === "Fetch.takeResponseBodyAsStream" ? { stream } : {};
 
-async function blockedEnabled(blocked: string, fallback: Sender = async () => ({})) {
+function blockedFixture(blocked: string, fallback: Sender = async () => ({})) {
   const started = createDeferred<void>();
   const pending = createDeferred<unknown>();
   const f = fixture(async (method, params) => {
@@ -59,18 +64,19 @@ async function blockedEnabled(blocked: string, fallback: Sender = async () => ({
     }
     return fallback(method, params);
   });
-  await f.command("Fetch.enable");
   return { f, started, pending };
-}
-
-function expectMethods(f: ReturnType<typeof fixture>, ...methods: string[]) {
-  expect(f.send.mock.calls.map(([method]) => method)).toEqual(methods);
 }
 
 async function enabledFixture(implementation?: Sender) {
   const f = fixture(implementation);
   await f.command("Fetch.enable");
   return f;
+}
+
+async function blockedEnabled(blocked: string, fallback?: Sender) {
+  const blockedState = blockedFixture(blocked, fallback);
+  await blockedState.f.command("Fetch.enable");
+  return blockedState;
 }
 
 describe("RelayFetch request and stream ownership", () => {
@@ -144,34 +150,20 @@ describe("RelayFetch request and stream ownership", () => {
     await f.command("IO.close", { handle });
   });
 
-  it.each(["IO.read", "IO.close"])(
-    "fences a stream after ambiguous %s completion",
-    async (method) => {
-      const failure = new Error("stream completion unknown");
-      const { f, started, pending } = await blockedEnabled(method, streamSender("native"));
-      const { handle } = await f.stream();
-      const operation = f.command(method, { handle });
-      await started.promise;
-      if (method === "IO.read") {
-        await expect(f.command(method, { handle })).rejects.toThrow(/read in flight/);
-      }
-      pending.reject(failure);
-      await expect(operation).rejects.toBe(failure);
-      const beforeRetry = f.send.mock.calls.length;
-      if (method === "IO.close") {
-        await expect(f.command("IO.read", { handle: "native" }, {})).rejects.toThrow(
-          /stream handle/,
-        );
-      }
-      await expect(f.command(method, { handle })).rejects.toThrow(
-        method === "IO.read" ? /no longer readable/ : /stream handle/,
-      );
-      expect(f.send).toHaveBeenCalledTimes(beforeRetry);
-      if (method === "IO.read") {
-        await f.command("IO.close", { handle });
-      }
-    },
-  );
+  it("serializes stream reads and retires readability after an ambiguous failure", async () => {
+    const failure = new Error("read completion unknown");
+    const { f, started, pending } = await blockedEnabled("IO.read", streamSender("native"));
+    const { handle } = await f.stream();
+    const reading = f.command("IO.read", { handle });
+    await started.promise;
+    await expect(f.command("IO.read", { handle })).rejects.toThrow(/read in flight/);
+    pending.reject(failure);
+    await expect(reading).rejects.toBe(failure);
+    const beforeRetry = f.send.mock.calls.length;
+    await expect(f.command("IO.read", { handle })).rejects.toThrow(/no longer readable/);
+    expect(f.send).toHaveBeenCalledTimes(beforeRetry);
+    await f.command("IO.close", { handle });
+  });
 });
 
 describe("RelayFetch uncertain state and retirement", () => {
@@ -200,6 +192,28 @@ describe("RelayFetch uncertain state and retirement", () => {
     const eventCount = f.events.length;
     f.fetch.event("Fetch.requestPaused", { requestId: "late" });
     expect(f.events).toHaveLength(eventCount);
+  });
+
+  it("bounds owner-close to one pause snapshot and disables after cleanup", async () => {
+    const started = createDeferred<void>();
+    const pending = createDeferred<unknown>();
+    const f = await enabledFixture(async (method, params) => {
+      if (method === "Fetch.failRequest" && params?.requestId === "first") {
+        started.resolve();
+        return pending.promise;
+      }
+      return {};
+    });
+    f.pause("first");
+    const closing = f.fetch.close(f.owner);
+    await started.promise;
+    f.expectLatePauseIgnored();
+    pending.resolve({});
+    await closing;
+    expect(f.send.mock.calls.slice(1)).toEqual([
+      ["Fetch.failRequest", { requestId: "first", errorReason: "Aborted" }],
+      ["Fetch.disable", undefined],
+    ]);
   });
 
   it("closes residual streams when owner close overtakes explicit disable", async () => {
@@ -242,35 +256,83 @@ describe("RelayFetch uncertain state and retirement", () => {
       ["IO.close", { handle: "native-stream" }],
     ]);
     expect(f.send.mock.calls.some(([method]) => method === "Fetch.disable")).toBe(false);
-    const eventCount = f.events.length;
-    f.fetch.event("Fetch.requestPaused", { requestId: "late" });
-    expect(f.events).toHaveLength(eventCount);
+    f.expectLatePauseIgnored();
     await expect(f.command("IO.read", { handle })).rejects.toThrow(/detached/);
 
     pending.resolve({ body: "late", base64Encoded: false });
     await expect(bodyRead).rejects.toThrow(/retired/);
   });
 
-  it.each(["rejected", "hung"])(
-    "reports %s retirement cleanup without disabling Fetch",
-    async (mode) => {
-      const failure = new Error("cleanup failed");
-      const { f, pending } = await blockedEnabled("Fetch.failRequest");
-      f.pause("request");
-      const retiring = f.fetch.prepareRetirement(mode === "hung" ? 10 : 100);
-      if (mode === "rejected") {
-        pending.reject(failure);
+  it("returns retirement cleanup errors without attempting Fetch.disable", async () => {
+    const failure = new Error("cleanup failed");
+    const f = await enabledFixture(async (method) => {
+      if (method === "Fetch.failRequest") {
+        throw failure;
       }
-      await expect(retiring).resolves.toEqual({
-        errors: [
-          mode === "rejected"
-            ? failure
-            : expect.objectContaining({ message: expect.stringMatching(/timed out/) }),
-        ],
-      });
-      expectMethods(f, "Fetch.enable", "Fetch.failRequest");
+      return {};
+    });
+    f.pause("request");
+    await expect(f.fetch.prepareRetirement(100)).resolves.toEqual({
+      errors: [failure],
+    });
+    expect(f.send.mock.calls.map(([method]) => method)).toEqual([
+      "Fetch.enable",
+      "Fetch.failRequest",
+    ]);
+  });
+
+  it("bounds cleanup commands issued during physical retirement", async () => {
+    const { f } = await blockedEnabled("Fetch.failRequest");
+    f.pause("request");
+    const result = await f.fetch.prepareRetirement(10);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toEqual(
+      expect.objectContaining({ message: expect.stringMatching(/timed out/) }),
+    );
+    expect(f.send.mock.calls.map(([method]) => method)).toEqual([
+      "Fetch.enable",
+      "Fetch.failRequest",
+    ]);
+  });
+});
+
+describe("RelayFetch native completion boundaries", () => {
+  it.each(["IO.read", "IO.close"])(
+    "rejects raw Fetch handles for every logical caller: %s",
+    async (method) => {
+      const f = await enabledFixture(streamSender("native-stream"));
+      const { handle } = await f.stream("response");
+      for (const caller of [f.owner, {}]) {
+        const before = f.send.mock.calls.length;
+        await expect(f.command(method, { handle: "native-stream" }, caller)).rejects.toThrow(
+          /stream handle/,
+        );
+        expect(f.send).toHaveBeenCalledTimes(before);
+      }
+      await expect(f.command(method, { handle }, {})).rejects.toThrow(/stream handle/);
+      expect(
+        f.fetch.command({}, f.emit, method, { handle: "other-domain-stream" }),
+      ).toBeUndefined();
+      await f.command("IO.close", { handle });
+      await expect(f.command(method, { handle })).rejects.toThrow(/stream handle/);
     },
   );
+
+  it("keeps raw handle ownership while native close completion is unknown", async () => {
+    const { f, pending } = await blockedEnabled("IO.close", streamSender("native-stream"));
+    const { handle } = await f.stream("response");
+    const closing = f.command("IO.close", { handle });
+    const rejected = expect(closing).rejects.toThrow("close completion unknown");
+    pending.reject(new Error("close completion unknown"));
+    await rejected;
+    const before = f.send.mock.calls.length;
+    await expect(f.command("IO.read", { handle: "native-stream" }, {})).rejects.toThrow(
+      /stream handle/,
+    );
+    await expect(f.command("IO.close", { handle })).rejects.toThrow(/stream handle/);
+    expect(f.send).toHaveBeenCalledTimes(before);
+  });
+
   it.each(["Fetch.getResponseBody", "Fetch.takeResponseBodyAsStream"])(
     "never mutates a request whose %s completion is unknown",
     async (method) => {
@@ -279,7 +341,7 @@ describe("RelayFetch uncertain state and retirement", () => {
       f.send.mockRejectedValueOnce(new Error("body completion unknown"));
       await expect(f.command(method, { requestId })).rejects.toThrow("body completion unknown");
       await f.fetch.prepareRetirement(100);
-      expectMethods(f, "Fetch.enable", method);
+      expect(f.send.mock.calls.map(([name]) => name)).toEqual(["Fetch.enable", method]);
     },
   );
 });
