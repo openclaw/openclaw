@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { MemoryIndexManager } from "./manager.js";
@@ -30,10 +29,4 @@ export async function openObservedManager(
   });
   assert(manager, "Expected a persistent memory manager");
   return { manager, cfg };
-}
-
-export function openPublishedIndex(manager: MemoryIndexManager) {
-  const dbPath = manager.status().dbPath;
-  assert(dbPath, "Expected a persistent memory index");
-  return new DatabaseSync(dbPath, { readOnly: true });
 }
