@@ -5,9 +5,9 @@ import { DEVICE_CODE_PHISHING_WARNING, type WizardPrompter } from "./prompts.js"
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
 async function nextStep(session: WizardSession, expected: Partial<WizardStep> = {}) {
-  const step = expectDefined((await session.next()).step, "wizard step");
-  expect(step).toMatchObject(expected);
-  return step;
+  const result = await session.next();
+  expect(result).toMatchObject({ done: false, step: expected });
+  return expectDefined(result.step, "wizard step");
 }
 
 function nextProgress(session: WizardSession, message: string, externalUrl?: string) {
@@ -79,31 +79,24 @@ describe("WizardSession", () => {
     });
     cleanupSession(session);
 
-    const first = await session.next();
-    expect(first.done).toBe(false);
-    expect(first.step?.type).toBe("note");
-    expect(first.step).toMatchObject({ title: "Welcome", message: "", executor: "client" });
-
-    const secondPeek = await session.next();
-    expect(secondPeek.step?.id).toBe(first.step?.id);
-
-    await session.answer(expectDefined(first.step, "wizard step").id, null);
-
-    const second = await session.next();
-    expect(second.done).toBe(false);
-    expect(second.step?.type).toBe("text");
-
-    await session.answer(expectDefined(second.step, "wizard step").id, "Peter");
-
-    const third = await session.next();
-    expect(third.step?.type).toBe("note");
-    expect(third.step).toMatchObject({
+    const first = await nextStep(session, {
+      type: "note",
+      title: "Welcome",
+      message: "",
+      executor: "client",
+    });
+    expect((await session.next()).step?.id).toBe(first.id);
+    await session.answer(first.id, null);
+    const second = await nextStep(session, { type: "text" });
+    await session.answer(second.id, "Peter");
+    const third = await nextStep(session, {
+      type: "note",
       title: "Greeting",
       message: "Hello Peter",
       executor: "client",
     });
 
-    await session.answer(expectDefined(third.step, "wizard step").id, null);
+    await session.answer(third.id, null);
 
     const last = await nextStep(session, {
       type: "note",
@@ -113,9 +106,7 @@ describe("WizardSession", () => {
     });
     await session.answer(last.id, null);
 
-    const done = await session.next();
-    expect(done.done).toBe(true);
-    expect(done.status).toBe("done");
+    await expectTerminal(session);
   });
 
   test("plain output is a client note with plain format", async () => {
@@ -215,23 +206,13 @@ describe("WizardSession", () => {
         await callback.promise;
       });
       cleanupSession(session, callback.resolve);
-      const next = session.next();
-      const delivered = vi.fn();
-      void next.then(delivered);
-      await vi.waitFor(() => expect(delivered).toHaveBeenCalledOnce());
-      const first = await next;
-      expect(first).toMatchObject({
-        done: false,
-        status: "running",
-        step: {
-          type: "progress",
-          executor: "gateway",
-          externalUrl: destination,
-        },
+      const first = await nextStep(session, {
+        type: "progress",
+        executor: "gateway",
+        externalUrl: destination,
       });
-      expect(wizardStepAwaitsInput(expectDefined(first.step, "browser sign-in progress"))).toBe(
-        false,
-      );
+      expect(session.getStatus()).toBe("running");
+      expect(wizardStepAwaitsInput(first)).toBe(false);
       const prompter = await ready.promise;
       const progress = prompter.progress("Waiting for approval");
       await nextProgress(session, "Waiting for approval", destination);
@@ -258,8 +239,7 @@ describe("WizardSession", () => {
         message: "Enter this one-time code in your browser.",
       });
     });
-    const first = await session.next();
-    expect(first.step).toMatchObject({
+    await nextStep(session, {
       type: "progress",
       executor: "gateway",
       title: "Provider sign-in",
@@ -406,8 +386,7 @@ describe("WizardSession", () => {
     );
     expect((await session.next()).step?.type).toBe("text");
     await vi.advanceTimersByTimeAsync(1_000);
-    const done = await session.next();
-    expect(done.status).toBe("cancelled");
+    await expectTerminal(session, "cancelled");
     expect(session.signal.aborted).toBe(true);
   });
 
