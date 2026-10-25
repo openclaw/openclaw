@@ -95,6 +95,7 @@ const { values } = parseArgs({
     "worker-heap-peer-done-file": { type: "string" },
     "worker-baseline-dir": { type: "string" },
     "baseline-owners": { type: "boolean", default: false },
+    "stress-shell-words": { type: "string", default: "0" },
     "stress-tools": { type: "boolean", default: false },
     "worktree-tool-churn": { type: "boolean", default: false },
     "stress-tool-search": { type: "boolean", default: false },
@@ -564,6 +565,12 @@ if (values["stress-tools"] && !toolScenario) {
     "--stress-tools requires chat.send, attempt-retention, session-idle-retention, or memory-soak",
   );
 }
+const stressShellWords = integer(values["stress-shell-words"], "--stress-shell-words", 0);
+// At most 50,007 source characters and about 10,000 syntax nodes, below both parser limits.
+if (stressShellWords > 10_000 || (stressShellWords > 0 && !values["stress-tools"])) {
+  throw new Error("--stress-shell-words must be 0–10000 and requires --stress-tools when positive");
+}
+const stressShellCommand = stressShellWords ? `: ${"word ".repeat(stressShellWords)}; pwd` : "pwd";
 if (values["stress-session-store"] && !values["stress-tools"]) {
   throw new Error("--stress-session-store requires --stress-tools");
 }
@@ -2210,7 +2217,7 @@ const mock = createServer((req, res) => {
                         ? 'if (!(await catalog.search("read file content", { limit: 5 })).some(tool => tool.name === "read")) throw new Error("Synthetic tool search omitted read");\n'
                         : "") +
                       `json(await read({ path: ${JSON.stringify(values["worktree-tool-churn"] && toolWorktree ? path.join(toolWorktree, "README.md") : toolPath)} }));\n` +
-                      `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(toolWorktree)} });\n` +
+                      `const shell = await exec({ command: ${JSON.stringify(stressShellCommand)}, workdir: ${JSON.stringify(toolWorktree)} });\n` +
                       `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(toolWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
                       (values["worktree-tool-churn"]
                         ? `const match = await exec({ command: "grep -n 'Synthetic project' README.md", workdir: ${JSON.stringify(toolWorktree)} });\n` +
@@ -6471,6 +6478,7 @@ try {
           },
         }
       : {}),
+    stressShellWords,
     stressSessionStore: values["stress-session-store"],
     stressToolSearch: values["stress-tool-search"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
