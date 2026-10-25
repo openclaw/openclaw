@@ -77,7 +77,7 @@ function fixture() {
         releaseSessionControllerClaim(claim);
       }
       registration.cleanup();
-      retireSessionControllerInput(registration.entry.input);
+      void track(retireSessionControllerInput(registration.entry.input));
     });
     track(registration.entry.input.settlement.promise);
     if (options?.terminal !== false) {

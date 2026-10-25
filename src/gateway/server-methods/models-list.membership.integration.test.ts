@@ -17,7 +17,6 @@ import {
   startCatalogGateway,
   writeCatalogPlugin,
 } from "./models-catalog-fixture.test-support.js";
-import { modelsTestConfig } from "./models-integration.test-support.js";
 
 function runMembershipCase(
   context: Pick<TestContext, "signal" | "onTestFinished">,
@@ -67,7 +66,11 @@ function runMembershipCase(
         };`,
       );
       const token = "membership-gateway-token";
-      const cfg = modelsTestConfig(state, token, {
+      const restricted = {
+        workspace: state.workspaceDir,
+        modelPolicy: { allow: [`${provider}/manual`] },
+      };
+      const cfg = {
         agents: {
           ownership: "explicit",
           defaults: {
@@ -76,9 +79,7 @@ function runMembershipCase(
           },
           entries: {
             main: { workspace: state.workspaceDir },
-            ...(!secondHook
-              ? { restricted: { workspace: state.workspaceDir, modelPolicy: { allow } } }
-              : {}),
+            ...(!secondHook ? { restricted } : {}),
           },
         },
         models: {
@@ -98,7 +99,8 @@ function runMembershipCase(
           load: { paths: [pluginPath] },
           slots: { memory: "none" },
         },
-      });
+        gateway: { mode: "local", auth: { mode: "token", token } },
+      };
       await state.writeConfig(cfg);
       const authProfiles = createCatalogAuthProfiles({ [provider]: "membership-account-key" });
       await state.writeAuthProfiles(authProfiles);
@@ -133,18 +135,18 @@ function runMembershipCase(
       expect(await list()).toEqual(initial);
       expect(requests).toBe(acquired);
 
-      const setPolicy = async (refs: string[]) => {
+      const patch = async (raw: unknown, replacePaths: string[] = []) => {
         const config = await client.request<{ hash: string }>("config.get", {}, { signal });
         await client.request(
           "config.patch",
-          {
-            baseHash: config.hash,
-            replacePaths: ["agents.defaults.modelPolicy.allow"],
-            raw: JSON.stringify({ agents: { defaults: { modelPolicy: { allow: refs } } } }),
-          },
+          { baseHash: config.hash, replacePaths, raw: JSON.stringify(raw) },
           { signal },
         );
       };
+      const setPolicy = (refs: string[]) =>
+        patch({ agents: { defaults: { modelPolicy: { allow: refs } } } }, [
+          "agents.defaults.modelPolicy.allow",
+        ]);
       // config.patch acknowledges runtime application, so the next read needs no polling.
       const policies: [string[], string[]][] = [
         [[`${provider}/*`], expected],
@@ -161,15 +163,21 @@ function runMembershipCase(
         expect(requests).toBe(acquired);
       }
 
-      const configuredModels = async () =>
-        (await client.request<{ config: typeof cfg }>("config.get", {}, { signal })).config.models
-          ?.providers?.[provider]?.models;
+      const getConfig = () => client.request<{ config: typeof cfg }>("config.get", {}, { signal });
+      const previousConfig = await getConfig();
       advertisedModelIds.push("next-release");
       expect(await refresh()).toEqual([...expected, "next-release"].toSorted());
-      expect(await configuredModels()).toEqual([createCatalogModel("manual", "Manual model")]);
+      const currentConfig = await getConfig();
+      expect(currentConfig.config.models.providers[provider].models).toEqual(
+        previousConfig.config.models.providers[provider].models,
+      );
       await beforeClose?.();
     },
-    async () => gateway && disconnectGatewayClient(gateway.client),
+    async () => {
+      if (gateway) {
+        await disconnectGatewayClient(gateway.client);
+      }
+    },
     async () => gateway?.server.close({ reason: "catalog membership test complete" }),
     async () => {
       if (endpoint.listening) {
@@ -204,7 +212,10 @@ it("models.list retains discovery across policy changes and joins an aborted cas
       signal.throwIfAborted();
     },
   );
-  const outcome = body.catch((error: unknown) => error);
+  const outcome = body.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
   let teardown: Promise<void> | undefined;
   try {
     await Promise.race([ready.promise, body]);

@@ -117,18 +117,50 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
-it("publishes recovery context without a team", async () => {
+it.each([
+  [
+    false,
+    `[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.
+Review the current state below and continue the conversation from where the previous model left off.
+
+CURRENT STATE SUMMARY:
+Delegate the remaining work`,
+  ],
+  [
+    true,
+    `[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.
+You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.
+
+ACTIVE SUBORDINATE UNITS:
+- Subagent child-session (orchestrator): done
+- Subagent worker-2 (leaf): running
+
+CURRENT STATE SUMMARY:
+Delegate the remaining work
+
+INSTRUCTIONS:
+1. Review the state and subordinate reports.
+2. Provide strategic guidance and commands to subordinates.
+3. Do not repeat work already performed by subordinates.`,
+  ],
+] as const)("publishes the complete recovery briefing with team=%s", async (team, expected) => {
   const fixture = createFixture();
-  mocks.readSummaries.mockResolvedValue([]);
+  mocks.readSummaries.mockResolvedValue(
+    team
+      ? [
+          ...fixture.summaries,
+          {
+            sessionKey: "agent:main:subagent:worker-2",
+            entry: { sessionId: "worker-2", updatedAt: 1, spawnedBy: fixture.entry.sessionId },
+          },
+        ]
+      : [],
+  );
   await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
   expect(fixture.agent.state.messages.at(-1)).toMatchObject({
     role: "user",
-    content: expect.stringContaining("CURRENT STATE SUMMARY:\nDelegate the remaining work"),
+    content: expected,
   });
-  const content = fixture.agent.state.messages.at(-1)?.content;
-  expect(content).toContain("[SYSTEM HANDOFF]");
-  expect(content).toContain("continue the conversation from where the previous model left off");
-  expect(content).not.toContain("ACTIVE SUBORDINATE UNITS");
 });
 
 it("awaits descriptive worker rows before publishing the recovery briefing", async () => {
@@ -143,23 +175,15 @@ it("awaits descriptive worker rows before publishing the recovery briefing", asy
   await awaitGateBeforeSettlement(entered.promise, preparation, "hierarchy reader was not reached");
   expect(fixture.agent.state.messages).toBe(fixture.messages);
   expect(mocks.updateEntry).not.toHaveBeenCalled();
-  rows.resolve([
-    ...fixture.summaries,
-    {
-      sessionKey: "agent:main:subagent:worker-2",
-      entry: { sessionId: "worker-2", updatedAt: 1, spawnedBy: fixture.entry.sessionId },
-    },
-  ]);
+  rows.resolve(fixture.summaries);
   await preparation;
-  const content = fixture.agent.state.messages.at(-1)?.content;
-  expect(content).toContain("Subagent child-session (orchestrator): done");
-  expect(content).toContain("Subagent worker-2 (leaf): running");
-  expect(content).toContain("You are the new LEADER (Orchestrator)");
-  expect(content).toContain("Do not perform tasks already delegated to subordinates.");
-  expect(content).toContain("CURRENT STATE SUMMARY:\nDelegate the remaining work");
-  expect(content).toContain("Do not repeat work already performed by subordinates.");
-  expect(fixture.agent.state.messages.at(-1)?.role).toBe("user");
-  expect(content).not.toContain("unrelated");
+  expect(fixture.agent.state.messages.at(-1)).toMatchObject({
+    role: "user",
+    content: expect.stringContaining("Subagent child-session (orchestrator): done"),
+  });
+  expect(fixture.agent.state.messages.at(-1)).toMatchObject({
+    content: expect.not.stringContaining("unrelated"),
+  });
   const [, update] = mocks.updateEntry.mock.calls[0]!;
   expect(await update(fixture.entry, {})).toMatchObject({ quotaSuspension: { state: "active" } });
   expect(await update({ ...fixture.entry, sessionId: "replacement" }, {})).toBeNull();
@@ -183,17 +207,21 @@ it.each([
         throw new Error("reader unavailable");
       }
     };
-    const readEntry = async () => {
-      await wait();
-      return fixture.entry;
-    };
-    if (stage === "hierarchy") {
+    if (stage === "entry") {
+      mocks.readEntry.mockImplementationOnce(async () => {
+        await wait();
+        return fixture.entry;
+      });
+    } else if (stage === "hierarchy") {
       mocks.readSummaries.mockImplementationOnce(async () => {
         await wait();
         return [];
       });
     } else {
-      mocks[stage === "entry" ? "readEntry" : "updateEntry"].mockImplementationOnce(readEntry);
+      mocks.updateEntry.mockImplementationOnce(async () => {
+        await wait();
+        return fixture.entry;
+      });
     }
     const preparation = prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
     await awaitGateBeforeSettlement(
