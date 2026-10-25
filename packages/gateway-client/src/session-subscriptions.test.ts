@@ -10,12 +10,38 @@ import {
   releaseGatewaySessionMessageSubscription,
   resetGatewaySessionMessageSubscriptionCoordinator,
 } from "./session-subscriptions.js";
-import { createClient, createStalledRequestClient } from "./session-subscriptions.test-support.js";
+import {
+  createClient,
+  createStalledRequestClient,
+  expectWire,
+  expectWireCalls,
+} from "./session-subscriptions.test-support.js";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 afterEach(() => {
   vi.useRealTimers();
 });
+
+function approvalClient(replay: () => unknown) {
+  return createClient(async (method, params) =>
+    method === "sessions.messages.subscribe"
+      ? { key: params.key, ...(params.includeApprovals ? { approvalReplay: replay() } : {}) }
+      : {},
+  );
+}
+
+function pendingApprovalClient() {
+  const approval = createDeferred<unknown>();
+  return {
+    approval,
+    ...createClient(async (method, params) => {
+      if (method === "sessions.messages.unsubscribe") {
+        return {};
+      }
+      return params.includeApprovals ? await approval.promise : { key: params.key };
+    }),
+  };
+}
 
 describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   it.each([
@@ -32,17 +58,11 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     expect(first.initialHistory).toEqual(initialHistory);
     expect(later).not.toHaveProperty("initialHistory");
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
-      key: "main",
-      subscriptionId: expect.any(String),
-      initialHistory: { limit: 80, cursor: "first" },
-    });
+    expect(request).toHaveBeenCalledOnce();
+    expectWireCalls(request, "subscribe", [{ initialHistory: { limit: 80, cursor: "first" } }]);
     await coordinator.release(first);
     await coordinator.release(later);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      key: "main",
-      subscriptionId: expect.any(String),
-    });
+    expectWire(request, "unsubscribe");
   });
 
   it("shares one in-flight wire subscription across canonical session aliases", async () => {
@@ -65,58 +85,38 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await coordinator.release(first);
     expect(request).toHaveBeenCalledOnce();
     await coordinator.release(second);
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-    });
+    expect(request).toHaveBeenCalledTimes(2);
+    expectWireCalls(request, "unsubscribe", [{}]);
   });
 
-  it.each([
-    {
-      name: "configured main",
-      requestedKey: "agent:ops:main",
-      canonicalKey: "agent:ops:work",
-    },
-  ])(
-    "coalesces $name aliases before the first canonical acknowledgment",
-    async ({ requestedKey, canonicalKey }) => {
-      const acknowledgement = createDeferred<unknown>();
-      const { coordinator, request } = createClient(async (method) =>
-        method === "sessions.messages.subscribe" ? await acknowledgement.promise : {},
-      );
+  it("coalesces configured main aliases before the first canonical acknowledgment", async () => {
+    const requestedKey = "agent:ops:main";
+    const canonicalKey = "agent:ops:work";
+    const acknowledgement = createDeferred<unknown>();
+    const { coordinator, request } = createClient(async (method) =>
+      method === "sessions.messages.subscribe" ? await acknowledgement.promise : {},
+    );
 
-      const requested = coordinator.acquire(requestedKey);
-      const canonical = coordinator.acquire(canonicalKey);
+    const requested = coordinator.acquire(requestedKey);
+    const canonical = coordinator.acquire(canonicalKey);
 
-      expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
-        subscriptionId: expect.any(String),
-        key: requestedKey,
-      });
+    expect(request).toHaveBeenCalledOnce();
+    expectWireCalls(request, "subscribe", [{ key: requestedKey }]);
 
-      acknowledgement.resolve({ key: canonicalKey });
-      const [first, second] = await Promise.all([requested, canonical]);
+    acknowledgement.resolve({ key: canonicalKey });
+    const [first, second] = await Promise.all([requested, canonical]);
 
-      expect(first).not.toBe(second);
-      expect(first).toEqual({ key: canonicalKey, agentId: null });
-      expect(second).toEqual({ key: canonicalKey, agentId: null });
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.messages.subscribe"),
-      ).toHaveLength(1);
+    expect(first).not.toBe(second);
+    expect(first).toEqual({ key: canonicalKey, agentId: null });
+    expect(second).toEqual({ key: canonicalKey, agentId: null });
+    expectWireCalls(request, "subscribe", [{ key: requestedKey }]);
 
-      await coordinator.release(first);
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
-      ).toHaveLength(0);
-      await coordinator.release(second);
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
-      ).toHaveLength(1);
-      expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-        subscriptionId: expect.any(String),
-        key: canonicalKey,
-      });
-    },
-  );
+    await coordinator.release(first);
+    expectWireCalls(request, "unsubscribe", []);
+    await coordinator.release(second);
+    expectWireCalls(request, "unsubscribe", [{ key: canonicalKey }]);
+    expectWire(request, "unsubscribe", { key: canonicalKey });
+  });
 
   it("upgrades a provisional canonical alias without creating a competing plain observer", async () => {
     const acknowledgement = createDeferred<unknown>();
@@ -145,20 +145,13 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       approvalReplay: replay,
     });
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "agent:main:main",
-      includeApprovals: true,
-    });
+    expectWire(request, "subscribe", { key: "agent:main:main", includeApprovals: true });
 
     await coordinator.release(plain);
     expect(request).toHaveBeenCalledTimes(2);
     await coordinator.release(upgraded);
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      subscriptionId: expect.any(String),
-      key: "agent:main:main",
-    });
+    expectWire(request, "unsubscribe", { key: "agent:main:main" });
   });
 
   it("keeps unacknowledged subscriptions isolated by canonical agent", async () => {
@@ -172,16 +165,10 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     expect(research).toEqual({ key: "global", agentId: "research" });
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "global",
-      agentId: "main",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "global",
-      agentId: "research",
-    });
+    expectWireCalls(request, "subscribe", [
+      { key: "global", agentId: "main" },
+      { key: "global", agentId: "research" },
+    ]);
     acknowledgement.resolve({ key: "global" });
     await expect(main).resolves.toEqual({ key: "global", agentId: "main" });
   });
@@ -283,19 +270,12 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     await expect(replacement).resolves.toEqual({ key: "main", agentId: null });
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-    });
+    expectWire(request, "subscribe");
   });
 
   it("upgrades an existing plain observer once and never downgrades approvals", async () => {
     const replay = { approvals: [{ id: "approval-2" }] };
-    const { coordinator, request } = createClient(async (method, params) =>
-      method === "sessions.messages.subscribe"
-        ? { key: params.key, ...(params.includeApprovals ? { approvalReplay: replay } : {}) }
-        : {},
-    );
+    const { coordinator, request } = approvalClient(() => replay);
 
     const plain = await coordinator.acquire("main");
     const [firstApproval, secondApproval] = await Promise.all([
@@ -305,17 +285,8 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     const laterPlain = await coordinator.acquire("main");
 
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-      includeApprovals: true,
-    });
-    expect(firstApproval.approvalReplay).toEqual(replay);
-    expect(secondApproval.approvalReplay).toEqual(replay);
+    expectWireCalls(request, "subscribe", [{}, { includeApprovals: true }]);
+    expect([firstApproval.approvalReplay, secondApproval.approvalReplay]).toEqual([replay, replay]);
 
     await coordinator.release(firstApproval);
     await coordinator.release(secondApproval);
@@ -325,59 +296,28 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
-  it.each([
-    {
-      name: "a closed approval pane leaves a plain observer",
-      initialApprovals: false,
-      closeFirst: true,
-      before: ["approval-old"],
-      after: [],
-    },
-  ])("refreshes pending approvals when $name", async (scenario) => {
-    let replay = { approvals: scenario.before.map((id) => ({ id })) };
-    const { coordinator, request } = createClient(async (method, params) =>
-      method === "sessions.messages.subscribe"
-        ? { key: params.key, ...(params.includeApprovals ? { approvalReplay: replay } : {}) }
-        : {},
-    );
-    const retained = await coordinator.acquire("main", {
-      includeApprovals: scenario.initialApprovals,
-    });
-    const first = scenario.initialApprovals
-      ? retained
-      : await coordinator.acquire("main", { includeApprovals: true });
-    const handles = new Set([retained, first]);
-    try {
-      if (scenario.closeFirst) {
-        await coordinator.release(first);
-      }
-      replay = { approvals: scenario.after.map((id) => ({ id })) };
-      const next = await coordinator.acquire("main", { includeApprovals: true });
-      handles.add(next);
-      expect(next.approvalReplay).toEqual(replay);
-    } finally {
-      for (const handle of handles) {
-        await coordinator.release(handle);
-      }
-    }
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
-    ).toHaveLength(1);
+  it("refreshes pending approvals when a closed approval pane leaves a plain observer", async () => {
+    let replay: { approvals: { id: string }[] } = { approvals: [{ id: "approval-old" }] };
+    const { coordinator, request } = approvalClient(() => replay);
+    const retained = await coordinator.acquire("main", { includeApprovals: false });
+    const first = await coordinator.acquire("main", { includeApprovals: true });
+    await coordinator.release(first);
+    replay = { approvals: [] };
+    const next = await coordinator.acquire("main", { includeApprovals: true });
+    expect(next.approvalReplay).toEqual(replay);
+    await coordinator.release(retained);
+    await coordinator.release(first);
+    await coordinator.release(next);
+    expectWireCalls(request, "unsubscribe", [{}]);
   });
 
   it("preserves the plain observer when an approval upgrade is unauthorized", async () => {
     let rejectApproval = true;
-    const { coordinator, request } = createClient(async (method, params) => {
-      if (method === "sessions.messages.unsubscribe") {
-        return {};
-      }
-      if (params.includeApprovals && rejectApproval) {
+    const { coordinator, request } = approvalClient(() => {
+      if (rejectApproval) {
         throw new Error("operator.approvals scope required");
       }
-      return {
-        key: params.key,
-        ...(params.includeApprovals ? { approvalReplay: { approvals: [] } } : {}),
-      };
+      return { approvals: [] };
     });
     const plain = await coordinator.acquire("main");
 
@@ -400,16 +340,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("lets concurrent plain observers recover when the first approval request is unauthorized", async () => {
-    const approval = createDeferred<unknown>();
-    const { coordinator, request } = createClient(async (method, params) => {
-      if (method === "sessions.messages.unsubscribe") {
-        return {};
-      }
-      if (params.includeApprovals) {
-        return await approval.promise;
-      }
-      return { key: params.key };
-    });
+    const { approval, coordinator, request } = pendingApprovalClient();
 
     const denied = coordinator.acquire("main", { includeApprovals: true });
     const firstPlain = coordinator.acquire("main");
@@ -422,28 +353,11 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       { key: "main", agentId: null },
     ]);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-      includeApprovals: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-    });
+    expectWireCalls(request, "subscribe", [{ includeApprovals: true }, {}]);
   });
 
   it("releases the last plain owner after its provisional approval upgrade fails", async () => {
-    const approval = createDeferred<unknown>();
-    const { coordinator, request } = createClient(async (method, params) => {
-      if (method === "sessions.messages.unsubscribe") {
-        return {};
-      }
-      if (params.includeApprovals) {
-        return await approval.promise;
-      }
-      return { key: params.key };
-    });
+    const { approval, coordinator, request } = pendingApprovalClient();
     const plain = await coordinator.acquire("main");
 
     const pendingApproval = coordinator.acquire("main", { includeApprovals: true });
@@ -454,10 +368,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     approval.reject(new Error("approval replay unavailable"));
     await expect(pendingApproval).rejects.toThrow("approval replay unavailable");
     await expect(release).resolves.toBeUndefined();
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-    });
+    expectWire(request, "unsubscribe");
     expect(request).toHaveBeenCalledTimes(3);
   });
 
@@ -476,10 +387,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     await releaseGatewaySessionMessageSubscription(replacement);
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-    });
+    expectWire(request, "unsubscribe");
   });
 
   it("rejects a subscribe acknowledgment from a retired connection", async () => {
@@ -512,12 +420,9 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       keysEquivalent,
     }).acquire("main");
 
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "MAIN",
-    });
-    expect(first.key).toBe("agent:main:main");
-    expect(second.key).toBe("agent:main:main");
+    expect(request).toHaveBeenCalledOnce();
+    expectWireCalls(request, "subscribe", [{ key: "MAIN" }]);
+    expect([first.key, second.key]).toEqual(["agent:main:main", "agent:main:main"]);
     expect(() =>
       getGatewaySessionMessageSubscriptionCoordinator(client, {
         keysEquivalent: (left, right) => left === right,
@@ -528,9 +433,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenCalledOnce();
     await releaseGatewaySessionMessageSubscription(second);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      subscriptionId: expect.any(String),
-      key: "agent:main:main",
-    });
+    expectWire(request, "unsubscribe", { key: "agent:main:main" });
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  hasSessionProjectionAcceptedFinal,
+  hasSessionProjectionAcceptedFinal as acceptedFinal,
   projectLiveSessionMessage as project,
   reconcileSessionProjectionSnapshot as reconcile,
   reduceSessionProjection as reduce,
@@ -37,8 +37,8 @@ const tool = (id = "later-tool", seq = 218, stopReason?: string) => ({
 });
 const announce = (message: unknown = selected, state = projection(), cloneLive = false) =>
   project(terminal(state, { message }), cloneLive ? structuredClone(message) : message, { runId });
-const expectMessages = (state: SessionProjectionState, messages: unknown[]) =>
-  expect(state.messages).toEqual(messages);
+const messages = (state: SessionProjectionState, ...expected: unknown[]) =>
+  expect(state.messages).toEqual(expected);
 const text = (...parts: string[]) => parts.map((value) => ({ type: "text", text: value }));
 
 describe("terminal receipts and snapshot reconciliation", () => {
@@ -73,8 +73,8 @@ describe("terminal receipts and snapshot reconciliation", () => {
       if (!persistedFirst) {
         state = persist(state, durable);
       }
-      expectMessages(state, [durable]);
-      expectMessages(persist(snapshot(state, [structuredClone(durable)]), durable), [durable]);
+      messages(state, durable);
+      messages(persist(snapshot(state, [structuredClone(durable)]), durable), durable);
     }
   });
 
@@ -127,13 +127,7 @@ describe("terminal receipts and snapshot reconciliation", () => {
     state = snapshot(state, [beforeFence, priorRun, failedA, failedB]);
     expect(state.messages).toContainEqual(fallback);
     const savedTerminal = receipt("selected-terminal", 8, { runTerminal: true });
-    expectMessages(persist(state, savedTerminal), [
-      beforeFence,
-      priorRun,
-      failedA,
-      failedB,
-      savedTerminal,
-    ]);
+    messages(persist(state, savedTerminal), beforeFence, priorRun, failedA, failedB, savedTerminal);
   });
 
   it("keeps durable replay idempotent despite contradictory same-run history", () => {
@@ -194,7 +188,7 @@ describe("terminal receipts and snapshot reconciliation", () => {
     (order) => {
       const different = reply("A different final answer");
       if (order === "durable-first") {
-        expectMessages(announce(different, snapshot(projection(), [saved])), [saved, different]);
+        messages(announce(different, snapshot(projection(), [saved])), saved, different);
       } else {
         const differentSaved = { ...saved, content: different.content };
         const state = project(project(projection(), selected, { runId }), differentSaved, {
@@ -245,7 +239,7 @@ describe("terminal receipts and snapshot reconciliation", () => {
       idempotencyKey: `cli-assistant:${runId}`,
       stopReason: "stop",
     };
-    expectMessages(snapshot(announce(selected, projection(), true), [persisted]), [persisted]);
+    messages(snapshot(announce(selected, projection(), true), [persisted]), persisted);
   });
 
   it("restores an inferred terminal when later history reveals a tool boundary", () => {
@@ -256,15 +250,11 @@ describe("terminal receipts and snapshot reconciliation", () => {
     const later = tool("assistant-tool-boundary", 3);
     const state = snapshot(announce(), [prompt, earlier]);
     expect(state.messages).toEqual([prompt, earlier]);
-    expectMessages(snapshot(state, [prompt, earlier, later]), [prompt, earlier, later, selected]);
+    messages(snapshot(state, [prompt, earlier, later]), prompt, earlier, later, selected);
   });
 
   it("does not restore a removed or filtered inferred terminal", () => {
-    const prompt = {
-      role: "user",
-      content: "Finish the task.",
-      __openclaw: { id: "user", seq: 1, runId },
-    };
+    const prompt = savedUser("Finish the task.", "user", 1, { runId });
     const persisted = savedReply("Selected answer", "final", 2, { runId });
     const state = snapshot(announce(), [prompt, persisted]);
     expect(state.messages).toEqual([prompt, persisted]);
@@ -326,7 +316,7 @@ describe("session run terminal bookkeeping", () => {
     const emptyMessage = savedReply("", "assistant-final", 7);
     const deliveredMessage = savedReply("eventual final", "assistant-final", 7);
     let state = terminal(projection(), { message: emptyMessage });
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], emptyMessage)).toBe(false);
+    expect(acceptedFinal(state.runs[runId], emptyMessage)).toBe(false);
     const mismatchedMessage = savedReply("wrong final", "different-assistant-final", 7);
     state = terminal(state, { message: mismatchedMessage });
     expect(state.runs["run-1"]?.message).toBe(emptyMessage);
@@ -336,9 +326,7 @@ describe("session run terminal bookkeeping", () => {
     const laterFinal = reply("later distinct final");
     const acceptedLaterFinal = terminal(state, { message: laterFinal });
     expect(acceptedLaterFinal.runs["run-1"]?.message).toBe(deliveredMessage);
-    expect(hasSessionProjectionAcceptedFinal(acceptedLaterFinal.runs["run-1"], laterFinal)).toBe(
-      true,
-    );
+    expect(acceptedFinal(acceptedLaterFinal.runs[runId], laterFinal)).toBe(true);
     expect(terminal(acceptedLaterFinal, { message: laterFinal })).toBe(acceptedLaterFinal);
   });
 
@@ -368,7 +356,7 @@ describe("session run terminal bookkeeping", () => {
       errorMessage: "original diagnostic",
     });
     expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(2);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(true);
+    expect(acceptedFinal(state.runs[runId], second)).toBe(true);
     expect(terminal(state, { message: second })).toBe(state);
   });
 

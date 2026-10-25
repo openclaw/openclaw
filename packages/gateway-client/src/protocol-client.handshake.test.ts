@@ -7,6 +7,7 @@ import type { GatewayProtocolSocket, GatewayProtocolSocketHandlers } from "./pro
 import {
   createProtocolClient,
   createProtocolHarness,
+  lastFrame,
   startProtocolHarness,
   receive,
   respond,
@@ -54,47 +55,49 @@ function receiveHello(connection: Connection): void {
   respond(connection, frame.id, { type: "hello-ok" });
 }
 
+const errorMessage = (message: unknown) => expect.objectContaining({ message });
+const connectAuthority = (generation: number) => ({
+  generation,
+  signal: expect.any(AbortSignal),
+  assertCurrent: expect.any(Function),
+});
+
 describe("GatewayProtocolClient connect handshake", () => {
-  it.each([{ retryable: true, retryAfterMs: 90_000, delayMs: 99_000, draw: 0.5, nextDelayMs: 22 }])(
-    "keeps admitted retry timing while advancing backoff: %j",
-    async ({ retryable, retryAfterMs, delayMs, draw, nextDelayMs }) => {
-      vi.mocked(Math.random).mockReturnValue(draw);
-      const { connections, onReconnectScheduled, first } = createHandshakeClient();
+  it("keeps admitted retry timing while advancing backoff", async () => {
+    vi.mocked(Math.random).mockReturnValue(0.5);
+    const { connections, onReconnectScheduled, first } = createHandshakeClient();
+    receiveConnectChallenge(first);
+    respond(
+      first,
+      lastFrame(first).id,
+      {
+        code: "UNAVAILABLE",
+        message: "temporarily unavailable",
+        retryable: true,
+        retryAfterMs: 90_000,
+      },
+      false,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(99_000, expect.any(AbortSignal));
+    const signal = onReconnectScheduled.mock.calls[0]?.[1];
+    assert(signal);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(98_999);
+    expect(connections).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connections).toHaveLength(2);
 
-      receiveConnectChallenge(first);
-      const sent = first.send.mock.calls[0];
-      assert(sent);
-      const request = JSON.parse(sent[0]) as { id: string };
-      receive(first, {
-        type: "res",
-        id: request.id,
-        ok: false,
-        error: { code: "UNAVAILABLE", message: "temporarily unavailable", retryable, retryAfterMs },
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(
-        delayMs,
-        expect.any(AbortSignal),
-      );
-      const signal = onReconnectScheduled.mock.calls[0]?.[1];
-      assert(signal);
-      expect(signal.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(delayMs - 1);
-      expect(connections).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(connections).toHaveLength(2);
-
-      const second = connections[1];
-      assert(second);
-      second.close(1006, "transport unavailable");
-      expect(signal.aborted).toBe(true);
-      expect(onReconnectScheduled).toHaveBeenLastCalledWith(nextDelayMs, expect.any(AbortSignal));
-      await vi.advanceTimersByTimeAsync(nextDelayMs - 1);
-      expect(connections).toHaveLength(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(connections).toHaveLength(3);
-    },
-  );
+    const second = connections[1];
+    assert(second);
+    second.close(1006, "transport unavailable");
+    expect(signal.aborted).toBe(true);
+    expect(onReconnectScheduled).toHaveBeenLastCalledWith(22, expect.any(AbortSignal));
+    await vi.advanceTimersByTimeAsync(21);
+    expect(connections).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connections).toHaveLength(3);
+  });
 
   it.each([false, true])(
     "cancels a scheduled retry when its observer stops the client (restart=%s)",
@@ -185,16 +188,10 @@ describe("GatewayProtocolClient connect handshake", () => {
   );
 
   it.each([false, true])("suppresses a resolved hello after stop (restart=%s)", async (restart) => {
-    const {
-      client,
-      connections,
-      onHello,
-      onConnectHello,
-      first: connection,
-    } = createHandshakeClient();
+    const { client, connections, onHello, onConnectHello, first } = createHandshakeClient();
 
-    receiveConnectChallenge(connection);
-    receiveHello(connection);
+    receiveConnectChallenge(first);
+    receiveHello(first);
     client.stop();
     if (restart) {
       client.start();
@@ -216,19 +213,16 @@ describe("GatewayProtocolClient connect handshake", () => {
     const buildConnectPlan = vi.fn(() => ({}));
     const { connections, first } = createHandshakeClient(buildConnectPlan);
 
-    first.handlers.open();
-    receive(first, {
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "first", ts: 1, capabilities: ["model-catalog-snapshot"] },
+    receiveConnectChallenge(first, {
+      nonce: "first",
+      ts: 1,
+      capabilities: ["model-catalog-snapshot"],
     });
     expect(buildConnectPlan).toHaveBeenLastCalledWith({
       nonce: "first",
       challengeTs: 1,
       serverCapabilities: ["model-catalog-snapshot"],
-      generation: 1,
-      signal: expect.any(AbortSignal),
-      assertCurrent: expect.any(Function),
+      ...connectAuthority(1),
     });
     first.handlers.close(1006, "reconnect");
     await vi.advanceTimersByTimeAsync(10);
@@ -239,9 +233,7 @@ describe("GatewayProtocolClient connect handshake", () => {
       nonce: "synthetic-nonce",
       challengeTs: 1_800_000_000_000,
       serverCapabilities: [],
-      generation: 2,
-      signal: expect.any(AbortSignal),
-      assertCurrent: expect.any(Function),
+      ...connectAuthority(2),
     });
   });
 
@@ -251,15 +243,12 @@ describe("GatewayProtocolClient connect handshake", () => {
       const buildConnectPlan = vi.fn(() => ({}));
       const { first } = createHandshakeClient(buildConnectPlan);
 
-      first.handlers.open();
-      receive(first, { type: "event", event: "connect.challenge", payload });
+      receiveConnectChallenge(first, payload);
       expect(buildConnectPlan).toHaveBeenLastCalledWith({
         nonce: payload.nonce,
         challengeTs: null,
         serverCapabilities: [],
-        generation: 1,
-        signal: expect.any(AbortSignal),
-        assertCurrent: expect.any(Function),
+        ...connectAuthority(1),
       });
     },
   );
@@ -313,44 +302,42 @@ function createNodeClient(options: GatewayClientOptions) {
 }
 
 describe("GatewayProtocolClient socket factory recovery", () => {
-  it.each([{ draw: 0.5, delays: [11, 22, 44, 88, 92, 92], resetDelay: 28 }])(
-    "spreads exponential retries through the cap and reset ($draw)",
-    async ({ draw, delays, resetDelay }) => {
-      vi.mocked(Math.random).mockReturnValue(draw);
-      const { client, createSocket, onConnectError } = createSocketFactoryHarness({
-        initialFailures: delays.length,
-        shouldRetrySocketFactoryError: () => true,
-      });
+  it("spreads exponential retries through the cap and reset", async () => {
+    const delays = [11, 22, 44, 88, 92, 92];
+    vi.mocked(Math.random).mockReturnValue(0.5);
+    const { client, createSocket, onConnectError } = createSocketFactoryHarness({
+      initialFailures: delays.length,
+      shouldRetrySocketFactoryError: () => true,
+    });
 
-      client.start();
+    client.start();
 
-      expect(createSocket).toHaveBeenCalledOnce();
-      expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message: "temporary socket construction failure" }),
-      );
-      expect(vi.getTimerCount()).toBe(1);
+    expect(createSocket).toHaveBeenCalledOnce();
+    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+      errorMessage("temporary socket construction failure"),
+    );
+    expect(vi.getTimerCount()).toBe(1);
 
-      client.start();
-      expect(createSocket).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(1);
+    client.start();
+    expect(createSocket).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(1);
 
-      for (const [index, delay] of delays.entries()) {
-        await vi.advanceTimersByTimeAsync(delay - 1);
-        expect(createSocket).toHaveBeenCalledTimes(index + 1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(createSocket).toHaveBeenCalledTimes(index + 2);
-      }
-      expect(onConnectError).toHaveBeenCalledTimes(delays.length);
-      expect(client.connected).toBe(true);
-
-      client.resetReconnectBackoff(25);
-      createSocket.mock.calls.at(-1)?.[0].close(1012, "service restart");
-      await vi.advanceTimersByTimeAsync(resetDelay - 1);
-      expect(createSocket).toHaveBeenCalledTimes(delays.length + 1);
+    for (const [index, delay] of delays.entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(createSocket).toHaveBeenCalledTimes(index + 1);
       await vi.advanceTimersByTimeAsync(1);
-      expect(createSocket).toHaveBeenCalledTimes(delays.length + 2);
-    },
-  );
+      expect(createSocket).toHaveBeenCalledTimes(index + 2);
+    }
+    expect(onConnectError).toHaveBeenCalledTimes(delays.length);
+    expect(client.connected).toBe(true);
+
+    client.resetReconnectBackoff(25);
+    createSocket.mock.calls.at(-1)?.[0].close(1012, "service restart");
+    await vi.advanceTimersByTimeAsync(27);
+    expect(createSocket).toHaveBeenCalledTimes(delays.length + 1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(createSocket).toHaveBeenCalledTimes(delays.length + 2);
+  });
 
   it.each([false, true])(
     "does not retry after an error callback takes ownership (restart=%s)",
@@ -393,16 +380,8 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     client.start();
     const first = connections[0];
     assert(first);
-    first.handlers.open();
-    receive(first, { type: "event", event: "connect.challenge", payload: { nonce: "challenge" } });
-    const connect = first.frames[0];
-    assert(connect);
-    receive(first, {
-      type: "res",
-      id: connect.id,
-      ok: true,
-      payload: { type: "hello-ok" },
-    });
+    receiveConnectChallenge(first, { nonce: "challenge" });
+    receiveHello(first);
     await vi.advanceTimersByTimeAsync(0);
     const pending = client
       .request("before-close", {}, { timeoutMs: null })
@@ -422,14 +401,7 @@ describe("GatewayProtocolClient socket factory recovery", () => {
 
     const replacement = connections[1];
     assert(replacement);
-    const request = replacement.frames[0];
-    assert(request);
-    receive(replacement, {
-      type: "res",
-      id: request.id,
-      ok: true,
-      payload: { healthy: true },
-    });
+    respond(replacement, lastFrame(replacement).id, { healthy: true });
     await expect(recoveredRequest).resolves.toEqual({ healthy: true });
     expect(client.hasPendingRequests).toBe(false);
   });
@@ -455,18 +427,18 @@ describe("GatewayProtocolClient socket factory recovery", () => {
 
       expect(createSocket).toHaveBeenCalledTimes(2);
       expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message: "loopback proxy policy rejected" }),
+        errorMessage("loopback proxy policy rejected"),
       );
       if (rethrow) {
         expect(onCallbackError).toHaveBeenCalledExactlyOnceWith(
           "reconnect",
-          expect.objectContaining({ message: "loopback proxy policy rejected" }),
+          errorMessage("loopback proxy policy rejected"),
         );
       } else {
         expect(onCallbackError).not.toHaveBeenCalled();
       }
       expect(onReconnectStopped).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message: "loopback proxy policy rejected" }),
+        errorMessage("loopback proxy policy rejected"),
       );
       expect(vi.getTimerCount()).toBe(0);
     },
@@ -517,7 +489,7 @@ describe("GatewayClient socket factory recovery", () => {
 
     client.start();
     expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: expect.stringContaining(expectedMessage) }),
+      errorMessage(expect.stringContaining(expectedMessage)),
     );
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -539,7 +511,7 @@ describe("GatewayClient socket factory recovery", () => {
     expect(registerGatewayLoopbackBypass).toHaveBeenCalledOnce();
     expect(unregister).toHaveBeenCalledOnce();
     expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: "The URL contains a fragment identifier" }),
+      errorMessage("The URL contains a fragment identifier"),
     );
     expect(vi.getTimerCount()).toBe(0);
   });

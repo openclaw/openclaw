@@ -9,6 +9,7 @@ import {
   readSessionMessageSequence,
   reconcileSessionProjectionSnapshot as reconcile,
   reduceSessionProjection as reduce,
+  type SessionProjectionState,
 } from "./session-projection.js";
 import {
   assistant as reply,
@@ -23,6 +24,13 @@ import {
   pending as sendPending,
   acknowledge,
 } from "./session-projection.test-support.js";
+
+const expectMessages = (state: SessionProjectionState, ...messages: unknown[]) =>
+  expect(state.messages).toEqual(messages);
+const segment = <T extends object>(message: T, runId?: string) => ({
+  ...message,
+  openclawStreamFallback: { itemId: "item-1", runId, source: "segment" },
+});
 
 describe("readSessionMessageIdentity", () => {
   it("reads the same canonical contract from both supported package barrels", () => {
@@ -102,42 +110,36 @@ describe("session transcript projection", () => {
   });
 
   it("does not adopt commentary with an unknown run", () => {
-    const local = {
-      ...reply("Repeated progress.", { id: undefined, seq: undefined, importedFrom: undefined }),
-      openclawStreamFallback: { itemId: "item-1", runId: undefined, source: "segment" },
-    };
-    const durable = {
-      ...savedReply("Repeated progress.", "persisted", 3, {
+    const local = segment(
+      reply("Repeated progress.", { id: undefined, seq: undefined, importedFrom: undefined }),
+    );
+    const durable = segment(
+      savedReply("Repeated progress.", "persisted", 3, {
         runId: "run-1",
         mirrorOrigin: "codex-app-server",
       }),
-      openclawStreamFallback: { itemId: "item-1", source: "segment" },
-    };
+    );
     const final = savedReply("Finished.", "final", 4, { runId: "run-1" });
     let state = projection([local, final]);
 
     state = project(state, durable);
 
-    expect(state.messages).toEqual([local, durable, final]);
+    expectMessages(state, local, durable, final);
     state = reduce(state, { type: "transportGap" });
     state = reduce(state, { type: "reconnected" });
     state = project(state, durable);
-    expect(state.messages).toEqual([local, durable, final]);
+    expectMessages(state, local, durable, final);
   });
 
   it("keeps authoritative commentary when its provisional item replays with different text", () => {
-    const durable = {
-      ...savedReply("Authoritative progress.", "persisted", 3, { runId: "run-1" }),
-      openclawStreamFallback: { itemId: "item-1", source: "segment" },
-    };
-    const local = {
-      ...reply("Partial progress."),
-      openclawStreamFallback: { itemId: "item-1", runId: "run-1", source: "segment" },
-    };
+    const durable = segment(
+      savedReply("Authoritative progress.", "persisted", 3, { runId: "run-1" }),
+    );
+    const local = segment(reply("Partial progress."), "run-1");
     const state = project(projection(), durable);
 
-    expect(project(state, local).messages).toEqual([durable]);
-    expect(reconcile(state, [durable], primaryScope).messages).toEqual([durable]);
+    expectMessages(project(state, local), durable);
+    expectMessages(reconcile(state, [durable], primaryScope), durable);
   });
 
   it("keeps a post-boundary tail until its own durable row arrives live", () => {
@@ -150,10 +152,10 @@ describe("session transcript projection", () => {
       afterSequence: 3,
     });
     state = reconcile(state, [prefix, steer], primaryScope);
-    expect(state.messages).toEqual([prefix, steer, tail]);
+    expectMessages(state, prefix, steer, tail);
 
     state = project(state, savedTail);
-    expect(state.messages).toEqual([prefix, steer, savedTail]);
+    expectMessages(state, prefix, steer, savedTail);
   });
 
   it("does not adopt an ambiguous synthetic final across distinct same-run assistants", () => {
@@ -164,18 +166,10 @@ describe("session transcript projection", () => {
     });
     const state = project(projection(), synthetic);
 
-    expect(reconcile(state, [first, second], primaryScope).messages).toEqual([
-      first,
-      second,
-      synthetic,
-    ]);
-    expect(project(projection([first, second]), synthetic).messages).toEqual([
-      first,
-      second,
-      synthetic,
-    ]);
+    expectMessages(reconcile(state, [first, second], primaryScope), first, second, synthetic);
+    expectMessages(project(projection([first, second]), synthetic), first, second, synthetic);
     const ambiguous = reconcile(state, [first, second], primaryScope);
-    expect(project(ambiguous, structuredClone(first)).messages).toEqual([first, second, synthetic]);
+    expectMessages(project(ambiguous, structuredClone(first)), first, second, synthetic);
   });
 
   it("promotes a native sequence-only live row to its durable snapshot identity", () => {
@@ -183,7 +177,7 @@ describe("session transcript projection", () => {
     const persisted = savedUser("persisted projection", "canonical-user-7", 7);
     const state = project(projection(), live);
 
-    expect(reconcile(state, [persisted], primaryScope).messages).toEqual([persisted]);
+    expectMessages(reconcile(state, [persisted], primaryScope), persisted);
   });
 
   it("rejects live events from another agent, session, reset epoch, or branch", () => {
@@ -216,7 +210,7 @@ describe("session transcript projection", () => {
     };
     const partial = user("partial", { importedFrom: "claude-cli", seq: 3 });
     state = project(project(project(state, otherSession), partial), imported);
-    expect(state.messages).toEqual([native, imported, otherSession, partial]);
+    expectMessages(state, native, imported, otherSession, partial);
     expect(state.entries.map((entry) => entry.identity?.externalSource)).toEqual([
       null,
       JSON.stringify(["claude-cli", "cli-session", "provider-local"]),
@@ -234,7 +228,7 @@ describe("session transcript projection", () => {
     });
     const state = project(projection(), live);
 
-    expect(reconcile(state, [snapshot], primaryScope).messages).toEqual([snapshot]);
+    expectMessages(reconcile(state, [snapshot], primaryScope), snapshot);
   });
 
   it("does not merge a partial import into a complete source tuple at the same sequence", () => {
@@ -248,7 +242,7 @@ describe("session transcript projection", () => {
     let state = project(projection(), partial);
     state = project(state, complete);
 
-    expect(state.messages).toEqual([partial, complete]);
+    expectMessages(state, partial, complete);
   });
 
   it("explicitly promotes only the admitted sequenced handoff", () => {
@@ -264,16 +258,17 @@ describe("session transcript projection", () => {
       { message: handoff, pending: true, pendingRunId: "initial-run" },
       { message: followingAssistant, pending: false },
     ]);
-    expect(reduce(state, { type: "sendFailed", runId: "initial-run" }).messages).toEqual([
+    expectMessages(
+      reduce(state, { type: "sendFailed", runId: "initial-run" }),
       peer,
       followingAssistant,
-    ]);
+    );
 
     const wrongSequence = savedUser("continue", "wrong-sequence-user", 4, {
       idempotencyKey: "initial-run:user",
     });
     state = persist(state, wrongSequence);
-    expect(state.messages).toEqual([peer, handoff, followingAssistant, wrongSequence]);
+    expectMessages(state, peer, handoff, followingAssistant, wrongSequence);
     expect(state.entries[1]).toMatchObject({ pending: true, pendingRunId: "initial-run" });
 
     const authoritative = savedUser("continue", "initial-user", 2, {
@@ -281,7 +276,7 @@ describe("session transcript projection", () => {
     });
     state = persist(state, authoritative);
 
-    expect(state.messages).toEqual([peer, authoritative, followingAssistant, wrongSequence]);
+    expectMessages(state, peer, authoritative, followingAssistant, wrongSequence);
     expect(state.entries[1]).toMatchObject({
       identity: { id: "initial-user" },
       pending: false,
@@ -315,9 +310,9 @@ describe("session transcript projection", () => {
 
     const reconciled = reconcile(state, [persisted, response], primaryScope);
 
-    expect(reconciled.messages).toEqual([persisted, response]);
+    expectMessages(reconciled, persisted, response);
     expect(reconciled.entries[0]?.identity?.runId).toBe("queued-execution");
-    expect(sendPending(reconciled, "queued-send", pending).messages).toEqual([persisted, response]);
+    expectMessages(sendPending(reconciled, "queued-send", pending), persisted, response);
   });
 
   it("rejects a delayed old-epoch snapshot after the selected session resets", () => {
@@ -335,11 +330,11 @@ describe("session transcript projection", () => {
 
     expect(state).toBe(resetState);
     expect(state.scope.lifecycleRevision).toBe(2);
-    expect(state.messages).toEqual([]);
+    expectMessages(state);
     const current = savedUser("after reset", "current", 1);
     state = project(state, current, undefined, currentScope);
     expect(state.scope).toEqual(currentScope);
-    expect(state.messages).toEqual([current]);
+    expectMessages(state, current);
   });
 
   it("classifies only metadata-free or send-key-only local turns as optimistic", () => {
@@ -374,7 +369,7 @@ describe("session transcript projection", () => {
       },
     });
 
-    expect(state.messages).toEqual([visible]);
+    expectMessages(state, visible);
   });
 
   it("rekeys provisional pending turns without adopting a same-text peer", () => {
@@ -386,17 +381,17 @@ describe("session transcript projection", () => {
     let state = project(projection([pending]), peer);
     state = acknowledge(state, "provisional-run", "accepted-run");
 
-    expect(state.messages).toEqual([pending, peer]);
+    expectMessages(state, pending, peer);
     expect(state.entries[0]).toMatchObject({ pending: true, pendingRunId: "accepted-run" });
     const accepted = savedUser("same prompt", "accepted-user", 2, {
       idempotencyKey: "accepted-run:user",
       runId: "queued-execution",
     });
-    expect(project(state, accepted).messages).toEqual([peer, accepted]);
+    expectMessages(project(state, accepted), peer, accepted);
 
     const persistedBeforeAck = project(projection([pending]), accepted);
     const adopted = acknowledge(persistedBeforeAck, "provisional-run", "accepted-run");
-    expect(adopted.messages).toEqual([accepted]);
+    expectMessages(adopted, accepted);
     expect(acknowledge(adopted, "provisional-run", "accepted-run")).toBe(adopted);
   });
 
@@ -425,7 +420,7 @@ describe("session transcript projection", () => {
     ]);
     const failed = reduce(initial, { type: "sendFailed", runId: "failed-run" });
 
-    expect(failed.messages).toEqual([independentAssistant, unkeyedUser, unownedAssistant, peer]);
+    expectMessages(failed, independentAssistant, unkeyedUser, unownedAssistant, peer);
     expect(reduce(failed, { type: "sendFailed", runId: "failed-run" })).toBe(failed);
   });
 
@@ -438,6 +433,6 @@ describe("session transcript projection", () => {
     state = terminal(state, { runId: "shared-run", message: assistant });
     const prompt = user("late peer prompt", { id: "user-1", idempotencyKey: "shared-run:user" });
 
-    expect(project(state, prompt).messages).toEqual([prompt, assistant]);
+    expectMessages(project(state, prompt), prompt, assistant);
   });
 });
