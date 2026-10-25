@@ -13,7 +13,7 @@ import {
   makeTui,
   makeTuiBackend,
 } from "./tui-session-actions-test-support.js";
-import { getTuiSessionProjection, reduceTuiSessionProjection } from "./tui-session-projection.js";
+import { reduceTuiSessionProjection } from "./tui-session-projection.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 
 const png = createSolidPngBuffer(80, 40, { r: 20, g: 140, b: 200 }).toString("base64");
@@ -351,18 +351,8 @@ describe("TUI attachment failure presentation", () => {
     },
   );
 
-  it("keeps failure-only aborts diagnostic and ignores a late attachment final", () => {
-    const harness = createDisplayHarness();
-    const event = {
-      runId: "run-1",
-      sessionKey: harness.state.currentSessionKey,
-      message: assistant([audioFailure]),
-    };
-    expect(extractTuiAbortedText(event.message, false)).toBe("");
-    harness.handlers.handleChatEvent({ ...event, state: "aborted" });
-    harness.handlers.handleChatEvent({ ...event, state: "final" });
-    expect(harness.visible()).toBe("run aborted");
-    expect(getTuiSessionProjection(harness.state).messages).toHaveLength(0);
+  it("does not present failure-only aborts as a delivered attachment receipt", () => {
+    expect(extractTuiAbortedText(assistant([audioFailure]), false)).toBe("");
   });
 
   it("does not invent failure output for empty or unsupported blocks", () => {

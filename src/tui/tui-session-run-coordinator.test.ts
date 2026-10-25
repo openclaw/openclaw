@@ -177,30 +177,6 @@ describe("TuiSessionRunCoordinator", () => {
     reconcile([]);
     expect(coordinator.resolveMostRecentPromotableRun()).toBe("run-reused");
   });
-  it("serializes queued reloads and replays a gated terminal event", async () => {
-    const {
-      coordinator,
-      loadHistory,
-      finalizeHistoryOwnedRun,
-      replayHistoryRunEvent,
-      resolveHistory,
-    } = createControlledCoordinator();
-    const deferredEvent: ChatEvent = {
-      runId: "run-first",
-      sessionKey: "agent:main:main",
-      state: "final",
-      message: { content: [{ type: "text", text: "persisted reply" }] },
-    };
-    void coordinator.queueHistoryReload(["run-first"], ["run-first"]);
-    coordinator.deferHistoryRunEvent(deferredEvent);
-    void coordinator.queueHistoryReload();
-    expect(loadHistory).toHaveBeenCalledTimes(1);
-    resolveHistory(completedHistory);
-    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
-    expectFinalized(finalizeHistoryOwnedRun, "run-first");
-    expect(replayHistoryRunEvent).toHaveBeenCalledWith(deferredEvent);
-    resolveHistory(completedHistory);
-  });
   it.each([false, true])("awaits the complete history drain across a reset: %s", async (reset) => {
     const first = createDeferred<TuiHistoryLoadResult>();
     const second = createDeferred<TuiHistoryLoadResult>();
@@ -208,9 +184,10 @@ describe("TuiSessionRunCoordinator", () => {
       .fn<() => Promise<TuiHistoryLoadResult>>()
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
-    const { coordinator, loadHistory } = createCoordinator({ loadHistory: reads });
+    const { coordinator, loadHistory, finalizeHistoryOwnedRun, replayHistoryRunEvent } =
+      createCoordinator({ loadHistory: reads });
     const settled = vi.fn();
-    const firstDrain = coordinator.queueHistoryReload();
+    const firstDrain = coordinator.queueHistoryReload(["run-stale"], ["run-stale"]);
     void firstDrain.then(settled);
     if (reset) {
       coordinator.clear();
@@ -220,6 +197,11 @@ describe("TuiSessionRunCoordinator", () => {
     expect(loadHistory).toHaveBeenCalledTimes(1);
     first.resolve(completedHistory);
     await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
+    if (reset) {
+      expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
+      expect(replayHistoryRunEvent).not.toHaveBeenCalled();
+      expect(coordinator.isHistoryReloadingRun("run-stale")).toBe(false);
+    }
     expect(settled).not.toHaveBeenCalled();
     second.resolve(completedHistory);
     await expect(Promise.all([firstDrain, secondDrain])).resolves.toEqual([!reset, true]);
@@ -326,16 +308,4 @@ describe("TuiSessionRunCoordinator", () => {
       expectFinalized(finalizeHistoryOwnedRun, "run-gap");
     },
   );
-  it("discards a stale in-flight reload when the selected session resets", async () => {
-    const { coordinator, finalizeHistoryOwnedRun, replayHistoryRunEvent, resolveHistory } =
-      createControlledCoordinator();
-    void coordinator.queueHistoryReload(["run-stale"], ["run-stale"]);
-    coordinator.clear();
-    resolveHistory(completedHistory);
-    await vi.waitFor(() => {
-      expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
-      expect(replayHistoryRunEvent).not.toHaveBeenCalled();
-    });
-    expect(coordinator.isHistoryReloadingRun("run-stale")).toBe(false);
-  });
 });

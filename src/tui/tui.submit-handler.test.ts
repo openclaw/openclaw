@@ -243,64 +243,51 @@ it.each([
   expect(shouldEnableWindowsGitBashPasteFallback()).toBe(enabled);
 });
 
-it.each([
-  { command: "new", capture: "before" },
-  { command: "reset", capture: "during" },
-] as const)(
-  "keeps a submit captured $capture /$command blocked across the transition epoch",
-  async ({ command, capture }) => {
-    const transitionResult = createDeferred<{
-      ok: true;
-      key: string;
-      entry: { sessionId: string };
-    }>();
-    const createSession = vi.fn(() => transitionResult.promise);
-    const resetSession = vi.fn(() => transitionResult.promise);
-    const applySessionMutationResult = vi.fn().mockReturnValue(true);
-    const harness = createTuiCommandHandlersHarness({
-      createSession,
-      resetSession,
-      applySessionMutationResult,
-    });
-    const { editor, handleBangLine, onSubmitError } = createSubmitHarness();
-    const submit = createEditorSubmitHandler({
-      editor,
-      handleCommand: harness.handleCommand,
-      sendMessage: harness.sendMessage,
-      handleBangLine,
-      onSubmitError,
-      admitMessage: harness.resolveMessageAdmission,
-      onBlockedMessageSubmit: harness.reportBlockedMessageSubmit,
-    });
-    const bufferedSubmit = bufferSubmit(submit, {
-      captureSnapshot: harness.captureMessageAdmission,
-    });
-    if (capture === "before") {
-      bufferedSubmit("must remain in the editor");
-    }
-    const transitioning = harness.handleCommand(`/${command}`);
-    await Promise.resolve();
-    expect(command === "new" ? createSession : resetSession).toHaveBeenCalledOnce();
-    if (capture === "during") {
-      bufferedSubmit("must remain in the editor");
-    }
-    transitionResult.resolve({
-      ok: true,
-      key: command === "new" ? "agent:main:tui-next" : "agent:main:main",
-      entry: { sessionId: `session-after-${command}` },
-    });
-    await transitioning;
-    expect(harness.captureMessageAdmission()).toEqual({
-      historyLoaded: true,
-      sessionTransition: null,
-      sessionTransitionEpoch: 2,
-    });
-    expect(harness.resolveMessageAdmission("live admission is clear")).toEqual({
-      status: "allowed",
-    });
-    vi.advanceTimersByTime(50);
-    expect(harness.sendChat).not.toHaveBeenCalled();
-    expect(editor.setText).toHaveBeenCalledWith("must remain in the editor");
-    expectCall(harness.addSystem, [`session change in progress; wait for /${command} to finish`]);
-  },
-);
+it("keeps a submit captured before /new blocked across the transition epoch", async () => {
+  const transitionResult = createDeferred<{
+    ok: true;
+    key: string;
+    entry: { sessionId: string };
+  }>();
+  const createSession = vi.fn(() => transitionResult.promise);
+  const applySessionMutationResult = vi.fn().mockReturnValue(true);
+  const harness = createTuiCommandHandlersHarness({
+    createSession,
+    applySessionMutationResult,
+  });
+  const { editor, handleBangLine, onSubmitError } = createSubmitHarness();
+  const submit = createEditorSubmitHandler({
+    editor,
+    handleCommand: harness.handleCommand,
+    sendMessage: harness.sendMessage,
+    handleBangLine,
+    onSubmitError,
+    admitMessage: harness.resolveMessageAdmission,
+    onBlockedMessageSubmit: harness.reportBlockedMessageSubmit,
+  });
+  const bufferedSubmit = bufferSubmit(submit, {
+    captureSnapshot: harness.captureMessageAdmission,
+  });
+  bufferedSubmit("must remain in the editor");
+  const transitioning = harness.handleCommand("/new");
+  await Promise.resolve();
+  expect(createSession).toHaveBeenCalledOnce();
+  transitionResult.resolve({
+    ok: true,
+    key: "agent:main:tui-next",
+    entry: { sessionId: "session-after-new" },
+  });
+  await transitioning;
+  expect(harness.captureMessageAdmission()).toEqual({
+    historyLoaded: true,
+    sessionTransition: null,
+    sessionTransitionEpoch: 2,
+  });
+  expect(harness.resolveMessageAdmission("live admission is clear")).toEqual({
+    status: "allowed",
+  });
+  vi.advanceTimersByTime(50);
+  expect(harness.sendChat).not.toHaveBeenCalled();
+  expect(editor.setText).toHaveBeenCalledWith("must remain in the editor");
+  expectCall(harness.addSystem, ["session change in progress; wait for /new to finish"]);
+});

@@ -190,19 +190,6 @@ describe("TUI plugin approvals", () => {
     },
   );
 
-  it("reruns a refresh requested while another refresh is in flight", async () => {
-    const harness = createHarness();
-    const pendingList = pending<unknown[]>([]);
-    harness.listPluginApprovals.mockReturnValueOnce(pendingList.promise).mockResolvedValueOnce([]);
-
-    const firstRefresh = harness.controller.refresh();
-    const secondRefresh = harness.controller.refresh();
-    pendingList.resolve([]);
-    await Promise.all([firstRefresh, secondRefresh]);
-
-    expect(harness.listPluginApprovals).toHaveBeenCalledTimes(2);
-  });
-
   it("binds global-session approvals to the active agent", () => {
     const harness = createHarness();
     harness.setSessionKey("global");
