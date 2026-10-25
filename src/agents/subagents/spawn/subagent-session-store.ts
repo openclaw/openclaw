@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isInternalSessionEffectsKey } from "../../../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
@@ -20,7 +21,10 @@ import {
 } from "../../../routing/session-key.js";
 import { assertAgentSessionWriteAdmission } from "../../../sessions/session-agent-work-admission.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
-import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import {
+  sessionChangeScopeAffectsStoredRows,
+  sessionChanges,
+} from "../../../sessions/session-row-changes.js";
 import { AsyncContext } from "../../../shared/async-context.js";
 import {
   resolveExplicitIncognitoAgentSqliteTarget,
@@ -190,6 +194,8 @@ const capabilityFields = [
   "delegatedToolPolicy",
 ] as const;
 
+const retainedCapabilityFields = [...capabilityFields, "clientCapabilities"] as const;
+
 function recordCapabilityRead(
   query: SessionCapabilityRead,
   entry: SessionCapabilityEntry | undefined,
@@ -290,9 +296,8 @@ async function prepareCapabilityReads<T>(
           releases.push(
             sessionChanges.subscribeFacts((change) => {
               if (
-                "all" in change ||
-                (change.scope !== "automation" &&
-                  (!change.agentId || change.agentId === query.agentId))
+                sessionChangeScopeAffectsStoredRows(change) &&
+                ("all" in change || !change.agentId || change.agentId === query.agentId)
               ) {
                 missingCurrent = false;
               }
@@ -335,9 +340,12 @@ async function prepareCapabilityReads<T>(
               databaseIdentity: `file:${databaseIdentity}`,
               sessionKey: selected?.sessionKey ?? query.sessionKey ?? "",
               entry,
+              // A model fallback does not revoke the child's inherited requester policy.
               matches: (before, after) =>
-                JSON.stringify(before && projectSessionEntryCapabilityFacts(before)) ===
-                JSON.stringify(after && projectSessionEntryCapabilityFacts(after)),
+                (before === undefined) === (after === undefined) &&
+                retainedCapabilityFields.every((field) =>
+                  isDeepStrictEqual(before?.[field], after?.[field]),
+                ),
             });
             releases.push(predicate.release);
             let idCurrent = true;

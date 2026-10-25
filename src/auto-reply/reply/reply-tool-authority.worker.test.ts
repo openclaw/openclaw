@@ -336,7 +336,9 @@ it.each(["execution", "separate"] as const)(
 
 it.each([
   "unrelated deletion",
+  "model fallback",
   "revoked policy",
+  "retired lifecycle",
   "reassigned session",
   "deleted requester",
 ] as const)(
@@ -407,12 +409,21 @@ it.each([
                     );
                   } else {
                     await patchSessionEntryCore(scope, () =>
-                      change === "revoked policy"
-                        ? { inheritedToolDeny: ["exec"] }
-                        : {
-                            sessionId: "replacement-requester",
-                            spawnedBy: "agent:main:other-parent",
-                          },
+                      change === "model fallback"
+                        ? {
+                            model: "fallback-model",
+                            modelProvider: "fallback-provider",
+                            authProfileOverride: "rotated-profile",
+                            authProfileOverrideSource: "auto",
+                          }
+                        : change === "revoked policy"
+                          ? { inheritedToolDeny: ["exec"] }
+                          : change === "retired lifecycle"
+                            ? { lifecycleRevision: "retired-lifecycle" }
+                            : {
+                                sessionId: "replacement-requester",
+                                spawnedBy: "agent:main:other-parent",
+                              },
                     );
                   }
                   interleaved = true;
@@ -425,7 +436,7 @@ it.each([
               toolAuthorityOverlay: toolAuthorityOverlay(run),
             });
             expect(interleaved).toBe(true);
-            if (change === "unrelated deletion") {
+            if (change === "unrelated deletion" || change === "model fallback") {
               expect(result).toEqual({ status: "accepted" });
               expect(queueMessage).toHaveBeenCalledOnce();
             } else {

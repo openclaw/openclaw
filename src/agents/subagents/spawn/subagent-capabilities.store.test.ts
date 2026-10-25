@@ -209,6 +209,89 @@ describe("persisted subagent capability lookups", () => {
     });
   });
 
+  it("retains completion policy across child model fallback but rejects policy revocation", async () => {
+    const { storePath, cfg, key } = fixture("subagent-completion-capability-");
+    const parent = "agent:main:dashboard:completion-parent";
+    const parentId = "completion-parent";
+    writeEntries(storePath, {
+      [parent]: makeEntry(parentId),
+      [key]: makeEntry("completed-child", {
+        spawnedBy: parent,
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["read"],
+        inheritedToolDeny: ["exec"],
+        model: "primary-model",
+        modelProvider: "primary-provider",
+      }),
+    });
+    const read = () =>
+      resolveRequesterToolPolicies({
+        config: cfg,
+        sessionKey: parent,
+        sessionId: parentId,
+        modelProvider: "fixture",
+        modelId: "parent-model",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: key,
+          sourceTool: "subagent_announce",
+        },
+        trustedInternalHandoff: {
+          kind: "subagent-completion",
+          sourceSessionKey: key,
+          targetSessionKey: parent,
+          targetSessionId: parentId,
+          provider: "fixture",
+          model: "parent-model",
+        },
+      });
+    const prepared = await prepareSessionCapabilityRead(read);
+    try {
+      const expected = {
+        delegated: true,
+        requesterPolicySource: "completion-handoff",
+        inheritedToolPolicy: { allow: ["read"], deny: ["exec"] },
+      };
+      expect(prepared.read()).toMatchObject(expected);
+      await sessionAccessor.patchSessionEntryCore(
+        { agentId: "main", storePath, sessionKey: key },
+        () => ({
+          model: "fallback-model",
+          modelProvider: "fallback-provider",
+          authProfileOverride: "rotated-profile",
+          authProfileOverrideSource: "auto",
+        }),
+      );
+      expect(prepared.read()).toMatchObject(expected);
+      await sessionAccessor.patchSessionEntryCore(
+        { agentId: "main", storePath, sessionKey: key },
+        () => ({ inheritedToolDeny: ["exec", "write"] }),
+      );
+      expect(() => prepared.read()).toThrow("Session capability metadata changed");
+    } finally {
+      prepared.release();
+    }
+  });
+
+  it("retains missing-store capability reads across runtime notifications but rejects store creation", async () => {
+    const { storePath, key } = fixture("subagent-capability-missing-store-");
+    const read = () => createSubagentSessionStore(storePath, "main").get(key);
+    const prepared = await prepareSessionCapabilityRead(read);
+    try {
+      expect(prepared.read()).toBeUndefined();
+      expect(fs.existsSync(storePath)).toBe(false);
+      sessionChanges.emit({ all: true, scope: "agent-runs" });
+      sessionChanges.emit({ all: true, scope: "profiles" });
+      sessionChanges.emit({ sessionKey: key, agentId: "main", scope: "runtime" });
+      expect(prepared.read()).toBeUndefined();
+      writeEntries(storePath, { [key]: makeEntry("new-child", { spawnDepth: 1 }) });
+      expect(() => prepared.read()).toThrow();
+    } finally {
+      prepared.release();
+    }
+  });
+
   it("surfaces the database failure when capability preparation cannot read its store", async () => {
     const storePath = path.join(
       tempDirs.make("subagent-capability-unreadable-"),
