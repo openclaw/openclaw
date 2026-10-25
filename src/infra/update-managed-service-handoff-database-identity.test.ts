@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import * as fileLocks from "./file-lock-sync.js";
 import * as rollback from "./sqlite-rollback-recovery.js";
 import { recoverManagedUpdateLeaseJournal } from "./update-managed-service-handoff-database-recovery.js";
 import {
@@ -98,12 +99,31 @@ it.each([prepareManagedHandoffLeaseDatabase, createManagedHandoffLeaseDatabase])
   },
 );
 
-it.skipIf(isWindows)(
-  "preserves original admission through an aliased prepared parent",
-  async () => {
+it.each([false, true])(
+  "preserves original admission through an aliased prepared parent (ordinary path retains alias: %s)",
+  async (retainsOrdinaryAlias) => {
     fs.mkdirSync(directory, { mode: 0o700 });
+    const alias = aliasedPath();
+    const canonicalDatabasePath = path.join(
+      fs.realpathSync.native(directory),
+      path.basename(databasePath),
+    );
+    if (retainsOrdinaryAlias) {
+      const ordinaryRealpath = fs.realpathSync;
+      // Windows S4U can retain a short TEMP spelling while native Root expands it.
+      vi.spyOn(fs, "realpathSync").mockImplementation((...args) => {
+        const resolved = ordinaryRealpath(...args);
+        return args[0] === alias && typeof resolved === "string" ? alias : resolved;
+      });
+      fs.realpathSync.native = ordinaryRealpath.native;
+    }
+    const acquireLock = fileLocks.acquireFileLockSyncWithRetry;
+    // Keep genuine self-contention deterministic without waiting for the retry budget.
+    vi.spyOn(fileLocks, "acquireFileLockSyncWithRetry").mockImplementation((file, options) =>
+      acquireLock(file, { ...options, timeoutMs: 0 }),
+    );
     const store = await prepareManagedHandoffLeaseStore({
-      databasePath: aliasedPath(),
+      databasePath: alias,
       serviceManagerEnv: process.env,
       originalUpdateKey: root,
     });
@@ -111,9 +131,9 @@ it.skipIf(isWindows)(
     if (acquired.kind !== "acquired" || !acquired.originalDatabaseIdentity) {
       throw new Error("Original owner was not admitted");
     }
-    expect(acquired.originalDatabaseIdentity.databasePath).toBe(databasePath);
+    expect(acquired.originalDatabaseIdentity.databasePath).toBe(canonicalDatabasePath);
     const pinned = await prepareManagedHandoffLeaseStore({
-      databasePath,
+      databasePath: canonicalDatabasePath,
       existingIdentity: acquired.originalDatabaseIdentity,
       serviceManagerEnv: process.env,
     });

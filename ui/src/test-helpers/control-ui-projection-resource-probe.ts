@@ -1,11 +1,11 @@
-export type ProjectionSourceCounts = {
+type ProjectionSourceCounts = {
   subscribeCalls: number;
   active: number;
   peak: number;
   callbacks: number;
   cleanupCalls: number;
 };
-export type ProjectionScanCounts = { calls: number; visits: number; duringNativeCallback: number };
+type ProjectionScanCounts = { calls: number; visits: number; duringNativeCallback: number };
 export type ProjectionResourceSnapshot = {
   sources: Record<string, ProjectionSourceCounts>;
   scans: Record<string, ProjectionScanCounts>;

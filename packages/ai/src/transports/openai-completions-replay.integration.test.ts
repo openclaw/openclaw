@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../../src/test-utils/port-claims.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import type { Context } from "../types.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
@@ -116,14 +117,10 @@ describe("streamed Chat Completions reasoning replay on the wire", () => {
         thinkingSignature:
           provider === "opencode-go" && mode === "direct" ? "reasoning_content" : field,
       });
-      context.messages.push(first, {
-        role: "toolResult",
-        toolCallId: "call_weather",
-        toolName: "weather",
-        content: [{ type: "text", text: "sunny" }],
-        isError: false,
-        timestamp: 2,
-      });
+      context.messages.push(
+        first,
+        makeTextToolResult("call_weather", "weather", "sunny", false, 2),
+      );
       const second = await (
         await stream(switchModel ? { ...model, id: "other-model" } : model, context, options)
       ).result();

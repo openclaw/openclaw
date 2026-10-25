@@ -16,6 +16,7 @@ import {
 } from "../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
@@ -76,26 +77,10 @@ function recordWarning(runId: string, detail: string, endedAtMs = 1, suffix = ""
 }
 
 function makeHistory(overrides: Partial<UpdateRunRecord>): UpdateRunRecord {
-  return {
-    runId: "interrupted-update",
-    createdAtMs: 1,
-    updatedAtMs: 2,
-    trigger: "cli",
-    phase: "finished",
-    status: "failed",
+  return createUpdateRunRecordFixture("interrupted-update", {
     reason: "abandoned",
-    origin: {},
-    target: {},
-    before: {},
-    after: {},
-    steps: [],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
-    finishedAtMs: 2,
-    downtimeMs: null,
     ...overrides,
-  };
+  });
 }
 
 function expectHistoryNote(message: string) {

@@ -107,10 +107,14 @@ describe("createSmsIngressSpool", () => {
     );
     let mediaRequests = 0;
     let authenticatedMediaRequests = 0;
+    const accountSid = `AC${"c".repeat(32)}`;
     const mediaOrigin = await listenSmsTestServer(
       createServer((req, res) => {
         mediaRequests += 1;
-        if (req.headers.authorization?.startsWith("Basic ")) {
+        if (
+          req.headers.authorization ===
+          `Basic ${Buffer.from(`${accountSid}:${account.authToken}`).toString("base64")}`
+        ) {
           authenticatedMediaRequests += 1;
         }
         if (mediaRequests === 1) {
@@ -126,7 +130,7 @@ describe("createSmsIngressSpool", () => {
     const messageSid = `MM${"a".repeat(32)}`;
     const testAccount = {
       ...account,
-      accountSid: `AC${"c".repeat(32)}`,
+      accountSid,
       dmPolicy: "allowlist" as const,
       allowFrom: [sender],
     };
@@ -138,15 +142,24 @@ describe("createSmsIngressSpool", () => {
       },
       pairing: { readAllowFromStore: async () => [] },
       routing: {
-        resolveAgentRoute: () => ({
-          agentId: "main",
-          accountId: account.accountId,
-          sessionKey: `agent:main:sms:direct:${sender}`,
-        }),
+        resolveAgentRoute: (
+          input: Parameters<SmsChannelRuntime["routing"]["resolveAgentRoute"]>[0],
+        ) => {
+          expect(input.peer).toEqual({ kind: "direct", id: sender });
+          return {
+            agentId: "main",
+            accountId: account.accountId,
+            sessionKey: `agent:main:sms:direct:${sender}`,
+          };
+        },
       },
       media: {
-        saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) =>
-          await saveRemoteMedia({
+        saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) => {
+          expect(options).toMatchObject({
+            ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
+            requestInit: { signal: expect.any(AbortSignal) },
+          });
+          return await saveRemoteMedia({
             ...options,
             // The guard resolves Twilio before the loopback fetch override runs.
             lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
@@ -155,11 +168,22 @@ describe("createSmsIngressSpool", () => {
                 headers: init?.headers,
                 signal: init?.signal,
               }),
-          }),
+          });
+        },
       },
       inbound: {
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: (input: Parameters<SmsChannelRuntime["inbound"]["buildContext"]>[0]) => {
+          expect(input).toMatchObject({
+            from: `sms:${sender}`,
+            sender: { id: sender },
+            conversation: { id: sender },
+            reply: { to: `sms:${sender}` },
+            route: {
+              routeSessionKey: `agent:main:sms:direct:${sender}`,
+              dispatchSessionKey: `agent:main:sms:direct:${sender}`,
+            },
+          });
           deliveries.push({
             id: String(input.extra?.MessageSid),
             body: input.message.bodyForAgent ?? input.message.rawBody,
@@ -172,11 +196,12 @@ describe("createSmsIngressSpool", () => {
           if (!turnInput) {
             throw new Error("expected normalized SMS turn");
           }
-          await input.adapter.resolveTurn(
+          const turn = await input.adapter.resolveTurn(
             turnInput,
             { kind: "message", canStartAgentTurn: true },
             {},
           );
+          expect(turn).toMatchObject({ route: { sessionKey: `agent:main:sms:direct:${sender}` } });
           await input.turnAdoptionLifecycle?.onAdopted();
         },
       },

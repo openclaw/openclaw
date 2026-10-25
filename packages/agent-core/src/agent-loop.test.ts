@@ -1641,43 +1641,24 @@ describe("agentLoop argument-validation admission", () => {
     const executed: string[] = [];
     const admittedCalls: InternalToolBatchCall[][] = [];
     const events = await collectEvents(
-      captureAgentLoop(
-        [{ role: "user", content: "run", timestamp: 1 }],
-        {
-          systemPrompt: "",
-          messages: [],
-          tools: [
-            {
-              ...makeTool("edit", executed),
-              parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
-            },
-          ],
-        },
-        {
-          ...config,
-          beforeToolBatch: async ({ calls }) => {
-            admittedCalls.push(calls);
-            const first = calls[0];
-            return first
-              ? {
-                  intervention: {
-                    kind: "critical-tool-loop",
-                    toolCallId: first.toolCall.id,
-                    toolName: first.toolCall.name,
-                    actionKey: "edit:same-action",
-                    detector: "generic_repeat",
-                    count: 20,
-                    reason: "CRITICAL: edit is looping",
-                  },
-                }
-              : undefined;
+      captureTools(
+        [
+          {
+            ...makeTool("edit", executed),
+            parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
           },
-        },
-        undefined,
+        ],
         createTurnSequenceStream([
           [{ type: "toolCall", id: "invalid-1", name: "edit", arguments: {} }],
           [{ type: "text", text: "recovered" }],
         ]),
+        {
+          beforeToolBatch: async ({ calls }) => {
+            admittedCalls.push(calls);
+            const first = calls[0];
+            return first ? { intervention: criticalLoopFor(first.toolCall) } : undefined;
+          },
+        },
       ),
     );
 

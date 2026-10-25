@@ -11,6 +11,7 @@ import {
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { catalogModel } from "./model-catalog-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat composer catalog",
@@ -19,10 +20,6 @@ const suite = createControlUiE2eSuite({
 type CatalogModel = { id: string; name: string; provider: string };
 const modelOption = (scope: Locator, model: string) =>
   scope.locator(`[data-chat-model-option="${model}"]`);
-
-function availableModel(id: string, name: string, provider: string) {
-  return { id, name, provider, available: true };
-}
 
 function sessionRow(model: CatalogModel, overrides: Partial<GatewaySessionRow> = {}) {
   return {
@@ -292,8 +289,8 @@ suite.define(() => {
 
   it("keeps the selected model visible while loading the next session's scoped catalog", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const workModel = availableModel("work-model", "Work Model", "openai");
-      const otherModel = availableModel("other-model", "Other Model", "anthropic");
+      const workModel = catalogModel("openai", "work-model", "Work Model");
+      const otherModel = catalogModel("anthropic", "other-model", "Other Model");
       const startupResponse = (sessionId: string, model: typeof workModel) => ({
         agentsList: agentRoster({ work: "Work", other: "Other" }, "work", "agent"),
         messages: [],
@@ -392,8 +389,8 @@ suite.define(() => {
 
   it("keeps published models visible and retries a failed publication read on reopen", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const startupModel = availableModel("startup-model", "Startup Model", "openai");
-      const discoveredModel = availableModel("discovered-model", "Discovered Model", "anthropic");
+      const startupModel = catalogModel("openai", "startup-model", "Startup Model");
+      const discoveredModel = catalogModel("anthropic", "discovered-model", "Discovered Model");
       const gateway = await installMockGateway(page, {
         models: [startupModel],
         methodResponses: {
@@ -446,7 +443,7 @@ suite.define(() => {
 
   it("retires an empty picker snapshot when the Gateway reconnects", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const routedModel = availableModel("gpt-5.6-luna", "GPT-5.6 Luna", "openai");
+      const routedModel = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
       const gateway = await installMockGateway(page, {
         agentModel: "openai/gpt-5.6-luna",
         models: [routedModel],
@@ -491,8 +488,8 @@ suite.define(() => {
   it("reuses the account catalog on reopen and follows publications without provider discovery", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const existing = { id: "existing", name: "Existing", provider: "example", available: true };
-      const firstOpen = availableModel("first-open", "First open", "example");
-      const published = availableModel("published", "Published", "example");
+      const firstOpen = catalogModel("example", "first-open", "First open");
+      const published = catalogModel("example", "published", "Published");
       const gateway = await installMockGateway(page, {
         models: [existing],
         sessionKey: "agent:main:main",
