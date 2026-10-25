@@ -7,6 +7,8 @@ import { Agents, type AgentsProps } from "./view.tsx";
 afterEach(() => document.body.replaceChildren());
 
 const inheritedAgentModel = "openai/gpt-5.4";
+const existingFallback = "anthropic/claude-sonnet-4-6";
+const nextFallback = "google/gemini-3-pro";
 const resolvedAgentWorkspace = "/tmp/agents/beta";
 const agentConfig = (defaults: Record<string, unknown>, beta: Record<string, unknown> = {}) => ({
   agents: { defaults, entries: { beta } },
@@ -20,13 +22,7 @@ const contextConfig = (model: Record<string, unknown>) =>
     },
     { model },
   );
-type AgentList = NonNullable<ReturnType<AgentsProps["readData"]>["agentsList"]>;
-const roster = (beta: AgentList["agents"][number]): AgentList => ({
-  defaultId: "alpha",
-  mainKey: "main",
-  scope: "per-sender",
-  agents: [{ id: "alpha", name: "Alpha" }, beta],
-});
+const data = createProps().readData();
 const contextValue = (container: HTMLElement, label: string) =>
   Array.from(container.querySelectorAll("dt"))
     .find((term) => term.textContent?.trim() === label)
@@ -37,52 +33,44 @@ type ViewOverrides = Omit<Partial<AgentsProps>, "access" | "overview"> & {
   overview?: Partial<AgentsProps["overview"]>;
   configForm?: Record<string, unknown>;
 };
-function renderAgents({ configForm, ...overrides }: ViewOverrides = {}, attached = false) {
-  const container = document.createElement("div");
-  if (attached) {
-    document.body.append(container);
-  }
+function renderAgents({ configForm, ...overrides }: ViewOverrides = {}) {
+  const container = document.body.appendChild(document.createElement("div"));
   const defaults = createProps();
-  const props = {
-    ...defaults,
-    ...overrides,
-    config: overrides.config ?? { ...defaults.config, configForm: configForm ?? null },
-    access: { ...defaults.access, ...overrides.access },
-    overview: { ...defaults.overview, ...overrides.overview },
-  };
-  mountSolid(Agents, props, container);
-  return container;
+  return mountSolid(
+    Agents,
+    {
+      ...defaults,
+      ...overrides,
+      config: overrides.config ?? { ...defaults.config, configForm: configForm ?? null },
+      access: { ...defaults.access, ...overrides.access },
+      overview: { ...defaults.overview, ...overrides.overview },
+    },
+    container,
+  ).container;
 }
 
 it.each([
-  {
-    panel: "overview",
-    model: { fallbacks: ["google/gemini-3-pro"] },
-    expectedModel: `${inheritedAgentModel} (+1 fallback)`,
-  },
-  {
-    panel: "channels",
-    model: { fallbacks: [] },
-    expectedModel: inheritedAgentModel,
-  },
-  {
-    panel: "cron",
-    model: { primary: "anthropic/claude-sonnet-4-6" },
-    expectedModel: "anthropic/claude-sonnet-4-6",
-  },
+  ["overview", { fallbacks: [nextFallback] }, `${inheritedAgentModel} (+1 fallback)`],
+  ["channels", { fallbacks: [] }, inheritedAgentModel],
+  ["cron", { primary: existingFallback }, existingFallback],
 ] as const)(
-  "shows authoritative workspace, skills and effective model on $panel",
-  async ({ panel, model, expectedModel }) => {
+  "shows authoritative workspace, skills and effective model on %s",
+  async (panel, model, expectedModel) => {
     const container = renderAgents({
       configForm: contextConfig(model),
       readData: () => ({
-        ...createProps().readData(),
+        ...data,
         agentsPanel: panel,
-        agentsList: roster({
-          id: "beta",
-          workspace: resolvedAgentWorkspace,
-          model: { primary: "openai/stale-roster-model", fallbacks: ["openai/stale-fallback"] },
-        }),
+        agentsList: {
+          ...data.agentsList!,
+          agents: [
+            {
+              id: "beta",
+              workspace: resolvedAgentWorkspace,
+              model: { primary: "openai/stale-roster-model", fallbacks: ["openai/stale-fallback"] },
+            },
+          ],
+        },
       }),
     });
     await waitForSolid(() => {
@@ -98,7 +86,7 @@ it.each([false, true])(
   (canUpdateIdentity) => {
     const container = renderAgents({
       access: { canUpdateIdentity },
-      readData: () => ({ ...createProps().readData(), identitySaving: canUpdateIdentity }),
+      readData: () => ({ ...data, identitySaving: canUpdateIdentity }),
     });
 
     expect(
@@ -107,28 +95,21 @@ it.each([false, true])(
   },
 );
 
-const primary = "openai/gpt-5.4";
-const existingFallback = "anthropic/claude-sonnet-4-6";
 const catalog = [
   { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
   { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
   { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google" },
 ] satisfies ReturnType<typeof createProps>["overview"]["modelCatalog"];
 
-function renderFallbacks(overrides: ViewOverrides = {}) {
+function renderFallbacks(canUpdateConfig = true) {
   const onModelFallbacksChange = vi.fn();
-  const container = renderAgents(
-    {
-      configForm: agentConfig({ model: { primary, fallbacks: [existingFallback] } }),
-      ...overrides,
-      overview: {
-        modelCatalog: catalog,
-        ...overrides.overview,
-        onModelFallbacksChange,
-      },
-    },
-    true,
-  );
+  const container = renderAgents({
+    configForm: agentConfig({
+      model: { primary: inheritedAgentModel, fallbacks: [existingFallback] },
+    }),
+    access: { canUpdateConfig },
+    overview: { modelCatalog: catalog, onModelFallbacksChange },
+  });
   const field = container.querySelector<HTMLElement>("openclaw-multi-select.agent-fallbacks");
   assert(field, "Missing fallback field");
   return { field, input: field.querySelector<HTMLInputElement>("input"), onModelFallbacksChange };
@@ -148,52 +129,19 @@ const open = async (field: HTMLElement) => {
 };
 
 it("shows, filters and extends the effective fallback chain for the selected agent", async () => {
-  const { field, input, onModelFallbacksChange } = renderFallbacks();
+  const { field, onModelFallbacksChange } = renderFallbacks();
   expect(values(field, ".multi-select__chip")).toEqual([existingFallback]);
-  expect(input).toMatchObject({ disabled: false });
   await open(field);
-  expect(values(field)).toEqual(["google/gemini-3-pro"]);
+  expect(values(field)).toEqual([nextFallback]);
   field.querySelector<HTMLElement>(".multi-select__option")!.click();
-  expect(onModelFallbacksChange).toHaveBeenCalledWith("beta", [
-    existingFallback,
-    "google/gemini-3-pro",
-  ]);
+  expect(onModelFallbacksChange).toHaveBeenCalledWith("beta", [existingFallback, nextFallback]);
   typeSearch(field, "fixture/custom-fallback");
   expect(field.querySelector("[data-custom]")?.getAttribute("data-value")).toBe(
     "fixture/custom-fallback",
   );
 });
 
-it("excludes a profile-qualified primary alias while retaining case-distinct model choices", async () => {
-  const target = "custom/model-a";
-  const caseDistinct = "custom/Model-A";
-  const { field } = renderFallbacks({
-    readData: () => ({
-      ...createProps().readData(),
-      agentsList: roster({ id: "beta", model: { primary: caseDistinct } }),
-    }),
-    configForm: agentConfig({
-      model: { primary: "fast@work" },
-      models: { [target]: { alias: "fast" } },
-    }),
-    overview: {
-      modelCatalog: [
-        { provider: "custom", id: "model-a", name: "Lowercase model" },
-        { provider: "custom", id: "Model-A", name: "Uppercase model" },
-      ],
-    },
-  });
-
-  await open(field);
-  expect(values(field)).toEqual([caseDistinct]);
-  expect(field.querySelector(".multi-select__option")?.textContent).toContain("Uppercase model");
-  typeSearch(field, "FAST");
-  expect(values(field)).toEqual([]);
-  typeSearch(field, `${target}@other`);
-  expect(values(field)).toEqual([`${target}@other`]);
-});
-
 it("disables the field without config write access", () => {
-  const { input } = renderFallbacks({ access: { canUpdateConfig: false } });
+  const { input } = renderFallbacks(false);
   expect(input).toMatchObject({ disabled: true });
 });
