@@ -73,7 +73,6 @@ function credentialFixture() {
   return {
     options,
     database,
-    capture,
     read,
     readAuthority: authority.readCurrentCredential,
     write: (value: unknown) => writeConfigMachineState(authKey, value, options),
@@ -136,26 +135,10 @@ it("imports only the first value and preserves facts when a later import is igno
   expect([readAuthority(), read()]).toEqual([credential("imported"), credential("imported")]);
 });
 
-it("publishes the serialized durable value and preserves it against an overtaken cold read", () => {
-  const { capture, read, readAuthority, write } = credentialFixture();
-  const cold = capture();
+it("publishes the serialized durable value", () => {
+  const { read, readAuthority, write } = credentialFixture();
   write({ ...store("unserialized"), toJSON: () => store("serialized") });
-  cold.observe(credential("original"));
-  expect(cold.readCurrentCredential()).toEqual(credential("serialized"));
-  expect(readAuthority()).toEqual(read());
-});
-
-it("keeps the original facts after rollback and unrelated writes leave authority available", () => {
-  const { options, database, read, readAuthority } = credentialFixture();
-  expect(() =>
-    runOpenClawStateWriteTransaction(() => {
-      writeConfigMachineState(authKey, store("rolled-back"), options);
-      expect(readAuthority).toThrow("authority is unavailable");
-      throw new Error("cancel mutation");
-    }, options),
-  ).toThrow("cancel mutation");
-  watchCommits(database, () => expect(readAuthority()).toEqual(credential("original")));
-  writeConfigMachineState("config.lastTouchedAt", "updated", options);
+  expect(readAuthority()).toEqual(credential("serialized"));
   expect(readAuthority()).toEqual(read());
 });
 

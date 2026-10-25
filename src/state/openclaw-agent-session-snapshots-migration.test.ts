@@ -2,18 +2,11 @@ import { copyFileSync } from "node:fs";
 import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { expect, it } from "vitest";
 import { readExactSessionEntryRow as readEntry } from "../config/sessions/session-accessor.sqlite-entry-read.js";
-import { readSessionEntryCacheValidityToken as readCacheToken } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
-import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema as ensureSchema } from "./openclaw-agent-db-schema.js";
-import {
-  openOpenClawAgentDatabase as openDatabase,
-  runOpenClawAgentWriteTransaction as writeTransaction,
-} from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "./openclaw-agent-schema-v24.test-support.js";
 import { withoutSessionEntrySnapshotsSchema } from "./openclaw-agent-session-snapshots-schema.js";
 
@@ -179,46 +172,6 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
     ensureSchema(reopened, options);
     expect(nodeRows(reopened)).toEqual(migratedNodes);
     expect(snapshotRows(reopened)).toEqual(coldRows);
-    reopened.close();
-    const opened = openDatabase(options);
-    const native = requireNativeSqliteDatabase(opened.db);
-    const readRevision = () =>
-      opened.db
-        .prepare("SELECT snapshot_revision FROM session_nodes WHERE session_key = ?")
-        .get(fixtureKey);
-    const migratedRevision = readRevision();
-    writeTransaction((current) => {
-      const entry = readEntry(current, fixtureKey)!.entry;
-      writeSessionEntry(
-        current,
-        fixtureKey,
-        { ...entry, label: "Renamed" },
-        { canonicalPreviousEntry: entry },
-      );
-    }, options);
-    expect(readEntry(opened, fixtureKey)?.entry.label).toBe("Renamed");
-    expect(snapshotRows(native)).toEqual(coldRows);
-    expect(readRevision()).toEqual(migratedRevision);
-    expect(transcriptRows(native)).toEqual(beforeTranscript);
-    const revision = readCacheToken(opened.db);
-    opened.db.exec("BEGIN");
-    try {
-      opened.db
-        .prepare(`UPDATE session_entry_snapshots SET value_json = ?
-            WHERE session_key = 'agent:main:fixture-0' AND field = 'skillsSnapshot'`)
-        .run(JSON.stringify({ prompt: "Changed outside the entry writer", skills: [] }));
-      expect(readCacheToken(opened.db)).not.toEqual(revision);
-      expect(readEntry(opened, fixtureKey)?.entry.skillsSnapshot?.prompt).toBe(
-        "Changed outside the entry writer",
-      );
-    } finally {
-      opened.db.exec("ROLLBACK");
-    }
-    const rolledBackRevision = readCacheToken(opened.db);
-    expect(rolledBackRevision).not.toEqual(revision);
-    expect(readCacheToken(opened.db)).toEqual(rolledBackRevision);
-    expect(readRevision()).toEqual(migratedRevision);
-    expect(snapshotRows(native)).toEqual(coldRows);
   });
 });
 

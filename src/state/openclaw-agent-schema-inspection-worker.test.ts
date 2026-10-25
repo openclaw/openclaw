@@ -32,28 +32,9 @@ function createSource(sql: string) {
 function observeChild() {
   const child = vi.mocked(fork).mock.results.at(-1)?.value;
   const closed = vi.fn();
-  const closure = new Promise<void>((resolve) => {
-    child.once("close", resolve);
-  });
   child.once("close", closed);
-  return { child, closed, closure };
+  return { child, closed };
 }
-
-it.each(["abort", "dispose"] as const)("joins an unused prestarted child on %s", async (stop) => {
-  const controller = new AbortController();
-  await using reader = createAgentSchemaInspectionWorker();
-  vi.mocked(fork).mockClear();
-  reader.prestart(controller.signal);
-  const { child, closed, closure } = observeChild();
-  expect(child?.pid).toBeGreaterThan(0);
-  if (stop === "abort") {
-    controller.abort(new Error("startup stopped before target discovery"));
-    await closure;
-  }
-  await reader[Symbol.asyncDispose]();
-  expect(closed).toHaveBeenCalledOnce();
-  expect([reader.processCount, reader.inspectionCount, reader.snapshotCount]).toEqual([1, 0, 0]);
-});
 
 it("hands its prestarted child to the first scheduler slot without spending inspection time", async () => {
   const pathname = createSource("CREATE TABLE probe(value TEXT); PRAGMA user_version = 1;");

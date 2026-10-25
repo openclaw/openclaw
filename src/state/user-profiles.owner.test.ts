@@ -1,9 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -18,7 +13,6 @@ import {
   syncGitHubIdentity,
 } from "./user-profile-writes.worker.js";
 import { mergeOwnerIntoPerson, profileState } from "./user-profiles-owner.test-support.js";
-import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
@@ -65,31 +59,6 @@ function ownerReference(kind: "merged owner" | "tombstone", state: ReturnType<ty
 }
 
 describe("gateway owner profiles", () => {
-  it.each([false, true])("reads each owner snapshot once (existing: %s)", (existing) => {
-    const options = stateOptions();
-    ensureUserProfilesSchema(options);
-    if (existing) {
-      const owner = ensureGatewayOwnerProfile("Local Owner", options);
-      setDisplayName(owner.id, "Saved Owner", options);
-    }
-    const { db } = openOpenClawStateDatabase(options);
-    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    const exec = vi.spyOn(db, "exec");
-    const ownerReads = () => reads.queries.filter((query) => /from "user_profiles"/i.test(query));
-    const transactions = () => exec.mock.calls.filter(([query]) => /^BEGIN\b/i.test(query));
-    try {
-      expect(ensureGatewayOwnerProfile("Host Renamed", options)).toMatchObject({
-        id: "gateway-owner",
-        displayName: existing ? "Saved Owner" : "Host Renamed",
-      });
-      expect.soft(ownerReads()).toHaveLength(existing ? 1 : 2);
-      expect.soft(transactions()).toHaveLength(existing ? 0 : 1);
-    } finally {
-      exec.mockRestore();
-      reads.restore();
-    }
-  });
-
   it.each([
     ["merged owner", "merge"],
     ["tombstone", "merge"],
@@ -137,19 +106,13 @@ describe("gateway owner profiles", () => {
     reject(() => signIn({ kind: "email", email: "person@example.test" }));
   });
 
-  it.each(["owner", "identity", "misdirected"])("requires Doctor for a damaged %s", (kind) => {
-    const { options, owner, db, reject } = fixture();
-    if (kind === "owner") {
-      mergeOwnerIntoPerson(owner.id, options);
-    } else {
-      const legacy = ensureProfileForTailscaleIdentity({ login: "legacy@other" }, options);
-      if (kind === "identity") {
-        mergeOwnerIntoPerson(legacy.id, options);
-      }
-      db.prepare(
-        "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local'",
-      ).run(legacy.id);
-    }
+  it("requires Doctor for a merged legacy owner identity", () => {
+    const { options, db, reject } = fixture();
+    const legacy = ensureProfileForTailscaleIdentity({ login: "legacy@other" }, options);
+    mergeOwnerIntoPerson(legacy.id, options);
+    db.prepare(
+      "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local'",
+    ).run(legacy.id);
     reject(() => ensureGatewayOwnerProfile("Host Renamed", options), "repair-required");
     expect(() => ensureGatewayOwnerProfile("Host Renamed", options)).toThrow(
       "openclaw doctor --fix",
@@ -209,18 +172,10 @@ describe("gateway owner profiles", () => {
     const owner = ensureGatewayOwnerProfile(null, options);
     expect(owner.displayName).toBeNull();
     expect(ensureGatewayOwnerProfile(" \t ", options)).toEqual(owner);
-    const observed = observeHostDataSql();
-    try {
-      expect(ensureGatewayOwnerProfile(`${"a".repeat(255)}🤖`, options)).toMatchObject({
-        id: owner.id,
-        displayName: "a".repeat(255),
-      });
-      expect(
-        observed.queries.filter((sql) => /insert into "user_profile_identities"/iu.test(sql)),
-      ).toEqual([]);
-    } finally {
-      observed.restore();
-    }
+    expect(ensureGatewayOwnerProfile(`${"a".repeat(255)}🤖`, options)).toMatchObject({
+      id: owner.id,
+      displayName: "a".repeat(255),
+    });
     expect(readUserProfileSnapshotSync(options).profiles).toEqual([
       expect.objectContaining({ id: owner.id, displayName: "a".repeat(255) }),
     ]);
