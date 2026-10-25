@@ -83,7 +83,7 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
   };
   onSettled(() => {
     // Retire connection-bound cards while their transcript trigger remains mounted.
-    const stopGateway = gateway?.subscribe(syncConnection);
+    const stopGateway = context?.gateway.subscribe(syncConnection);
     syncConnection();
     return () => {
       cardCode.dispose();
