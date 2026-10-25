@@ -183,7 +183,6 @@ export function installControlUiResourceCounts() {
           }
           return timer;
         }
-        let timer: number;
         args[0] = function (this: unknown, ...values: unknown[]) {
           if (!repeating) {
             pending.delete(timer);
@@ -192,14 +191,16 @@ export function installControlUiResourceCounts() {
           total.callbacks++;
           return Reflect.apply(handler, this, values);
         };
-        timer = Reflect.apply(schedule, receiver, args);
+        const timer: number = Reflect.apply(schedule, receiver, args);
         pending.add(timer);
         total.created++;
         total.active = pending.size;
         return timer;
       },
     });
+  // oxlint-disable-next-line typescript/unbound-method -- The Proxy forwards the call receiver through Reflect.apply.
   browser.setTimeout = instrumentTimer(browser.setTimeout, false);
+  // oxlint-disable-next-line typescript/unbound-method -- The Proxy forwards the call receiver through Reflect.apply.
   browser.setInterval = instrumentTimer(browser.setInterval, true);
   const retireTimer = (timer: number) => {
     for (const [pending, total] of [
@@ -244,10 +245,13 @@ export function installControlUiResourceCounts() {
       },
     });
   // Browser timeout and interval handles share a pool and either clearer can cancel them.
+  // oxlint-disable-next-line typescript/unbound-method -- The Proxy forwards the call receiver through Reflect.apply.
   browser.clearTimeout = instrumentCancel(browser.clearTimeout, retireTimer);
+  // oxlint-disable-next-line typescript/unbound-method -- The Proxy forwards the call receiver through Reflect.apply.
   browser.clearInterval = instrumentCancel(browser.clearInterval, retireTimer);
 
   const frames = new Set<number>();
+  // oxlint-disable-next-line typescript/unbound-method -- The Proxy forwards the call receiver through Reflect.apply.
   const requestFrame = browser.requestAnimationFrame;
   browser.requestAnimationFrame = new Proxy(requestFrame, {
     apply(request, receiver, args) {
@@ -255,20 +259,20 @@ export function installControlUiResourceCounts() {
       if (typeof callback !== "function") {
         return Reflect.apply(request, receiver, args);
       }
-      let frame: number;
       args[0] = function (this: unknown, ...values: unknown[]) {
         frames.delete(frame);
         counts.animationFrames.active = frames.size;
         counts.animationFrames.callbacks++;
         return Reflect.apply(callback, this, values);
       };
-      frame = Reflect.apply(request, receiver, args);
+      const frame: number = Reflect.apply(request, receiver, args);
       frames.add(frame);
       counts.animationFrames.created++;
       counts.animationFrames.active = frames.size;
       return frame;
     },
   });
+  // oxlint-disable-next-line typescript/unbound-method -- The Proxy forwards the call receiver through Reflect.apply.
   browser.cancelAnimationFrame = instrumentCancel(browser.cancelAnimationFrame, (frame) => {
     if (frames.delete(frame)) {
       counts.animationFrames.cancelled++;
@@ -277,26 +281,27 @@ export function installControlUiResourceCounts() {
   });
   if (counts.idleCallbacks.supported) {
     const idle = new Set<number>();
+    // oxlint-disable-next-line typescript/unbound-method -- The Proxy forwards the call receiver through Reflect.apply.
     browser.requestIdleCallback = new Proxy(browser.requestIdleCallback, {
       apply(request, receiver, args) {
         const callback = args[0];
         if (typeof callback !== "function") {
           return Reflect.apply(request, receiver, args);
         }
-        let handle: number;
         args[0] = function (this: unknown, ...values: unknown[]) {
           idle.delete(handle);
           counts.idleCallbacks.active = idle.size;
           counts.idleCallbacks.callbacks++;
           return Reflect.apply(callback, this, values);
         };
-        handle = Reflect.apply(request, receiver, args);
+        const handle: number = Reflect.apply(request, receiver, args);
         idle.add(handle);
         counts.idleCallbacks.created++;
         counts.idleCallbacks.active = idle.size;
         return handle;
       },
     });
+    // oxlint-disable-next-line typescript/unbound-method -- The Proxy forwards the call receiver through Reflect.apply.
     browser.cancelIdleCallback = instrumentCancel(browser.cancelIdleCallback, (handle) => {
       if (idle.delete(handle)) {
         counts.idleCallbacks.cancelled++;

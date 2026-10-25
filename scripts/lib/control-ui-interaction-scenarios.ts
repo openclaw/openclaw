@@ -39,7 +39,7 @@ const canvasDocId = "cv_resource_retention";
 const canvasDocumentUrl = `/__openclaw__/canvas/documents/${canvasDocId}/index.html`;
 const canvasRunId = "resource-retention-run";
 const mcpResourceCount = 3;
-const retainedMcpFrames = new WeakMap<Page, Array<ElementHandle<Node>>>();
+const retainedMcpFrames = new WeakMap<Page, Array<ElementHandle>>();
 
 export type InteractionSandbox = { sandboxUrl: string; sandboxPort: number };
 export type InteractionEvidence = Record<string, number | boolean>;
@@ -613,7 +613,7 @@ async function waitForMcpResourceContexts(page: Page) {
   for (let index = 0; index < mcpResourceCount; index++) {
     const frame = mcpResourceFrame(page, index);
     const deadline = Date.now() + 30_000;
-    let matched = false;
+    let matched: boolean;
     do {
       // Board layout keeps settling after a viewport change; sample both sides on every poll.
       const dimensions = await frame.locator("..").evaluate((mount) => {
@@ -651,11 +651,11 @@ async function prepareMcpResources(page: Page) {
   }
   await settleSidebarBackgroundWork(page);
   await waitForMcpResourceContexts(page);
-  const frames = await page.locator(`${activePane} mcp-app-view iframe`).elementHandles();
-  if (frames.length !== mcpResourceCount) {
+  const appFrameHandles = await page.locator(`${activePane} mcp-app-view iframe`).elementHandles();
+  if (appFrameHandles.length !== mcpResourceCount) {
     throw new Error("MCP resource fixture requires three initialized App frames");
   }
-  retainedMcpFrames.set(page, frames);
+  retainedMcpFrames.set(page, appFrameHandles);
 }
 
 async function resizeMcpResources(
@@ -742,10 +742,12 @@ async function waitForResourceBoardTab(page: Page, tab: "main" | "second") {
       .getByRole("heading", { name: `Resource ${tab}-${index}`, exact: true })
       .waitFor();
     await page.waitForFunction((name) => {
-      const frame = document.querySelector<HTMLIFrameElement>(
+      const iframeElement = document.querySelector<HTMLIFrameElement>(
         `[data-widget-name="resource-${name}"] .board-widget__frame`,
       );
-      return frame && !frame.inert && getComputedStyle(frame).opacity === "1";
+      return (
+        iframeElement && !iframeElement.inert && getComputedStyle(iframeElement).opacity === "1"
+      );
     }, `${tab}-${index}`);
   }
 }
@@ -775,9 +777,10 @@ async function prepareResourceBoard(page: Page) {
 }
 
 async function assertResourceBoardInventory(page: Page) {
-  const counts = await page.locator(boardFrameSelector).evaluateAll((frames) => ({
-    mounted: frames.length,
-    parked: frames.filter((frame) => frame.closest("[hidden][inert]")).length,
+  const counts = await page.locator(boardFrameSelector).evaluateAll((resourceFrames) => ({
+    mounted: resourceFrames.length,
+    parked: resourceFrames.filter((resourceFrame) => resourceFrame.closest("[hidden][inert]"))
+      .length,
   }));
   if (counts.mounted !== 6 || counts.parked !== 3) {
     throw new Error(
@@ -811,9 +814,11 @@ async function exerciseResourceBoard(page: Page): Promise<InteractionEvidence> {
   await inner.getByRole("heading", { name: "Resource main-0", exact: true }).hover();
   const scrollBefore = await board.evaluate((element) => element.scrollTop);
   await page.mouse.wheel(0, 120);
-  await page.waitForFunction((before) => {
-    const board = document.querySelector(".chat-pane-cache__pane--active openclaw-board-view");
-    return board && board.scrollTop > before;
+  await page.waitForFunction((previousScrollTop) => {
+    const boardElement = document.querySelector(
+      ".chat-pane-cache__pane--active openclaw-board-view",
+    );
+    return boardElement && boardElement.scrollTop > previousScrollTop;
   }, scrollBefore);
   await selectResourceBoardTab(page, "second");
   await selectResourceBoardTab(page, "main");
@@ -912,13 +917,13 @@ async function finishCanvasRetention(
     };
     await gateway.setHistoryMessages([...canvasResourceTranscript(), finalMessage]);
     await page.evaluate(
-      ({ sessionKey, runId, finalMessage }) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+      ({ sessionKey, runId, finalMessage: terminalMessage }) => {
+        const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
         // Deliver the normal lifecycle batch together, within the existing one-second parking lease.
-        gateway.emit("session.message", {
+        mockGateway.emit("session.message", {
           sessionKey,
           runId,
-          message: finalMessage,
+          message: terminalMessage,
           messageId: "resource-final",
           messageSeq: 401,
           session: {
@@ -930,8 +935,14 @@ async function finishCanvasRetention(
           hasActiveRun: true,
           activeRunIds: [runId],
         });
-        gateway.emit("chat", { sessionKey, runId, seq: 1, state: "final", message: finalMessage });
-        gateway.emit("sessions.changed", {
+        mockGateway.emit("chat", {
+          sessionKey,
+          runId,
+          seq: 1,
+          state: "final",
+          message: terminalMessage,
+        });
+        mockGateway.emit("sessions.changed", {
           sessionKey,
           reason: "lifecycle",
           session: {
@@ -950,7 +961,7 @@ async function finishCanvasRetention(
     await reply.getByText(finalText, { exact: true }).waitFor();
     await reply.locator("openclaw-canvas-widget-view").waitFor();
     const frame = reply.locator(canvasFrameSelector);
-    if (!(await frame.evaluate((frame, original) => frame === original, retained))) {
+    if (!(await frame.evaluate((currentFrame, original) => currentFrame === original, retained))) {
       throw new Error("The live Canvas frame was replaced in the final reply");
     }
     if (
@@ -995,7 +1006,9 @@ async function idleResourceFrames(
     if ((await page.evaluate(() => document.visibilityState)) !== visibility) {
       throw new Error(`Expected a ${visibility} document before ${kind} idle`);
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 3_000));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 3_000);
+    });
     if ((await page.evaluate(() => document.visibilityState)) !== visibility) {
       throw new Error(`${kind} idle changed document visibility`);
     }
@@ -1003,7 +1016,7 @@ async function idleResourceFrames(
       kind === "board"
         ? resourceBoardFrame(page, "main-0")
         : page.locator(`${activePane} ${canvasFrameSelector}`);
-    if (!(await frame.evaluate((frame, original) => frame === original, retained))) {
+    if (!(await frame.evaluate((currentFrame, original) => currentFrame === original, retained))) {
       throw new Error(`${kind} idle replaced its retained frame`);
     }
     if (
@@ -1414,7 +1427,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       if (before.documentVisibility !== visibility) {
         throw new Error(`Expected ${visibility} transcript before idle`);
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 3_000));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 3_000);
+      });
       const after = await platformTranscriptSnapshot(page);
       if (after.documentVisibility !== visibility || after.mountedMessageDisclosures === 0) {
         throw new Error(`Transcript or ${visibility} state changed during idle`);
