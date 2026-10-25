@@ -81,7 +81,7 @@ const RECONCILE_RETRY_BACKOFF_MS: readonly number[] = [0, 50, 200, 500, 1_000];
 type RunningReconcile = {
   assertCurrent?: () => void;
   pending: boolean;
-  projections: Map<string, Deferred<void>>;
+  projections: Map<string, Deferred>;
   signal?: AbortSignal;
   preferredSessionId?: string;
   promise?: Promise<SessionTranscriptReconcileResult>;
@@ -603,7 +603,7 @@ export async function waitForSessionTranscriptProjection(
   // Subscribe before the initial read so a committed projection cannot be missed during it.
   let projection = running.projections.get(resolved.sessionId);
   if (!projection) {
-    projection = createDeferredCore<void>();
+    projection = createDeferredCore();
     running.projections.set(resolved.sessionId, projection);
   }
   try {
