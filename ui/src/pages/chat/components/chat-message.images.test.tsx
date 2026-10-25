@@ -30,6 +30,10 @@ const {
   renderAssistantMessage,
   renderGroupedMessage,
 } = harness;
+const imageElement = (root: Element = harness.view) =>
+  root.querySelector<HTMLImageElement>(".chat-message-image");
+const thumbnail = (source: string) => `${source.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`;
+const dimensions = { width: 1, height: 1 };
 
 describe("grouped chat rendering", () => {
   function mountAssistantImage(url: string, alt: string) {
@@ -73,13 +77,11 @@ describe("grouped chat rendering", () => {
       { path: firstSource, contentType: "application/octet-stream" },
     ]);
     await waitForSolid(() =>
-      expect(
-        harness.view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-      ).toContain(`source=${encodeURIComponent(firstSource)}`),
+      expect(imageElement()?.getAttribute("src")).toContain(
+        `source=${encodeURIComponent(firstSource)}`,
+      ),
     );
-    const firstImageUrl = new URL(
-      harness.view.querySelector<HTMLImageElement>(".chat-message-image")!.src,
-    );
+    const firstImageUrl = new URL(imageElement()!.src);
     expect([
       firstImageUrl.searchParams.get("messageId"),
       firstImageUrl.searchParams.get("sessionKey"),
@@ -116,9 +118,7 @@ describe("grouped chat rendering", () => {
     renderAssistantMessage(
       createAssistantMessage([{ type: "input_image", image_url: "data:image/png;base64,cG5n" }]),
     );
-    expect(
-      harness.view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe("data:image/png;base64,cG5n");
+    expect(imageElement()?.getAttribute("src")).toBe("data:image/png;base64,cG5n");
   });
 
   it("expires pairing QR images without requesting a pane refresh", async () => {
@@ -139,7 +139,7 @@ describe("grouped chat rendering", () => {
       );
     renderQr("cXJwbmc=", 1_000);
 
-    const image = harness.view.querySelector<HTMLImageElement>(".chat-message-image");
+    const image = imageElement();
     expect(image).toMatchObject({
       src: "data:image/png;base64,cXJwbmc=",
       alt: "OpenClaw pairing QR code",
@@ -194,10 +194,7 @@ describe("grouped chat rendering", () => {
 
     const onOpenImage = vi.fn();
     renderAssistantMessage(
-      createAssistantImageMessage(managedChatImageUrl, "Generated image 1", {
-        width: 1,
-        height: 1,
-      }),
+      createAssistantImageMessage(managedChatImageUrl, "Generated image 1", dimensions),
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "test-auth-token",
@@ -206,13 +203,13 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    await vi.waitFor(() => {
-      expect(element(".chat-message-image")).toMatchObject({
+    await vi.waitFor(() =>
+      expect(imageElement()).toMatchObject({
         src: objectUrl,
         alt: "Generated image 1",
-      });
-    });
-    const thumbnailUrl = `/rosita${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`;
+      }),
+    );
+    const thumbnailUrl = `/rosita${thumbnail(managedChatImageUrl)}`;
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnailUrl);
     expectSameOriginGet(fetchInit);
     requireElement(".chat-message-image-button", HTMLButtonElement).click();
@@ -221,8 +218,7 @@ describe("grouped chat rendering", () => {
         expect.objectContaining({ src: objectUrl, title: "Generated image 1" }),
       ),
     );
-    const activeItem = onOpenImage.mock.calls[0]?.[0];
-    activeItem?.release?.();
+    onOpenImage.mock.calls[0]?.[0]?.release?.();
   });
 
   it("downloads a managed image from its pure-image actions", async () => {
@@ -234,7 +230,7 @@ describe("grouped chat rendering", () => {
     const objectUrls = ["blob:thumbnail", "blob:full", "blob:download"];
     const { revokeObjectURL } = stubObjectUrls(() => objectUrls.shift() ?? "blob:extra");
     const imageBlob = new Blob(["png"], { type: "image/png" });
-    const fetchMock = stubFetch(async (_url: string | URL | Request, _init?: RequestInit) => ({
+    const fetchMock = stubFetch(async () => ({
       ok: true,
       blob: async () => imageBlob,
     }));
@@ -250,7 +246,7 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false, resolveArtifactDownload },
       container,
     );
-    await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
+    await vi.waitFor(() => expect(imageElement(container)).not.toBeNull());
     expect(fetchMock).toHaveBeenCalledWith(thumbnailUrl, expect.anything());
 
     // Own the delayed download cleanup before restoring the URL globals.
@@ -292,18 +288,12 @@ describe("grouped chat rendering", () => {
     });
 
     renderAssistantMessage(
-      createAssistantImageMessage(source, "Generated image body stall", {
-        width: 1,
-        height: 1,
-      }),
+      createAssistantImageMessage(source, "Generated image body stall", dimensions),
     );
 
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, fetchInit] = requireFetchCallForUrl(
-      fetchMock,
-      `${source.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`,
-    );
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnail(source));
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
 
@@ -327,10 +317,7 @@ describe("grouped chat rendering", () => {
       | undefined;
     const response = { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) };
     stubFetch((url: string) => {
-      if (
-        deferEvictedRefetch &&
-        url === `${imageUrls[1]?.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`
-      ) {
+      if (deferEvictedRefetch && url === thumbnail(imageUrls[1]!)) {
         return new Promise<typeof response>((resolve) => {
           resolveEvictedRefetch = resolve;
         });
@@ -360,7 +347,7 @@ describe("grouped chat rendering", () => {
     await vi.waitFor(() =>
       expect(createObjectURL.mock.calls.length).toBeGreaterThan(createsBeforeRefetch),
     );
-    expect(evictedContainer.querySelector(".chat-message-image")).not.toBeNull();
+    expect(imageElement(evictedContainer)).not.toBeNull();
   });
 
   it("bounds managed outgoing image miss retention", async () => {

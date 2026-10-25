@@ -161,6 +161,13 @@ function narration(content: unknown, timestamp: number, overrides: Record<string
   };
 }
 
+async function renderToolFiles(group: MessageGroup, frame: boolean) {
+  const onOpenWorkspaceFile = vi.fn();
+  (frame ? renderFrame : renderGroup)(group, { onOpenWorkspaceFile, ...expanded });
+  await settleToolBridges(container);
+  return onOpenWorkspaceFile;
+}
+
 it.each([
   { collapsed: false, key: "click" },
   { collapsed: true, key: "Enter" },
@@ -175,7 +182,6 @@ it.each([
 });
 
 it.each([false, true])("opens sender's nested tool files (frame=%s)", async (frame) => {
-  const onOpenWorkspaceFile = vi.fn();
   const group = createGroup(
     { sessionKey },
     {
@@ -186,13 +192,7 @@ it.each([false, true])("opens sender's nested tool files (frame=%s)", async (fra
       ],
     },
   );
-  const options = { onOpenWorkspaceFile, ...expanded };
-  if (frame) {
-    renderFrame(group, options);
-  } else {
-    renderGroup(group, options);
-  }
-  await settleToolBridges(container);
+  const onOpenWorkspaceFile = await renderToolFiles(group, frame);
   const links = container.querySelectorAll<HTMLButtonElement>(".chat-tool-row__file-link");
   expect(links).toHaveLength(2);
   for (const link of links) {
@@ -205,19 +205,12 @@ it.each([false, true])("opens sender's nested tool files (frame=%s)", async (fra
 });
 
 it.each([false, true])("opens own tool files from their message (frame=%s)", async (frame) => {
-  const onOpenWorkspaceFile = vi.fn();
   const group = createGroup(undefined, {
     runId: "own-tools",
     __openclaw: { id: "entry-read" },
     content: [readCall("own-read", reportPath)],
   });
-  const options = { onOpenWorkspaceFile, ...expanded };
-  if (frame) {
-    renderFrame(group, options);
-  } else {
-    renderGroup(group, options);
-  }
-  await settleToolBridges(container);
+  const onOpenWorkspaceFile = await renderToolFiles(group, frame);
   required(".chat-tool-row__file-link").click();
   expect(onOpenWorkspaceFile).toHaveBeenCalledExactlyOnceWith({
     path: reportPath,

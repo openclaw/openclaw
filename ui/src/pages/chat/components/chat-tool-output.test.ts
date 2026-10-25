@@ -32,6 +32,15 @@ const execution = (fields: Partial<NativeExecution>) => ({
   execution: { output: "done", chunk_id: "chunk", wall_time_seconds: 0.7, ...fields },
 });
 const nativeOutput = (output: string, exitCode = 0) => ({ output, exitCode });
+const contentText = (...texts: string[]) =>
+  JSON.stringify(
+    texts.map((text) => ({ type: "input_text", text })),
+    null,
+    2,
+  );
+const toolOutput = { source: "provider-response", modelInput: "unverified" } as const;
+const truncationMarker =
+  "...(OpenClaw truncated Codex native tool output: original 20000 chars, showing 10000; rerun with narrower args.)";
 
 function outputCard(overrides: Partial<ToolCard> = {}): ToolCard {
   return {
@@ -41,7 +50,7 @@ function outputCard(overrides: Partial<ToolCard> = {}): ToolCard {
     name: "exec",
     args: { input: "text(await tools.exec_command({cmd: 'check-service'}));" },
     outputText: "preview",
-    toolOutput: { source: "provider-response", modelInput: "unverified" },
+    toolOutput,
     completed: true,
     ...overrides,
   };
@@ -71,7 +80,7 @@ function result(text: string) {
           id: "b",
           name: "exec",
           text,
-          __openclaw: { toolOutput: { source: "provider-response", modelInput: "unverified" } },
+          __openclaw: { toolOutput },
         },
       ],
     },
@@ -139,22 +148,15 @@ describe("tool output inspection", () => {
       "literal" in testCase
         ? testCase.literal
         : "execution" in testCase
-          ? JSON.stringify([{ type: "input_text", text: JSON.stringify(testCase.execution) }])
-          : JSON.stringify(
-              [
-                { type: "input_text", text: "Script completed\nWall time 0.8 seconds\nOutput:\n" },
-                {
-                  type: "input_text",
-                  text: JSON.stringify({
-                    ...(testCase.exitCode === 0 ? { chunk_id: "chunk" } : {}),
-                    wall_time_seconds: 0.7,
-                    exit_code: testCase.exitCode,
-                    output: testCase.output,
-                  }),
-                },
-              ],
-              null,
-              2,
+          ? contentText(JSON.stringify(testCase.execution))
+          : contentText(
+              "Script completed\nWall time 0.8 seconds\nOutput:\n",
+              JSON.stringify({
+                ...(testCase.exitCode === 0 ? { chunk_id: "chunk" } : {}),
+                wall_time_seconds: 0.7,
+                exit_code: testCase.exitCode,
+                output: testCase.output,
+              }),
             );
     const panel = mount(
       outputCard({ outputText: raw }),
@@ -199,7 +201,7 @@ describe("tool output inspection", () => {
 
   it.each(["plain", "native"])("opens long %s output as an inspectable result", async (shape) => {
     const text = "  " + "x".repeat(150_000) + "\r\nTAIL";
-    const output = shape === "native" ? JSON.stringify([{ type: "input_text", text }]) : text;
+    const output = shape === "native" ? contentText(text) : text;
     const card = outputCard({ outputText: output });
     const open = vi.fn<(content: SidebarContent) => void>();
     const root = document.createElement("div");
@@ -333,8 +335,7 @@ describe("tool output inspection", () => {
                     modelInput: "unverified",
                     captureTruncated: true,
                   },
-            outputText:
-              "prefix\n...(OpenClaw truncated Codex native tool output: original 20000 chars, showing 10000; rerun with narrower args.)",
+            outputText: `prefix\n${truncationMarker}`,
           });
       const panel = mount(card, load);
       await vi.waitFor(() =>
@@ -354,8 +355,7 @@ describe("tool output inspection", () => {
   ])(
     "fetches $source previews before interpreting a truncation suffix",
     async ({ source, preview }) => {
-      const marker =
-        "literal\n...(OpenClaw truncated Codex native tool output: original 20000 chars, showing 10000; rerun with narrower args.)";
+      const marker = `literal\n${truncationMarker}`;
       const load = vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(marker));
       const panel = mount(
         outputCard({
@@ -377,15 +377,10 @@ describe("tool output inspection", () => {
   it.each(["selection", "connection"])(
     "ignores old full-output responses after a new %s",
     async (change) => {
-      let complete!: (value: ReturnType<typeof result>) => void;
+      const pending = createDeferred<ReturnType<typeof result>>();
       const load = vi
         .fn<SidebarFullMessageLoader>()
-        .mockImplementationOnce(
-          () =>
-            new Promise((resolve) => {
-              complete = resolve;
-            }),
-        )
+        .mockImplementationOnce(() => pending.promise)
         .mockResolvedValueOnce(result("new selection"));
       const panel = mount(outputCard(), load);
       await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
@@ -403,7 +398,7 @@ describe("tool output inspection", () => {
         panel.update({ ...panel.props, connectionEpoch: 2 });
       }
       await vi.waitFor(() => expect(textOf(panel.container)).toBe("new selection"));
-      complete(result("stale response"));
+      pending.resolve(result("stale response"));
       await Promise.resolve();
       flush();
       expect(textOf(panel.container)).toBe("new selection");

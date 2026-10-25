@@ -28,15 +28,21 @@ const {
   markdownRenderMock,
   renderMarkdownHtml,
 } = harness;
+const audio = (root: Element = harness.view) => root.querySelector("openclaw-chat-audio-player");
+const downloadHref = (root: Element) => attachmentDownload(root)?.getAttribute("href");
 
 describe("grouped chat rendering", () => {
   function renderReactiveAssistant(
     message: () => unknown,
-    options: Partial<RenderMessageGroupOptions>,
+    options: Partial<RenderMessageGroupOptions> = {},
     container: HTMLElement = harness.view,
   ) {
     const rerender = () =>
-      renderAssistantMessage(message(), { ...options, mediaOwner: rerender }, container);
+      renderAssistantMessage(
+        message(),
+        { showToolCalls: false, ...options, mediaOwner: rerender },
+        container,
+      );
     rerender();
   }
 
@@ -48,14 +54,14 @@ describe("grouped chat rendering", () => {
     const container = document.body.appendChild(document.createElement("div"));
     renderReactiveAssistant(
       () => nativeAudio(source, artifactId),
-      { showToolCalls: false, resolveArtifactDownload },
+      { resolveArtifactDownload },
       container,
     );
     return container;
   }
 
   it("renders assistant MEDIA attachments without a strip for an unresolved current reply", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
+    document.body.append(harness.view);
     const onOpenImage = vi.fn();
     await markdownRenderMock.withImplementation(renderMarkdownHtml, async () => {
       renderAssistantMessage(
@@ -67,39 +73,35 @@ describe("grouped chat rendering", () => {
           },
         ),
         { showToolCalls: false, onOpenImage },
-        container,
       );
       await vi.dynamicImportSettled();
     });
 
-    expect(container.querySelector(".chat-reply-attribution")).toBeNull();
-    expect(elementText(".chat-text > p:first-child", container)?.trim()).toBe("Here is the image.");
-    expect(elementText(".chat-text", container)).not.toContain("MEDIA:");
+    expect(harness.view.querySelector(".chat-reply-attribution")).toBeNull();
+    expect(elementText(".chat-text > p:first-child")?.trim()).toBe("Here is the image.");
+    expect(elementText(".chat-text")).not.toContain("MEDIA:");
     await waitForSolid(() =>
-      expect(requireElement(".chat-message-image", HTMLImageElement, container).src).toBe(
+      expect(requireElement(".chat-message-image", HTMLImageElement).src).toBe(
         "https://example.com/photo.png",
       ),
     );
-    requireElement(".chat-message-image-button", HTMLButtonElement, container).click();
+    requireElement(".chat-message-image-button", HTMLButtonElement).click();
     expect(onOpenImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        src: "https://example.com/photo.png",
-        title: "photo.png",
-      }),
+      expect.objectContaining({ src: "https://example.com/photo.png", title: "photo.png" }),
     );
     await waitForSolid(() =>
-      expect(elementText(".chat-assistant-attachment-card__title", container)).toBe("voice.ogg"),
+      expect(elementText(".chat-assistant-attachment-card__title")).toBe("voice.ogg"),
     );
-    requireElement("openclaw-chat-audio-player", HTMLElement, container);
+    requireElement("openclaw-chat-audio-player", HTMLElement);
   });
 
   it("resolves managed transcode audio to an inline player", async () => {
+    document.body.append(harness.view);
     const source = managedSource();
     const ticketedUrl = `${source}?mediaTicket=managed-ticket`;
     const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
     const fetchMock = stubFetch();
-    const container = document.body.appendChild(document.createElement("div"));
     renderReactiveAssistant(
       () =>
         nativeAudio(
@@ -115,17 +117,13 @@ describe("grouped chat rendering", () => {
           { id: "assistant-managed-transcode-audio" },
         ),
       {
-        showToolCalls: false,
         assistantAttachmentAuthToken: "must-not-be-forwarded",
         resolveArtifactDownload,
       },
-      container,
     );
 
     await vi.dynamicImportSettled();
-    await waitForSolid(() =>
-      expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull(),
-    );
+    await waitForSolid(() => expect(audio()).not.toBeNull());
     expect(resolveArtifactDownload).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       artifactId,
@@ -134,8 +132,7 @@ describe("grouped chat rendering", () => {
       `${ticketedUrl}&playback=1`,
       expect.objectContaining({ method: "HEAD" }),
     );
-    expect(attachmentDownload(container)?.getAttribute("href")).toBe(ticketedUrl);
-    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+    expect(downloadHref(harness.view)).toBe(ticketedUrl);
   });
 
   function managedTicketFixture() {
@@ -174,18 +171,14 @@ describe("grouped chat rendering", () => {
     });
     const container = mountManagedAudio(source, artifactId, resolveArtifactDownload);
     await vi.dynamicImportSettled();
-    await waitForSolid(
-      () => expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull(),
-      { interval: 0 },
-    );
+    await waitForSolid(() => expect(audio(container)).not.toBeNull(), { interval: 0 });
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(4_999);
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(1);
     await advanceAttachments(1);
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
-    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+    expect(audio(container)).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
@@ -222,26 +215,19 @@ describe("grouped chat rendering", () => {
       });
       const container = mountManagedAudio(source, artifactId, resolveArtifactDownload);
       await vi.dynamicImportSettled();
-      await waitForSolid(
-        () => expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull(),
-        { interval: 0 },
-      );
+      await waitForSolid(() => expect(audio(container)).not.toBeNull(), { interval: 0 });
       await advanceAttachments(5_000);
       if (refreshFails) {
         expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
         expectManagedAudio(container, false);
-        expect(attachmentDownload(container)?.getAttribute("href")).toContain(
-          "mediaTicket=short-1",
-        );
+        expect(downloadHref(container)).toContain("mediaTicket=short-1");
       }
       await advanceAttachments(10_000);
       expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
-      expect(attachmentDownload(container)?.getAttribute("href")).toContain(
-        `mediaTicket=short-${retainedTicket}`,
-      );
+      expect(downloadHref(container)).toContain(`mediaTicket=short-${retainedTicket}`);
       expectManagedAudio(container, false);
       await advanceAttachments(beforeExpiry);
-      expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+      expect(audio(container)).not.toBeNull();
       await advanceAttachments(untilExpiry);
       expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
       expectManagedAudio(container, true);
@@ -274,7 +260,6 @@ describe("grouped chat rendering", () => {
     renderReactiveAssistant(
       () => createAssistantMessage(`Unavailable recording\nMEDIA:${source}`),
       {
-        showToolCalls: false,
         resourceBasePath: "/openclaw",
         assistantAttachmentAuthToken: "session-token",
       },
@@ -284,13 +269,13 @@ describe("grouped chat rendering", () => {
     await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await flushAttachmentChecks();
 
-    await vi.waitFor(() => {
+    await vi.waitFor(() =>
       expect(
         elementText(
           ".chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__status-meta",
         ),
-      ).toContain(reason);
-    });
+      ).toContain(reason),
+    );
     expectAbsent("audio");
     expect(attachmentDownload(harness.view)).toBeNull();
   });
@@ -338,7 +323,6 @@ describe("grouped chat rendering", () => {
       );
     });
     renderReactiveAssistant(() => createAssistantMessage(`Local document\nMEDIA:${source}`), {
-      showToolCalls: false,
       resourceBasePath: "/openclaw",
     });
 
@@ -379,7 +363,6 @@ describe("grouped chat rendering", () => {
           createAttachmentBlock(source, "audio", "clip.mp3", "audio/mpeg", { artifactId }),
         ]),
       {
-        showToolCalls: false,
         resolveArtifactDownload,
         onOpenSidebar: (content) => {
           sidebarContent = content;

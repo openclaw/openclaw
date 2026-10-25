@@ -21,6 +21,13 @@ import { createSolidApplicationContextProvider } from "../../../test-helpers/sol
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatSubagentsPanel } from "./chat-subagents-panel.tsx";
 
+const history = (sessionId: GatewaySessionRow["sessionId"]) => ({
+  sessionId,
+  messages: [],
+  hasMore: false,
+  totalMessages: 0,
+});
+
 function mountPanel(handler: (method: string, params?: unknown) => unknown, mobile?: boolean) {
   const request = vi.fn(handler);
   const connection = createGatewayHarness(createTestGatewayClient(request));
@@ -43,15 +50,16 @@ function mountPanel(handler: (method: string, params?: unknown) => unknown, mobi
     () => createComponent(ChatSubagentsPanel, { sessionKey: "agent:main:parent", mobile }),
     { wrapper: provider.wrapper },
   );
-  const panel = view.container.querySelector<
-    HTMLElementTagNameMap["openclaw-chat-subagents-panel"]
-  >("openclaw-chat-subagents-panel")!;
+  const panel = view.container.querySelector("openclaw-chat-subagents-panel")!;
+  const find = (selector: string) => panel.querySelector<HTMLButtonElement>(selector);
+  const waitForCount = (selector: string, count: number) =>
+    waitForSolid(() => expect(panel.querySelectorAll(selector)).toHaveLength(count));
   onTestFinished(() => {
     view.unmount();
     sessions.dispose();
     disposeSidebarContextLifecycles();
   });
-  return { panel, request, sessions, connection };
+  return { panel, request, sessions, connection, find, waitForCount };
 }
 
 it("retains detail while hidden and applies a show request after its complete scope change", async () => {
@@ -78,12 +86,7 @@ it("retains detail while hidden and applies a show request after its complete sc
     }
     if (method === "chat.history") {
       const agentId = values?.sessionKey === key("worker") ? "worker" : "main";
-      return {
-        sessionId: `${agentId}-child-session`,
-        messages: [],
-        hasMore: false,
-        totalMessages: 0,
-      };
+      return history(`${agentId}-child-session`);
     }
     if (method === "sessions.subscribe" || method === "sessions.unsubscribe") {
       return {};
@@ -148,6 +151,32 @@ const page = (rows: GatewaySessionRow[], extra: Partial<SessionsListResult> = {}
   nextOffset: null,
   ...extra,
 });
+function mountRows(
+  rows: (params?: Record<string, unknown>) => GatewaySessionRow[],
+  mobile?: boolean,
+  handlers: {
+    list?: () => unknown;
+    abort?: () => unknown;
+    history?: () => unknown;
+  } = {},
+) {
+  return mountPanel((method, params) => {
+    const values = asOptionalRecord(params);
+    if (method === "sessions.list") {
+      return values?.spawnedBy ? (handlers.list?.() ?? page(rows(values))) : page([]);
+    }
+    if (method === "chat.history") {
+      if (handlers.history) {
+        return handlers.history();
+      }
+      const entries = rows(values);
+      return history(
+        (entries.find((row) => row.key === values?.sessionKey) ?? entries.at(-1))?.sessionId,
+      );
+    }
+    return method === "sessions.abort" ? (handlers.abort?.() ?? {}) : {};
+  }, mobile);
+}
 const openSelector = (mobile?: boolean) =>
   mobile === true
     ? ".chat-subagents-mobile__open"
@@ -200,9 +229,7 @@ it.each([undefined, false, true])(
     );
     expect(f.panel.querySelector(openSelector(mobile))).toBeNull();
     continuation.resolve(page([last], { offset: 1, totalCount: 2 }));
-    await waitForSolid(() =>
-      expect(f.panel.querySelectorAll(openSelector(mobile))).toHaveLength(2),
-    );
+    await f.waitForCount(openSelector(mobile), 2);
     const retained = f.panel.querySelector(openSelector(mobile));
     phase = "refresh";
     const refresh = f.sessions.refreshList({ ...childSessionListQuery(parentKey), force: true });
@@ -218,9 +245,7 @@ it.each([undefined, false, true])(
     expect(f.panel.querySelector(openSelector(mobile))).toBeNull();
     phase = "ready";
     f.panel.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
-    await waitForSolid(() =>
-      expect(f.panel.querySelectorAll(openSelector(mobile))).toHaveLength(2),
-    );
+    await f.waitForCount(openSelector(mobile), 2);
   },
 );
 
@@ -228,28 +253,21 @@ it.each([undefined, true])(
   "retries a rejected Stop from the %s notice and restores mobile feedback focus",
   async (mobile) => {
     const row = child("retry");
-    const f = mountPanel((method, params) => {
-      if (method === "sessions.list") {
-        return page(asOptionalRecord(params)?.spawnedBy ? [row] : []);
-      }
-      if (method === "sessions.abort") {
+    const f = mountRows(() => [row], mobile, {
+      abort: () => {
         throw new Error("Stop denied by fixture");
-      }
-      if (method === "chat.history") {
-        return { sessionId: row.sessionId, messages: [], hasMore: false, totalMessages: 0 };
-      }
-      return {};
-    }, mobile);
+      },
+    });
     const stopSelector = mobile ? ".chat-subagents-mobile__stop" : ".chat-subagents__stop";
-    await waitForSolid(() => expect(f.panel.querySelector(stopSelector)).not.toBeNull());
-    f.panel.querySelector<HTMLButtonElement>(stopSelector)!.click();
+    await f.waitForCount(stopSelector, 1);
+    f.find(stopSelector)!.click();
     if (mobile) {
       const confirm = () =>
         document.querySelector<HTMLButtonElement>("openclaw-modal-actions .danger");
       await waitForSolid(() => expect(confirm()).not.toBeNull());
       confirm()!.click();
     }
-    const retry = () => f.panel.querySelector<HTMLButtonElement>('[role="alert"] button');
+    const retry = () => f.find('[role="alert"] button');
     await waitForSolid(() =>
       expect(f.panel.querySelector('[role="alert"]')?.textContent).toContain(
         "Stop denied by fixture",
@@ -260,7 +278,7 @@ it.each([undefined, true])(
       if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
       }
-      f.panel.querySelector<HTMLButtonElement>(openSelector(mobile))!.click();
+      f.find(openSelector(mobile))!.click();
       await waitForSolid(() => expect(f.panel.querySelector("openclaw-chat-pane")).not.toBeNull());
       f.panel.querySelector("openclaw-chat-pane")!.onBackToSubagents?.();
       await waitForSolid(() => expect(document.activeElement).toBe(retry()));
@@ -279,24 +297,10 @@ it("keeps desktop row Stop feedback independent, preserves navigation, and relea
   const aborted = createDeferred<{ aborted: boolean }>();
   const revalidation = createDeferred<SessionsListResult>();
   let holdRefresh = false;
-  const f = mountPanel((method, params) => {
-    const values = asOptionalRecord(params);
-    if (method === "sessions.list") {
-      return values?.spawnedBy ? (holdRefresh ? revalidation.promise : page(rows)) : page([]);
-    }
-    if (method === "sessions.abort") {
-      return aborted.promise;
-    }
-    if (method === "chat.history") {
-      return {
-        sessionId: values?.sessionKey === rows[0]!.key ? rows[0]!.sessionId : rows[1]!.sessionId,
-        messages: [],
-        hasMore: false,
-        totalMessages: 0,
-      };
-    }
-    return {};
-  }, false);
+  const f = mountRows(() => rows, false, {
+    list: () => (holdRefresh ? revalidation.promise : page(rows)),
+    abort: () => aborted.promise,
+  });
   onTestFinished(() => {
     aborted.resolve({ aborted: true });
     revalidation.resolve(page(rows));
@@ -304,7 +308,7 @@ it("keeps desktop row Stop feedback independent, preserves navigation, and relea
   const stops = () => f.panel.querySelectorAll<HTMLButtonElement>(".subagents-desktop__stop");
   await waitForSolid(() => expect(stops()).toHaveLength(2));
   const retainedStop = stops()[0]!;
-  const retainedOpen = f.panel.querySelector<HTMLButtonElement>(".subagents-desktop__open")!;
+  const retainedOpen = f.find(".subagents-desktop__open")!;
   retainedStop.click();
   await waitForSolid(() => expect(retainedStop.disabled).toBe(true));
   expect(stops()[1]!.disabled).toBe(false);
@@ -335,30 +339,14 @@ it("keeps desktop row Stop feedback independent, preserves navigation, and relea
 
 it("does not redirect a mobile confirmation to a replacement run", async () => {
   let row = child("confirm");
-  const f = mountPanel((method, params) => {
-    const values = asOptionalRecord(params);
-    if (method === "sessions.list") {
-      return page(values?.spawnedBy ? [row] : []);
-    }
-    if (method === "chat.history") {
-      return { sessionId: row.sessionId, messages: [], hasMore: false, totalMessages: 0 };
-    }
-    if (method === "sessions.abort") {
-      return { aborted: true };
-    }
-    return {};
-  }, true);
-  await waitForSolid(() =>
-    expect(f.panel.querySelector(".chat-subagents-mobile__stop")).not.toBeNull(),
-  );
-  f.panel.querySelector<HTMLButtonElement>(".chat-subagents-mobile__stop")!.click();
+  const f = mountRows(() => [row], true, { abort: () => ({ aborted: true }) });
+  await f.waitForCount(".chat-subagents-mobile__stop", 1);
+  f.find(".chat-subagents-mobile__stop")!.click();
   const confirm = () => document.querySelector<HTMLButtonElement>("openclaw-modal-actions .danger");
   await waitForSolid(() => expect(confirm()).not.toBeNull());
   row = { ...row, activeRunIds: ["replacement-run"], updatedAt: 2 };
   await f.sessions.refreshList({ ...childSessionListQuery(parentKey), force: true });
-  await waitForSolid(() =>
-    expect(f.panel.querySelector(".chat-subagents-mobile__stop")).not.toBeNull(),
-  );
+  await f.waitForCount(".chat-subagents-mobile__stop", 1);
   confirm()!.click();
   await waitForSolid(() => expect(confirm()).toBeNull());
   expect(f.request.mock.calls.filter(([method]) => method === "sessions.abort")).toEqual([]);
@@ -368,27 +356,16 @@ it.each(["parent", "hidden", "connection"] as const)(
   "retires held Stop feedback on %s replacement",
   async (replacement) => {
     const aborted = createDeferred<{ aborted: boolean }>();
-    const f = mountPanel((method, params) => {
-      const values = asOptionalRecord(params);
-      if (method === "sessions.list") {
-        const spawnedBy = typeof values?.spawnedBy === "string" ? values.spawnedBy : undefined;
-        return page(spawnedBy ? [{ ...child(spawnedBy), spawnedBy }] : []);
-      }
-      if (method === "sessions.abort") {
-        return aborted.promise;
-      }
-      if (method === "chat.history") {
-        return {
-          sessionId: `session-${parentKey}`,
-          messages: [],
-          hasMore: false,
-          totalMessages: 0,
-        };
-      }
-      return {};
-    }, false);
+    const f = mountRows(
+      (params) => {
+        const spawnedBy = typeof params?.spawnedBy === "string" ? params.spawnedBy : parentKey;
+        return [{ ...child(spawnedBy), spawnedBy }];
+      },
+      false,
+      { abort: () => aborted.promise, history: () => history(`session-${parentKey}`) },
+    );
     onTestFinished(() => aborted.resolve({ aborted: true }));
-    const stop = () => f.panel.querySelector<HTMLButtonElement>(".subagents-desktop__stop");
+    const stop = () => f.find(".subagents-desktop__stop");
     await waitForSolid(() => expect(stop()).not.toBeNull());
     stop()!.click();
     await waitForSolid(() => expect(stop()!.disabled).toBe(true));

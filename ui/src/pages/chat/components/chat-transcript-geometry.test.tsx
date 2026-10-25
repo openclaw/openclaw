@@ -468,9 +468,7 @@ it("keeps rendering rows after a hide-transition zero rect", async () => {
       observer.emit(0, 0);
     }
     for (const row of transcriptRows(container)) {
-      if (observer.observes(row)) {
-        observer.emitTarget(row, 0, 0);
-      }
+      observer.emitTarget(row, 0, 0);
     }
   }
   render(renderChatThread(props, transcript), container);

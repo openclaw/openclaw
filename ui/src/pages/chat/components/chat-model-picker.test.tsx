@@ -20,6 +20,30 @@ beforeAll(async () => {
 beforeEach(installModelPickerLayout);
 afterEach(() => vi.restoreAllMocks());
 
+function control<T extends HTMLElement = HTMLButtonElement>(
+  root: ParentNode,
+  name: string,
+  value?: string,
+) {
+  return root.querySelector<T>(modelControlSelector(name, value));
+}
+
+function toggleMenu(details: HTMLDetailsElement, open: boolean) {
+  details.open = open;
+  details.dispatchEvent(new Event("toggle"));
+}
+
+function searchFor(input: HTMLInputElement, value: string) {
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+}
+
+function keydown(input: HTMLInputElement, key: string) {
+  input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  flush();
+}
+
 it.each([false, true])(
   "initially expands the selected provider and retains toggles on reopen (inherited=%s)",
   async (inherited) => {
@@ -39,11 +63,8 @@ it.each([false, true])(
     const { container, update } = mountPicker(params);
     await waitForMenu(container);
     const details = container.querySelector<HTMLDetailsElement>("details")!;
-    const selected = container.querySelector<HTMLButtonElement>(
-      modelControlSelector("option", "selected/current"),
-    )!;
-    const other = () =>
-      container.querySelector<HTMLButtonElement>(modelControlSelector("option", "other/first"));
+    const selected = control(container, "option", "selected/current")!;
+    const other = () => control(container, "option", "other/first");
     const toggle = selected
       .closest("section")!
       .querySelector<HTMLButtonElement>("[data-chat-model-provider-toggle]")!;
@@ -54,10 +75,8 @@ it.each([false, true])(
     toggle.click();
     flush();
     expect(selected.isConnected).toBe(false);
-    details.open = false;
-    details.dispatchEvent(new Event("toggle"));
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
+    toggleMenu(details, false);
+    toggleMenu(details, true);
     await waitForMenu(container);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(selected.isConnected).toBe(false);
@@ -66,8 +85,7 @@ it.each([false, true])(
     // The next selection, including a change while closed, owns the open group.
     update({ ...params, open: false, selectedModelValue: "other/first" });
     details.dispatchEvent(new Event("toggle"));
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
+    toggleMenu(details, true);
     await waitForMenu(container);
     expect(other()?.hidden).toBe(false);
     expect(selected.isConnected).toBe(false);
@@ -88,13 +106,11 @@ it("retains disclosure across catalog refreshes and forgets removed providers", 
   await waitForMenu(container);
   const group = () =>
     container.querySelector<HTMLElement>('[data-chat-model-provider-group="other"]')!;
-  const toggle = () =>
-    group().querySelector<HTMLButtonElement>(modelControlSelector("provider-toggle"))!;
-  const rest = () =>
-    group().querySelector<HTMLButtonElement>(modelControlSelector("option", "other/rest"))!;
+  const toggle = () => control(group(), "provider-toggle")!;
+  const rest = () => control(group(), "option", "other/rest")!;
   toggle().click();
   flush();
-  group().querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"))!.click();
+  control(group(), "more-toggle")!.click();
   flush();
   const initialRest = rest();
   expect(initialRest.hidden).toBe(false);
@@ -114,9 +130,7 @@ it("retains disclosure across catalog refreshes and forgets removed providers", 
   toggle().click();
   flush();
   expect(rest()).toBeNull();
-  expect(
-    group().querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"))!.hidden,
-  ).toBe(false);
+  expect(control(group(), "more-toggle")!.hidden).toBe(false);
 });
 
 it.each([false, true])(
@@ -145,17 +159,12 @@ it.each([false, true])(
         : ["fixture/model-299", "fixture/model-0", "fixture/model-1"],
     );
     expect(rows[hasDefault ? 1 : 0]?.getAttribute("aria-selected")).toBe("true");
-    const more = () =>
-      container.querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"));
-    const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
-    search.value = "Model 298";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    const more = () => control(container, "more-toggle");
+    const search = control<HTMLInputElement>(container, "search")!;
+    searchFor(search, "Model 298");
     expect(visibleRows().map((row) => row.dataset.chatModelOption)).toEqual(["fixture/model-298"]);
     expect(more()).toBeNull();
-    search.value = "";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    searchFor(search, "");
     expect(visibleRows()).toHaveLength(9);
     more()!.click();
     flush();
@@ -179,16 +188,12 @@ it.each([false, true])(
       open: true,
     });
     await waitForMenu(container);
-    const more = container.querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"))!;
+    const more = control(container, "more-toggle")!;
     const details = container.querySelector("details")!;
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
+    toggleMenu(details, true);
     await waitForMenu(container);
-    const rest = () =>
-      container.querySelector<HTMLButtonElement>(modelControlSelector("option", "fixture/rest"));
-    const group = container.querySelector<HTMLButtonElement>(
-      modelControlSelector("provider-toggle"),
-    )!;
+    const rest = () => control(container, "option", "fixture/rest");
+    const group = control(container, "provider-toggle")!;
     expect(more.hidden).toBe(false);
     expect(rest()).toBeNull();
 
@@ -199,7 +204,7 @@ it.each([false, true])(
     expect(rest()?.hidden).toBe(false);
     // Keyboard focus lands on the first selectable revealed model, else back on search.
     expect(document.activeElement).toBe(
-      restDisabled ? container.querySelector<HTMLElement>(modelControlSelector("search")) : rest(),
+      restDisabled ? control<HTMLElement>(container, "search") : rest(),
     );
 
     group.click();
@@ -293,13 +298,9 @@ it("derives rank and keyboard choices across model, target, and account rows", a
   });
   const { container, update } = mountPicker(params);
   await waitForMenu(container);
-  await waitForSolid(() =>
-    expect(container.querySelector(modelControlSelector("target", "remote"))).not.toBeNull(),
-  );
-  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
-  search.value = "needle";
-  search.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
+  await waitForSolid(() => expect(control(container, "target", "remote")).not.toBeNull());
+  const search = control<HTMLInputElement>(container, "search")!;
+  searchFor(search, "needle");
   const ranked = () =>
     [
       ...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]:not([hidden])"),
@@ -325,16 +326,15 @@ it("derives rank and keyboard choices across model, target, and account rows", a
       .querySelector("[data-chat-model-shortcut]")
       ?.getAttribute("data-chat-model-shortcut-number"),
   ).toBe("1");
-  search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-  flush();
+  keydown(search, "ArrowDown");
   const target = ranked()[2]!;
   expect(search.getAttribute("aria-activedescendant")).toBe(target.id);
   update({
     ...params,
     modelOptions: [option("fixture", "new", { label: "Needle new" }), ...params.modelOptions],
   });
-  expect(container.querySelector(modelControlSelector("highlighted"))).toBe(target);
-  search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  expect(control(container, "highlighted")).toBe(target);
+  keydown(search, "Enter");
   expect(selectTarget).toHaveBeenCalledWith("target", "remote");
   expect(selectAccount).not.toHaveBeenCalled();
 });
@@ -368,10 +368,8 @@ it("keeps model search and account indexing live while CLI targets load", async 
   });
   const { container, update } = mountPicker(params);
   await waitForMenu(container);
-  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
-  const model = container.querySelector<HTMLButtonElement>(
-    modelControlSelector("option", "fixture/current"),
-  )!;
+  const search = control<HTMLInputElement>(container, "search")!;
+  const model = control(container, "option", "fixture/current")!;
   expect(
     container.querySelector(
       '[data-chat-model-target-group] [data-chat-model-catalog-state="loading"]',
@@ -379,28 +377,21 @@ it("keeps model search and account indexing live while CLI targets load", async 
   ).not.toBeNull();
   expect(accountProps).toHaveBeenLastCalledWith(1);
   search.focus();
-  search.value = "needle";
-  search.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
+  searchFor(search, "needle");
   expect(model.hidden).toBe(false);
   expect(search.getAttribute("aria-activedescendant")).toBe(model.id);
-  expect(container.querySelector(modelControlSelector("option", "account:current"))).not.toBeNull();
+  expect(control(container, "option", "account:current")).not.toBeNull();
 
   const options = [{ value: "remote", label: "Needle target" }];
   update({ ...params, targetGroups: [{ ...group, options }] });
   completion.resolve(options);
-  await waitForSolid(() =>
-    expect(container.querySelector(modelControlSelector("target", "remote"))).not.toBeNull(),
-  );
-  expect(container.querySelector(modelControlSelector("search"))).toBe(search);
-  expect(container.querySelector(modelControlSelector("option", "fixture/current"))).toBe(model);
+  await waitForSolid(() => expect(control(container, "target", "remote")).not.toBeNull());
+  expect(control(container, "search")).toBe(search);
+  expect(control(container, "option", "fixture/current")).toBe(model);
   expect(document.activeElement).toBe(search);
   expect(accountProps).toHaveBeenLastCalledWith(2);
-  search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-  flush();
-  const target = container.querySelector<HTMLButtonElement>(
-    modelControlSelector("target", "remote"),
-  )!;
+  keydown(search, "ArrowDown");
+  const target = control(container, "target", "remote")!;
   expect(search.getAttribute("aria-activedescendant")).toBe(target.id);
 
   target.focus();
@@ -412,7 +403,7 @@ it("keeps model search and account indexing live while CLI targets load", async 
     targetGroups: [{ ...group, options }],
   });
   await waitForSolid(() => expect(model.textContent).toContain("Needle renamed"));
-  expect(container.querySelector(modelControlSelector("target", "remote"))).toBe(target);
+  expect(control(container, "target", "remote")).toBe(target);
   expect(document.activeElement).toBe(target);
   expect(
     container.querySelector("[data-chat-model-target-group] [data-chat-model-catalog-state]"),
@@ -429,13 +420,11 @@ it("restores the selected keyboard choice when an unfiltered picker reopens", as
   });
   await waitForMenu(container);
   const details = container.querySelector<HTMLDetailsElement>("details")!;
-  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
-  details.open = false;
-  details.dispatchEvent(new Event("toggle"));
+  const search = control<HTMLInputElement>(container, "search")!;
+  toggleMenu(details, false);
   flush();
-  details.open = true;
-  details.dispatchEvent(new Event("toggle"));
+  toggleMenu(details, true);
   flush();
-  search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  keydown(search, "Enter");
   expect(onModelSelect).toHaveBeenCalledWith("fixture/current", "main", undefined);
 });
