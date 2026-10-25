@@ -7,97 +7,46 @@ import {
   runLoadedScenarioFlow,
 } from "./scenario-flow-runner.test-support.js";
 
-function terminalReceipt(params: {
-  runId: string;
-  provider: string;
-  model: string;
+type Turn = {
+  reply: string;
+  outbound?: string;
   responseModel?: string;
   rerouted?: boolean;
   effective?: { provider?: string; model?: string };
-}) {
-  const effective = {
-    provider: params.effective?.provider ?? params.provider,
-    model: params.effective?.model ?? params.model,
-  };
-  const responseModel = params.responseModel ?? effective.model;
-  return {
-    runId: params.runId,
-    sessionId: "session-model-switch",
-    turnId: `turn-${params.runId}`,
-    requested: { provider: params.provider, model: params.model },
-    effective: { ...effective, responseModel },
-    successfulToolNames: [],
-    rerouted:
-      params.rerouted ?? (effective.provider !== params.provider || responseModel !== params.model),
-    terminalDisposition: "visible",
-  };
-}
-
-async function runFollowUp(params?: {
-  alternateModel?: string;
-  alternateReceiptRunId?: string;
-  primaryReplyText?: string;
-  primaryOutboundText?: string;
-  primaryDelivery?: { status: string; resultCount: number } | null;
-  alternateReplyText?: string;
-  alternateOutboundText?: string;
-  alternateDelivery?: { status: string; resultCount: number } | null;
-  primaryResponseModel?: string;
-  primaryRerouted?: boolean;
-  primaryEffective?: { provider?: string; model?: string };
-  alternateResponseModel?: string;
-  alternateRerouted?: boolean;
-  alternateEffective?: { provider?: string; model?: string };
-  unrelatedPrimaryOutboundText?: string;
-  unrelatedLaterOutboundText?: string;
-  onRun?: () => void;
-}) {
+};
+async function runFollowUp(primary: Partial<Turn> = {}, alternate: Partial<Turn> = {}) {
+  const turns: Turn[] = [
+    { reply: "hello from the primary model", ...primary },
+    { reply: "the model switch handoff completed", ...alternate },
+  ];
   const state = createQaBusState();
   let call = 0;
   const runAgentPrompt = vi.fn(
     async (_env: unknown, prompt: { provider?: string; model?: string; message: string }) => {
-      params?.onRun?.();
       call += 1;
       const runId = `run-${call}`;
       const provider = prompt.provider ?? "openai";
       const model = prompt.model ?? "primary-model";
-      const replyText =
-        call === 1
-          ? (params?.primaryReplyText ?? "hello from the primary model")
-          : (params?.alternateReplyText ?? "the model switch handoff completed");
-      addQaFlowTestOutbound(
-        state,
-        "dm:qa-operator",
-        call === 1
-          ? (params?.primaryOutboundText ?? replyText)
-          : (params?.alternateOutboundText ?? replyText),
-      );
-      if (call === 1 && params?.unrelatedPrimaryOutboundText) {
-        addQaFlowTestOutbound(state, "dm:qa-operator", params.unrelatedPrimaryOutboundText);
-      }
-      if (call === 2 && params?.unrelatedLaterOutboundText) {
-        addQaFlowTestOutbound(state, "dm:qa-operator", params.unrelatedLaterOutboundText);
-      }
-      const terminalDelivery = call === 1 ? params?.primaryDelivery : params?.alternateDelivery;
+      const turn = turns[call - 1]!;
+      const effective = { provider, model, ...turn.effective };
+      const responseModel = turn.responseModel ?? effective.model;
+      addQaFlowTestOutbound(state, "dm:qa-operator", turn.outbound ?? turn.reply);
       return {
         started: { runId },
         waited: {
           status: "ok",
-          ...(terminalDelivery === null
-            ? {}
-            : {
-                terminalDelivery: terminalDelivery ?? { status: "sent", resultCount: 1 },
-              }),
-          terminalReply: { disposition: "visible", text: replyText },
-          terminalReceipt: terminalReceipt({
-            runId: call === 2 ? (params?.alternateReceiptRunId ?? runId) : runId,
-            provider,
-            model,
-            responseModel:
-              call === 1 ? params?.primaryResponseModel : params?.alternateResponseModel,
-            rerouted: call === 1 ? params?.primaryRerouted : params?.alternateRerouted,
-            effective: call === 1 ? params?.primaryEffective : params?.alternateEffective,
-          }),
+          terminalDelivery: { status: "sent", resultCount: 1 },
+          terminalReply: { disposition: "visible", text: turn.reply },
+          terminalReceipt: {
+            runId,
+            sessionId: "session-model-switch",
+            turnId: `turn-${runId}`,
+            requested: { provider, model },
+            effective: { ...effective, responseModel },
+            successfulToolNames: [],
+            rerouted: turn.rerouted ?? (effective.provider !== provider || responseModel !== model),
+            terminalDisposition: "visible",
+          },
         },
       };
     },
@@ -108,7 +57,7 @@ async function runFollowUp(params?: {
       env: {
         providerMode: "mock-openai",
         primaryModel: "openai/primary-model",
-        alternateModel: params?.alternateModel ?? "OPENAI/alternate-alias",
+        alternateModel: "OPENAI/alternate-alias",
         gateway: {},
       },
       runAgentPrompt,
@@ -123,16 +72,20 @@ async function runFollowUp(params?: {
 
 describe("model-switch follow-up terminal evidence", () => {
   it("invokes the canonical alias target and records exact run-owned evidence", async () => {
-    const { result, runAgentPrompt } = await runFollowUp({
-      primaryReplyText: "hello **from the primary model**",
-      primaryOutboundText: "hello from the primary model",
-      alternateReplyText: "the **model switch** handoff completed",
-      alternateOutboundText: "the model switch handoff completed",
-      primaryResponseModel: "primary-model-concrete",
-      primaryRerouted: false,
-      alternateResponseModel: "alternate-model-concrete",
-      alternateRerouted: false,
-    });
+    const { result, runAgentPrompt } = await runFollowUp(
+      {
+        reply: "hello **from the primary model**",
+        outbound: "hello from the primary model",
+        responseModel: "primary-model-concrete",
+        rerouted: false,
+      },
+      {
+        reply: "the **model switch** handoff completed",
+        outbound: "the model switch handoff completed",
+        responseModel: "alternate-model-concrete",
+        rerouted: false,
+      },
+    );
 
     expect(result.status).toBe("pass");
     expect(runAgentPrompt.mock.calls[1]?.[1]).toMatchObject({
@@ -156,14 +109,14 @@ describe("model-switch follow-up terminal evidence", () => {
     default: "default-model run did not return an exact owned terminal receipt",
     alternate: "alternate-model run did not return distinct exact owned model evidence",
   } as const;
-  const receiptOverrides = (
+  const runWithReceipt = (
     run: keyof typeof receiptErrors,
     rerouted: boolean,
     effective?: { provider?: string; model?: string },
   ) =>
     run === "default"
-      ? { primaryRerouted: rerouted, primaryEffective: effective }
-      : { alternateRerouted: rerouted, alternateEffective: effective };
+      ? runFollowUp({ rerouted, effective })
+      : runFollowUp({}, { rerouted, effective });
 
   it.each([
     { run: "default" as const, changed: "model", effective: { model: "fallback-model" } },
@@ -177,19 +130,17 @@ describe("model-switch follow-up terminal evidence", () => {
   ])(
     "requires a changed $run effective $changed to be marked rerouted",
     async ({ run, effective }) => {
-      const { result } = await runFollowUp(receiptOverrides(run, true, effective));
+      const { result } = await runWithReceipt(run, true, effective);
       expect(result.status).toBe("pass");
 
-      await expect(runFollowUp(receiptOverrides(run, false, effective))).rejects.toThrow(
-        receiptErrors[run],
-      );
+      await expect(runWithReceipt(run, false, effective)).rejects.toThrow(receiptErrors[run]);
     },
   );
 
   it.each(["default", "alternate"] as const)(
     "rejects an unchanged %s route reported as rerouted",
     async (run) => {
-      await expect(runFollowUp(receiptOverrides(run, true))).rejects.toThrow(receiptErrors[run]);
+      await expect(runWithReceipt(run, true)).rejects.toThrow(receiptErrors[run]);
     },
   );
 });

@@ -1,21 +1,55 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { markdownToIRWithMeta } from "openclaw/plugin-sdk/text-chunking";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildQaConfidenceReport, renderQaConfidenceMarkdownReport } from "./confidence-report.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
+
+const { makeTempDir, cleanup } = createTempDirHarness();
+afterEach(cleanup);
+const generatedAt = "2026-05-13T00:00:00.000Z";
+const counts = { total: 1, passed: 0, failed: 0, blocked: 0, missing: 0, unknown: 0 };
+const lane = {
+  id: "evidence",
+  title: "Evidence",
+  artifact: "summary.json",
+  required: true,
+};
+type Lane = Parameters<typeof buildQaConfidenceReport>[0]["manifest"]["lanes"][number];
+function buildReport(artifactRoot: string, lanes: Lane[], strictGlobalPass = false) {
+  return buildQaConfidenceReport({
+    manifest: {
+      version: 1,
+      profile: strictGlobalPass ? "confidence-table" : "evidence-classification",
+      lanes,
+    },
+    artifactRoot,
+    generatedAt,
+    strictZeroUnknowns: !strictGlobalPass,
+    strictGlobalPass,
+  });
+}
+function missingLane(
+  id: string,
+  title: string,
+  productImpact: string,
+  qaImpact: string,
+  missingReason: string,
+): Lane {
+  return {
+    id,
+    title,
+    kind: "qa-suite-summary",
+    artifact: `${id}/qa-suite-summary.json`,
+    required: true,
+    missingVerdict: "environment-blocked",
+    missingReason,
+    productImpact,
+    qaImpact,
+  };
+}
 
 describe("qa confidence report Markdown", () => {
-  let tempRoot: string;
-
-  beforeEach(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-confidence-markdown-"));
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  });
-
   it.each([
     [
       "non-object suite",
@@ -76,32 +110,13 @@ describe("qa confidence report Markdown", () => {
   ] as const)(
     "preserves evidence classification for %s",
     async (_name, kind, payload, details, status) => {
-      await fs.mkdir(path.join(tempRoot, "evidence"), { recursive: true });
-      await fs.writeFile(
-        path.join(tempRoot, "evidence/summary.json"),
-        `${JSON.stringify(payload, null, 2)}\n`,
-        "utf8",
-      );
-      const lane = {
-        id: "evidence",
-        title: "Evidence",
-        kind,
-        artifact: "evidence/summary.json",
-        required: true,
-      };
-      const generatedAt = "2026-05-13T00:00:00.000Z";
-      const report = await buildQaConfidenceReport({
-        manifest: {
-          version: 1,
-          profile: "evidence-classification",
-          lanes: [{ ...lane, failureVerdict: "fixture-bug" }],
-        },
-        artifactRoot: tempRoot,
-        strictZeroUnknowns: true,
-        generatedAt,
-      });
+      const tempRoot = await makeTempDir("qa-confidence-markdown-");
+      await fs.writeFile(path.join(tempRoot, lane.artifact), JSON.stringify(payload));
+      const report = await buildReport(tempRoot, [
+        { ...lane, kind, failureVerdict: "fixture-bug" },
+      ]);
       const unknown = status === "unknown";
-      const expected = {
+      expect(report).toEqual({
         generatedAt,
         profile: "evidence-classification",
         strictZeroUnknowns: true,
@@ -109,31 +124,19 @@ describe("qa confidence report Markdown", () => {
         pass: !unknown,
         zeroUnknowns: !unknown,
         globalPass: false,
-        counts: {
-          total: 1,
-          passed: 0,
-          failed: unknown ? 0 : 1,
-          blocked: 0,
-          missing: 0,
-          unknown: unknown ? 1 : 0,
-        },
+        counts: { ...counts, failed: unknown ? 0 : 1, unknown: unknown ? 1 : 0 },
         failures: unknown ? [`evidence is unclassified: ${details}`] : [],
         lanes: [
           {
-            id: lane.id,
-            title: lane.title,
+            ...lane,
             kind,
-            artifact: lane.artifact,
             artifactPath: lane.artifact,
-            required: true,
             status,
             ...(unknown ? {} : { verdict: "fixture-bug" }),
             details,
           },
         ],
-      };
-
-      expect(JSON.stringify(report)).toBe(JSON.stringify(expected));
+      });
       expect(report.lanes[0]).not.toHaveProperty("skippedCount");
       if (unknown) {
         expect(report.lanes[0]).not.toHaveProperty("verdict");
@@ -155,39 +158,21 @@ describe("qa confidence report Markdown", () => {
   ] as const)(
     "preserves impacts %s / %s in the confidence table",
     async (productImpact, qaImpact, expectedImpacts) => {
-      const report = await buildQaConfidenceReport({
-        manifest: {
-          version: 1,
-          profile: "confidence-table",
-          lanes: [
-            {
-              id: "missing",
-              title: "Missing",
-              kind: "qa-suite-summary",
-              artifact: "missing/qa-suite-summary.json",
-              required: true,
-              missingVerdict: "environment-blocked",
-              missingReason: String.raw`path\|fallback unavailable`,
-              productImpact,
-              qaImpact,
-            },
-            {
-              id: "following-control",
-              title: "Following control",
-              kind: "qa-suite-summary",
-              artifact: "control/qa-suite-summary.json",
-              required: true,
-              missingVerdict: "environment-blocked",
-              missingReason: "Control unavailable.",
-              productImpact: "P4",
-              qaImpact: "P0",
-            },
-          ],
-        },
-        artifactRoot: tempRoot,
-        strictGlobalPass: true,
-        generatedAt: "2026-05-13T00:00:00.000Z",
-      });
+      const tempRoot = await makeTempDir("qa-confidence-markdown-");
+      const report = await buildReport(
+        tempRoot,
+        [
+          missingLane(
+            "missing",
+            "Missing",
+            productImpact,
+            qaImpact,
+            String.raw`path\|fallback unavailable`,
+          ),
+          missingLane("following-control", "Following control", "P4", "P0", "Control unavailable."),
+        ],
+        true,
+      );
       const markdown = renderQaConfidenceMarkdownReport(report);
       const { tables } = markdownToIRWithMeta(markdown, { tableMode: "block" });
 
@@ -215,14 +200,7 @@ describe("qa confidence report Markdown", () => {
         qaImpact,
         details: String.raw`path\|fallback unavailable`,
       });
-      expect(report.counts).toEqual({
-        total: 2,
-        passed: 0,
-        failed: 0,
-        blocked: 2,
-        missing: 0,
-        unknown: 0,
-      });
+      expect(report.counts).toEqual({ ...counts, total: 2, blocked: 2 });
       expect(report).toMatchObject({ pass: false, zeroUnknowns: true, globalPass: false });
     },
   );
