@@ -371,7 +371,9 @@ it.skipIf(process.platform === "win32")(
     );
 
     fs.chmodSync(rootDir, 0o755);
-    expect(inspectPluginCapabilityArtifact(rootDir).manifest.id).toBe("permissions");
+    expect(inspectPluginCapabilityArtifact(rootDir)).toMatchObject({
+      manifest: { id: "permissions" },
+    });
   },
 );
 
