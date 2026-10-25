@@ -3,15 +3,16 @@
 import { useSubagentControlFixture } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
+import {
+  createControlRunFixture,
+  enqueueControlRun,
+  holdControlSessionPublication,
+} from "../../agents/subagents/registry/subagent-control.fixtures.test-support.js";
 import * as lifecycleCompletion from "../../agents/subagents/registry/subagent-registry-lifecycle-completion.js";
 import * as lifecycleDelivery from "../../agents/subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import {
-  registerSubagentRun,
-  markSubagentRunTerminated,
-} from "../../agents/subagents/registry/subagent-registry.js";
-import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { enqueueSwarmRun, isSwarmRunActive } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { markSubagentRunTerminated } from "../../agents/subagents/registry/subagent-registry.js";
+import { isSwarmRunActive } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryExactReplacements } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -19,64 +20,43 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gatewa
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
-import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import * as stateOperation from "../../state/openclaw-state-worker-operation.js";
 
 const fixture = useSubagentControlFixture();
+const runs = createControlRunFixture(() => fixture.stateDir);
 
 it.for(["before commit", "after commit"] as const)(
   "retains collector completion through metadata publication %s",
   async (boundary, { signal }) => {
     const runId = "completion-publication";
-    const childKey = "agent:main:subagent:completion-publication";
-    const sessionId = "completion-publication-session";
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
+    const {
       sessionKey: childKey,
-      defaultSessionId: sessionId,
-      lifecycleRevision: "completion-publication-original",
-    });
-    await registerSubagentRun({
-      runId,
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "complete while metadata publishes",
-      cleanup: "keep",
-      collect: true,
-      expectsCompletionMessage: false,
-    });
+      sessionId,
+      storePath,
+    } = await runs.seed(runId, { collect: true });
     await markSubagentRunTerminated({ runId, reason: "killed" });
     const delivery = subagentRuns.get(runId)!.delivery;
     let retainedDeliveryWhileQueued: boolean | undefined;
     const next = vi.fn(async () => {});
-    enqueueSwarmRun({
-      groupId: "completion-publication",
-      runId: "next",
-      start: next,
-      activeRunIds: [runId],
-      maxConcurrent: 1,
-      onStartFailure: () => true,
-    });
+    enqueueControlRun(runId, "next", [runId], next);
     const completionScope = new AsyncLocalStorage<boolean>();
-    const producerScope = new AsyncLocalStorage<boolean>();
-    const nativeHeld = createDeferredCore();
     const producerQueued = createDeferredCore();
-    const releaseNative = createDeferredCore();
     const completionDone = createDeferredCore<{ error?: unknown }>();
-    let holdingResult = false;
+    const held = holdControlSessionPublication({
+      signal,
+      consumerScope: completionScope,
+      onJoined: () => {
+        retainedDeliveryWhileQueued = subagentRuns.get(runId)?.delivery === delivery;
+        held.release();
+      },
+    });
+    const { producerScope, nativeHeld, release, state } = held;
     let registryReceipt = false;
     let producerOutcome: Promise<unknown> | undefined;
-    const release = () => releaseNative.resolve();
-    signal.addEventListener("abort", release, { once: true });
-    const runQueued = writerQueue.runQueuedStoreWrite;
+    const runQueued = vi.mocked(writerQueue.runQueuedStoreWrite).getMockImplementation()!;
     vi.spyOn(writerQueue, "runQueuedStoreWrite").mockImplementation((params) => {
-      const relevant = params.queues === SQLITE_SESSION_WRITER_QUEUES;
+      const relevant = producerScope.getStore() && params.queues === SQLITE_SESSION_WRITER_QUEUES;
       const before = relevant
         ? new Set(params.queues.get(params.storePath)?.pending ?? [])
         : undefined;
@@ -85,56 +65,11 @@ it.for(["before commit", "after commit"] as const)(
         before &&
         params.queues.get(params.storePath)?.pending.some((entry) => !before.has(entry))
       ) {
-        if (producerScope.getStore()) {
-          producerQueued.resolve();
-          release();
-        } else if (completionScope.getStore() && holdingResult) {
-          retainedDeliveryWhileQueued = subagentRuns.get(runId)?.delivery === delivery;
-          release();
-        }
+        producerQueued.resolve();
+        release();
       }
       return result;
     });
-    const wrapExecution = (
-      execution: ReturnType<typeof executionOwner.captureOpenClawAgentDatabaseExecution>,
-    ) => {
-      if (!producerScope.getStore()) {
-        return execution;
-      }
-      const runExisting: typeof execution.runExisting = (source, operation, options) =>
-        execution.runExisting(
-          source,
-          (scope) =>
-            operation({
-              execute(command, commandOptions) {
-                const pending = scope.execute(command, commandOptions);
-                if (command.type !== "session.entries.replace" || holdingResult) {
-                  return pending;
-                }
-                holdingResult = true;
-                return pending.then(async (value) => {
-                  nativeHeld.resolve();
-                  await releaseNative.promise;
-                  return value;
-                });
-              },
-            }),
-          options,
-        );
-      return new Proxy(execution, {
-        get(original, key, receiver) {
-          return key === "runExisting" ? runExisting : Reflect.get(original, key, receiver);
-        },
-      });
-    };
-    const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
-    vi.spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-      (...args) => wrapExecution(capture(...args)),
-    );
-    const capturePreparation = executionOwner.captureOpenClawAgentDatabasePreparationExecution;
-    vi.spyOn(executionOwner, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
-      (...args) => wrapExecution(capturePreparation(...args)),
-    );
     const startProducer = () => {
       producerOutcome ??= runOutsideAsyncWorkScope(() =>
         runWithGatewayIndependentRootWorkAdmission(
@@ -232,7 +167,7 @@ it.for(["before commit", "after commit"] as const)(
       const outcome = await completionDone.promise;
       release();
       expect(await producerOutcome).toEqual({ ok: true });
-      expect(holdingResult).toBe(true);
+      expect(state.holdingResult).toBe(true);
       expect(outcome).toEqual({});
       if (boundary === "before commit") {
         expect(retainedDeliveryWhileQueued).toBe(true);
@@ -250,9 +185,7 @@ it.for(["before commit", "after commit"] as const)(
     } finally {
       release();
       await producerOutcome;
-      signal.removeEventListener("abort", release);
-      producerScope.disable();
-      completionScope.disable();
+      held.dispose();
     }
   },
 );
