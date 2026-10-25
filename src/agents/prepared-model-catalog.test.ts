@@ -328,6 +328,111 @@ describe("prepared model catalog access", () => {
     },
   );
 
+  it("falls back to the configured owner for a project-parent read-only preflight (issue #182467)", async () => {
+    // sessions_spawn preflight supplies the project workspaceDir with readOnly:true. The
+    // configured owner is published at the agent's own workspace, so the exact and activation
+    // candidates both miss it and the preflight would otherwise fall back to a runtime-free
+    // ephemeral read-only catalog without the plugin registry — rejecting plugin-resolved
+    // provider models (deepseek, Haiku, etc.) even though the configured owner knows them.
+    // The fallback must probe at the agent's known configured workspace (not any workspace) with
+    // agent, agent-directory, inherited-auth, and effective-env identity preserved so the owner
+    // resolver's exact lookup — not its wildcard — picks up the single configured owner.
+    const projectWorkspace = "/tmp/project-outside-agent-workspace";
+    const callerEnv = { ...process.env, OPENCLAW_TEST_SCOPE: "project-parent-182467" };
+    const pluginModel = { provider: "deepseek", id: "deepseek-flash", name: "DeepSeek Flash" };
+    const fullWithPlugin = {
+      ...fullSnapshot,
+      modelCatalog: { entries: [pluginModel], routeVariants: [] },
+    };
+    // Simulate the sole published configured owner: match ONLY when every identity dimension
+    // lines up. Any divergence (agent, agent-dir, env, workspace != configured) rejects.
+    mocks.prepareSnapshot.mockImplementation(async (input: Record<string, unknown>) => {
+      if (
+        input.agentId === "main" &&
+        input.agentDir === agentDir &&
+        input.workspaceDir === workspaceDir &&
+        input.env === callerEnv
+      ) {
+        return fullWithPlugin;
+      }
+      throw new PreparedModelRuntimeOwnerNotPublishedError();
+    });
+    mocks.loadSnapshot.mockResolvedValue(readOnlySnapshot);
+
+    await expect(
+      loadCatalog({ workspaceDir: projectWorkspace, readOnly: true, env: callerEnv }),
+    ).resolves.toBe(fullWithPlugin.modelCatalog);
+    // The ephemeral read-only build (missing plugin model) must not have been taken.
+    expect(mocks.loadSnapshot).not.toHaveBeenCalled();
+    expect(readOnlySnapshot.modelCatalog.entries).not.toContainEqual(pluginModel);
+    // The exact/activation candidates both carry the explicit project workspace.
+    expect(mocks.prepareSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: projectWorkspace, env: callerEnv }),
+    );
+    // The final fallback probes the agent's configured workspace with every other identity
+    // dimension carried over from the caller.
+    expect(mocks.prepareSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        agentDir,
+        workspaceDir,
+        env: callerEnv,
+      }),
+    );
+  });
+
+  it("rejects the project-parent fallback when agent, directory, or env identity diverges", async () => {
+    // The configured owner is keyed on multiple identity dimensions; a competing publication
+    // that matches by workspace but differs on agent/dir/env must not satisfy the fallback.
+    const projectWorkspace = "/tmp/project-outside-agent-workspace";
+    const callerEnv = { ...process.env, OPENCLAW_TEST_SCOPE: "mismatch-182467" };
+    mocks.prepareSnapshot.mockImplementation(async (input: Record<string, unknown>) => {
+      // A different agent / dir / env is published at the agent's configured workspace, so the
+      // resolver would wrongly accept it if any identity dimension were dropped from the fallback.
+      if (
+        input.workspaceDir === workspaceDir &&
+        (input.agentId !== "main" || input.agentDir !== agentDir || input.env !== callerEnv)
+      ) {
+        return fullSnapshot;
+      }
+      throw new PreparedModelRuntimeOwnerNotPublishedError();
+    });
+    mocks.loadSnapshot.mockResolvedValue(readOnlySnapshot);
+
+    await expect(
+      loadCatalog({ workspaceDir: projectWorkspace, readOnly: true, env: callerEnv }),
+    ).resolves.toBe(readOnlySnapshot.modelCatalog);
+    expect(mocks.loadSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("does not synthesize a configured-workspace probe when no explicit workspace is requested", async () => {
+    // The fallback is reserved for callers who supplied an explicit workspace that missed the
+    // published owner; a workspace-less caller already receives the activation probe.
+    mocks.prepareSnapshot.mockResolvedValue(fullSnapshot);
+
+    await expect(loadCatalog({ readOnly: true })).resolves.toBe(fullSnapshot.modelCatalog);
+    expect(mocks.prepareSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the project-parent fallback when the agent's configured workspace is unknown", async () => {
+    // Without a resolvable configured workspace, there is no safe third candidate to probe. The
+    // read-only ephemeral build takes over, matching the pre-#182467 behavior for this shape.
+    mocks.agentIds = [];
+    mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
+    mocks.loadSnapshot.mockResolvedValue(readOnlySnapshot);
+
+    await expect(
+      loadCatalog({
+        agentDir: "/tmp/unknown-agent",
+        workspaceDir: "/tmp/project-outside-agent-workspace",
+        readOnly: true,
+      }),
+    ).resolves.toBe(readOnlySnapshot.modelCatalog);
+    expect(mocks.prepareSnapshot).not.toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: workspaceDir }),
+    );
+  });
+
   it("leases a full generation for a gateway preflight in a dynamic workspace", async () => {
     unpublished();
     mocks.activateSnapshot.mockResolvedValue(undefined);

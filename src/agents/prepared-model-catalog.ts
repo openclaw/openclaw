@@ -162,6 +162,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   full: PreparedModelRuntimeInput;
   activationExact: PreparedModelRuntimeInput;
   activationFull: PreparedModelRuntimeInput;
+  agentConfiguredWorkspaceDir: string | undefined;
 } {
   const config = params.config ?? getRuntimeConfig();
   const explicitOrDefaultAgentId =
@@ -177,9 +178,10 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
         );
   const agentId =
     explicitOrDefaultAgentId ?? (matchingAgentIds.length === 1 ? matchingAgentIds[0] : undefined);
-  const activationWorkspaceDir =
-    params.workspaceDir ??
-    (agentId ? resolveAgentWorkspaceDir(config, agentId, params.env) : undefined);
+  const agentConfiguredWorkspaceDir = agentId
+    ? resolveAgentWorkspaceDir(config, agentId, params.env)
+    : undefined;
+  const activationWorkspaceDir = params.workspaceDir ?? agentConfiguredWorkspaceDir;
   const full: PreparedModelRuntimeInput = {
     ...(agentId ? { agentId } : {}),
     agentDir,
@@ -204,6 +206,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
         : params.readOnly
           ? { ...activationFull, readOnly: true }
           : activationFull,
+    agentConfiguredWorkspaceDir,
   };
 }
 
@@ -268,8 +271,27 @@ async function resolveReadOnlyPublishedModelCatalogOwner(
   preparePublishedOwner = preparePublishedCatalogOwner,
   selection: "owner" | "completed-inventory" = "owner",
 ): Promise<PreparedModelCatalogOwner | undefined> {
-  const { activationFull, full } = resolveInputs(params);
-  for (const candidate of new Set([full, activationFull])) {
+  const { activationFull, agentConfiguredWorkspaceDir, full } = resolveInputs(params);
+  // A project-parent read supplies a project workspace that typically differs from the agent's
+  // configured workspace; the exact and activation candidates both miss the configured owner, so
+  // the final fallback probes the agent's known configured workspace to pick up its published
+  // owner. Agent, inherited-auth, and environment identity are preserved; env is bound to the
+  // effective process environment so `resolvePublishedOwner`'s wildcard clause cannot admit an
+  // owner published under a different environment (issue #182467).
+  const configuredFallback: PreparedModelRuntimeInput | undefined =
+    params.workspaceDir !== undefined &&
+    agentConfiguredWorkspaceDir !== undefined &&
+    agentConfiguredWorkspaceDir !== full.workspaceDir
+      ? {
+          ...full,
+          workspaceDir: agentConfiguredWorkspaceDir,
+          env: full.env ?? process.env,
+        }
+      : undefined;
+  const candidates = configuredFallback
+    ? [full, activationFull, configuredFallback]
+    : [full, activationFull];
+  for (const candidate of new Set(candidates)) {
     try {
       // Full lifecycle owners include provider augmentation omitted by read-only fallback builds.
       const prepared = await preparePublishedOwner(candidate);
