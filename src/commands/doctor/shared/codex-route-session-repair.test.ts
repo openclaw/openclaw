@@ -2,7 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../config/sessions/context-budget.test-support.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
-import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
+import {
+  legacyCodexProviderIdentityKey,
+  type LegacyCodexModelIdentity,
+} from "./codex-route-model-ref.js";
 import { repairCodexSessionStoreRoutes } from "./codex-route-session-repair.test-support.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 
@@ -17,6 +20,14 @@ function autoSession(fields: Partial<SessionEntry>): SessionEntry {
     authProfileOverrideSource: "auto",
     ...fields,
   });
+}
+
+function expectBlocked(store: Record<string, SessionEntry>, identity: LegacyCodexModelIdentity) {
+  const original = structuredClone(store);
+  expect(
+    repairCodexSessionStoreRoutes({ store, blockedModelIdentities: new Set([identity]) }),
+  ).toEqual([]);
+  expect(store).toEqual(original);
 }
 
 describe("repairCodexSessionStoreRoutes", () => {
@@ -109,15 +120,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       legacyCodexProviderIdentityKey("codex"),
       "blocked session namespace test invariant",
     );
-    const original = structuredClone(store);
-
-    const result = repairCodexSessionStoreRoutes({
-      store,
-      blockedModelIdentities: new Set([blockedNamespace]),
-    });
-
-    expect(result).toEqual([]);
-    expect(store).toEqual(original);
+    expectBlocked(store, blockedNamespace);
   });
 
   it("retains a fallback notice atomically when one legacy endpoint is blocked", () => {
@@ -133,7 +136,6 @@ describe("repairCodexSessionStoreRoutes", () => {
         },
       }),
     };
-    const original = structuredClone(store);
     // Build the blocked identity through the production plan so the test
     // exercises the same composition doctor uses.
     const blockedIdentity = expectDefined(
@@ -148,13 +150,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       "blocked fallback notice model identity test invariant",
     );
 
-    const result = repairCodexSessionStoreRoutes({
-      store,
-      blockedModelIdentities: new Set([blockedIdentity]),
-    });
-
-    expect(result).toEqual([]);
-    expect(store).toEqual(original);
+    expectBlocked(store, blockedIdentity);
   });
 
   it("skips valid locked agent-harness rows while repairing ordinary legacy routes", () => {
