@@ -9,8 +9,10 @@ import {
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../../ui/src/test-helpers/control-ui-navigation.ts";
+import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture.tsx";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
 import { meetingStatus } from "../../ui/src/test-helpers/transcripts.test-support.ts";
+import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 
 const sessionKeys = ["agent:main:interaction-a", "agent:main:interaction-b"] as const;
 const sessionQuery = "Interaction 0999";
@@ -30,6 +32,8 @@ export type InteractionScenario = {
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;
   visibility?: "hidden";
+  projectionFamily?: ProjectionFamily;
+  projectionIdle?: boolean;
   /** Count newly inserted rows across the action, including transient replacements. */
   rowSelector?: string;
   prepare: (page: Page, gateway: MockGatewayControls) => Promise<void>;
@@ -526,6 +530,39 @@ async function searchModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...(["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+    id: `projection-outbox-idle-${visibility}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected: `480 actual outbox rows remain mounted for three ${visibility} native-clock idle seconds, then retire independently.`,
+    projectionFamily: "outbox",
+    projectionIdle: true,
+    visibility: visibility === "hidden" ? visibility : undefined,
+    prepare: prepareChat,
+    run: async (page) => {
+      const state = () => page.evaluate(() => document.visibilityState);
+      if ((await state()) !== visibility) throw new Error(`Expected ${visibility} projection page`);
+      await new Promise<void>((resolve) => setTimeout(resolve, 3_000));
+      if (
+        (await state()) !== visibility ||
+        (await page
+          .locator('[data-projection-application="A"] [data-attention-kind="outbox"]')
+          .count()) !== 400
+      ) {
+        throw new Error("Projection idle visibility or mounted family changed");
+      }
+    },
+  })),
+  ...(["agent-rows", "outbox", "board-pins"] as const).map((family): InteractionScenario => ({
+    id: `projection-${family}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected:
+      "400 rows in application A and 80 in B; twenty actual native-owner publications update A alone, then both groups retire independently.",
+    projectionFamily: family,
+    prepare: prepareChat,
+    run: async (page) => {
+      await runProjectionFixture(page);
+    },
+  })),
   {
     id: "sidebar-resources-scroll-resize",
     route: controlUiSessionPath(sessionKeys[0]),
