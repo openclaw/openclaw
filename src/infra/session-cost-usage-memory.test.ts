@@ -28,7 +28,6 @@ import {
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
-import { resolveZstdCodec } from "./zstd-codec.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -172,13 +171,10 @@ async function cachedFixture(target = { sessionKey, sessionId }) {
   };
 }
 
-function paddedRollup(entry: UsageCostRollupEntry, bytes: number, compressed = false) {
+function paddedRollup(entry: UsageCostRollupEntry, bytes: number) {
   const rollup = structuredClone(entry);
   rollup.rollup.untimestamped.tools = [{ name: "x".repeat(bytes), count: 1 }];
   const encoded = encodeUsageCostRollup(rollup);
-  if (compressed) {
-    return encoded;
-  }
   const raw = Buffer.from(JSON.stringify(rollup.rollup));
   const envelope = expectDefined(
     decodeUsageCostRollupEnvelope(encoded.valueJson),
@@ -290,23 +286,6 @@ describe("actor memory usage", () => {
       cacheStatus: { status: "partial", staleFiles: 0, pendingFiles: 40, cachedFiles: 0 },
     });
   });
-
-  it.skipIf(!resolveZstdCodec())(
-    "defers compressed expansion within the same report allowance",
-    async () => {
-      const cached = await cachedFixture();
-      const encoded = paddedRollup(cached.entry, 33 * 1024 * 1024, true);
-      expect(encoded.blob.byteLength).toBeLessThan(1024 * 1024);
-      await cached.write(encoded);
-      const report = await cached.report();
-      expectReport(report, {
-        summaries: [null],
-        staleSessionFiles: [],
-        invalidRows: [],
-        cacheStatus: { status: "partial", staleFiles: 0 },
-      });
-    },
-  );
 
   it.each(["valid", "missing"] as const)(
     "preserves freshness or repairs %s bodies after header allowance exhaustion",

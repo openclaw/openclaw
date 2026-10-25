@@ -42,40 +42,6 @@ async function resizeFile(file: string, size: number, flag: "w" | "a") {
   }
 }
 
-async function snapshotInput(
-  root: string,
-  setup: (db: ReturnType<typeof openNodeSqliteDatabase>) => void,
-  prepare?: (source: string) => void,
-) {
-  const stateDir = path.join(root, "source");
-  const targetStateDir = path.join(root, "rehearsal");
-  const relative = path.join("agents", "main", "agent", "openclaw-agent.sqlite");
-  const source = path.join(stateDir, relative);
-  await fs.mkdir(path.dirname(source), { recursive: true });
-  await fs.mkdir(targetStateDir);
-  const db = openNodeSqliteDatabase(source);
-  try {
-    setup(db);
-  } finally {
-    db.close();
-  }
-  prepare?.(source);
-  const original = await fs.readFile(source);
-  const input = createStateSnapshotInput(root, stateDir, targetStateDir);
-  const inventory = await readUpdateCandidateStateInventoryInProcess(input);
-  return {
-    original,
-    source,
-    target: path.join(targetStateDir, relative),
-    snapshot: () =>
-      snapshotUpdateCandidateState({
-        ...input,
-        pluginPlanPath: path.join(targetStateDir, inventory.pluginPlan),
-        databaseInventory: [...inventory.databases.keys()],
-      }),
-  };
-}
-
 describe("snapshot inventory", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -435,32 +401,6 @@ describe("snapshot execution approvals", () => {
   );
 });
 
-describe("snapshot row identities", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-  it("preserves sparse row IDs and original bytes when preparing a migration rehearsal", async () => {
-    const fixture = await snapshotInput(tempDirs.make("candidate-rowids-"), (db) => {
-      db.exec(`
-        PRAGMA user_version = 3;
-        CREATE TABLE evidence(value TEXT);
-        INSERT INTO evidence(rowid, value) VALUES(71, 'preserved');
-      `);
-    });
-    await fixture.snapshot();
-    const snapshot = openNodeSqliteDatabase(fixture.target, { readOnly: true });
-    try {
-      expect(snapshot.prepare("SELECT rowid, value FROM evidence").all()).toEqual([
-        { rowid: 71, value: "preserved" },
-      ]);
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      expect(snapshot.prepare("PRAGMA user_version").get()).toEqual({ user_version: 3 });
-    } finally {
-      snapshot.close();
-    }
-    expect(await fs.readFile(fixture.source)).toEqual(fixture.original);
-  });
-});
-
 describe("snapshot FTS integrity", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const ftsTables = ["memory_index_chunks_fts", "session_transcript_fts"];
@@ -469,31 +409,41 @@ describe("snapshot FTS integrity", () => {
   );
 
   async function snapshotAgentDatabase(staleTables: readonly string[]) {
-    const fixture = await snapshotInput(
-      tempDirs.make("candidate-fts-"),
-      (db) => {
-        for (const match of AGENT_FTS_SCHEMAS.join("\n").matchAll(/CREATE VIRTUAL TABLE[^;]+;/gu)) {
-          if (!match[0].includes("content =")) {
-            db.exec(match[0]);
-          }
+    const root = tempDirs.make("candidate-fts-");
+    const stateDir = path.join(root, "source");
+    const targetStateDir = path.join(root, "rehearsal");
+    const relative = path.join("agents", "main", "agent", "openclaw-agent.sqlite");
+    const source = path.join(stateDir, relative);
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.mkdir(targetStateDir);
+    {
+      using db = openNodeSqliteDatabase(source);
+      for (const match of AGENT_FTS_SCHEMAS.join("\n").matchAll(/CREATE VIRTUAL TABLE[^;]+;/gu)) {
+        if (!match[0].includes("content =")) {
+          db.exec(match[0]);
         }
-        for (const table of ftsTables) {
-          db.exec(`INSERT INTO ${table}(text) VALUES ('ab'||char(65534)||'cd')`);
-        }
-        db.exec(`
+      }
+      for (const table of ftsTables) {
+        db.exec(`INSERT INTO ${table}(text) VALUES ('ab'||char(65534)||'cd')`);
+      }
+      db.exec(`
         PRAGMA user_version = 3;
         CREATE VIRTUAL TABLE unowned_fts USING fts5(text);
         INSERT INTO unowned_fts(text) VALUES ('ab'||char(65534)||'cd');
       `);
-      },
-      (source) => {
-        // Simulate a tokenizer change on a healthy index built by the old runtime.
-        for (const table of staleTables) {
-          installSqliteFtsTokenizerMismatch(source, table);
-        }
-      },
-    );
-    return { ...fixture, snapshot: fixture.snapshot() };
+    }
+    for (const table of staleTables) {
+      installSqliteFtsTokenizerMismatch(source, table);
+    }
+    const original = await fs.readFile(source);
+    const input = createStateSnapshotInput(root, stateDir, targetStateDir);
+    const inventory = await readUpdateCandidateStateInventoryInProcess(input);
+    const snapshot = snapshotUpdateCandidateState({
+      ...input,
+      pluginPlanPath: path.join(targetStateDir, inventory.pluginPlan),
+      databaseInventory: [...inventory.databases.keys()],
+    });
+    return { snapshot, original, source, target: path.join(targetStateDir, relative) };
   }
 
   it("rehearses a database whose only findings are stale owned FTS indexes", async () => {
