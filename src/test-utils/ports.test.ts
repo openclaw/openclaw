@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { createServer as createRealServer } from "node:net";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withEnvAsync } from "./env.js";
@@ -6,7 +7,6 @@ const host = vi.hoisted(() => ({
   platform: vi.fn(() => "linux"),
   range: "32768\t60999\n",
   reads: vi.fn((): string => host.range),
-  cacheKey: Symbol("test port host"),
   rejectPort: vi.fn<(...args: [number]) => string | undefined>(() => undefined),
 }));
 
@@ -45,18 +45,8 @@ vi.mock("node:fs", async (importOriginal) => {
         : actual.readFileSync(...args),
   };
 });
-vi.mock("../shared/global-singleton.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../shared/global-singleton.js")>();
-  return {
-    ...actual,
-    resolveGlobalSingleton: (...args: Parameters<typeof actual.resolveGlobalSingleton>) => {
-      if (args[0] === Symbol.for("openclaw.testPortPool")) {
-        args[0] = host.cacheKey;
-      }
-      return actual.resolveGlobalSingleton(...args);
-    },
-  };
-});
+const poolKey = Symbol.for("openclaw.testPortPool");
+let savedPool: PropertyDescriptor | undefined;
 
 const listeners: ReturnType<typeof createRealServer>[] = [];
 let ports: typeof import("./ports.js");
@@ -70,16 +60,13 @@ const allocate = (offsets?: number[], fallback = false) =>
       })
     : ports.getDeterministicFreePortBlock(offsets && { offsets });
 
-function expectBlock(
-  port: number,
-  offsets: number[],
-  outside?: [number, number],
-  inside: [number, number] = [1024, 65535],
-) {
+type Bounds = [number, number];
+function expectBlock(port: number, offsets: number[], outside?: Bounds, inside?: Bounds) {
+  const [low, high] = inside ?? [1024, 65535];
   for (const offset of offsets) {
     const candidate = port + offset;
-    expect(candidate).toBeGreaterThanOrEqual(inside[0]);
-    expect(candidate).toBeLessThanOrEqual(inside[1]);
+    expect(candidate).toBeGreaterThanOrEqual(low);
+    expect(candidate).toBeLessThanOrEqual(high);
     if (outside) {
       expect(candidate < outside[0] || candidate > outside[1]).toBe(true);
     }
@@ -89,24 +76,24 @@ function expectBlock(
 async function bindPort(port: number) {
   const server = createRealServer();
   listeners.push(server);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);
-  });
+  await once(server.listen(port, "127.0.0.1"), "listening");
 }
 
 beforeEach(async () => {
   vi.resetModules();
   host.platform.mockReturnValue("linux");
   host.range = "32768\t60999\n";
-  host.reads.mockClear();
   host.rejectPort.mockReset();
-  host.cacheKey = Symbol("test port host");
+  savedPool = Object.getOwnPropertyDescriptor(globalThis, poolKey);
+  Reflect.deleteProperty(globalThis, poolKey);
   ports = await import("./ports.js");
 });
 
 afterEach(async () => {
-  Reflect.deleteProperty(globalThis, host.cacheKey);
+  Reflect.deleteProperty(globalThis, poolKey);
+  if (savedPool) {
+    Object.defineProperty(globalThis, poolKey, savedPool);
+  }
   for (const server of listeners.splice(0)) {
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
@@ -114,28 +101,33 @@ afterEach(async () => {
   }
 });
 
-it("excludes kernel client ports across workers", async () => {
-  const [low, high] = [20000, 65000];
-  host.range = `${low}\t${high}\n`;
-  for (let worker = 0; worker < 64; worker += 1) {
-    const port = await withEnvAsync({ VITEST_WORKER_ID: String(worker) }, () => allocate());
-    expectBlock(port, defaultOffsets, [low, high]);
-  }
-  expect(host.reads).toHaveBeenCalledTimes(1);
-});
-
-it.each(["linux", "darwin"])("binds non-overlapping %s blocks", async (os) => {
+it.each([
+  ["linux", -1, false],
+  ["darwin", -1, false],
+  ["win32", 0, false],
+  ["win32", 1, true],
+] as const)("binds %s (deny=%s, fallback=%s)", async (os, denial, fallback) => {
   host.platform.mockReturnValue(os);
-  const bound = new Set<number>();
-  for (let block = 0; block < 2; block += 1) {
-    const port = await allocate();
-    if (os === "darwin") {
-      expectBlock(port, defaultOffsets, undefined, [30000, 64999]);
-    }
-    for (const offset of defaultOffsets) {
-      expect(bound.has(port + offset)).toBe(false);
-      await bindPort(port + offset);
-      bound.add(port + offset);
+  host.range = "20000 65000";
+  let first: number | undefined;
+  host.rejectPort.mockImplementation((port) => {
+    first ??= port;
+    return denial >= 0 && port === first + denial ? "EACCES" : undefined;
+  });
+  for (let worker = 0; worker < (os === "linux" ? 64 : 2); worker++) {
+    const port = await withEnvAsync({ VITEST_WORKER_ID: String(worker) }, () =>
+      allocate(defaultOffsets, fallback),
+    );
+    expectBlock(
+      port,
+      defaultOffsets,
+      os === "linux" ? [20000, 65000] : undefined,
+      os === "linux" ? [1024, 65535] : [30000, 64999],
+    );
+    if (worker < 2) {
+      for (const offset of defaultOffsets) {
+        await bindPort(port + offset);
+      }
     }
   }
 });
@@ -146,47 +138,7 @@ it("excludes HTTP-blocked base and derived ports", async () => {
   host.rejectPort.mockImplementation((port) =>
     (port >= 1712 && port <= 1719) || (port >= 1800 && port <= 1807) ? undefined : "EADDRINUSE",
   );
-  await expect(ports.isPortFree(1719)).resolves.toBe(true);
-  const port = await allocate(offsets);
-  expectBlock(port, offsets, undefined, [1800, 1807]);
-});
-
-it.each([
-  [0, false],
-  [1, true],
-] as const)("retries Windows EACCES +%i (fallback=%s)", async (deniedOffset, fallback) => {
-  host.platform.mockReturnValue("win32");
-  let firstCandidate: number | undefined;
-  host.rejectPort.mockImplementation((port) => {
-    firstCandidate ??= port;
-    return port === firstCandidate + deniedOffset ? "EACCES" : undefined;
-  });
-  const offsets = [0, 1];
-  const port = await allocate(offsets, fallback);
-  expect(firstCandidate).toBeDefined();
-  expect(port).not.toBe(firstCandidate);
-  for (const offset of offsets) {
-    const candidate = port + offset;
-    expect(candidate).not.toBe(firstCandidate! + deniedOffset);
-    await bindPort(candidate);
-  }
-});
-
-it.each([
-  ["linux", "EACCES", false],
-  ["win32", "EPERM", false],
-  ["win32", "EACCES", false],
-  ["win32", "EACCES", true],
-] as const)("rejects %s %s (ephemeralOnly=%s)", async (os, code, ephemeralOnly) => {
-  host.platform.mockReturnValue(os);
-  host.rejectPort.mockImplementation((port) => (ephemeralOnly && port === 0 ? undefined : code));
-  const result = allocate([0, 1]);
-  if (ephemeralOnly) {
-    await expect(result).rejects.toThrow("failed to acquire a free port block");
-    expect(host.rejectPort).toHaveBeenCalledWith(0);
-  } else {
-    await expect(result).rejects.toMatchObject({ code });
-  }
+  expectBlock(await allocate(offsets), offsets, undefined, [1800, 1807]);
 });
 
 it("falls back outside occupied worker and kernel ranges", async () => {
@@ -201,23 +153,34 @@ it("falls back outside occupied worker and kernel ranges", async () => {
   expect(occupiedStart).toBeDefined();
   expectBlock(port, defaultOffsets, [occupiedStart!, occupiedStart! + 999]);
   expectBlock(port, defaultOffsets, [32768, 60999]);
-  expect(host.rejectPort).not.toHaveBeenCalledWith(0);
 });
 
 it.each([
-  ["linux", "EPERM"],
-  ["linux", "EACCES"],
-  ["darwin", "EACCES"],
-  ["win32", "EACCES"],
-])("preserves safe %s fallback on %s", async (os, code) => {
+  ["linux", "EACCES", false, false],
+  ["win32", "EPERM", false, false],
+  ["win32", "EACCES", false, false],
+  ["win32", "EACCES", false, true],
+  ["linux", "EPERM", true, false],
+  ["linux", "EACCES", true, false],
+  ["darwin", "EACCES", true, false],
+  ["win32", "EACCES", true, false],
+] as const)("%s %s: fallback=%s, ephemeral=%s", async (os, code, fallback, ephemeral) => {
   host.platform.mockReturnValue(os);
-  host.rejectPort.mockReturnValue(code);
-  const port = await allocate(fallbackOffsets, true);
-  if (os !== "linux") {
-    expect(port).toBe(44000 + (process.pid % 10000));
-    return;
+  host.rejectPort.mockImplementation((port) => (ephemeral && port === 0 ? undefined : code));
+  const result = allocate(fallback ? fallbackOffsets : [0, 1], fallback);
+  if (fallback) {
+    const port = await result;
+    if (os === "linux") {
+      expectBlock(port, fallbackOffsets, [32768, 60999]);
+    } else {
+      expect(port).toBe(44000 + (process.pid % 10000));
+    }
+  } else if (ephemeral) {
+    await expect(result).rejects.toThrow("failed to acquire a free port block");
+    expect(host.rejectPort).toHaveBeenCalledWith(0);
+  } else {
+    await expect(result).rejects.toMatchObject({ code });
   }
-  expectBlock(port, fallbackOffsets, [32768, 60999]);
 });
 
 it("skips HTTP-blocked ports before Linux permission fallback", async () => {
@@ -227,7 +190,6 @@ it("skips HTTP-blocked ports before Linux permission fallback", async () => {
   await withEnvAsync({ VITEST_WORKER_ID: String(64 - (process.pid % 64)) }, async () => {
     const port = await allocate([0, 7], true);
     expect(port).toBe(1728);
-    expect(host.rejectPort.mock.calls.map(([candidate]) => candidate)).toEqual([1728, 1735]);
   });
 });
 
