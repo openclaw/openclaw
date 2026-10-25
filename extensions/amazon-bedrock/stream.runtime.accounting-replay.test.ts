@@ -26,7 +26,6 @@ import {
   mockStream,
   startEvent,
   stopEvent,
-  streamEvents,
   streamBedrockForTest,
   userContext,
   textBlock,
@@ -80,7 +79,7 @@ describe("Bedrock reasoning replay", () => {
     const opaqueReasoning = Uint8Array.from([0xde, 0xad, 0xbe, 0xef]);
     const model = bedrockModel({ id: "anthropic.claude-haiku-4-5-20251001-v1:0" });
     const encodeOpaqueReasoning = vi.spyOn(globalThis, "btoa");
-    const send = mockStream([
+    mockStream([
       startEvent,
       ...[opaqueReasoning.slice(0, 2), opaqueReasoning.slice(2)].map((redactedContent) => ({
         contentBlockDelta: {
@@ -104,18 +103,10 @@ describe("Bedrock reasoning replay", () => {
     ]);
     expect(encodeOpaqueReasoning).toHaveBeenCalledTimes(1);
 
-    send.mockResolvedValueOnce({
-      $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([startEvent, stopEvent]),
-    } as never);
-    await streamBedrockForTest(model, {
+    const replay = await captureMessages(model, {
       messages: [result, { role: "user", content: "Continue", timestamp: 1 }],
-    } as never).result();
-
-    const replayCommand = send.mock.calls[1]?.[0] as {
-      input?: { messages?: Array<{ content?: unknown[] }> };
-    };
-    expect(replayCommand.input?.messages?.[0]?.content).toEqual([
+    });
+    expect(replay[0]?.content).toEqual([
       { reasoningContent: { redactedContent: opaqueReasoning } },
     ]);
   });
@@ -148,14 +139,11 @@ describe("Bedrock prompt cache ownership", () => {
   ])("emits only supported Nova checkpoints for %s", async (id, supported) => {
     vi.stubEnv("OPENCLAW_CACHE_RETENTION", supported ? "long" : undefined);
     vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", supported ? "1" : undefined);
-    const tools = [
-      { name: "lookup", description: "Lookup", parameters: { type: "object", properties: {} } },
-      {
-        name: "calculate",
-        description: "Calculate",
-        parameters: { type: "object", properties: {} },
-      },
-    ];
+    const tools = ["lookup", "calculate"].map((name) => ({
+      name,
+      description: name,
+      parameters: { type: "object", properties: {} },
+    }));
     for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
       const payload = await capturePayload(
         bedrockModel({ id, name: "Nova Pro" }),
@@ -474,7 +462,7 @@ async function readBedrockFrames(options: {
         const stream = streamSimpleBedrock(
           model,
           {
-            messages: [{ role: "user", content: "Write the fixture.", timestamp: 0 }],
+            ...userContext("Write the fixture."),
             tools: [
               {
                 name: "write_document",

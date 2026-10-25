@@ -40,6 +40,16 @@ function expectObjectToolUseInput(input: Awaited<ReturnType<typeof captureComman
   expect(Array.isArray(toolInput)).toBe(false);
 }
 
+const claudeModel = (id: string, overrides: Parameters<typeof bedrockModel>[0] = {}) =>
+  bedrockModel({ id, name: id, contextWindow: 1_000_000, maxTokens: 128_000, ...overrides });
+const opaqueProfile =
+  "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/profile-abc";
+const lookup = {
+  name: "lookup",
+  description: "Lookup",
+  parameters: { type: "object", properties: {} },
+};
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -136,13 +146,11 @@ describe("Bedrock tool-result replay", () => {
   it("replays unsupported audio attachments as their canonical text placeholder", async () => {
     const input = await captureCommandInput(bedrockModel({ input: ["text", "image"] }), {
       messages: [
-        {
-          role: "toolResult",
-          toolCallId: "call_audio",
-          toolName: "listen",
-          isError: false,
-          content: [{ type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" }],
-        },
+        toolResult(
+          "call_audio",
+          [{ type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" }],
+          "listen",
+        ),
       ],
     } as never);
     const messages = input.messages;
@@ -184,19 +192,11 @@ it("normalizes invalid stored arguments at the Bedrock request boundary", async 
     messages: [
       {
         ...replayAssistant("amazon.nova-micro-v1:0", [
-          {
-            type: "toolCall",
-            id: "call_replay",
-            name: "read",
-            arguments: '{"path":',
-          },
+          { type: "toolCall", id: "call_replay", name: "read", arguments: '{"path":' },
         ]),
         timestamp: 0,
       },
-      {
-        ...toolResult("call_replay", [{ type: "text", text: "existing result" }], "read"),
-        timestamp: 1,
-      },
+      toolResult("call_replay", [{ type: "text", text: "existing result" }], "read", false, 1),
       { role: "user", content: "continue", timestamp: 2 },
     ],
   } as never;
@@ -243,6 +243,7 @@ describe("Bedrock stop reasons", () => {
     [BedrockStopReason.MODEL_CONTEXT_WINDOW_EXCEEDED, "length", undefined],
     ["unknown_provider_reason", "error", "unknown_provider_reason"],
     [undefined, "error", "An unknown error occurred"],
+    [BedrockStopReason.MALFORMED_TOOL_USE, "error", BedrockStopReason.MALFORMED_TOOL_USE],
   ] as const)(
     "projects terminal reason %s through the public stream",
     async (reason, stopReason, errorMessage) => {
@@ -318,138 +319,66 @@ describe("Bedrock stop reasons", () => {
     expect(result.content[0]).not.toHaveProperty("index");
     expect(result.content[0]).not.toHaveProperty("partialJson");
   });
-
-  it("reports the provider malformed-tool stop reason", async () => {
-    mockStream([
-      startMessage,
-      { messageStop: { stopReason: BedrockStopReason.MALFORMED_TOOL_USE } },
-    ]);
-    const result = await streamBedrockForTest(bedrockModel({}), userContext()).result();
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: BedrockStopReason.MALFORMED_TOOL_USE,
-    });
-  });
 });
 
 describe("Bedrock thinking request composition", () => {
   const context = userContext("Think carefully.");
+  const profile = claudeModel(opaqueProfile, { name: "US Claude Fable 5.1" });
+  const opus = claudeModel("global.anthropic.claude-opus-5", {
+    thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+  });
+  const sonnet = claudeModel("us.anthropic.claude-sonnet-5", {
+    thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+  });
+  const legacy = claudeModel("anthropic.claude-haiku-4-5-v1:0", { maxTokens: 1024 });
+  const adaptive = claudeModel("us.anthropic.claude-opus-4-8");
+  const named = bedrockModel({ id: opaqueProfile, name: "Claude Production Opus 4.8" });
+  const alias = (canonicalModelId: string, enabled: boolean) =>
+    bedrockModel({
+      id: "production-claude",
+      name: "Production Claude",
+      reasoning: false,
+      params: { canonicalModelId },
+      thinkingLevelMap: enabled ? { xhigh: "xhigh", max: "max" } : { xhigh: null, max: null },
+    });
+  const nativeAlias = alias("claude-opus-4-8", true);
+  const clampedAlias = alias("claude-opus-4-6", false);
 
   it.each([
-    {
-      name: "profile default",
-      modelOverrides: {
-        id: "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdefghijk",
-        name: "US Claude Fable 5.1",
-      },
-      reasoning: undefined,
-      expectedEffort: "medium",
-    },
-    {
-      name: "Opus 5 default",
-      modelOverrides: {
-        id: "global.anthropic.claude-opus-5",
-        name: "Claude Opus 5",
-        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      },
-      reasoning: undefined,
-      expectedEffort: "high",
-    },
-    {
-      name: "Sonnet 5 explicit off",
-      modelOverrides: {
-        id: "us.anthropic.claude-sonnet-5",
-        name: "Claude Sonnet 5",
-        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-      },
-      reasoning: "off" as const,
-      expectedEffort: "low",
-    },
-  ] as const)("sends $name policy in the final request", async (testCase) => {
-    const options = testCase.reasoning === undefined ? {} : { reasoning: testCase.reasoning };
-    const input = await captureCommandInput(
-      bedrockModel({ ...testCase.modelOverrides, contextWindow: 1_000_000, maxTokens: 128_000 }),
-      context,
-      options,
-    );
-
-    expect(input.inferenceConfig).toEqual({ maxTokens: 128_000 });
-    expect(input.additionalModelRequestFields).toEqual(adaptiveFields(testCase.expectedEffort));
-  });
-
-  it("disables legacy thinking when the output cap leaves no thinking budget", async () => {
-    const input = await captureCommandInput(
-      bedrockModel({
-        id: "anthropic.claude-haiku-4-5-v1:0",
-        name: "Claude Haiku 4.5",
-        maxTokens: 1024,
-      }),
-      context,
-      { reasoning: "minimal" },
-    );
-
-    expect(input.inferenceConfig).toEqual({ maxTokens: 1024 });
-    expect(input.additionalModelRequestFields).toBeUndefined();
-  });
-
-  it.each([
-    ["explicit request cap", 128_000, 32_000, 32_000, "high"],
-    ["native model cap with thinking disabled", 128_000, undefined, 128_000, "off"],
+    ["profile default", profile, {}, 128_000, "medium"],
+    ["Opus 5 default", opus, {}, 128_000, "high"],
+    ["Sonnet 5 explicit off", sonnet, { reasoning: "off" }, 128_000, "low"],
+    ["legacy budget exhausted", legacy, { reasoning: "minimal" }, 1024, undefined],
+    ["explicit request cap", adaptive, { reasoning: "high", maxTokens: 32_000 }, 32_000, "high"],
+    ["native cap with thinking off", adaptive, { reasoning: "off" }, 128_000, undefined],
+    ["descriptive profile name", named, { reasoning: "xhigh" }, undefined, "xhigh"],
+    ["native alias", nativeAlias, { reasoning: "xhigh", temperature: 0.2 }, undefined, "xhigh"],
+    ["clamped alias", clampedAlias, { reasoning: "max", temperature: 0.2 }, undefined, "high"],
   ] as const)(
-    "uses the %s for adaptive-capable models",
-    async (_name, modelMaxTokens, requestedMaxTokens, expected, reasoning) => {
-      const input = await captureCommandInput(
-        bedrockModel({
-          id: "us.anthropic.claude-opus-4-8",
-          name: "Claude Opus 4.8",
-          contextWindow: 1_000_000,
-          maxTokens: modelMaxTokens,
-        }),
-        context,
-        {
-          reasoning,
-          ...(requestedMaxTokens === undefined ? {} : { maxTokens: requestedMaxTokens }),
-        },
-      );
-
-      expect(input.inferenceConfig).toEqual({ maxTokens: expected });
+    "sends %s policy in the final request",
+    async (_name, model, options, maxTokens, effort) => {
+      const input = await captureCommandInput(model, context, options);
+      expect(input.modelId).toBe(model.id);
+      expect(input.inferenceConfig).toEqual(maxTokens === undefined ? {} : { maxTokens });
       expect(input.additionalModelRequestFields).toEqual(
-        reasoning !== "high" ? undefined : adaptiveFields("high"),
+        effort ? adaptiveFields(effort) : undefined,
       );
     },
   );
-
-  it("uses descriptive Claude names for opaque profile effort", async () => {
-    const input = await captureCommandInput(
-      bedrockModel({
-        id: "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/profile-abc",
-        name: "Claude Production Opus 4.8",
-      }),
-      context,
-      { reasoning: "xhigh" },
-    );
-
-    expect(input.additionalModelRequestFields).toEqual(adaptiveFields("xhigh"));
-  });
 });
 
 describe("Bedrock Fable contract", () => {
   const fableModel = () =>
-    bedrockModel({
-      id: "production-fable",
+    claudeModel("production-fable", {
       name: "Production deployment",
       reasoning: false,
       params: { canonicalModelId: "claude-fable-5" },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
     });
 
   const context = () =>
     ({
       ...userContext("Reply briefly."),
-      tools: [
-        { name: "lookup", description: "Lookup", parameters: { type: "object", properties: {} } },
-      ],
+      tools: [lookup],
     }) as never;
 
   it("sends always-adaptive high effort without unsupported request controls", async () => {
@@ -474,12 +403,9 @@ describe("Bedrock Fable contract", () => {
   });
 
   it("quarantines partial output when Mythos 5 returns a terminal refusal", async () => {
-    const model = bedrockModel({
-      id: "production-mythos",
+    const model = claudeModel("production-mythos", {
       name: "Production deployment",
       params: { canonicalModelId: "claude-mythos-5" },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
     });
     mockStream([
       textDelta("discard this partial output"),
@@ -571,29 +497,3 @@ describe("Bedrock Fable contract", () => {
     expect(activityCount).toBe(5);
   });
 });
-
-it.each([
-  ["claude-opus-4-8", "xhigh", { xhigh: "xhigh", max: "max" }, "xhigh"],
-  ["claude-opus-4-6", "max", { xhigh: null, max: null }, "high"],
-] as const)(
-  "uses adaptive thinking and omits temperature for %s aliases",
-  async (canonicalModelId, reasoning, thinkingLevelMap, expectedEffort) => {
-    const model = bedrockModel({
-      id: "production-claude",
-      name: "Production Claude",
-      reasoning: false,
-      params: { canonicalModelId },
-      thinkingLevelMap,
-    });
-
-    const input = await captureCommandInput(model, userContext("Reply briefly."), {
-      reasoning,
-      temperature: 0.2,
-    });
-    expect(input).toMatchObject({
-      modelId: "production-claude",
-      inferenceConfig: {},
-      additionalModelRequestFields: adaptiveFields(expectedEffort),
-    });
-  },
-);
