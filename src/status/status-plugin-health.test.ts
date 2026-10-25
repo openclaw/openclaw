@@ -183,24 +183,6 @@ it.each([true, false])(
 );
 
 it.each<[Partial<StatusPluginHealthSnapshot>, string[], string[]]>([
-  [
-    {
-      plugins: [
-        plugin("runtime-ok"),
-        plugin("installed-idle"),
-        plugin("broken", { status: "error", failurePhase: "load", error: "boom" }),
-        disabled("off"),
-      ],
-      runtimeLoadedPluginIds: ["runtime-ok"],
-    },
-    [
-      "Loaded: 1 (runtime-ok)",
-      "Installed (not active): 1 (installed-idle)",
-      "Disabled: 1",
-      "- broken [load]: boom",
-    ],
-    ["Loaded: 2", "Configured to run but not loaded:"],
-  ],
   [{ plugins: [plugin("a"), plugin("b")] }, ["Loaded: 2 (a, b)"], ["Installed (not active):"]],
   [
     { plugins: [plugin("active-ok")], runtimeLoadedPluginIds: ["active-ok", "pinned-only"] },
@@ -251,6 +233,7 @@ it("keeps installed-only loaded plugins out of Loaded after merge", () => {
     "Loaded: 1 (runtime-ok)",
     "Installed (not active): 1 (installed-idle)",
   ]);
+  expect(detailed(merged)).not.toContain("Configured to run but not loaded:");
 });
 
 it("flags configured memory embedding providers that no loaded plugin registers", () => {
@@ -268,15 +251,8 @@ it("flags configured memory embedding providers that no loaded plugin registers"
   expect(text.split("\n")[0]).toBe("🔌 Plugins: OK");
 });
 
-it.each([undefined, []])(
-  "omits the memory-provider line with %j",
-  (unregisteredMemoryEmbeddingProviders) => {
-    expect(
-      detail({
-        plugins: [plugin("runtime-ok")],
-        runtimeLoadedPluginIds: ["runtime-ok"],
-        unregisteredMemoryEmbeddingProviders,
-      }),
-    ).not.toContain("Configured memory provider not registered:");
-  },
-);
+it("omits the memory-provider line for an empty provider list", () => {
+  expect(detail({ unregisteredMemoryEmbeddingProviders: [] })).not.toContain(
+    "Configured memory provider not registered:",
+  );
+});

@@ -27,7 +27,6 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { formatDetailedPluginHealth } from "./status-plugin-health.js";
 import {
   collectInstalledPluginHealthSnapshot as collectInstalled,
   collectRuntimePluginHealthSnapshot as collectRuntime,
@@ -118,15 +117,15 @@ function seedPersistedToolQuarantineForTest(
   record: ReturnType<typeof createRuntimeHealthRecordEnvelope> & {
     toolName: string;
     owner?: string;
-    reason: string;
   },
 ): void {
-  createCorePluginStateSyncKeyedStore<typeof record>({
+  const value = { ...record, reason: "unsupported schema" };
+  createCorePluginStateSyncKeyedStore<typeof value>({
     ownerId: "core:runtime-tool-quarantine-health",
     namespace: "schema-quarantines",
     maxEntries: 128,
     defaultTtlMs: 24 * 60 * 60 * 1_000,
-  }).register(JSON.stringify([record.owner ?? "", record.toolName, record.processId]), record);
+  }).register(JSON.stringify([record.owner ?? "", record.toolName, record.processId]), value);
 }
 
 describe("runtime plugin health snapshot", () => {
@@ -212,7 +211,6 @@ describe("runtime plugin health snapshot", () => {
       activate();
       seedPersistedToolQuarantineForTest({
         toolName: "stale_tool",
-        reason: "unsupported schema",
         failedAtMs: 123,
         processId: await deadProcessId(),
         processToken: "dead-process-token",
@@ -220,7 +218,6 @@ describe("runtime plugin health snapshot", () => {
       });
       seedPersistedToolQuarantineForTest({
         toolName: "live_tool",
-        reason: "unsupported schema",
         ...createRuntimeHealthRecordEnvelope(new Date(456)),
       });
 
@@ -236,7 +233,6 @@ describe("runtime plugin health snapshot", () => {
       activate();
       seedPersistedToolQuarantineForTest({
         toolName: "reused_pid_tool",
-        reason: "unsupported schema",
         ...createRuntimeHealthRecordEnvelope(new Date(123)),
         processToken: "stale-incarnation-token",
       });
@@ -333,7 +329,7 @@ describe("installed plugin health", () => {
       const quarantine = engineQuarantine("quarantined-engine", "startup failed");
       await recordEngine(quarantine);
 
-      const rawConfig = {} as never;
+      const rawConfig = {};
       const snapshot = await collect(rawConfig);
 
       expect(planMock).toHaveBeenCalledWith(
@@ -343,10 +339,6 @@ describe("installed plugin health", () => {
         ["planned-missing", "runtime-ok"],
         [quarantine],
       ]);
-
-      const text = formatDetailedPluginHealth(snapshot);
-      expect(text).toContain("Loaded: 1 (runtime-ok)");
-      expect(text).toContain("Configured to run but not loaded: 1 (planned-missing)");
     }),
   );
 
@@ -369,53 +361,33 @@ describe("installed plugin health", () => {
     }),
   );
 
-  it(
-    "omits the should-run set entirely when no config is provided",
-    inState(async () => {
-      activate();
-
-      const snapshot = await collect();
-
-      expect(snapshot.shouldRunPluginIds).toBeUndefined();
-      expect(snapshot.unregisteredMemoryEmbeddingProviders).toBeUndefined();
-      expect(missingProvidersMock).not.toHaveBeenCalled();
-      expect(planMock).not.toHaveBeenCalled();
-      expect(formatDetailedPluginHealth(snapshot)).not.toContain(
-        "Configured to run but not loaded:",
+  it.each([
+    ["no config", undefined, true],
+    ["unregistered provider", {}, true],
+    ["no runtime registry", {}, false],
+  ] as const)("collects installed health with %s", async (_name, config, registry) => {
+    await inState(async () => {
+      missingProvidersMock.mockReturnValue(config ? [missingProvider] : []);
+      if (registry) {
+        activate();
+      } else {
+        resetPluginRuntimeStateForTest();
+      }
+      const snapshot = await collect(config);
+      expect(snapshot.unregisteredMemoryEmbeddingProviders).toEqual(
+        config && registry ? [missingProvider] : undefined,
       );
-    }),
-  );
-
-  it(
-    "reports configured but unregistered memory providers",
-    inState(async () => {
-      missingProvidersMock.mockReturnValue([missingProvider]);
-      activate();
-
-      const snapshot = await collect({});
-
-      expect(snapshot.unregisteredMemoryEmbeddingProviders).toEqual([missingProvider]);
-      expect(missingProvidersMock).toHaveBeenCalledWith(
-        expect.objectContaining({ registeredProviderIds: expect.any(Set) }),
-      );
-      expect(formatDetailedPluginHealth(snapshot)).toContain(
-        "Configured memory provider not registered: 1 (custom-embed (memorySearch.provider))",
-      );
-    }),
-  );
-
-  it(
-    "skips the check and renders no line without a runtime registry",
-    inState(async () => {
-      missingProvidersMock.mockReturnValue([missingProvider]);
-      resetPluginRuntimeStateForTest();
-      const snapshot = await collect({});
-
-      expect(snapshot.unregisteredMemoryEmbeddingProviders).toBeUndefined();
-      expect(missingProvidersMock).not.toHaveBeenCalled();
-      expect(formatDetailedPluginHealth(snapshot)).not.toContain(
-        "Configured memory provider not registered:",
-      );
-    }),
-  );
+      if (config && registry) {
+        expect(missingProvidersMock).toHaveBeenCalledWith(
+          expect.objectContaining({ registeredProviderIds: expect.any(Set) }),
+        );
+      } else {
+        expect(missingProvidersMock).not.toHaveBeenCalled();
+      }
+      if (!config) {
+        expect(snapshot.shouldRunPluginIds).toBeUndefined();
+        expect(planMock).not.toHaveBeenCalled();
+      }
+    })();
+  });
 });
