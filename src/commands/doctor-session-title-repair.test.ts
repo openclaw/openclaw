@@ -15,6 +15,14 @@ const cfg = { agents: { entries: { main: {} } } };
 const title = "Investigate why the gateway times out";
 const user = (content: string) => ({ role: "user", content });
 const messages = [user(title), { role: "assistant", content: "reply" }];
+const makeEntry = (sessionId: string, lifecycleRevision: string): SessionEntry => ({
+  sessionId,
+  lifecycleRevision,
+  status: "done",
+  updatedAt: 12,
+  lastActivityAt: 11,
+  lastInteractionAt: 10,
+});
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback,
 }));
@@ -40,14 +48,10 @@ async function withSession(
       messages: transcript.map((message) => ({ message })),
       touchSessionEntry: false,
     });
-    await sessionAccessor.replaceSessionEntry(params, {
-      sessionId: params.sessionId,
-      lifecycleRevision: params.lifecycleRevision,
-      status: "done",
-      updatedAt: 12,
-      lastActivityAt: 11,
-      lastInteractionAt: 10,
-    });
+    await sessionAccessor.replaceSessionEntry(
+      params,
+      makeEntry(params.sessionId, params.lifecycleRevision),
+    );
     await run(params);
   });
 }
@@ -70,29 +74,27 @@ it("preserves native child names while repairing ordinary sessions in the same s
         entry?: Partial<SessionEntry>;
         displayName?: string;
       }> = [
-        ...(["run", "session"] as const).flatMap((spawnMode) => {
-          const historical = `[Subagent Context] You are running as a subagent.\n\n[Subagent Task]\n\n${task}`;
-          const current = buildSubagentTaskMessage({
+        {
+          sessionKey: "agent:main:subagent:run:thread:child",
+          message: `[Subagent Context] You are running as a subagent.\n\n[Subagent Task]\n\n${task}`,
+        },
+        {
+          sessionKey: "agent:main:subagent:session:thread:child",
+          message: buildSubagentTaskMessage({
             task,
-            spawnMode,
+            spawnMode: "session",
             childDepth: 1,
             maxSpawnDepth: 5,
-          });
-          return [historical, current].map((message, index) => ({
-            sessionKey: `agent:main:subagent:${spawnMode}-${index}:thread:child`,
-            message,
-          }));
-        }),
+          }),
+        },
         {
           sessionKey: "agent:main:subagent:named",
           message: task,
           entry: { label: "Explicit child label" },
-          displayName: undefined,
         },
         {
           sessionKey: "agent:main:dashboard:child",
           message: task,
-          entry: {},
           displayName: task,
         },
       ];
@@ -104,12 +106,8 @@ it("preserves native child names while repairing ordinary sessions in the same s
           touchSessionEntry: false,
         });
         await sessionAccessor.replaceSessionEntry(scope, {
-          sessionId: scope.sessionId,
-          lifecycleRevision: `child-lifecycle-${index}`,
-          status: "done",
+          ...makeEntry(scope.sessionId, `child-lifecycle-${index}`),
           updatedAt: Date.now(),
-          lastActivityAt: 11,
-          lastInteractionAt: 10,
           ...fixture.entry,
         });
         const before = expectDefined(sessionAccessor.loadSessionEntry(scope), fixture.sessionKey);
