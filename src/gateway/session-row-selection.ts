@@ -8,11 +8,7 @@ import {
   projectSessionParticipants,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
-import {
-  compareSessionEntryPairs,
-  sessionEntryInsertionIndex,
-  type SessionEntryPair,
-} from "./session-list-order.js";
+import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
 import {
   identity as rowIdentity,
   type SelectionRow as SelectionTarget,
@@ -46,13 +42,8 @@ export function createSessionRowSelection(
       entries: SessionEntryPair[];
     }
   >();
-  // Lagging readers rebuild after 64 changes; no revision chain retains retired rosters.
-  let partitions:
-    | Array<{
-        revision: { changes: Array<{ key: string; previous?: SessionEntryPair }> };
-        entries: Map<string, SessionEntryPair>;
-      }>
-    | undefined;
+  // Fixed partitions bound refiltering after exact publications without retaining old rosters.
+  let partitions: Array<{ revision: object; entries: Map<string, SessionEntryPair> }> | undefined;
   const partitionFor = (key: string) => {
     let hash = 0;
     for (let i = 0; i < key.length; i++) {
@@ -218,18 +209,7 @@ export function createSessionRowSelection(
     if (!group && oldWinner && rowIdentity(oldWinner.row) !== id) {
       group = new Map([[rowIdentity(oldWinner.row), oldWinner]]);
     }
-    const previous =
-      group?.get(id) ?? (oldWinner && rowIdentity(oldWinner.row) === id ? oldWinner : undefined);
-    let winner: IndexedTarget | undefined = eligible
-      ? previous &&
-        previous.row.entry === row.entry &&
-        previous.row.selection === row.selection &&
-        previous.row.storeTarget === row.storeTarget &&
-        previous.row.generation === row.generation &&
-        previous.row.hasBoard === row.hasBoard
-        ? previous
-        : { row, pair: [key, row.entry] }
-      : undefined;
+    let winner: IndexedTarget | undefined = eligible ? { row, pair: [key, row.entry] } : undefined;
     if (group) {
       if (winner) {
         group.set(id, winner);
@@ -269,10 +249,7 @@ export function createSessionRowSelection(
     updateCreator(winner);
     const partition = partitionFor(key);
     if (partition) {
-      if (partition.revision.changes.length === 64) {
-        partition.revision = { changes: [] };
-      }
-      partition.revision.changes.push({ key, previous: oldWinner?.pair });
+      partition.revision = {};
       if (winner) {
         partition.entries.set(key, winner.pair);
       } else {
@@ -289,11 +266,24 @@ export function createSessionRowSelection(
       }
     }
     for (const { sortBy, archived, entries } of orders.values()) {
+      const locate = (pair: SessionEntryPair) => {
+        let lo = 0,
+          hi = entries.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (compareSessionEntryPairs(entries[mid]!, pair, sortBy) < 0) {
+            lo = mid + 1;
+          } else {
+            hi = mid;
+          }
+        }
+        return lo;
+      };
       if (oldWinner && matchesSessionArchiveFilter(oldWinner.row.entry, archived)) {
-        entries.splice(sessionEntryInsertionIndex(entries, oldWinner.pair, sortBy), 1);
+        entries.splice(locate(oldWinner.pair), 1);
       }
       if (winner && matchesSessionArchiveFilter(winner.row.entry, archived)) {
-        entries.splice(sessionEntryInsertionIndex(entries, winner.pair, sortBy), 0, winner.pair);
+        entries.splice(locate(winner.pair), 0, winner.pair);
       }
     }
   };
@@ -341,7 +331,7 @@ export function createSessionRowSelection(
       assertCanonical();
       if (!candidates && !partitions) {
         partitions = Array.from({ length: 64 }, () => ({
-          revision: { changes: [] },
+          revision: {},
           entries: new Map<string, SessionEntryPair>(),
         }));
         for (const [key, target] of winners) {

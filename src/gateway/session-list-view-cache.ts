@@ -35,7 +35,6 @@ function selectionRefs(value: SessionEntrySelection | SessionListFilteredEntries
     value.entries.length +
     ("ownerEntries" in value ? value.ownerEntries.length : 0) +
     value.ownerFacet.length +
-    ("partition" in value ? (value.partition?.owners.size ?? 0) : 0) +
     (value.ownerSessionCounts?.length ?? 0) +
     (value.ownerSessionProfiles?.size ?? 0) +
     (value.people?.length ?? 0)
@@ -45,14 +44,11 @@ function selectionRefs(value: SessionEntrySelection | SessionListFilteredEntries
 class SelectionPartitions extends WeakMap<object, SessionListFilteredEntries> {
   refs = 0;
   count = 0;
-  private sizes = new WeakMap<object, number>();
 
   override set(key: object, value: SessionListFilteredEntries) {
-    const previous = this.sizes.get(key);
-    const refs = selectionRefs(value);
-    this.refs += refs - (previous ?? 0);
-    this.count += Number(previous === undefined);
-    this.sizes.set(key, refs);
+    const previous = this.get(key);
+    this.refs += selectionRefs(value) - (previous ? selectionRefs(previous) : 0);
+    this.count += Number(!previous);
     // Dead weak keys may overestimate retention until view eviction. Never undercount
     // old partition arrays by scanning or trying to predict garbage collection.
     return super.set(key, value);
