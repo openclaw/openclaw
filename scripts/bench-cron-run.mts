@@ -391,7 +391,7 @@ try {
     const runPhase = sample === 0 ? "04.cron-cold" : `04.cron-warm-${sample}`;
     setPhase(runPhase);
     expectedRuns++;
-    const ack = await rpc<{ enqueued: boolean; runId: string }>("cron.run", {
+    const ack: { enqueued: boolean; runId: string } = await rpc("cron.run", {
       id: jobId,
       mode: "force",
     });
@@ -405,14 +405,14 @@ try {
     const finishedAt = Date.now();
     setPhase(`${runPhase}.verify`);
     // Finished follows the history persistence attempt; verify its success once.
-    const page = await rpc<{
+    const page: {
       entries: Array<{ runId?: string; status?: string; summary?: string }>;
-    }>("cron.runs", {
+    } = await rpc("cron.runs", {
       id: jobId,
       runId: ack.runId,
       limit: 1,
     });
-    const entry = page.entries[0];
+    const entry: (typeof page.entries)[number] | undefined = page.entries[0];
     assert(entry && entry.runId === ack.runId, "Finished cron run is absent from history");
     assert.equal(entry.status, "ok", "Persisted cron run failed");
     assert(entry.summary?.includes("Synthetic cron result."), "Missing mock provider response");
