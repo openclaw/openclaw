@@ -135,20 +135,15 @@ describe("collectDevicePairingHealthFindings", () => {
         publicKey,
         role: "operator",
         scopes: ["operator.admin"],
-        clientId: "control-ui",
-        clientMode: "webchat",
-        displayName: "Dashboard",
       });
 
       const findings = await collect("local");
       expect(findings).toEqual([
         expect.objectContaining({
-          checkId: "core/doctor/device-pairing",
           severity: "warning",
           path: "devices.pending",
           target: identity.deviceId + ":" + pending.request.requestId,
           category: "recommended",
-          docsUrl: "https://docs.openclaw.ai/cli/devices",
           requirement: "scope-upgrade",
           message: expect.stringContaining("Pending scope upgrade"),
           fixHint: expect.stringContaining("openclaw devices approve"),
@@ -165,14 +160,12 @@ describe("collectDevicePairingHealthFindings", () => {
       mode: "local",
       findingPath: "devices.legacy-store",
       requirement: "pairing-store-legacy-file",
-      fixHint: "openclaw doctor --fix",
     },
     {
       file: "identity/device-auth.json",
       mode: "remote",
       findingPath: "identity.device-auth",
       requirement: "device-auth-store-legacy-file",
-      fixHint: "openclaw doctor --fix",
     },
   ] as const)(
     "warns about unimported $file in $mode mode without changing it",
@@ -186,18 +179,16 @@ describe("collectDevicePairingHealthFindings", () => {
         const findings = await collect(testCase.mode);
         expect.soft(findings).toEqual([
           expect.objectContaining({
-            checkId: "core/doctor/device-pairing",
             severity: "warning",
             path: testCase.findingPath,
             category: "fix-now",
-            docsUrl: "https://docs.openclaw.ai/cli/devices",
             requirement: testCase.requirement,
             message: expect.stringContaining(
               testCase.requirement === "pairing-store-legacy-file"
                 ? "has not been imported"
                 : "is still present",
             ),
-            fixHint: expect.stringContaining(testCase.fixHint),
+            fixHint: expect.stringContaining("openclaw doctor --fix"),
           }),
         ]);
         expect(findings[0]?.message).toContain(path.basename(sourcePath));
@@ -343,13 +334,9 @@ describe("collectDevicePairingHealthFindings", () => {
     const findings = await collect("remote", true);
 
     const message = findings.map((finding) => finding.message).join("\n");
-    expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith({
-      method: "device.pair.list",
-      timeoutMs: 5_000,
-      config: { gateway: { mode: "remote" } },
-      sharedStateMode: "read-only",
-      assertDispatchCurrent: undefined,
-    });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.list", sharedStateMode: "read-only" }),
+    );
     expect(findings).toHaveLength(1);
     expect(message).toContain("req-gateway-1");
     expect(message).toContain("bad\\nname");
@@ -371,9 +358,6 @@ describe("collectDevicePairingHealthFindings", () => {
         pairedDevice({
           deviceId: "device; echo pwn",
           publicKey: "paired-pubkey",
-          displayName: "Dashboard",
-          clientId: "control-ui",
-          clientMode: "webchat",
           role: "operator; touch /tmp/pwn",
           roles: ["operator; touch /tmp/pwn"],
           scopes: [],

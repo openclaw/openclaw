@@ -10,11 +10,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -80,9 +78,6 @@ describe("doctor SQLite session transcript header repair", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await waitForSessionTranscriptIndexReconcile(transcriptDatabaseOptions);
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   });
 
@@ -153,16 +148,14 @@ describe("doctor SQLite session transcript header repair", () => {
     await expect(health()).resolves.toEqual({ found: 1, repaired: 1 });
     const backups = recoveryDirectories();
     expect(backups).toHaveLength(1);
-    const backup = openNodeSqliteDatabase(
-      path.join(path.dirname(db.path), backups[0]!, "database.sqlite"),
-      { readOnly: true },
-    );
-    try {
+    {
+      using backup = openNodeSqliteDatabase(
+        path.join(path.dirname(db.path), backups[0]!, "database.sqlite"),
+        { readOnly: true },
+      );
       expect(backup.prepare("SELECT * FROM transcript_events ORDER BY seq").all()).toEqual(
         originalStorage,
       );
-    } finally {
-      backup.close();
     }
 
     const repairedRows = rows();

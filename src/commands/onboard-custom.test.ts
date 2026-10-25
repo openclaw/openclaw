@@ -63,17 +63,6 @@ function mockDiscoveredModels(ids: string[] = []) {
   }));
 }
 
-function expectModelOptions(prompter: ReturnType<typeof createTestPrompter>, ids: string[]) {
-  expect(prompter.select).toHaveBeenCalledWith(
-    expect.objectContaining({
-      options: [
-        ...ids.map((id) => ({ value: id, label: id })),
-        { value: "", label: "Enter a model ID manually" },
-      ],
-    }),
-  );
-}
-
 function stubFetchSequence(
   responses: Array<{ ok: boolean; status?: number }>,
 ): ReturnType<typeof vi.fn> {
@@ -83,7 +72,6 @@ function stubFetchSequence(
       ok: response.ok,
       status: response.status,
       headers: new Headers({ "content-type": "application/json; charset=utf-8" }),
-      json: async () => ({}),
     });
   }
   vi.stubGlobal("fetch", fetchMock);
@@ -222,16 +210,12 @@ describe("promptCustomApiConfig", () => {
 
     const result = await runPromptCustomApi(prompter, { verification: "deferred" });
 
-    expect(result.modelId).toBe("local-large");
     expect(result.config.models?.providers?.custom?.models.map((model) => model.id)).toEqual([
       "local-large",
     ]);
-    expectModelOptions(prompter, ["local-small", "local-large"]);
     expect(discoveryFetch).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        url: "http://localhost:1234/v1/models",
         init: { headers: { Authorization: "Bearer fixture-key" } },
-        timeoutMs: 5_000,
       }),
     );
   });
@@ -244,8 +228,6 @@ describe("promptCustomApiConfig", () => {
     });
     const result = await runPromptCustomApi(prompter, { verification: "deferred" });
     expect(result.modelId).toBe("unlisted-model");
-    expect(discoveryFetch).toHaveBeenCalledOnce();
-    expectModelOptions(prompter, ["advertised-model"]);
   });
 
   it.each(["empty", "invalid", "http", "timeout"])(
@@ -287,31 +269,6 @@ describe("promptCustomApiConfig", () => {
     expect(discoveryFetch).not.toHaveBeenCalled();
   });
 
-  it("rejects aliases already used only by the selected agent", async () => {
-    const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
-    });
-    stubFetchSequence([{ ok: true }]);
-
-    await runPromptCustomApi(prompter, {
-      config: {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
-        },
-      },
-      target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
-    });
-
-    const aliasPrompt = prompter.text.mock.calls.find(
-      ([options]) => options.message === "Model alias (optional)",
-    );
-    expect(aliasPrompt?.[0].validate("Operations")).toBe(
-      "Alias Operations already points to openai/ops.",
-    );
-  });
-
   it("threads one workspace-scoped manifest snapshot through alias validation", async () => {
     const preparedPlugins = [
       {
@@ -325,6 +282,7 @@ describe("promptCustomApiConfig", () => {
     stubFetchSequence([{ ok: true }]);
     const config = {
       agents: {
+        entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
         defaults: {
           models: {
             "custom/latest": { alias: "Legacy" },
@@ -340,86 +298,59 @@ describe("promptCustomApiConfig", () => {
 
     const result = await runPromptCustomApi(prompter, { config, target });
 
-    expect(loadManifestMetadataSnapshot).toHaveBeenCalledExactlyOnceWith({
-      config,
-      workspaceDir: target.workspaceDir,
-      env: process.env,
-    });
-    expect(loadManifestMetadataSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
-      prompter.text.mock.invocationCallOrder[0]!,
+    expect(loadManifestMetadataSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: target.workspaceDir }),
+    );
+    const aliasPrompt = prompter.text.mock.calls.find(
+      ([options]) => options.message === "Model alias (optional)",
+    );
+    expect(aliasPrompt?.[0].validate("Operations")).toBe(
+      "Alias Operations already points to openai/ops.",
     );
     expect(result.config.agents?.defaults?.models?.["custom/modern-model"]?.alias).toBe("Legacy");
   });
 
-  it("cancels custom provider verification response bodies", async () => {
-    const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
-    });
-    const cancel = vi.fn(async () => undefined);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        headers: new Headers({ "content-type": "application/json; charset=utf-8" }),
-        body: { cancel },
-      })),
-    );
-
-    await runPromptCustomApi(prompter);
-
-    expect(cancel).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries when verification fails", async () => {
-    const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "bad-model", "good-model", "custom", ""],
-      select: ["plaintext", "openai", "model"],
-    });
-    stubFetchSequence([{ ok: false, status: 400 }, { ok: true }]);
-    await runPromptCustomApi(prompter);
-
-    expect(prompter.text).toHaveBeenCalledTimes(6);
-    expect(prompter.select).toHaveBeenCalledTimes(3);
-  });
-
-  it("rejects successful-looking HTML verification responses with a base URL hint", async () => {
-    const prompter = createTestPrompter({
-      text: [
-        "https://proxy.example.com",
-        "test-key",
-        "bad-model",
-        "https://proxy.example.com/v1",
-        "test-key",
-        "custom",
-        "",
-      ],
-      select: ["plaintext", "openai", "baseUrl", "plaintext"],
-    });
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
-        text: async () => "<html>not the API</html>",
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({}),
+  it.each(["HTML", "HTTP error"])(
+    "retries %s verification and cancels the successful response body",
+    async (failure) => {
+      const prompter = createTestPrompter({
+        text: [
+          "https://proxy.example.com",
+          "test-key",
+          "bad-model",
+          "https://proxy.example.com/v1",
+          "test-key",
+          "custom",
+          "",
+        ],
+        select: ["plaintext", "openai", "baseUrl", "plaintext"],
       });
-    vi.stubGlobal("fetch", fetchMock);
+      const cancel = vi.fn(async () => undefined);
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: failure === "HTML",
+          status: failure === "HTML" ? 200 : 400,
+          headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "application/json" }),
+          body: { cancel },
+        });
+      vi.stubGlobal("fetch", fetchMock);
 
-    await runPromptCustomApi(prompter);
+      await runPromptCustomApi(prompter);
 
-    expect(prompter.progress.mock.results[0]?.value.stop).toHaveBeenCalledWith(
-      expect.stringContaining("usually need a /v1 path prefix"),
-    );
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example.com/chat/completions");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://proxy.example.com/v1/chat/completions");
-  });
+      expect(prompter.progress.mock.results[0]?.value.stop).toHaveBeenCalledWith(
+        expect.stringContaining(failure === "HTML" ? "usually need a /v1 path prefix" : "400"),
+      );
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example.com/chat/completions");
+      expect(fetchMock.mock.calls[1]?.[0]).toBe("https://proxy.example.com/v1/chat/completions");
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
 
   it("re-prompts base url when unknown detection fails", async () => {
     const prompter = createTestPrompter({

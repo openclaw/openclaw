@@ -84,6 +84,8 @@ function makePending(pluginId: string, overrides: Partial<DeferredPluginMigratio
 }
 const protectedConfig = (pluginId: string) => [["plugins", "entries", pluginId, "config"]];
 const hasPending = (pluginId: string) => expect.objectContaining({ pluginId });
+const defer = (...pending: DeferredPluginMigration[]) =>
+  recordDeferredPluginMigrations({ pending });
 
 async function prepareMigrationOwner() {
   const owner = createDoctorPluginMigrationPreparation({
@@ -146,15 +148,7 @@ describe("unavailable plugin migration owners", () => {
         expect(blocked.unavailablePluginIds).toContain(pluginId);
       }
 
-      await recordDeferredPluginMigrations({
-        pending: [
-          makePending(policyId, {
-            reason: "Earlier upgrade",
-            command: "openclaw doctor --fix",
-            requiresStateMigration: true,
-          }),
-        ],
-      });
+      await defer(makePending(policyId, { requiresStateMigration: true }));
       const owner = await prepareMigrationOwner();
       await owner.complete();
       expect(readDeferredPluginMigrations()).toContainEqual(
@@ -179,16 +173,12 @@ describe("unavailable plugin migration owners", () => {
           plugins: { enabled: false },
           legacyFixture: legacyValue,
         });
-        await recordDeferredPluginMigrations({
-          pending: [
-            makePending("missing-owner", {
-              reason: "Retained compatibility input",
-              command: "openclaw doctor --fix",
-              configPaths: [["legacyFixture"]],
-              validationExcludedPaths: [["legacyFixture"]],
-            }),
-          ],
-        });
+        await defer(
+          makePending("missing-owner", {
+            configPaths: [["legacyFixture"]],
+            validationExcludedPaths: [["legacyFixture"]],
+          }),
+        );
         expect((await readConfigFileSnapshot()).valid).toBe(false);
         const owner = await prepareMigrationOwner();
         await owner.complete();
@@ -219,9 +209,7 @@ describe("unavailable plugin migration owners", () => {
         `module.exports = { stateMigrations: [{ id: "retained-state", label: "Retained state", detectLegacyState: () => null, migrateLegacyState: () => ({ changes: [], warnings: [] }) }] };\n`,
       );
       await seedInstalledPluginIndex({ [pluginId]: record }, { config });
-      await recordDeferredPluginMigrations({
-        pending: [makePending("qqbot", { requiresDoctorInspection: true })],
-      });
+      await defer(makePending("qqbot", { requiresDoctorInspection: true }));
       const state = createPluginStateKeyedStore<string>("qqbot", {
         namespace: "migration-fixture",
         maxEntries: 4,
@@ -256,15 +244,7 @@ describe("unavailable plugin migration owners", () => {
       await withHome(async (home) => {
         const config = { gateway: { mode: "local" }, plugins: { enabled: false } };
         await writeOpenClawConfig(home, config);
-        await recordDeferredPluginMigrations({
-          pending: [
-            makePending("webhooks", {
-              reason: "Retained input",
-              command: "openclaw doctor --fix",
-              configPaths: protectedConfig("webhooks"),
-            }),
-          ],
-        });
+        await defer(makePending("webhooks", { configPaths: protectedConfig("webhooks") }));
         const configPath = path.join(home, ".openclaw", "openclaw.json");
         if (kind === "unreadable") {
           await fs.writeFile(configPath, '{ "plugins":');
@@ -296,18 +276,13 @@ describe("unavailable plugin migration owners", () => {
           entries: { webhooks: { config: {} }, "disabled-fixture": { enabled: false, config: {} } },
         },
       });
-      await recordDeferredPluginMigrations({
-        pending: pluginIds.map((pluginId) =>
-          makePending(pluginId, { configPaths: protectedConfig(pluginId) }),
-        ),
-      });
+      await defer(...pluginIds.map((id) => makePending(id, { configPaths: protectedConfig(id) })));
       // Startup is a reader; Doctor owns settlement of this shipped pending row.
       await runStartupConfigPreflight({ gateway: true, observe: false });
       expect(readDeferredPluginMigrations()).toHaveLength(3);
-      const pendingAcrossRuns = [];
       for (let run = 0; run < 2; run++) {
         const repaired = await runDoctorConfigPreflight(options);
-        pendingAcrossRuns.push(readDeferredPluginMigrations());
+        expect(readDeferredPluginMigrations()).toEqual([]);
         expect(repaired.deferredPluginMigrations).toBeUndefined();
         expect(
           repaired.stateMigrationStepReceipts?.filter(
@@ -319,7 +294,6 @@ describe("unavailable plugin migration owners", () => {
         await runStartupConfigPreflight({ gateway: true, observe: false });
         expect(readDeferredPluginMigrations()).toEqual([]);
       }
-      expect(pendingAcrossRuns).toEqual([[], []]);
       for (const pluginId of pluginIds) {
         expect(await readReceipt(home, pluginId)).toMatchObject({
           status: "completed",
@@ -388,9 +362,7 @@ describe("unavailable plugin migration owners", () => {
         gateway: { mode: "local" },
         plugins: { allow: ["other-plugin"], entries: { [pluginId]: { config } } },
       });
-      await recordDeferredPluginMigrations({
-        pending: [makePending(pluginId, { configPaths: protectedConfig(pluginId) })],
-      });
+      await defer(makePending(pluginId, { configPaths: protectedConfig(pluginId) }));
       {
         const result = await runDoctorConfigPreflight(options);
         expect(readDeferredPluginMigrations()).toEqual([expect.objectContaining({ pluginId })]);

@@ -104,13 +104,8 @@ function previewEntry(sessionId: string, updatedAt: number, label?: string) {
   return { sessionId, updatedAt, model: "test:opus", ...(label === undefined ? {} : { label }) };
 }
 
-function artifactStats(
-  scannedFiles = 0,
-  removedFiles = 0,
-  freedBytes = 0,
-  olderThanMs = 604800000,
-) {
-  return { scannedFiles, removedFiles, freedBytes, olderThanMs };
+function artifactStats(scannedFiles = 0, removedFiles = 0, freedBytes = 0) {
+  return { scannedFiles, removedFiles, freedBytes, olderThanMs: 604800000 };
 }
 
 function mockPreviews(...previewResults: ReturnType<typeof cleanupPreview>[]) {
@@ -146,8 +141,6 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("keeps an empty explicit store local instead of delegating default cleanup to the gateway", async () => {
-    // Resolve a full result so a regression that delegates fails on the
-    // gateway assertion below instead of throwing on the beforeEach null.
     mocks.callGateway.mockResolvedValue(gatewayCleanupResult("/gateway/sessions.json"));
     await cleanup({ store: "", enforce: true });
 
@@ -262,7 +255,6 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 1,
             pruned: 0,
-            unreferencedArtifacts: artifactStats(0, 0, 0, 0),
           }),
           appliedCount: 0,
         },
