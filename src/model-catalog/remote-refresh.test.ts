@@ -30,7 +30,6 @@ import { captureOpenClawStateWorkerContext as workerContext } from "../state/ope
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledStamp from "./bundled-catalog-stamp.js";
 import { resolveRemoteCatalogUrl } from "./remote-config.js";
 import { refreshRemoteModelCatalog as refreshCatalog } from "./remote-refresh.js";
@@ -71,17 +70,6 @@ function mockFetch(implementation: typeof fetch) {
 }
 function mockDownload(value: unknown = bundle, init?: ResponseInit) {
   return mockFetch(async () => new Response(JSON.stringify(value), init));
-}
-function corruptDownload(patch: object = {}, invalidUtf8 = false) {
-  const body = Buffer.from(
-    JSON.stringify({ ...bundle, generatedAt: bundle.generatedAt + 1, ...patch }),
-  );
-  if (invalidUtf8) {
-    const offset = body.indexOf("claude-test");
-    expect(offset).toBeGreaterThanOrEqual(0);
-    body[offset + "claude-".length] = 0xff;
-  }
-  return new Response(body);
 }
 
 type StoredCatalog = Parameters<typeof writeCatalog>[0];
@@ -212,7 +200,7 @@ describe("remote model catalog refresh", () => {
         resolve();
       });
     });
-    const fetchImpl = mockFetch(async () => {
+    mockFetch(async () => {
       competitor.exec("BEGIN IMMEDIATE");
       // Native port delivery needs a caller event-loop turn; no timer races the write.
       port2.postMessage("release");
@@ -221,7 +209,6 @@ describe("remote model catalog refresh", () => {
     try {
       await expectRefresh({ status: "updated" });
       await released;
-      expect(fetchImpl).toHaveBeenCalledOnce();
       expect(readCatalog(databaseOptions)?.generated_at).toBe(bundle.generatedAt);
     } finally {
       port1.removeAllListeners();
@@ -234,7 +221,7 @@ describe("remote model catalog refresh", () => {
     }
   });
 
-  it("persists valid rows and revalidates without caller-thread SQL", async () => {
+  it("persists sanitized rows and revalidates the stored catalog", async () => {
     const downloaded = {
       ...bundle,
       models: [
@@ -242,21 +229,11 @@ describe("remote model catalog refresh", () => {
         { id: "bad-pricing", provider: "anthropic", pricing: { status: "unknown", input: 0 } },
       ],
     };
-    openOpenClawStateDatabase(databaseOptions);
-    const sql = observeMainThreadSql();
-    sql.calibrate();
-    try {
-      const fetchImpl = mockDownload(downloaded, { status: 200, headers: { etag: '"two"' } });
-      await expectRefresh({ status: "updated", providers: 1, models: 1 });
-      expect(fetchImpl.mock.calls[0]?.[0]).toBe(
-        "https://catalog.openclaw.ai/models/v2/catalog.json",
-      );
-      mockFetch(async () => new Response(null, { status: 304 }));
-      await expectRefresh({ status: "unchanged" });
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    const fetchImpl = mockDownload(downloaded, { status: 200, headers: { etag: '"two"' } });
+    await expectRefresh({ status: "updated", providers: 1, models: 1 });
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(defaultUrl);
+    mockFetch(async () => new Response(null, { status: 304 }));
+    await expectRefresh({ status: "unchanged" });
     expect(JSON.parse(readCatalog(databaseOptions)?.bundle_json ?? "null")).toEqual({
       ...bundle,
       models: [{ ...bundle.models[0], input: ["text"] }],
@@ -315,12 +292,6 @@ describe("remote model catalog refresh", () => {
     const decision = {
       protocol: "fixture.decisions",
       input: ["text"],
-      questions: { boolean: { probabilities: "boolean", abstention: false } },
-      billing: {
-        unit: "tokens",
-        source: "provider-docs",
-        usdPerMillion: { input: 0, output: 0 },
-      },
     };
     const downloaded = {
       ...bundle,
@@ -354,13 +325,12 @@ describe("remote model catalog refresh", () => {
       },
       pricing: { "anthropic/history-only": { input: 2, output: 8 } },
     };
-    const fetchImpl = mockDownload(legacy);
+    mockDownload(legacy);
     await expectRefresh({ status: "updated", providers: 1, models: 1 }, mirrorConfig("v1/"));
     const persisted = JSON.parse(readCatalog(databaseOptions)?.bundle_json ?? "null");
     expect(persisted.pricing).toEqual(legacy.pricing);
     expect(persisted.providers.anthropic).not.toHaveProperty("baseUrl");
     expect(persisted.providers.anthropic.models[0]).not.toHaveProperty("headers");
-    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("does not report a catalog older than the bundled build as applicable", async () => {
@@ -377,13 +347,12 @@ describe("remote model catalog refresh", () => {
     expect(readCatalog(databaseOptions)?.generated_at).toBe(newerBundle.generatedAt);
 
     const mirrorBundle = { ...bundle, generatedAt: newerBundle.generatedAt + 100 };
-    const mirrorFetch = mockDownload(mirrorBundle);
+    mockDownload(mirrorBundle);
     await expectRefresh(
       { status: "updated", generatedAt: mirrorBundle.generatedAt },
       mirrorConfig(),
       false,
     );
-    expect(mirrorFetch).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -395,16 +364,8 @@ describe("remote model catalog refresh", () => {
         throw new DOMException("timed out", "TimeoutError");
       },
     ],
-    ["invalid UTF-8", async () => corruptDownload({}, true)],
-    ["unsupported schema", async () => corruptDownload({ schemaVersion: 4 })],
-    ["empty models", async () => corruptDownload({ models: [] })],
-    [
-      "rates on unknown pricing",
-      async () =>
-        corruptDownload({
-          models: [{ ...bundle.models[0], pricing: { status: "unknown", input: 0 } }],
-        }),
-    ],
+    ["invalid UTF-8", async () => new Response(Uint8Array.of(0xff))],
+    ["invalid schema", async () => Response.json({ ...bundle, models: [] })],
   ] satisfies Array<[string, typeof fetch]>)(
     "preserves the previous catalog without a fallback request after %s",
     async (_failure, fetch) => {

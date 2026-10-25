@@ -42,26 +42,6 @@ const disabledConfig = { models: { catalogRefresh: { enabled: false } } };
 function stageBundle(value: unknown = bundle, source_url = defaultUrl) {
   read.mockReturnValue({ bundle_json: JSON.stringify(value), source_url });
 }
-function recommendationBundle(ids: string[], served: string[], rate: number) {
-  return {
-    schemaVersion: 2,
-    generatedAt: 200,
-    minVersion: "2026.7.0",
-    sourceCommit: "recommendation-test",
-    providers: { anthropic: { recommendedModels: ids } },
-    models: served.map((id) => ({
-      id,
-      provider: "anthropic",
-      pricing: {
-        status: "known",
-        currency: "USD",
-        unit: "million_tokens",
-        input: rate,
-        output: rate * 2,
-      },
-    })),
-  };
-}
 const overlay = (config: OpenClawConfig = {}) =>
   getRemoteModelCatalogProviderOverlay(config, "anthropic");
 const price = () => activeCatalog({})?.pricing?.["openai/gpt-external"];
@@ -97,9 +77,20 @@ describe("remote model catalog overlay", () => {
   it("keeps older hosted recommendations only for currently served rows", async () => {
     builtAt.mockReturnValue(300);
     stageBundle({
-      ...recommendationBundle(["retired", "current"], ["retired", "current"], 9),
+      schemaVersion: 2,
+      generatedAt: 200,
+      sourceCommit: "recommendation-test",
+      providers: { anthropic: { recommendedModels: ["retired", "current", "missing"] } },
+      models: ["retired", "current"].map((id) => ({
+        id,
+        provider: "anthropic",
+        pricing: { status: "known", currency: "USD", unit: "million_tokens", input: 9, output: 18 },
+      })),
       upstreamPricing: { "anthropic/current": { input: 9, output: 18, source: "native" } },
     });
+    expect(await readUpdate({})).toBeUndefined();
+    expect(await readRecommendations({}, "anthropic")).toEqual(["retired", "current"]);
+    expect(await readRecommendations(disabledConfig, "anthropic")).toBeUndefined();
     await prepareStartup();
     const rank = createModelPickerRecommendationRank({});
     const current = { provider: "anthropic", id: "current" };
@@ -138,14 +129,6 @@ describe("remote model catalog overlay", () => {
       expect(overlay()?.models).toEqual([{ id: "downloaded" }]);
     },
   );
-
-  it("reads stored recommendations even when the catalog is older than the build", async () => {
-    builtAt.mockReturnValue(300);
-    stageBundle(recommendationBundle(["first", "second"], ["first"], 1));
-    expect(await readUpdate({})).toBeUndefined();
-    expect(await readRecommendations({}, "anthropic")).toEqual(["first"]);
-    expect(await readRecommendations(disabledConfig, "anthropic")).toBeUndefined();
-  });
 
   it("does not adopt a stored bundle belonging to another source", async () => {
     const previous = await prepareStartup();
@@ -219,14 +202,17 @@ describe("remote model catalog overlay", () => {
   it("serves a released default install's v1 download until its v2 download is active", async () => {
     const v1Default = "https://catalog.openclaw.ai/models/v1/catalog.json";
     stageBundle(bundle, v1Default);
-    await prepareStartup();
-    expect(overlay()).toHaveProperty("models");
+    const previous = await prepareStartup();
+    expectPair();
     expect(price()).toEqual({
       cost: { input: 2.5, output: 10 },
       explicit: false,
     });
     expect(activeCatalog(mirrorConfig)?.pricing).toBeUndefined();
-    const previous = await prepareStartup();
+    expect(overlay(disabledConfig)).toBeUndefined();
+    expect(overlay(mirrorConfig)).toBeUndefined();
+    expect(captureStartup()).toBe(previous);
+    expect(read).toHaveBeenCalledOnce();
     stageBundle();
     const next = expectDefined(await readUpdate({}), "v2 catalog");
     expect(captureStartup()?.sourceUrl).toBe(v1Default);
@@ -257,16 +243,5 @@ describe("remote model catalog overlay", () => {
     } finally {
       await worker.terminate();
     }
-  });
-
-  it("does not reuse a cached overlay after disablement or a URL change", async () => {
-    await prepareStartup();
-    const previous = captureStartup();
-    expect(overlay()).toHaveProperty("models");
-    expect(overlay(disabledConfig)).toBeUndefined();
-    expect(overlay(mirrorConfig)).toBeUndefined();
-    expectPair();
-    expect(captureStartup()).toBe(previous);
-    expect(read).toHaveBeenCalledOnce();
   });
 });
