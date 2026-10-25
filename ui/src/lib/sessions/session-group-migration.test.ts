@@ -19,6 +19,7 @@ const clientDefaults = { name: "Client", cwd: "/repos/client", worktree: true };
 const expectedClient = [{ ...clientGroup, ...clientDefaults }];
 type Groups = { groups: { name: string; position: number }[] };
 type Defaults = { defaults: (typeof clientDefaults)[] };
+const groupMethods = (names: string[]) => names.map((name) => `sessions.groups.${name}`);
 
 function legacyGroups() {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -30,12 +31,7 @@ function legacyGroups() {
 function createGatewayHarness(
   request: ReturnType<typeof vi.fn>,
   scopes = ["operator.write"],
-  methods = [
-    "sessions.groups.list",
-    "sessions.groups.defaults",
-    "sessions.groups.put",
-    "sessions.groups.rename",
-  ],
+  methods = groupMethods(["list", "defaults", "put", "rename"]),
 ) {
   const harness = sharedGatewayHarness({ request } as unknown as GatewayBrowserClient, methods);
   harness.gateway.snapshot.hello = {
@@ -95,33 +91,31 @@ it.each(["disconnected", "disposed"] as const)(
   },
 );
 
-it("does not migrate browser groups without operator.write", async () => {
-  const legacy = legacyGroups();
-  const request = groupRequests({ "sessions.groups.list": () => ({ groups: [] }) });
-  const sessions = createSessions(request, ["operator.read"]);
-
-  await sessions.groupsLoad();
-
-  expect(request).toHaveBeenCalledOnce();
-  expect(request).toHaveBeenCalledWith("sessions.groups.list", {});
-  expect(localStorage.getItem(legacyKey)).toBe(legacy);
-});
-
-it("migrates browser groups with operator.write", async () => {
-  legacyGroups();
-  const request = groupRequests({
-    "sessions.groups.list": () => ({ groups: [] }),
-    "sessions.groups.put": () => ({ groups: [{ name: "Research", position: 0 }] }),
-    "sessions.groups.defaults": () => ({ defaults: [{ name: "Research" }] }),
-  });
-  const sessions = createSessions(request);
-
-  await sessions.groupsLoad();
-
-  expect(request).toHaveBeenCalledWith("sessions.groups.put", { names: ["Research"] });
-  expect(sessions.state.groups).toEqual(["Research"]);
-  expect(localStorage.getItem(legacyKey)).toBeNull();
-});
+it.each([false, true])(
+  "migrates browser groups only with write authority (%s)",
+  async (writable) => {
+    const legacy = legacyGroups();
+    const request = groupRequests({
+      "sessions.groups.list": () => ({ groups: [] }),
+      ...(writable
+        ? {
+            "sessions.groups.put": () => ({ groups: [{ name: "Research", position: 0 }] }),
+            "sessions.groups.defaults": () => ({ defaults: [{ name: "Research" }] }),
+          }
+        : {}),
+    });
+    const sessions = createSessions(request, [writable ? "operator.write" : "operator.read"]);
+    await sessions.groupsLoad();
+    if (writable) {
+      expect(request).toHaveBeenCalledWith("sessions.groups.put", { names: ["Research"] });
+      expect(sessions.state.groups).toEqual(["Research"]);
+    } else {
+      expect(request).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledWith("sessions.groups.list", {});
+    }
+    expect(localStorage.getItem(legacyKey)).toBe(writable ? null : legacy);
+  },
+);
 
 it("does not replace saved groups from an invalidated legacy import", async () => {
   const legacy = legacyGroups();
@@ -162,12 +156,11 @@ it("reloads path-free mutations and clears removed defaults on update", async ()
     "sessions.groups.put": () => ({ groups: [clientGroup] }),
     "sessions.groups.update": () => ({ defaults: [{ name: "Client", worktree: false }] }),
   });
-  const sessions = createSessions(request, undefined, [
-    "sessions.groups.list",
-    "sessions.groups.defaults",
-    "sessions.groups.put",
-    "sessions.groups.update",
-  ]);
+  const sessions = createSessions(
+    request,
+    undefined,
+    groupMethods(["list", "defaults", "put", "update"]),
+  );
 
   await expect(sessions.groupsLoad()).resolves.toBeNull();
   expect(sessions.groupsStatus()).toBe("unavailable");

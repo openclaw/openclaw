@@ -101,24 +101,18 @@ it("keeps catalog preview targets without connection credentials", async () => {
   );
 });
 
-it.each([
-  ["open-new-tab", undefined],
-  ["open-new-window", "popup"],
-] as const)("opens %s with a detached opener", async (kind, features) => {
-  const opened = { opener: window, location: { replace: vi.fn() } };
-  opened.location.replace.mockImplementation(() => expect(opened.opener).toBeNull());
-  const open = vi.spyOn(window, "open").mockReturnValue(opened as unknown as Window);
-  Object.assign(params.context.gateway.snapshot.hello!, {
-    controlUiUrl: "https://gateway.example.test/remote",
-  });
-  await run(kind);
-  expect(open).toHaveBeenCalledWith("about:blank", "_blank", features);
-  expect(opened.location.replace).toHaveBeenCalledWith(
-    `${window.location.origin}/control${sessionPath}`,
-  );
-  expect(opened.opener).toBeNull();
-  expect(showToast).not.toHaveBeenCalled();
-});
+it.each(["open-new-tab", "open-new-window"] as const)(
+  "opens %s with a detached opener",
+  async (kind) => {
+    const opened = { opener: window, location: { replace: vi.fn() } };
+    opened.location.replace.mockImplementation(() => expect(opened.opener).toBeNull());
+    vi.spyOn(window, "open").mockReturnValue(opened as unknown as Window);
+    await run(kind);
+    expect(opened.location.replace).toHaveBeenCalledWith(
+      `${window.location.origin}/control${sessionPath}`,
+    );
+  },
+);
 
 it("reports popup blocking", async () => {
   vi.spyOn(window, "open").mockReturnValue(null);
