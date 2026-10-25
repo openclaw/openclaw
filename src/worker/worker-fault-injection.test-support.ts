@@ -59,6 +59,7 @@ import {
   WorkerFaultPlacementLifecycle,
 } from "./worker-fault-placement-lifecycle.test-support.js";
 import { bindWorkerFixtureTurnSource } from "./worker-fault-session-target.test-support.js";
+import { createWorkerLaunchDescriptorForTest } from "./worker-process.test-support.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
@@ -343,15 +344,13 @@ export class ComposedGatewayHarness {
       );
       this.turnSources.set(claim.claimId, source);
     }
-    const descriptor: WorkerLaunchDescriptor = {
-      version: 4,
+    const descriptor = createWorkerLaunchDescriptorForTest({
       connectionEndpoint: { kind: "unix", socketPath: this.socketPath },
       admission: {
         environmentId: ENVIRONMENT_ID,
         credential,
         sessionId: SESSION_ID,
         ownerEpoch: epoch,
-        rpcSetVersion: WORKER_RPC_SET_VERSION,
         handshake: workerHandshake(this.artifact),
       },
       assignment: {
@@ -363,9 +362,6 @@ export class ComposedGatewayHarness {
         prompt: "fault injection",
         workspaceDir: this.root,
         modelRef: MODEL_REF,
-        inferenceOptions: {},
-        suppressPromptTranscript: false,
-        initialMessages: [],
         transcript: { baseLeafId: params.baseLeafId ?? null, nextSeq: params.initialSeq ?? 1 },
         liveEvents: {
           ackedSeq: params.initialAckedSeq ?? 0,
@@ -375,7 +371,7 @@ export class ComposedGatewayHarness {
           allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
         },
       },
-    };
+    });
     source.setToolAssignment(descriptor.assignment);
     return descriptor;
   }
@@ -390,13 +386,27 @@ export class ComposedGatewayHarness {
       admissionDeadlineMs: 5_000,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
     });
+    const transcript = new WorkerTranscriptCommitClient(connection, {
+      runEpoch: admission.ownerEpoch,
+      baseLeafId: assignment.transcript.baseLeafId,
+      initialSeq: assignment.transcript.nextSeq,
+    });
     return {
       connection,
-      transcript: new WorkerTranscriptCommitClient(connection, {
-        runEpoch: admission.ownerEpoch,
-        baseLeafId: assignment.transcript.baseLeafId,
-        initialSeq: assignment.transcript.nextSeq,
-      }),
+      async start() {
+        await connection.start();
+        const response = await connection.rpc.request("turn-admission", {
+          runEpoch: admission.ownerEpoch,
+          systemPrompt: assignment.systemPrompt ?? "",
+          prompt: typeof assignment.prompt === "string" ? assignment.prompt : "fault injection",
+          messages: [],
+        });
+        if (!response.ok || response.payload.outcome !== "allow") {
+          throw new Error("Fault fixture input admission rejected");
+        }
+        transcript.admitInput(response.payload.baseLeafId);
+      },
+      transcript,
       live: new WorkerLiveEventClient(connection, {
         runEpoch: admission.ownerEpoch,
         initialAckedSeq: assignment.liveEvents.ackedSeq,

@@ -16,7 +16,7 @@ import {
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { ClearCompanion, ExternalPanelLink } from "../chat-pane-embedded-view.tsx";
+import { ClearCompanion, ExternalPanelLink } from "../chat-panel-header-actions.tsx";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   ensureSidebarConversation,

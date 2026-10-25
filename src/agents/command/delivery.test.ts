@@ -160,15 +160,10 @@ function expectStatus(
 
 type JsonOutput = { payloads: unknown[]; meta?: unknown; deliveryStatus?: DeliveryStatusLike };
 
-async function deliverMediaReplyForTest(
-  outboundSession: DeliverParams["outboundSession"],
-  optsOverrides: Partial<AgentCommandOpts> = {},
-  overrides: Partial<DeliveryFixture> = {},
-) {
-  return await deliverForTest({
+function deliverMediaReplyForTest({ opts, ...overrides }: Partial<DeliveryFixture> = {}) {
+  return deliverForTest({
     workspace: true,
-    opts: { message: "go", replyTo: "#general", ...optsOverrides },
-    outboundSession,
+    opts: { message: "go", replyTo: "#general", ...opts },
     payloads: [mediaPayload],
     ...overrides,
   });
@@ -232,9 +227,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
     timeoutError.name = "TimeoutError";
     controller.abort(timeoutError);
 
-    await deliverMediaReplyForTest(undefined, {
-      abortSignal: controller.signal,
-    });
+    await deliverMediaReplyForTest({ opts: { abortSignal: controller.signal } });
 
     const deliverySignal = outboundArgs().abortSignal;
     expect(deliverySignal).toBeInstanceOf(AbortSignal);
@@ -261,7 +254,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
       }
       return [{ channel: "discord", messageId: "sent-after-restart" }];
     });
-    const delivery = deliverMediaReplyForTest(undefined, { abortSignal: controller.signal });
+    const delivery = deliverMediaReplyForTest({ opts: { abortSignal: controller.signal } });
     if (hasIntent) {
       expect((await delivery).deliverySucceeded).toBe(true);
       expect(deliverySignal?.aborted).toBe(false);
@@ -321,14 +314,12 @@ describe("deliverAgentCommandResult payload normalization", () => {
     }));
     normalizerMock.mockReturnValue(normalizerFn);
 
-    await deliverMediaReplyForTest(
-      mediaSession,
-      { replyAccountId: "workspace-1", threadId: "thread-1", runId: "run-1" },
-      {
-        sessionEntry: { sessionId: "session-1", updatedAt: 1 },
-        payloads: [{ ...mediaPayload, text: "✅ New session started.", isStatusNotice: true }],
-      },
-    );
+    await deliverMediaReplyForTest({
+      outboundSession: mediaSession,
+      opts: { replyAccountId: "workspace-1", threadId: "thread-1", runId: "run-1" },
+      sessionEntry: { sessionId: "session-1", updatedAt: 1 },
+      payloads: [{ ...mediaPayload, text: "✅ New session started.", isStatusNotice: true }],
+    });
 
     expect(normalizerMock.mock.lastCall![0]).toMatchObject({
       sessionKey: mediaSession.key,
@@ -452,14 +443,12 @@ describe("deliverAgentCommandResult payload normalization", () => {
     });
 
     const runtime = { log: vi.fn(), error: vi.fn() };
-    const delivered = await deliverMediaReplyForTest(
-      mediaSession,
-      { bestEffortDeliver: true },
-      {
-        runtime: runtime as never,
-        payloads: partial ? [mediaPayload] : [{ text: "here you go" }],
-      },
-    );
+    const delivered = await deliverMediaReplyForTest({
+      outboundSession: mediaSession,
+      opts: { bestEffortDeliver: true },
+      runtime: runtime as never,
+      payloads: partial ? [mediaPayload] : [{ text: "here you go" }],
+    });
 
     expect(delivered.deliverySucceeded).toBe(false);
     const status = expectStatus(delivered, {
@@ -520,9 +509,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
       onDeliveryResult,
     });
 
-    expect(delivered.requesterContinuationSettled).toBe(true);
-    const [field, expected] = Object.entries(result)[0]!;
-    expect(delivered).toHaveProperty(field, expected);
+    expect(delivered).toMatchObject({ ...result, requesterContinuationSettled: true });
     expect(onDeliveryResult).toHaveBeenCalledOnce();
     expect(onDeliveryResult).toHaveBeenCalledWith(delivered, expect.any(Array));
     expect(buildRestartRecoveryTerminalDeliveryEvidence(delivered)).toEqual({
@@ -544,10 +531,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
       sentTarget: { mediaUrls: ["/tmp/generated-image.png"] },
     });
 
-    expect(outboundArgs().identity).toEqual({
-      name: "Default",
-      emoji: ":robot_face:",
-    });
+    expect(outboundArgs().identity).toEqual({ name: "Default", emoji: ":robot_face:" });
     expect(delivered.deliverySucceeded).toBe(true);
     expectOutboundPayloads({ mediaUrls: ["/tmp/generated-image.png"], delivery });
   });
@@ -658,7 +642,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
       return [];
     });
 
-    const delivered = await deliverMediaReplyForTest(mediaSession);
+    const delivered = await deliverMediaReplyForTest({ outboundSession: mediaSession });
 
     expect(delivered.deliverySucceeded).toBe(true);
     const status = expectStatus(delivered, {
@@ -706,22 +690,20 @@ describe("deliverAgentCommandResult payload normalization", () => {
       writeJson: vi.fn((_value: JsonOutput) => events.push("json")),
     };
     await expect(
-      deliverMediaReplyForTest(
-        {
+      deliverMediaReplyForTest({
+        outboundSession: {
           ...mediaSession,
           ...(preflight ? { key: "agent:tester:not-installed:direct:alice" } : {}),
         },
-        {
+        opts: {
           json: true,
           bestEffortDeliver: false,
           replyChannel: preflight ? "not-installed" : "slack",
         },
-        {
-          runtime: runtime as never,
-          payloads: preflight ? [mediaPayload] : [{ text: "here you go" }],
-          onDeliveryResult,
-        },
-      ),
+        runtime: runtime as never,
+        payloads: preflight ? [mediaPayload] : [{ text: "here you go" }],
+        onDeliveryResult,
+      }),
     ).rejects.toThrow(error);
     expect(runtime.writeJson).toHaveBeenCalledOnce();
     const json = runtime.writeJson.mock.calls[0]![0] as JsonOutput;

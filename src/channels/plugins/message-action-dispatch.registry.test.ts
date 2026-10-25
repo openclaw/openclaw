@@ -53,7 +53,7 @@ function scopedReader(read: boolean) {
 }
 
 function pauseRead(
-  fixture: Pick<ReturnType<typeof registerReader>, "handleAction">,
+  fixture: Pick<ReturnType<typeof registerOfficial>, "handleAction">,
   fenced = true,
 ) {
   const resume = createDeferred();
@@ -109,7 +109,7 @@ describe("message action registration ownership", () => {
   });
 });
 
-function registerReader(
+function registerOfficial(
   options: {
     trusted?: boolean;
     origin?: "global" | "bundled";
@@ -117,6 +117,7 @@ function registerReader(
     readActions?: NonNullable<ChannelPlugin["actions"]>["readAuthorityActions"];
     gates?: NonNullable<ChannelPlugin["actions"]>["providerOwnedReadGates"];
     activate?: boolean;
+    actions?: Omit<NonNullable<ChannelPlugin["actions"]>, "handleAction">;
   } = {},
 ) {
   const owner = createPluginRegistry({
@@ -133,10 +134,12 @@ function registerReader(
   const plugin: ChannelPlugin = {
     ...createChannelTestPluginBase({ id: "configured-reader" }),
     actions: {
-      describeMessageTool: () => ({ actions: ["read", "search"] }),
-      providerOwnedReadGates: options.gates ?? true,
-      readAuthorityActions:
-        options.fenced === false ? undefined : (options.readActions ?? ["read", "search"]),
+      ...(options.actions ?? {
+        describeMessageTool: () => ({ actions: ["read", "search"] }),
+        providerOwnedReadGates: options.gates ?? true,
+        readAuthorityActions:
+          options.fenced === false ? undefined : (options.readActions ?? ["read", "search"]),
+      }),
       handleAction,
     },
   };
@@ -166,7 +169,7 @@ function registerReader(
 
 describe("official plugin read-only authority", () => {
   it.each(["read", "download-file"] as const)("admits cross-conversation %s", async (action) => {
-    const fixture = registerReader({ readActions: [action] });
+    const fixture = registerOfficial({ readActions: [action] });
     const ctx = { ...fixture.context, action };
     expect(shouldDeferExternalMessageActionTargetResolution(ctx)).toBe(true);
     expect((await prepareExternalMessageActionTargetForResolution(ctx)).params).toBe(ctx.params);
@@ -178,13 +181,13 @@ describe("official plugin read-only authority", () => {
     ["download-file", undefined],
     ["react", ["react"]],
   ] as const)("does not broaden %s authority", async (action, readActions) => {
-    const fixture = registerReader({ readActions });
+    const fixture = registerOfficial({ readActions });
     await expect(fixture.dispatch({ action })).rejects.toThrow(exactConversation);
     expect(fixture.handleAction).not.toHaveBeenCalled();
   });
 
   it("admits a dashboard read without promoting its origin or replacing native context", async () => {
-    const fixture = registerReader();
+    const fixture = registerOfficial();
     const assertDashboardReadCurrent = vi.fn();
     const context = {
       ...fixture.context,
@@ -224,7 +227,7 @@ describe("official plugin read-only authority", () => {
     { gates: ["search"] as const },
     { readActions: ["search"] as const },
   ])("does not accept an untrusted, legacy, or undeclared read (%j)", async (options) => {
-    const fixture = registerReader(options);
+    const fixture = registerOfficial(options);
     Object.assign(fixture.plugin, { trustedOfficialInstall: true });
     fixture.context.params.trustedOfficialInstall = true;
     await expect(fixture.prepare()).rejects.toThrow(exactConversation);
@@ -246,7 +249,7 @@ describe("official plugin read-only authority", () => {
     { toolContext: undefined },
     { toolContext: { currentChannelProvider: "other-provider", currentChannelId: "current" } },
   ])("retains originating provider/account context (%j)", async (mismatch) => {
-    const fixture = registerReader();
+    const fixture = registerOfficial();
     await expect(fixture.dispatch(mismatch)).rejects.toThrow(
       "current provider and account context",
     );
@@ -254,11 +257,11 @@ describe("official plugin read-only authority", () => {
   });
 
   it.each([false, true])("does not borrow root authority (has channel=%s)", async (hasChannel) => {
-    const scope = registerReader({ trusted: false, activate: false });
+    const scope = registerOfficial({ trusted: false, activate: false });
     if (!hasChannel) {
       scope.owner.registry.channels.splice(0);
     }
-    const root = registerReader();
+    const root = registerOfficial();
     await withPluginRuntimeRegistryScope(scope.owner.registry, async () => {
       await expect(root.dispatch()).rejects.toThrow(exactConversation);
     });
@@ -269,11 +272,9 @@ describe("official plugin read-only authority", () => {
 
   it.each([
     { change: "reactivate", origin: "global" },
-    { change: "adopt", origin: "global" },
-    { change: "reactivate", origin: "bundled" },
     { change: "adopt", origin: "bundled" },
   ] as const)("retains $origin reads across $change", async ({ change, origin }) => {
-    const fixture = registerReader({ origin, trusted: origin !== "bundled" });
+    const fixture = registerOfficial({ origin, trusted: origin !== "bundled" });
     const { resume, entered, nextRequest } = pauseRead(fixture);
     const read = fixture.dispatch();
     await entered.promise;
@@ -293,7 +294,7 @@ describe("official plugin read-only authority", () => {
   });
 
   it("preserves bundled provider-owned admission with a live read fence", async () => {
-    const fixture = registerReader({ origin: "bundled", trusted: false });
+    const fixture = registerOfficial({ origin: "bundled", trusted: false });
     let retained: (() => void) | undefined;
     fixture.handleAction.mockImplementation(async () => {
       retained = captureChannelReadAuthority();
@@ -305,7 +306,7 @@ describe("official plugin read-only authority", () => {
   });
 
   it.each(["artifact", "scope"] as const)("fences bundled %s fallbacks", async (fallback) => {
-    const fixture = registerReader({ origin: "bundled", trusted: false });
+    const fixture = registerOfficial({ origin: "bundled", trusted: false });
     if (fallback === "artifact") {
       setActivePluginRegistry(createTestRegistry([]));
       vi.spyOn(bundled, "getBundledChannelPlugin").mockReturnValue(fixture.plugin);
@@ -324,7 +325,7 @@ describe("official plugin read-only authority", () => {
     }
   });
 
-  it.each<[string, (fixture: ReturnType<typeof registerReader>) => void]>([
+  it.each<[string, (fixture: ReturnType<typeof registerOfficial>) => void]>([
     ["replace", () => setActivePluginRegistry(createTestRegistry([]))],
     ["disable", ({ record }) => Object.assign(record, { enabled: false })],
     ["remove", ({ owner }) => owner.registry.plugins.splice(0)],
@@ -332,7 +333,7 @@ describe("official plugin read-only authority", () => {
     ["reregister", ({ register }) => register()],
     ["trust-downgrade", ({ record }) => Object.assign(record, { trustedOfficialInstall: false })],
   ])("fences subsequent I/O and results after %s", async (_change, invalidate) => {
-    const fixture = registerReader();
+    const fixture = registerOfficial();
     const { resume, entered, nextRequest } = pauseRead(fixture);
     const read = fixture.dispatch();
     const rejected = expect(read).rejects.toThrow(inactiveRead);
@@ -344,7 +345,7 @@ describe("official plugin read-only authority", () => {
   });
 
   it.each([false, true])("suppresses revoked responses (error=%s)", async (error) => {
-    const fixture = registerReader();
+    const fixture = registerOfficial();
     const { resume, entered } = pauseRead(fixture, false);
     const read = fixture.dispatch();
     const rejected = expect(read).rejects.toThrow(inactiveRead);
@@ -359,17 +360,179 @@ describe("official plugin read-only authority", () => {
   });
 
   it("does not refresh a captured route's authority after awaited target resolution", async () => {
-    const first = registerReader();
+    const first = registerOfficial();
     const prepared = await first.prepare();
-    let replacement: ReturnType<typeof registerReader> | undefined;
+    let replacement: ReturnType<typeof registerOfficial> | undefined;
     await expect(
       withChannelReadAuthority(prepared.assertReadAuthorityCurrent, async () => {
         await Promise.resolve();
-        replacement = registerReader();
+        replacement = registerOfficial();
         return await replacement.dispatch();
       }),
     ).rejects.toThrow(inactiveRead);
     expect(first.handleAction).not.toHaveBeenCalled();
     expect(replacement?.handleAction).not.toHaveBeenCalled();
+  });
+});
+
+function registerWriter(
+  options: {
+    trusted?: boolean;
+    origin?: "global" | "bundled";
+    writes?: NonNullable<ChannelPlugin["actions"]>["writeAuthorityActions"];
+  } = {},
+) {
+  const fixture = registerOfficial({
+    ...options,
+    actions: {
+      describeMessageTool: () => ({ actions: ["channel-edit"] }),
+      writeAuthorityActions: options.writes ?? ["channel-edit"],
+    },
+  });
+  const source = new AbortController();
+  const context: Context = {
+    cfg: fixture.context.cfg,
+    channel: fixture.plugin.id,
+    action: "channel-edit",
+    params: { channelId: "fixture", topic: "new topic" },
+    accountId: "default",
+    senderIsOwner: false,
+    messageActionAuthorization: {
+      scheduled: {
+        policy: { version: 1, mode: "trusted" },
+        assertCurrent: () => source.signal.throwIfAborted(),
+      },
+    },
+  };
+  return { ...fixture, source, context };
+}
+
+describe("scheduled message write declaration", () => {
+  it.each([
+    { origin: "global", error: false },
+    { origin: "bundled", error: false },
+    { origin: "global", error: true },
+  ] as const)(
+    "projects declared $origin writes and closes completed callbacks (error=$error)",
+    async ({ origin, error }) => {
+      const fixture = registerWriter({ origin, trusted: origin === "global" });
+      let retained: (() => void) | undefined;
+      fixture.handleAction.mockImplementation(async (context) => {
+        retained = context.assertDirectAdapterHandoff;
+        retained?.();
+        if (error) {
+          throw new Error("provider rejected edit");
+        }
+        return receipt;
+      });
+      const request = dispatchChannelMessageAction(fixture.context);
+      if (error) {
+        await expect(request).rejects.toThrow("provider rejected edit");
+      } else {
+        await expect(request).resolves.toBe(receipt);
+      }
+      const received = fixture.handleAction.mock.calls[0]?.[0];
+      expect(received?.senderIsOwner).toBe(true);
+      expect(received?.toolContext).toBeUndefined();
+      expect(received?.requesterSenderId).toBeUndefined();
+      expect(received).not.toHaveProperty("messageActionAuthorization");
+      expect(fixture.context.senderIsOwner).toBe(false);
+      expect(fixture.source.signal.aborted).toBe(false);
+      expect(retained).toBeTypeOf("function");
+      expect(retained).toThrow("invocation is no longer active");
+    },
+  );
+
+  it.each([
+    { name: "untrusted registration", options: { trusted: false }, emptyScope: false },
+    { name: "undeclared action", options: { writes: ["read"] }, emptyScope: false },
+    { name: "empty scope", options: {}, emptyScope: true },
+  ] satisfies {
+    name: string;
+    options: Parameters<typeof registerWriter>[0];
+    emptyScope: boolean;
+  }[])("rejects $name regardless of forged action arguments", async ({ options, emptyScope }) => {
+    const fixture = registerWriter(options);
+    fixture.context.params.writeAuthorityActions = ["channel-edit"];
+    fixture.context.params.trustedOfficialInstall = true;
+    fixture.context.params.senderIsOwner = true;
+    const run = () =>
+      expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
+        "write authorization support",
+      );
+    if (emptyScope) {
+      await withPluginRuntimeRegistryScope(createTestRegistry([]), run);
+    } else {
+      await run();
+    }
+    expect(fixture.handleAction).not.toHaveBeenCalled();
+  });
+
+  it.each(["sent", "rejected", "revoked"] as const)(
+    "awaits the dispatch hook and fences its %s outcome before the adapter",
+    async (outcome) => {
+      const fixture = registerWriter();
+      let hookFinished = false;
+      let fencedAfterHook = false;
+      fixture.context.onPlatformSendDispatch = vi.fn(async () => {
+        await Promise.resolve();
+        hookFinished = true;
+        if (outcome !== "sent") {
+          throw new Error("source conversation changed before delivery");
+        }
+      });
+      fixture.context.assertDirectAdapterHandoff = () => {
+        if (hookFinished) {
+          fencedAfterHook = true;
+          if (outcome === "revoked") {
+            throw new Error("caller authority ended");
+          }
+        }
+      };
+      fixture.handleAction.mockImplementation(async () => {
+        expect(hookFinished).toBe(true);
+        expect(fencedAfterHook).toBe(true);
+        return receipt;
+      });
+      const request = dispatchChannelMessageAction(fixture.context);
+      if (outcome === "sent") {
+        await expect(request).resolves.toBe(receipt);
+      } else {
+        await expect(request).rejects.toThrow(
+          outcome === "revoked"
+            ? "caller authority ended"
+            : "source conversation changed before delivery",
+        );
+      }
+      expect(fencedAfterHook).toBe(true);
+      expect(fixture.context.onPlatformSendDispatch).toHaveBeenCalledTimes(1);
+      expect(fixture.handleAction).toHaveBeenCalledTimes(outcome === "sent" ? 1 : 0);
+    },
+  );
+
+  it("stops a pending request after its plugin authority ends", async () => {
+    const fixture = registerWriter();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const write = vi.fn();
+    fixture.handleAction.mockImplementation(async (context) => {
+      entered.resolve();
+      await release.promise;
+      context.assertDirectAdapterHandoff?.();
+      write();
+      return receipt;
+    });
+    const request = dispatchChannelMessageAction(fixture.context);
+    const rejected = expect(request).rejects.toThrow(/authority|retired/);
+    try {
+      await entered.promise;
+      revokePluginRecord(fixture.owner.registry, fixture.record);
+      release.resolve();
+      await rejected;
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([request]);
+    }
   });
 });

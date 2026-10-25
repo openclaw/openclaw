@@ -17,6 +17,8 @@ const routeState = vi.hoisted(() => {
     cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
     cookiesSetManyViaPlaywright: vi.fn(async () => ({ added: 2 })),
     setDeviceViaPlaywright: vi.fn(async () => {}),
+    setTimezoneViaPlaywright: vi.fn(async () => {}),
+    setLocaleViaPlaywright: vi.fn(async () => {}),
     setHttpCredentialsViaPlaywright: vi.fn(async () => {}),
     storage,
     storageGetViaPlaywright: vi.fn(async ({ kind, key }: { kind: StorageKind; key?: string }) => ({
@@ -100,6 +102,40 @@ beforeEach(() => {
 
 describe("browser device route", () => {
   it.each([
+    {
+      route: "timezone",
+      field: "timezoneId",
+      value: 0,
+      expected: "0",
+      method: "setTimezoneViaPlaywright",
+    },
+    {
+      route: "locale",
+      field: "locale",
+      value: false,
+      expected: "false",
+      method: "setLocaleViaPlaywright",
+    },
+  ] as const)(
+    "preserves scalar coercion at the $route boundary",
+    async ({ route, field, value, expected, method }) => {
+      const response = await post(`/set/${route}`, { [field]: value });
+      expectResponse(response, { ok: true, targetId: "tab-1" });
+      expect(routeState[method]).toHaveBeenCalledWith({ ...target, [field]: expected });
+    },
+  );
+
+  it.each([
+    { route: "timezone", field: "timezoneId" },
+    { route: "locale", field: "locale" },
+    { route: "device", field: "name" },
+  ])("rejects blank $field before acquiring a browser", async ({ route, field }) => {
+    const response = await post(`/set/${route}`, { [field]: " \t " });
+    expectResponse(response, { error: `${field} is required` }, 400);
+    expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { route: "/set/media", body: { colorScheme: "dark" } },
     { route: "/set/timezone", body: { timezoneId: "America/New_York" } },
     { route: "/set/locale", body: { locale: "en-US" } },
@@ -118,7 +154,7 @@ describe("browser device route", () => {
     const controller = new AbortController();
     const response = await post(
       "/set/device",
-      { targetId: "tab-1", name: "iPhone 14" },
+      { targetId: "tab-1", name: "  iPhone 14  " },
       {},
       controller.signal,
     );

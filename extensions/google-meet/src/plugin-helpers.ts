@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/channel-actions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -9,21 +10,27 @@ import {
 import type { GoogleMeetConfig } from "./config.js";
 import { fetchGoogleMeetSpace } from "./meet-api.js";
 import { fetchGoogleMeetArtifacts, fetchGoogleMeetAttendance } from "./meet.js";
+import { resolveManagedGoogleMeetAccessToken, type GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import { resolveMeetingInput } from "./plugin-registration.js";
 const loadGoogleMeetExportModule = createLazyRuntimeModule(() => import("./cli-export.js"));
 
 export async function resolveGoogleMeetTokenFromParams(
   config: GoogleMeetConfig,
   raw: Record<string, unknown>,
+  runtime?: GoogleMeetOAuthRuntime,
 ) {
   const { resolveGoogleMeetAccessToken } = await import("./oauth.js");
-  return resolveGoogleMeetAccessToken({
+  const oauth = {
     clientId: normalizeOptionalString(raw.clientId) ?? config.oauth.clientId,
     clientSecret: normalizeOptionalString(raw.clientSecret) ?? config.oauth.clientSecret,
     refreshToken: normalizeOptionalString(raw.refreshToken) ?? config.oauth.refreshToken,
     accessToken: normalizeOptionalString(raw.accessToken) ?? config.oauth.accessToken,
     expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : config.oauth.expiresAt,
-  });
+  };
+  const configured = isDeepStrictEqual(oauth, config.oauth);
+  return runtime && configured
+    ? resolveManagedGoogleMeetAccessToken(config.oauth, runtime)
+    : resolveGoogleMeetAccessToken(oauth);
 }
 
 function wantsCalendarLookup(raw: Record<string, unknown>): boolean {
@@ -51,8 +58,9 @@ export async function resolveMeetingFromParams(params: {
 export async function resolveSpaceFromParams(
   config: GoogleMeetConfig,
   raw: Record<string, unknown>,
+  runtime?: GoogleMeetOAuthRuntime,
 ) {
-  const token = await resolveGoogleMeetTokenFromParams(config, raw);
+  const token = await resolveGoogleMeetTokenFromParams(config, raw, runtime);
   const { meeting, calendarEvent } = await resolveMeetingFromParams({
     config,
     raw,
@@ -68,10 +76,11 @@ export async function resolveSpaceFromParams(
 export async function resolveArtifactQueryFromParams(
   config: GoogleMeetConfig,
   raw: Record<string, unknown>,
+  runtime?: GoogleMeetOAuthRuntime,
 ) {
   const meeting = normalizeOptionalString(raw.meeting) ?? config.defaults.meeting;
   const conferenceRecord = normalizeOptionalString(raw.conferenceRecord);
-  const token = await resolveGoogleMeetTokenFromParams(config, raw);
+  const token = await resolveGoogleMeetTokenFromParams(config, raw, runtime);
   const resolvedMeeting: { meeting?: string; calendarEvent?: GoogleMeetCalendarLookupResult } =
     conferenceRecord
       ? { meeting }
@@ -143,8 +152,9 @@ export function buildGoogleMeetExportRequest(
 export async function exportGoogleMeetBundleFromParams(
   config: GoogleMeetConfig,
   raw: Record<string, unknown>,
+  runtime?: GoogleMeetOAuthRuntime,
 ) {
-  const resolved = await resolveArtifactQueryFromParams(config, raw);
+  const resolved = await resolveArtifactQueryFromParams(config, raw, runtime);
   const [artifacts, attendance] = await Promise.all([
     fetchResolvedGoogleMeetArtifacts(resolved),
     fetchResolvedGoogleMeetAttendance(resolved),

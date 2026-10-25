@@ -5,6 +5,7 @@ import { createPluginMetadataSnapshot } from "../../../config/plugin-auto-enable
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { createChangeListeners } from "../../../shared/listeners.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
@@ -84,6 +85,7 @@ function createSettleFixture({
     }),
     markTimedOutDuringCompaction: vi.fn(),
     getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
+    onRunAbortDeadlineChanged: () => () => {},
     runAbortSignal: new AbortController().signal,
     isProbeSession: true,
     abortable: async <T>(promise: Promise<T>) => await promise,
@@ -136,6 +138,47 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       const result = await settlement;
       expect(result).toMatchObject({ promptError: null, sessionIdUsed: "sess-settle-1" });
       expect(findMediaGenerationOperation(task.runId!)).toMatchObject({ status: "running" });
+    } finally {
+      await Promise.allSettled([settlement]);
+      resetGeneratedMediaTaskActivityForTests();
+    }
+  });
+
+  it("uses the updated media deadline while preserving the settlement margin", async () => {
+    vi.useFakeTimers();
+    resetGeneratedMediaTaskActivityForTests();
+    const sessionKey = "agent:main:cron:settle:run:deadline";
+    const task = createMediaGenerationOperation({
+      taskId: "stream-deadline",
+      runId: "stream-deadline",
+      requesterSessionKey: sessionKey,
+      taskKind: "image_generation",
+      status: "running",
+    });
+    const deadlineChanges = createChangeListeners();
+    let deadlineAtMs = Date.now() + 1_500;
+    let settled = false;
+    const settlement = settleEmbeddedAttemptStream(
+      createSettleFixture({
+        attempt: { sessionKey },
+        getRunAbortDeadlineAtMs: () => deadlineAtMs,
+        onRunAbortDeadlineChanged: deadlineChanges.subscribe,
+      }),
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(250);
+      deadlineAtMs = Date.now() + 2_000;
+      deadlineChanges.publish();
+      await vi.advanceTimersByTimeAsync(1_499);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await settlement).promptError).toEqual(
+        new Error(`Timed out waiting for async task completion: ${task.runId}`),
+      );
+      expect(findMediaGenerationOperation(task.taskId)?.status).toBe("running");
     } finally {
       await Promise.allSettled([settlement]);
       resetGeneratedMediaTaskActivityForTests();
@@ -424,7 +467,6 @@ describe("attempt projection persistence through settlement", () => {
             images: [],
             modelPrompt: "continue",
             onFinalPromptText: () => {},
-            onSteeringAcknowledged: () => {},
             persistToolResultProjections: async () => {
               await persistToolResultProjections(projectionState, (customType, data) =>
                 manager.appendCustomEntryAsync(customType, data),

@@ -11,12 +11,22 @@ title: "Network exposure"
 
 ### Bind, port, firewall
 
-The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`), hosted widget documents (`/__openclaw__/canvas`), and A2UI renderer assets (`/__openclaw__/a2ui`). Widget documents contain agent-authored HTML/JS; treat them as untrusted content when loaded in a normal browser, do not expose them to untrusted networks or users, and do not share their origin with privileged web surfaces.
+The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`), and hosted widget documents (`/__openclaw__/canvas`). Widget documents contain agent-authored HTML/JS; treat them as untrusted content when loaded in a normal browser, do not expose them to untrusted networks or users, and do not share their origin with privileged web surfaces.
 
 `gateway.bind` controls where the Gateway listens:
 
-- `"loopback"` (default): only local clients can connect.
+- `"loopback"` (default on regular hosts): only local clients can connect.
+- `"auto"` (default when the setting is omitted in a detected container):
+  resolves to `0.0.0.0` so port forwarding and container-network ingress work.
+  Tailscale Serve/Funnel instead forces loopback.
 - `"lan"`, `"tailnet"`, `"custom"`: make the Gateway reachable by more clients. Only use with gateway auth (shared token/password, or a correctly configured trusted proxy) and a real firewall.
+
+Non-loopback startup requires configured auth and fails closed without it. The
+standalone image defines no host port publication; actual reachability depends
+on the runtime and network topology. Peers on the same container network and
+hosts with a route to the container address can reach a wildcard listener. Set
+`gateway.bind: "loopback"` explicitly for a loopback-only listener; host
+networking changes what that interface represents.
 
 Rules of thumb: prefer Tailscale Serve over LAN binds (Serve keeps the Gateway on loopback and Tailscale handles access); if you must bind to LAN, firewall the port to a tight source-IP allowlist rather than port-forwarding broadly; never expose the Gateway unauthenticated on `0.0.0.0`.
 

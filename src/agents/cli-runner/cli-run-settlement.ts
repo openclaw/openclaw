@@ -1,4 +1,5 @@
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import type { CliSessionBinding } from "../../config/sessions.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasCompletionMessageSessionSpawn } from "../accepted-session-spawn.js";
@@ -26,6 +27,7 @@ import {
 import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/auth-profile-failure-policy.js";
 import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
 import { isFailoverError } from "../failover-error.js";
+import { resolveRetryAfterMs } from "../failover/retry-evidence.js";
 import {
   createMissingReplyNotice,
   MISSING_REPLY_NOTICE_TEXT,
@@ -48,6 +50,72 @@ const log = createSubsystemLogger("agents/cli-runner");
 /** Formats the visible terminal reason for an interrupted turn that retained partial output. */
 export function formatCliTerminalInterruption(interruption: CliTerminalInterruption): string {
   return `CLI turn ${interruption.reason} after partial output`;
+}
+
+/** Marks the history reseed this native session received, so imports can strip it. */
+export function buildCliReseedReceipt(params: {
+  runParams: RunCliAgentParams;
+  output: Pick<CliOutput, "finalPromptText">;
+  usedHistoryPrompt: boolean;
+  userTurnHandled: boolean;
+}): CliSessionBinding["reseedReceipt"] {
+  const { runParams, output } = params;
+  if (
+    !params.usedHistoryPrompt ||
+    !isClaudeCliBackend(runParams.provider) ||
+    output.finalPromptText === undefined ||
+    !params.userTurnHandled ||
+    !runParams.sessionId
+  ) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    promptHash: hashCliReseedPrompt(output.finalPromptText),
+    localSessionId: runParams.sessionId,
+    userTurnDisposition: runParams.userTurnTranscriptRecorder?.hasPersisted()
+      ? "persisted"
+      : "omitted",
+  };
+}
+
+/** Native continuity for a returned session, keyed to this run's auth and prompt facts. */
+export function buildCliSessionBinding(
+  context: PreparedCliRunContext,
+  sessionId: string,
+  output: Pick<CliOutput, "resumeCheckpointId" | "terminalInterruption">,
+  reseedReceipt?: CliSessionBinding["reseedReceipt"],
+): CliSessionBinding {
+  return {
+    sessionId,
+    ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
+    ...(output.resumeCheckpointId ? { resumeCheckpointId: output.resumeCheckpointId } : {}),
+    ...(context.authEpoch ? { authEpoch: context.authEpoch } : {}),
+    authEpochVersion: context.authEpochVersion,
+    ...(context.extraSystemPromptHash
+      ? { extraSystemPromptHash: context.extraSystemPromptHash }
+      : {}),
+    ...(context.messageToolPolicyHash
+      ? { messageToolPolicyHash: context.messageToolPolicyHash }
+      : {}),
+    ...(context.promptToolNamesHash ? { promptToolNamesHash: context.promptToolNamesHash } : {}),
+    ...(context.cwdHash ? { cwdHash: context.cwdHash } : {}),
+    ...(context.preparedBackend.mcpConfigHash
+      ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }
+      : {}),
+    ...(context.preparedBackend.mcpResumeHash
+      ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
+      : {}),
+    ...(reseedReceipt ? { reseedReceipt } : {}),
+    ...(context.transcriptCursor && !output.terminalInterruption
+      ? {
+          transcriptCursor: {
+            ...context.transcriptCursor,
+            userEntryId: context.params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId,
+          },
+        }
+      : {}),
+  };
 }
 
 async function settleCliAuthProfile(params: {
@@ -93,6 +161,7 @@ async function settleCliAuthProfile(params: {
         agentDir: params.agentDir,
         runId: params.terminal.runId,
         modelId: params.terminal.modelId,
+        retryAfterMs: resolveRetryAfterMs(formatErrorMessage(error), Date.now(), error),
       });
     }
   } catch (error) {
@@ -473,7 +542,6 @@ export function buildCliRunResult(params: {
   const replyExpectation = resolveReplyExpectation(runParams);
   const payloadsForVisibleCompletion = filterAgentRunTerminalPayloadsForPresentation({
     payloads: payloadsWithToolMedia,
-    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
   });
   const unflushed = !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false;
   const terminalInterruption = output.terminalInterruption;
@@ -488,22 +556,9 @@ export function buildCliRunResult(params: {
         effectiveCliSessionId !== resolveCliSessionId(context.reusableCliSession),
     });
   const persistedCliSessionId = cliSessionBindingCleared ? undefined : effectiveCliSessionId;
-  const createdReseedReceipt =
-    persistedCliSessionId &&
-    usedHistoryPrompt &&
-    isClaudeCliBackend(runParams.provider) &&
-    output.finalPromptText !== undefined &&
-    userTurnHandled &&
-    runParams.sessionId
-      ? {
-          version: 1 as const,
-          promptHash: hashCliReseedPrompt(output.finalPromptText),
-          localSessionId: runParams.sessionId,
-          userTurnDisposition: runParams.userTurnTranscriptRecorder?.hasPersisted()
-            ? ("persisted" as const)
-            : ("omitted" as const),
-        }
-      : undefined;
+  const createdReseedReceipt = persistedCliSessionId
+    ? buildCliReseedReceipt({ runParams, output, usedHistoryPrompt, userTurnHandled })
+    : undefined;
   const preservedReseedReceipt =
     runParams.cliSessionBinding && persistedCliSessionId === runParams.cliSessionBinding.sessionId
       ? runParams.cliSessionBinding.reseedReceipt
@@ -641,34 +696,12 @@ export function buildCliRunResult(params: {
         ...(output.diagnosticUsage ? { diagnosticUsage: output.diagnosticUsage } : {}),
         ...(persistedCliSessionId
           ? {
-              cliSessionBinding: {
-                sessionId: persistedCliSessionId,
-                ...(context.effectiveAuthProfileId
-                  ? { authProfileId: context.effectiveAuthProfileId }
-                  : {}),
-                ...(output.resumeCheckpointId
-                  ? { resumeCheckpointId: output.resumeCheckpointId }
-                  : {}),
-                ...(context.authEpoch ? { authEpoch: context.authEpoch } : {}),
-                authEpochVersion: context.authEpochVersion,
-                ...(context.extraSystemPromptHash
-                  ? { extraSystemPromptHash: context.extraSystemPromptHash }
-                  : {}),
-                ...(context.messageToolPolicyHash
-                  ? { messageToolPolicyHash: context.messageToolPolicyHash }
-                  : {}),
-                ...(context.promptToolNamesHash
-                  ? { promptToolNamesHash: context.promptToolNamesHash }
-                  : {}),
-                ...(context.cwdHash ? { cwdHash: context.cwdHash } : {}),
-                ...(context.preparedBackend.mcpConfigHash
-                  ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }
-                  : {}),
-                ...(context.preparedBackend.mcpResumeHash
-                  ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
-                  : {}),
-                ...(reseedReceipt ? { reseedReceipt } : {}),
-              },
+              cliSessionBinding: buildCliSessionBinding(
+                context,
+                persistedCliSessionId,
+                output,
+                reseedReceipt,
+              ),
             }
           : {}),
         ...(cliSessionBindingCleared ? { clearCliSessionBinding: true } : {}),

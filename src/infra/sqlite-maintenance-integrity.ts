@@ -12,6 +12,13 @@ export type SqliteIntegrityCheckOptions = {
   check?: "quick" | "full";
   /** Tables rewritten or re-indexed by the migration; absent tables may be created by it. */
   tables?: readonly string[];
+  /**
+   * Owned FTS5 definitions whose inverted indexes are derived data. When these
+   * are the only findings, the check passes: a SQLite tokenizer change makes a
+   * healthy index report "malformed", and the runtime that next admits the
+   * database rebuilds it.
+   */
+  ftsSchemas?: readonly string[];
 };
 
 type CapturedIntegrity = {

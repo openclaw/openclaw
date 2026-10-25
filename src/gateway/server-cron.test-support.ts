@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import { resolveSelectedCronJobsStorePath } from "../cron/store/paths.js";
 import type { CronJobCreate } from "../cron/types.js";
-import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { ManagedRun, RunExit } from "../process/supervisor/types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
@@ -20,8 +19,6 @@ type RunCronIsolatedAgentTurnMock = (params: {
 const {
   enqueueSystemEventMock,
   systemEventReceiptRemoveMock,
-  requestHeartbeatMock,
-  requestHeartbeatAndWaitMock,
   loadConfigMock,
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
@@ -40,10 +37,6 @@ const {
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   systemEventReceiptRemoveMock: vi.fn(() => true),
-  requestHeartbeatMock: vi.fn(),
-  requestHeartbeatAndWaitMock: vi.fn<(...args: unknown[]) => Promise<HeartbeatRunResult>>(
-    async () => ({ status: "ran", durationMs: 1 }),
-  ),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   sendCronAnnouncePayloadStrictMock: vi.fn<
@@ -129,25 +122,6 @@ vi.mock("../infra/system-events.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/heartbeat-wake.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-    "../infra/heartbeat-wake.js",
-  );
-  return {
-    ...actual,
-    requestHeartbeat: requestHeartbeatMock,
-    requestHeartbeatAndWait: requestHeartbeatAndWaitMock,
-  };
-});
-
-// mock-isolation: Keep heartbeat enrollment inert while testing cron lifecycle wiring.
-vi.mock("../infra/heartbeat-runner.js", () => ({
-  // Heartbeat monitor convergence enumerates agents at cron start; keep it
-  // inert so these tests exercise cron wiring, not heartbeat enrollment.
-  resolveHeartbeatAgents: () => [],
-  resolveHeartbeatSchedulerSeed: () => "test-seed",
-}));
-
 vi.mock("../infra/restart-coordinator.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/restart-coordinator.js")>(
     "../infra/restart-coordinator.js",
@@ -232,6 +206,7 @@ vi.mock("../cron/trigger-script.js", () => ({
 }));
 
 import { buildGatewayCronService as buildGatewayCronServiceRuntime } from "./server-cron.js";
+import { runExit } from "./server-cron.process.test-support.js";
 
 function buildGatewayCronService(
   params: Omit<Parameters<typeof buildGatewayCronServiceRuntime>[0], "storePath">,
@@ -335,20 +310,6 @@ export function addAgentTurnJob(
   return addCronJob(service, name, { kind: "agentTurn", message }, overrides);
 }
 
-function runExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "manual-cancel",
-    exitCode: null,
-    exitSignal: null,
-    durationMs: 1,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
-}
-
 export function createWatchedRun(settleOnCancel = true, exitResult: Partial<RunExit> = {}) {
   const exit = createDeferred<RunExit>();
   return {
@@ -389,8 +350,6 @@ export function resetGatewayCronMocks() {
   resetActiveCronTaskRunsForTests();
   enqueueSystemEventMock.mockClear();
   systemEventReceiptRemoveMock.mockClear();
-  requestHeartbeatMock.mockClear();
-  requestHeartbeatAndWaitMock.mockReset();
   loadConfigMock.mockClear();
   fetchWithSsrFGuardMock.mockClear();
   sendCronAnnouncePayloadStrictMock.mockClear();

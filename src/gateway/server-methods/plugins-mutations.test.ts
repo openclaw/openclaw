@@ -443,6 +443,25 @@ describe("plugin management Gateway mutation handlers", () => {
     },
   );
 
+  it.each([
+    [
+      "install",
+      clawhub(),
+      { ...workboard, clawhubPackage: "community/workboard" },
+      "ch_Y29tbXVuaXR5L3dvcmtib2FyZA",
+    ],
+    ["setEnabled", { pluginId: "workboard", enabled: false }, workboard, "local_d29ya2JvYXJk"],
+  ] as const)(
+    "returns the %s plugin with its catalog relation",
+    async (method, params, plugin, id) => {
+      managementMocks[method].mockResolvedValue({ plugin, application });
+      expectResponse(await callHandler(`plugins.${method}`, params), {
+        runtime: application,
+        plugin: { ...plugin, catalogId: id },
+      });
+    },
+  );
+
   it("rejects missing application receipts", async () => {
     managementMocks.reload.mockResolvedValue({ pluginIds: ["workboard"] });
     expectFailure(await callHandler("plugins.reload", { plugins: [{ pluginId: "workboard" }] }), {

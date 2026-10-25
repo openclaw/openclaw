@@ -8,6 +8,7 @@ import * as doctor from "../../flows/doctor-health.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -73,7 +74,9 @@ it("migrates retired heartbeat config with its backed-up state only once", async
       expect(saved.agents.defaults).not.toHaveProperty("heartbeat");
       const readJobs = () => {
         using db = new DatabaseSync(databasePath, { readOnly: true });
-        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(30);
+        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_STATE_SCHEMA_VERSION,
+        );
         return db
           .prepare("SELECT job_json FROM cron_jobs ORDER BY job_id")
           .all()

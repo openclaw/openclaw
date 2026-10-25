@@ -122,32 +122,27 @@ it.each([
   },
 );
 
-it("defers configured account discovery without resolving accounts", async () => {
-  const resolveAccounts = vi.fn(() => ({ defaultAccountIds: { "custom-channel": "primary" } }));
-  const { detected } = await fixture(
-    { "custom-channel-allowFrom.json": ["legacy-user"] },
-    {
-      configuredChannelIds: ["custom-channel"],
-      resolveAccounts,
-      deferConfiguredAccountDiscovery: true,
-    },
-  );
-  expect(detected.accountDiscoveryDeferred).toBe(true);
-  expect(resolveAccounts).not.toHaveBeenCalled();
-});
-
-it("does not defer pairing requests or built-in explicit default accounts", async () => {
-  const { detected } = await fixture(
+it.each([
+  ["configured allowFrom", { "custom-channel-allowFrom.json": ["legacy-user"] }, true],
+  [
+    "pairing requests and built-in explicit default accounts",
     {
       "telegram-pairing.json": { version: 1, requests: [] },
       "whatsapp-default-allowFrom.json": ["legacy-user"],
     },
-    {
-      configuredChannelIds: ["custom-channel", "whatsapp"],
-      deferConfiguredAccountDiscovery: true,
-    },
-  );
-  expect(detected.accountDiscoveryDeferred).toBe(false);
+    false,
+  ],
+] as const)("defers discovery only for configured allowFrom: %s", async (_, files, deferred) => {
+  const resolveAccounts = vi.fn(() => ({ defaultAccountIds: { "custom-channel": "primary" } }));
+  const { detected } = await fixture(files, {
+    configuredChannelIds: ["custom-channel", "whatsapp"],
+    ...(deferred ? { resolveAccounts } : {}),
+    deferConfiguredAccountDiscovery: true,
+  });
+  expect(detected.accountDiscoveryDeferred).toBe(deferred);
+  if (deferred) {
+    expect(resolveAccounts).not.toHaveBeenCalled();
+  }
 });
 
 it("imports requests and exact scoped accounts while ignoring invalid candidates", async () => {
@@ -209,6 +204,53 @@ it("merges authoritative SQLite rows and keeps unreadable sources", async () => 
     allowFrom: { primary: ["kept", "imported"] },
   });
 });
+
+it.each(["pairing", "allowFrom"] as const)(
+  "preserves malformed UTF-8 %s while importing valid sibling state",
+  async (kind) => {
+    const filename = `custom-channel-${kind}.json`;
+    const original = JSON.stringify(
+      kind === "pairing" ? { requests: [{ ...request, id: "CORRUPT" }] } : ["CORRUPT"],
+    );
+    const bytes = Buffer.from(original.replace("CORRUPT", "\x80"), "latin1");
+    const state = await fixture(
+      {
+        [filename]: original,
+        "whatsapp-default-allowFrom.json": ["valid-user"],
+      },
+      { configuredChannelIds: ["custom-channel"] },
+    );
+    fs.writeFileSync(path.join(state.sourceDir, filename), bytes);
+
+    const laterRepair = vi.fn(() => ({ changes: ["Later repair completed"], warnings: [] }));
+    const result = await runLegacyStateMigrationSteps(
+      [state.migrate, laterRepair].map((run, index) => ({
+        id: index === 0 ? "channel-pairing" : "later-repair",
+        run,
+        phase: "final" as const,
+        source: [],
+        target: [],
+        requiredness: "required" as const,
+        reversibility: "checkpoint-required" as const,
+      })),
+    );
+
+    expect(result.haltedBy).toBeUndefined();
+    expect(result.receipts.map((receipt) => receipt.outcome)).toEqual(["warning", "completed"]);
+    expect(laterRepair).toHaveBeenCalledOnce();
+    expect(result.sources[0]?.warnings).toEqual([
+      expect.stringContaining("unreadable; left in place"),
+    ]);
+    expect(fs.readFileSync(path.join(state.sourceDir, filename))).toEqual(bytes);
+    expect(readPairing("custom-channel", state.env)).toEqual({
+      version: 1,
+      requests: [],
+      allowFrom: {},
+    });
+    expect(readPairing("whatsapp", state.env).allowFrom).toEqual({ default: ["valid-user"] });
+    expect(state.exists("whatsapp-default-allowFrom.json")).toBe(false);
+  },
+);
 
 it("leaves case-folded filename collision sets in place", async () => {
   const names = ["Ab", "AB", "xy", "Xy"].map((account) => `telegram-${account}-allowFrom.json`);

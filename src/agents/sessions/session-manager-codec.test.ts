@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   buildSessionContext,
@@ -51,18 +52,9 @@ describe("session manager codec compatibility", () => {
 
   it("backfills current-version hook messages persisted without a custom type", () => {
     const manager = SessionManager.fromEntries([
+      sessionHeader("persisted-hook-session"),
       {
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: "persisted-hook-session",
-        timestamp: "2026-01-01T00:00:00.000Z",
-        cwd: "/tmp",
-      },
-      {
-        type: "message",
-        id: "persisted-hook-message",
-        parentId: null,
-        timestamp: "2026-01-01T00:00:01.000Z",
+        ...messageEntry(userMessage(""), "persisted-hook-message"),
         message: { role: "custom", content: "persisted hook context" },
       },
     ]);
@@ -94,26 +86,10 @@ describe("session manager codec compatibility", () => {
     { name: "nested singleton", reason: [["reset"]] },
   ])("preserves a $name legacy reset reason", ({ reason }) => {
     const manager = SessionManager.fromEntries([
-      {
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: "legacy-reset-session",
-        timestamp: "2026-01-01T00:00:00.000Z",
-        cwd: "/tmp",
-      },
-      {
-        type: "message",
-        id: "before-reset",
-        parentId: null,
-        message: { role: "user", content: "before" },
-      },
+      sessionHeader("legacy-reset-session"),
+      messageEntry(userMessage("before"), "before-reset"),
       { type: "reset", id: "legacy-reset", parentId: "before-reset", reason },
-      {
-        type: "message",
-        id: "after-reset",
-        parentId: "legacy-reset",
-        message: { role: "user", content: "after" },
-      },
+      messageEntry(userMessage("after"), "after-reset", "legacy-reset"),
     ]);
 
     expect(manager.getEntry("legacy-reset")).toBeDefined();
@@ -212,16 +188,6 @@ describe("model context projection isolation", () => {
   const missingDetails = { openclawSyntheticMissingToolResult: true };
   const missingResult = { ...toolResult, details: missingDetails };
   const cases: Array<[string, Message, unknown]> = [
-    [
-      "private user metadata",
-      Object.assign(userMessage("visible"), {
-        __openclaw: { upstreamUserText: "private", retained: { nested: "kept" } },
-      }),
-      {
-        ...userMessage("visible"),
-        __openclaw: { retained: { nested: "kept" } },
-      },
-    ],
     ["plain tool result", toolResult, toolResult],
     ["tool evidence", { ...toolResult, details: { evidence: "private" } }, toolResult],
     ["missing-result marker", missingResult, missingResult],
@@ -242,11 +208,13 @@ describe("model context projection isolation", () => {
     (_name, message, expected) => {
       const entry = messageEntry(message);
       const before = JSON.stringify(entry);
-      Object.freeze(entry);
-      Object.freeze(message);
-      expect(cloneSessionModelContextEntries(null, [entry])).toEqual([
-        { ...entry, message: expected },
-      ]);
+      freezeJsonSnapshot(entry);
+      const projected = cloneSessionModelContextEntries([entry]);
+      expect(projected).toEqual([{ ...entry, message: expected }]);
+      const projectedEntry = projected[0];
+      assert(projectedEntry?.type === "message");
+      expect(Reflect.set(projectedEntry, "timestamp", "changed")).toBe(true);
+      expect(Reflect.set(projectedEntry.message, "content", [])).toBe(true);
       expect(JSON.stringify(entry)).toBe(before);
     },
   );
@@ -261,7 +229,8 @@ describe("model context projection isolation", () => {
       { __openclaw: metadata },
     );
     const entry = messageEntry(message);
-    const projected = cloneSessionModelContextEntries(null, [entry]);
+    const projected = cloneSessionModelContextEntries([entry]);
+    expect(metadata.upstreamUserText).toBe("private");
     argumentsValue.nested.path = "caller-change.txt";
     metadata.retained.nested = "caller-change";
     expect(projected).toMatchObject([
@@ -282,11 +251,28 @@ describe("model context projection isolation", () => {
     assert(nested, "Missing nested tool arguments");
     nested.path = "context-change.txt";
     const projectedMetadata = asOptionalRecord(Reflect.get(projectedEntry.message, "__openclaw"));
+    expect(projectedMetadata).not.toHaveProperty("upstreamUserText");
     const retained = asOptionalRecord(projectedMetadata?.retained);
     assert(retained, "Missing retained metadata");
     retained.nested = "context-change";
     expect(argumentsValue.nested.path).toBe("caller-change.txt");
     expect(metadata.retained.nested).toBe("caller-change");
+  });
+
+  it("keeps frozen nested arguments writable only in the projected view", () => {
+    const message = makeAgentAssistantMessage({
+      content: [
+        { type: "toolCall", id: "call", name: "read", arguments: { path: "original.txt" } },
+      ],
+    });
+    freezeJsonSnapshot(message.content);
+    const projected = cloneSessionModelContextEntries([messageEntry(message)])[0];
+    assert(projected?.type === "message" && projected.message.role === "assistant");
+    const call = projected.message.content[0];
+    assert(call?.type === "toolCall");
+    expect(Reflect.set(call.arguments, "path", "changed.txt")).toBe(true);
+    expect(Reflect.set(projected.message.content, "length", 0)).toBe(true);
+    expect(message.content).toMatchObject([{ arguments: { path: "original.txt" } }]);
   });
 });
 

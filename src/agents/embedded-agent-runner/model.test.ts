@@ -119,19 +119,14 @@ vi.mock("../prepared-model-runtime.js", async () => {
     }
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const snapshot = {
-      catalogOwner: undefined,
-      agentDir: input.agentDir,
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: input.agentDir,
+        config: input.config ?? {},
+        metadataSnapshot,
+        createStores: () => ({ authStorage, modelRegistry }),
+      }),
       ...(workspaceDir ? { workspaceDir } : {}),
-      activeProjectKeys: [],
-      config: input.config ?? {},
-      authModes: {},
-      metadataSnapshot,
-      allowGatewaySubagentBinding: false,
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [],
       findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup([], metadataSnapshot),
-      inlineProviderModels: [],
-      createStores: () => ({ authStorage, modelRegistry }),
     };
     preparedSnapshots.set(key, snapshot);
     return snapshot;

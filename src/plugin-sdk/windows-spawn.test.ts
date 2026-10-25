@@ -47,9 +47,7 @@ describe("resolveWindowsSpawnProgram", () => {
       const child = spawnSync(invocation.command, invocation.argv, { env, encoding: "utf8" });
 
       expect(program).toMatchObject({ command: executable, resolution: "direct" });
-      expect(child.error).toBeUndefined();
-      expect(child.status).toBe(0);
-      expect(child.stdout).toBe("native-ok");
+      expect([child.error, child.status, child.stdout]).toEqual([undefined, 0, "native-ok"]);
     },
   );
 
@@ -101,8 +99,7 @@ describe("resolveWindowsSpawnProgram", () => {
         "argument with spaces",
       ]);
       const child = spawnSync(invocation.command, invocation.argv, { cwd, encoding: "utf8" });
-      expect(child.error).toBeUndefined();
-      expect(child.status).toBe(0);
+      expect([child.error, child.status]).toEqual([undefined, 0]);
       expect(JSON.parse(child.stdout)).toEqual({ cwd, args: ["argument with spaces"] });
     },
   );
@@ -135,24 +132,11 @@ describe("resolveWindowsSpawnProgram", () => {
     });
   });
 
-  it("preserves custom batch-wrapper behavior instead of bypassing its target", async () => {
-    const wrapperPath = await createWrapper(
-      '@ECHO off\r\nSET WRAPPER_FLAG=1\r\n"%~dp0\\tool.exe" %*\r\n',
-      ["tool.exe", ""],
-    );
-    expect(resolve(wrapperPath, { allowShellFallback: true })).toEqual({
-      command: wrapperPath,
-      leadingArgv: [],
-      resolution: "shell-fallback",
-      shell: true,
-    });
-  });
-
-  it("does not reinterpret a forwarded batch wrapper as a Node script", async () => {
-    const wrapperPath = await createWrapper('@ECHO off\r\n"%~dp0\\inner.cmd" %*\r\n', [
-      "inner.cmd",
-      "@ECHO off\r\necho inner\r\n",
-    ]);
+  it.each([
+    ["custom setup", 'SET WRAPPER_FLAG=1\r\n"%~dp0\\tool.exe" %*', "tool.exe", ""],
+    ["forwarded batch", '"%~dp0\\inner.cmd" %*', "inner.cmd", "@ECHO off\r\necho inner\r\n"],
+  ])("preserves %s wrappers instead of bypassing their target", async (_, body, name, content) => {
+    const wrapperPath = await createWrapper(`@ECHO off\r\n${body}\r\n`, [name, content]);
     expect(resolve(wrapperPath, { allowShellFallback: true })).toEqual({
       command: wrapperPath,
       leadingArgv: [],

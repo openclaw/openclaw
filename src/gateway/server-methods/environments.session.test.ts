@@ -30,13 +30,12 @@ const identity = {
   sessionId: "personal-tools",
 };
 
-support.setupWorkerEnvironmentServiceSuite();
+support.setupWorkerEnvironmentServiceSuite((config, root) => {
+  config.session = { store: path.join(root, "sessions.json") };
+});
 beforeEach(() => {
-  support.testState.config.session = {
-    store: path.join(support.testState.root, "sessions.json"),
-  };
   ensureSessionEntrySync(
-    { ...identity, storePath: support.testState.config.session.store },
+    { ...identity, storePath: support.testState.config.session!.store },
     { sessionId: identity.sessionId, updatedAt: 1 },
   );
 });

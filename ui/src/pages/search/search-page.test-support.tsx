@@ -1,3 +1,4 @@
+import { createRouter } from "@openclaw/uirouter";
 import { flush } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
@@ -115,6 +116,7 @@ export async function mountSearch<R>(options: {
   }));
   const context = {
     basePath: "",
+    router: createRouter({ routes: [] }),
     gateway: connection.gateway,
     runtimeConfig: runtime,
     settingsAgentSelection: { ...selection, set: setAgent },

@@ -549,7 +549,7 @@ it("projects answer delivery from the outbox, retries its payload, and waits for
   container.querySelector<HTMLButtonElement>("button")!.click();
   expect(retry).toHaveBeenCalledExactlyOnceWith("answer-row");
   expect(state.transcriptRenderContext.onAsyncQuestionSubmit).not.toHaveBeenCalled();
-  showDelivery("unconfirmed", "Delivery unconfirmed");
+  showDelivery("failed", "Answer not sent");
   const retainedRetry = container.querySelector<HTMLButtonElement>("button")!;
   state.asyncQuestionScope = "another-context";
   retainedRetry.click();

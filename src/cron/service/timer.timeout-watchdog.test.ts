@@ -61,11 +61,11 @@ function agentJob(id: string, timeoutSeconds: number) {
   return dueJob(id, { payload: { kind: "agentTurn", message: "work", timeoutSeconds } });
 }
 
-function heartbeatJob(id: string, overrides: Partial<CronJob> = {}) {
+function sessionEventJob(id: string, overrides: Partial<CronJob> = {}) {
   return dueJob(id, {
     sessionTarget: "main",
     wakeMode: "now",
-    payload: { kind: "systemEvent", text: "check heartbeat work" },
+    payload: { kind: "systemEvent", text: "check scheduled work" },
     schedule: { kind: "every", everyMs: 60_000, anchorMs: SCHEDULED_AT - 60_000 },
     ...overrides,
   });
@@ -134,7 +134,7 @@ it("does not spend a main-session execution deadline waiting for event adoption"
   const settled = vi.fn();
   const running = executeJobCoreWithTimeout(
     state,
-    heartbeatJob("deferred-adoption", { wakeMode: "next-heartbeat" }),
+    sessionEventJob("deferred-adoption", { wakeMode: "next-heartbeat" }),
   ).then((result) => {
     settled();
     return result;
@@ -309,14 +309,11 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
               timeoutSeconds: finite ? 15 * 60 : 0,
             },
           })
-        : heartbeatJob("session-trigger-watchdog", {
+        : sessionEventJob("session-trigger-watchdog", {
             trigger: { script: "return { fire: true };" },
           });
     const started = createDeferred<AbortSignal | undefined>();
     const release = createDeferred();
-    const resolveHeartbeatTimeoutMs = vi.fn();
-    const requestHeartbeatAndWait =
-      vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>();
     const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
       async ({ abortSignal, onExecutionStarted }) => {
         onExecutionStarted?.({ jobId: job.id, phase: "model_call_started" });
@@ -338,8 +335,6 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
     const { state, advance } = await fixture(job, {
       nowMs: Date.now,
       defaultAgentId: "main",
-      resolveHeartbeatTimeoutMs,
-      requestHeartbeatAndWait,
       runSessionEvent,
       ...(!finite && !unlimited
         ? {
@@ -370,8 +365,6 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
             job: expect.objectContaining({ agentId: "ops", sessionKey: "agent:ops:main" }),
           }),
         );
-        expect(resolveHeartbeatTimeoutMs).not.toHaveBeenCalled();
-        expect(requestHeartbeatAndWait).not.toHaveBeenCalled();
       } else if (unlimited) {
         expect(settled).toBe(false);
         release.resolve();
@@ -380,8 +373,6 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
         return;
       } else {
         await timer;
-        expect(resolveHeartbeatTimeoutMs).not.toHaveBeenCalled();
-        expect(requestHeartbeatAndWait).not.toHaveBeenCalled();
         expect(runSessionEvent).not.toHaveBeenCalled();
       }
       expect(requireJob(state, job.id).state.lastError).toContain(

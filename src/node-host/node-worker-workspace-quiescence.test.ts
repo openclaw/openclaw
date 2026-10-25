@@ -1,12 +1,14 @@
 import { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
+import { transformSync } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -85,22 +87,35 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
       const lease = path.join(storage, key + "." + nonce + ".json");
       return fs.existsSync(lease) ? JSON.parse(fs.readFileSync(lease, "utf8")) : undefined;
     }
-    const database = new DatabaseSync(path.join(storage, "windows-shared-host.sqlite"), {
+    using database = new DatabaseSync(path.join(storage, "windows-shared-host.sqlite"), {
       readOnly: true,
     });
-    try {
-      const row = database
-        .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
-        .get(key);
-      return row ? JSON.parse(String(row.lease_json)) : undefined;
-    } finally {
-      database.close();
-    }
+    const row = database
+      .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
+      .get(key);
+    return row ? JSON.parse(String(row.lease_json)) : undefined;
   };
 
   // Execute the generated program with real lease storage and IPC receipts.
   // Only the OS transport, process identity and expiry clock are simulated.
   const script = (args: readonly string[], child?: ChildProcess) => {
+    const inline = args[0] === "-e";
+    const fileOffset = args[0] === "--no-install" ? 1 : 0;
+    const filename = args[fileOffset];
+    if (!filename) {
+      throw new Error("expected quiescence entry");
+    }
+    const source = inline
+      ? args[1]
+      : transformSync(fs.readFileSync(filename, "utf8"), {
+          format: "cjs",
+          sourcefile: filename,
+          define: { "import.meta.url": JSON.stringify(pathToFileURL(filename).href) },
+          logLevel: "silent",
+        }).code;
+    if (source === undefined) {
+      throw new Error("expected quiescence program");
+    }
     const result = { stdout: "", stderr: "", exitCode: 0 };
     const stdin = new PassThrough();
     const exited = new Error("script exited");
@@ -120,7 +135,7 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
       }
     };
     const guest = Object.assign(new EventEmitter(), {
-      argv: [process.execPath, ...args.slice(2)],
+      argv: [process.execPath, ...args.slice(inline ? 2 : fileOffset)],
       platform: guestPlatform,
       getuid: () => 0,
       kill: () => {
@@ -168,25 +183,32 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
         },
       });
     }
+    const requireRemote = (name: string): unknown => {
+      if (name === "node:module") {
+        return { createRequire: () => requireRemote };
+      }
+      if (name === "node:os") {
+        return { homedir: () => home };
+      }
+      if (name === "node:child_process") {
+        return {
+          execFileSync: (command: string, probeArgs: string[]) => {
+            if (command !== "ps" || probeArgs[0] !== "-o" || probeArgs.at(-1) !== String(pid)) {
+              throw new Error("native quiescence must only inspect its watchdog");
+            }
+            return "Tue Oct  6 19:00:00 2026\n";
+          },
+        };
+      }
+      return require(name);
+    };
+    const guestModule = { exports: {} };
     try {
-      runInNewContext(args[1]!, {
+      runInNewContext(source, {
+        module: guestModule,
+        exports: guestModule.exports,
         process: guest,
-        require: (name: string) => {
-          if (name === "node:os") {
-            return { homedir: () => home };
-          }
-          if (name === "node:child_process") {
-            return {
-              execFileSync: (command: string, probeArgs: string[]) => {
-                if (command !== "ps" || probeArgs[0] !== "-o" || probeArgs.at(-1) !== String(pid)) {
-                  throw new Error("native quiescence must only inspect its watchdog");
-                }
-                return "Tue Oct  6 19:00:00 2026\n";
-              },
-            };
-          }
-          return require(name);
-        },
+        require: requireRemote,
         setTimeout: () => 1,
         clearTimeout: () => {},
         performance,
@@ -200,8 +222,8 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
     return result;
   };
   mocks.helper.mockImplementation((_command, args) => {
-    if (!Array.isArray(args)) {
-      throw new Error("expected helper argv");
+    if (!Array.isArray(args) || args[0] === "-e") {
+      throw new Error("local helper requires a packaged entry file");
     }
     const child = new ChildProcess();
     const pid = 1000 + children.length;
@@ -218,6 +240,9 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
   mocks.spawn.mockImplementation(async (input) => {
     if (input.mode !== "child") {
       throw new Error("expected standalone recovery command");
+    }
+    if (input.argv[1] === "-e") {
+      throw new Error("local recovery requires a packaged entry file");
     }
     const outcome = script(input.argv.slice(1));
     const result: RunExit = {
@@ -246,9 +271,7 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
     workspaceDir,
     kill: async () => {
       const child = children.at(-1)!;
-      const closed = new Promise<void>((resolve) => {
-        child.once("close", () => resolve());
-      });
+      const closed = once(child, "close");
       exits.get(child)!();
       await closed;
     },

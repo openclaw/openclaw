@@ -21,9 +21,7 @@ it("preserves a sibling model cooldown until that model succeeds", () => {
     cooldownReason: "rate_limit",
     cooldownModel: "primary",
     cooldownUntil: 31_000,
-    errorCount: 1,
-    failureCounts: { rate_limit: 1 },
-    lastFailureAt: 1_000,
+    lastRateLimitAt: 1_000,
   };
   const siblingSuccess = resetAuthProfileFailureState(existing, { lastUsed: 2_000 }, "fallback");
   expect(siblingSuccess).toMatchObject({ ...existing, lastUsed: 2_000 });
@@ -31,7 +29,7 @@ it("preserves a sibling model cooldown until that model succeeds", () => {
     resetAuthProfileFailureState(siblingSuccess, { lastUsed: 32_000 }, "primary"),
   ).toMatchObject({
     cooldownUntil: undefined,
-    failureCounts: undefined,
+    lastRateLimitAt: undefined,
     lastUsed: 32_000,
   });
 });
@@ -199,13 +197,13 @@ const reasonCase = (
   backup?: Stats,
 ) => ({ expected, usageStats: { primary, ...(backup ? { backup } : {}) } });
 it.each([
-  reasonCase("auth", withFailures({ rate_limit: 99 }, "auth")),
+  reasonCase("auth", withFailures({ timeout: 99 }, "auth")),
   reasonCase(
     "session_expired",
     withFailures({ session_expired: 1 }),
     withFailures({ session_expired: 1 }),
   ),
-  reasonCase("overloaded", withFailures({ overloaded: 2, rate_limit: 1 })),
+  reasonCase("overloaded", withFailures({ overloaded: 2, timeout: 1 })),
   reasonCase("unknown", cooldown()),
   reasonCase(
     null,
@@ -269,7 +267,7 @@ it.each([
       disabledUntil: now + 3_600_000,
       disabledReason: "billing",
       errorCount: 5,
-      failureCounts: { rate_limit: 3, billing: 2 },
+      failureCounts: { timeout: 3, billing: 2 },
     },
     clearedCooldown,
   ),
@@ -284,25 +282,27 @@ it.each([
     clearedDisable,
   ),
   expires(
-    "all expired windows preserve rate-limit history",
+    "all expired windows reset counters but keep rate-limit recovery",
     {
       cooldownUntil: now - 2_000,
       disabledUntil: now - 1_000,
       disabledReason: "billing",
       errorCount: 4,
-      failureCounts: { rate_limit: 2, billing: 2 },
+      failureCounts: { timeout: 2, billing: 2 },
+      lastRateLimitAt: now - 2_000,
     },
-    { ...clearedCooldown, ...clearedDisable, errorCount: 0, failureCounts: { rate_limit: 2 } },
+    { ...clearedCooldown, ...clearedDisable, errorCount: 0, failureCounts: undefined },
   ),
   expires(
-    "expired provider block preserves retry backoff",
+    "expired provider block keeps rate-limit recovery",
     {
       blockedUntil: now - 1_000,
       blockedReason: "subscription_limit",
       blockedSource: "codex_rate_limits",
       errorCount: 4,
-      failureCounts: { rate_limit: 4, timeout: 2 },
+      failureCounts: { timeout: 2 },
       lastFailureAt: now - 120_000,
+      lastRateLimitAt: now - 120_000,
     },
     {
       blockedUntil: undefined,
@@ -311,7 +311,7 @@ it.each([
       blockedModel: undefined,
       blockedScope: undefined,
       errorCount: 0,
-      failureCounts: { rate_limit: 4 },
+      failureCounts: undefined,
     },
     true,
   ),

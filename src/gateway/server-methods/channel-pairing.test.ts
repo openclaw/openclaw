@@ -1,5 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
+import {
+  expectRpcError as expectError,
+  expectRpcResult as expectSuccess,
+} from "./rpc-response.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   approve: vi.fn(),
@@ -88,13 +92,6 @@ function pairingEntry(id = senderId, meta?: Record<string, string>) {
 function approved(id = senderId, meta?: Record<string, string>) {
   return { id, entry: pairingEntry(id, meta) };
 }
-function expectError(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
-}
-function expectSuccess(respond: ReturnType<typeof vi.fn>, result: object) {
-  expect(respond).toHaveBeenCalledWith(true, result, undefined);
-}
-
 async function invoke(
   method: keyof typeof channelPairingHandlers,
   params: Record<string, unknown>,

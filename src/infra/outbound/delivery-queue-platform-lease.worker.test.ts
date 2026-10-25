@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -16,7 +12,6 @@ import type { WorkerWriteOperationContext } from "../../state/worker-operation-r
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
-import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
 import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
@@ -31,6 +26,7 @@ import {
   markDeliveryPlatformSendDispatched,
   loadPendingDelivery,
 } from "./delivery-queue-storage.js";
+import { holdDeliveryQueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
 function beforeSettlement<T>(signal: Promise<T>, operation: Promise<unknown>) {
@@ -41,70 +37,9 @@ function beforeSettlement<T>(signal: Promise<T>, operation: Promise<unknown>) {
 }
 
 function observeRenewalDispatch(id: string, holdReply = false) {
-  const posted = createDeferredCore(),
-    held = createDeferredCore<number>();
-  let target: { worker: Worker; requestId: number } | undefined;
-  let publish: (() => void) | undefined;
-  let captured = false;
-  // oxlint-disable-next-line typescript/unbound-method -- call supplies the intercepted worker receiver.
-  const original = Worker.prototype.postMessage;
-  vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    request: SqliteWorkerRequest,
-    transferList,
-  ) {
-    if (request.type === "execute") {
-      const command: unknown = deserialize(request.input);
-      if (
-        isRecord(command) &&
-        command.type === "deliveryQueue.renewPlatformSendLease" &&
-        isRecord(command.input) &&
-        command.input.id === id
-      ) {
-        target = { worker: this, requestId: request.id };
-        posted.resolve();
-      }
-    }
-    return original.call(this, request, transferList);
-  });
-  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply supplies the emitting worker receiver.
-  const emit = Worker.prototype.emit;
-  if (holdReply) {
-    vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
-      this: Worker,
-      event: string | symbol,
-      ...args: unknown[]
-    ) {
-      const reply = args[0];
-      if (
-        !captured &&
-        target?.worker === this &&
-        event === "message" &&
-        isRecord(reply) &&
-        reply.id === target.requestId &&
-        reply.ok === true &&
-        reply.value instanceof Uint8Array
-      ) {
-        const expiresAt: unknown = deserialize(reply.value);
-        if (typeof expiresAt === "number") {
-          captured = true;
-          publish = () => Reflect.apply(emit, this, [event, ...args]);
-          held.resolve(expiresAt);
-          return true;
-        }
-      }
-      return Reflect.apply(emit, this, [event, ...args]);
-    });
-  }
-  return {
-    posted: posted.promise,
-    held: held.promise,
-    release() {
-      const send = publish;
-      publish = undefined;
-      send?.();
-    },
-  };
+  return holdDeliveryQueueReply("deliveryQueue.renewPlatformSendLease", id, (value) =>
+    holdReply && typeof value === "number" ? value : undefined,
+  );
 }
 
 describe("outbound producer claim worker", () => {

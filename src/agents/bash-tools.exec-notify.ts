@@ -23,6 +23,7 @@ import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { recoverAfterAgentDatabasePreparation } from "../state/agent-database-preparation-recovery.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
   processSessionInstanceId,
@@ -132,34 +133,10 @@ function installExecNotificationPersistence(session: ProcessSession) {
 }
 
 /** Replay only the notification obligation, through the ordinary exit owner. */
-export async function recoverExecExitNotifications(cfg: OpenClawConfig, signal: AbortSignal) {
-  const [
-    { listAgentDatabaseAdmissionRefusals, readAgentDatabaseAdmissionRefusal },
-    { waitForAgentDatabasePreparation },
-  ] = await Promise.all([
-    import("../state/agent-database-admission.js"),
-    import("../state/agent-database-preparation-context.js"),
-  ]);
-  const pendingAgents = listAgentDatabaseAdmissionRefusals()
-    .filter((refusal) => refusal.code === "agent-database-inspection-pending")
-    .map((refusal) => refusal.agentId);
-  await recoverExecExitNotificationsForAgents(cfg, signal);
-  // Like main-session recovery, retain skipped agents and rediscover them after admission.
-  // Join the startup owner's completion, without borrowing its database access or polling.
-  const rescans = await Promise.allSettled(
-    pendingAgents.map(async (agentId) => {
-      await waitForAgentDatabasePreparation(agentId, { signal });
-      signal.throwIfAborted();
-      if (!readAgentDatabaseAdmissionRefusal(agentId)) {
-        await recoverExecExitNotificationsForAgents(cfg, signal, new Set([agentId]));
-      }
-    }),
+export function recoverExecExitNotifications(cfg: OpenClawConfig, signal: AbortSignal) {
+  return recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
+    recoverExecExitNotificationsForAgents(cfg, signal, agentIds),
   );
-  for (const result of rescans) {
-    if (result.status === "rejected") {
-      throw result.reason;
-    }
-  }
 }
 
 async function recoverExecExitNotificationsForAgents(
@@ -410,7 +387,6 @@ export async function maybeNotifyOnExit(
       sessionKey: eventSessionKey,
       contextKey: `exec:${session.id}`,
       deliveryContext: session.notifyDeliveryContext,
-      fromConversationTurn: session.notifyFromConversationTurn,
     },
     readExecRequestOwners(session),
   );
@@ -429,6 +405,7 @@ export async function maybeNotifyOnExit(
         processSessionInstanceId(session),
         {
           ...eventOptions,
+          sourceRunId: session.originRunId,
           assertAcceptanceCurrent: session.assertExitNotificationAcceptanceCurrent,
           onAdopted: session.clearExitNotification,
         },

@@ -1,29 +1,27 @@
-// Mistral provider tests cover bounded-stream-read helper (`createBoundedMistralFetcher`).
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { assert, describe, expect, it } from "vitest";
-import type { Context, Model } from "../types.js";
 import { createBoundedMistralFetcher, streamMistral } from "./mistral.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
+import { serializeSse } from "./provider-stream.test-support.js";
 
 const MAX = 16 * 1024 * 1024;
 const TOTAL = 18 * 1024 * 1024;
 
-async function readAllChunks(body: ReadableStream<Uint8Array> | null): Promise<{ total: number }> {
-  if (!body) {
-    return { total: 0 };
+async function withServer<T>(handler: http.RequestListener, run: (url: string) => Promise<T>) {
+  const server = http.createServer(handler);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    return await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
   }
-  const reader = body.getReader();
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    if (value) {
-      total += value.byteLength;
-    }
-  }
-  return { total };
 }
 
 async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -43,61 +41,41 @@ async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
 describe("Mistral bounded-stream-read real wire proof (loopback http.createServer)", () => {
   it("caps an oversized body streamed chunked over real wire", async () => {
     const fetcher = createBoundedMistralFetcher(fetch);
-    const CHUNK = 1024 * 1024;
     // Pending writes may retain this buffer, so keep its bytes unchanged.
-    const chunk = Buffer.alloc(CHUNK);
-    const server = http.createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/octet-stream" });
-      let sent = 0;
-      const tick = setInterval(() => {
-        if (sent < 18) {
-          res.write(chunk);
-          sent++;
-        } else {
-          clearInterval(tick);
-          res.end();
+    const chunk = Buffer.alloc(1024 * 1024);
+    await withServer(
+      (_req, res) => {
+        res.writeHead(200, { "content-type": "application/octet-stream" });
+        let sent = 0;
+        const tick = setInterval(() => {
+          if (sent < 18) {
+            res.write(chunk);
+            sent++;
+          } else {
+            clearInterval(tick);
+            res.end();
+          }
+        }, 1);
+      },
+      async (url) => {
+        let captured: unknown;
+        const response = await fetcher(url);
+        try {
+          await response.arrayBuffer();
+        } catch (err) {
+          captured = err;
         }
-      }, 1);
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        resolve();
-      });
-    });
-    const port = (server.address() as AddressInfo).port;
-
-    let captured: Error | undefined;
-    try {
-      const response = await fetcher(`http://127.0.0.1:${port}/`);
-      // Wire framing merges TCP packets, so the reported size at throw time
-      // is between MAX (cap) and TOTAL (cap + last merged packet). Both
-      // bounds prove (a) cap fired (got > MAX) and (b) we did not buffer
-      // beyond the server's full 18 MiB (got < TOTAL).
-      try {
-        await readAllChunks(response.body);
-      } catch (err) {
-        captured = err as Error;
-      }
-      expect(captured).toBeInstanceOf(Error);
-      const match = (captured as Error).message.match(
-        /mistral: stream body exceeds \d+ bytes \(got (\d+)\)/,
-      );
-      expect(match).not.toBeNull();
-      const got = Number(match?.[1]);
-      expect(got).toBeGreaterThan(MAX);
-      expect(got).toBeLessThan(TOTAL);
-      // Print to vitest stdout for PR-body real behavior proof capture.
-      console.log(
-        `[mistral bounded-stream proof] oversized path: cap=${MAX} reported=${got} server_total=${TOTAL}`,
-      );
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
-      });
-    }
+        assert.instanceOf(captured, Error);
+        const match = captured.message.match(
+          /mistral: stream body exceeds \d+ bytes \(got (\d+)\)/,
+        );
+        expect(match).not.toBeNull();
+        // TCP framing can merge chunks, but the cap must fire before the full body.
+        const got = Number(match?.[1]);
+        expect(got).toBeGreaterThan(MAX);
+        expect(got).toBeLessThan(TOTAL);
+      },
+    );
   });
 });
 
@@ -115,9 +93,7 @@ describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => 
     );
     const wrapped = await fetcher("http://unused.invalid/");
     const reader = wrapped.body?.getReader();
-    if (!reader) {
-      throw new Error("bounded Mistral response did not expose a body reader");
-    }
+    assert(reader, "bounded Mistral response did not expose a body reader");
 
     await expect(
       settleWithin(reader.cancel("done"), "wrapped response cancel"),
@@ -137,99 +113,74 @@ type MistralTerminalFixture = {
 };
 
 async function streamMistralTerminalFixture(fixture: MistralTerminalFixture) {
-  const server = http.createServer((request, response) => {
-    request.resume();
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    const toolCalls = fixture.toolArguments?.map((args, index) => ({
-      index,
-      id: `call_${index}`,
-      type: "function",
-      function: { name: `tool_${index}`, arguments: args },
-    }));
-    response.write(
-      `data: ${JSON.stringify({
-        id: "mistral-terminal-owner-proof",
-        object: "chat.completion.chunk",
-        created: 1,
-        model: "mistral-large-latest",
-        choices: [
-          {
-            index: 0,
-            delta: {
-              content: fixture.text ?? null,
-              ...(toolCalls ? { tool_calls: toolCalls } : {}),
-            },
-            finish_reason: fixture.finishReason,
-          },
-        ],
-        usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
-      })}\n\n`,
-    );
-    for (const content of fixture.followupTexts ?? []) {
-      response.write(
-        `data: ${JSON.stringify({
-          id: "mistral-terminal-owner-proof",
-          model: "mistral-large-latest",
-          choices: [
+  return withServer(
+    (request, response) => {
+      request.resume();
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const toolCalls = fixture.toolArguments?.map((args, index) => ({
+        index,
+        id: `call_${index}`,
+        type: "function",
+        function: { name: `tool_${index}`, arguments: args },
+      }));
+      const write = (content: MistralTerminalFixture["text"], initial = false) =>
+        response.write(
+          serializeSse([
             {
-              index: 0,
-              delta: { content },
-              finish_reason: fixture.finishReason,
+              id: "mistral-terminal-owner-proof",
+              ...(initial ? { object: "chat.completion.chunk", created: 1 } : {}),
+              model: "mistral-large-latest",
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    content: content ?? null,
+                    ...(initial && toolCalls ? { tool_calls: toolCalls } : {}),
+                  },
+                  finish_reason: fixture.finishReason,
+                },
+              ],
+              ...(initial
+                ? { usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }
+                : {}),
             },
-          ],
-        })}\n\n`,
+          ]),
+        );
+      write(fixture.text, true);
+      for (const content of fixture.followupTexts ?? []) {
+        write(content);
+      }
+      if (fixture.abort) {
+        return;
+      }
+      response.end(fixture.done ? "data: [DONE]\n\n" : "");
+    },
+    async (baseUrl) => {
+      const model = makeProviderModel("mistral-conversations", "mistral", "mistral-large-latest", {
+        baseUrl,
+        reasoning: false,
+      });
+      const abort = new AbortController();
+      const stream = streamMistral(
+        model,
+        { messages: [{ role: "user", content: "Inspect only", timestamp: 1 }] },
+        { apiKey: "redacted-fixture-token", ...(fixture.abort ? { signal: abort.signal } : {}) },
       );
-    }
-    if (fixture.abort) {
-      return;
-    }
-    response.end(fixture.done ? "data: [DONE]\n\n" : "");
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address() as AddressInfo;
-  const model = {
-    id: "mistral-large-latest",
-    name: "Mistral terminal owner",
-    api: "mistral-conversations",
-    provider: "mistral",
-    baseUrl: `http://127.0.0.1:${port}`,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  } satisfies Model<"mistral-conversations">;
-  const context = {
-    messages: [{ role: "user", content: "Inspect only", timestamp: 1 }],
-  } satisfies Context;
-  try {
-    const abort = new AbortController();
-    const stream = streamMistral(model, context, {
-      apiKey: "redacted-fixture-token",
-      ...(fixture.abort ? { signal: abort.signal } : {}),
-    });
-    const events: string[] = [];
-    const textIndexes: number[] = [];
-    for await (const event of stream) {
-      events.push(event.type);
-      if (event.type === "text_delta") {
-        assert.isDefined(event.partial);
-        textIndexes.push(event.contentIndex);
+      const events: string[] = [];
+      const textIndexes: number[] = [];
+      for await (const event of stream) {
+        events.push(event.type);
+        if (event.type === "text_delta") {
+          assert.isDefined(event.partial);
+          textIndexes.push(event.contentIndex);
+        }
+        if (fixture.abort && event.type === "toolcall_delta") {
+          abort.abort(new Error("Operator canceled the incomplete tool"));
+        }
       }
-      if (fixture.abort && event.type === "toolcall_delta") {
-        abort.abort(new Error("Operator canceled the incomplete tool"));
-      }
-    }
-    return { result: await stream.result(), events, textIndexes };
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+      return { result: await stream.result(), events, textIndexes };
+    },
+  );
 }
 
 describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE", () => {
@@ -263,54 +214,41 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
     ]);
   });
 
-  it("discards unfinished tool arguments when the operator cancels generation", async () => {
-    const { result, events } = await streamMistralTerminalFixture({
-      finishReason: null,
-      done: false,
-      abort: true,
-      toolArguments: ['{"action":"delete_all"'],
-    });
-    expect(result.stopReason).toBe("aborted");
-    expect(events).not.toContain("toolcall_end");
-    expect(result.content).not.toContainEqual(expect.objectContaining({ type: "toolCall" }));
-  });
-
+  const partial = { type: "text", text: "Safe partial answer" };
+  const eofError = "Mistral stream ended without a terminal finish reason";
+  const unknownError = "Provider finish_reason: provider_guardrail";
+  const badJson = expect.stringContaining("invalid JSON arguments");
   it.each([
-    { name: "EOF without a provider terminal", finishReason: null, done: false },
-    { name: "an unknown provider terminal", finishReason: "provider_guardrail", done: true },
-    { name: "malformed arguments on a tool terminal", finishReason: "tool_calls", done: true },
-  ] as const)("rejects $name without executable calls", async (fixture) => {
-    const { result, events } = await streamMistralTerminalFixture({
-      ...fixture,
-      toolArguments: ['{"action":"delete_all"'],
-      text: "Safe partial answer",
-    });
-    expect(result.stopReason).toBe("error");
-    if (fixture.finishReason === null) {
-      expect(result.errorMessage).toBe("Mistral stream ended without a terminal finish reason");
-    } else if (fixture.finishReason === "tool_calls") {
-      expect(result.errorMessage).toContain("invalid JSON arguments");
-    } else {
-      expect(result.errorMessage).toBe(`Provider finish_reason: ${fixture.finishReason}`);
-    }
-    expect(events).toContain("error");
-    expect(events).not.toContain("toolcall_end");
-    expect(result.content).not.toContainEqual(expect.objectContaining({ type: "toolCall" }));
-    expect(result.content).toContainEqual({ type: "text", text: "Safe partial answer" });
-  });
-
-  it("preserves a model_length terminal and visible text without finalizing partial tools", async () => {
-    const { result, events } = await streamMistralTerminalFixture({
-      finishReason: "model_length",
-      done: true,
-      toolArguments: ['{"action":"delete_all"'],
-      text: "Safe partial answer",
-    });
-    expect(result.stopReason).toBe("length");
-    expect(result.content).toEqual([{ type: "text", text: "Safe partial answer" }]);
-    expect(events).not.toContain("toolcall_end");
-    expect(events).toContain("done");
-  });
+    ["operator cancellation", null, false, true, "aborted", undefined, undefined],
+    ["EOF", null, false, false, "error", eofError, "error"],
+    ["unknown terminal", "provider_guardrail", true, false, "error", unknownError, "error"],
+    ["malformed tool terminal", "tool_calls", true, false, "error", badJson, "error"],
+    ["model_length alias", "model_length", true, false, "length", undefined, "done"],
+  ] as const)(
+    "never executes incomplete arguments after %s",
+    async (_name, finishReason, done, abort, stopReason, errorMessage, terminalEvent) => {
+      const { result, events } = await streamMistralTerminalFixture({
+        finishReason,
+        done,
+        abort,
+        toolArguments: ['{"action":"delete_all"'],
+        ...(abort ? {} : { text: partial.text }),
+      });
+      expect(result.stopReason).toBe(stopReason);
+      if (errorMessage !== undefined) {
+        expect(result.errorMessage).toEqual(errorMessage);
+      }
+      if (terminalEvent) {
+        expect(events).toContain(terminalEvent);
+      }
+      expect(events).not.toContain("toolcall_end");
+      if (abort) {
+        expect(result.content).not.toContainEqual(expect.objectContaining({ type: "toolCall" }));
+      } else {
+        expect(result.content).toEqual([partial]);
+      }
+    },
+  );
 
   it("drops every pending parallel tool when a later call is truncated", async () => {
     const { result, events } = await streamMistralTerminalFixture({

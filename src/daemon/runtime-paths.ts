@@ -6,7 +6,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   nodeRuntimeFailure,
-  nodeRuntimeNote,
   SQLITE_CAPABILITY_PROBE,
   type SqliteCapabilities,
 } from "../../node-sqlite.mjs";
@@ -184,7 +183,6 @@ type RuntimeInfo =
       sqliteLibraryPath?: string;
       sqliteProbe: SqliteCapabilities;
       capabilityError?: string;
-      note?: string;
     }
   | { status: "probe-failed"; error: Error };
 
@@ -253,7 +251,6 @@ async function resolveRuntimeInfo(
           ? "The executable is Bun, not Node."
           : nodeRuntimeFailure(version, sqliteProbe)
         : null;
-    const note = runtime === "node" ? nodeRuntimeNote(version, sqliteProbe) : null;
     const supportedVersion = runtime === "node" ? !capabilityError : isSupportedBunVersion(version);
     return {
       status:
@@ -267,7 +264,6 @@ async function resolveRuntimeInfo(
       sqliteVersion,
       sqliteProbe,
       ...(capabilityError ? { capabilityError } : {}),
-      ...(note ? { note } : {}),
       nodeSharedSqlite: parsed.nodeSharedSqlite === true || parsed.nodeSharedSqlite === "true",
       ...(sqliteSelectionError ? { sqliteSelectionError } : {}),
       ...(typeof sqliteLibraryPath === "string" ? { sqliteLibraryPath } : {}),
@@ -399,7 +395,7 @@ export function renderSystemNodeWarning(
   selectedNodePath?: string,
 ): string | null {
   if (!systemNode || systemNode.status === "supported") {
-    return systemNode?.note ?? null;
+    return null;
   }
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
   if (systemNode.status === "probe-failed") {
@@ -469,18 +465,16 @@ export async function resolvePreferredNodePath(
 }
 
 export async function resolvePreferredBunPath(
-  params: RuntimePathOptions,
+  params: Pick<RuntimePathOptions, "env" | "runtime">,
 ): Promise<string | undefined> {
   if (params.runtime !== "bun") {
     return undefined;
   }
 
   const env = params.env ?? process.env;
-  const platform = params.platform ?? process.platform;
-  const currentExecPath = params.execPath ?? process.execPath;
   let probeFailure: Error | undefined;
   let selectionError: string | undefined;
-  for (const candidate of buildBunCandidates(env, platform, currentExecPath)) {
+  for (const candidate of buildBunCandidates(env, process.platform, process.execPath)) {
     try {
       await fs.access(candidate);
     } catch (error) {

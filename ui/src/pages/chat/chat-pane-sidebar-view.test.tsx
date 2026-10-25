@@ -4,7 +4,8 @@ import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { createNoopSidebarRegionCallbacks } from "../../test-helpers/sidebar-region-callbacks.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatMobileHost } from "./chat-mobile-host.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
@@ -35,19 +36,9 @@ it("releases each mobile details mount when its host is replaced or removed", ()
       availableWidth={400}
       narrow
       mobileHost={mobileHost()}
-      regionError={undefined}
       layout={{ columns: [] }}
       panelDefinitions={sidebarPanelDefinitions()}
-      callbacks={{
-        activatePanel() {},
-        togglePanelExpanded() {},
-        setDock() {},
-        closeSlot() {},
-        openSlot() {},
-        reorderPanel() {},
-        resizePanel() {},
-        setOpen() {},
-      }}
+      callbacks={createNoopSidebarRegionCallbacks()}
     />
   ));
   flush();
@@ -86,19 +77,9 @@ it("retains loading panel contents when fitting a new layout snapshot", () => {
         panelIdPrefix="chat-panel-loading-layout"
         availableWidth={width()}
         narrow={false}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          setDock() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
+        callbacks={createNoopSidebarRegionCallbacks()}
         layout={fitSidebarLayout(layout, width())!}
         panelDefinitions={sidebarPanelDefinitions()}
-        regionError={null}
       />
     );
   });
@@ -132,19 +113,9 @@ it("retains the primary input and the region-owned outlet while changing the lay
         panelIdPrefix="chat-panel-native-layout"
         availableWidth={1400}
         narrow={false}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          setDock() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
+        callbacks={createNoopSidebarRegionCallbacks()}
         layout={setSidebarOpen(layout, open())}
         panelDefinitions={sidebarPanelDefinitions()}
-        regionError={null}
         primary={primary}
       />
     );
@@ -193,7 +164,7 @@ it("parks on owner events and reveals with the parent's next props", () => {
   expect(content.value).toBe("Retained text");
 });
 
-it("releases region refs when the lazy host or its containing view unmounts", () => {
+it("releases region refs when the panel column or its containing view unmounts", async () => {
   let regionElement: HTMLElement | null = null;
   let headerElement: HTMLElement | null = null;
   let regionView: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
@@ -207,19 +178,9 @@ it("releases region refs when the lazy host or its containing view unmounts", ()
         panelIdPrefix="chat-owned-region-refs"
         availableWidth={1400}
         narrow={false}
-        layout={{ columns: [] }}
+        layout={pending() ? { columns: [] } : openSlot({ columns: [] }, "workspace")}
         panelDefinitions={sidebarPanelDefinitions()}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          setDock() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
-        regionError={pending() ? null : undefined}
+        callbacks={createNoopSidebarRegionCallbacks()}
         onRegionElementRef={(element) => {
           regionElement = element;
           return () => {
@@ -246,6 +207,7 @@ it("releases region refs when the lazy host or its containing view unmounts", ()
     );
   });
   flush();
+  await waitForSolid(() => expect(regionView).not.toBeNull());
   const shell = regionElement;
   const firstView = regionView;
   const header = headerElement;
@@ -259,7 +221,7 @@ it("releases region refs when the lazy host or its containing view unmounts", ()
   expect(headerElement).toBe(header);
   loading(false);
   flush();
-  expect(regionView).not.toBeNull();
+  await waitForSolid(() => expect(regionView).not.toBeNull());
   expect(regionView).not.toBe(firstView);
   mounted.unmount();
   expect(regionView).toBeNull();

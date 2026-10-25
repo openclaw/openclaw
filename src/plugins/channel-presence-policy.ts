@@ -31,13 +31,13 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 
 /** Source classes that can make a channel appear configured for read-only scopes. */
-export type ConfiguredChannelPresenceSource =
+type ConfiguredChannelPresenceSource =
   | "explicit-config"
   | Exclude<ChannelPresenceSignalSource, "config">
   | "manifest-env";
 
 /** Reasons a configured channel signal is not effective. */
-export type ConfiguredChannelBlockedReason =
+type ConfiguredChannelBlockedReason =
   | "plugins-disabled"
   | "blocked-by-denylist"
   | "plugin-disabled"
@@ -559,10 +559,7 @@ export async function hasConfiguredChannelsForReadOnlyScopeAsync(
 export function listConfiguredAnnounceChannelIdsForConfig(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  manifestRecords?: readonly PluginManifestRecord[];
-  discovery?: PluginDiscoveryResult;
 }): string[] {
   const disabledChannelIds = new Set(listExplicitlyDisabledChannelIdsForConfig(params.config));
   const trustConfig = params.activationSourceConfig ?? params.config;
@@ -570,11 +567,8 @@ export function listConfiguredAnnounceChannelIdsForConfig(params: {
   const policy = resolveConfiguredChannelPresencePolicy({
     config: params.config,
     activationSourceConfig: trustConfig,
-    workspaceDir: params.workspaceDir,
     env: params.env,
     includePersistedAuthState: false,
-    manifestRecords: params.manifestRecords,
-    discovery: params.discovery,
   });
   const policyDisabledChannelIds = new Set(
     policy

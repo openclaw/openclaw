@@ -1,4 +1,3 @@
-// Doctor startup maintenance tests cover channel preview warnings and startup repair flow.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as startup from "../channels/plugins/lifecycle-startup.js";
 import {
@@ -13,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   })),
   collectChannelDoctorPreviewWarnings: vi.fn(async (): Promise<string[]> => []),
 }));
+const cfg = { channels: { matrix: { enabled: true } } };
 
 vi.mock("../commands/doctor/shared/preview-warnings.js", () => ({
   resolveDoctorChannelPreviewConfig: mocks.resolveDoctorChannelPreviewConfig,
@@ -33,13 +33,6 @@ describe("doctor startup channel maintenance", () => {
   });
 
   it("maps channel doctor preview warnings to structured findings", async () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          enabled: true,
-        },
-      },
-    };
     mocks.collectChannelDoctorPreviewWarnings.mockResolvedValue([
       "- channels.matrix: stale config needs startup maintenance.",
     ]);
@@ -72,57 +65,43 @@ describe("doctor startup channel maintenance", () => {
     });
   });
 
-  it("runs Matrix startup migration during repair flows", async () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "tok-123",
-        },
-      },
-    };
-    const runtimeCalls: string[] = [];
-    const runtime = {
-      log: (message: string) => runtimeCalls.push(`log:${message}`),
-      error: (message: string) => runtimeCalls.push(`error:${message}`),
-    };
+  it.each([false, true])(
+    "runs Matrix startup migration only for repair=%s",
+    async (shouldRepair) => {
+      const runtimeCalls: string[] = [];
+      const runtime = {
+        log: (message: string) => runtimeCalls.push(`log:${message}`),
+        error: (message: string) => runtimeCalls.push(`error:${message}`),
+      };
 
-    const run = vi
-      .spyOn(startup, "runChannelPluginStartupMaintenance")
-      .mockResolvedValue(undefined);
-    await maybeRunDoctorStartupChannelMaintenance({
-      cfg,
-      runtime,
-      shouldRepair: true,
-    });
+      const run = vi
+        .spyOn(startup, "runChannelPluginStartupMaintenance")
+        .mockResolvedValue(undefined);
+      await maybeRunDoctorStartupChannelMaintenance({
+        cfg,
+        runtime,
+        shouldRepair,
+      });
 
-    expect(run).toHaveBeenCalledOnce();
-    const call = run.mock.calls[0]?.[0];
-    if (!call) {
-      throw new Error("Expected startup maintenance call");
-    }
-    expect(call.cfg).toBe(cfg);
-    expect(call.env).toBe(process.env);
-    expect(call.trigger).toBe("doctor-fix");
-    expect(call.logPrefix).toBe("doctor");
-    expect(call.log.info).toBeTypeOf("function");
-    expect(call.log.warn).toBeTypeOf("function");
-    call.log.info?.("migrated");
-    call.log.warn?.("needs attention");
-    expect(runtimeCalls).toEqual(["log:migrated", "error:needs attention"]);
-  });
-
-  it("skips startup migration outside repair flows", async () => {
-    const run = vi
-      .spyOn(startup, "runChannelPluginStartupMaintenance")
-      .mockResolvedValue(undefined);
-    await maybeRunDoctorStartupChannelMaintenance({
-      cfg: { channels: { matrix: {} } },
-      runtime: { log() {}, error() {} },
-      shouldRepair: false,
-    });
-
-    expect(run).not.toHaveBeenCalled();
-  });
+      if (!shouldRepair) {
+        expect(run).not.toHaveBeenCalled();
+        return;
+      }
+      expect(run).toHaveBeenCalledOnce();
+      const call = run.mock.calls[0]?.[0];
+      if (!call) {
+        throw new Error("Expected startup maintenance call");
+      }
+      expect(call.cfg).toBe(cfg);
+      expect(call.env).toBe(process.env);
+      expect(call).toMatchObject({
+        trigger: "doctor-fix",
+        logPrefix: "doctor",
+        log: { info: expect.any(Function), warn: expect.any(Function) },
+      });
+      call.log.info?.("migrated");
+      call.log.warn?.("needs attention");
+      expect(runtimeCalls).toEqual(["log:migrated", "error:needs attention"]);
+    },
+  );
 });

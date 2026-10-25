@@ -8,7 +8,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_FEATURES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  completionConfig,
+  completionModelDefinition,
+} from "../agents/simple-completion.test-support.js";
 import { createWorkerBundleProducer } from "../gateway/worker-environments/bundle.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -174,29 +177,15 @@ it.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platform === 
           : FINAL,
       FINAL,
     );
-    const config = {
-      models: {
-        providers: {
-          [MODEL.provider]: {
-            apiKey: KEY,
-            api: "openai-completions",
-            baseUrl: provider.baseUrl,
-            headers: { "x-native-registry": "supervisor-snapshot" },
-            models: [
-              {
-                id: MODEL.model,
-                name: MODEL.model,
-                contextWindow: 32768,
-                maxTokens: 173,
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const config = completionConfig(MODEL.provider, {
+      apiKey: KEY,
+      api: "openai-completions",
+      baseUrl: provider.baseUrl,
+      headers: { "x-native-registry": "supervisor-snapshot" },
+      models: [
+        completionModelDefinition({ id: MODEL.model, contextWindow: 32768, maxTokens: 173 }),
+      ],
+    });
     const nativeInferenceSnapshot = snapshotNodeWorkerNativeInference(config, env)!;
     supervisor = createNodeWorkerSupervisor({
       bundleRoot,

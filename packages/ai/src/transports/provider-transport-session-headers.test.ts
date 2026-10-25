@@ -4,9 +4,11 @@ import type {
   StreamFn,
 } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { jsonResponse } from "../../../../src/test-helpers/http.js";
 import { createApiRegistry } from "../api-registry.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamSimpleGoogle } from "../providers/google.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import type { Model } from "../types.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
@@ -23,10 +25,7 @@ function captureRequests() {
   const requests: Request[] = [];
   const captureFetch: typeof fetch = async (input, init) => {
     requests.push(new Request(input, init));
-    return new Response(JSON.stringify({ error: { message: "request captured" } }), {
-      status: 400,
-      headers: { "content-type": "application/json" },
-    });
+    return jsonResponse({ error: { message: "request captured" } }, 400);
   };
   return { requests, captureFetch };
 }
@@ -34,16 +33,12 @@ function captureRequests() {
 function makeModel<T extends Model["api"]>(
   overrides: Pick<Model<T>, "api" | "provider" | "baseUrl"> & Partial<Model<T>>,
 ): Model<T> {
-  return {
-    id: "test-model",
+  return makeProviderModel(overrides.api, overrides.provider, "test-model", {
     name: "Test model",
     reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
     maxTokens: 128,
     ...overrides,
-  };
+  });
 }
 
 function isSynchronousStream(

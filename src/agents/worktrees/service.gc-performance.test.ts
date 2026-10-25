@@ -144,7 +144,7 @@ describe("worktree Git maintenance", () => {
     await service.gc();
 
     expect(commands.mock.calls.filter(([, args]) => args[0] === "multi-pack-index")).toHaveLength(
-      1,
+      0,
     );
     await requireGit(repo, ["multi-pack-index", "verify"]);
   });
@@ -286,7 +286,7 @@ describe("worktree Git maintenance", () => {
     expect(await missing()).toBe(0);
   });
 
-  it("rebuilds pack lookup when its previous index names a removed pack", async () => {
+  it("repairs stale pack lookup without rebuilding a repository-wide index", async () => {
     const repo = await initRepo(tempDirs.make("worktree-stale-pack-index-"));
     const packDirectory = path.join(repo, ".git", "objects", "pack");
     const indexPath = path.join(packDirectory, "multi-pack-index");
@@ -305,8 +305,16 @@ describe("worktree Git maintenance", () => {
     const [record] = await materialize(repo, ["repair"]);
     // Reproduce an interrupted pack replacement without removing any reachable objects.
     await fs.writeFile(indexPath, staleIndex);
+    const chainDirectory = path.join(packDirectory, "multi-pack-index.d");
+    const checksum = staleIndex.subarray(-20).toString("hex");
+    await fs.mkdir(chainDirectory);
+    await fs.writeFile(path.join(chainDirectory, `multi-pack-index-${checksum}.midx`), staleIndex);
+    const chainPath = path.join(chainDirectory, "multi-pack-index-chain");
+    await fs.writeFile(chainPath, `${checksum}\n`);
     await createWorktreeGitMaintenance(env)({});
 
+    await expectMissing(indexPath);
+    await expectMissing(chainPath);
     await requireGit(repo, ["multi-pack-index", "verify"]);
     expect(await requireGit(repo, ["show", "HEAD:replacement.txt"])).toBe("replacement pack");
     expect(await requireGit(record!.path, ["show", "HEAD:replacement.txt"])).toBe(
@@ -344,11 +352,11 @@ describe("worktree Git maintenance", () => {
     const commands = vi
       .spyOn(gitExec, "executeGitCommand")
       .mockImplementation(async (cwd, args, options) => {
-        if (args[0] === "multi-pack-index") {
+        if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
           repairRoots.push(cwd);
           expect(options?.timeoutMs).toBe(30 * 60_000);
           if (failPackRepair && cwd === repo) {
-            throw new Error("pack index unavailable");
+            throw new Error("pack directory unavailable");
           }
         }
         if (args[0] !== "maintenance") {
@@ -386,7 +394,7 @@ describe("worktree Git maintenance", () => {
     });
     expect(maintenanceRoots.toSorted()).toEqual([repo, otherRepo].toSorted());
     expect(repairRoots.toSorted()).toEqual([repo, otherRepo].toSorted());
-    // Git honors task order; graph traversal must not starve pack-index repair.
+    // Git honors task order; graph traversal must not starve pack maintenance.
     expect(taskOrders).toEqual(
       [repo, otherRepo].map(() => ["--task=commit-graph", "--task=loose-objects"]),
     );
@@ -483,6 +491,25 @@ describe("worktree Git maintenance", () => {
     await requireGit(repo, ["prune-packed"]);
     await requireGit(repo, ["multi-pack-index", "write"]);
     await register(repo, "consolidate", { branch: "main" });
+    const execute = gitExec.executeGitCommand;
+    const commands = vi
+      .spyOn(gitExec, "executeGitCommand")
+      .mockImplementation(async (cwd, args, options) => {
+        if (args.at(-1) === "openclaw-consolidate") {
+          throw new Error("pack publication failed");
+        }
+        return execute(cwd, args, options);
+      });
+    const beforeFailure = (await fs.readdir(packDirectory))
+      .filter((name) => name.endsWith(".pack"))
+      .toSorted();
+    const failed = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress: failed });
+    expect(failed.result.gitMaintenance?.stage).toBe("suspended");
+    expect(
+      (await fs.readdir(packDirectory)).filter((name) => name.endsWith(".pack")).toSorted(),
+    ).toEqual(beforeFailure);
+    commands.mockImplementation(execute);
     const trace = path.join(root, "pack-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     const checkpoints: Array<NonNullable<ManagedWorktreeGcResult["gitMaintenance"]>> = [];
@@ -516,17 +543,109 @@ describe("worktree Git maintenance", () => {
     );
     await requireGit(repo, ["multi-pack-index", "verify"]);
     expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
-    // Duplicate expiry below the rewrite threshold stays within its promise group.
+    // A tiny duplicate does not force rewriting its dominant pack or rebuilding
+    // a full MIDX just to discover redundant copies.
     const duplicate = await requireGit(repo, ["pack-objects", path.join(packDirectory, "pack")], {
       input: `${objects[1]}\n`,
     });
     await fs.writeFile(path.join(packDirectory, `pack-${duplicate}.promisor`), "");
     await createWorktreeGitMaintenance(env)({});
     const afterDuplicate = await fs.readdir(packDirectory);
-    expect(afterDuplicate.filter((name) => name.endsWith(".pack"))).toHaveLength(3);
-    expect(afterDuplicate.filter((name) => name.endsWith(".promisor"))).toHaveLength(2);
+    expect(afterDuplicate.filter((name) => name.endsWith(".pack"))).toHaveLength(4);
+    expect(afterDuplicate.filter((name) => name.endsWith(".promisor"))).toHaveLength(3);
     expect(await requireGit(repo, ["cat-file", "-t", objects[1]!])).toBe("blob");
     await requireGit(repo, ["multi-pack-index", "verify"]);
+  });
+
+  it("rolls up equal-sized small packs while leaving a dominant pack untouched", async () => {
+    const repo = await initRepo(tempDirs.make("worktree-geometric-packs-"));
+    const directory = path.join(repo, ".git", "objects", "pack");
+    const dominant = Buffer.alloc(4096);
+    for (let offset = 0; offset < dominant.length; offset += 4) {
+      dominant.writeUInt32BE(offset, offset);
+    }
+    const objects: string[] = [];
+    const packs: string[] = [];
+    for (const input of ["small-a", "small-b", dominant]) {
+      const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], { input });
+      objects.push(object);
+      const hash = await requireGit(repo, ["pack-objects", path.join(directory, "pack")], {
+        input: `${object}\n`,
+      });
+      packs.push(path.join(directory, `pack-${hash}.pack`));
+    }
+    const sizes = await Promise.all(packs.map(async (name) => (await fs.stat(name)).size));
+    expect(sizes[2]).toBeGreaterThan(sizes[0]! + sizes[1]!);
+    await requireGit(repo, ["prune-packed"]);
+    await register(repo, "geometric-packs", { branch: "main" });
+    const progress = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress });
+    expect(progress.result.gitMaintenance).toMatchObject({
+      stage: "completed",
+      packsBefore: 3,
+      packsAfter: 2,
+    });
+    await fs.access(packs[2]!);
+    expect(
+      await requireGit(repo, ["cat-file", "--batch-check=%(objecttype)"], {
+        input: `${objects.join("\n")}\n`,
+      }),
+    ).toBe("blob\nblob\nblob");
+  });
+
+  it("retains a replacement that is already an input and a pack pinned during publication", async () => {
+    const repo = await initRepo(tempDirs.make("worktree-pack-existing-output-"));
+    const directory = path.join(repo, ".git", "objects", "pack");
+    const objects: string[] = [];
+    const inputs: string[] = [];
+    for (let index = 0; index < 15; index++) {
+      const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], {
+        input: `retained-${index}`,
+      });
+      objects.push(object);
+      const hash = await requireGit(
+        repo,
+        ["pack-objects", "--window=0", "--threads=1", path.join(directory, "pack")],
+        { input: `${object}\n` },
+      );
+      inputs.push(`pack-${hash}`);
+      await fs.utimes(path.join(directory, `pack-${hash}.pack`), 1, 1);
+    }
+    const union = await requireGit(
+      repo,
+      ["pack-objects", "--window=0", "--threads=1", path.join(directory, "pack")],
+      { input: `${objects.join("\n")}\n` },
+    );
+    await fs.utimes(path.join(directory, `pack-${union}.pack`), 2, 2);
+    await requireGit(repo, ["prune-packed"]);
+    await register(repo, "existing-output", { branch: "main" });
+    const execute = gitExec.executeGitCommand;
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      const result = await execute(cwd, args, options);
+      if (args.at(-1) === "openclaw-consolidate") {
+        expect(result.stdout.trim()).toBe(`pack\t${union}`);
+        await fs.writeFile(
+          path.join(directory, `${inputs[0]}.keep`),
+          "another writer pinned this input",
+        );
+      }
+      return result;
+    });
+    const progress = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress });
+    expect(progress.result.gitMaintenance).toMatchObject({
+      stage: "completed",
+      packsBefore: 16,
+      packsAfter: 2,
+    });
+    expect(
+      (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted(),
+    ).toEqual([`${inputs[0]}.pack`, `pack-${union}.pack`].toSorted());
+    expect(
+      await requireGit(repo, ["cat-file", "--batch-check=%(objecttype)"], {
+        input: `${objects.join("\n")}\n`,
+      }),
+    ).toBe(objects.map(() => "blob").join("\n"));
   });
 
   it.skipIf(process.platform !== "linux")(

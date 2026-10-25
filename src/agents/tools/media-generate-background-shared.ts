@@ -4,7 +4,7 @@ import { computeBackoffSchedule, sleepWithAbort } from "@openclaw/retry";
 import { getRuntimeConfig } from "../../config/config.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -33,10 +33,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
-import {
-  resolveRequiredCompletionDeliveryFailureTerminalResult,
-  type RequiredCompletionTerminalResult,
-} from "../completion-result.js";
+import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import {
   clearGeneratedMediaTaskActivity,
@@ -239,7 +236,7 @@ async function createMediaGenerationTaskRun(
       : undefined;
     const entry =
       agentId && storePath
-        ? await withSessionEntryReadOnlyInWorker(
+        ? await readSessionEntryReadOnlyInWorker(
             {
               agentId,
               storePath,
@@ -252,12 +249,6 @@ async function createMediaGenerationTaskRun(
               hydrateSkillPromptRefs: false,
             },
             assertCurrent,
-            async (read) => {
-              if (!read.ok) {
-                throw read.error;
-              }
-              return read.value;
-            },
           )
         : undefined;
     assertCurrent();
@@ -400,7 +391,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
           progressSummary: params.progressSummary,
         });
       }, MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS);
-      interval.unref?.();
+      interval.unref();
       try {
         executed = await params.run();
       } finally {
@@ -466,13 +457,11 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       });
       if (wakeOutcome.status !== "delivered") {
         const failureReason = "completion delivery was not confirmed after successful generation";
-        terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(failureReason);
+        terminalResult = { terminalOutcome: "blocked" };
         reportFailure(`${params.toolName} ${failureReason}`);
       }
     } catch (error) {
-      terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
-        formatToolErrorMessage(error),
-      );
+      terminalResult = { terminalOutcome: "blocked" };
       reportFailure(`${params.toolName} completion wake failed after successful generation`, {
         error,
       });

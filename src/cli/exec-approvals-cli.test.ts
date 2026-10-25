@@ -242,6 +242,27 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it.each([
+    [{ ...nativeSnapshot, ...nativePolicy }, "hostname"],
+    [{ enabled: false, message: "Configured on the host only" }, "Configured on the host only"],
+  ])(
+    "renders host-native policy for people without file-policy inference",
+    async (snapshot, detail) => {
+      callGatewayFromCli.mockResolvedValue(snapshot);
+
+      await runApprovalsCommand(["approvals", "get", "--node", "windows"]);
+
+      const output = loggedOutput();
+      expect(output).toContain("host-native");
+      expect(output).toContain(detail);
+      expect(output).toContain("OpenClaw approvals-file policy math does not apply.");
+      expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+        "exec.approvals.node.get",
+      ]);
+      expect(runtimeErrors).toHaveLength(0);
+    },
+  );
+
   it("rejects unknown host-native policy fields instead of dropping them", async () => {
     const policyPath = policyFile({ rules: [{ ...nativePolicy.rules[0], shell: "powershell" }] });
     callGatewayFromCli.mockResolvedValue(nativeSnapshot);

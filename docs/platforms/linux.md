@@ -138,7 +138,10 @@ Changing it requires the separate **Set as Primary** confirmation on a saved
 token-authenticated connection. Other Gateway windows retain their own targets.
 The companion remembers successful explicit selections, returns to Primary when
 that saved connection is removed, and keeps credentials in the operating
-system's credential store. Linux requires an unlocked Secret Service, such as
+system's credential store. Each saved Gateway keeps its own dashboard storage, so
+an approved device pairing survives restarts. Removing the Gateway retires that
+storage: saving it again pairs a new dashboard session, and the old storage is
+deleted at the next launch. Linux requires an unlocked Secret Service, such as
 GNOME Keyring or KWallet's Secret Service support.
 
 An unavailable credential store shows a dismissible notice without blocking the
@@ -500,7 +503,7 @@ The bundled Linux Canvas bridge and its desktop Canvas window have been removed.
 For inline widgets in the Control UI, use [`show_widget`](/tools/show-widget).
 The separate [macOS widget panel](/platforms/mac/canvas) requires a connected
 Mac and is render-only. These widget surfaces do not restore the former Linux
-Canvas bridge or its A2UI push commands.
+Canvas bridge.
 
 ## Install
 

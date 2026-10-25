@@ -29,7 +29,6 @@ import type {
 
 export type { SessionTranscriptReadScope } from "./session-transcript-read.types.js";
 export { capArrayByJsonBytes } from "./session-utils.fs.js";
-export { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
 function captureHistoryReadScope(scope: SessionTranscriptReadScope): SessionTranscriptReadScope {
   const target = bindSessionTranscriptStoreScope(scope);
@@ -105,7 +104,16 @@ export async function readSessionTranscriptAccountingAsync(
   options: SessionTranscriptAccountingOptions,
   signal?: AbortSignal,
 ) {
-  const captured = structuredClone(options);
+  const captured: SessionTranscriptAccountingOptions = {
+    includeByteSize: options.includeByteSize,
+    includeUsage: options.includeUsage,
+    ...(Object.hasOwn(options, "includeTurnTaint")
+      ? { includeTurnTaint: options.includeTurnTaint }
+      : {}),
+    ...(Object.hasOwn(options, "usageEventLimit")
+      ? { usageEventLimit: options.usageEventLimit }
+      : {}),
+  };
   const memory = captureSessionActorTranscriptRead(scope, signal);
   if (memory) {
     return memory.read("session.history.accounting", { options: captured });

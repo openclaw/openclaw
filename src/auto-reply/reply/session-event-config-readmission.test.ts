@@ -36,6 +36,7 @@ import {
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { captureCronInferenceBinding } from "../../cron/inference-binding.runtime.js";
+import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "../../cron/session-run.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
@@ -380,6 +381,7 @@ it.for([
             ...(scenario.startsWith("scheduled-")
               ? {
                   scheduledAutomation: {
+                    ...TEST_SCHEDULED_TURN,
                     job: {
                       id: "scheduled-readmission",
                       name: "Scheduled readmission",
@@ -410,7 +412,6 @@ it.for([
                       state: {},
                       inferenceBinding,
                     },
-                    admissionSource: "operator-schedule" as const,
                     onLaneWait: ({ waiting }) => laneStates.push(waiting),
                     operatorAuthority,
                     assertCurrent: () => {
@@ -667,6 +668,7 @@ it("rebuilds queued Gmail content under the readmitted external-content policy",
           signal,
         );
         scheduled = runCronSessionTurn({
+          ...TEST_SCHEDULED_TURN,
           ...scope,
           cfg: config,
           job: makeCronJob({
@@ -677,10 +679,8 @@ it("rebuilds queued Gmail content under the readmitted external-content policy",
             payload: { kind: "agentTurn", message: "Summarize this synthetic email." },
           }),
           text: "Summarize this synthetic email.",
-          admissionSource: "operator-schedule",
           deliveryAttemptFence: null,
           abortSignal: signal,
-          assertCurrent() {},
           onLaneWait(info) {
             if (info?.waiting) {
               queued.resolve();
@@ -838,6 +838,7 @@ it.for(["changed", "unchanged", "no-delivery"] as const)(
             signal,
           );
           scheduled = runCronSessionTurn({
+            ...TEST_SCHEDULED_TURN,
             ...scope,
             cfg: config,
             job: makeCronJob({
@@ -845,10 +846,8 @@ it.for(["changed", "unchanged", "no-delivery"] as const)(
               delivery: { mode: scenario === "no-delivery" ? "none" : "announce" },
             }),
             text: "Send the scheduled report",
-            admissionSource: "operator-schedule",
             deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
             abortSignal: signal,
-            assertCurrent() {},
             onLaneWait(info) {
               if (info?.waiting) {
                 queued.resolve();
@@ -961,9 +960,8 @@ it.for(["transport", "agent", "context-overflow"] as const)(
           abortSignal: signal,
           deliver: failureKind === "transport",
           scheduledAutomation: {
+            ...TEST_SCHEDULED_TURN,
             job: makeCronJob({ sessionTarget: `session:${scope.sessionKey}` }),
-            admissionSource: "operator-schedule",
-            assertCurrent() {},
           },
         });
         try {

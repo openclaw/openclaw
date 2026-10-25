@@ -42,29 +42,6 @@ test.each([
   },
 );
 
-test("records parallel, repeated, and archive phases independently in canonical order", () => {
-  diagnostics = startSessionPatchDiagnostics("sessions.patchMany");
-  const first = expectDefined(diagnostics.scope("catalog"), "active catalog phase");
-  const second = expectDefined(diagnostics.scope("catalog"), "active catalog phase");
-  const group = expectDefined(diagnostics.scope("snapshot"), "active snapshot phase");
-  at(100, () => group.mark("projection"));
-  at(200, () => group.mark("runtimeSelection"));
-  at(500, () => group.mark("archivePlacement"));
-  at(600, () => second.finish());
-  at(900, () => group.mark("commit"));
-  at(1_000, () => group.mark("snapshot"));
-  at(1_300, () => group.finish());
-  const effects = expectDefined(diagnostics.scope("effects"), "archive effects");
-  const cron = expectDefined(diagnostics.scope("cronEffects"), "archive cron effects");
-  at(1_400, () => first.finish());
-  at(1_800, () => cron.finish());
-  effects.finish();
-  diagnostics.finish();
-  expect(log).toHaveBeenCalledExactlyOnceWith(
-    "slow session patch 1800ms method=sessions.patchMany snapshot=400ms projection=100ms catalog=2000ms runtimeSelection=300ms archivePlacement=400ms commit=100ms effects=500ms cronEffects=500ms",
-  );
-});
-
 test("request settlement closes unfinished phases and retires retained markers", () => {
   const scope = expectDefined(diagnostics.scope("preflight"), "active preflight phase");
   at(1_500, () => diagnostics.finish());

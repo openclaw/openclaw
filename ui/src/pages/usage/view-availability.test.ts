@@ -54,7 +54,7 @@ it("shows lower-bound totals after interruption while keeping completed session 
   }));
   expect(badges()).toEqual(["≥ 2.6K", "≥ $0.00", "2"]);
   expect(query(".usage-trend-section")).not.toBeNull();
-  expect(text('.usage-callout[role="note"]')).toContain("lower bound");
+  expect(text(".usage-lower-bound:not(.usage-lower-bound--off)")).toContain("lower bound");
   expect(text('[title="interrupted"] .session-bar-value')).toBe("≥ 0");
   expect(text('[title="completed"] .session-bar-value')).toBe("2.6K");
   expect(text(".sessions-card-stats")).toContain("≥ ");
@@ -67,7 +67,8 @@ it("shows lower-bound totals after interruption while keeping completed session 
   flush();
   expect(badges()).toEqual(["2.6K", "$0.00", "1"]);
   expect(query(".usage-trend-section")).not.toBeNull();
-  expect(query('.usage-callout[role="note"]')).toBeNull();
+  expect(query(".usage-lower-bound:not(.usage-lower-bound--off)")).toBeNull();
+  expect(query(".usage-lower-bound")?.classList).toContain("usage-lower-bound--off");
   expect(text(".cost-breakdown-total")).not.toContain("≥");
   expect(summary("average-tokens")).not.toBe("—");
 });
@@ -86,5 +87,5 @@ it("keeps the lower-bound note for full-session charts when only the selected da
   expect(text(".usage-metric-badge strong")).toBe("100");
   expect(query(".usage-trend-section")).not.toBeNull();
   expect(query(".usage-mosaic")).not.toBeNull();
-  expect(text('.usage-callout[role="note"]')).toContain("lower bound");
+  expect(text(".usage-lower-bound:not(.usage-lower-bound--off)")).toContain("lower bound");
 });

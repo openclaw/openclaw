@@ -75,11 +75,7 @@ describe("createSessionCapability message subscriptions", () => {
         reconcileMutation: async () => ({ status: "stale" }),
       });
       const acquisition = operations.subscribeMessages("agent:main:old");
-      expect(request).toHaveBeenCalledExactlyOnceWith(
-        "sessions.messages.subscribe",
-        { key: "agent:main:old", subscriptionId: expect.any(String) },
-        subscriptionRequestOptions,
-      );
+      expect(request.mock.calls).toEqual([wireCall("subscribe", { key: "agent:main:old" })]);
       if (retirement === "dispose") {
         operations.dispose();
       } else {
@@ -88,10 +84,8 @@ describe("createSessionCapability message subscriptions", () => {
       }
       await expect(acquisition).rejects.toThrow("replaced Gateway connection");
       if (retirement === "dispose") {
-        expect(request).toHaveBeenLastCalledWith(
-          "sessions.messages.unsubscribe",
-          { key: "agent:main:old", subscriptionId: expect.any(String) },
-          subscriptionRequestOptions,
+        expect(request.mock.calls.at(-1)).toEqual(
+          wireCall("unsubscribe", { key: "agent:main:old" }),
         );
       }
       request.mockClear();
@@ -188,8 +182,7 @@ describe("createSessionCapability message subscriptions", () => {
       expect([...observers]).toEqual([["work", true]]);
       await sessions.unsubscribeMessages(approval);
       expect(observers.size).toBe(0);
-      expect(main).toEqual({ key: "global", agentId: "main" });
-      expect(work).toEqual({ key: "global", agentId: "work" });
+      expect([main, work]).toEqual(["main", "work"].map((agentId) => ({ key: "global", agentId })));
       expect(request.mock.calls.slice(0, 2)).toEqual([
         wireCall("subscribe", { key: keyFor("main"), agentId: "main" }),
         wireCall("subscribe", { key: keyFor("work"), agentId: "work" }),

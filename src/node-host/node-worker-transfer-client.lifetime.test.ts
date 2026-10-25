@@ -6,7 +6,11 @@ import { connect as connectNet } from "node:net";
 import path from "node:path";
 import { getDefaultHighWaterMark, setDefaultHighWaterMark } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import {
@@ -36,7 +40,9 @@ async function uploadFixture(content: string | Buffer) {
   };
 }
 
-function observeStagedReads(observe: (handle: fs.FileHandle, filePath: string) => void) {
+function observeStagedReads(
+  observe: (handle: fs.FileHandle, filePath: string) => void | Promise<void>,
+) {
   const open = fs.open.bind(fs);
   return vi.spyOn(fs, "open").mockImplementation(async (...args) => {
     const handle = await open(...args);
@@ -48,13 +54,68 @@ function observeStagedReads(observe: (handle: fs.FileHandle, filePath: string) =
       typeof flags === "number" &&
       (flags & (fsSync.constants.O_WRONLY | fsSync.constants.O_RDWR)) === 0
     ) {
-      observe(handle, filePath);
+      await observe(handle, filePath);
     }
     return handle;
   });
 }
 
 describe("node worker upload HTTP lifetime", () => {
+  it("cancels before streaming a staged file whose open outlives its caller", async ({
+    signal,
+  }) => {
+    const f = await uploadFixture("captured result\n");
+    const controller = new AbortController();
+    const readOpened = createDeferred();
+    const releaseOpen = createDeferred();
+    let stagedPath = "";
+    let readClosed = false;
+    const createReadStream = vi.fn();
+    const openSpy = observeStagedReads(async (handle, filePath) => {
+      stagedPath = filePath;
+      const stream = handle.createReadStream.bind(handle);
+      vi.spyOn(handle, "createReadStream").mockImplementation((options) => {
+        createReadStream();
+        return stream(options);
+      });
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, "close").mockImplementation(async () => {
+        await close();
+        readClosed = true;
+      });
+      readOpened.resolve();
+      await releaseOpen.promise;
+    });
+    const server = createHttpServer();
+    const gatewayUrl = await listen(server);
+    const operation = f.upload(gatewayUrl, controller.signal);
+    const rejected = expect(operation).rejects.toMatchObject({
+      operation: "upload",
+      stage: "reconcile",
+    });
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          readOpened.promise,
+          operation,
+          "Upload settled before staged-file open",
+        ),
+        signal,
+      );
+      controller.abort(new Error("upload cancelled while opening its staged file"));
+      releaseOpen.resolve();
+      await withinTest(rejected, signal);
+      expect(createReadStream).not.toHaveBeenCalled();
+      expect(readClosed).toBe(true);
+      await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      releaseOpen.resolve();
+      await operation.catch(() => undefined);
+      openSpy.mockRestore();
+      await closeServer(server);
+    }
+  });
+
   it("accepts a complete response before the final backpressure drain", async () => {
     const f = await uploadFixture(Buffer.alloc(2 * 1024 * 1024, "a"));
     const readClosed = createDeferred();

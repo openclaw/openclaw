@@ -54,14 +54,21 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       sessionKey,
       connected: this.context.gateway.snapshot.phase === "connected",
       promise: reading
-        .then((storedSnapshot) => {
+        .then(async (storedSnapshot) => {
+          // Let the initial composer commit before the saved rows do their layout work.
+          if (!hydration.connected && storedSnapshot && !storedSnapshot.board) {
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 0);
+            });
+          }
+          // Scoped snapshots can paint while the route awaits live revalidation.
+          // The pending route still gates commands and authenticated resources.
           if (!isCurrent()) {
-            return hydration.complete?.();
+            return;
           }
           const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
           const boardRestored = restoreBoard(snapshot?.board);
           if (requests.acceptedHistory || !snapshot) {
-            hydration.complete?.();
             return boardRestored;
           }
           // A sibling can fill the shared cache while this pane still needs its
@@ -75,19 +82,17 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
               this.progressCards.hydrate(progressTarget, snapshot.progressCard);
             }
           }
-          // Release the history response before publishing the cached transcript.
-          hydration.complete?.();
           return boardRestored;
         })
-        .catch(() => hydration.complete?.())
+        .catch(() => undefined)
         .finally(() => {
           hydration.titlePending = false;
-          if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
+          if (requests.initialSnapshotHydration === hydration) {
             delete requests.initialSnapshotHydration;
           }
         }),
     };
-    // Only the title observes cache readiness; history keeps its existing wait contract.
+    // The title observes cache readiness; network history never waits on it.
     requests.initialSnapshotHydration = projectChatFields(hydration, ["titlePending"]);
   }
 }

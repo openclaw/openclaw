@@ -36,7 +36,6 @@ const CURSOR_CASES = [
   ...cursorGroup("pointer", "#shadow-new-tab-button", true),
   ...cursorGroup("default", "#shadow-disabled-new-tab-button", true),
   ...cursorGroup("text", "#plain-text-input, .chat-pane__session-title-button"),
-  ...cursorGroup("grab", ".sidebar-session-group-drag-handle"),
   ...cursorGroup("zoom-in", ".chat-message-image-button"),
   ...cursorGroup("not-allowed", ".btn--ghost:disabled, #disabled-new-tab-button"),
   ...cursorGroup("wait", ".sidebar-update-card__hold:disabled"),
@@ -90,7 +89,6 @@ const fixtureDocument =
       <div class="markdown"><a class="markdown-bare-url" href="https://example.com">Transcript link</a></div>
       <div class="chat-thinking"><a class="markdown-bare-url" href="https://example.com">Reasoning link</a></div>
       <div class="markdown-body"><a class="markdown-bare-url" href="https://example.com">Logbook link</a></div>
-      <div class="chat-session-rail__answer"><a class="markdown-bare-url" href="https://example.com">Answer link</a></div>
       <div class="chat-position-rail__preview-copy" inert>
         <a class="markdown-bare-url" href="https://example.com">Preview URL</a>
         <a id="preview-github-link" class="markdown-github-link" href="https://github.com/example/project">Preview repository</a>
@@ -131,7 +129,6 @@ const fixtureDocument =
       <button class="chat-pane__session-title-button" type="button">Session title</button>
       <button class="chat-message-image-button" type="button">Image</button>
       <div class="chat-assistant-attachment-card" data-openable>Attachment</div>
-      <div class="sidebar-session-group-drag-handle"></div>
       <span class="agent-tools-runtime-chip--more">+3</span>
       <div class="chat-text"><a class="markdown-file-link">src/index.ts</a></div>
       <div class="chat-text"><a class="markdown-github-link markdown-github-item" data-github-kind="pull" href="https://github.com/openclaw/openclaw/pull/3434" target="_blank">#3434</a></div>

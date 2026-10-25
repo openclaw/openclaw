@@ -35,7 +35,6 @@ type Source = {
 export function createConfigFileAdapter(opts: {
   path: string;
   includedPaths?: readonly string[];
-  includeRoots?: readonly string[];
   onChange: () => void;
   onReady?: (isCurrent: () => boolean) => void;
   log: { warn: (message: string) => void; error: (message: string) => void };
@@ -59,7 +58,6 @@ export function createConfigFileAdapter(opts: {
     new Set([opts.path, ...paths].map((entry) => nodePath.resolve(entry)));
   let watchedPaths = normalizePaths(acceptedPaths);
   let primaryTarget: string | undefined;
-  let selectionRevision = 0;
   let roots: ReturnType<typeof admitConfigObservationRoots> | undefined;
   const admittedRoots = {
     roots: new Map<string, Promise<Root>>(),
@@ -93,7 +91,7 @@ export function createConfigFileAdapter(opts: {
     if (!roots) {
       roots = admitConfigObservationRoots(
         opts.path,
-        opts.includeRoots ?? resolveIncludeRoots(),
+        resolveIncludeRoots(),
         admittedRoots,
         primaryTarget,
         desiredPaths,
@@ -334,10 +332,9 @@ export function createConfigFileAdapter(opts: {
   };
 
   const reconcilePaths = async (paths: readonly string[], changedScope = false) => {
-    const revision = ++selectionRevision;
     const nextPaths = normalizePaths(paths);
     const nextPrimary = await canonicalPathFromExistingAncestor(opts.path);
-    if (stopped || revision !== selectionRevision) {
+    if (stopped) {
       return;
     }
     const changedPrimary = nextPrimary !== primaryTarget;

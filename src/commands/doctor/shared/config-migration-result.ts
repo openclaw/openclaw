@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ConfigSnapshotReadMeasure } from "../../../config/io.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../../../infra/state-migrations.media-persistence-targets.js";
@@ -54,6 +55,8 @@ export type DoctorConfigPreflightResult = {
   stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
+  /** Config whose pre-session state migrations completed without unresolved work. */
+  preflightLegacyStateConfig?: OpenClawConfig;
 };
 
 /** Keep migrated selectors with Doctor's model-policy owner until billing facts are captured. */
@@ -88,6 +91,7 @@ export async function retainHeartbeatMigrationInput(
       }
     }
   }
+  copyConfigResolutionFactsThroughRewrite(config, candidate);
   return candidate;
 }
 
@@ -167,6 +171,11 @@ export function prepareDoctorConfigMigrationResult(
       ...(receipts ? { stateMigrationStepReceipts: receipts } : {}),
       ...(postSession ? { postSessionPluginMigration: postSession } : {}),
       ...(planBound ? { postSessionPluginMigrationPlanBound: true } : {}),
+      ...(!params.shouldWriteConfig &&
+      !params.pluginInventoryChanged &&
+      isDeepStrictEqual(preflight.preflightLegacyStateConfig, params.cfg)
+        ? { preflightLegacyStateConfig: preflight.preflightLegacyStateConfig }
+        : {}),
     };
   };
 }

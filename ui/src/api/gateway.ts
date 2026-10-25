@@ -30,6 +30,7 @@ import {
   loadDeviceAuthToken,
   storeDeviceAuthToken,
 } from "../lib/nodes/index.ts";
+import { listSessionPlacementRecoveryStorageKeys } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket, probeGatewayReachability } from "./gateway-browser-socket.ts";
 import { GatewayChatEvents } from "./gateway-chat-events.ts";
@@ -433,7 +434,10 @@ export class GatewayBrowserClient {
             plan.selectedAuth.authToken),
     );
     const migrateRecoveryScope =
-      serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
+      serverScope &&
+      hello.auth?.recoveryMigrationAllowed === true &&
+      legacyScope &&
+      listSessionPlacementRecoveryStorageKeys(this.opts.url, legacyScope).length > 0
         ? (await import("../lib/sessions/session-placement-recovery-migration.runtime.ts")).default
         : undefined;
     if (plan.generation !== this.recovery.generation || !this.client.connected) {

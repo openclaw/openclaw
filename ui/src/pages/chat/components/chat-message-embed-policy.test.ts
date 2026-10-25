@@ -2,7 +2,13 @@
 
 import { createComponent, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
+import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext } from "../../../test-helpers/app-sidebar.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildMessageItems } from "../chat-thread-items.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -16,7 +22,7 @@ function createEmbedHarness(container: HTMLElement, surface: "persisted" | "stre
     text: string;
     options: Pick<
       Parameters<typeof GroupedMessage>[0]["options"],
-      "allowExternalEmbedUrls" | "embedSandboxMode" | "sessionKey"
+      "allowExternalEmbedUrls" | "embedSandboxMode" | "sessionKey" | "mediaReadAllowed"
     >;
   };
   const Content = (props: Props) =>
@@ -61,6 +67,30 @@ function createEmbedHarness(container: HTMLElement, surface: "persisted" | "stre
 }
 
 describe("assistant message embed policy", () => {
+  it.each(["persisted", "streaming"] as const)(
+    "holds saved %s embeds until live resource admission",
+    async (surface) => {
+      const host = document.body.appendChild(document.createElement("div"));
+      const preview = createEmbedHarness(host, surface);
+      onTestFinished(() => {
+        preview.unmount();
+        host.remove();
+      });
+      const url = "https://widget.example.test/saved";
+      const text = `[embed url="${url}" title="Saved widget" /]\nSaved conversation text.`;
+      for (const mediaReadAllowed of [false, true, false]) {
+        preview.render(text, { allowExternalEmbedUrls: true, mediaReadAllowed });
+        await vi.dynamicImportSettled();
+        await waitForSolid(() => {
+          expect(host.querySelector("iframe")?.getAttribute("src") ?? null).toBe(
+            mediaReadAllowed ? url : null,
+          );
+          expect(host.textContent).toContain("Saved conversation text.");
+        });
+      }
+    },
+  );
+
   it.each(["persisted", "streaming"] as const)(
     "preserves YouTube playback on refresh and revokes it on policy, source, and session changes in %s messages",
     async (surface) => {
@@ -160,83 +190,106 @@ describe("assistant message embed policy", () => {
   it.each([
     { label: "grouped messages", renderGroup: MessageGroup },
     { label: "run-frame message contents", renderGroup: MessageGroupContent },
-  ])("updates the authenticated widget's script policy when $label rerender", ({ renderGroup }) => {
-    const container = document.createElement("div");
-    type GroupProps = Parameters<typeof MessageGroup>[0];
-    let root: ReturnType<typeof mountSolid<GroupProps>> | undefined;
-    onTestFinished(async () => {
-      await vi.dynamicImportSettled();
-      root?.dispose();
-    });
-    let timestamp = 1000;
-    const renderCanvas = (embedSandboxMode: "strict" | "scripts", prepend = false) => {
-      const message = {
-        role: "assistant",
-        id: "assistant-canvas-inline-sandbox-change",
-        timestamp: timestamp++,
-        content: [
-          { type: "text", text: "Inline canvas result." },
-          {
-            type: "canvas",
-            preview: createCanvasPreview({
-              viewId: "cv_inline_sandbox-change",
-              title: "Scoped preview",
-              preferredHeight: 320,
-            }),
+  ])(
+    "updates the authenticated widget's script policy when $label rerender",
+    async ({ renderGroup }) => {
+      const container = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => container.remove());
+      type GroupProps = Parameters<typeof MessageGroup>[0];
+      const { gateway } = createApplicationGateway();
+      const sessions = createTestSessionCapability(gateway);
+      const context = createContext(gateway, sessions);
+      onTestFinished(disposeSidebarContextLifecycles);
+      const CanvasGroup = (props: GroupProps) =>
+        createComponent(ApplicationProvider, {
+          value: context,
+          host: container,
+          get children() {
+            return createComponent(renderGroup, props);
           },
-        ],
+        });
+      let root: ReturnType<typeof mountSolid<GroupProps>> | undefined;
+      onTestFinished(async () => {
+        await vi.dynamicImportSettled();
+        root?.dispose();
+      });
+      let timestamp = 1000;
+      const renderCanvas = (embedSandboxMode: "strict" | "scripts", prepend = false) => {
+        const message = {
+          role: "assistant",
+          id: "assistant-canvas-inline-sandbox-change",
+          timestamp: timestamp++,
+          content: [
+            { type: "text", text: "Inline canvas result." },
+            {
+              type: "canvas",
+              preview: createCanvasPreview({
+                viewId: "cv_inline_sandbox-change",
+                title: "Scoped preview",
+                preferredHeight: 320,
+              }),
+            },
+          ],
+        };
+        const messages = prepend
+          ? [
+              { role: "assistant", content: "Earlier reply.", id: "earlier", timestamp: 999 },
+              message,
+            ]
+          : [message];
+        // Use production keys and grouping: recreated messages retain source identity
+        // even when their timestamps change or earlier replies are inserted.
+        const [group] = groupMessages(buildMessageItems(messages));
+        if (group?.kind !== "group") {
+          throw new Error("expected a prepared assistant message group");
+        }
+        const next = {
+          group,
+          options: {
+            showReasoning: true,
+            embedSandboxMode,
+            sessionKey: "agent:main:canvas",
+            canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
+          },
+        };
+        if (root) {
+          root.update(next);
+        } else {
+          root = mountSolid(CanvasGroup, next, container);
+        }
       };
-      const messages = prepend
-        ? [{ role: "assistant", content: "Earlier reply.", id: "earlier", timestamp: 999 }, message]
-        : [message];
-      // Use production keys and grouping: recreated messages retain source identity
-      // even when their timestamps change or earlier replies are inserted.
-      const [group] = groupMessages(buildMessageItems(messages));
-      if (group?.kind !== "group") {
-        throw new Error("expected a prepared assistant message group");
-      }
-      const next = {
-        group,
-        options: {
-          showReasoning: true,
-          embedSandboxMode,
-          sessionKey: "agent:main:canvas",
-          canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
-        },
-      };
-      if (root) {
-        root.update(next);
-      } else {
-        root = mountSolid(renderGroup, next, container);
-      }
-    };
 
-    renderCanvas("strict");
-    expect(container.querySelectorAll("openclaw-canvas-widget-view")).toHaveLength(1);
-    const widget = container.querySelector("openclaw-canvas-widget-view");
-    expect(widget).toBeInstanceOf(HTMLElement);
-    expect(widget).toMatchObject({
-      docId: "cv_inline_sandbox-change",
-      title: "Scoped preview",
-      preferredHeight: 320,
-      sessionKey: "agent:main:canvas",
-      allowScripts: false,
-    });
-    expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
-
-    for (const [mode, prepend] of [
-      ["scripts", false],
-      ["strict", false],
-      ["scripts", true],
-      ["strict", false],
-    ] as const) {
-      renderCanvas(mode, prepend);
-      expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-      expect(widget).toMatchObject({ allowScripts: mode === "scripts" });
+      renderCanvas("strict");
+      await waitForSolid(() =>
+        expect(container.querySelectorAll("openclaw-canvas-widget-view")).toHaveLength(1),
+      );
+      const widget = container.querySelector("openclaw-canvas-widget-view");
+      expect(widget).toBeInstanceOf(HTMLElement);
+      expect(widget).toMatchObject({
+        docId: "cv_inline_sandbox-change",
+        title: "Scoped preview",
+        preferredHeight: 320,
+        sessionKey: "agent:main:canvas",
+        allowScripts: false,
+      });
       expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
-      expect(
-        [...container.querySelectorAll(".chat-text")].map((node) => node.textContent?.trim()),
-      ).toEqual(prepend ? ["Earlier reply.", "Inline canvas result."] : ["Inline canvas result."]);
-    }
-  });
+
+      for (const [mode, prepend] of [
+        ["scripts", false],
+        ["strict", false],
+        ["scripts", true],
+        ["strict", false],
+      ] as const) {
+        renderCanvas(mode, prepend);
+        expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
+        expect(widget).toMatchObject({ allowScripts: mode === "scripts" });
+        expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
+        expect(
+          [...container.querySelectorAll(".chat-text")].map((node) => node.textContent?.trim()),
+        ).toEqual(
+          prepend ? ["Earlier reply.", "Inline canvas result."] : ["Inline canvas result."],
+        );
+      }
+    },
+  );
 });

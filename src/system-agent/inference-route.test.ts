@@ -9,6 +9,7 @@ import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/reg
 import { selectAgentHarness } from "../agents/harness/selection.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import {
   projectInferenceRoute,
@@ -16,17 +17,7 @@ import {
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 
-function model(id: string) {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8_192,
-    maxTokens: 2_048,
-  };
-}
+const model = (id: string) => buildCatalogModel(id, { contextWindow: 8192, maxTokens: 2048 });
 
 async function expectSameProjection(
   before: OpenClawConfig,

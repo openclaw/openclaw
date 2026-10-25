@@ -18,10 +18,9 @@ async function scaffold(options: Partial<Parameters<typeof writeQaDockerHarnessF
   const outputDir = path.join(root, "scaffold");
   const repoRoot = path.join(root, "repo #hash");
   await mkdir(repoRoot);
-  const result = await writeQaDockerHarnessFiles({
+  await writeQaDockerHarnessFiles({
     outputDir,
     repoRoot,
-    gatewayToken: "qa-token",
     bindUiDist: true,
     ...options,
   });
@@ -40,7 +39,7 @@ async function scaffold(options: Partial<Parameters<typeof writeQaDockerHarnessF
       >;
     }
   ).services;
-  return { result, compose, services, read, outputDir };
+  return { compose, services, read };
 }
 function contains(text: string, snippets: string[]) {
   for (const snippet of snippets) {
@@ -50,24 +49,12 @@ function contains(text: string, snippets: string[]) {
 
 describe("qa docker harness", () => {
   it("writes compose, env, config, and workspace scaffold files", async () => {
-    const { result, compose, services, read, outputDir } = await scaffold({
+    const { compose, services, read } = await scaffold({
       gatewayPort: 18889,
       qaLabPort: 43124,
       providerBaseUrl: "http://host.docker.internal:45123/v1",
       usePrebuiltImage: true,
     });
-
-    for (const file of [
-      ".env.example",
-      "README.md",
-      "docker-compose.qa.yml",
-      "state/openclaw.json",
-      ...["QA_KICKOFF_TASK.md", "QA_SCENARIO_PLAN.md", "QA_SCENARIOS.yaml", "IDENTITY.md"].map(
-        (name) => `state/seed-workspace/${name}`,
-      ),
-    ]) {
-      expect(result.files).toContain(path.join(outputDir, file));
-    }
 
     expect(services["qa-mock-openai"]?.environment).toMatchObject({
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",

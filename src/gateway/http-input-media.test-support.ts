@@ -13,6 +13,17 @@ const chatImage = (url = "data:image/png;base64,QUJDRA==") => ({
   type: "image_url",
   image_url: { url },
 });
+const textPart = (text: string) => ({ type: "text", text });
+const withChatImage = (text: string, url: string) => chatMessage([textPart(text), chatImage(url)]);
+const responseBase64 = (
+  type: "input_file" | "input_image",
+  media_type: string,
+  data: string,
+  filename?: string,
+) => ({
+  type,
+  source: { type: "base64", media_type, data, ...(filename ? { filename } : {}) },
+});
 const uploadsDisabledError = {
   type: "forbidden",
   code: "UPLOADS_DISABLED",
@@ -54,7 +65,7 @@ function disableUploadsDuringAdmission(agentCommandMock: HttpMediaSuite["agentCo
       throw new Error("Expected the HTTP command input admission guard");
     }
     publishUploads(false);
-    await options.assertSourceCurrent();
+    options.assertSourceCurrent();
     return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
   });
 }
@@ -78,17 +89,10 @@ function registerUploadPolicyTests(suite: OpenAiMediaSuite | ResponsesUploadSuit
       ? suite.postResponses(getPort(), { model: "openclaw", input, stream })
       : suite.postChatCompletions(getPort(), { model: "openclaw", messages: input, stream });
   const imagePart = responses
-    ? { type: "input_image", source: { type: "base64", media_type: "image/png", data: "QUJDRA==" } }
+    ? responseBase64("input_image", "image/png", "QUJDRA==")
     : chatImage();
-  const responseFile = (data = "dXBsb2FkZWQgdGV4dA==") => ({
-    type: "input_file",
-    source: {
-      type: "base64",
-      media_type: "text/plain",
-      data,
-      filename: "notes.txt",
-    },
-  });
+  const responseFile = (data = "dXBsb2FkZWQgdGV4dA==") =>
+    responseBase64("input_file", "text/plain", data, "notes.txt");
   const responseUrl = (type: "input_file" | "input_image", url: string) => ({
     type,
     source: { type: "url", url },
@@ -112,39 +116,28 @@ function registerUploadPolicyTests(suite: OpenAiMediaSuite | ResponsesUploadSuit
       }
     });
 
-    const blocked: Array<{ name: string; part: unknown; stream: boolean }> = responses
+    const blockedCase = (name: string, part: unknown, stream = false) => ({ name, part, stream });
+    const blocked = responses
       ? [
-          { name: "inline image", part: imagePart, stream: false },
-          { name: "inline file", part: filePart, stream: false },
-          {
-            name: "URL image in a streaming request",
-            part: responseUrl("input_image", "https://example.com/image.png"),
-            stream: true,
-          },
-          {
-            name: "URL file",
-            part: responseUrl("input_file", "https://example.com/notes.txt"),
-            stream: false,
-          },
-          {
-            name: "malformed base64 before decoding",
-            part: responseFile("%%%"),
-            stream: false,
-          },
+          blockedCase("inline image", imagePart),
+          blockedCase("inline file", filePart),
+          blockedCase(
+            "URL image in a streaming request",
+            responseUrl("input_image", "https://example.com/image.png"),
+            true,
+          ),
+          blockedCase("URL file", responseUrl("input_file", "https://example.com/notes.txt")),
+          blockedCase("malformed base64 before decoding", responseFile("%%%")),
         ]
       : [
-          { name: "inline image", part: imagePart, stream: false },
-          {
-            name: "URL image in a streaming request",
-            part: chatImage("https://example.com/image.png"),
-            stream: true,
-          },
-          { name: "file", part: filePart, stream: false },
-          {
-            name: "malformed image before decoding",
-            part: chatImage("data:image/png;base64,%%%"),
-            stream: false,
-          },
+          blockedCase("inline image", imagePart),
+          blockedCase(
+            "URL image in a streaming request",
+            chatImage("https://example.com/image.png"),
+            true,
+          ),
+          blockedCase("file", filePart),
+          blockedCase("malformed image before decoding", chatImage("data:image/png;base64,%%%")),
         ];
     it.each(blocked)("rejects $name without extraction or dispatch", async ({ part, stream }) => {
       publishUploads(false);
@@ -272,22 +265,12 @@ export async function runOpenAiHttpImageInputCases({
 
   const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA";
   await accept(
-    [
-      chatMessage([
-        { type: "text", text: "describe this" },
-        chatImage(`data:image/png;base64,${pngData}`),
-      ]),
-    ],
+    [withChatImage("describe this", `data:image/png;base64,${pngData}`)],
     [image(pngData)],
     (message) => expect(message).toBe("describe this"),
   );
   await accept(
-    [
-      chatMessage([
-        { type: "text", text: "with metadata params" },
-        chatImage("data:image/png;charset=utf-8;base64,QUJDRA=="),
-      ]),
-    ],
+    [withChatImage("with metadata params", "data:image/png;charset=utf-8;base64,QUJDRA==")],
     [image("QUJDRA==")],
   );
 
@@ -306,7 +289,7 @@ export async function runOpenAiHttpImageInputCases({
   for (const imagePart of malformedImageParts) {
     for (const content of [
       [imagePart],
-      [{ type: "text", text: "describe this" }, imagePart],
+      [textPart("describe this"), imagePart],
       [validImagePart, imagePart],
     ]) {
       await expectInvalidRequestNoDispatch([chatMessage(content)]);
@@ -319,9 +302,7 @@ export async function runOpenAiHttpImageInputCases({
     "data:image/svg+xml;base64,PHN2Zz4=",
     "data:image/png;base64,JVBERi0xLjQK",
   ]) {
-    await expectInvalidRequestNoDispatch([
-      chatMessage([{ type: "text", text: "describe this" }, chatImage(uri)]),
-    ]);
+    await expectInvalidRequestNoDispatch([withChatImage("describe this", uri)]);
   }
 
   await accept(
@@ -345,7 +326,7 @@ export async function runOpenAiHttpImageInputCases({
     ]) {
       await accept(
         [
-          chatMessage([{ type: "text", text: "look at this" }, ...historicalImageParts]),
+          chatMessage([textPart("look at this"), ...historicalImageParts]),
           chatMessage("Checking the image.", "assistant"),
           followup,
         ],
@@ -356,9 +337,9 @@ export async function runOpenAiHttpImageInputCases({
   }
   await accept(
     [
-      chatMessage([{ type: "text", text: "first" }, chatImage("data:image/png;base64,QUFBQQ==")]),
+      withChatImage("first", "data:image/png;base64,QUFBQQ=="),
       chatMessage("noted", "assistant"),
-      chatMessage([{ type: "text", text: "second" }, chatImage("data:image/png;base64,QkJCQg==")]),
+      withChatImage("second", "data:image/png;base64,QkJCQg=="),
     ],
     [image("QkJCQg==")],
   );
@@ -420,14 +401,7 @@ export function registerOpenResponsesHttpMediaInputTests({
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
     await accept(
-      [
-        responseMessage([
-          {
-            type: "input_image",
-            source: { type: "base64", media_type: "image/png", data: pngBase64 },
-          },
-        ]),
-      ],
+      [responseMessage([responseBase64("input_image", "image/png", pngBase64)])],
       (opts) => {
         expect(opts.message ?? "").toBe(IMAGE_ONLY_USER_MESSAGE);
         expect(opts.images).toHaveLength(1);

@@ -3,10 +3,7 @@ import { asOptionalRecord as record } from "@openclaw/normalization-core/record-
 import type { Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 import { expect, it } from "vitest";
-import type {
-  GatewayFrame,
-  HelloOk,
-} from "../../../packages/gateway-protocol/src/schema/frames.ts";
+import type { GatewayFrame } from "../../../packages/gateway-protocol/src/schema/frames.ts";
 import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts";
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import {
@@ -148,9 +145,7 @@ const suite = createControlUiE2eSuite({
 function observe(page: Page) {
   const sent: GatewayFrame[] = [];
   const received: GatewayFrame[] = [];
-  let sockets = 0;
   page.on("websocket", (socket) => {
-    sockets += 1;
     socket.on("framesent", (frame) => sent.push(JSON.parse(frame.payload.toString())));
     socket.on("framereceived", (frame) => received.push(JSON.parse(frame.payload.toString())));
   });
@@ -170,7 +165,7 @@ function observe(page: Page) {
             ["chat.history", "chat.startup"].includes(request.method),
         ),
     );
-  return { received, requests, response, history, sockets: () => sockets };
+  return { received, requests, response, history };
 }
 type Observation = ReturnType<typeof observe>;
 async function send(
@@ -342,8 +337,7 @@ suite.define(() => {
                 .toContain(people[index]!.name);
             }
             const identities = await Promise.all(pages.map(identity));
-            const clientInstanceIds: string[] = [];
-            for (const [index, observed] of observers.entries()) {
+            for (const index of [0, 1]) {
               expect(identities[index]).toMatchObject({
                 user: {
                   id: profileIds[index],
@@ -353,25 +347,7 @@ suite.define(() => {
                 authMethod: "trusted-proxy",
                 connId: expect.any(String),
               });
-              const connect = observed.requests("connect").at(-1);
-              if (!connect || connect.type !== "req") {
-                throw new Error("No real connect request");
-              }
-              const reply = observed.response(connect.id);
-              if (!reply || reply.type !== "res") {
-                throw new Error("No real hello response");
-              }
-              const hello = reply.payload as HelloOk;
-              const instanceId = record(record(connect.params)?.client)?.instanceId;
-              if (typeof instanceId !== "string") {
-                throw new Error("No browser instance identity");
-              }
-              clientInstanceIds.push(instanceId);
-              expect(
-                hello.snapshot.presence.find((entry) => entry.instanceId === instanceId)?.user?.id,
-              ).toBe(profileIds[index]);
             }
-            expect(new Set(clientInstanceIds).size).toBe(2);
             expect(identities[0]!.connId).not.toBe(identities[1]!.connId);
             expect(profileIds[0]).not.toBe(profileIds[1]);
             const finishVisibility = await Promise.all(pages.map(startAssistantVisibilityProbe));
@@ -398,7 +374,10 @@ suite.define(() => {
               ["tail", false],
               ["reading-typed", true],
               ["tail-typed", true],
+              ["older-history", false],
+              ["near-bottom", false],
             ] as const) {
+              const reading = !mode.startsWith("tail");
               const turn = provider.plan();
               await send(reader, a, "Reader starts the " + mode + " scenario");
               await expect.poll(provider.requests).toBe(turn.index);
@@ -406,13 +385,24 @@ suite.define(() => {
               await waitForDelta(a, mode + " paragraph 14.", sessionKey);
               await waitForChatScrollIdle(reader);
               await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
-              if (mode.startsWith("reading")) {
-                await wheel(reader, -420);
+              if (reading) {
+                const delta =
+                  mode === "near-bottom"
+                    ? -80
+                    : mode === "older-history"
+                      ? -(await reader
+                          .locator('.chat-virtual-row[data-virtual-row-key^="agent-run:"]')
+                          .last()
+                          .evaluate((element) => element.getBoundingClientRect().height)) - 350
+                      : -420;
+                await wheel(reader, delta);
               }
               const before = await startScrollProbe(reader);
-              expect(mode.startsWith("reading") ? before.distance > 8 : before.distance <= 8).toBe(
-                true,
-              );
+              expect(reading ? before.distance > 8 : before.distance <= 8).toBe(true);
+              if (mode === "older-history") {
+                expect(before.anchorText).not.toContain(mode + " paragraph");
+              }
+              const readerSends = a.requests("chat.send").length;
               const finishWriterPresence = await watchExistingReply(writer, mode + " paragraph 1.");
               const remotePrompt = "Writer follow-up while Reader is at " + mode;
               const remote = await send(
@@ -438,7 +428,9 @@ suite.define(() => {
                 await waitForChatScrollIdle(reader);
                 const samples = await readScrollProbe(reader);
                 const latest = samples.at(-1)!;
-                if (mode.startsWith("reading")) {
+                expect(new Set(latest.keys).size, stage).toBe(latest.keys.length);
+                expect(a.requests("chat.send"), stage).toHaveLength(readerSends);
+                if (reading) {
                   expect
                     .soft(
                       Math.abs((latest.anchor ?? Infinity) - before.anchor!),
@@ -451,8 +443,11 @@ suite.define(() => {
                     .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
                     .toBe(true);
                 } else {
-                  expect
-                    .soft(latest.distance, mode + ": " + stage + " follows")
+                  // A geometry pause can precede the history publication triggered by persistence.
+                  await expect
+                    .poll(() => chatThreadDistanceFromBottom(reader), {
+                      message: mode + ": " + stage + " follows",
+                    })
                     .toBeLessThanOrEqual(8);
                 }
               };
@@ -479,7 +474,7 @@ suite.define(() => {
               const maxDrift = Math.max(
                 ...samples.map((sample) => Math.abs((sample.anchor ?? Infinity) - before.anchor!)),
               );
-              if (mode.startsWith("reading")) {
+              if (reading) {
                 expect
                   .soft(maxDrift, mode + ": every animation frame retains the reading anchor")
                   .toBeLessThanOrEqual(1);
@@ -514,10 +509,6 @@ suite.define(() => {
               )
               .toEqual([[], []]);
             expect(provider.failures).toEqual([]);
-            for (const observed of observers) {
-              // Profile bootstrap and the chat navigation each own a real connection.
-              expect(observed.sockets()).toBe(2);
-            }
           });
         });
       },

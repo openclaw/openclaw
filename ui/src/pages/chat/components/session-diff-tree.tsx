@@ -1,10 +1,10 @@
-import { createMemo, createSignal, createStore, For, Show } from "solid-js";
+import { createMemo, createStore, For, Show } from "solid-js";
 import type { SessionDiffFile } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { FileDisclosure } from "./file-disclosure.tsx";
@@ -24,25 +24,9 @@ export function ReviewFilename(props: { name: string }) {
       ? props.name.length - compound[0].length
       : Math.max(0, props.name.lastIndexOf("."));
   });
-  const [overflow, setOverflow] = createSignal(false);
-  let basename: HTMLSpanElement | undefined;
-  createLayoutMeasurement(
-    () => props.name,
-    () => {
-      const overflowing = Boolean(basename && basename.scrollWidth > basename.clientWidth);
-      return () => setOverflow(overflowing);
-    },
-    { targets: () => (basename ? [basename] : []) },
-  );
   return (
     <span class="session-diff__filename-label">
-      <span
-        ref={(element) => {
-          basename = element;
-        }}
-        class="session-diff__basename"
-        data-overflow={overflow() ? "true" : "false"}
-      >
+      <span ref={createTextOverflow(() => props.name)} class="session-diff__basename">
         {split() ? props.name.slice(0, split()) : props.name}
       </span>
       {split() > 0 && <span class="session-diff__extension">{props.name.slice(split())}</span>}
@@ -64,7 +48,7 @@ function reviewTree(files: readonly SessionDiffFile[], query: string): ReviewNod
     if (filter && !file.path.toLocaleLowerCase().includes(filter)) {
       continue;
     }
-    const parts = file.path.split("/");
+    const parts = file.path.replace(/\/$/, "").split("/");
     let parent = root;
     for (let index = 0; index < parts.length - 1; index++) {
       const name = parts[index]!;
@@ -173,7 +157,9 @@ export function SessionDiffTree(props: {
                     {node().file ? (
                       <ReviewFilename name={node().name} />
                     ) : (
-                      <span>{node().name}</span>
+                      <span ref={createTextOverflow(() => node().name)} title={node().name}>
+                        {node().name}
+                      </span>
                     )}
                   </span>
                   <Show when={props.statsAvailable && node().file}>

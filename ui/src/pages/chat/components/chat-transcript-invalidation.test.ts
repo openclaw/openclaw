@@ -7,6 +7,7 @@ import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
+import * as draftStore from "../../../lib/chat/composer-draft-store.runtime.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
@@ -17,6 +18,7 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   activePlacementSession,
   createInitializationContext,
+  createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
@@ -35,10 +37,15 @@ import {
   renderChatThread,
   renderTranscriptSearch,
 } from "../test-helpers/chat-transcript-native.tsx";
+import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import * as chatMessage from "./chat-message-group-frame.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { createAttachmentBlock } from "./chat-message.test-support.ts";
-import { resetTranscriptSession, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
+import {
+  getTranscriptState,
+  resetTranscriptSession,
+  toggleTranscriptSearch,
+} from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { transcriptContainer, threadFixture } from "./chat-transcript-fixture.test-support.tsx";
@@ -330,47 +337,48 @@ describe("chat transcript invalidation", () => {
     );
   });
 
-  it("updates persisted named references when the connection catalog changes without transcript edits", () => {
-    const props = threadProps("pane-named", "agent:main:named", [
-      { role: "assistant", content: "ClawSweeper PR **#1576 opened**", timestamp: 1_000 },
-    ]);
-    props.githubRepo = { owner: "openclaw", repo: "openclaw" };
+  it("keeps explicit destinations stable as history, catalog rows, and sessions change", () => {
+    const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+    const original = {
+      role: "assistant",
+      content: "PR acme/research#126 and https://github.com/other/project/issues/126. PR #126.",
+      timestamp: 1_000,
+    };
+    const props = threadProps("pane-github", "agent:main:github", [original]);
     const { container, rerender } = threadFixture(props);
-    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
-    rerender();
-    expect(chip()).toBeNull();
-    props.githubRepositories = [
-      { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] },
+    const links = () =>
+      [...container.querySelectorAll<HTMLAnchorElement>("a.markdown-github-item")].map(
+        (a) => a.href,
+      );
+    const expected = [
+      "https://github.com/acme/research/pull/126",
+      "https://github.com/other/project/issues/126",
     ];
     rerender();
-    expect(chip()?.href).toBe("https://github.com/openclaw/clawsweeper/pull/1576");
-    props.githubRepositories = [{ aliases: ["ClawSweeper"] }];
+    expect(links()).toEqual(expected);
+    for (const type of ["toolResult", "toolCall", "reasoning"] as const) {
+      const catalogMessage = pane.catalogItemMessage({
+        id: type,
+        type,
+        text: "https://github.com/unrelated/example/pull/126",
+      });
+      props.messages = [catalogMessage, original];
+      rerender();
+      expect(links()).toContain(expected[0]);
+      expect(links()).toContain(expected[1]);
+      expect(container.textContent).toContain("PR #126");
+    }
+    props.messages = [
+      { role: "assistant", content: "https://github.com/history/older/pull/126", timestamp: 500 },
+      original,
+    ];
     rerender();
-    expect(chip()).toBeNull();
-    props.githubRepositories = [{ owner: "fork", repo: "clawsweeper", aliases: ["ClawSweeper"] }];
+    expect(links()).toContain(expected[0]);
+    expect(links()).toContain(expected[1]);
+    props.sessionKey = "agent:main:another-checkout";
+    props.messages = [original];
     rerender();
-    expect(chip()?.href).toBe("https://github.com/fork/clawsweeper/pull/1576");
-  });
-
-  it("updates settled GitHub reference chips when the session repository arrives or changes", () => {
-    vi.spyOn(Date, "now").mockReturnValue(60_000);
-    const props = threadProps("pane-github-repository", "agent:main:github-repository", [
-      { role: "assistant", content: "PR #141270", timestamp: 1_000 },
-    ]);
-    const { container, rerender } = threadFixture(props);
-    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
-    rerender();
-    expect(chip()).toBeNull();
-
-    props.githubRepo = { owner: "openclaw", repo: "openclaw" };
-    rerender();
-    expect(chip()?.href).toBe("https://github.com/openclaw/openclaw/pull/141270");
-    props.githubRepo = { owner: "other", repo: "checkout" };
-    rerender();
-    expect(chip()?.href).toBe("https://github.com/other/checkout/pull/141270");
-    props.githubRepo = null;
-    rerender();
-    expect(chip()).toBeNull();
+    expect(links()).toEqual(expected);
   });
 
   it("does not renormalize projected historical messages", () => {
@@ -489,6 +497,133 @@ describe("chat transcript invalidation", () => {
     expect(restoredItemsA).toBe(itemsA);
   });
 
+  it("keeps message rows prepared and refreshes failure actions when a retained transcript returns", async () => {
+    const owner = new EventTarget();
+    let visible = true;
+    const props = {
+      ...threadProps("pane-retained-rows", "agent:main:retained-rows", [
+        msg("user", "Keep this question", 1_000),
+        msg("assistant", "Keep this answer", 2_000),
+        msg("custom", "The service is unavailable.", 3_000, {
+          openclawRunError: { runId: "run-a", summary: "The service is unavailable." },
+        }),
+      ]),
+      transcriptVisible: { owner, isPresented: () => visible },
+      presented: true,
+      failureActionsRunId: "run-a",
+      onRetryRun: vi.fn(),
+    };
+    const { transcript, container, rerender } = updatingThread(props);
+    const prepare = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
+    try {
+      rerender();
+      transcript.start();
+      await flushDeferredRowPrune();
+      await waitForSolid(() => expect(find(container, ".chat-run-failure__retry")).not.toBeNull());
+      const bubble = required(container, ".chat-bubble");
+      expect(prepare).toHaveBeenCalled();
+      prepare.mockClear();
+      const previousRetry = props.onRetryRun;
+
+      visible = false;
+      props.presented = false;
+      owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+      resetTranscriptSession(props.paneId, container);
+      rerender();
+      flush();
+      visible = true;
+      props.presented = true;
+      props.subagentSessions = [{ key: "agent:main:child", kind: "direct", updatedAt: 3_000 }];
+      owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+      props.onRetryRun = vi.fn();
+      rerender();
+      await flushDeferredRowPrune();
+
+      expect(required(container, ".chat-bubble")).toBe(bubble);
+      expect(container.textContent).toContain("Keep this answer");
+      expect(prepare).not.toHaveBeenCalled();
+      click(container, ".chat-run-failure__retry");
+      expect(props.onRetryRun).toHaveBeenCalledExactlyOnceWith("run-a");
+      expect(previousRetry).not.toHaveBeenCalled();
+
+      props.failureActionsRunId = "run-b";
+      rerender();
+      await flushDeferredRowPrune();
+      expect(find(container, ".chat-run-failure__retry")).toBeNull();
+      expect(prepare).not.toHaveBeenCalled();
+    } finally {
+      render(null, container);
+      transcript.dispose();
+    }
+  });
+
+  it.each([false, true])(
+    "refreshes a retained question's Answer action (durable=%s)",
+    async (durable) => {
+      vi.spyOn(draftStore, "readDurableComposerDraft").mockResolvedValue({ status: "not-found" });
+      vi.spyOn(draftStore, "writeDurableComposerDraft").mockResolvedValue({ status: "persisted" });
+      const props = threadProps("pane-retained-question", "agent:main:retained-question", [
+        msg("assistant", "Which audience?", 1_000, {
+          runId: "question-run",
+          openclawAsyncDelivery: {
+            itemId: "audience-question",
+            questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
+          },
+        }),
+        msg("assistant", "First turn finished.", 1_500, {
+          runId: "question-run",
+          phase: "final_answer",
+          stopReason: "stop",
+          __openclaw: { id: "question-completed", runId: "question-run", runTerminal: true },
+        }),
+        msg("assistant", "Finished the requested work.", 2_000, {
+          runId: "completed-run",
+          phase: "final_answer",
+          stopReason: "stop",
+          __openclaw: { id: "completed", runId: "completed-run", runTerminal: true },
+        }),
+      ]);
+      const state = getTranscriptState(props.paneId);
+      const onReopen = vi.fn();
+      const presentQuestions = () => {
+        props.asyncQuestions = createAsyncQuestionPresentation(state, {
+          sessionKey: props.sessionKey,
+          messages: props.messages,
+          onAsyncQuestionSubmit: vi.fn(async () => true),
+          asyncQuestionStorage: durable
+            ? { gatewayOwner: "ws://fixture", recoveryScope: "viewer", scopeKey: props.sessionKey }
+            : null,
+          onReopen,
+        });
+      };
+      presentQuestions();
+      for (const session of state.asyncQuestionSessions?.values() ?? []) {
+        await session.load;
+      }
+      const { transcript, container, rerender } = updatingThread(props);
+      try {
+        rerender();
+        transcript.start();
+        await flushDeferredRowPrune();
+        expect(required(container, ".chat-question-summary button").textContent).toBe("Answer");
+
+        resetTranscriptSession(props.paneId, container);
+        presentQuestions();
+        rerender();
+        await flushDeferredRowPrune();
+        click(container, ".chat-question-summary button");
+
+        expect(onReopen).toHaveBeenCalledWith("audience-question", expect.any(String));
+      } finally {
+        for (const session of state.asyncQuestionSessions?.values() ?? []) {
+          await session.write;
+        }
+        render(null, container);
+        transcript.dispose();
+      }
+    },
+  );
+
   it("keeps history cached during worker setup and clears its notice when placement becomes active", async () => {
     const props = threadProps("pane-worker-setup", "agent:main:worker-setup", [
       { role: "user", content: "Earlier request", timestamp: 1_000 },
@@ -541,6 +676,7 @@ describe("chat transcript invalidation", () => {
     const { container, rerender } = threadFixture(props);
     const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
     rerender();
+    await flushDeferredRowPrune();
     const userRow = required(container, ".chat-group.user");
     expect(userRow.querySelector(".chat-avatar")).toBeNull();
     expect(prepareFrame.mock.calls.some(([group]) => group.role === "user")).toBe(true);
@@ -781,7 +917,10 @@ describe("chat transcript invalidation", () => {
     };
     const controller = createTestTranscript();
     const retainedPane = transcriptContainer();
+    controller.start();
     render(renderChatThread(props, controller), retainedPane);
+    controller.update();
+    await flushDeferredRowPrune();
     await settleToolBridges(retainedPane);
     const staleTools = getExpandedToolCards(sessionKey);
     const staleUsers = getExpandedUserMessages(sessionKey);

@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { resolveRuntimeConfig } from "./credentials.js";
+import { EvaluationError } from "./errors.js";
 import { legacyWireFixture } from "./prepared.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
@@ -82,7 +83,7 @@ it.each(changes)("revalidates %s after the pending import", async (change) => {
   expect(evaluate).not.toHaveBeenCalled();
 });
 
-it("shares a pending evaluator initialization with a later first caller", async () => {
+it("shares pending initialization between callers", async () => {
   const { started, release, evaluate, initialize, provider } = await setup();
   expect(provider.isReady?.()).toBe(true);
   expect(initialize).not.toHaveBeenCalled();
@@ -97,7 +98,7 @@ it("shares a pending evaluator initialization with a later first caller", async 
   expect(evaluate).toHaveBeenCalledTimes(2);
 });
 
-it("rejects evaluator initialization errors instead of reporting provider unavailability", async () => {
+it("preserves initialization failures", async () => {
   const { initialize, provider } = await setup();
   initialize.mockImplementation(() => {
     throw new Error("synthetic evaluator initialization failure");
@@ -105,4 +106,24 @@ it("rejects evaluator initialization errors instead of reporting provider unavai
   await expect(provider.evaluate(batch, context())).rejects.toThrow();
   await expect(provider.evaluate(batch, context())).rejects.toThrow();
   expect(initialize).toHaveBeenCalledOnce();
+});
+
+it("preserves cancellation and sanitizes adapter defects", async () => {
+  const { provider, evaluate, release } = await setup();
+  release.resolve();
+  const controller = new AbortController();
+  evaluate.mockImplementation(async () => {
+    controller.abort(new Error("caller closed"));
+    throw new EvaluationError("cancelled", "transport");
+  });
+  await expect(provider.evaluate(batch, context(controller.signal))).rejects.toThrow(
+    "caller closed",
+  );
+  evaluate.mockRejectedValue(new Error("private detail"));
+  const failure = provider.evaluate(batch, context());
+  await expect(failure).rejects.toMatchObject({
+    name: "Error",
+    message: "TypeSafe decision adapter contract failure.",
+  });
+  await expect(failure).rejects.not.toHaveProperty("cause");
 });

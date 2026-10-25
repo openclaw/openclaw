@@ -1,7 +1,10 @@
-import { expect, it, vi } from "vitest";
+import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import * as participantCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -27,12 +30,16 @@ import {
   type Fixture,
   type Mutation,
 } from "./session-actor-worker.test-support.js";
-import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
+import type {
+  SessionEntryPatchCommitted,
+  SessionEntryPatchGuard,
+} from "./session-entry-patch.types.js";
 import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { timedMessageEvent, messageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -334,17 +341,21 @@ it("keeps transcript residency across entry patches without losing either owner'
           timestamp: "2026-01-01T00:00:00Z",
           cwd: "/synthetic",
         },
-        {
-          type: "message",
-          id: "before-patch",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01Z",
-          message: { role: "user", content: "retain this input" },
-        },
+        timedMessageEvent("before-patch", null, "2026-01-01T00:00:01Z", {
+          role: "user",
+          content: "retain this input",
+        }),
       ]),
     );
     f.writeEntry({
       ...f.nativeEntry()!,
+      skillsSnapshot: {
+        prompt: "synthetic snapshot",
+        skills: Array.from({ length: 256 }, (_, index) => ({
+          name: `fixture-${index}`,
+          requiredEnv: [`SYNTHETIC_${index}`],
+        })),
+      },
       activitySummary: {
         version: 1,
         text: "Retained input",
@@ -388,7 +399,28 @@ it("keeps transcript residency across entry patches without losing either owner'
           : null,
     );
     try {
+      let candidate: SessionEntryPatchCommitted | undefined;
+      const transfer = createSqliteWorkerTransferCollector("patch", (value) => {
+        // The real patch kernel owns this candidate; the collector decodes its wire bytes.
+        candidate = value as SessionEntryPatchCommitted;
+      });
+      f.hooks.admit = (_stage, facts) => {
+        if (isRecord(facts) && facts.transfer) {
+          transfer.accept(facts.transfer);
+        }
+      };
       entryPatch({ label: "entry owner committed", model: "updated-model" });
+      delete f.hooks.admit;
+      assert(transfer.completed && candidate?.entry?.skillsSnapshot);
+      // The mutable caller result and retained publication each need one snapshot copy.
+      expect(serialize(candidate).byteLength).toBeLessThan(
+        serialize(candidate.entry).byteLength * 2.5,
+      );
+      candidate.entry.skillsSnapshot.prompt = "caller-owned edit";
+      expect(
+        candidate.publication?.fullEntries?.get(f.target.sessionKey)?.skillsSnapshot?.prompt,
+      ).toBe("synthetic snapshot");
+      expect(f.read().entry?.skillsSnapshot?.prompt).toBe("synthetic snapshot");
       expect(reads.counts.watermark).toBe(0);
       expect(reads.counts.select).toBe(0);
       runSqliteImmediateTransactionSync(f.database.db, () =>
@@ -570,18 +602,8 @@ it.each(["entry", "target"] as const)(
   },
 );
 
-const question = {
-  type: "message",
-  id: "question",
-  parentId: null,
-  message: { role: "user", content: "A question about 🦞" },
-};
-const answer = {
-  type: "message",
-  id: "answer",
-  parentId: "question",
-  message: { role: "assistant", content: "An answer" },
-};
+const question = messageEvent("question", null, { role: "user", content: "A question about 🦞" });
+const answer = messageEvent("answer", "question", { role: "assistant", content: "An answer" });
 
 const storedBytes = (event: unknown) => Buffer.byteLength(JSON.stringify(event)) + 1;
 
@@ -752,12 +774,12 @@ it.each(["reset", "compaction", "leaf"] as const)(
 
 it("keeps exact accounting through appends and rewrites beyond the actor's resident window without rescanning", async () => {
   await withActor(async (f) => {
-    const events = Array.from({ length: 600 }, (_, index) => ({
-      type: "message",
-      id: `message-${index}`,
-      parentId: index === 0 ? null : `message-${index - 1}`,
-      message: { role: "user", content: "x" },
-    }));
+    const events = Array.from({ length: 600 }, (_, index) =>
+      messageEvent(`message-${index}`, index === 0 ? null : `message-${index - 1}`, {
+        role: "user",
+        content: "x",
+      }),
+    );
     runSqliteImmediateTransactionSync(f.database.db, () => {
       appendTranscriptEventsInTransaction(f.database, f.scope, events, {
         scheduleProjectionReconcile: false,

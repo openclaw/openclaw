@@ -718,6 +718,10 @@ describe("artifact download lookup", () => {
       messageRole: "assistant",
     };
     const summaries = expectArtifactList((await listArtifacts(query)).calls).artifacts!;
+    for (const summary of summaries) {
+      expect(summary).not.toHaveProperty("data");
+      expect(summary).not.toHaveProperty("url");
+    }
     const expected = [
       { artifact: summaries[0], encoding: "base64", data: "Zmlyc3Q=" },
       { artifact: summaries[1], encoding: "base64", data: "c2Vjb25k" },

@@ -4,7 +4,6 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
-import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
   OpenClawAgentDatabaseReadOnlyScope,
   withScopedOpenClawAgentDatabaseReadOnly,
@@ -24,13 +23,15 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
-  persistSessionTranscriptTurn,
   waitForSessionTranscriptProjection,
   type SessionTranscriptReadScope,
 } from "./session-accessor.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   insertSyntheticHistory,
+  historyActivity,
+  clearHistoryNavigation,
+  persistHistory,
   readSessionTranscriptHistoryEventCount,
 } from "./session-accessor.sqlite-history.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -62,11 +63,8 @@ async function seedHistory(sessionId: string) {
   return { scope, database };
 }
 
-async function seedTranscript(scope: Parameters<typeof persistSessionTranscriptTurn>[0]) {
-  await persistSessionTranscriptTurn(scope, {
-    messages: [transcriptMessage("seed", null, { role: "user", content: "seed" })],
-    touchSessionEntry: false,
-  });
+async function seedTranscript(scope: Parameters<typeof persistHistory>[0]) {
+  await persistHistory(scope, [transcriptMessage("seed", null, { role: "user", content: "seed" })]);
 }
 
 function expectPage(
@@ -186,15 +184,15 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
         ? { summary: "Current branch marker" }
         : { customType: "synthetic-notice", content: "Current branch marker", display: true }),
     });
-    await persistSessionTranscriptTurn(target, {
-      messages: branchIds.map((id, index) =>
+    await persistHistory(
+      target,
+      branchIds.map((id, index) =>
         transcriptMessage(id, index === 0 ? markerId : branchIds[index - 1]!, {
           role: index % 2 === 0 ? "user" : "assistant",
           content: id,
         }),
       ),
-      touchSessionEntry: false,
-    });
+    );
     await waitForSessionTranscriptProjection(target);
     if (analyzed) {
       await waitForSessionTranscriptIndexReconcile(scope);
@@ -220,13 +218,7 @@ it("reads only appended metadata for a warm marker-heavy page and quoted message
   insertSyntheticHistory(database, scope.sessionId, 2_000, true);
   runOpenClawAgentWriteTransaction(
     (writeDatabase) => {
-      writeDatabase.db
-        .prepare(`UPDATE transcript_events
-      SET navigation_type = NULL, navigation_custom_type = NULL,
-          navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-          navigation_last_custom_type = NULL, navigation_valid = 1
-      WHERE session_id = ?`)
-        .run(scope.sessionId);
+      clearHistoryNavigation(writeDatabase, scope.sessionId);
     },
     { agentId: database.agentId, path: database.path },
   );
@@ -251,15 +243,12 @@ it("reads only appended metadata for a warm marker-heavy page and quoted message
     );
   try {
     expect(readPage().totalMessages).toBe(4_001);
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("new-tail", "synthetic-message-4001", {
-          role: "assistant",
-          content: "New reply",
-        }),
-      ],
-      touchSessionEntry: false,
-    });
+    await persistHistory(scope, [
+      transcriptMessage("new-tail", "synthetic-message-4001", {
+        role: "assistant",
+        content: "New reply",
+      }),
+    ]);
     const retained = owner.run(target.database, () =>
       withScopedOpenClawAgentDatabaseReadOnly(({ db }) => db, target.database),
     );
@@ -336,26 +325,18 @@ it("looks up nested activity anchors without scanning unrelated transcript ident
   const { scope, database } = await seedHistory("history-anchors");
   insertSyntheticHistory(database, scope.sessionId, 2_000);
   const anchors = ["seed", "seed", "missing"];
-  await persistSessionTranscriptTurn(scope, {
-    messages: anchors.map((afterEntryId, index) => ({
+  await persistHistory(
+    scope,
+    anchors.map((afterEntryId, index) => ({
       eventId: `activity-${index}`,
       parentId: index === 0 ? "synthetic-message-2001" : `activity-${index - 1}`,
-      message: createNestedToolActivity({
-        runId: "run",
-        scopeId: "attempt",
+      message: historyActivity({
         afterEntryId,
         startOrder: index,
         toolCallId: `tool-${index}`,
-        toolName: "read",
-        input: {},
-        result: { content: [] },
-        isError: false,
-        startedAt: 1,
-        timestamp: 2,
       }),
     })),
-    touchSessionEntry: false,
-  });
+  );
   const { page, anchorSearches } = readHistoryWithQueryPlans(database, scope);
   expect(
     page.events.slice(-3).map(({ displayPosition }) => displayPosition?.activity?.afterRawSeq),

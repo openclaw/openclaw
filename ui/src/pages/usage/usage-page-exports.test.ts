@@ -9,30 +9,45 @@ import {
   cleanupUsagePageTest,
   contextWeight,
   loadUsagePage,
+  showRecentSessions,
+  queryUsagePage,
+  settleUsagePage,
   usageCalls,
 } from "./usage-page.test-support.ts";
+import { texts } from "./view-render.test-support.ts";
 import { buildAggregatesFromSessions } from "./view.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 const sortedKeys = (labels: string[]) =>
   labels.map((label) => `agent:main:${label}`).toSorted((a, b) => a.localeCompare(b));
 
-it.each<[string, string[], string, string[], number, boolean?]>([
-  ["multiple selections", ["first", "second"], "", ["first", "second"], 400],
-  ["selection intersected with a query", ["first", "second"], "provider:openai", ["first"], 100],
-  ["query without a selection", [], "provider:openai", ["first", "third"], 300],
-  ["selection excluded by a query", ["second"], "provider:openai", [], 0],
+// The export owner tests the format matrix; exercise each menu action across distinct UI scopes.
+it.each<
+  [string, string[], string, string[], number, "sessions-csv" | "json" | "daily-csv", boolean?]
+>([
+  ["multiple selections", ["first", "second"], "", ["first", "second"], 400, "sessions-csv"],
+  [
+    "selection intersected with a query",
+    ["first", "second"],
+    "provider:openai",
+    ["first"],
+    100,
+    "json",
+  ],
+  ["query without a selection", [], "provider:openai", ["first", "third"], 300, "daily-csv"],
+  ["selection excluded by a query", ["second"], "provider:openai", [], 0, "sessions-csv"],
   [
     "quoted label retained while selecting a provider",
     [],
     '"label:Team Planning"',
     ["first"],
     100,
+    "json",
     true,
   ],
 ])(
   "exports the displayed session scope: %s",
-  async (_name, selected, query, expected, tokens, menuProvider) => {
+  async (_name, selected, query, expected, tokens, format, menuProvider) => {
     const snapshot = cacheSnapshot("fresh");
     const sessions = ["first", "second", "third"].map((label, index) => {
       const totalTokens = [100, 300, 200][index]!;
@@ -84,27 +99,25 @@ it.each<[string, string[], string, string[], number, boolean?]>([
     });
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const { page } = await loadUsagePage(request);
-    const settled = async () => {
-      await vi.waitFor(() => expect(page.usageLoading).toBe(false));
-      await page.updateComplete;
-    };
+    await showRecentSessions(page);
+    // Match the fixture range so each export interaction renders only its populated day.
+    page.read().callbacks.filters.onDatesChange({
+      startDate: snapshot.result.startDate,
+      endDate: snapshot.result.endDate,
+    });
+    await page.refresh();
+    await page.updateComplete;
     for (const [index, label] of selected.entries()) {
       page
         .querySelector<HTMLButtonElement>(`.session-bar-selection[aria-label="${label}"]`)!
         .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: index > 0 }));
-      await settled();
+      await settleUsagePage(page);
     }
     if (query) {
-      const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
-      input.value = query;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      await settled();
+      await queryUsagePage(page, query);
     }
     if (menuProvider) {
-      expect(
-        [...page.querySelectorAll(".session-bar-title")].map((row) => row.textContent?.trim()),
-      ).toEqual(["Team Planning"]);
+      expect(texts(page.element, ".session-bar-title")).toEqual(["Team Planning"]);
       const trigger = page.querySelector<HTMLButtonElement>(
         '[id="usage-filter-provider:trigger"]',
       )!;
@@ -120,18 +133,12 @@ it.each<[string, string[], string, string[], number, boolean?]>([
           query: page.querySelector<HTMLInputElement>(".usage-query-input")!.value.trim(),
         }),
       );
-      await settled();
+      await settleUsagePage(page);
       trigger.click();
       expect
         .soft(page.querySelector<HTMLInputElement>(".usage-query-input")!.value)
         .toBe(`${query} provider:openai `);
-      expect
-        .soft(
-          [...page.querySelectorAll(".usage-metric-badge strong")].map((value) =>
-            value.textContent?.trim(),
-          ),
-        )
-        .toEqual(["100", "$1.00", "1"]);
+      expect.soft(texts(page.element, ".usage-metric-badge strong")).toEqual(["100", "$1.00", "1"]);
     }
     // Selection narrows accounting and exports, not the roster available for comparison.
     expect(
@@ -155,44 +162,47 @@ it.each<[string, string[], string, string[], number, boolean?]>([
       expect(download).not.toHaveBeenCalled();
       return;
     }
-    for (const [index, value] of ["sessions-csv", "json", "daily-csv"].entries()) {
-      const before = usageCalls(request).length;
-      await selectUsageExport(menu, value);
-      await vi.waitFor(() => expect(download).toHaveBeenCalledTimes(index + 1));
-      const sent = usageCalls(request)
-        .slice(before)
-        .find(([, params]) =>
-          value === "daily-csv"
-            ? params?.projection === "overview"
-            : params?.limit === Number.MAX_SAFE_INTEGER,
-        )?.[1];
-      expect(sent).toMatchObject(
-        value === "daily-csv"
-          ? { projection: "overview", limit: 50 }
-          : { limit: Number.MAX_SAFE_INTEGER, includeContextWeight: value === "json" },
-      );
-      if (value !== "daily-csv") {
-        expect(sent).not.toHaveProperty("projection");
-      }
+    const before = usageCalls(request).length;
+    await selectUsageExport(menu, format);
+    await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+    const sent = usageCalls(request)
+      .slice(before)
+      .find(([, params]) =>
+        format === "daily-csv"
+          ? params?.projection === "overview"
+          : params?.limit === Number.MAX_SAFE_INTEGER,
+      )?.[1];
+    expect(sent).toMatchObject(
+      format === "daily-csv"
+        ? { projection: "overview", limit: 50 }
+        : { limit: Number.MAX_SAFE_INTEGER, includeContextWeight: format === "json" },
+    );
+    if (format !== "daily-csv") {
+      expect(sent).not.toHaveProperty("projection");
     }
-    const csv = download.mock.calls.find(([filename]) => filename.endsWith(".csv"))![1];
-    const [header, ...rows] = csv.split("\n").map((row) => row.split(","));
     const keys = sortedKeys(expected);
-    expect.soft(rows.map(([key]) => key).toSorted((a, b) => a!.localeCompare(b!))).toEqual(keys);
-    expect
-      .soft(rows.reduce((sum, row) => sum + Number(row[header!.indexOf("totalTokens")]), 0))
-      .toBe(tokens);
+    if (format !== "json") {
+      const csv = download.mock.calls.find(([filename]) => filename.endsWith(".csv"))![1];
+      const [header, ...rows] = csv.split("\n").map((row) => row.split(","));
+      expect
+        .soft(rows.map(([key]) => key).toSorted((a, b) => a!.localeCompare(b!)))
+        .toEqual(format === "sessions-csv" ? keys : ["2026-08-07"]);
+      expect
+        .soft(rows.reduce((sum, row) => sum + Number(row[header!.indexOf("totalTokens")]), 0))
+        .toBe(tokens);
+      return;
+    }
     const payload = JSON.parse(
       download.mock.calls.find(([filename]) => filename.endsWith(".json"))![1],
     ) as UsageJsonExport;
     expect
       .soft(payload.sessions.map((session) => session.key).toSorted((a, b) => a.localeCompare(b)))
       .toEqual(keys);
-    expect(payload.totals?.totalTokens).toBe(tokens);
-    expect(payload.daily.reduce((sum, day) => sum + day.totalTokens, 0)).toBe(tokens);
-    expect
-      .soft(payload.sessions.reduce((sum, session) => sum + (session.usage?.totalTokens ?? 0), 0))
-      .toBe(tokens);
+    expect([
+      payload.totals?.totalTokens,
+      payload.daily.reduce((sum, day) => sum + day.totalTokens, 0),
+      payload.sessions.reduce((sum, session) => sum + (session.usage?.totalTokens ?? 0), 0),
+    ]).toEqual([tokens, tokens, tokens]);
     for (const session of payload.sessions) {
       expect(session.contextWeight).toEqual(contextWeight(session.label!));
     }

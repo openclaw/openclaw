@@ -128,25 +128,20 @@ it.each([
       },
     );
     const { journal } = state;
-    try {
-      await expect(
-        applyStagedWorkerWorkspace({
-          ...f,
-          journal,
-          acceptance: {
-            kind: "reconcile",
-            publish: async () => {
-              if (phase !== "commit") {
-                throw publicationFailure;
-              }
-            },
+    await expect(
+      applyStagedWorkerWorkspace({
+        ...f,
+        journal,
+        acceptance: {
+          kind: "reconcile",
+          publish: async () => {
+            if (phase !== "commit") {
+              throw publicationFailure;
+            }
           },
-        }),
-      ).rejects.toBe(publicationFailure);
-    } finally {
-      await journal.commit.mock.results[0]?.value.catch(() => undefined);
-      await journal.abort.mock.results[0]?.value;
-    }
+        },
+      }),
+    ).rejects.toBe(publicationFailure);
     if (definitive) {
       expect(state.pending()).toBeUndefined();
       expect(journal.abort).toHaveBeenCalledOnce();

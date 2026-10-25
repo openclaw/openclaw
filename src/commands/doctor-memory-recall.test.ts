@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+import { createDoctorPrompterFixture as createPrompter } from "../flows/doctor-health-context.test-support.js";
 
 const note = vi.hoisted(() => vi.fn());
 const listAgentIds = vi.hoisted(() => vi.fn<(cfg: OpenClawConfig) => string[]>());
@@ -84,25 +84,6 @@ beforeEach(() => {
   });
 });
 
-function createPrompter(): DoctorPrompter {
-  return {
-    confirm: vi.fn(async () => true),
-    confirmAutoFix: vi.fn(async () => true),
-    confirmAggressiveAutoFix: vi.fn(async () => true),
-    confirmRuntimeRepair: vi.fn(async () => true),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair: true,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair: true,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    },
-  };
-}
-
 it.each(["provider-runtime", "builtin"] as const)(
   "reports %s recall health with appropriate guidance",
   async (backend) => {
@@ -153,7 +134,7 @@ it("runs dreaming artifact repair during doctor --fix", async () => {
     archivedSessionIngestion: true,
     warnings: [],
   });
-  const prompter = createPrompter();
+  const prompter = createPrompter(true, true);
 
   await maybeRepairMemoryRecallHealth({ cfg, prompter });
 
@@ -188,7 +169,7 @@ it("audits and repairs each agent with isolated managers and paths", async () =>
     rewroteStore: true,
     removedStaleLock: true,
   });
-  const prompter = createPrompter();
+  const prompter = createPrompter(true, true);
 
   await maybeRepairMemoryRecallHealth({ cfg, prompter });
 

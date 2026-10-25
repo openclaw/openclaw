@@ -1,5 +1,6 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import { buildVolcengineSpeechProvider } from "./speech-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -36,16 +37,7 @@ function mockResponse(
   return release;
 }
 
-const directivePolicy = {
-  enabled: true,
-  allowText: true,
-  allowProvider: true,
-  allowVoice: true,
-  allowModelId: true,
-  allowVoiceSettings: true,
-  allowNormalization: true,
-  allowSeed: true,
-};
+const directivePolicy = createSpeechDirectivePolicy();
 
 const TTS_ENV_KEYS = [
   "BYTEPLUS_SEED_SPEECH_API_KEY",

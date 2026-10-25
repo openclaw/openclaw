@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { configSnapshot } from "./config-snapshot.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createGatewayHarness,
@@ -30,7 +31,7 @@ describe("config gateway operations", () => {
         method === "config.get" ? runtimeConfig.refresh() : runtimeConfig.refreshSchema();
       try {
         const loading = refresh();
-        expect(request).toHaveBeenCalledWith(method, {});
+        await vi.waitFor(() => expect(request).toHaveBeenCalledWith(method, {}));
         publish(true, client, gatewayHelloForMethods([method], ["operator.sessions.read"]));
         publish(true, client);
         pending.resolve(response);
@@ -130,13 +131,11 @@ describe("config gateway operations", () => {
     let deferReload: ReturnType<typeof deferred<unknown>> | null = null;
     const request = vi.fn((method: string, params?: unknown) => {
       if (method === "config.get") {
-        const response = {
-          config: JSON.parse(storedRaw) as Record<string, unknown>,
-          raw: storedRaw,
-          hash: `hash-${hashCounter}`,
-          valid: true,
-          issues: [],
-        };
+        const response = configSnapshot(
+          JSON.parse(storedRaw) as Record<string, unknown>,
+          `hash-${hashCounter}`,
+          storedRaw,
+        );
         if (deferReload) {
           const pending = deferReload;
           deferReload = null;
@@ -182,13 +181,7 @@ describe("config gateway operations", () => {
     let hashCounter = 1;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.get") {
-        return {
-          config: storedConfig,
-          raw: JSON.stringify(storedConfig),
-          hash: `hash-${hashCounter}`,
-          valid: true,
-          issues: [],
-        };
+        return configSnapshot(storedConfig, `hash-${hashCounter}`, JSON.stringify(storedConfig));
       }
       if (method === "config.patch") {
         const patch = params as { baseHash: string; raw: string };
@@ -224,13 +217,7 @@ describe("config gateway operations", () => {
         if (getCalls === 2) {
           return staleLoad.promise;
         }
-        return {
-          config: { count: 1 },
-          raw: '{"count":1}',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
+        return configSnapshot({ count: 1 }, "hash-1", '{"count":1}');
       }
       if (method === "config.patch" || method === "config.set") {
         return { config: { count: 1, patched: true }, hash: "hash-2" };
@@ -249,13 +236,7 @@ describe("config gateway operations", () => {
     ).resolves.toBe(true);
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
 
-    staleLoad.resolve({
-      config: { count: 1 },
-      raw: '{"count":1}',
-      hash: "hash-1",
-      valid: true,
-      issues: [],
-    });
+    staleLoad.resolve(configSnapshot({ count: 1 }, "hash-1", '{"count":1}'));
     await staleRefresh;
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
     expect(runtimeConfig.state.configForm).toEqual({ count: 1, patched: true });

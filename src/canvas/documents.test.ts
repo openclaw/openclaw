@@ -1,4 +1,4 @@
-import fs, { link, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -25,9 +25,9 @@ const hostedPath = (suffix: string) =>
 
 function createHtmlDocument(
   html: string,
-  options: Pick<Parameters<typeof createCanvasDocument>[0], "id" | "title" | "cspSandbox"> = {},
+  options: Pick<Parameters<typeof createCanvasDocument>[0], "title" | "cspSandbox"> = {},
 ) {
-  return createCanvasDocument({ html, ...options }, { stateDir });
+  return createCanvasDocument({ html, ...options });
 }
 
 describe("canvas documents", () => {
@@ -61,8 +61,8 @@ describe("canvas documents", () => {
     const html = "é".repeat(5 * 1024 * 1024);
     const document = await createHtmlDocument(`${html}é`);
     await expect(readHtml(document.id)).rejects.toMatchObject({ code: "too-large" });
-    await createHtmlDocument(html, { id: document.id });
-    await expect(readHtml(document.id)).resolves.toEqual({ html });
+    const bounded = await createHtmlDocument(html);
+    await expect(readHtml(bounded.id)).resolves.toEqual({ html });
   });
 
   it("rejects oversized manifests before parsing them", async () => {
@@ -93,29 +93,6 @@ describe("canvas documents", () => {
       html: "<script>ready()</script>",
       cspSandbox: "scripts",
     });
-  });
-
-  it("reuses a supplied stable id by replacing the prior materialized view", async () => {
-    const first = await createHtmlDocument("<div>first</div>", { id: "status-card" });
-    const second = await createHtmlDocument("<div>second</div>", { id: "status-card" });
-
-    expect([first.id, second.id]).toEqual(["status-card", "status-card"]);
-    const indexHtml = await readFile(documentPath(second.id, "index.html"), "utf8");
-    expect(indexHtml).toContain("second");
-    expect(indexHtml).not.toContain("first");
-  });
-
-  it("does not overwrite an existing document when removing it fails", async () => {
-    const id = "status-card";
-    await createHtmlDocument("<div>first</div>", { id });
-    const failure = Object.assign(new Error("document directory busy"), { code: "EBUSY" });
-    const remove = vi.spyOn(fs, "rm").mockRejectedValueOnce(failure);
-    try {
-      await expect(createHtmlDocument("<div>second</div>", { id })).rejects.toBe(failure);
-      await expect(readHtml(id)).resolves.toEqual({ html: "<div>first</div>" });
-    } finally {
-      remove.mockRestore();
-    }
   });
 
   it("rejects traversal and malformed encoded hosted paths", async () => {

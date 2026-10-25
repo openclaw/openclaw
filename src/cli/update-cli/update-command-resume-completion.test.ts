@@ -35,6 +35,10 @@ import {
   writeScenario,
 } from "./update-command-lease.test-harness.js";
 
+await vi.hoisted(async () => {
+  await import("./update-command-lease.test-harness.js");
+});
+
 installUpdateLeaseHarness();
 
 const readyEvents = ["post-attempt", "post-acquired", "validate", "readiness"];

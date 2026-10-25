@@ -4,6 +4,11 @@ import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-ha
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createChannelIngressDrainOwner } from "../channels/message/ingress-drain.js";
+import {
+  createTestIngressQueue,
+  withTempState,
+} from "../channels/message/ingress-drain.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
@@ -23,11 +28,7 @@ const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime"
 const { mocks } = fixture;
 type Dispatch = ReturnType<typeof loadDispatch>;
 type Refresh = ReturnType<typeof refreshRuntime>;
-const buildResult = (agentId = "default") => ({
-  agentDir: fixture.state.agentDir(agentId),
-  wrote: false as const,
-});
-const build = () => createDeferred<ReturnType<typeof buildResult>>();
+const build = () => createDeferred<Record<string, never>>();
 const refresh = (config: OpenClawConfig = {}) => refreshRuntime(config, { gatewayLifecycle: true });
 async function start(agentIds = ["default"], config: OpenClawConfig = {}) {
   mocks.configuredAgentIds = agentIds;
@@ -49,9 +50,9 @@ function pendingWork() {
     defer: (cleanup: () => void) => {
       cleanups.push(cleanup);
     },
-    build(agentId = "default") {
+    build() {
       const deferred = build();
-      releases.push(() => deferred.resolve(buildResult(agentId)));
+      releases.push(() => deferred.resolve({}));
       return deferred;
     },
     track<T>(operation: Promise<T>): Promise<T> {
@@ -89,6 +90,103 @@ function observePhases() {
 }
 
 describe("prepared model runtime reload auth adoption", () => {
+  it("republishes a failed auth owner on the next inbound dispatch", async () => {
+    await start();
+    const failure = new Error("configured model publication timed out");
+    mocks.resolveAmbientCredentials.mockRejectedValueOnce(failure);
+    mutate("default");
+    await expect(loadDispatch({ agentId: "default" })).rejects.toBe(failure);
+
+    const [first, concurrent] = await Promise.all([
+      loadDispatch({ agentId: "default" }),
+      loadDispatch({ agentId: "default" }),
+    ]);
+    expect(first?.agentId).toBe("default");
+    expect(concurrent?.pluginGeneration).toBe(first?.pluginGeneration);
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["recovers", "fails"] as const)(
+    "%s after the next eligible real recovery without charging backoff replays",
+    async (outcome) => {
+      let now = 10_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        await start();
+        const failure = new Error("configured model publication timed out");
+        mocks.resolveAmbientCredentials.mockRejectedValue(failure);
+        mutate();
+        await expect(loadDispatch({ agentId: "default" })).rejects.toBe(failure);
+        mocks.resolveAmbientCredentials.mockClear();
+
+        await withTempState(async (stateDir) => {
+          const queue = createTestIngressQueue(stateDir, { now: () => now });
+          await queue.enqueue("unavailable", { text: "retained request" });
+          const log = vi.fn();
+          const createDrain = () =>
+            createChannelIngressDrainOwner({
+              queue,
+              now: () => now,
+              onLog: log,
+              dispatchClaimedEvent: async () => {
+                await loadDispatch({ agentId: "default" });
+              },
+            });
+          let drain = createDrain();
+          try {
+            expect(await drain.drainOnce()).toEqual({ started: 1 });
+            await drain.waitForIdle();
+            expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+            expect(await queue.listPending()).toMatchObject([{ id: "unavailable", attempts: 1 }]);
+            now += 1_000;
+            expect(await drain.drainOnce()).toEqual({ started: 0 });
+            // An already-claimed replay must also preserve the real-attempt budget.
+            const replay = await queue.claim("unavailable");
+            expect(replay).not.toBeNull();
+            drain.dispatchClaimed(replay!, Promise.resolve());
+            await drain.waitForIdle();
+            expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+            const [pending] = await queue.listPending();
+            expect(pending).toMatchObject({
+              id: "unavailable",
+              attempts: 1,
+            });
+            drain.dispose();
+            drain = createDrain();
+            expect(await drain.drainOnce()).toEqual({ started: 0 });
+            now = 15_000;
+            if (outcome === "recovers") {
+              mocks.resolveAmbientCredentials.mockReturnValue({});
+            }
+            expect(await drain.drainOnce()).toEqual({ started: 1 });
+            await drain.waitForIdle();
+            expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
+            expect(await queue.listPending()).toEqual([]);
+            if (outcome === "recovers") {
+              expect(await queue.listFailed?.()).toEqual([]);
+              expect(await queue.enqueue("unavailable", { text: "duplicate" })).toMatchObject({
+                kind: "completed",
+              });
+            } else {
+              expect(await queue.listFailed?.()).toMatchObject([
+                {
+                  id: "unavailable",
+                  payload: { text: "retained request" },
+                  reason: "runtime-recovery-failed",
+                },
+              ]);
+              expect(log).toHaveBeenCalledWith(expect.stringContaining("runtime-recovery-failed"));
+            }
+          } finally {
+            drain.dispose();
+          }
+        });
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("does not record an obsolete catalog attempt after its owner is superseded", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
@@ -171,7 +269,7 @@ describe("prepared model runtime reload auth adoption", () => {
     let defaultBuildCount = 0;
     mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
       if (agentDir !== fixture.state.agentDir("default")) {
-        return { agentDir: String(agentDir), wrote: false };
+        return {};
       }
       defaultBuildCount += 1;
       if (defaultBuildCount === 1) {
@@ -194,13 +292,13 @@ describe("prepared model runtime reload auth adoption", () => {
     );
     const siblingRead = work.track(loadDispatch({ agentId: "worker" }));
     order.push("config-build-finish");
-    configBuild.resolve(buildResult());
+    configBuild.resolve({});
     await vi.waitFor(() => expect(order).toContain("auth-drain-start"));
     await expectPending(publication);
     await expectPending(affectedRead);
 
     order.push("auth-drain-finish");
-    authBuild.resolve(buildResult());
+    authBuild.resolve({});
     await expect(publication).resolves.toBeUndefined();
     const [affectedRuntime, siblingRuntime] = await Promise.all([affectedRead, siblingRead]);
     unregister();
@@ -246,15 +344,10 @@ describe("prepared model runtime reload auth adoption", () => {
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
     const authWaiter = work.track(loadDispatch({ agentId: "default" }));
     const reload = work.track(refresh(replacementConfig));
-    authBuild.resolve(buildResult());
+    authBuild.resolve({});
 
     await expect(reload).rejects.toBe(reloadError);
     await expect(authWaiter).rejects.toBe(reloadError);
-    await expect(loadDispatch({ agentId: "default" })).rejects.toThrow(
-      "prepared reply dispatch runtime owner was not published for default",
-    );
-
-    await refresh(replacementConfig);
     await expect(loadDispatch({ agentId: "default" })).resolves.toMatchObject({
       config: replacementConfig,
     });
@@ -277,7 +370,7 @@ describe("prepared model runtime reload auth adoption", () => {
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
     await expectPending(dispatch);
 
-    secondBuild.resolve({ agentDir, wrote: false });
+    secondBuild.resolve({});
     await expect(dispatch).resolves.toMatchObject({ agentId: "default", agentDir });
     expect(mocks.warn).not.toHaveBeenCalled();
   });
@@ -292,17 +385,15 @@ describe("prepared model runtime reload auth adoption", () => {
     } as const;
     const builds = {
       default: work.build(),
-      research: work.build("research"),
-      worker: work.build("worker"),
+      research: work.build(),
+      worker: work.build(),
     };
     const refreshError = new Error("inherited research auth build failed");
     mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
       const entry = Object.entries(agentDirs).find(
         ([, configuredDir]) => configuredDir === agentDir,
       );
-      return entry
-        ? await builds[entry[0] as keyof typeof builds].promise
-        : { agentDir: String(agentDir), wrote: false };
+      return entry ? await builds[entry[0] as keyof typeof builds].promise : {};
     });
 
     mutate("worker");
@@ -311,8 +402,8 @@ describe("prepared model runtime reload auth adoption", () => {
     const dispatches = Object.fromEntries(
       Object.keys(agentDirs).map((agentId) => [agentId, work.track(loadDispatch({ agentId }))]),
     ) as Record<keyof typeof agentDirs, Dispatch>;
-    builds.default.resolve({ agentDir: agentDirs.default, wrote: false });
-    builds.worker.resolve({ agentDir: agentDirs.worker, wrote: false });
+    builds.default.resolve({});
+    builds.worker.resolve({});
     await vi.waitFor(() =>
       expect(mocks.ensureOpenClawModelsJson.mock.calls.length).toBeGreaterThanOrEqual(6),
     );
@@ -328,8 +419,8 @@ describe("prepared model runtime reload auth adoption", () => {
   it("commits a successful owner when the final independent owner fails", async () => {
     await using work = pendingWork();
     await start(["default", "worker", "research"]);
-    const workerBuild = work.build("worker");
-    const researchBuild = work.build("research");
+    const workerBuild = work.build();
+    const researchBuild = work.build();
     const researchError = new Error("final research auth build failed");
     const { events, unregister } = observePhases();
     work.defer(unregister);
@@ -340,7 +431,7 @@ describe("prepared model runtime reload auth adoption", () => {
       if (agentDir === fixture.state.agentDir("research")) {
         return await researchBuild.promise;
       }
-      return { agentDir: String(agentDir), wrote: false };
+      return {};
     });
 
     mutate("worker");
@@ -350,7 +441,7 @@ describe("prepared model runtime reload auth adoption", () => {
     void workerDispatch.then(workerSettled, () => undefined);
     mutate("research");
     const researchDispatch = work.track(loadDispatch({ agentId: "research" }));
-    workerBuild.resolve(buildResult("worker"));
+    workerBuild.resolve({});
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(5));
     await vi.waitFor(() => expect(workerSettled).toHaveBeenCalledOnce());
     await expectPending(researchDispatch);
@@ -359,9 +450,6 @@ describe("prepared model runtime reload auth adoption", () => {
 
     await expect(workerDispatch).resolves.toMatchObject({ agentId: "worker" });
     await expect(researchDispatch).rejects.toBe(researchError);
-    await expect(loadDispatch({ agentId: "research" })).rejects.toThrow(
-      "prepared reply dispatch runtime owner was not published for research",
-    );
     expect(events).not.toContain("published");
     expect(events.filter((phase) => phase === "failed")).toHaveLength(1);
     unregister();
@@ -389,10 +477,8 @@ describe("prepared model runtime reload auth adoption", () => {
       agentId: "research",
       agentDir: fixture.state.agentDir("research"),
     });
-    await expect(loadDispatch({ agentId: "worker" })).rejects.toThrow(
-      "prepared reply dispatch runtime owner was not published for worker",
-    );
     expect(events.filter((phase) => phase === "failed")).toHaveLength(1);
+    await expect(loadDispatch({ agentId: "worker" })).resolves.toMatchObject({ agentId: "worker" });
     replaceSpy.mockRestore();
     unregister();
   });
@@ -414,7 +500,7 @@ describe("prepared model runtime reload auth adoption", () => {
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
     await expectPending(authWaiter);
 
-    configBuild.resolve(buildResult());
+    configBuild.resolve({});
     await expect(reload).resolves.toBeUndefined();
     await expect(authWaiter).resolves.toMatchObject({ config: replacementConfig });
     expect(mocks.warn).not.toHaveBeenCalled();
@@ -537,9 +623,9 @@ describe("prepared model runtime reload auth adoption", () => {
     const initialConfig = {};
     const replacementConfig = { plugins: {} };
     await start(["default", "worker", "research"], initialConfig);
-    const workerAuthBuild = work.build("worker");
-    const researchAuthBuild = work.build("research");
-    const replacementWorkerBuild = work.build("worker");
+    const workerAuthBuild = work.build();
+    const researchAuthBuild = work.build();
+    const replacementWorkerBuild = work.build();
     const workerAuthStarted = createDeferred();
     const researchAuthStarted = createDeferred();
     const replacementWorkerStarted = createDeferred();
@@ -567,7 +653,7 @@ describe("prepared model runtime reload auth adoption", () => {
         replacementWorkerStarted.resolve();
         return await replacementWorkerBuild.promise;
       }
-      return { agentDir: String(agentDir), wrote: false };
+      return {};
     });
 
     mutate("worker");
@@ -575,7 +661,7 @@ describe("prepared model runtime reload auth adoption", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4);
     const firstWorkerRead = work.track(loadDispatch({ agentId: "worker" }));
     mutate("research");
-    workerAuthBuild.resolve(buildResult("worker"));
+    workerAuthBuild.resolve({});
     await researchAuthStarted.promise;
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(5);
     await expect(firstWorkerRead).resolves.toMatchObject({ config: initialConfig });
@@ -587,10 +673,10 @@ describe("prepared model runtime reload auth adoption", () => {
     await Promise.resolve();
     expect(adoptedWorkerSettled).not.toHaveBeenCalled();
 
-    researchAuthBuild.resolve(buildResult("research"));
+    researchAuthBuild.resolve({});
     await replacementWorkerStarted.promise;
     expect(adoptedWorkerSettled).not.toHaveBeenCalled();
-    replacementWorkerBuild.resolve(buildResult("worker"));
+    replacementWorkerBuild.resolve({});
     await expect(reload).resolves.toBeUndefined();
     await expect(adoptedWorkerRead).resolves.toMatchObject({ config: replacementConfig });
     unregister();

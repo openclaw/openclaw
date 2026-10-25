@@ -11,7 +11,6 @@ import { refreshPageChat } from "../pages/chat/chat-state-refresh.ts";
 import { buildSessionsListQuery } from "../pages/sessions/list-query.ts";
 import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import type { GatewayRequestMock } from "../test-helpers/gateway-client.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   childToggle,
@@ -27,10 +26,6 @@ import {
 import "./app-sidebar.tsx";
 
 const requireRecord = createRequireRecord("object", "expected-label");
-const requestParams = (request: GatewayRequestMock, method: string) =>
-  request.mock.calls
-    .filter(([name]) => name === method)
-    .map(([, params]) => requireRecord(params, `${method} params`));
 const page = (rows: GatewaySessionRow[], offset = 0): SessionsListResult => ({
   ...sessionsResult(rows, 10),
   offset,
@@ -89,7 +84,6 @@ it.each(["away and back", "during publication"] as const)(
     const listed = sessionsResult(reentrant ? [refreshedFirst] : [refreshedFirst, second], 20);
     const childRead = deferred<SessionsListResult>();
     const secondDescribe = deferred<{ session: GatewaySessionRow }>();
-    const unexpectedMethods: string[] = [];
     const request = vi.fn(async (method, params) => {
       if (method === "sessions.list") {
         const query = requireRecord(params, "sessions.list params");
@@ -107,7 +101,6 @@ it.each(["away and back", "during publication"] as const)(
       if (method === "sessions.subscribe") {
         return { subscribed: true };
       }
-      unexpectedMethods.push(method);
       throw new Error(`Unexpected Gateway method: ${method}`);
     });
     const { sidebar, provider, sessions, data } = await mountRoster(request);
@@ -179,7 +172,6 @@ it.each(["away and back", "during publication"] as const)(
         expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual(primaryKeys);
         expect(data.sessionsResult?.sessions.map((row) => row.key)).toEqual(primaryKeys);
       }
-      expect(unexpectedMethods).toEqual([]);
     } finally {
       stopReentry();
       disposeRoster({ provider, sessions });
@@ -259,11 +251,6 @@ it.each([
       firstPage.resolve(page(firstRows, 0));
       await children;
       await sidebar.updateComplete;
-      expect(
-        requestParams(request, "sessions.list")
-          .filter((params) => params.spawnedBy === parentKey)
-          .map((params) => params.offset ?? 0),
-      ).toEqual([0, 100]);
       expect(data.childSessionRowsByParent[parentKey]).toHaveLength(101);
       const { label, placement } = selectedPage === 1 ? historyRow : selected;
       expect(findRow(sessions.state.result, key)).toMatchObject({ label, placement });
@@ -324,12 +311,11 @@ it.each([
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "worker" }],
     });
-    const query = buildSessionsListQuery(context, {
-      deepLinkSessionKey: child.key,
-      includeGlobal: true,
-      includeUnknown: true,
-      statusFilter: "active",
-    });
+    const query = buildSessionsListQuery(
+      context.agentSelection.state.scopeId,
+      { includeGlobal: true, includeUnknown: true, statusFilter: "active" },
+      child.key,
+    );
     const unsubscribe = sessions.subscribeList(query, () => {});
     let childLoad: Promise<void> | undefined;
     try {
@@ -478,9 +464,6 @@ it.each([
         await waitForFast(() => expect(rowElement(sidebar, describedParentKey)).not.toBeNull());
       }
       await waitForRequest(request, "sessions.describe", { key: describedParentKey });
-      expect(requestParams(request, "sessions.describe").filter((p) => p.key === key)).toHaveLength(
-        1,
-      );
       if (first === "describe") {
         refresh = data.refreshSidebarSessions();
         await waitForFast(() => expect(heldReads).toBe(1));

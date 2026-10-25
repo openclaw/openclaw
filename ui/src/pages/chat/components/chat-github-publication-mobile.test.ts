@@ -173,7 +173,7 @@ describe("mobile publication review", () => {
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 
-  it("opens only the exact published receipt on explicit activation", () => {
+  it("links to the exact published receipt with native navigation", () => {
     const result = {
       status: "published" as const,
       requestId: "request-original",
@@ -182,20 +182,17 @@ describe("mobile publication review", () => {
       headCommit: "b".repeat(40),
       url: "https://github.com/example/original/pull/317",
     };
-    const onOpenPublished = vi.fn();
     const onDismissBranch = vi.fn();
     const container = render({
       publication: publication({ result }),
       branch: sessionBranch(),
-      onOpenPublished,
       onDismissBranch,
     });
     expect(container.querySelector(".chat-pr-mobile__hide")).toBeNull();
     expect(onDismissBranch).not.toHaveBeenCalled();
     const link = container.querySelector<HTMLAnchorElement>("a.chat-pr__create")!;
     expect(link.href).toBe(result.url);
-    expect(onOpenPublished).not.toHaveBeenCalled();
-    for (const modifier of ["metaKey", "ctrlKey", "shiftKey", "altKey"]) {
+    for (const modifier of [undefined, "metaKey", "ctrlKey", "shiftKey", "altKey"]) {
       let handled: boolean | undefined;
       container.addEventListener(
         "click",
@@ -207,12 +204,13 @@ describe("mobile publication review", () => {
         { once: true },
       );
       link.dispatchEvent(
-        new MouseEvent("click", { bubbles: true, cancelable: true, [modifier]: true }),
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          ...(modifier ? { [modifier]: true } : {}),
+        }),
       );
       expect(handled).toBe(false);
-      expect(onOpenPublished).not.toHaveBeenCalled();
     }
-    link.click();
-    expect(onOpenPublished).toHaveBeenCalledExactlyOnceWith(result);
   });
 });

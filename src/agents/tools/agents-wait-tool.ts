@@ -11,7 +11,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
+import { capFrozenResultText } from "../subagents/registry/subagent-registry-helpers.js";
 import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
 import { matchesSubagentRequesterSession } from "../subagents/registry/subagent-registry-queries.js";
 import { prepareSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
@@ -27,6 +29,12 @@ import {
 } from "./gateway-caller-context.js";
 
 const MAX_WAIT_IDS = 1_000;
+
+const finalAnswerLoader = createLazyImportLoader(
+  () => import("../subagents/announce/subagent-announce-output.js"),
+);
+const UNAVAILABLE_ANSWER_NOTICE =
+  "\n\n[truncated: the complete child answer is unavailable; this is its 4,096-character preview]";
 
 const AgentsWaitToolSchema = Type.Object({
   ids: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: MAX_WAIT_IDS }),
@@ -49,12 +57,16 @@ const CollectorCompletionSchema = Type.Object(
       Type.Literal("timeout"),
     ]),
     result: Type.String(),
+    // The result may be incomplete: its complete answer was unavailable or exceeded 100 KB.
+    resultTruncated: Type.Optional(Type.Literal(true)),
     structured: Type.Optional(Type.Unknown()),
     error: Type.Optional(Type.String()),
     schemaError: Type.Optional(Type.String()),
     reason: Type.Optional(Type.Literal("yielded_without_result")),
     sessionKey: Type.String(),
     label: Type.Optional(Type.String()),
+    groupId: Type.Optional(Type.String()),
+    runtimeMs: Type.Optional(Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
     usage: Type.Optional(
       Type.Object(
         { inputTokens: Type.Number(), outputTokens: Type.Number() },
@@ -179,6 +191,12 @@ function completionResult(
   if (!completion) {
     return undefined;
   }
+  const elapsed =
+    (entry.execution.endedAt ?? Number.NaN) - (entry.execution.startedAt ?? Number.NaN);
+  const runtimeMs =
+    Number.isFinite(elapsed) && elapsed >= 0 && elapsed <= Number.MAX_SAFE_INTEGER
+      ? elapsed
+      : undefined;
   return {
     runId: entry.swarmRunId ?? entry.runId,
     status: completion.status,
@@ -191,11 +209,50 @@ function completionResult(
     ...(completion.reason ? { reason: completion.reason } : {}),
     sessionKey: entry.childSessionKey,
     ...(entry.label ? { label: entry.label } : {}),
+    ...(entry.groupId ? { groupId: entry.groupId } : {}),
+    ...(runtimeMs !== undefined ? { runtimeMs } : {}),
     ...(completion.usage ? { usage: completion.usage } : {}),
   };
 }
 
 export type CollectorCompletionResult = NonNullable<ReturnType<typeof completionResult>>;
+
+/**
+ * Lifecycle evidence keeps a 4,096-character reply preview. Return the run's complete
+ * recorded answer instead, within the 100 KB bound frozen collector results already use.
+ */
+async function completeCollectorResult(
+  result: CollectorCompletionResult,
+  entry: SubagentRunRecord,
+): Promise<CollectorCompletionResult> {
+  const preview = entry.completion?.terminalReply;
+  // Only a capped preview ends with this marker; trimming can shorten it, so length proves nothing.
+  if (
+    preview?.disposition !== "visible" ||
+    result.result !== preview.text ||
+    !preview.text.endsWith("…")
+  ) {
+    return result;
+  }
+  const answer =
+    entry.execution.outcome?.status === "ok"
+      ? await finalAnswerLoader
+          .load()
+          .then((output) => output.readSubagentRunFinalAnswer(entry))
+          .catch(() => undefined)
+      : undefined;
+  if (!answer?.trim()) {
+    return {
+      ...result,
+      result: `${result.result}${UNAVAILABLE_ANSWER_NOTICE}`,
+      resultTruncated: true,
+    };
+  }
+  const bounded = capFrozenResultText(answer);
+  return bounded === answer.trim()
+    ? { ...result, result: bounded }
+    : { ...result, result: bounded, resultTruncated: true };
+}
 
 /** Park one host bridge until its collector completes; registry writes wake it without polling. */
 export async function waitForCollectorCompletion(
@@ -220,7 +277,8 @@ function readWaitState(
 ) {
   const errors: WaitError[] = [];
   const completed: Array<{
-    result: NonNullable<ReturnType<typeof completionResult>>;
+    result: CollectorCompletionResult;
+    entry: SubagentRunRecord;
     completedAt: number;
     inputIndex: number;
   }> = [];
@@ -239,6 +297,7 @@ function readWaitState(
     if (result) {
       completed.push({
         result,
+        entry,
         completedAt:
           entry.completion?.capturedAt ?? entry.execution.endedAt ?? Number.MAX_SAFE_INTEGER,
         inputIndex,
@@ -251,22 +310,35 @@ function readWaitState(
     (left, right) => left.completedAt - right.completedAt || left.inputIndex - right.inputIndex,
   );
   return {
-    completed: completed.map((entry) => entry.result),
+    completed: completed.map(({ result, entry }) => ({ result, entry })),
     pending,
     ...(errors.length > 0 ? { errors } : {}),
   };
 }
 
-async function waitForCollector(
-  params: CollectorOwnerScope & {
-    ids: readonly string[];
-    timeoutMs?: number;
-    waitForAll?: boolean;
-    signal?: AbortSignal;
-    abortError: () => Error;
-    assertCurrent?: () => void;
-  },
-) {
+type CollectorWaitParams = CollectorOwnerScope & {
+  ids: readonly string[];
+  timeoutMs?: number;
+  waitForAll?: boolean;
+  signal?: AbortSignal;
+  abortError: () => Error;
+  assertCurrent?: () => void;
+};
+
+async function waitForCollector(params: CollectorWaitParams) {
+  const state = await waitForCollectorState(params);
+  const completed = await Promise.all(
+    state.completed.map(({ result, entry }) => completeCollectorResult(result, entry)),
+  );
+  // Transcript reads happen after the registry wait; recheck its effect-time authority.
+  params.assertCurrent?.();
+  if (params.signal?.aborted) {
+    throw params.abortError();
+  }
+  return { ...state, completed };
+}
+
+async function waitForCollectorState(params: CollectorWaitParams) {
   const watchdogAttempt = getGatewayToolCallerIdentity()?.watchdogAttempt;
   const assertCurrent = captureGatewayToolCallerAssertion();
   const deadline =
@@ -332,15 +404,15 @@ async function waitForCollector(
       }
       await new Promise<void>((resolve) => {
         resume = resolve;
-        // Only a verified, owned pending collector parks the current attempt.
-        // Publications revoke protection before the reread, so a hung read
-        // remains recoverable. The controller still enforces execution deadlines.
+        // Protect only the authorized parked wait; publications end protection
+        // before any registry or transcript reread. Execution deadlines still apply.
         watchdogWait = watchdogAttempt?.beginWait({
           kind: "runtime_owned",
           isCurrent: () => {
             if (resume === undefined || changed || params.signal?.aborted) {
               return false;
             }
+            params.assertCurrent?.();
             assertCurrent?.();
             return true;
           },
@@ -380,6 +452,9 @@ export function createAgentsWaitTool(opts: {
     outputSchema: AgentsWaitOutputSchema,
     execute: async (toolCallId, args, signal) => {
       const params = args as Static<typeof AgentsWaitToolSchema>;
+      if (!Array.isArray(params?.ids) || params.ids.some((id) => typeof id !== "string")) {
+        throw new ToolInputError("agents_wait ids must be an array of run id strings.");
+      }
       const scope = nativeCollectorOwner.getStore();
       return jsonResult(
         await collectNativeSubagentResults({

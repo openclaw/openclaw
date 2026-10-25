@@ -6,8 +6,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMSTeamsPollCard,
   createMSTeamsPollStoreState,
@@ -17,14 +16,9 @@ import {
 import { setMSTeamsRuntime } from "./runtime.js";
 import { resolveMSTeamsAccountStateNamespace } from "./sqlite-state.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    cleanup();
-  }),
-);
+const tempDirs = useMSTeamsStateTempDirs();
 
 afterEach(() => vi.unstubAllEnvs());
 

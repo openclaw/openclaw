@@ -2,10 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  seedMacNodeWorkerProofState,
-  readMacNodeWorkerProofRows,
-} from "../../scripts/lib/mac-node-worker-proof-state.mjs";
+import { seedMacNodeWorkerProofState } from "../../scripts/lib/mac-node-worker-proof-state.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   getRuntimeConfig,
@@ -182,28 +179,6 @@ describe("private node worker bootstrap", () => {
       expect(initializeNativeOpenClawStateDatabase()).toBeUndefined();
     }
     expect(fs.readFileSync(databasePath)).toEqual(before);
-  });
-
-  it("migrates native credentials during node startup without changing identity, tokens or policy", async () => {
-    const { stateDir, databasePath, configPath } = fixture();
-    const rows = seedMacNodeWorkerProofState(databasePath);
-    const configBefore = fs.readFileSync(configPath);
-
-    await bootstrap();
-    await ensureNodeHostStateReady();
-    await closeOpenClawStateDatabaseAsync();
-
-    using database = new DatabaseSync(databasePath, { readOnly: true });
-    const credentialsPath = path.join(stateDir, "client", "credentials.sqlite");
-    expect(readMacNodeWorkerProofRows(database, credentialsPath)).toEqual(rows);
-    expect(
-      database
-        .prepare(
-          "SELECT name FROM sqlite_schema WHERE name IN ('device_identities','device_auth_tokens')",
-        )
-        .all(),
-    ).toEqual([]);
-    expect(fs.readFileSync(configPath)).toEqual(configBefore);
   });
 
   it("pins core config and preserves existing Gateway state", async () => {

@@ -1,7 +1,16 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
+import {
+  createSignal,
+  createUniqueId,
+  For,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { SESSION_VISIBILITY_VALUES } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
-import type { SessionSharingIdentity } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
+import type { SessionMemberPermissionLevel } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionVisibility } from "../../../api/types.ts";
 import { PersonName, PersonAvatarLink } from "../../../components/person-activity-link-solid.tsx";
 import {
@@ -9,14 +18,20 @@ import {
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { SessionOwnerAvatar } from "../../../components/solid/session-owner-chip.tsx";
 import { SettingsToggleRow } from "../../../components/solid/settings-ui.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/settings.css";
 import "../../../styles/chat/sharing-mobile.css";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import {
+  ChatSessionSharingError,
+  chatSessionPermissionLabel,
+  type ChatSessionSharingRosterRow,
+} from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -26,7 +41,7 @@ export type ChatSessionSharingMobileLabels = {
   sessionAccess: string;
   linkSharing: string;
   anyoneWithLink: string;
-  messagePermissions: string;
+  permissions: string;
   showSearch: string;
   hideSearch: string;
 };
@@ -36,15 +51,6 @@ export type ChatSessionSharingModePresentation = Record<
   { description: string; icon: () => JSX.Element }
 >;
 
-type ChatSessionSharingPermissionRow = {
-  identity: SessionSharingIdentity;
-  permissionLabel: string;
-  selected: boolean;
-  /** Fixed creator/admin rows remain visible, subdued and non-editable. */
-  fixed?: boolean;
-  disabledReason?: string;
-};
-
 export type ChatSessionSharingMobileProps = {
   visibility: SessionVisibility;
   modes: ChatSessionSharingModePresentation;
@@ -52,6 +58,8 @@ export type ChatSessionSharingMobileProps = {
   accessDisabledReason?: string;
   onOpenAccess: () => void;
   error?: string;
+  completion?: Promise<void>;
+  pending?: boolean;
   publicLink?: {
     enabled: boolean;
     description: string;
@@ -64,10 +72,12 @@ export type ChatSessionSharingMobileProps = {
   };
   /** Omitted when the authoritative projection does not expose this section. */
   permissions?: {
-    rows: readonly ChatSessionSharingPermissionRow[];
+    rows: readonly ChatSessionSharingRosterRow[];
     loading: boolean;
+    read: () => void;
+    scope: () => unknown;
     personActivity?: PersonActivityRouting;
-    onMemberChange: (identityId: string, member: boolean) => void;
+    onPermissionChange: (identityId: string, level: SessionMemberPermissionLevel) => void;
   };
 };
 
@@ -79,10 +89,17 @@ export type ChatSessionAccessMobileProps = {
   pending: boolean;
   disabledReason?: string;
   error?: string;
+  completion?: Promise<void>;
   /** True only after an applied mutation still belonging to this current destination. */
   onVisibilityChange: (visibility: SessionVisibility) => Promise<boolean>;
   onApplied: () => void;
 };
+
+const renderSharingError = (error: string) => (
+  <p class="chat-sharing-mobile__error" role="alert">
+    {error}
+  </p>
+);
 
 function sharingVisibilityLabel(visibility: SessionVisibility) {
   return t(`chat.sessionSharing.${visibility === "read-only" ? "readOnly" : visibility}`);
@@ -170,11 +187,13 @@ export function ChatSessionSharingMobile(props: ChatSessionSharingMobileProps) {
           </section>
         )}
       </Show>
-      <Show when={props.error}>
-        <p class="chat-sharing-mobile__error" role="alert">
-          {props.error}
-        </p>
-      </Show>
+      <ChatSessionSharingError
+        error={props.error}
+        completion={props.completion}
+        pending={props.pending}
+      >
+        {renderSharingError}
+      </ChatSessionSharingError>
       <Show when={props.permissions}>
         {(permissions) => <SharingPermissions data={permissions()} labels={props.labels} />}
       </Show>
@@ -207,7 +226,7 @@ function SharingPermissions(props: {
   return (
     <section>
       <div class="chat-sharing-mobile__permissions-heading">
-        <h3 class="chat-sharing-mobile__heading">{props.labels.messagePermissions}</h3>
+        <h3 class="chat-sharing-mobile__heading">{props.labels.permissions}</h3>
         <button
           ref={(element) => {
             trigger = element;
@@ -255,12 +274,14 @@ function SharingPermissions(props: {
           />
         </div>
       </SharingDisclosure>
-      <div class="chat-sharing-mobile__group" aria-busy={props.data.loading ? "true" : "false"}>
-        <Show
-          when={!props.data.loading || props.data.rows.length > 0}
-          fallback={
-            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
-          }
+      <Loading
+        on={props.data.scope()}
+        fallback={<PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />}
+      >
+        {(latest(props.data.read), null)}
+        <div
+          class="chat-sharing-mobile__group"
+          aria-busy={isPending(props.data.read) || props.data.loading ? "true" : "false"}
         >
           <For each={matches()} keyed={(row) => row.identity.id}>
             {(row) => <SharingPermissionRow row={row()} data={props.data} />}
@@ -270,18 +291,19 @@ function SharingPermissions(props: {
               {t(query().trim() ? "sessionsView.noPeopleMatch" : "chat.sessionSharing.noPeople")}
             </p>
           </Show>
-        </Show>
-      </div>
+        </div>
+      </Loading>
     </section>
   );
 }
 
 function SharingPermissionRow(props: {
-  row: ChatSessionSharingPermissionRow;
+  row: ChatSessionSharingRosterRow;
   data: NonNullable<ChatSessionSharingMobileProps["permissions"]>;
 }) {
   const unavailable = () =>
     props.row.fixed || props.data.loading || Boolean(props.row.disabledReason);
+  const id = createUniqueId();
   const name = () => props.row.identity.label ?? props.row.identity.id;
   const activity = () =>
     personActivityLink(
@@ -302,31 +324,41 @@ function SharingPermissionRow(props: {
         </PersonAvatarLink>
       </span>
       <PersonName label={name()} link={activity()} class="chat-sharing-mobile__person-name" />
-      <button
-        type="button"
-        class="chat-sharing-mobile__permission"
-        role="checkbox"
-        aria-checked={props.row.selected ? "true" : "false"}
-        aria-label={`${name()}, ${props.row.permissionLabel}`}
-        aria-disabled={unavailable() ? "true" : undefined}
-        aria-description={
-          props.row.disabledReason ?? (props.data.loading ? t("common.loading") : undefined)
-        }
-        // Transient unavailability must not blur the focused membership control.
-        disabled={props.row.fixed}
-        onClick={() => {
-          if (!unavailable()) {
-            props.data.onMemberChange(props.row.identity.id, !props.row.selected);
-          }
-        }}
+      <Show
+        when={!props.row.fixed}
+        fallback={<span class="chat-sharing-mobile__permission">{props.row.controlLabel}</span>}
       >
-        <span>{props.row.permissionLabel}</span>
-        <span class="chat-sharing-mobile__check" aria-hidden="true">
-          <Show when={props.row.selected}>
-            <Icon name="check" />
-          </Show>
-        </span>
-      </button>
+        <Menu
+          id={id}
+          label={`${name()}, ${props.row.controlLabel}`}
+          triggerClass="chat-sharing-mobile__permission"
+          disabled={!props.data.loading && Boolean(props.row.disabledReason)}
+          triggerAttributes={{ "aria-disabled": unavailable() ? "true" : undefined }}
+          onBeforeShow={(event) => {
+            if (unavailable()) {
+              event.preventDefault();
+            }
+          }}
+          trigger={
+            <>
+              <span>{props.row.controlLabel}</span>
+              <Icon name="chevronDown" class="chat-sharing-mobile__trailing-icon" />
+            </>
+          }
+          items={props.row.options.map((level) => ({
+            id: level,
+            label: chatSessionPermissionLabel(level),
+            type: "radio" as const,
+            checked: props.row.level === level,
+          }))}
+          onSelect={(item) => {
+            const level = props.row.options.find((option) => option === item.id);
+            if (level && !unavailable() && level !== props.row.level) {
+              props.data.onPermissionChange(props.row.identity.id, level);
+            }
+          }}
+        />
+      </Show>
     </div>
   );
 }
@@ -385,11 +417,13 @@ export function ChatSessionAccessMobile(props: ChatSessionAccessMobileProps) {
           )}
         </For>
       </div>
-      <Show when={props.error}>
-        <p class="chat-sharing-mobile__error" role="alert">
-          {props.error}
-        </p>
-      </Show>
+      <ChatSessionSharingError
+        error={props.error}
+        completion={props.completion}
+        pending={props.pending}
+      >
+        {renderSharingError}
+      </ChatSessionSharingError>
     </div>
   );
 }

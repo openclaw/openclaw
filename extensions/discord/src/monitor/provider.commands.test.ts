@@ -1,6 +1,7 @@
 import * as commandAuthNative from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
+import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createTestRegistry,
@@ -27,7 +28,7 @@ const skillCommands = [skill("skill-only"), skill("extra-skill")];
 
 async function createResolverHarness(
   options: {
-    pluginCommandSpecs?: NativeCommandSpec[];
+    pluginCommandSpecs?: (NativeCommandSpec & { nativeNames?: Record<string, string> })[];
     voiceEnabled?: boolean;
     skillCommands?: SkillCommands;
     nativeSkillsEnabled?: boolean;
@@ -94,7 +95,6 @@ it("reports only retained collisions after command overflow removes skills", asy
     ],
   });
 
-  expect(resolved.skillCommands).toEqual([]);
   expect(names(resolved.commandSpecs)).toEqual(["built-in", "vc", "skill-only", "plugin-unique"]);
   expect(resolved.commandSpecs[2]).toMatchObject({
     name: "skill-only",
@@ -131,7 +131,6 @@ it.each(["plugin", "skill"])("retains voice ownership against a %s named vc", as
     );
     return;
   }
-  expect(resolved.skillCommands).toEqual(vcSkillCommands);
   expect(harness.error).not.toHaveBeenCalled();
 });
 
@@ -175,10 +174,85 @@ it("deduplicates provider-renamed primary specs before Discord cap planning", as
     voiceEnabled: false,
   });
 
-  expect(resolved.skillCommands).toEqual(cappedSkillCommands);
   expect(resolved.commandSpecs).toHaveLength(uniqueCount(rawPrimary));
   expect(voiceSpecs(resolved.commandSpecs)).toEqual([
     expect.objectContaining({ description: "Control text-to-speech (TTS)." }),
   ]);
   expect(runtime.log).not.toHaveBeenCalled();
+});
+
+it("keeps the 32-character boundary and later valid commands before cap planning", async () => {
+  const boundary = "a".repeat(32);
+  const { resolved, ...harness } = await createResolverHarness({
+    skillCommands: paddingSkills("skill", 97),
+    pluginCommandSpecs: [spec(boundary), spec("b".repeat(33)), spec("LaterValid")],
+  });
+
+  expect(names(resolved.commandSpecs)).toEqual([
+    "built-in",
+    ...paddingSkills("skill", 97).map(({ name }) => name),
+    boundary,
+    "latervalid",
+  ]);
+  expect(harness.listSpecs).toHaveBeenCalledTimes(1);
+  expect(harness.log).not.toHaveBeenCalled();
+  expect(harness.error).toHaveBeenCalledExactlyOnceWith(
+    danger(
+      `discord: plugin command "/${"b".repeat(32)}…" exceeds the 32-character name limit. Set a shorter Discord native alias. Skipping.`,
+    ),
+  );
+});
+
+it("normalizes Discord aliases without changing Slack spelling or plugin dispatch", async () => {
+  setActivePluginRegistry(createTestRegistry());
+  const handler = vi.fn(async () => ({ text: "original handler" }));
+  expect(
+    registerPluginCommand("alias-plugin", {
+      name: "p".repeat(40),
+      description: "Alias command",
+      nativeNames: { discord: "MiXeDAlias", slack: "SlackAlias" },
+      handler,
+    }),
+  ).toEqual({ ok: true });
+  expect(
+    registerPluginCommand("collision-plugin", {
+      name: "shadow",
+      description: "Collision",
+      nativeNames: { discord: "BuIlT-In" },
+      handler: async () => ({ text: "shadow handler" }),
+    }),
+  ).toEqual({ ok: true });
+  vi.spyOn(commandAuthNative, "listNativeCommandSpecsForConfig").mockReturnValue([
+    spec("built-in"),
+  ]);
+  const runtime = createRuntimeSpies();
+  const { commandSpecs } = await resolveDiscordProviderCommandSpecs({
+    cfg: {},
+    runtime,
+    nativeEnabled: true,
+    nativeSkillsEnabled: false,
+    voiceEnabled: false,
+  });
+  expect(names(commandSpecs)).toEqual(["built-in", "mixedalias"]);
+  expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+    danger('discord: plugin command "/built-in" duplicates an existing native command. Skipping.'),
+  );
+  expect(createPluginCommandRuntime().listNativeCandidates("slack")[0]?.name).toBe("SlackAlias");
+  const candidate = commandSpecs[1]!;
+  if (!("prepareDispatch" in candidate)) {
+    throw new Error("Expected a plugin candidate");
+  }
+  const dispatch = candidate.prepareDispatch();
+  if (dispatch.kind !== "plugin") {
+    throw new Error("Expected the original plugin dispatch");
+  }
+  await expect(
+    dispatch.execute({
+      channel: "discord",
+      isAuthorizedSender: true,
+      commandBody: "/mixedalias",
+      config: {},
+    }),
+  ).resolves.toEqual({ text: "original handler" });
+  expect(handler).toHaveBeenCalledOnce();
 });

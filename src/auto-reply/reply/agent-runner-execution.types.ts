@@ -58,7 +58,7 @@ export type AgentTurnInternalResult =
       postCompactionModelFailure?: true;
     };
 
-type SettledAgentTurnBase = {
+export type SettledAgentTurn = {
   kind: "settled";
   /** Captured before terminal event settlement consumes the invocation. */
   automation?: { result?: AutomationResult; includeReasoning: boolean };
@@ -75,21 +75,18 @@ type SettledAgentTurnBase = {
   hasDirectlySentBlockReply?: true;
   /** Delivery receipts for direct tool-flush payloads, including retry custody. */
   directBlockDeliveries?: DirectBlockDelivery[];
-};
-
-export type SettledAgentTurn = SettledAgentTurnBase &
-  (
-    | {
-        status: "ok";
-        terminalFailurePayload?: never;
-        postCompactionModelFailure?: never;
-      }
-    | {
-        status: "failed";
-        terminalFailurePayload?: ReplyPayload;
-        postCompactionModelFailure?: true;
-      }
-  );
+} & (
+  | {
+      status: "ok";
+      terminalFailurePayload?: never;
+      postCompactionModelFailure?: never;
+    }
+  | {
+      status: "failed";
+      terminalFailurePayload?: ReplyPayload;
+      postCompactionModelFailure?: true;
+    }
+);
 
 /** Closed result shared by foreground and queued agent-turn callers. */
 export type AgentTurnExecutionResult = {
@@ -136,7 +133,6 @@ export type AgentTurnParams = ReplyAgentTurnContext & {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
-  isHeartbeat: boolean;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
   replyMediaContext?: ReplyMediaContext;

@@ -10,6 +10,7 @@ import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../../lib/chat/tool-cards.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import * as thinking from "../../../lib/strip-thinking-tags.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -64,7 +65,7 @@ describe("message action projections", () => {
     });
   });
 
-  it("prepares collapsed previews only for tool message shells", () => {
+  it("defers collapsed previews until a tool message shell renders", async () => {
     const preview = vi.spyOn(toolCards, "formatCollapsedToolPreviewText");
     onTestFinished(() => preview.mockRestore());
     const prepare = (role: string, content: string) =>
@@ -74,9 +75,26 @@ describe("message action projections", () => {
       });
     prepare("assistant", "A streaming reply");
     expect(preview).not.toHaveBeenCalled();
-    const tool = prepare("toolResult", "First line\nSecond line");
-    expect(preview).toHaveBeenCalledOnce();
-    expect(tool.toolPreview).toBe("First line Second line");
+    prepare("toolResult", "First line\nSecond line");
+    expect(preview).not.toHaveBeenCalled();
+    const container = document.createElement("div");
+    const view = mountSolid(
+      GroupedMessage,
+      {
+        preparation: prepareChatMessageRender({
+          role: "toolResult",
+          content: "First line\nSecond line",
+        }),
+        messageKey: "tool-preview",
+        options: { isStreaming: true, showReasoning: false },
+      },
+      container,
+    );
+    onTestFinished(view.dispose);
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool"),
+    );
+    expect(preview).toHaveBeenCalledWith("First line\nSecond line");
   });
 
   const indented = "    *literal*";
@@ -304,11 +322,7 @@ describe("user message disclosure", () => {
       container.remove();
       restoreStyles.forEach((restore) => restore());
       vi.unstubAllGlobals();
-      if (previousFonts) {
-        Object.defineProperty(document, "fonts", previousFonts);
-      } else {
-        Reflect.deleteProperty(document, "fonts");
-      }
+      restorePropertyDescriptor(document, "fonts", previousFonts);
     }
   });
 
@@ -411,12 +425,13 @@ describe("persisted human mentions in message bubbles", () => {
   >([
     ["string content", "user", text, { humanMentions }, true],
     ["text block", "user", [{ type: "text", text }], { humanMentions }, true],
-    ["assistant", "assistant", text, { humanMentions }, false],
+    ["Gateway-authored assistant", "assistant", [{ type: "text", text }], { humanMentions }, true],
+    ["tool result", "toolResult", text, { humanMentions }, false],
     ["capped user", "user", text, { humanMentions, truncated: true, reason: "oversized" }, false],
     ["unselected text", "user", text, undefined, false],
     ["replaced display", "user", text, { humanMentions }, false, "@Different Person"],
   ])(
-    "attaches identities only to unchanged selected user spans: %s",
+    "attaches identities only to unchanged selected message spans: %s",
     (_name, role, content, metadata, selected, replacement) => {
       const entry = { role, content, metadata, selected, replacement };
       const host = document.createElement("div");

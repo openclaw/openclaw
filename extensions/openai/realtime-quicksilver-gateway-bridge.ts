@@ -12,6 +12,7 @@ import WebSocket from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   assertOpenAIQuicksilverPcmOutput,
+  closeOpenAIQuicksilverAudioOutput,
   OpenAIQuicksilverAudioAdapter,
   OpenAIQuicksilverPendingAudio,
 } from "./realtime-quicksilver-audio-buffer.js";
@@ -129,17 +130,8 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     if (this.connectPromise || this.closed) {
       throw new Error("GPT-Live audio output must be configured before connecting");
     }
-    this.closeAudioOutput();
+    this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
     this.audioOutput = output;
-  }
-
-  private closeAudioOutput(): void {
-    if (!this.audioOutput) {
-      return;
-    }
-    Atomics.store(new Int32Array(this.audioOutput.state), 0, 1);
-    this.audioOutput.port.close();
-    this.audioOutput = undefined;
   }
 
   connect(): Promise<void> {
@@ -147,7 +139,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       return Promise.reject(new Error("GPT-Live gateway relay bridge is closed"));
     }
     this.connectPromise ??= this.connectInternal().catch((error: unknown) => {
-      this.closeAudioOutput();
+      this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
       throw error;
     });
     return this.connectPromise;
@@ -567,7 +559,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       return this.closingPromise;
     }
     this.closed = true;
-    this.closeAudioOutput();
+    this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
     this.directSocket?.stopAudio();
     this.closeReason = reason;
     const socket = this.sideband;
@@ -619,7 +611,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   private releaseResources(disposition: RealtimeVoiceCloseDisposition): void {
-    this.closeAudioOutput();
+    this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
     this.directSocket?.stopAudio();
     releaseOpenAIQuicksilverSession(this);
     this.connected = false;

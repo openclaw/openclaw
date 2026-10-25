@@ -25,7 +25,7 @@ import {
   readActiveGatewayLockPort,
   resolveGatewayOwnerStatus,
 } from "./gateway-lock.js";
-import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
+import { acquireGatewayStateOwner, captureGatewayStateOwner } from "./gateway-state-owner.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 type GatewayLockOptions = NonNullable<Parameters<typeof acquireGatewayLock>[0]>;
@@ -210,6 +210,40 @@ describe("gateway lock", () => {
     }
     lifecycleDatabases.clear();
   });
+
+  it.each(["root", "projection"])(
+    "refuses corrupt foreign %s payloads and detects changes to held custody",
+    async (kind) => {
+      const env = await makeEnv();
+      const databasePath = path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
+      const seed = expectGatewayLock(await acquireForTest(env));
+      const pathname = kind === "root" ? seed.lockPath : seed.stateLockPath;
+      const record = JSON.parse(await fs.readFile(pathname, "utf8"));
+      await seed.release();
+      // A dead PID alone must not authorize reclamation of a malformed record.
+      const corrupt = JSON.stringify({ ...record, pid: 2_147_483_647, createdAt: 42 });
+      await fs.writeFile(pathname, corrupt);
+      await expect(acquireForTest(env, { timeoutMs: 0 })).rejects.toThrow();
+      expect(await fs.readFile(pathname, "utf8")).toBe(corrupt);
+      await fs.unlink(pathname);
+
+      const owner = expectGatewayLock(await acquireForTest(env));
+      try {
+        owner.run(() => {
+          const captured = captureGatewayStateOwner(databasePath);
+          expect(captured).toBeDefined();
+          captured!.assertCurrent();
+          // Preserve the acquisition token: exact payload bytes still bind custody.
+          const held = fsSync.readFileSync(pathname, "utf8");
+          fsSync.writeFileSync(pathname, held.replace(/"createdAt":\s*"[^"]*"/u, '"createdAt":42'));
+          expect(() => captured!.assertCurrent()).toThrow();
+          expect(() => owner.assertCurrent()).toThrow();
+        });
+      } finally {
+        await owner.release();
+      }
+    },
+  );
 
   it.each(["agent-embedded", "skill-workshop-apply"] as const)(
     "keeps an unclassified legacy %s owner unknown when start identity is unavailable",
@@ -515,7 +549,6 @@ describe("gateway lock", () => {
       await expect(
         acquireForTest(env, {
           timeoutMs: 15,
-          staleMs: 0,
           platform: "linux",
         }),
       ).rejects.toBeInstanceOf(GatewayLockError);
@@ -548,7 +581,6 @@ describe("gateway lock", () => {
     await expect(
       acquireForTest(env, {
         platform: "linux",
-        staleMs: 0,
         timeoutMs: 80,
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);
@@ -571,7 +603,6 @@ describe("gateway lock", () => {
     );
     const pending = acquireForTest(env, {
       timeoutMs: 20,
-      staleMs: 10_000,
       platform: "linux",
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
@@ -598,7 +629,6 @@ describe("gateway lock", () => {
       acquireForTest(env, {
         timeoutMs: 80,
         pollIntervalMs: 5,
-        staleMs: 10_000,
         platform: "darwin",
         port: 18789,
       }),
@@ -625,7 +655,6 @@ describe("gateway lock", () => {
         allowInTests: true,
         timeoutMs: 5,
         pollIntervalMs: Number.MAX_SAFE_INTEGER,
-        staleMs: 10_000,
         platform: "darwin",
         now: () => now,
         sleep: async (ms) => {
@@ -709,7 +738,6 @@ describe("gateway lock", () => {
       acquireForTest(env, {
         timeoutMs: 80,
         pollIntervalMs: 5,
-        staleMs: 10_000,
         platform: "win32",
         port: 18789,
       }),
@@ -730,7 +758,6 @@ describe("gateway lock", () => {
     const pending = acquireForTest(env, {
       timeoutMs: 20,
       pollIntervalMs: 2,
-      staleMs: 10_000,
       platform: "win32",
       port: 18789,
     });

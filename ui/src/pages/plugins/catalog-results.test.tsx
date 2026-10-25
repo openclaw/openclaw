@@ -1,15 +1,25 @@
 /* @vitest-environment jsdom */
 
-import { flush, createSignal } from "solid-js";
+import { flush, createSignal, onSettled } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
+import type {
+  PluginDiscoveryCategory,
+  PluginDiscoveryEntry,
+  PluginDiscoveryResult,
+} from "../../lib/plugins/index.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   formatCompactCount,
   renderPluginCatalogResults as PluginCatalogResults,
   type PluginCatalogResultsProps,
 } from "./catalog-results.tsx";
+import { createPluginDiscovery } from "./plugin-discovery.ts";
 
 function plugin(
   id: string,
@@ -43,11 +53,11 @@ function plugin(
 function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCatalogResultsProps {
   return {
     connected: true,
-    loading: false,
     result: { items: [plugin("tool")] },
+    hasCurrentResult: overrides.result !== null,
+    reads: { browse: null, categories: null, more: null },
     error: null,
     remoteError: null,
-    categoriesLoading: false,
     categoriesError: null,
     onRetryCategories: vi.fn(),
     categories: [
@@ -62,7 +72,6 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
     ],
     featured: [plugin("featured")],
     trending: [plugin("trending")],
-    loadingMore: false,
     loadMoreError: null,
     intent: "all",
     category: null,
@@ -83,7 +92,7 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
 }
 
 const updates = new WeakMap<HTMLElement, (props: PluginCatalogResultsProps) => void>();
-function mount(props: PluginCatalogResultsProps): HTMLElement {
+async function mount(props: PluginCatalogResultsProps): Promise<HTMLElement> {
   const [current, setCurrent] = createSignal(props);
   const view = mountSolid(() => <PluginCatalogResults {...current()} />);
   updates.set(view.container, (next) => {
@@ -91,6 +100,14 @@ function mount(props: PluginCatalogResultsProps): HTMLElement {
     flush();
   });
   flush();
+  await waitForSolid(() => {
+    if (!props.reads.browse) {
+      expect(view.container.querySelector(".plugin-catalog-grid--skeleton")).toBeNull();
+    }
+    if (!props.reads.categories) {
+      expect(view.container.querySelector(".plugin-catalog-chip--skeleton")).toBeNull();
+    }
+  });
   return view.container;
 }
 function update(container: HTMLElement, props: PluginCatalogResultsProps) {
@@ -108,7 +125,210 @@ describe("renderPluginCatalogResults", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not rescan the large catalog for unrelated feedback updates", () => {
+  it("shows placeholders when the first browse starts after the initial render", async () => {
+    const props = baseProps({ result: null, featured: [], trending: [] });
+    const container = await mount(props);
+    expect(container.querySelector("openclaw-panel-empty-state")).not.toBeNull();
+
+    const pending = Promise.withResolvers<null>();
+    const reads = { ...props.reads, browse: pending.promise };
+    update(container, { ...props, reads });
+    await waitForSolid(() => {
+      expect(container.querySelector(".plugin-catalog-grid--skeleton")).not.toBeNull();
+      expect(container.querySelector("openclaw-panel-empty-state")).toBeNull();
+    });
+
+    update(container, { ...props, reads, result: { items: [plugin("tool")] } });
+    pending.resolve(null);
+    await waitForSolid(() => {
+      expect(container.querySelector(".plugin-catalog-grid--skeleton")).toBeNull();
+      expect(container.querySelector('[data-plugin-id="tool"]')).not.toBeNull();
+    });
+  });
+
+  it("retains grouped overview cards when a refresh fails", async () => {
+    const props = baseProps();
+    const container = await mount(props);
+    const cards = [...container.querySelectorAll(".plugin-catalog-card")];
+    expect(cards).toHaveLength(3);
+    const pending = Promise.withResolvers<{ error: unknown } | null>();
+    const reads = { ...props.reads, browse: pending.promise };
+    update(container, { ...props, reads });
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(3),
+    );
+    for (const [index, card] of cards.entries()) {
+      expect(container.querySelectorAll(".plugin-catalog-card")[index]).toBe(card);
+    }
+
+    const error = new Error("Overview refresh unavailable");
+    update(container, { ...props, reads, error: error.message });
+    pending.resolve({ error });
+    await waitForSolid(() =>
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(error.message),
+    );
+    for (const [index, card] of cards.entries()) {
+      expect(container.querySelectorAll(".plugin-catalog-card")[index]).toBe(card);
+    }
+    expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(3);
+  });
+
+  it.each(["grouped", "filtered"] as const)(
+    "publishes installation completion during a held %s catalog refresh",
+    async (mode) => {
+      const installed = plugin("installed", {
+        local: {
+          present: true,
+          installed: true,
+          enabled: true,
+          state: "enabled",
+          action: "manage",
+        },
+      });
+      const props = baseProps({
+        query: mode === "filtered" ? "installed" : "",
+        result: { items: [installed] },
+        featured: [],
+        trending: [],
+      });
+      const progress = new Map([["install:installed", { startedAt: 1, activities: [] }]]);
+      const container = await mount({ ...props, installProgress: progress });
+      const card = container.querySelector('[data-plugin-id="installed"]')!;
+      expect(card.querySelector("openclaw-plugin-install-action")).not.toBeNull();
+      const pending = Promise.withResolvers<null>();
+      const reads = { ...props.reads, browse: pending.promise };
+      update(container, { ...props, reads, installProgress: progress });
+      update(container, { ...props, reads });
+      await waitForSolid(() => {
+        expect(
+          card.querySelector('.plugin-catalog-card__status[aria-label="Enabled"]'),
+        ).not.toBeNull();
+        expect(card.querySelector("openclaw-plugin-install-action")).toBeNull();
+      });
+      expect(container.querySelector('[data-plugin-id="installed"]')).toBe(card);
+      pending.resolve(null);
+    },
+  );
+
+  it("presents independent owner reads, retries failures, and retains cards during refresh and pagination", async () => {
+    const categories = Array.from({ length: 2 }, () =>
+      Promise.withResolvers<{ categories: PluginDiscoveryCategory[] }>(),
+    );
+    let categoryIndex = 0;
+    const reads = Array.from({ length: 5 }, () => Promise.withResolvers<PluginDiscoveryResult>());
+    let browseIndex = 0;
+    const request = createGatewayRequestMock(async (method) =>
+      method === "plugins.catalog.categories"
+        ? categories[categoryIndex++]!.promise
+        : reads[browseIndex++]!.promise,
+    );
+    const client = createTestGatewayClient(request);
+    let discovery!: ReturnType<typeof createPluginDiscovery>;
+    const view = mountSolid(() => {
+      const [revision, changed] = createSignal(0);
+      discovery = createPluginDiscovery({ getClient: () => client, isConnected: () => true }, () =>
+        changed((value) => value + 1),
+      );
+      const props = () => {
+        revision();
+        return {
+          ...baseProps(),
+          ...discovery.read(),
+          onRetry: () => void discovery.refresh(),
+          onRetryCategories: () => void discovery.ensureCategories(true),
+          onLoadMore: () => void discovery.loadMore(),
+        };
+      };
+      onSettled(() => {
+        void discovery.ensureCategories();
+        void discovery.selectCategory("tools");
+      });
+      return <PluginCatalogResults {...props()} />;
+    });
+    const container = view.container;
+    await waitForSolid(() =>
+      expect(container.querySelector(".plugin-catalog-grid--skeleton")).not.toBeNull(),
+    );
+    const search = container.querySelector("input")!;
+    expect(container.querySelectorAll(".plugin-catalog-chip")).toHaveLength(3);
+    categories[0]!.reject(new Error("Categories unavailable"));
+    await waitForSolid(() =>
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Categories unavailable",
+      ),
+    );
+    expect(container.querySelectorAll(".plugin-catalog-chip")).toHaveLength(3);
+    expect(container.querySelector("input")).toBe(search);
+    container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await waitForSolid(() => {
+      expect(categoryIndex).toBe(2);
+      expect(container.querySelector(".plugin-catalog-chip--skeleton")).not.toBeNull();
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+    });
+    categories[1]!.resolve({ categories: [...baseProps().categories] });
+    await waitForSolid(() =>
+      expect(container.querySelector(".plugin-catalog-chip--skeleton")).toBeNull(),
+    );
+    expect(container.querySelector(".plugin-catalog-grid--skeleton")).not.toBeNull();
+    reads[0]!.reject(new Error("Catalog unavailable"));
+    await waitForSolid(() =>
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Catalog unavailable",
+      ),
+    );
+    container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await waitForSolid(() => {
+      expect(browseIndex).toBe(2);
+      expect(container.querySelector(".plugin-catalog-grid--skeleton")).not.toBeNull();
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+    });
+    reads[1]!.resolve({ items: [plugin("tool")], nextCursor: "page-2" });
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-plugin-id="tool"]')).not.toBeNull(),
+    );
+    const card = container.querySelector('[data-plugin-id="tool"]');
+    const refreshing = discovery.refresh();
+    await waitForSolid(() => expect(browseIndex).toBe(3));
+    expect(container.querySelector('[data-plugin-id="tool"]')).toBe(card);
+    expect(container.querySelector(".plugin-catalog-grid--skeleton")).toBeNull();
+    reads[2]!.resolve({
+      items: [plugin("tool", { catalog: { name: "Updated tool" } })],
+      nextCursor: "page-2",
+    });
+    await refreshing;
+    await waitForSolid(() => expect(card?.textContent).toContain("Updated tool"));
+    container.querySelector<HTMLButtonElement>(".plugin-catalog-load-more button")!.click();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector<HTMLButtonElement>(".plugin-catalog-load-more button")?.disabled,
+      ).toBe(true),
+    );
+    expect(container.querySelector('[data-plugin-id="tool"]')).toBe(card);
+    reads[3]!.reject(new Error("Pagination unavailable"));
+    await waitForSolid(() =>
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Pagination unavailable",
+      ),
+    );
+    container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await waitForSolid(() => {
+      expect(browseIndex).toBe(5);
+      expect(
+        container.querySelector<HTMLButtonElement>(".plugin-catalog-load-more button")?.disabled,
+      ).toBe(true);
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+    });
+    expect(container.querySelector('[data-plugin-id="tool"]')).toBe(card);
+    reads[4]!.resolve({ items: [plugin("second")] });
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-plugin-id="second"]')).not.toBeNull(),
+    );
+    expect(container.querySelector('[data-plugin-id="tool"]')).toBe(card);
+    expect(container.querySelector("input")).toBe(search);
+    expect(request).toHaveBeenCalledTimes(7);
+  });
+
+  it("does not rescan the large catalog for unrelated feedback updates", async () => {
     let categoryReads = 0;
     const items = Array.from({ length: 300 }, (_, index) => {
       const entry = plugin(`audit-${index}`);
@@ -122,7 +342,7 @@ describe("renderPluginCatalogResults", () => {
       return entry;
     });
     const props = baseProps({ result: { items }, featured: [], trending: [] });
-    const container = mount(props);
+    const container = await mount(props);
     const row = container.querySelector('[data-plugin-id="audit-0"]');
     const search = container.querySelector<HTMLInputElement>("input")!;
     search.focus();
@@ -152,20 +372,38 @@ describe("renderPluginCatalogResults", () => {
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(1);
   });
 
-  it("keeps built-in filters usable while category placeholders settle", () => {
-    const props = baseProps({ categories: [], categoriesLoading: true });
-    const container = mount(props);
-    const chips = container.querySelector(".plugin-catalog-chips")!;
-    expect(chips.querySelectorAll("button")).toHaveLength(3);
-    expect(chips.querySelectorAll(".plugin-catalog-chip--skeleton").length).toBeGreaterThan(0);
-    expect(chips.querySelector('[role="status"]')).not.toBeNull();
-    update(container, { ...props, categoriesLoading: false });
-    expect(chips.querySelector(".plugin-catalog-chip--skeleton")).toBeNull();
-    expect(chips.querySelectorAll("button")).toHaveLength(3);
-  });
+  it.each(["initial", "delayed"] as const)(
+    "keeps built-in filters usable when the category read is %s",
+    async (timing) => {
+      const pending = Promise.withResolvers<null>();
+      const props = baseProps({
+        categories: [],
+        reads: {
+          browse: null,
+          categories: timing === "initial" ? pending.promise : null,
+          more: null,
+        },
+      });
+      const container = await mount(props);
+      if (timing === "delayed") {
+        update(container, { ...props, reads: { ...props.reads, categories: pending.promise } });
+      }
+      await waitForSolid(() => {
+        const chips = container.querySelector(".plugin-catalog-chips")!;
+        expect(chips.querySelectorAll("button")).toHaveLength(3);
+        expect(chips.querySelectorAll(".plugin-catalog-chip--skeleton").length).toBeGreaterThan(0);
+        expect(chips.querySelector('[role="status"]')).not.toBeNull();
+      });
+      pending.resolve(null);
+      await waitForSolid(() =>
+        expect(container.querySelector(".plugin-catalog-chip--skeleton")).toBeNull(),
+      );
+      expect(container.querySelectorAll(".plugin-catalog-chips button")).toHaveLength(3);
+    },
+  );
 
-  it("uses the package fallback for unknown and inherited category icon names", () => {
-    const container = mount(
+  it("uses the package fallback for unknown and inherited category icon names", async () => {
+    const container = await mount(
       baseProps({
         categories: ["constructor", "unknown-icon", "package", "brain"].map((icon, order) => ({
           slug: icon,
@@ -188,7 +426,7 @@ describe("renderPluginCatalogResults", () => {
 
   it.each(["official", "community", "empty", "mixed"] as const)(
     "preserves search ranking and groups only mixed publishers (%s)",
-    (kind) => {
+    async (kind) => {
       const official = Array.from({ length: kind === "mixed" ? 10 : 1 }, (_, i) =>
         plugin(`official-${i}`),
       );
@@ -204,7 +442,7 @@ describe("renderPluginCatalogResults", () => {
               ? community.slice(0, 1)
               : [];
       const onLoadMore = vi.fn();
-      const container = mount(
+      const container = await mount(
         baseProps({
           query: "integration",
           result: { items, ...(kind === "mixed" ? { nextCursor: "catalog-page-2" } : {}) },
@@ -241,9 +479,9 @@ describe("renderPluginCatalogResults", () => {
     },
   );
 
-  it("keeps a partial ClawHub failure retryable", () => {
+  it("keeps a partial ClawHub failure retryable", async () => {
     const onRetry = vi.fn();
-    const container = mount(
+    const container = await mount(
       baseProps({
         remoteError: "ClawHub is unavailable; local plugins remain available.",
         result: { items: [] },
@@ -262,7 +500,7 @@ describe("renderPluginCatalogResults", () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it("uses only resolved artwork, preferring installed icons and whitening only official images", () => {
+  it("uses only resolved artwork, preferring installed icons and whitening only official images", async () => {
     const imageUrl = "https://example.com/icon.png";
     const cases = [
       { id: "official-package", packageName: "@openclaw/whatsapp", official: true },
@@ -283,7 +521,7 @@ describe("renderPluginCatalogResults", () => {
       { id: "community", official: false, imageUrl, expected: "blob:catalog-icon" },
       { id: "missing", official: true },
     ];
-    const container = mount(
+    const container = await mount(
       baseProps({
         query: "artwork",
         result: {
@@ -352,7 +590,7 @@ describe("renderPluginCatalogResults", () => {
     shelves: Record<string, string[]>;
   }>)(
     "keeps category membership and search consistent for $name",
-    ({ categories, entries, shelves }) => {
+    async ({ categories, entries, shelves }) => {
       const props = baseProps({
         featured: [],
         trending: [],
@@ -375,7 +613,7 @@ describe("renderPluginCatalogResults", () => {
           ),
         },
       });
-      const container = mount(props);
+      const container = await mount(props);
       for (const [shelf, ids] of Object.entries(shelves)) {
         const section = container.querySelector(`[data-catalog-section="${shelf}"]`);
         expect(
@@ -403,7 +641,7 @@ describe("renderPluginCatalogResults", () => {
     },
   );
 
-  it("orders and caps each category before opening its full results", () => {
+  it("orders and caps each category before opening its full results", async () => {
     const items = Array.from({ length: 9 }, (_, index) =>
       plugin(`popular-${index}`, {
         catalog: {
@@ -424,7 +662,9 @@ describe("renderPluginCatalogResults", () => {
       },
     });
     const onCategoryChange = vi.fn();
-    const container = mount(baseProps({ result: { items: [...items, pinned] }, onCategoryChange }));
+    const container = await mount(
+      baseProps({ result: { items: [...items, pinned] }, onCategoryChange }),
+    );
     const tools = container.querySelector('[data-catalog-section="tools"]')!;
     expect(tools.querySelectorAll(".plugin-catalog-card")).toHaveLength(8);
     expect(tools.classList.contains("plugin-catalog-section--expandable")).toBe(true);
@@ -448,7 +688,7 @@ describe("renderPluginCatalogResults", () => {
     ]);
   });
 
-  it("keeps one action per card while an install publishes before its final response", () => {
+  it("keeps one action per card while an install publishes before its final response", async () => {
     const installed = plugin("installed", {
       local: { present: true, installed: true, enabled: true, state: "enabled", action: "manage" },
     });
@@ -456,7 +696,7 @@ describe("renderPluginCatalogResults", () => {
       query: "result",
       result: { items: [installed, plugin("available")] },
     });
-    const container = mount({
+    const container = await mount({
       ...props,
       installProgress: new Map([["install:installed", { startedAt: Date.now(), activities: [] }]]),
     });

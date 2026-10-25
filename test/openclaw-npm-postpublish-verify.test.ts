@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { dirname, join } from "node:path";
 import { build } from "tsdown";
 import { expect, it, vi } from "vitest";
+import { collectPackageDistImportErrors } from "../scripts/lib/package-dist-imports.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import {
   collectInstalledContextEngineRuntimeErrors as contextErrors,
@@ -20,6 +21,8 @@ import {
   rewriteRootRuntimeImportsToStableAliases,
   writeStableRootRuntimeAliases,
 } from "../scripts/runtime-postbuild.mts";
+import { resolveNodeBootstrapRuntimeChunks } from "../src/gateway/worker-environments/node-bootstrap-runtime-chunks.js";
+import { collectPackageDistInventory } from "../src/infra/package-dist-inventory.js";
 import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -445,6 +448,17 @@ it("accepts Bun built-in modules without npm dependency declarations", () => {
   expect(dependencyErrors(packageRoot)).toStrictEqual([]);
 });
 
+it("accepts the optional A2UI renderer import shipped by supported release lines", () => {
+  const packageRoot = makeInstalledPackageRoot({ dependencies: {} });
+  writeInstalledFile(
+    packageRoot,
+    "dist/canvas-host/a2ui/a2ui.bundle.js",
+    'export const load = () => import("@a2ui/markdown-it").catch(() => null);\n',
+  );
+
+  expect(dependencyErrors(packageRoot)).toStrictEqual([]);
+});
+
 const companionSource = 'const voice = require("@discordjs/voice");\nexport { voice };\n';
 const discordManifest = {
   name: "@openclaw/discord",
@@ -703,3 +717,49 @@ it("rejects a root-shared chunk even when a plugin owns the same dependency", as
   const root = await buildInstalledFixture('export { value } from "./shared.js";');
   expectDependencyErrors(root, "missing declared runtime dependency 'fixture-runtime'");
 });
+
+it.each([false, true])(
+  "omits private SDK test workers from the built node distribution (QA: %s)",
+  async (qa) => {
+    const root = await buildInstalledFixture(
+      "export const ready = true;",
+      {
+        "test/helpers/sqlite-worker-fault.ts": `
+        export const marker = "qa-only";
+        export const faultWorker = () => new URL("./sqlite-worker-fault.worker.mjs", import.meta.url);
+      `,
+        "src/plugin-sdk/sqlite-runtime-testing.ts":
+          'export { marker, faultWorker } from "../../test/helpers/sqlite-worker-fault.ts";',
+        "src/plugin-sdk/test-state.ts":
+          'export { faultWorker } from "../../test/helpers/sqlite-worker-fault.ts";',
+        "extensions/qa-lab/index.js":
+          'export { marker } from "../../src/plugin-sdk/sqlite-runtime-testing.ts";',
+      },
+      {
+        "plugin-sdk/sqlite-runtime-testing": "src/plugin-sdk/sqlite-runtime-testing.ts",
+        "plugin-sdk/test-state": "src/plugin-sdk/test-state.ts",
+        ...(qa ? { "extensions/qa-lab/index": "extensions/qa-lab/index.js" } : {}),
+      },
+    );
+    const manifest = {
+      files: [
+        "dist/",
+        "!dist/extensions/qa-lab/**",
+        "!dist/plugin-sdk/sqlite-runtime-testing.*",
+        "!dist/plugin-sdk/test-state.*",
+      ],
+    };
+    const { files } = await resolveNodeBootstrapRuntimeChunks(
+      root,
+      await collectPackageDistInventory(root, { packageManifest: manifest }),
+      manifest.files,
+    );
+    expect(files).toEqual(expect.arrayContaining([expect.stringMatching(/^dist\/root\.m?js$/u)]));
+    expect(
+      collectPackageDistImportErrors({
+        files,
+        readText: (file) => fs.readFileSync(join(root, file), "utf8"),
+      }),
+    ).toEqual([]);
+  },
+);

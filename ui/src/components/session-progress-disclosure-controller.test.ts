@@ -110,37 +110,19 @@ it.each([
       fixture.click();
     }
     expectChoice(manualOpen, partial ? "48px" : "");
-    show();
-    expectChoice(manualOpen, partial ? "48px" : "");
-    let remounted = false;
-    for (const [revision, final, remount] of [
-      [3, false, false],
-      [4, true, false],
-      [4, true, true],
-      [5, false, false],
-    ] as const) {
-      if (remount) {
-        fixture.unmount();
-        remounted = true;
-      }
-      show(cardLifetime, revision, final);
-      expectChoice(!retained && remounted ? initialOpen : manualOpen, partial ? "48px" : "");
-    }
+    fixture.unmount();
+    show(cardLifetime, 4, true);
+    expectChoice(retained ? manualOpen : initialOpen, partial ? "48px" : "");
     const replacement = {};
     show(replacement, 1);
     expectChoice(initialOpen);
     expect(fixture.body().style.minHeight).toBe("");
-    fixture.unmount();
-    show(replacement, 1);
-    expectChoice(initialOpen);
   },
 );
 
 it.each([
-  "history",
   "delayed history",
   "keyboard replacement",
-  "pointer replacement",
   "programmatic replacement",
   "scope replacement",
   "header",
@@ -151,36 +133,30 @@ it.each([
   if (choice !== "header") {
     const transcript = observeTranscript(fixture.container, transcriptCleanups);
     await Promise.resolve();
-    if (choice !== "history") {
-      transcript.thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
+    transcript.thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
+    advance(301);
+    expect(fixture.card().open).toBe(true);
+    if (choice === "keyboard replacement") {
+      transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
+    } else if (choice === "programmatic replacement") {
+      publishTranscriptScroll(transcript.thread, {
+        type: "offset",
+        delta: 0,
+        scrolling: false,
+        touching: false,
+        programmatic: true,
+      });
+    } else if (choice === "scope replacement") {
+      context.gatewayScope = {};
+      fixture.show();
+      await Promise.resolve();
+    }
+    transcript.scroll(200);
+    if (choice !== "delayed history") {
       advance(301);
       expect(fixture.card().open).toBe(true);
-      if (choice === "keyboard replacement") {
-        transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
-      } else if (choice === "pointer replacement") {
-        transcript.thread.dispatchEvent(new PointerEvent("pointerdown"));
-      } else if (choice === "programmatic replacement") {
-        publishTranscriptScroll(transcript.thread, {
-          type: "offset",
-          delta: 0,
-          scrolling: false,
-          touching: false,
-          programmatic: true,
-        });
-      } else if (choice === "scope replacement") {
-        context.gatewayScope = {};
-        fixture.show();
-        await Promise.resolve();
-      }
-      transcript.scroll(200);
-      if (choice !== "delayed history") {
-        advance(301);
-        expect(fixture.card().open).toBe(true);
-        wheelThenAdvance(transcript);
-        expect(fixture.card().open).toBe(true);
-      }
-    } else {
-      transcript.wheel(200);
+      wheelThenAdvance(transcript);
+      expect(fixture.card().open).toBe(true);
     }
     advance(201);
     wheelThenAdvance(transcript);

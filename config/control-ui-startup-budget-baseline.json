@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 325081,
-  "reason": "Solid 2 action/optimistic runtime adoption, W-SOLID2-RECIPES; offset tracked by HF-STARTUP-BUDGET",
-  "updatedAt": "2026-10-21"
+  "startupJsGzipBytes": 272543,
+  "reason": "Measured dormant Chat runtime deferral with synchronous FIFO admission; startup baseline equals final production bundle",
+  "updatedAt": "2026-10-25"
 }

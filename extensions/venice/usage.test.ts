@@ -5,9 +5,7 @@ import plugin from "./index.js";
 
 const provider = await registerSingleProviderPlugin(plugin);
 
-async function fetchVeniceUsage(
-  params: Pick<ProviderFetchUsageSnapshotContext, "token" | "timeoutMs" | "fetchFn">,
-) {
+async function fetchVeniceUsage(fetchFn: ProviderFetchUsageSnapshotContext["fetchFn"]) {
   if (!provider.fetchUsageSnapshot) {
     throw new Error("Venice usage provider is not registered");
   }
@@ -15,7 +13,9 @@ async function fetchVeniceUsage(
     config: {},
     env: {},
     provider: "venice",
-    ...params,
+    token: "venice-key",
+    timeoutMs: 5000,
+    fetchFn,
   });
   if (!snapshot) {
     throw new Error("Venice usage provider returned no snapshot");
@@ -34,11 +34,7 @@ describe("Venice usage", () => {
       }),
     );
 
-    const snapshot = await fetchVeniceUsage({
-      token: "venice-key",
-      timeoutMs: 5000,
-      fetchFn: fetchFn as unknown as typeof fetch,
-    });
+    const snapshot = await fetchVeniceUsage(fetchFn as unknown as typeof fetch);
 
     expect(snapshot).toEqual({
       provider: "venice",
@@ -67,13 +63,11 @@ describe("Venice usage", () => {
   });
 
   it("preserves unavailable status with balances", async () => {
-    const snapshot = await fetchVeniceUsage({
-      token: "venice-key",
-      timeoutMs: 5000,
-      fetchFn: vi.fn(async () =>
+    const snapshot = await fetchVeniceUsage(
+      vi.fn(async () =>
         Response.json({ canConsume: false, balances: { usd: 0 } }),
       ) as unknown as typeof fetch,
-    });
+    );
 
     expect(snapshot.summary).toBe("API consumption unavailable");
     expect(snapshot.billing).toEqual([
@@ -82,36 +76,28 @@ describe("Venice usage", () => {
   });
 
   it("returns HTTP status without exposing provider error bodies", async () => {
-    const snapshot = await fetchVeniceUsage({
-      token: "venice-key",
-      timeoutMs: 5000,
-      fetchFn: vi.fn(
-        async () => new Response("private", { status: 403 }),
-      ) as unknown as typeof fetch,
-    });
+    const snapshot = await fetchVeniceUsage(
+      vi.fn(async () => new Response("private", { status: 403 })) as unknown as typeof fetch,
+    );
 
     expect(snapshot.error).toBe("HTTP 403");
   });
 
   it("rejects a malformed JSON root without throwing", async () => {
-    const snapshot = await fetchVeniceUsage({
-      token: "venice-key",
-      timeoutMs: 5000,
-      fetchFn: vi.fn(async () => Response.json(null)) as unknown as typeof fetch,
-    });
+    const snapshot = await fetchVeniceUsage(
+      vi.fn(async () => Response.json(null)) as unknown as typeof fetch,
+    );
 
     expect(snapshot.error).toBe("Malformed usage response");
     expect(snapshot.windows).toEqual([]);
   });
 
   it("returns a stable error for transport failures", async () => {
-    const snapshot = await fetchVeniceUsage({
-      token: "venice-key",
-      timeoutMs: 5000,
-      fetchFn: vi.fn(async () => {
+    const snapshot = await fetchVeniceUsage(
+      vi.fn(async () => {
         throw new Error("network down");
       }) as unknown as typeof fetch,
-    });
+    );
 
     expect(snapshot.error).toBe("Usage unavailable");
     expect(snapshot.windows).toEqual([]);

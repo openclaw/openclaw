@@ -4,7 +4,6 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy as allowlistPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy as openPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
 } from "./runtime-group-policy.js";
 
 it.each([
@@ -28,40 +27,26 @@ it("returns channels.defaults.groupPolicy when present", () => {
   );
 });
 
-it("logs only once per provider/account key", () => {
-  const lines: string[] = [];
-  const warn = () =>
-    warnMissingProviderGroupPolicyFallbackOnce({
-      providerMissingFallbackApplied: true,
-      providerKey: "runtime-policy-test",
-      accountId: "account-a",
-      blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
-      log: (message) => lines.push(message),
-    });
-  expect(warn()).toBe(true);
-  expect(warn()).toBe(false);
-  expect(lines).toHaveLength(1);
-  expect(lines[0]).toContain("channels.runtime-policy-test is missing");
-  expect(lines[0]).toContain("room messages blocked");
-});
-
 it("refreshes recent keys and re-warns evicted keys once the cap overflows", async () => {
   vi.resetModules();
   const { warnMissingProviderGroupPolicyFallbackOnce: warnOnceFn } =
     await import("./runtime-group-policy.js");
   const lines: string[] = [];
-  const warnForAccount = (accountId: string) =>
+  const warnForAccount = (accountId: string, blockedLabel?: string) =>
     warnOnceFn({
       providerMissingFallbackApplied: true,
       providerKey: "runtime-policy-evict-test",
       accountId,
+      blockedLabel,
       log: (message) => lines.push(message),
     });
 
   for (let i = 0; i < 4096; i++) {
-    warnForAccount(`account-${i}`);
+    warnForAccount(`account-${i}`, i === 0 ? GROUP_POLICY_BLOCKED_LABEL.room : undefined);
   }
   expect(lines).toHaveLength(4096);
+  expect(lines[0]).toContain("channels.runtime-policy-evict-test is missing");
+  expect(lines[0]).toContain("room messages blocked");
 
   expect(warnForAccount("account-0")).toBe(false);
   expect(lines).toHaveLength(4096);

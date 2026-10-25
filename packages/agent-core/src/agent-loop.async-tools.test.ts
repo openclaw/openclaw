@@ -7,12 +7,18 @@ import { createRequesterYieldCallback } from "../../../src/agents/openclaw-tools
 import { isToolResultError } from "../../../src/agents/tool-result-error.js";
 import { createSessionsYieldTool } from "../../../src/agents/tools/sessions-yield-tool.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
-import { runAgentLoop } from "./agent-loop.js";
-import { makeAssistantMessage, model as baseModel } from "./agent-loop.test-support.js";
+import {
+  captureToolLoop,
+  expectedToolResult,
+  finishMessageStream,
+  startToolCalls,
+  makeAssistantMessage,
+  model as baseModel,
+} from "./agent-loop.test-support.js";
 import { Agent } from "./agent.js";
 import { attachInternalToolBatchLifecycle } from "./internal-hooks.js";
 import { getAgentToolExecutionContext } from "./tool-execution-context.js";
-import type { AgentEvent, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from "./types.js";
+import type { AgentEvent, AgentMessage, AgentTool, StreamFn } from "./types.js";
 
 const model: Model = { ...baseModel, id: "async-model", name: "Async Model", reasoning: true };
 const usage = {
@@ -56,8 +62,7 @@ function finish(
   message: AssistantMessage,
   reason: "stop" | "toolUse" | "length" = "stop",
 ) {
-  stream.push({ type: "done", reason, message });
-  stream.end();
+  finishMessageStream(stream, message, reason);
 }
 
 function fail(
@@ -65,8 +70,7 @@ function fail(
   error: AssistantMessage,
   reason: "error" | "aborted" = "error",
 ) {
-  stream.push({ type: "error", reason, error });
-  stream.end();
+  finishMessageStream(stream, error, reason);
 }
 
 function completedResponse() {
@@ -88,42 +92,11 @@ function startCalls(
   calls: ToolCall[],
   message = assistant,
 ) {
-  stream.push({ type: "start", partial: message([]) });
-  calls.forEach((toolCall, index) =>
-    pushCall(stream, toolCall, index, message(calls.slice(0, index + 1))),
-  );
+  startToolCalls(stream, calls, message);
 }
 
-function runFixture(options: {
-  tools: AgentTool[];
-  config?: Partial<AgentLoopConfig>;
-  onEvent?: (event: AgentEvent) => void | Promise<void>;
-  onMessage?: (message: AgentMessage) => void | Promise<void>;
-  signal?: AbortSignal;
-  streamFn?: StreamFn;
-}) {
-  const response = createAssistantMessageEventStream();
-  const persisted: AgentMessage[] = [];
-  const events: AgentEvent[] = [];
-  const run = runAgentLoop(
-    [{ role: "user", content: "start", timestamp: 0 }],
-    { systemPrompt: "", messages: [], tools: options.tools },
-    { model, convertToLlm: (messages) => messages as Context["messages"], ...options.config },
-    (event) => {
-      events.push(event);
-      if (event.type === "message_end") {
-        persisted.push(event.message);
-        if (options.onMessage) {
-          return options.onMessage(event.message);
-        }
-      }
-      return options.onEvent?.(event);
-    },
-    options.signal,
-    options.streamFn ?? (() => response),
-  );
-  return { response, persisted, events, run };
-}
+const runFixture = (options: Parameters<typeof captureToolLoop>[0]) =>
+  captureToolLoop({ ...options, config: { model, ...options.config } });
 
 function outputLimitFailure(content: AssistantMessage["content"]): AssistantMessage {
   return {
@@ -313,7 +286,7 @@ it("persists an execution identity for a done-only async length response", async
   const result = await run;
   expect(execute).toHaveBeenCalledTimes(1);
   expect(result).toEqual(persisted);
-  expect(result.at(-1)).toMatchObject({ role: "toolResult", toolCallId: "lookup", isError: false });
+  expect(result.at(-1)).toMatchObject(expectedToolResult("lookup", false));
 });
 
 it("persists async calls before admission, streams the remaining answer, and executes each call once", async () => {

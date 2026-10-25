@@ -22,6 +22,7 @@ type ReadinessResult = {
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
   agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  agentRecovery?: readonly string[];
   stateDatabase?: { reason: string };
 };
 
@@ -102,6 +103,9 @@ export function createReadinessChecker(
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
+    isChatSendAvailable?: () => boolean;
+    getPendingAgentInputRecovery?: () => readonly string[];
+    isRequiredAgent?: (agentId: string) => boolean;
     shouldSkipChannelReadiness?: () => boolean;
   },
 ): ReadinessChecker {
@@ -112,6 +116,7 @@ export function createReadinessChecker(
 
   const readReadiness = (
     agentDatabases: readonly AgentDatabaseAdmissionRefusal[] | undefined,
+    pendingRecovery: readonly string[],
   ): ReadinessResult => {
     const startup = getStartup();
     const uptimeMs = startup.uptimeMs;
@@ -149,6 +154,22 @@ export function createReadinessChecker(
     if (pluginReload) {
       cachedState = null;
       return { ready: false, coreReady: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
+    }
+    if (deps.isChatSendAvailable?.() === false) {
+      cachedState = null;
+      return { ready: false, coreReady: false, failing: ["chat-recovery"], uptimeMs };
+    }
+    const requiredRecovery = pendingRecovery.filter(
+      (agentId) => deps.isRequiredAgent?.(agentId) ?? true,
+    );
+    if (requiredRecovery.length) {
+      cachedState = null;
+      return {
+        ready: false,
+        coreReady: false,
+        failing: requiredRecovery.map((agentId) => `chat-recovery:${agentId}`),
+        uptimeMs,
+      };
     }
     if (
       cachedState &&
@@ -207,12 +228,14 @@ export function createReadinessChecker(
   };
   return () => {
     const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
-    const result = readReadiness(agentDatabases);
+    const agentRecovery = deps.getPendingAgentInputRecovery?.();
+    const result = readReadiness(agentDatabases, agentRecovery ?? []);
     const getEventLoopHealth = deps.getEventLoopHealth;
     const eventLoop = getEventLoopHealth?.();
     return {
       ...result,
       ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(agentRecovery?.length ? { agentRecovery } : {}),
       ...(eventLoop ? { eventLoop } : {}),
     };
   };

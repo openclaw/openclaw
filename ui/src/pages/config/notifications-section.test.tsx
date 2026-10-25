@@ -25,7 +25,10 @@ const userPreferences = {
 
 type NotificationProps = Parameters<typeof NotificationsSection>[0];
 function renderSection(props: Partial<NotificationProps>) {
-  return mountSolid(() => <NotificationsSection connected={true} {...props} />);
+  const retired = new Promise<void>(() => {});
+  return mountSolid(() => (
+    <NotificationsSection connected={true} presentationRetired={() => retired} {...props} />
+  ));
 }
 
 function webPush(
@@ -69,9 +72,10 @@ describe("native notification test outcome", () => {
     });
     const button = expectDefined(container.querySelector<HTMLButtonElement>("button"), "send");
     button.click();
-    flush();
-    expect(button.disabled).toBe(true);
-    expect(button.textContent).toContain("Sending test");
+    await waitForSolid(() => {
+      expect(button.disabled).toBe(true);
+      expect(button.textContent).toContain("Sending test");
+    });
     expect(container.querySelector(".settings-status--accent")?.textContent).toContain(
       "Sending test",
     );
@@ -110,6 +114,48 @@ describe("native notification test outcome", () => {
     if (state === "error") {
       expect(container.querySelector(".settings-status--danger")).not.toBeNull();
     }
+  });
+
+  it("retires a failed receipt during retry and preserves the send control", async () => {
+    const message = "Open System Settings and try again.";
+    const [native, setNative] = createSignal<NonNullable<NotificationProps["nativeNotifications"]>>(
+      { permission: "granted", test: { state: "error", message } },
+    );
+    let completion = createDeferredCore<undefined>();
+    const onSend = vi.fn(() => {
+      setNative({ permission: "granted", test: { state: "pending" } });
+      return completion.promise;
+    });
+    const { container } = renderSection({
+      get nativeNotifications() {
+        return native();
+      },
+      onNativeNotificationsSendTest: onSend,
+    });
+    const button = expectDefined(container.querySelector<HTMLButtonElement>("button"), "send");
+    await waitForSolid(() => expect(container.textContent).toContain(message));
+
+    for (const result of [{ state: "error", message }, { state: "sent" }] as const) {
+      button.click();
+      await waitForSolid(() => {
+        expect(container.textContent).not.toContain(message);
+        expect(button.disabled).toBe(true);
+        expect(container.querySelector(".settings-status--accent")?.textContent).toContain(
+          "Sending test",
+        );
+      });
+      setNative({ permission: "granted", test: result });
+      completion.resolve(undefined);
+      await waitForSolid(() => {
+        expect(button.disabled).toBe(false);
+        expect(container.textContent).toContain(
+          result.state === "error" ? message : "Test notification queued",
+        );
+      });
+      completion = createDeferredCore<undefined>();
+      expect(container.querySelector("button")).toBe(button);
+    }
+    expect(onSend).toHaveBeenCalledTimes(2);
   });
 });
 

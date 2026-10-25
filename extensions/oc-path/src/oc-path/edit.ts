@@ -4,7 +4,7 @@ import type { MdAst } from "./ast.js";
 import { OcPathEditError } from "./edit-error.js";
 import { replaceMdSource } from "./emit.js";
 import { formatFrontmatterValue } from "./frontmatter-format.js";
-import { formatOcPath, type OcPath } from "./oc-path.js";
+import { formatOcPath, unquoteSeg, type OcPath } from "./oc-path.js";
 import { resolveMdOcPath } from "./resolve.js";
 import { guardSentinel } from "./sentinel.js";
 import { sourceLineEnding, sourceLineOffset } from "./source.js";
@@ -12,11 +12,11 @@ import { sourceLineEnding, sourceLineOffset } from "./source.js";
 export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdAst {
   guardSentinel(newValue, formatOcPath(path));
   if (path.section === "[frontmatter]") {
-    const key = path.item ?? path.field;
-    const existing = ast.frontmatter.find((entry) => entry.key === key);
-    if (existing === undefined || ast.frontmatterEndLine === undefined) {
+    const match = resolveMdOcPath(ast, path);
+    if (match?.kind !== "frontmatter" || ast.frontmatterEndLine === undefined) {
       throw new OcPathEditError("unresolved");
     }
+    const existing = match.node;
     const offset = sourceLineOffset(ast.raw, existing.line);
     const source = ast.raw.slice(offset, sourceLineOffset(ast.raw, ast.frontmatterEndLine));
     const prefix = /^[^:\r\n]*:[ \t]*/.exec(source)?.[0];
@@ -57,7 +57,7 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdAst {
   if (item.kv === undefined) {
     throw new OcPathEditError("no-item-kv");
   }
-  if (item.kv.key.toLowerCase() !== path.field.toLowerCase()) {
+  if (item.kv.key.toLowerCase() !== unquoteSeg(path.field).toLowerCase()) {
     throw new OcPathEditError("unresolved");
   }
   const key = item.kv.key;

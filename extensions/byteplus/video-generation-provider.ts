@@ -5,8 +5,12 @@ import {
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
+  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
+  executeProviderOperationWithRetry,
+  fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postJsonResponse,
   resolveProviderOperationTimeoutMs,
@@ -60,28 +64,6 @@ function readBytePlusTaskStatus(payload: BytePlusTaskResponse): BytePlusTaskStat
 
 function readBytePlusErrorMessage(error: unknown): string | undefined {
   return isRecord(error) ? normalizeOptionalString(error.message) : undefined;
-}
-
-function readBytePlusVideoUrl(payload: BytePlusTaskResponse): string {
-  const content = payload.content;
-  if (content !== undefined && !isRecord(content)) {
-    throw new Error("BytePlus video generation completed with malformed content");
-  }
-  const videoUrl = normalizeOptionalString(content?.video_url);
-  if (!videoUrl) {
-    throw new Error("BytePlus video generation completed without a video URL");
-  }
-  return videoUrl;
-}
-
-function resolveBytePlusDurationSeconds(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return asSafeIntegerInRange(Math.round(value), {
-    min: BYTEPLUS_MIN_DURATION_SECONDS,
-    max: BYTEPLUS_MAX_DURATION_SECONDS,
-  });
 }
 
 export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider {
@@ -169,9 +151,15 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       if (resolution) {
         body.resolution = resolution;
       }
-      const duration = resolveBytePlusDurationSeconds(req.durationSeconds);
-      if (duration !== undefined) {
-        body.duration = duration;
+      const requestedDuration = req.durationSeconds;
+      if (typeof requestedDuration === "number" && Number.isFinite(requestedDuration)) {
+        const duration = asSafeIntegerInRange(Math.round(requestedDuration), {
+          min: BYTEPLUS_MIN_DURATION_SECONDS,
+          max: BYTEPLUS_MAX_DURATION_SECONDS,
+        });
+        if (duration !== undefined) {
+          body.duration = duration;
+        }
       }
       if (req.audio !== undefined) {
         body.generate_audio = req.audio;
@@ -239,7 +227,14 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
             : undefined;
         },
       });
-      const videoUrl = readBytePlusVideoUrl(completed);
+      const completedContent = completed.content;
+      if (completedContent !== undefined && !isRecord(completedContent)) {
+        throw new Error("BytePlus video generation completed with malformed content");
+      }
+      const videoUrl = normalizeOptionalString(completedContent?.video_url);
+      if (!videoUrl) {
+        throw new Error("BytePlus video generation completed without a video URL");
+      }
       const video = await downloadGeneratedVideoAsset({
         url: videoUrl,
         timeoutMs: createProviderOperationTimeoutResolver({
@@ -253,6 +248,38 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         requestFailedMessage: "BytePlus generated video download failed",
         maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         validateBinaryResponse: true,
+        fetchResponse: ({ deadline: downloadDeadline, timeoutMs }) =>
+          executeProviderOperationWithRetry({
+            provider: "byteplus",
+            stage: "download",
+            operation: async () => {
+              // Result URLs never inherit task credentials or private-network trust.
+              const result = await fetchWithTimeoutGuarded(
+                videoUrl,
+                { method: "GET" },
+                timeoutMs(),
+                fetchFn,
+                {
+                  mode: "strict",
+                  dispatcherPolicy: dispatcherPolicy ?? { mode: "env-proxy" },
+                },
+              );
+              try {
+                await assertOkOrThrowHttpError(
+                  result.response,
+                  "BytePlus generated video download failed",
+                  {
+                    bodyTimeoutMs: timeoutMs,
+                    onBodyTimeout: () => createProviderOperationTimeoutError(downloadDeadline),
+                  },
+                );
+                return result;
+              } catch (error) {
+                await result.release();
+                throw error;
+              }
+            },
+          }),
       });
       return {
         videos: [video],

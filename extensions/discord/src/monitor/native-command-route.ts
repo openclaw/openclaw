@@ -5,7 +5,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import type { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import {
-  resolveDiscordBoundConversationRoute,
+  buildDiscordRoutePeer,
+  resolveDiscordConversationRoute,
   resolveDiscordEffectiveRoute,
 } from "./route-resolution.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
@@ -33,15 +34,17 @@ export function resolveDiscordNativeInteractionRouteState(params: {
   const threadBinding = channelContext.isThreadChannel
     ? params.threadBindings?.getByThreadId(channelContext.rawChannelId)
     : undefined;
-  const route = resolveDiscordBoundConversationRoute({
+  const route = resolveDiscordConversationRoute({
     cfg: params.cfg,
     accountId: params.accountId,
     guildId: interaction.guild?.id,
     memberRoleIds: channelContext.memberRoleIds,
-    isDirectMessage: channelContext.isDirectMessage,
-    isGroupDm: channelContext.isGroupDm,
-    directUserId: interaction.user?.id ?? channelContext.rawChannelId,
-    conversationId,
+    peer: buildDiscordRoutePeer({
+      isDirectMessage: channelContext.isDirectMessage,
+      isGroupDm: channelContext.isGroupDm,
+      directUserId: interaction.user?.id ?? channelContext.rawChannelId,
+      conversationId,
+    }),
     parentConversationId: channelContext.threadParentId,
   });
   const configuredRoute =

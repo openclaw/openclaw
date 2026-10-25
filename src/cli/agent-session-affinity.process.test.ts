@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCliProcessFixture } from "./isolated-process-fixture.test-support.js";
 
@@ -46,13 +50,7 @@ it.each([
     });
   });
   try {
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Loopback receiver did not bind");
-    }
+    const baseUrl = `${await listenLoopback(server)}/v1`;
     const model = {
       id: "affinity-fixture",
       name: "Affinity fixture",
@@ -66,7 +64,7 @@ it.each([
     };
     const provider = {
       api: "openai-completions",
-      baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      baseUrl,
       apiKey: "synthetic-loopback-key",
       models: [model],
     };
@@ -110,8 +108,6 @@ it.each([
       ),
     ).toEqual(Array<string | undefined>(3).fill(testCase.expected));
   } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeHttpServer(server);
   }
 });

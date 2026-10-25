@@ -1,10 +1,11 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
-import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 import "../../styles.css";
+import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 
 function settingsRow(container: HTMLElement, title: string) {
   const row = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
@@ -62,7 +63,7 @@ describe("config appearance preferences", () => {
       permissionRequired: false,
       selectedDeviceId: deviceId,
       discovery: null,
-      error: null,
+      selection: null,
     };
   }
 
@@ -261,16 +262,14 @@ describe("config appearance preferences", () => {
       renderConfigInto(props, container);
     };
     renderConfigInto(props, container);
-    const frames = new Map<number, FrameRequestCallback>();
-    let frameId = 0;
+    const framesClock = createFrameClock();
+    const frames = framesClock.frames;
+
     const requestFrame = vi
       .spyOn(window, "requestAnimationFrame")
-      .mockImplementation((callback) => {
-        frames.set(++frameId, callback);
-        return frameId;
-      });
+      .mockImplementation(framesClock.request);
     const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
-      frames.delete(id);
+      framesClock.cancel(id);
     });
     onTestFinished(() => {
       cleanupSolid();
@@ -285,11 +284,7 @@ describe("config appearance preferences", () => {
     props.textScale = 110;
     renderConfigInto(props, container);
     const input = required(container, ".settings-theme-import__input", HTMLInputElement);
-    const pending = [...frames.values()];
-    frames.clear();
-    for (const frame of pending) {
-      frame(0);
-    }
+    framesClock.flush(0);
     expect(document.activeElement).toBe(input);
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe("amethyst-haze".length);
@@ -348,7 +343,11 @@ describe("config appearance preferences", () => {
     expect(props.setTextScale).toHaveBeenCalledWith(100);
   });
 
-  it("keeps authored visual defaults direct", () => {
+  it.each(["iPhone", "Windows"])("keeps authored defaults editable on %s", (userAgent) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const { container, props } = renderAppearance({
       theme: "claw",
       themeOverridden: true,
@@ -365,7 +364,19 @@ describe("config appearance preferences", () => {
 
     expect(normalizedText(themeSection)).toContain("Default: Claw");
     expect(normalizedText(themeSection)).toContain("Default: System");
-    expect(shortcutRow?.textContent).toContain("Default: Enter");
+    expect(shortcutRow.textContent).toContain("Default: Enter");
+    expect(shortcutRow.textContent).toContain(
+      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
+    );
+    const shortcut = required(shortcutRow, "select", HTMLSelectElement);
+    expect(shortcut.value).toBe("enter");
+    expect(shortcut.disabled).toBe(false);
+    expect(props.onAppearanceChange).not.toHaveBeenCalled();
+    shortcut.value = "modifier-enter";
+    shortcut.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(props.onAppearanceChange).toHaveBeenCalledExactlyOnceWith({
+      chatSendShortcut: "modifier-enter",
+    });
     findButtonByText(themeSection, "Claw").click();
     themeSection
       .querySelector<HTMLInputElement>('.settings-segmented__input[value="system"]')
@@ -443,7 +454,7 @@ describe("config appearance preferences", () => {
       onMicrophoneSelect: vi.fn(),
       onMicrophoneRefresh,
       camera: mediaDevice("camera-1", "Desk Camera"),
-      onCameraSelect: vi.fn(),
+      onCameraSelect: vi.fn().mockResolvedValue(undefined),
       onCameraRefresh,
       composerHoldToRecord: true,
     });
@@ -499,11 +510,15 @@ describe("config appearance preferences", () => {
         discovery: loading ? new Promise<string | null>(() => {}) : null,
         permissionRequired: true,
         selectedDeviceId: "",
-        error: null,
+        selection: null,
       };
       const { container } = renderAppearance(
         device === "camera"
-          ? { camera: state, onCameraSelect: vi.fn(), onCameraRefresh: onRefresh }
+          ? {
+              camera: state,
+              onCameraSelect: vi.fn().mockResolvedValue(undefined),
+              onCameraRefresh: onRefresh,
+            }
           : { microphone: state, onMicrophoneSelect: vi.fn(), onMicrophoneRefresh: onRefresh },
       );
       const select = required(container, `[data-settings-${device}]`, HTMLSelectElement);

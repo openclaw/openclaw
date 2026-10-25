@@ -1,4 +1,8 @@
 import {
+  MessageInjectionPolicyMismatchError,
+  MessageInjectionTargetUnavailableError,
+} from "../../auto-reply/reply/message-injection-authority.js";
+import {
   prepareReplyToolAuthority,
   type ReplyToolAuthorityNarrow,
 } from "../../auto-reply/reply/reply-tool-authority.js";
@@ -8,6 +12,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import type {
+  EmbeddedRunToolAuthorityBinding,
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
 } from "../../sessions/session-controller.contracts.js";
@@ -29,6 +34,10 @@ import {
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import {
+  bindReplyQueueInputAdapter,
+  type ReplyQueueInputAdapter,
+  bindReplyToolAuthorityCallerRead,
+  captureReplyToolAuthorityCallerBinding,
   createAgentQuestionAnswerAuthority,
   prepareReplyToolAuthorityCallerRead,
   registerAgentHarnessQuestionAnswerAuthority,
@@ -47,6 +56,8 @@ type ToolAuthorityAttempt = Pick<
   | "messageChannel"
   | "toolsAllow"
   | "disableTools"
+  | "forceRestartSafeTools"
+  | "forceCodeModeTools"
   | "runId"
   | "abortSignal"
   | "sessionTarget"
@@ -63,7 +74,8 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     | "sessionPersistence"
     | "trigger"
     | "bindWatchdogAttempt"
-  >,
+    | "joinObservation"
+  > & { queueInputAdapter?: ReplyQueueInputAdapter },
   attempt: Attempt,
   narrow: ReplyToolAuthorityNarrow | undefined,
   run: (
@@ -132,10 +144,13 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           originatingChannel: attempt.messageChannel,
           toolsAllow: attempt.toolsAllow,
           disableTools: attempt.disableTools,
+          forceRestartSafeTools: attempt.forceRestartSafeTools,
+          forceCodeModeTools: attempt.forceCodeModeTools,
           operatorAuthority,
           run: {
             ...attempt,
             model: attempt.modelId,
+            elevatedLevel: attempt.bashElevated?.defaultLevel,
             runtimePolicySessionKey: attempt.sandboxSessionKey,
             traceAuthorized: false,
             spawnedBy: attempt.spawnedBy ?? undefined,
@@ -149,6 +164,8 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           },
         },
         narrow,
+        undefined,
+        internal.joinObservation,
       );
   let fingerprint: string | undefined;
   let releaseAttemptSnapshot: (() => void) | undefined;
@@ -361,7 +378,44 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
             assertRegistered();
             return ownsOperation() ? projected : undefined;
           };
-          return {
+          // The published handle owns either the reply snapshot or this exact
+          // attempt snapshot. A lifecycle-only turn cannot lend its policy.
+          bindReplyToolAuthorityCallerRead(
+            projectAsync,
+            (caller, expected, _requestedRoute, assertCaller) => {
+              const assertPreparedOwner = () => {
+                assertCaller();
+                assertRegistered();
+                if (!ownsOperation() || fingerprint !== expected) {
+                  throw new MessageInjectionTargetUnavailableError(
+                    "Embedded attempt authority changed during steering",
+                  );
+                }
+              };
+              assertPreparedOwner();
+              if (!operation && caller && "kind" in caller) {
+                const selected = direct?.requestedRoute;
+                if (
+                  selected &&
+                  (selected.provider !== caller.selectedRoute.provider ||
+                    selected.model !== caller.selectedRoute.model)
+                ) {
+                  throw new MessageInjectionPolicyMismatchError(
+                    "model-fallback-changed",
+                    "The selected model changed before steering",
+                  );
+                }
+              }
+              return captureReplyToolAuthorityCallerBinding(
+                operation?.projectToolAuthorityFingerprintAsync ?? direct?.projectAsync,
+                caller,
+                expected,
+                route,
+                assertPreparedOwner,
+              );
+            },
+          );
+          const binding: ReturnType<EmbeddedRunToolAuthorityBinding> = {
             watchdogAttempt,
             personalToolParticipants,
             operation: turn,
@@ -394,6 +448,10 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
             projectRequester: project,
             projectRequesterAsync: projectAsync,
           };
+          return bindReplyQueueInputAdapter(
+            binding,
+            internal.queueInputAdapter ?? "legacy-question-category",
+          );
         },
       },
       runPrepared,

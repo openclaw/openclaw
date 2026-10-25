@@ -9,6 +9,7 @@ import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
 import { toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   threadProps,
@@ -39,7 +40,7 @@ function required(parent: ParentNode, selector: string) {
   return expectDefined(parent.querySelector<HTMLElement>(selector), selector);
 }
 
-function setupEntryTranscript(messages: unknown[] = []) {
+async function setupEntryTranscript(messages: unknown[] = []) {
   const transcript = createTestTranscript();
   const props = {
     ...threadProps("pane-entry", "agent:main:entry", messages),
@@ -61,6 +62,7 @@ function setupEntryTranscript(messages: unknown[] = []) {
   update();
   transcript.start();
   update();
+  await flushDeferredRowPrune();
   return {
     props,
     transcript,
@@ -91,8 +93,8 @@ describe("chat transcript entry lifecycle", () => {
 
   it.each(["animationend", "animationcancel", "disconnect"])(
     "retires a new prompt on %s without disturbing existing bubbles",
-    (eventType) => {
-      const view = setupEntryTranscript([
+    async (eventType) => {
+      const view = await setupEntryTranscript([
         { role: "user", content: "existing prompt", timestamp: 1_000 },
       ]);
       const existing = bubbles(view.container)[0];
@@ -136,8 +138,8 @@ describe("chat transcript entry lifecycle", () => {
     },
   );
 
-  it("keeps consecutive pending steers in place through their history handoff", () => {
-    const view = setupEntryTranscript();
+  it("keeps consecutive pending steers in place through their history handoff", async () => {
+    const view = await setupEntryTranscript();
     const first = { ...pendingSend("First input"), createdAt: 10, queueMode: "steer" as const };
     const second = { ...pendingSend("Second input"), createdAt: 20, queueMode: "steer" as const };
     try {
@@ -170,14 +172,14 @@ describe("chat transcript entry lifecycle", () => {
     }
   });
 
-  it("does not leave a dormant arrival when reduced motion disables animation", () => {
+  it("does not leave a dormant arrival when reduced motion disables animation", async () => {
     const media = (matches: boolean) => () => ({
       matches,
       addEventListener: () => {},
       removeEventListener: () => {},
     });
     vi.stubGlobal("matchMedia", media(true));
-    const view = setupEntryTranscript();
+    const view = await setupEntryTranscript();
     view.props.queue = [pendingSend("reduced-motion-prompt")];
     view.update();
     expect(entering(view.container)).toHaveLength(0);
@@ -190,7 +192,7 @@ describe("chat transcript entry lifecycle", () => {
     view.transcript.dispose();
   });
 
-  it("keeps asynchronous reply text out of entry animation through terminal and history handoff", () => {
+  it("keeps asynchronous reply text out of entry animation through terminal and history handoff", async () => {
     const runId = "reply-run";
     const prefix = "The first paragraph stays visible.\n\n";
     const completedText = prefix + "A new reply with more tokens";
@@ -211,7 +213,7 @@ describe("chat transcript entry lifecycle", () => {
         seq: 3,
       }),
     ];
-    const view = setupEntryTranscript(history);
+    const view = await setupEntryTranscript(history);
     const earlierReply = required(view.container, '[data-entry-id="earlier-answer"]');
     try {
       view.props.runId = runId;
@@ -282,7 +284,7 @@ describe("chat transcript entry lifecycle", () => {
       idempotencyKey: `${runId}:user`,
       seq: 1,
     });
-    const view = setupEntryTranscript([prompt]);
+    const view = await setupEntryTranscript([prompt]);
     const commentary = "Checking the existing implementation.";
     const code = Array.from({ length: 10 }, (_, index) => `const value${index} = ${index};`).join(
       "\n",
@@ -342,8 +344,8 @@ describe("chat transcript entry lifecycle", () => {
     }
   });
 
-  it("does not animate initial history, prepends, search restoration, or session restoration", () => {
-    const view = setupEntryTranscript([
+  it("does not animate initial history, prepends, search restoration, or session restoration", async () => {
+    const view = await setupEntryTranscript([
       { role: "assistant", content: "existing", timestamp: 2_000 },
     ]);
     expect(entering(view.container)).toHaveLength(0);

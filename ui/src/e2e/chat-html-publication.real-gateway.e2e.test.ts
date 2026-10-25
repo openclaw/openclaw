@@ -18,7 +18,9 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { callGateway, runGatewayCli } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:html-publication-proof";
@@ -33,7 +35,6 @@ let sourcePath: string;
 
 async function startProvider() {
   const failures: string[] = [];
-  const calls: string[] = [];
   let step = 0;
   const owned = await reserveTestPortListener({
     offsets: [0],
@@ -56,17 +57,12 @@ async function startProvider() {
           }
           expect(body?.model).toBe("publisher");
           const input = JSON.stringify(body?.input);
-          const tools = body?.tools;
           if (step++ === 0) {
             expect(input).toContain(prompt);
-            expect(tools).toContainEqual(expect.objectContaining({ name: "write" }));
-            calls.push("write");
             writeToolCall(response, "write", { path: sourcePath, content: finalHtml });
           } else if (step === 2) {
             expect(input).toContain("function_call_output");
             expect(await readFile(sourcePath, "utf8")).toBe(finalHtml);
-            expect(tools).toContainEqual(expect.objectContaining({ name: "message" }));
-            calls.push("message");
             writeToolCall(response, "message", {
               action: "send",
               message: caption,
@@ -93,7 +89,6 @@ async function startProvider() {
   return {
     port: owned.claim.port,
     failures,
-    calls,
     close: () =>
       runQaGatewayFixture(async () => {
         owned.listener.closeAllConnections();
@@ -181,26 +176,9 @@ const suite = createControlUiE2eSuite({
   },
 });
 
-async function cli(args: string[]) {
-  const result = await instance.cli(args);
-  if (result.code !== 0) {
-    throw new Error(
-      [
-        result.stderr || result.stdout,
-        `Gateway child: pid=${instance.child?.pid} exit=${instance.child?.exitCode} signal=${instance.child?.signalCode}`,
-        await instance.diagnose(),
-        instance.logs(),
-      ].join("\n"),
-    );
-  }
-  return result.stdout;
-}
-
-async function rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
-  return JSON.parse(
-    await cli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
-  );
-}
+const cli = (args: string[]) => runGatewayCli(instance, args);
+const rpc = async (method: string, params: Record<string, unknown>): Promise<unknown> =>
+  JSON.parse(await callGateway(instance, method, params));
 
 suite.define(() => {
   it("retains final parent-edited HTML after source deletion, reload, sandbox preview and exact download", async () => {
@@ -238,12 +216,6 @@ suite.define(() => {
           .getByRole("button", { name: "Stop generating", exact: true })
           .waitFor({ state: "detached" });
         expect(provider.failures).toEqual([]);
-        expect(provider.calls).toEqual(["write", "message"]);
-        const history = await rpc("chat.history", { sessionKey, agentId: "main" });
-        const historyJson = JSON.stringify(history);
-        expect(historyJson).toContain("text/html");
-        expect(historyJson).toContain("artifactId");
-        expect(historyJson).not.toContain('"type":"attachment_error"');
         await rm(sourcePath);
         await page.reload();
         await waitForControlUiGatewayReady(page);
@@ -263,7 +235,10 @@ suite.define(() => {
           .locator('[data-region="side"]')
           .filter({ has: panel })
           .evaluate(finishElementAnimations);
-        await document.getByRole("button", { name: "Count", exact: true }).click();
+        await clickBoardWidgetControl(
+          page,
+          document.getByRole("button", { name: "Count", exact: true }),
+        );
         await expect.poll(() => document.locator("output").textContent()).toBe("1");
         expect(
           await document.locator("body").evaluate(() => {

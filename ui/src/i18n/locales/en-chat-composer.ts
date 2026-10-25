@@ -14,7 +14,6 @@ const catalog = {
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
-      placeholderWithAttachments: "Add a message or paste more images...",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",
@@ -57,7 +56,7 @@ const catalog = {
       menu: {
         back: "Back",
         skills: "Skills",
-        connectors: "Connectors",
+        connectors: "Plugins",
         webSearch: "Web search",
         webSearchGloballyDisabled:
           "Web search is disabled in config (tools.web.search.enabled). Session overrides cannot turn it back on.",
@@ -78,7 +77,7 @@ const catalog = {
           label: "Tool access",
           loading: "Loading tools…",
           loadFailed: "Couldn’t load tools.",
-          noTools: "No tools available for this connector.",
+          noTools: "No tools available for this MCP server.",
           summary: "{enabled} of {total} tools on",
           summaryOne: "{enabled} of {total} tool on",
         },
@@ -91,7 +90,7 @@ const catalog = {
         skillBlocked: "not available for this agent",
         sessionTag: "session",
         offlineBlocked: "Connect to the gateway to change session capabilities.",
-        adminBlocked: "Admin access is required to manage connectors.",
+        adminBlocked: "Admin access is required to manage MCP servers.",
         savingBlocked: "Wait for the current session capability change to finish.",
       },
       overrides: {
@@ -105,6 +104,10 @@ const catalog = {
         summary: "Session context usage: {used} of {limit} ({pct}%)",
         contextWindow: "Context window",
         promptBudget: "Prompt budget",
+        latestRun: "Latest run",
+        inputShort: "In",
+        outputShort: "Out",
+        costShort: "Cost",
         latestRunTokens: "Latest run tokens",
         estimatedCost: "Est. cost",
         planUsage: "Plan usage",
@@ -112,10 +115,10 @@ const catalog = {
         resets: "Resets {time}",
         usageCredits: "Usage credits",
         budgetValue: "{used} of {limit}",
-        limitFiveHour: "5-hour limit",
+        limitFiveHour: "5-hour",
         limitWeekly: "Weekly",
-        limitDaily: "Daily limit",
-        limitHours: "{hours}-hour limit",
+        limitDaily: "Daily",
+        limitHours: "{hours}-hour",
       },
       takePhoto: "Take photo",
       cameraAccessFailed: "Unable to access the camera.",
@@ -202,10 +205,6 @@ const catalog = {
       initialTurnPending:
         "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
       notSent: "Not sent",
-      deliveryUnconfirmed: "Delivery unconfirmed",
-      checkDelivery: "Check delivery",
-      checkDeliveryHelp:
-        "Delivery is unconfirmed. Check delivery looks for the original message without resending it or starting a worker. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt.",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
       discard: "Discard",
@@ -221,12 +220,12 @@ const catalog = {
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
         applyingSettings: "Applying chat settings",
-        blockedByUnconfirmed:
-          "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
+        blockedByReview:
+          "Queue paused. Review or discard the earlier held message in the conversation.",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",
-        needsReview: "Delivery uncertain",
+        needsReview: "Needs review",
       },
       imageCount: "Image ({count})",
     },
@@ -302,8 +301,6 @@ const catalog = {
       selectionConfirmationFailed: "Voice change unconfirmed.",
     },
     sendErrors: {
-      outboxPayloadCopied:
-        "This queued message was copied from another tab. Check the conversation and retry only if it has not arrived.",
       outboxPayloadCapacity:
         "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
       outboxPayloadUnavailable:
@@ -312,17 +309,143 @@ const catalog = {
         "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",
     },
+    outboxRecoveryReviewTitle: "Review in this chat?",
+    outboxRecoveryConfirm: "Add this saved copy to “{chat}” for review? Nothing will be sent.",
+    outboxRecoveryRestore: "Restore",
+    outboxRecoveryConflict:
+      "Keep or clear the draft and pending messages in this chat first, or open another non-Incognito chat. Your saved copy is unchanged.",
+    outboxRecoveryStorageFailed:
+      "We could not access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
+    outboxRecoveryFull:
+      "There are more saved messages than we can show. Review or delete the copies below to make room. The remaining messages are still saved in this browser.",
+    outboxRecoveryDraft: "Draft",
+    outboxRecoveryQueued: "Unsent",
+    outboxRecoverySource: "from {chat}",
+    outboxRecoveryUpdated: "Last updated {time}",
+    outboxRecoveryGoal: "Includes an unsent goal change",
+    outboxRecoveryReply: "Reply to: {text}",
+    outboxRecoveryAttachments: "Attachments: {files}",
+    outboxRecoveryAttachmentMissing:
+      "An attachment could not be loaded. Review the message and reattach the file before sending.",
+    outboxRecoveryDelete: "Delete",
+    outboxRecoveryDeleteTitle: "Delete this saved copy?",
+    outboxRecoveryDeleteConfirm:
+      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a chat will not be deleted.",
+    outboxRecoveryDeleteConflict:
+      "This saved copy changed while you were reviewing it. Nothing was deleted. Reload and review it again.",
+    attachments: {
+      allowImage: "Allow image",
+      attachedFile: "Attached file",
+      audio: "Audio",
+      download: "Download",
+      expand: "Open {filename} in the side panel",
+      open: "Open",
+      previewUnavailable: "Preview unavailable",
+      textPreviewUnavailable:
+        "Could not preview this file. Text previews require UTF-8 files up to 256 KiB. Download it to read the full file.",
+      htmlPreviewUnavailable:
+        "Could not preview this HTML file. HTML previews require UTF-8 files up to 2 MiB. Download it to read the full file.",
+      readFailed: "Could not attach file. Try again.",
+      imagesOnly: "Side chat accepts image attachments only.",
+      tooLarge: "Too large to send: {names}{more}",
+      tooLargeToast: "File too large. Try a smaller file.",
+      openOriginal: "Open original",
+      compressToFit: "Compress to fit",
+      retryCompression: "Retry compression",
+      compressionHint:
+        "Video is too large. Compress a copy on this device; the original stays unchanged.",
+      compressing: "Compressing · {progress}%",
+      compressionUnsupported: "This browser cannot compress this video.",
+      compressionTooLarge: "Video is still too large. Try a smaller file.",
+      compressionFailed: "Could not compress video. Try again.",
+      showInTextField: "Show in text field",
+      pastedText: "Pasted text",
+      outsideAllowedFolders: "Outside allowed folders",
+      unavailable: "Unavailable",
+      failureDeliveryFailed: "Delivery failed. Try sending this file again.",
+      failureInvalidReference:
+        "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
+      failureFileNotFound: "File not found. Check the path and try again.",
+      failureUnsupportedFormat:
+        "Rejected by the local attachment allowlist. Send a supported file type.",
+      history: "History",
+      image: "Image",
+      notSent: "Not sent",
+      omittedFromHistory: "Omitted from history",
+      omittedFromHistoryWithSize: "Omitted from history · {size}",
+      video: "Video",
+    },
+    privateDraftReload: {
+      blocked: "An unsent Incognito draft is keeping this tab open. Review it before refreshing.",
+      review: "Review private draft",
+      title: "Unsent Incognito draft",
+      description:
+        "This draft stays only in this tab. Copy its text or download its attachments before discarding it to refresh. Keeping this tab open leaves the draft unchanged.",
+      text: "Draft text",
+      copy: "Copy text",
+      goal: "This draft includes an unsent goal change.",
+      reading:
+        "Some attachments are still being read. Keep this tab open, then review the draft again when they finish.",
+      changed:
+        "The draft changed while you were reviewing it. It has not been discarded; review the current draft before refreshing.",
+      copyFailed:
+        "The text could not be copied. Select it in the draft field and copy it manually.",
+      attachmentUnavailable:
+        "This attachment is no longer available to download. Keep the draft open and recover the original file before discarding it.",
+      download: "Download {name}",
+      discard: "Discard this draft and refresh",
+      keep: "Keep in this tab",
+      unavailable:
+        "The private draft could not be opened. It remains in this tab; try Review private draft again.",
+    },
+    progressLabels: {
+      shelling: "Shelling",
+      scuttling: "Scuttling",
+      clawing: "Clawing",
+      pinching: "Pinching",
+      molting: "Molting",
+      bubbling: "Bubbling",
+      tiding: "Tiding",
+      reefing: "Reefing",
+      cracking: "Cracking",
+      sifting: "Sifting",
+      brining: "Brining",
+      nautiling: "Nautiling",
+      krilling: "Krilling",
+      barnacling: "Barnacling",
+      lobstering: "Lobstering",
+      tidepooling: "Tidepooling",
+      pearling: "Pearling",
+      snapping: "Snapping",
+      surfacing: "Surfacing",
+    },
   },
 } satisfies TranslationMap;
 
 export const registerChatComposerEnglish = Object.assign(
   () => {
-    Object.assign(en.chat.composer, catalog.chat.composer);
-    Object.assign(en.chat.queue, catalog.chat.queue);
-    Object.assign(en.chat.mentions, catalog.chat.mentions);
-    Object.assign(en.chat.permissions, catalog.chat.permissions);
-    Object.assign(en.chat.voice, catalog.chat.voice);
-    Object.assign(en.chat.sendErrors, catalog.chat.sendErrors);
+    const {
+      composer,
+      queue,
+      mentions,
+      permissions,
+      voice,
+      sendErrors,
+      attachments,
+      privateDraftReload,
+      progressLabels,
+      ...outboxRecovery
+    } = catalog.chat;
+    Object.assign(en.chat, outboxRecovery);
+    Object.assign(en.chat.composer, composer);
+    Object.assign(en.chat.queue, queue);
+    Object.assign(en.chat.mentions, mentions);
+    Object.assign(en.chat.permissions, permissions);
+    Object.assign(en.chat.voice, voice);
+    Object.assign(en.chat.sendErrors, sendErrors);
+    Object.assign(en.chat.attachments, attachments);
+    Object.assign(en.chat.privateDraftReload, privateDraftReload);
+    Object.assign(en.chat.progressLabels, progressLabels);
   },
   { catalog },
 );

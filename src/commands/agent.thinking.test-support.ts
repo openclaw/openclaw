@@ -27,6 +27,7 @@ export function registerAgentThinkingTests({
     home: string,
     storePath: string,
     agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
+    agentEntries?: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>,
   ) => OpenClawConfig;
   getLastEmbeddedCall: () => Parameters<typeof runEmbeddedAgent>[0] | undefined;
   runtime: RuntimeEnv;
@@ -131,5 +132,17 @@ export function registerAgentThinkingTests({
         model: model.id,
         thinkLevel: "off",
       });
+    }));
+
+  it("runs with the agent entry's verbose default over the global default", () =>
+    withTempHome(async (home) => {
+      mockConfig(
+        home,
+        path.join(home, "sessions.json"),
+        { verboseDefault: "off" },
+        { main: { verboseDefault: "full" } },
+      );
+      await agentCommand({ message: "ping", to: "+1222" }, runtime);
+      expect(getLastEmbeddedCall()?.verboseLevel).toBe("full");
     }));
 }

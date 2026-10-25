@@ -1,5 +1,5 @@
 // Plugin SDK subpath tests cover documented SDK subpath exports and package aliases.
-import fs, { readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as Contract from "openclaw/plugin-sdk/channel-contract";
@@ -47,19 +47,14 @@ const PUBLIC_SDK_TEST_HELPER_SUBPATHS_WITH_TOP_LEVEL_MOCKS = ["provider-http-tes
 
 const importSdk = async (subpath: string) => import(`openclaw/plugin-sdk/${subpath}`);
 
-type BrowserFacadeSourceContract = {
+type BrowserHelperContract = {
   subpath: string;
   mentions: readonly string[];
   omits: readonly string[];
-};
-
-type BrowserHelperExportParityContract = {
-  corePath: string;
-  extensionPath: string;
   expectedExports: readonly string[];
 };
 
-const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = [
+const BROWSER_HELPER_CONTRACTS: readonly BrowserHelperContract[] = [
   {
     subpath: "browser-control-auth",
     mentions: identifiers(`
@@ -69,6 +64,10 @@ const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = 
     omits: identifiers(`
       resolveGatewayAuth writeConfigFile generateBrowserControlToken
       ensureGatewayStartupAuth
+    `),
+    expectedExports: identifiers(`
+      BrowserControlAuth ensureBrowserControlAuth resolveBrowserControlAuth
+      shouldAutoGenerateBrowserAuth
     `),
   },
   {
@@ -82,21 +81,6 @@ const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = 
       resolveBrowserSsrFPolicy ensureDefaultProfile ensureDefaultUserBrowserProfile
       normalizeHexColor
     `),
-  },
-];
-
-const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParityContract[] = [
-  {
-    corePath: "src/plugin-sdk/browser-control-auth.ts",
-    extensionPath: "extensions/browser/browser-control-auth.ts",
-    expectedExports: identifiers(`
-      BrowserControlAuth ensureBrowserControlAuth resolveBrowserControlAuth
-      shouldAutoGenerateBrowserAuth
-    `),
-  },
-  {
-    corePath: "src/plugin-sdk/browser-profiles.ts",
-    extensionPath: "extensions/browser/browser-profiles.ts",
     expectedExports: identifiers(`
       DEFAULT_AI_SNAPSHOT_MAX_CHARS DEFAULT_BROWSER_ACTION_TIMEOUT_MS
       DEFAULT_BROWSER_DEFAULT_PROFILE_NAME DEFAULT_BROWSER_EVALUATE_ENABLED
@@ -130,51 +114,24 @@ function readRepoSource(relativePath: string): string {
   return readCachedSource(resolve(REPO_ROOT, relativePath));
 }
 
-function collectNamedExportsFromClause(clause: string): string[] {
-  return clause
-    .split(",")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0)
-    .map((segment) => segment.replace(/^type\s+/u, ""))
-    .map((segment) => {
-      const aliasMatch = segment.match(/\s+as\s+([A-Za-z_$][\w$]*)$/u);
-      if (aliasMatch?.[1]) {
-        return aliasMatch[1];
-      }
-      return segment;
-    });
-}
-
 function collectNamedExportsFromSource(source: string): string[] {
   const names = new Set<string>();
-
-  const exportClausePattern =
-    /export\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s+["'][^"']+["'])?\s*;?/gms;
-  for (const match of source.matchAll(exportClausePattern)) {
-    for (const name of collectNamedExportsFromClause(match[1] ?? "")) {
-      names.add(name);
-    }
-  }
-
-  for (const pattern of [
-    /\bexport\s+(?:declare\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gu,
-    /\bexport\s+(?:declare\s+)?const\s+([A-Za-z_$][\w$]*)/gu,
-    /\bexport\s+type\s+([A-Za-z_$][\w$]*)\s*=/gu,
-    /\bexport\s+interface\s+([A-Za-z_$][\w$]*)/gu,
-    /\bexport\s+class\s+([A-Za-z_$][\w$]*)/gu,
-  ]) {
-    for (const match of source.matchAll(pattern)) {
-      if (match[1]) {
-        names.add(match[1]);
+  for (const match of source.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/gms)) {
+    for (const segment of (match[1] ?? "").split(",")) {
+      const name = segment.trim().replace(/^type\s+/u, "");
+      if (name) {
+        names.add(name.match(/\s+as\s+([A-Za-z_$][\w$]*)$/u)?.[1] ?? name);
       }
     }
   }
-
+  const declarations =
+    /\bexport\s+(?:(?:declare\s+)?(?:async\s+)?function|(?:declare\s+)?const|type(?=\s+[A-Za-z_$][\w$]*\s*=)|interface|class)\s+([A-Za-z_$][\w$]*)/gu;
+  for (const match of source.matchAll(declarations)) {
+    if (match[1]) {
+      names.add(match[1]);
+    }
+  }
   return [...names].toSorted();
-}
-
-function collectNamedExportsFromRepoFile(relativePath: string): string[] {
-  return collectNamedExportsFromSource(readRepoSource(relativePath));
 }
 
 function createSourceFile(absolutePath: string): ts.SourceFile {
@@ -246,31 +203,13 @@ function topLevelVitestModuleMockLines(filePath: string): number[] {
   return lines;
 }
 
-function expectNamedExportParity(params: BrowserHelperExportParityContract) {
-  for (const file of [params.corePath, params.extensionPath]) {
-    expect(collectNamedExportsFromRepoFile(file), `${file} exports changed`).toEqual([
+function expectNamedExportParity(params: BrowserHelperContract) {
+  for (const dir of ["src/plugin-sdk", "extensions/browser"]) {
+    const file = `${dir}/${params.subpath}.ts`;
+    expect(collectNamedExportsFromSource(readRepoSource(file)), `${file} exports changed`).toEqual([
       ...params.expectedExports,
     ]);
   }
-}
-
-function listTrackedRepoTsFiles(dir: string): string[] | null {
-  const relativeDir = toRepoRelativePath(REPO_ROOT, dir);
-  if (!relativeDir || relativeDir.startsWith("..")) {
-    return null;
-  }
-  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeDir });
-  if (!files) {
-    return null;
-  }
-  return files
-    .filter(
-      (line) =>
-        line.endsWith(".ts") && !line.includes("/dist/") && !line.includes("/node_modules/"),
-    )
-    .map((line) => resolve(REPO_ROOT, ...line.split("/")))
-    .filter((filePath) => fs.existsSync(filePath))
-    .toSorted();
 }
 
 function listRepoTsFiles(dir: string): string[] {
@@ -278,9 +217,14 @@ function listRepoTsFiles(dir: string): string[] {
   if (cached !== undefined) {
     return cached;
   }
-  const trackedFiles = listTrackedRepoTsFiles(dir);
+  const trackedFiles = listGitTrackedFiles({
+    repoRoot: REPO_ROOT,
+    pathspecs: toRepoRelativePath(REPO_ROOT, dir),
+  });
   expect(trackedFiles, "boundary scans require a Git checkout").not.toBeNull();
-  const files = trackedFiles ?? [];
+  const files = (trackedFiles ?? [])
+    .filter((line) => line.endsWith(".ts") && !/\/(?:dist|node_modules)\//u.test(line))
+    .map((line) => resolve(REPO_ROOT, ...line.split("/")));
   repoTsFilesCache.set(dir, files);
   return files;
 }
@@ -301,31 +245,9 @@ function findRepoFilesContaining(params: {
     .toSorted();
 }
 
-function isIdentifierCode(code: number): boolean {
-  return (
-    (code >= 48 && code <= 57) ||
-    (code >= 65 && code <= 90) ||
-    (code >= 97 && code <= 122) ||
-    code === 36 ||
-    code === 95
-  );
-}
-
 function sourceMentionsIdentifier(source: string, name: string): boolean {
-  let fromIndex = 0;
-  while (true) {
-    const matchIndex = source.indexOf(name, fromIndex);
-    if (matchIndex === -1) {
-      return false;
-    }
-    const beforeCode = matchIndex === 0 ? -1 : source.charCodeAt(matchIndex - 1);
-    const afterIndex = matchIndex + name.length;
-    const afterCode = afterIndex >= source.length ? -1 : source.charCodeAt(afterIndex);
-    if (!isIdentifierCode(beforeCode) && !isIdentifierCode(afterCode)) {
-      return true;
-    }
-    fromIndex = matchIndex + 1;
-  }
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`(?<![\\w$])${escaped}(?![\\w$])`, "u").test(source);
 }
 
 function expectSourceMentions(subpath: string, names: readonly string[]) {
@@ -367,7 +289,7 @@ function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
   expect(source).not.toMatch(new RegExp(`\\bimport\\(\\s*["']${escapedSpecifier}["']\\s*\\)`, "u"));
 }
 
-function expectBrowserFacadeSourceContract(contract: BrowserFacadeSourceContract) {
+function expectBrowserFacadeSourceContract(contract: BrowserHelperContract) {
   expectSourceMentions(contract.subpath, contract.mentions);
   expectSourceContains(contract.subpath, `artifactBasename: "${contract.subpath}.js"`);
   expectSourceOmits(contract.subpath, contract.omits);
@@ -433,24 +355,11 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps the curated public list free of internal implementation subpaths", () => {
-    for (const deniedSubpath of [
-      "acpx",
-      "device-pair",
-      "lobster",
-      "pairing-access",
-      "provider-model-definitions",
-      "qa-channel",
-      "qa-channel-protocol",
-      "reply-prefix",
-      "secret-input-schema",
-      "signal-core",
-      "synology-chat",
-      "typing",
-      "whatsapp",
-      "whatsapp-action-runtime",
-      "whatsapp-login-qr",
-      "zai",
-    ]) {
+    for (const deniedSubpath of identifiers(`
+      acpx device-pair lobster pairing-access provider-model-definitions qa-channel
+      qa-channel-protocol reply-prefix secret-input-schema signal-core synology-chat
+      typing whatsapp whatsapp-action-runtime whatsapp-login-qr zai
+    `)) {
       expect(pluginSdkSubpaths).not.toContain(deniedSubpath);
     }
   });
@@ -476,54 +385,24 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps browser compatibility helper subpaths as thin facades", () => {
-    for (const contract of BROWSER_FACADE_SOURCE_CONTRACTS) {
+    for (const contract of BROWSER_HELPER_CONTRACTS) {
       expectBrowserFacadeSourceContract(contract);
     }
   });
 
   it("keeps browser helper facade exports aligned with extension public wrappers", () => {
-    for (const contract of BROWSER_HELPER_EXPORT_PARITY_CONTRACTS) {
+    for (const contract of BROWSER_HELPER_CONTRACTS) {
       expectNamedExportParity(contract);
     }
   });
 
   it("keeps helper subpaths aligned", () => {
+    // Shipped exports are checked through the TypeScript graph by plugin-sdk:surface:check.
+    // Keep only additions outside that inventory and negative ownership boundaries here.
     expectSourceNames(
       {
         "expect-runtime": "expectDefined",
-        core: `
-        emptyPluginConfigSchema definePluginEntry defineChannelPluginEntry defineSetupPluginEntry
-        createChatChannelPlugin createChannelPluginBase isSecretRef optionalStringEnum
-      `,
-        routing: `
-        buildAgentSessionKey resolveThreadSessionKeys normalizeMessageChannel
-        resolveGatewayMessageChannel
-      `,
-        "reply-payload": `
-        buildMediaPayload deliverTextOrMediaReply resolveOutboundMediaUrls resolvePayloadMediaUrls
-        sendPayloadMediaSequenceAndFinalize sendPayloadMediaSequenceOrFallback sendTextMediaPayload
-        sendPayloadWithChunkedTextAndMedia
-      `,
-        "media-runtime": "createDirectTextMediaOutbound createScopedChannelMediaMaxBytesResolver",
-        "media-local-roots":
-          "getAgentScopedMediaLocalRoots getAgentScopedMediaLocalRootsForSources",
-        "approval-auth-runtime": `
-        createResolvedApproverActionAuthAdapter isImplicitSameChatApprovalAuthorization
-        markImplicitSameChatApprovalAuthorization resolveApprovalApprovers
-      `,
         "approval-reference-runtime": "buildApprovalResolutionRef",
-        "reply-chunking": "chunkText chunkTextWithMode",
-        "reply-history": `
-        buildInboundHistoryFromEntries buildInboundHistoryFromMap buildPendingHistoryContextFromMap
-        clearHistoryEntriesIfEnabled createChannelHistoryWindow recordPendingHistoryEntryIfEnabled
-      `,
-        "account-helpers": "createAccountListHelpers",
-        "channel-actions": "optionalStringEnum stringEnum",
-        "channel-secret-basic-runtime": `
-        createSimpleChannelSecretContract collectSimpleChannelFieldAssignments
-        collectConditionalChannelFieldAssignments collectSecretInputAssignment getChannelSurface
-        pushAssignment pushInactiveSurfaceWarning ResolverContext SecretTargetRegistryEntry
-      `,
         "channel-secret-tts-runtime": "collectNestedChannelTtsAssignments",
         "provider-web-search-contract": `
         createWebSearchProviderContractFields enablePluginInConfig getScopedCredentialValue
@@ -536,23 +415,6 @@ describe("plugin-sdk subpath exports", () => {
       `,
         "provider-web-fetch-contract": "enablePluginInConfig WebFetchProviderPlugin",
         "tool-payload": "extractToolPayload ToolPayloadCarrier",
-        "device-bootstrap": "approveDevicePairing issueDeviceBootstrapToken listDevicePairing",
-        "allowlist-config-edit":
-          "buildDmGroupAccountAllowlistAdapter createNestedAllowlistOverrideResolver",
-        "allow-from": `
-        addAllowlistUserEntriesFromConfigEntry buildAllowlistResolutionSummary
-        canonicalizeAllowlistWithResolvedIds mapAllowlistResolutionInputs mergeAllowlist
-        patchAllowlistUsersInConfigEntries summarizeMapping compileAllowlist firstDefined
-        formatAllowlistMatchMeta isSenderIdAllowed mergeDmAllowFromSources resolveAllowlistMatchSimple
-      `,
-        runtime: "createLoggerBackedRuntime",
-        "gateway-runtime": "createOperatorApprovalsGatewayClient",
-        "conversation-runtime":
-          "recordInboundSession recordInboundSessionMetaSafe resolveConversationLabel",
-        "directory-runtime": `
-        createChannelDirectoryAdapter createRuntimeDirectoryLiveAdapter
-        listDirectoryEntriesFromSources listResolvedDirectoryEntriesFromSources
-      `,
         "memory-core-host-engine-foundation": [
           'from "../../packages/memory-host-sdk/src/host/fs-utils.js"',
         ],
@@ -711,18 +573,6 @@ describe("plugin-sdk subpath exports", () => {
   it("keeps channel runtime helpers on focused subpaths", () => {
     expectSourceNames(
       {
-        "channel-inbound": `
-        buildMentionRegexes createDirectDmPreCryptoGuardPolicy createChannelInboundDebouncer
-        createInboundDebouncer dispatchInboundDirectDmWithRuntime formatInboundEnvelope
-        formatInboundFromLabel formatLocationText implicitMentionKindWhen logInboundDrop
-        matchesMentionPatterns matchesMentionWithExplicit resolveInboundMentionDecision
-        normalizeMentionText resolveInboundDebounceMs resolveEnvelopeFormatOptions
-        resolveInboundSessionEnvelopeContext shouldDebounceTextInbound toLocationContext
-        createPreCryptoDirectDmAuthorizer resolveInboundDirectDmAccessWithRuntime
-      `,
-        "channel-setup": "createOptionalChannelSetupSurface createTopLevelChannelDmPolicy",
-        "channel-actions":
-          "createUnionActionGate listTokenSourcedAccounts resolveReactionMessageId",
         "channel-targets": `
         applyChannelMatchMeta buildChannelKeyCandidates buildMessagingTarget ChannelId
         createAllowedChatSenderMatcher ensureTargetId normalizeChannelId parseChatAllowTargetPrefixes
@@ -733,40 +583,11 @@ describe("plugin-sdk subpath exports", () => {
         resolveTargetsWithOptionalToken
       `,
         "channel-config-writes": "resolveChannelConfigWrites",
-        "channel-feedback": `
-        createStatusReactionController logAckFailure logTypingFailure removeAckReactionAfterReply
-        shouldAckReaction DEFAULT_EMOJIS shouldAckReactionForWhatsApp WhatsAppAckReactionMode
-      `,
-        "status-helpers": `
-        appendMatchMetadata asString collectIssuesForEnabledAccounts isRecord
-        resolveEnabledConfiguredAccountId
-      `,
-        "command-status": "buildCommandsMessage buildCommandsMessagePaginated buildHelpMessage",
-        "channel-send-result": "attachChannelToResult buildChannelSendResult",
-        "conversation-runtime": `
-        formatThreadBindingDisabledError resolveThreadBindingFarewellText
-        resolveThreadBindingConversationIdFromBindingId resolveThreadBindingEffectiveExpiresAt
-        resolveThreadBindingIdleTimeoutMs resolveThreadBindingIdleTimeoutMsForChannel
-        resolveThreadBindingIntroText resolveThreadBindingLifecycle resolveThreadBindingMaxAgeMs
-        resolveThreadBindingMaxAgeMsForChannel resolveThreadBindingSpawnPolicy
-        resolveThreadBindingThreadName resolveThreadBindingsEnabled formatThreadBindingDurationLabel
-        createScopedAccountReplyToModeResolver createStaticReplyToModeResolver
-        createTopLevelChannelReplyToModeResolver
-      `,
         "thread-bindings-runtime":
           "registerSessionBindingAdapter unregisterSessionBindingAdapter SessionBindingAdapter",
-        "ssrf-runtime": `
-        closeDispatcher createPinnedDispatcher resolvePinnedHostnameWithPolicy formatErrorMessage
-        isPrivateIpAddress assertHttpUrlTargetsPrivateNetwork
-        ssrfPolicyFromDangerouslyAllowPrivateNetwork ssrfPolicyFromAllowPrivateNetwork
-      `,
         "provider-setup": `
         applyProviderDefaultModel defineSelfHostedOpenAICompatibleProvider
         discoverOpenAICompatibleLocalModels discoverOpenAICompatibleSelfHostedProvider
-      `,
-        "provider-auth": `
-        buildOauthProviderAuthResult generateHexPkceVerifierChallenge generatePkceVerifierChallenge
-        toFormUrlEncoded
       `,
         "provider-model-shared": `
         DEFAULT_CONTEXT_TOKENS normalizeModelCompat cloneFirstTemplateModel
@@ -774,25 +595,11 @@ describe("plugin-sdk subpath exports", () => {
       `,
         "provider-catalog-shared":
           "buildSingleProviderApiKeyCatalog buildManifestProviderCatalogFamily",
-        setup: `
-        DEFAULT_ACCOUNT_ID createAllowFromSection createDelegatedSetupWizardProxy
-        createTopLevelChannelDmPolicy mergeAllowFromEntries
-      `,
-        "setup-tools": "formatCliCommand detectBinary formatDocsLink",
-        "lazy-runtime": "createLazyRuntimeSurface createLazyRuntimeModule",
         "agent-harness": ["./agent-harness-runtime.js"],
-        "agent-harness-runtime":
-          "AgentHarness EmbeddedAgentCompactResult agentHarnessStructuredInput",
         sandbox: "registerSandboxBackend runPluginCommandWithTimeout",
-        "secret-input":
-          "buildSecretInputSchema buildOptionalSecretInputSchema normalizeSecretInputString",
         "provider-http": `
         assertOkOrThrowHttpError normalizeBaseUrl postJsonRequest postTranscriptionRequest
         requireTranscriptionText
-      `,
-        "webhook-ingress": `
-        registerPluginHttpRoute resolveWebhookPath readRequestBodyWithLimit
-        readJsonWebhookBodyOrReject requestBodyErrorToText withResolvedWebhookRequestPipeline
       `,
       },
       true,

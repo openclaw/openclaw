@@ -32,6 +32,16 @@ describe("createInboundDebouncer", () => {
   };
   const keyedDebouncer = (options: KeyedOptions) =>
     createInboundDebouncer<Message>({ debounceMs: 0, buildKey: (item) => item.key, ...options });
+  function batchDebouncer<T>(
+    options: RecordingOptions<T> & Pick<InboundDebounceCreateParams<T>, "buildKey">,
+    onBatch: (items: T[]) => void | Promise<void>,
+  ) {
+    return createInboundDebouncer({
+      debounceMs: 50,
+      ...options,
+      onFlush: (items) => flushOnCompletion(() => onBatch(items)),
+    });
+  }
   async function tick<T>(ms: number, calls: T[], expected: T[]) {
     await vi.advanceTimersByTimeAsync(ms);
     expect(calls).toStrictEqual(expected);
@@ -53,29 +63,24 @@ describe("createInboundDebouncer", () => {
     onBatch: (items: number[]) => void | Promise<void> = () => {},
   ) {
     const calls: number[][] = [];
-    const debouncer = createInboundDebouncer({
-      debounceMs: 0,
-      ...options,
-      buildKey: () => "sender",
-      onFlush: (items: number[]) =>
-        flushOnCompletion(() => {
-          calls.push(items);
-          return onBatch(items);
-        }),
-    });
+    const debouncer = batchDebouncer(
+      {
+        debounceMs: 0,
+        ...options,
+        buildKey: () => "sender",
+      },
+      (items: number[]) => {
+        calls.push(items);
+        return onBatch(items);
+      },
+    );
     return { calls, debouncer };
   }
 
   function createRecordingDebouncer<T extends Message = Message>(options: RecordingOptions<T>) {
     const calls: string[][] = [];
-    const debouncer = createInboundDebouncer<T>({
-      debounceMs: 50,
-      ...options,
-      buildKey: (item) => item.key,
-      onFlush: (items) =>
-        flushOnCompletion(() => {
-          calls.push(items.map((item) => item.id));
-        }),
+    const debouncer = batchDebouncer<T>({ ...options, buildKey: (item) => item.key }, (items) => {
+      calls.push(items.map((item) => item.id));
     });
     return { calls, debouncer };
   }
@@ -84,26 +89,30 @@ describe("createInboundDebouncer", () => {
     options: RecordingOptions<T>,
     blockedId = "1",
   ) {
+    const work = blockedWork(blockedId);
+    const debouncer = batchDebouncer<T>({ ...options, buildKey: (item) => item.key }, (items) =>
+      work.run(items.map((item) => item.id).join(",")),
+    );
+    return { debouncer, ...work };
+  }
+
+  function blockedWork(blockedId = "1") {
     const started: string[] = [];
     const finished: string[] = [];
     const entered = createDeferred();
     const release = createDeferred();
-    const debouncer = createInboundDebouncer<T>({
-      debounceMs: 50,
-      ...options,
-      buildKey: (item) => item.key,
-      onFlush: (items) =>
-        flushOnCompletion(async () => {
-          const ids = items.map((item) => item.id).join(",");
-          started.push(ids);
-          if (ids === blockedId) {
-            entered.resolve();
-            await release.promise;
-          }
-          finished.push(ids);
-        }),
-    });
-    return { debouncer, started, finished, entered, release };
+    const run = async (id: string, adopt?: () => Promise<void>) => {
+      started.push(id);
+      if (adopt) {
+        await adopt();
+      }
+      if (id === blockedId) {
+        entered.resolve();
+        await release.promise;
+      }
+      finished.push(id);
+    };
+    return { started, finished, entered, release, run };
   }
 
   it.each([false, true])(
@@ -234,7 +243,6 @@ describe("createInboundDebouncer", () => {
     await tick(1, calls, [["first", "later"]]);
     await debouncer.drain();
   });
-
   it("flushes sustained messages even when the system clock moves backward", async () => {
     const { calls, debouncer } = createRecordingDebouncer({});
 
@@ -252,34 +260,24 @@ describe("createInboundDebouncer", () => {
     await debouncer.drain();
   });
 
-  it("re-arms the quiet window when the flush check holds the batch", async () => {
-    const shouldHoldFlush = vi.fn(() => false).mockReturnValueOnce(true);
-    const { calls, debouncer } = createRecordingDebouncer({ debounceMs: 10, shouldHoldFlush });
-
-    await debouncer.enqueue({ key: "a", id: "1" });
-    await tick(10, calls, []);
-
-    await tick(9, calls, []);
-    await tick(1, calls, [["1"]]);
-    await debouncer.drain();
-  });
-
-  it.each([false, true])(
-    "forces the deadline flush without another hold check (check pending: %s)",
-    async (pending) => {
+  it.each(["release", "hold", "pending"])(
+    "re-arms quiet flushes but enforces the fixed deadline (%s)",
+    async (mode) => {
       const check = createDeferred<boolean>();
-      const shouldHoldFlush = vi.fn(() => (pending ? check.promise : true));
+      const shouldHoldFlush = vi
+        .fn(() => (mode === "pending" ? check.promise : mode === "hold"))
+        .mockReturnValueOnce(mode === "pending" ? check.promise : true);
       const { calls, debouncer } = createRecordingDebouncer({
         debounceMs: 10,
-        maxWaitMs: 30,
+        ...(mode === "release" ? {} : { maxWaitMs: 30 }),
         shouldHoldFlush,
       });
 
       await debouncer.enqueue({ key: "a", id: "1" });
-      await tick(20, calls, []);
-
-      await tick(10, calls, [["1"]]);
-      expect(shouldHoldFlush).toHaveBeenCalledTimes(pending ? 1 : 2);
+      await tick(10, calls, []);
+      await tick(mode === "release" ? 9 : 10, calls, []);
+      await tick(mode === "release" ? 1 : 10, calls, [["1"]]);
+      expect(shouldHoldFlush).toHaveBeenCalledTimes(mode === "pending" ? 1 : 2);
       check.resolve(false);
       await debouncer.drain();
     },
@@ -357,20 +355,10 @@ describe("createInboundDebouncer", () => {
   );
 
   it("releases a keyed chain at admission and drains full flush completions", async () => {
-    const started: string[] = [];
-    const completed: string[] = [];
-    const firstCompletion = createDeferred();
-    const debouncer = lifecycleDebouncer(
-      async (id, lifecycle) => {
-        started.push(id);
-        await lifecycle.onAdopted();
-        if (id === "1") {
-          await firstCompletion.promise;
-        }
-        completed.push(id);
-      },
-      { debounceMs: 50 },
-    );
+    const { started, finished, release, run } = blockedWork();
+    const debouncer = lifecycleDebouncer((id, lifecycle) => run(id, () => lifecycle.onAdopted()), {
+      debounceMs: 50,
+    });
 
     await debouncer.enqueue({ key: "a", id: "1" });
     await debouncer.flushKey("a");
@@ -378,16 +366,16 @@ describe("createInboundDebouncer", () => {
     await debouncer.flushKey("a");
 
     expect(started).toEqual(["1", "2"]);
-    expect(completed).toEqual(["2"]);
+    expect(finished).toEqual(["2"]);
 
     const onDrained = vi.fn();
     const drain = debouncer.drain().then(onDrained);
     await Promise.resolve();
     expect(onDrained).not.toHaveBeenCalled();
 
-    firstCompletion.resolve();
+    release.resolve();
     await drain;
-    expect(completed).toEqual(["2", "1"]);
+    expect(finished).toEqual(["2", "1"]);
   });
 
   it.each(["accepting", "suspended", "restarting"] as const)(

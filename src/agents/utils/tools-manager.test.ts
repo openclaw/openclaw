@@ -254,10 +254,8 @@ describe("ensureTool", () => {
     const { ensureTool } = await import("./tools-manager.js");
     const releaseCheckRelease = vi.fn(async () => {});
     const downloadRelease = vi.fn(async () => {});
-    let resolveCheck!: (value: ReturnType<typeof guardedResponse>) => void;
-    const releaseCheck = new Promise<Parameters<typeof resolveCheck>[0]>((resolve) => {
-      resolveCheck = resolve;
-    });
+    const { promise: releaseCheck, resolve: resolveCheck } =
+      createDeferred<ReturnType<typeof guardedResponse>>();
     extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
       writeFileSync(join(params.destDir, "fd"), "binary");
     });

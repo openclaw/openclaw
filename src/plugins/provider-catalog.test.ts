@@ -52,6 +52,47 @@ describe("manifest model size projection", () => {
   });
 });
 
+describe("manifest model family projection", () => {
+  const providerId = "family-host";
+  const row = { contextWindow: 32_768, maxTokens: 8192 };
+  const catalog: ModelCatalogProvider = {
+    baseUrl: "https://family.example/v1",
+    api: "openai-completions",
+    family: "meta",
+    models: [
+      { id: "inherits", ...row },
+      { id: "declares", family: "zai", ...row },
+    ],
+  };
+
+  it.each([
+    ["raw manifest", () => buildManifestModelProviderConfig({ providerId, catalog }).models],
+    [
+      "effective manifest",
+      () =>
+        buildEffectiveManifestProviderConfig(
+          normalizeModelCatalogProviderRows({
+            provider: providerId,
+            providerCatalog: catalog,
+            source: "manifest",
+          }),
+        )?.models,
+    ],
+    [
+      "catalog augmentation",
+      () =>
+        buildManifestProviderCatalogFamily({
+          surfaces: [{ id: providerId, label: "Family host", catalog }],
+        }).augmentModelCatalog(),
+    ],
+  ])("gives rows their declared or provider family through %s", (_name, project) => {
+    expect(Object.fromEntries((project() ?? []).map((model) => [model.id, model.family]))).toEqual({
+      inherits: "meta",
+      declares: "zai",
+    });
+  });
+});
+
 function createProviderConfig(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
     api: "openai-completions",

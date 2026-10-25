@@ -164,8 +164,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       );
 
       expect(Date.now() - startedAt).toBeLessThan(1_500);
-      // The exact result proves cleanup succeeded. A later numeric PID probe can
-      // race PID reuse and inspect an unrelated process.
+      // Assert cleanup through the result, not a PID probe that can race PID reuse.
       expect(result).toEqual({
         exitCode: 7,
         signal: null,
@@ -416,7 +415,6 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
       await vi.advanceTimersByTimeAsync(130);
 
       await expect(resultPromise).resolves.toMatchObject(timeoutResult);
-      expect(spawnSyncMock).toHaveBeenCalledTimes(2);
       expect(spawnSyncMock.mock.calls.map((call) => call[1])).toEqual([
         ["/PID", "12345", "/T"],
         ["/PID", "12345", "/T", "/F"],

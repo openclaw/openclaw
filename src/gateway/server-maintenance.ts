@@ -121,7 +121,6 @@ export function startGatewayMaintenanceTimers(params: {
   isNixMode?: boolean;
   getRuntimeConfig: () => OpenClawConfig;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
-  runManagedOutgoingMediaGc?: () => Promise<unknown>;
 }): {
   stopPeriodicTasks: () => Promise<void>;
   startMediaCleanup: () => void;
@@ -522,29 +521,27 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   });
 
-  const runManagedOutgoingMediaGc =
-    params.runManagedOutgoingMediaGc ??
-    (async () => {
-      const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
-      return await cleanupManagedOutgoingMediaRecords({
-        hasActiveSessionRun: (sessionKey, agentId) => {
-          const cfg = params.getRuntimeConfig();
-          const defaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
-          if (!agentId && !defaultAgentId) {
-            return false;
-          }
-          return hasRegisteredChatRunForSessionKey({
-            storePath: resolveSessionStorePathCore(cfg.session?.store, {
-              agentId: agentId ?? defaultAgentId,
-            }),
-            resolveGatewayContext: params.resolveGatewayContext,
-            sessionKey,
-            agentId,
-            defaultAgentId,
-          });
-        },
-      });
+  const runManagedOutgoingMediaGc = async () => {
+    const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
+    return await cleanupManagedOutgoingMediaRecords({
+      hasActiveSessionRun: (sessionKey, agentId) => {
+        const cfg = params.getRuntimeConfig();
+        const defaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
+        if (!agentId && !defaultAgentId) {
+          return false;
+        }
+        return hasRegisteredChatRunForSessionKey({
+          storePath: resolveSessionStorePathCore(cfg.session?.store, {
+            agentId: agentId ?? defaultAgentId,
+          }),
+          resolveGatewayContext: params.resolveGatewayContext,
+          sessionKey,
+          agentId,
+          defaultAgentId,
+        });
+      },
     });
+  };
   let mediaCleanupStarted = false;
   const startMediaCleanup = () => {
     if (mediaScheduler.signal.aborted || mediaCleanupStarted) {

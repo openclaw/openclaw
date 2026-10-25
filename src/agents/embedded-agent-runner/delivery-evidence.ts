@@ -50,6 +50,7 @@ export type AgentDeliveryEvidence = {
     aborted?: unknown;
     finalAssistantVisibleText?: unknown;
     terminalReply?: unknown;
+    terminalReplyExpectation?: unknown;
     toolSummary?: {
       calls?: unknown;
     };

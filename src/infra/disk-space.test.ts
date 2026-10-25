@@ -66,7 +66,6 @@ describe("disk-space helpers", () => {
         createLowDiskSpaceWarning({
           targetPath: tempDir,
           purpose: "test staging",
-          thresholdBytes: 512 * 1024 * 1024,
         }),
       ).toBe(`Low disk space near ${tempDir}: 256 MiB available; test staging may fail.`);
     } finally {

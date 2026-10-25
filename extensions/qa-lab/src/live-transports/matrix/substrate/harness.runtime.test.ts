@@ -103,7 +103,6 @@ function recordingProxy(targetBaseUrl: string, setTargetBaseUrl = vi.fn()) {
 async function withStartedMatrixHarness(
   deps: MatrixQaHarnessDeps,
   verify: (params: { outputDir: string; result: MatrixQaHarnessResult }) => Promise<void> | void,
-  options?: { dynamicPort?: boolean },
 ) {
   await withTempDir("matrix-qa-harness-", async (outputDir) => {
     const startRecordingProxyImpl =
@@ -114,7 +113,6 @@ async function withStartedMatrixHarness(
       {
         outputDir,
         repoRoot: "/repo/openclaw",
-        ...(options?.dynamicPort ? {} : { homeserverPort: 28008 }),
       },
       { ...deps, startRecordingProxyImpl },
     );
@@ -127,7 +125,12 @@ function runCommands(responses: Record<string, () => string | Promise<never>>, c
     calls?.push([command, ...args, `@${cwd}`].join(" "));
     const rendered = args.join(" ");
     const response = Object.entries(responses).find(([match]) => rendered.includes(match));
-    return { stdout: response ? await response[1]() : "", stderr: "" };
+    const stdout = response
+      ? await response[1]()
+      : rendered.includes("port matrix-qa-homeserver 8008")
+        ? "127.0.0.1:28008\n"
+        : "";
+    return { stdout, stderr: "" };
   };
 }
 
@@ -160,21 +163,18 @@ describe("matrix harness runtime", () => {
     await withTempDir("matrix-qa-harness-", async (outputDir) => {
       const result = await writeMatrixQaHarnessFiles({
         outputDir,
-        homeserverPort: 28008,
-        registrationToken: "secret-token",
-        serverName: "matrix-qa.test",
       });
 
       const compose = await readFile(result.composeFile, "utf8");
       expect(compose).toContain(
         "image: ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0",
       );
-      expect(compose).toContain('      - "127.0.0.1:28008:8008"');
+      expect(compose).toContain("      - target: 8008\n        host_ip: 127.0.0.1");
       expect(compose).toContain('TUWUNEL_ALLOW_ENCRYPTION: "true"');
       expect(compose).toContain('TUWUNEL_ALLOW_REGISTRATION: "true"');
-      expect(compose).toContain('TUWUNEL_REGISTRATION_TOKEN: "secret-token"');
+      expect(compose).toContain(`TUWUNEL_REGISTRATION_TOKEN: "${result.registrationToken}"`);
       expect(compose).toContain('TUWUNEL_SERVER_NAME: "matrix-qa.test"');
-      expect(result.registrationToken).toBe("secret-token");
+      expect(result.registrationToken).toMatch(/^matrix-qa-[0-9a-f-]{36}$/);
     });
   });
 
@@ -226,7 +226,7 @@ describe("matrix harness runtime", () => {
         })),
       },
       async ({ outputDir, result }) => {
-        expect(result).toMatchObject({ homeserverPort: 49152, baseUrl: "http://127.0.0.1:49152/" });
+        expect(result).toMatchObject({ baseUrl: "http://127.0.0.1:49152/" });
         expect(calls).toContain(
           `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml port matrix-qa-homeserver 8008 @/repo/openclaw`,
         );
@@ -235,7 +235,6 @@ describe("matrix harness runtime", () => {
         await result.restartService();
         expect(setTargetBaseUrl).toHaveBeenCalledWith("http://127.0.0.1:49153/");
       },
-      { dynamicPort: true },
     );
   });
 
@@ -244,7 +243,7 @@ describe("matrix harness runtime", () => {
     await withTempDir("matrix-qa-harness-", async (outputDir) => {
       await expect(
         startMatrixQaHarness(
-          { outputDir, repoRoot: "/repo/openclaw", homeserverPort: 28008 },
+          { outputDir, repoRoot: "/repo/openclaw" },
           {
             runCommand: runCommands({}, calls),
             sleepImpl: vi.fn(async () => {
@@ -276,10 +275,7 @@ describe("matrix harness runtime", () => {
     expect(probeSignals[0]?.aborted).toBe(true);
   });
 
-  it.each([
-    [container, 25],
-    [host, 1_000],
-  ] as const)("returns %s without waiting for a stalled peer", async (healthy, timeoutMs) => {
+  it.each([container, host])("returns %s without waiting for a stalled peer", async (healthy) => {
     const { fetchImpl, probeSignals } = createStalledVersionsFetch(healthy);
     await expect(
       waitForReachableMatrixBaseUrl({
@@ -288,7 +284,6 @@ describe("matrix harness runtime", () => {
         fetchImpl,
         hostBaseUrl: host,
         sleepImpl: vi.fn(awake),
-        timeoutMs,
       }),
     ).resolves.toBe(healthy);
 

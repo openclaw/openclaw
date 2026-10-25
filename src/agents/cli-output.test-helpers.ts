@@ -1,6 +1,41 @@
 import type { CliJsonlStreamingParserOptions } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 
+export const localCliBackend: CliJsonlStreamingParserOptions["backend"] = {
+  command: "local-cli",
+  output: "jsonl",
+  jsonlDialect: "claude-stream-json",
+  sessionIdFields: ["session_id"],
+};
+
+export function createClaudeBackend(
+  command = "local-cli",
+): CliJsonlStreamingParserOptions["backend"] {
+  return { ...localCliBackend, command, sessionIdFields: ["session_id"] };
+}
+
+export function createPluginParser(overrides: Partial<CliJsonlStreamingParserOptions> = {}) {
+  return createCliJsonlStreamingParser({
+    backend: { command: "acme", output: "jsonl" },
+    providerId: "acme-cli",
+    onAssistantDelta: () => {},
+    ...overrides,
+  });
+}
+
+export function finishCliFrames(
+  parser: ReturnType<typeof createClaudeParser>,
+  ...frames: unknown[]
+) {
+  parser.push(joinJsonlFrames(...frames));
+  parser.finish();
+}
+
+export function claudeMessageStart(id?: string) {
+  return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
+}
+export const claudeMessageStop = () => claudeStreamEvent({ type: "message_stop" });
+
 export function createClaudeParser(overrides: Partial<CliJsonlStreamingParserOptions> = {}) {
   return createCliJsonlStreamingParser({
     backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
@@ -84,4 +119,8 @@ export function claudeInputJsonDelta(partialJson: string, index?: number) {
 
 export function claudeTextDelta(text: string, index?: number | string) {
   return indexedEvent("content_block_delta", index, { delta: { type: "text_delta", text } });
+}
+
+export function createGeminiBackend(): CliJsonlStreamingParserOptions["backend"] {
+  return { command: "gemini", output: "jsonl", jsonlDialect: "gemini-stream-json" };
 }

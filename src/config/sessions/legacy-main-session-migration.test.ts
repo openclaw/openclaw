@@ -26,8 +26,6 @@ import {
   setupLegacyMainSessionMigrationTests,
 } from "./legacy-main-session-migration.test-support.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
-import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { appendTranscriptEventInTransaction as appendEvent } from "./session-accessor.sqlite-transcript-store.js";
 import * as retirement from "./session-retirement-read.js";
 import type { SessionRetirementReadOperation } from "./session-retirement-read.types.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
@@ -342,21 +340,17 @@ function recordRetirementReads(): SessionRetirementReadOperation[] {
 }
 
 function seedSessions(stateDir: string, agentId: string, keys: string[]): void {
-  const pathname = databasePath(stateDir, agentId);
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      const options = { allowStoredAliases: true, previousEntry: null };
-      for (const key of keys) {
-        writeSessionEntry(database, key, { sessionId: key, updatedAt: 100 }, options);
-        const scope = { agentId, path: pathname, sessionId: key, sessionKey: key };
-        for (let index = 0; index < 3; index += 1) {
-          const event = { type: "message", id: `${key}-${index}`, text: "synthetic transcript" };
-          appendEvent(database, scope, event, { allowStoredAlias: true });
-        }
-      }
-    },
-    { agentId, path: pathname },
-  );
+  for (const key of keys) {
+    seedClaim({
+      ...claim(agentId, databasePath(stateDir, agentId), key),
+      entry: { sessionId: key, updatedAt: 100 },
+      events: Array.from({ length: 3 }, (_, index) => ({
+        type: "message",
+        id: `${key}-${index}`,
+        text: "synthetic transcript",
+      })),
+    });
+  }
 }
 
 function recordTranscriptReads() {

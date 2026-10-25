@@ -6,6 +6,7 @@ import { readBestEffortConfigSnapshot } from "../config/config.js";
 import { createConfigIoContext } from "../config/io.context.js";
 import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createCliFixture,
@@ -18,12 +19,16 @@ import {
 import {
   createPluginCliLoadSession,
   loadPluginCliDescriptors,
+  loadPluginCliRegistrationEntriesWithDefaults,
   resolvePluginCliRootOwnerIds,
 } from "./cli-registry-loader.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import * as discovery from "./discovery.js";
+import { withPluginInstallRoots } from "./install-root-context.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   cleanupPluginLoaderFixturesForTest,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   writePlugin,
 } from "./loader.test-fixtures.js";
@@ -210,4 +215,94 @@ describe("CLI config producer lifetime", () => {
       expect(program.commands.map((command) => command.name())).toEqual(["live-config"]);
     });
   });
+});
+
+function makeEnvironment() {
+  const root = fs.realpathSync(makePluginLoaderTempDir());
+  return {
+    HOME: root,
+    OPENCLAW_STATE_DIR: path.join(root, "state"),
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  };
+}
+
+it.each(["system-agent", "install-roots", "install-state"] as const)(
+  "prepares %s scopes without mutating the supplied config or env",
+  async (kind) => {
+    const env = makeEnvironment();
+    const at = (...parts: string[]) => path.join(env.HOME, ...parts);
+    const ids = ["alpha", "beta"];
+    const entries = Object.fromEntries(ids.map((id) => [id, { workspace: at(id) }]));
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries },
+      plugins: { allow: ids },
+    };
+    for (const id of ids) {
+      const installPath = at(id, ".openclaw", "extensions", id);
+      writePlugin({
+        id,
+        dir: installPath,
+        filename: "index.cjs",
+        body: `module.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerCli(({ program }) => program.command(${JSON.stringify(id)}), { descriptors: [{ name: ${JSON.stringify(id)}, description: "Scope", hasSubcommands: false }] }); } };`,
+      });
+    }
+    if (kind === "install-state") {
+      for (const id of ids) {
+        const installPath = at(id, ".openclaw", "extensions", id);
+        await refreshPersistedInstalledPluginIndex({
+          config: cfg,
+          env,
+          stateDir: at(id, "state"),
+          reason: "source-changed",
+          installRecords: { [id]: { source: "path", installPath, sourcePath: installPath } },
+        });
+      }
+    }
+    const session = createPluginCliLoadSession();
+    const params = { cfg, env, session };
+    let previous: Awaited<ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>> = [];
+    for (const id of ids) {
+      const run = async () => {
+        const serialized = JSON.stringify([cfg, env]);
+        expect((await loadPluginCliDescriptors(params)).map(({ name }) => name)).toEqual([id]);
+        previous = await loadPluginCliRegistrationEntriesWithDefaults(params);
+        const program = new Command();
+        await previous[0]!.register(program);
+        expect(program.commands.map((command) => command.name())).toEqual([id]);
+        expect(JSON.stringify([cfg, env])).toBe(serialized);
+      };
+      if (kind === "system-agent") {
+        cfg.agents!.defaults = { systemAgent: { agentId: id } };
+        await run();
+      } else {
+        await withPluginInstallRoots(
+          {
+            extensionsDir: at(kind === "install-state" ? "shared" : id, ".openclaw", "extensions"),
+            gitDir: at("shared", "git"),
+            npmDir: at("shared", "npm"),
+            stateDir: at(id, "state"),
+          },
+          run,
+        );
+      }
+    }
+    session.close();
+    await expect(previous[0]!.register(new Command())).rejects.toThrow(/preparation is closed/);
+    expect(() => session.resolve({ cfg, env })).toThrow(/preparation is closed/);
+  },
+);
+
+it("retains the exact new config object when a fresh read has identical serialized values", () => {
+  const env = makeEnvironment();
+  const cfg = { plugins: { enabled: false } };
+  const fresh = { ...cfg };
+  const session = createPluginCliLoadSession();
+  session.resolve({ cfg, env });
+  const next = session.resolve({ cfg: fresh, env });
+  expect(next.context.rawConfig).toBe(fresh);
+  expect(next.context.activationSourceConfig).toBe(fresh);
+  const freshEnv = { ...env };
+  const changedEnv = session.resolve({ cfg: fresh, env: freshEnv });
+  expect(changedEnv).not.toBe(next);
+  session.close();
 });

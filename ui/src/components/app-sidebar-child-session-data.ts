@@ -262,56 +262,6 @@ export function scheduleSidebarChildSessions(
   }
 }
 
-/** Publish an observed child window through the sidebar's existing lineage admission. */
-async function hydrateSidebarChildSessions(params: {
-  owner: {
-    childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
-    loadedChildSessionKeys: ReadonlySet<string>;
-    childSessionErrorsByParent: ReadonlyMap<string, string>;
-  };
-  parentKey: string;
-  sessions: SessionCapability;
-  initialResult: SessionsListResult;
-  childRead: SidebarChildSessionRead;
-  ownsQuery: () => boolean;
-  selectedKey: () => string | null;
-}): Promise<void> {
-  const { owner, parentKey, sessions, initialResult, childRead } = params;
-  const isCurrent = () => params.ownsQuery() && childRead.isCurrent();
-  try {
-    const rows = await fetchChildSessionRows({ sessions, parentKey, isCurrent, initialResult });
-    if (!rows || !isCurrent()) {
-      return;
-    }
-    const accepted = rows.flatMap((row) => {
-      const outcome = childRead.reconcile(row);
-      return outcome.status === "selected" ? (outcome.row ? [outcome.row] : []) : [row];
-    });
-    if (!isCurrent()) {
-      return;
-    }
-    // Removed children leave the window; only the routed lineage survives omission.
-    owner.childSessionRowsByParent = mergeRefreshedChildSessionRows(
-      params.selectedKey(),
-      owner.childSessionRowsByParent,
-      parentKey,
-      sessions.projectRows(accepted),
-    );
-    owner.loadedChildSessionKeys = new Set([...owner.loadedChildSessionKeys, parentKey]);
-    const errors = new Map(owner.childSessionErrorsByParent);
-    errors.delete(parentKey);
-    owner.childSessionErrorsByParent = errors;
-  } catch (error) {
-    if (!isCurrent()) {
-      return;
-    }
-    owner.childSessionErrorsByParent = new Map(owner.childSessionErrorsByParent).set(
-      parentKey,
-      formatUiError(error),
-    );
-  }
-}
-
 /** Admit the observed child window before publishing its sidebar presentation. */
 export function applySidebarChildSessionSnapshot(
   params: {
@@ -352,10 +302,10 @@ export function applySidebarChildSessionSnapshot(
     params.finishLoad();
     return;
   }
-  const result = snapshot.result;
+  const initialResult = snapshot.result;
   const refreshed = query.loading || !query.result;
   query.loading = false;
-  if (!result) {
+  if (!initialResult) {
     return;
   }
   if (!refreshed) {
@@ -374,19 +324,47 @@ export function applySidebarChildSessionSnapshot(
     }
     return;
   }
-  query.result = result;
+  query.result = initialResult;
   if (query.hydration) {
     return;
   }
-  query.hydration = hydrateSidebarChildSessions({
-    owner,
-    parentKey,
-    sessions,
-    initialResult: result,
-    childRead: query.childRead ?? params.captureChildRead(),
-    ownsQuery: params.isCurrent,
-    selectedKey: params.selectedKey,
-  }).finally(() => {
+  const childRead = query.childRead ?? params.captureChildRead();
+  const { isCurrent: ownsQuery, selectedKey } = params;
+  query.hydration = (async () => {
+    const isCurrent = () => ownsQuery() && childRead.isCurrent();
+    try {
+      const rows = await fetchChildSessionRows({ sessions, parentKey, isCurrent, initialResult });
+      if (!rows || !isCurrent()) {
+        return;
+      }
+      const accepted = rows.flatMap((row) => {
+        const outcome = childRead.reconcile(row);
+        return outcome.status === "selected" ? (outcome.row ? [outcome.row] : []) : [row];
+      });
+      if (!isCurrent()) {
+        return;
+      }
+      // Removed children leave the window; only the routed lineage survives omission.
+      owner.childSessionRowsByParent = mergeRefreshedChildSessionRows(
+        selectedKey(),
+        owner.childSessionRowsByParent,
+        parentKey,
+        sessions.projectRows(accepted),
+      );
+      owner.loadedChildSessionKeys = new Set([...owner.loadedChildSessionKeys, parentKey]);
+      const errors = new Map(owner.childSessionErrorsByParent);
+      errors.delete(parentKey);
+      owner.childSessionErrorsByParent = errors;
+    } catch (error) {
+      if (!isCurrent()) {
+        return;
+      }
+      owner.childSessionErrorsByParent = new Map(owner.childSessionErrorsByParent).set(
+        parentKey,
+        formatUiError(error),
+      );
+    }
+  })().finally(() => {
     if (params.isCurrent()) {
       query.hydration = undefined;
       params.finishLoad();

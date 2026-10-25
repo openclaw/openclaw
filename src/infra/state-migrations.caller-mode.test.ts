@@ -209,20 +209,15 @@ it.each(["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"] as const)(
       PI_CODING_AGENT_DIR: undefined,
       [overrideKey]: externalAgentDir,
     };
+    const externalBeforePlanning = snapshotFiles(externalAgentDir);
     const plan = await fixture.plan({ env });
+    expect(snapshotFiles(externalAgentDir)).toEqual(externalBeforePlanning);
     for (const suffix of sqliteSuffixes) {
-      expect(fs.readFileSync(`${externalDatabasePath}${suffix}`, "utf8")).toBe(
-        `external${suffix}\n`,
-      );
       fs.writeFileSync(`${externalDatabasePath}${suffix}`, `changed${suffix}\n`);
     }
+    const externalBeforeRepeatedPlan = snapshotFiles(externalAgentDir);
     const repeatedPlan = await fixture.plan({ env });
-
-    for (const suffix of sqliteSuffixes) {
-      expect(fs.readFileSync(`${externalDatabasePath}${suffix}`, "utf8")).toBe(
-        `changed${suffix}\n`,
-      );
-    }
+    expect(snapshotFiles(externalAgentDir)).toEqual(externalBeforeRepeatedPlan);
     const externalAfterPlanning = snapshotFiles(externalAgentDir);
     let firstLiveRefusal: { id: string; files: Record<string, string> } | undefined;
 
@@ -265,15 +260,16 @@ it.each(["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"] as const)(
     }
     expect(repeatedPlan.snapshot.stateDigest).toBe(plan.snapshot.stateDigest);
     expect(repeatedPlan.planDigest).toBe(plan.planDigest);
-    for (const stepId of ["media-persistence", "transcript-directives", "shared-auth-store"]) {
+    for (const stepId of [
+      "session-entry-state-preparation",
+      "media-persistence",
+      "session-entry-state",
+      "transcript-directives",
+      "shared-auth-store",
+    ]) {
       const plannedSource = byId(plan.steps, stepId)?.source;
       if (overrideKey === "PI_CODING_AGENT_DIR") {
         expect(plannedSource).toEqual(byId(result.stepReceipts, stepId)?.source);
-      }
-      for (const suffix of sqliteSuffixes) {
-        expect(plannedSource).not.toContainEqual(
-          expect.objectContaining({ path: `${externalDatabasePath}${suffix}` }),
-        );
       }
       expect(
         plannedSource?.some(
@@ -329,7 +325,6 @@ it("keeps an unbound configured agent database unopened during copied-state plan
     const externalArtifactsBeforePlan = snapshotExternalArtifacts();
     expect(externalArtifactsBeforePlan["-wal"]).toBeDefined();
     expect(externalArtifactsBeforePlan["-shm"]).toBeDefined();
-    // Preserve the native method so the spy can inspect each opened database before delegating.
     // oxlint-disable-next-line typescript/unbound-method
     const originalPrepare = DatabaseSync.prototype.prepare;
     const externalQueries: string[] = [];

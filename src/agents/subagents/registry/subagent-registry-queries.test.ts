@@ -10,7 +10,6 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
   countActiveRunsForSessionFromRuns,
-  hasDescendantRunAwaitingSettleFromRuns,
   listRunsForRequesterFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
@@ -40,6 +39,35 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
 }
 
 describe("subagent registry query regressions", () => {
+  it.each(["absent", "same object", "distinct object"] as const)(
+    "keeps child snapshots independent across patches with %s memory",
+    (kind) => {
+      const first = makeRun({ runId: "first", childSessionKey: "child", generation: 1 });
+      const second = makeRun({ runId: "second", childSessionKey: "child", generation: 2 });
+      const memory =
+        kind === "absent" ? undefined : kind === "same object" ? second : { ...second };
+      let index = buildSubagentRunReadIndexFromRuns({
+        runs: toRunMap([first, second]),
+        inMemoryRuns: memory ? [memory, memory] : [],
+      });
+      const captured = index.runsByChildSessionKey.get("child");
+      const expected = kind === "distinct object" ? [first, second, memory] : [first, second];
+      expect(captured).toEqual(expected);
+      if (memory) {
+        expect(captured?.filter((row) => row === memory)).toHaveLength(1);
+      }
+      const replacement = { ...first, cleanupCompletedAt: 100 };
+      index = index.patch(toRunMap([replacement]), new Map());
+      expect(index.runsByChildSessionKey.get("child")?.[0]).toBe(replacement);
+      index = index.patch(new Map([[second.runId, undefined]]), new Map());
+      expect(index.runsByChildSessionKey.get("child")).toEqual(
+        memory ? [replacement, memory] : [replacement],
+      );
+      expect(captured).toEqual(expected);
+      expect(captured?.[0]).toBe(first);
+    },
+  );
+
   it("patches one sibling without reading others and preserves group order after removal", () => {
     let unrelatedReads = 0;
     const first = {
@@ -406,11 +434,8 @@ describe("hasDescendantRunAwaitingSettleFromRuns", () => {
     const runs = toRunMap([parent, descendant]);
 
     expect(
-      hasDescendantRunAwaitingSettleFromRuns(
-        runs,
+      buildSubagentRunReadIndexFromRuns({ runs }).hasDescendantRunAwaitingSettle(
         requester,
-        undefined,
-        undefined,
         undefined,
         batchCreatedAt,
       ),
@@ -419,12 +444,9 @@ describe("hasDescendantRunAwaitingSettleFromRuns", () => {
       2,
     );
     expect(
-      hasDescendantRunAwaitingSettleFromRuns(
-        runs,
+      buildSubagentRunReadIndexFromRuns({ runs }).hasDescendantRunAwaitingSettle(
         requester,
         descendant.runId,
-        undefined,
-        undefined,
         batchCreatedAt,
       ),
     ).toBe(false);

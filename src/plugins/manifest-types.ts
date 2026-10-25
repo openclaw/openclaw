@@ -108,8 +108,6 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
-export type PluginManifestModelCatalog = ModelCatalog;
-
 export type PluginManifestModelPricing = {
   providers?: Record<string, ModelPricingProvider>;
 };
@@ -443,6 +441,8 @@ export type PluginManifest = {
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
   autoEnableWhenConfiguredProviders?: string[];
   kind?: PluginKind | PluginKind[];
+  /** Context engine registration IDs owned by this plugin before runtime loading. */
+  contextEngineIds?: string[];
   channels?: string[];
   /** Account-key selection rules available before channel runtime loads. */
   channelAccountKeyPolicies?: Record<string, ChannelAccountKeyPolicy>;
@@ -465,7 +465,7 @@ export type PluginManifest = {
    * Declarative model catalog metadata used by future read-only listing,
    * onboarding, and model picker surfaces before provider runtime loads.
    */
-  modelCatalog?: PluginManifestModelCatalog;
+  modelCatalog?: ModelCatalog;
   /** Manifest-owned external pricing lookup policy for provider refs. */
   modelPricing?: PluginManifestModelPricing;
   /** Manifest-owned model-id normalization used before provider runtime loads. */

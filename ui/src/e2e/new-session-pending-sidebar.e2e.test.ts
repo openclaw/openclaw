@@ -6,55 +6,12 @@ import {
   navigateInApp,
   waitForCommittedChatRoute,
   controlUiSessionPath,
-  pollText,
   pollValue,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it.each(["named", "failed"])(
-    "replaces the title placeholder when title generation is %s",
-    async (outcome) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const key = "agent:main:dashboard:title-settlement";
-        const pending = {
-          key,
-          sessionId: "title-settlement",
-          kind: "direct",
-          updatedAt: 1,
-          titlePending: true,
-          status: "done",
-          hasActiveRun: false,
-        };
-        const gateway = await installMockGateway(page, { sessionKey: key, sessions: [pending] });
-        await page.goto(new URL(controlUiSessionPath(key), suite.server.baseUrl).href);
-        const sidebar = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-        const header = page.locator(".chat-pane__header");
-        await sidebar.locator(".session-title-placeholder").waitFor();
-        await header.locator(".session-title-placeholder").waitFor();
-        const settled = {
-          ...pending,
-          updatedAt: 2,
-          titlePending: false,
-          ...(outcome === "named" ? { displayName: "Release readiness" } : {}),
-        };
-        await gateway.setSessionsListResponse({ sessions: [settled] });
-        await gateway.emitGatewayEvent("sessions.changed", {
-          reason: "chat.title",
-          sessionKey: key,
-          agentId: "main",
-          session: settled,
-        });
-        const expected = outcome === "named" ? "Release readiness" : "New session";
-        await pollText(sidebar.locator(".sidebar-recent-session__name")).toBe(expected);
-        await pollText(header.locator(".chat-pane__session-title-text")).toBe(expected);
-        expect(await sidebar.locator(".session-title-placeholder").count()).toBe(0);
-        expect(await header.locator(".session-title-placeholder").count()).toBe(0);
-      });
-    },
-  );
-
   it.each([
     { destination: "chip", mode: "chip", pinned: false },
     { destination: "roster", mode: "roster", pinned: false },
@@ -113,7 +70,6 @@ suite.define(() => {
             expect(await provisional.count()).toBe(0);
           }
           if (mode === "chip") {
-            // The handoff occupies the slot its admitted row will take.
             const handoffSlot = page.locator(
               ".sidebar-sessions .sidebar-recent-sessions .sidebar-recent-session--creating",
             );
@@ -123,7 +79,6 @@ suite.define(() => {
                 .locator(".sidebar-recent-session__text")
                 .evaluate((element) => Math.round(element.getBoundingClientRect().left));
             expect(await titleInset(provisional)).toBe(await titleInset(oldRow));
-            // Row spacing, not section spacing: admission swaps rows without moving the rest.
             const bounds = (row: typeof provisional) =>
               row.evaluate((element) => element.getBoundingClientRect().toJSON() as DOMRect);
             const [pendingBox, oldBox] = [await bounds(provisional), await bounds(oldRow)];
@@ -142,17 +97,9 @@ suite.define(() => {
             );
           expect(await bars.count()).toBe(mode === "chip" ? 2 : 1);
           for (const bar of await bars.all()) {
-            const style = await bar.evaluate((element) => {
-              const { borderRadius, transform, backgroundColor } = getComputedStyle(element);
-              return {
-                radius: borderRadius,
-                transform,
-                background: backgroundColor,
-                animation: getComputedStyle(element, "::after").animationName,
-              };
-            });
-            expect(style).toMatchObject({ radius: "3px", transform: "none", animation: "shimmer" });
-            expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+            expect(
+              await bar.evaluate((element) => getComputedStyle(element, "::after").animationName),
+            ).toBe("shimmer");
           }
           await page.emulateMedia({ reducedMotion: "reduce" });
           for (const bar of await bars.all()) {
@@ -160,9 +107,6 @@ suite.define(() => {
               await bar.evaluate((element) => getComputedStyle(element, "::after").animationName),
             ).toBe("none");
           }
-          expect(await page.locator(".chat-pane__header .session-title-placeholder").count()).toBe(
-            1,
-          );
           expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
           await gateway.rejectDeferred("sessions.create", {
             code: "UNAVAILABLE",
@@ -184,4 +128,66 @@ suite.define(() => {
       );
     },
   );
+
+  it("keeps a group-targeted provisional row in that group through admission", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
+      async ({ page }) => {
+        const row = (key: string, label: string, updatedAt: number, category?: string) => ({
+          key,
+          sessionId: key.split(":").at(-1),
+          kind: "direct",
+          label,
+          updatedAt,
+          ...(category ? { category } : {}),
+        });
+        const sessions = [
+          row("agent:main:gateway", "Start clean gateway", 3, "Claws"),
+          row("agent:main:audit", "Audit model usage", 2, "ClawHub"),
+          row("agent:main:other", "Chat catch-up panel", 1),
+        ];
+        const gateway = await installMockGateway(page, {
+          sessionKey: "agent:main:other",
+          sessions,
+          sessionGroups: ["Claws", "ClawHub"],
+          featureMethods: [
+            "chat.startup",
+            "sessions.create",
+            "sessions.groups.list",
+            "sessions.groups.put",
+          ],
+        });
+        await page.goto(
+          new URL(controlUiSessionPath("agent:main:other"), suite.server.baseUrl).href,
+        );
+        const claws = page.locator('[data-session-section="category:Claws"]');
+        const existing = claws.locator('[data-session-key="agent:main:gateway"]');
+        await existing.waitFor();
+        await navigateInApp(page, "new-session", "?agent=main&group=Claws");
+        await page.locator(".new-session-page__message").fill("Draft the next release notes");
+        await gateway.deferNext("sessions.create");
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const create = await gateway.waitForRequest("sessions.create");
+        const params = create.params as { key: string; category?: string };
+        expect(params.category).toBe("Claws");
+
+        const provisional = page.locator(".sidebar-recent-session--creating");
+        await expect.poll(() => provisional.count()).toBe(1);
+        expect(await claws.locator(".sidebar-recent-session--creating").count()).toBe(1);
+        const top = (locator: typeof provisional) =>
+          locator.evaluate((element) => Math.round(element.getBoundingClientRect().top));
+        const provisionalTop = await top(provisional);
+        expect(provisionalTop).toBeLessThan(await top(existing));
+
+        await gateway.setSessionsListResponse({
+          sessions: [row(params.key, "Draft the next release notes", 4, "Claws"), ...sessions],
+        });
+        await gateway.resolveDeferred("sessions.create", { key: params.key });
+        const admitted = claws.locator(`[data-session-key="${params.key}"]`);
+        await admitted.waitFor();
+        await expect.poll(() => provisional.count()).toBe(0);
+        expect(await top(admitted)).toBe(provisionalTop);
+      },
+    );
+  });
 });

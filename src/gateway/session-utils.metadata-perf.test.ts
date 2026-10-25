@@ -150,37 +150,34 @@ test("rebuilds resident thinking facts on config and catalog publication", async
       getConfig: () => cfg,
       getModelCatalog: async () => catalog,
     });
+    using _ = { [Symbol.dispose]: () => projection.dispose() };
     const read = () => projection.snapshot({ agentId: "main", key }).row;
-    try {
-      await projection.ensureMaterialized();
-      expect(read()).toMatchObject({ thinkingLevel: "medium", thinkingDefault: "off" });
-      const initialCalls = fixture.policyCalls();
-      cfg = {
-        ...cfg,
-        agents: { ...cfg.agents, defaults: { ...cfg.agents?.defaults, thinkingDefault: "high" } },
-      };
-      expect(read()?.thinkingDefault).toBe("off");
-      sessionChanges.emit({ all: true, scope: "config" });
-      await projection.ensureMaterialized();
-      expect(read()).toMatchObject({ thinkingLevel: "medium", thinkingDefault: "high" });
-      expect(fixture.policyCalls()).toBeGreaterThan(initialCalls);
-      const configuredCalls = fixture.policyCalls();
-      catalog = fixture.prepare({
-        entries: [{ ...fixture.model, reasoning: false }],
-        routeVariants: [],
-      });
-      expect(read()?.thinkingLevel).toBe("medium");
-      notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-      await projection.ensureMaterialized();
-      expect(read()).toMatchObject({
-        thinkingLevel: "medium",
-        thinkingDefault: "off",
-        thinkingOptions: ["off", "ultra"],
-      });
-      expect(fixture.policyCalls()).toBeGreaterThan(configuredCalls);
-    } finally {
-      projection.dispose();
-    }
+    await projection.ensureMaterialized();
+    expect(read()).toMatchObject({ thinkingLevel: "medium", thinkingDefault: "off" });
+    const initialCalls = fixture.policyCalls();
+    cfg = {
+      ...cfg,
+      agents: { ...cfg.agents, defaults: { ...cfg.agents?.defaults, thinkingDefault: "high" } },
+    };
+    expect(read()?.thinkingDefault).toBe("off");
+    sessionChanges.emit({ all: true, scope: "config" });
+    await projection.ensureMaterialized();
+    expect(read()).toMatchObject({ thinkingLevel: "medium", thinkingDefault: "high" });
+    expect(fixture.policyCalls()).toBeGreaterThan(initialCalls);
+    const configuredCalls = fixture.policyCalls();
+    catalog = fixture.prepare({
+      entries: [{ ...fixture.model, reasoning: false }],
+      routeVariants: [],
+    });
+    expect(read()?.thinkingLevel).toBe("medium");
+    notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+    await projection.ensureMaterialized();
+    expect(read()).toMatchObject({
+      thinkingLevel: "medium",
+      thinkingDefault: "off",
+      thinkingOptions: ["off", "ultra"],
+    });
+    expect(fixture.policyCalls()).toBeGreaterThan(configuredCalls);
   });
 });
 

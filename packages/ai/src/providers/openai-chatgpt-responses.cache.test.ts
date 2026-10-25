@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { getEventListeners, once } from "node:events";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { setTimeout as nextTimerTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -83,8 +83,9 @@ describe("ChatGPT Responses cached transport", () => {
     try {
       await expectStopped(completeTurn());
       const control = new WeakRef({ unowned: true });
-      // The cached native socket and its real expiry timer remain live through GC.
-      await nextEventLoopTurn();
+      // This later timer follows the stream's cooperative timer; the cached native
+      // socket and its real expiry timer remain live through GC.
+      await nextTimerTurn(0);
       queryObjects(WeakRef);
       expect(control.deref()).toBeUndefined();
       assert.ok(reference);

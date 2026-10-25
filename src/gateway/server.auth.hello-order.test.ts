@@ -5,26 +5,24 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeConfigFile } from "../config/config.js";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { upsertPresence, type SystemPresence } from "../infra/system-presence.js";
 import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import {
   connectReq,
+  BROWSER_ORIGIN as origin,
+  configureBrowserAuth,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   openWs,
   onceMessage,
-  testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
 import { connectWatchNode } from "./watch-node-http.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-const origin = "https://control.example.com";
 
 type ObservedFrame = {
   event?: string;
@@ -35,22 +33,7 @@ type ObservedFrame = {
   };
 };
 
-beforeEach(async () => {
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
-  testState.gatewayAuth = auth;
-  const controlUi = { allowedOrigins: [origin] };
-  testState.gatewayControlUi = controlUi;
-  await writeConfigFile({
-    gateway: { auth, trustedProxies: ["127.0.0.1"], controlUi },
-  });
-});
+beforeEach(() => configureBrowserAuth());
 
 async function openBrowser(port: number, instanceId: string, caps: string[] = []) {
   const identityPath = path.join(tempDirs.make("hello-browser-"), "client", "credentials.sqlite");

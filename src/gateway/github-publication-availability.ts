@@ -21,6 +21,7 @@ import {
   readCapturedSessionActorEntry,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntrySnapshotField } from "../config/sessions/session-entry-snapshot-values.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -147,8 +148,11 @@ export async function prepareGitHubPublicationSession(
     assertCurrent?: () => void;
     target?: AgentRunSessionTarget;
     fields?: readonly (keyof NonNullable<PublicationSessionRead["entry"]>)[];
+    /** Saved snapshots a consumer compares; stored reads omit them by default. */
+    projection?: readonly SessionEntrySnapshotField[];
   } = {},
 ) {
+  const projection = options.projection ?? [];
   const fields = [
     ...(options.fields ??
       ([
@@ -202,7 +206,7 @@ export async function prepareGitHubPublicationSession(
       const agentId = options.target.agentId;
       const storedKey = options.target.sessionKey ?? sessionKey;
       loaded = await withSessionEntryReadOnlyInWorker(
-        { agentId, sessionKey: storedKey, storePath, projection: [] },
+        { agentId, sessionKey: storedKey, storePath, projection },
         () => options.assertCurrent?.(),
         async (read, owner) => {
           if (!read.ok) {
@@ -219,7 +223,7 @@ export async function prepareGitHubPublicationSession(
         cfg: options.cfg ?? getRuntimeConfig(),
         key: sessionKey,
         agentId: options.agentId,
-        projection: [],
+        projection,
         assertActive: options.assertCurrent,
         onSelected(target) {
           const source = target.capturedReadSource;

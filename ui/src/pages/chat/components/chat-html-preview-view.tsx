@@ -1,14 +1,13 @@
-import type { LazyCustomElementRequests } from "../../../app/lazy-custom-element.ts";
+import { lazy } from "solid-js";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { ChatImportBoundary } from "./chat-import-boundary.tsx";
 import type { SessionFileSource } from "./chat-sidebar-content-types.ts";
 
 export type PreviewProps = {
   desktop?: boolean;
-  state: LazyCustomElementRequests["visibleState"];
-  onRetry: () => void;
   content: string;
   sourceIdentity: string;
   title: string;
@@ -16,31 +15,29 @@ export type PreviewProps = {
   sessionFileSource?: SessionFileSource;
 };
 
+const Preview = lazy(() => import("./chat-html-preview-element.tsx"), {
+  export: "ChatHtmlPreview",
+});
+
 export function HtmlPreviewLoading() {
   return <PanelLoadingSkeleton variant="document" label={t("common.loading")} compact />;
 }
 
 export function HtmlPreview(props: PreviewProps) {
   return (
-    <>
-      {props.state?.status === "error" ? (
-        <LazyViewError
-          error={props.state.error}
-          stale={props.state.stale}
-          onRetry={props.onRetry}
-        />
-      ) : props.state ? (
-        <HtmlPreviewLoading />
-      ) : undefined}
-      <openclaw-chat-html-preview
-        prop:desktop={props.desktop ?? false}
-        prop:html={props.content}
-        prop:sourceIdentity={props.sourceIdentity}
-        prop:title={props.title}
-        prop:embedSandboxMode={props.embedSandboxMode}
-        prop:sessionFileSource={props.sessionFileSource}
+    <ChatImportBoundary
+      identity={[props.sourceIdentity, props.content]}
+      fallback={() => <HtmlPreviewLoading />}
+    >
+      <Preview
+        desktop={props.desktop ?? false}
+        html={props.content}
+        sourceIdentity={props.sourceIdentity}
+        title={props.title}
+        embedSandboxMode={props.embedSandboxMode}
+        sessionFileSource={props.sessionFileSource}
       />
-    </>
+    </ChatImportBoundary>
   );
 }
 

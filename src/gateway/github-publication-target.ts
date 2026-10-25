@@ -26,7 +26,7 @@ import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 
 /** A refreshed observation must still name the bound PR and its original repositories/refs. */
-export function assertBoundGitHubPullRequest(
+function assertBoundGitHubPullRequest(
   binding: SessionGitHubPullRequestBinding,
   current: SessionGitHubPullRequestInspectResult,
 ): void {

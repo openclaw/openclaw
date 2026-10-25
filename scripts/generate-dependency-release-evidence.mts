@@ -113,7 +113,7 @@ function runCommand(
   });
 }
 
-export function resolveReleaseTag({
+function resolveReleaseTag({
   releaseRef,
   packageVersion,
 }: Required<Pick<ManifestParams, "packageVersion" | "releaseRef">>) {
@@ -498,7 +498,7 @@ Options:
 `;
 }
 
-export function parseArgs(argv: string[]): EvidenceCliOptions {
+function parseArgs(argv: string[]): EvidenceCliOptions {
   const options: EvidenceCliOptions = {
     rootDir: process.cwd(),
     outputDir: null,

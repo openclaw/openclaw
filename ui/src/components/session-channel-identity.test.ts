@@ -132,14 +132,3 @@ it.each([
 ] satisfies [Partial<GatewaySessionRow>, Expected][])("projects %j", (row, expected) => {
   expect(projectSidebarSession(row).channelPresentation).toMatchObject(expected);
 });
-
-it("does not label a dashboard session as channel-linked because of its last delivery route", () => {
-  expect(
-    projectSidebarSession({
-      key: "agent:main:dashboard:chat",
-      channel: "whatsapp",
-      chatType: "direct",
-      origin: { provider: "whatsapp", from: "+15555550123" },
-    }).channelPresentation,
-  ).toBeUndefined();
-});

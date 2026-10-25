@@ -889,14 +889,13 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
 export function readQaScorecardProfileOptions(profileId: string | undefined, repoRoot?: string) {
   const profile = profileId?.trim();
   if (!profile) {
-    return { evidenceMode: "full" as const, channelDriver: "qa-channel" as const };
+    return { evidenceMode: "full" as const };
   }
   const profileOptions = readQaMaturityTaxonomy(repoRoot)?.profiles.find(
     (entry) => entry.id === profile,
   );
   return {
     evidenceMode: profileOptions?.evidenceMode ?? "full",
-    channelDriver: profileOptions?.channelDriver ?? "qa-channel",
   };
 }
 

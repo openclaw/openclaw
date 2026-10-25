@@ -10,6 +10,7 @@ import {
   runInitialConfigWriteHealth,
   runWriteConfigHealth,
 } from "./doctor-health-contribution-runners.config.js";
+import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import { useDoctorHealthFixture } from "./doctor-health.fixture.test-support.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
@@ -52,6 +53,21 @@ describe("Doctor with externally managed config", () => {
           mocks.runContributions.mockImplementation(async (ctx) => {
             await runInitialConfigWriteHealth(ctx);
             await runWriteConfigHealth(ctx);
+            await createDoctorHealthContribution("doctor:read-only-advisory", "State advisory", {
+              healthChecks: {
+                description: "Optional state improvement",
+                detect: async () => [
+                  {
+                    checkId: "core/doctor/read-only-advisory",
+                    severity: "warning",
+                    category: "recommended",
+                    message: "Optional state improvement remains available.",
+                    fixHint: "Review the optional state improvement after redeploying config.",
+                    docsUrl: "https://docs.openclaw.ai/cli/doctor/running#understanding-findings",
+                  },
+                ],
+              },
+            }).run(ctx);
           });
           const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
           try {
@@ -78,6 +94,15 @@ describe("Doctor with externally managed config", () => {
             } else {
               await expect(startup).resolves.toMatchObject({ snapshot: { valid: true } });
             }
+            const output = runtime.log.mock.calls.flat().join("\n");
+            expect(output).not.toContain("Recommended improvements:");
+            expect(output).not.toContain("Optional state improvement remains available.");
+            expect(output).not.toContain(
+              "Next step: Review the optional state improvement after redeploying config.",
+            );
+            expect(output).not.toContain(
+              "Docs: https://docs.openclaw.ai/cli/doctor/running#understanding-findings",
+            );
           } finally {
             configSpy.mockRestore();
             fs.chmodSync(state.configPath, 0o600);

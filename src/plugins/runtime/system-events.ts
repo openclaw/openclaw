@@ -57,8 +57,8 @@ export function enqueueRoutedSystemEvent(
 }
 
 export const consumeSelectedSystemEventEntriesFromSdk: typeof events.consumeSelectedSystemEventEntries =
-  (key, entries) =>
-    events.consumeSelectedSystemEventEntries(resolveSystemEventSessionKey(key), entries);
+  (key, entries, options) =>
+    events.consumeSelectedSystemEventEntries(resolveSystemEventSessionKey(key), entries, options);
 export const drainSystemEventEntriesFromSdk: typeof events.drainSystemEventEntries = (key) =>
   events.drainSystemEventEntries(resolveSystemEventSessionKey(key));
 export const drainSystemEventsFromSdk: typeof events.drainSystemEvents = (key) =>

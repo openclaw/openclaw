@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   parseCardsJson,
   parseObservationSegments,
@@ -99,6 +99,21 @@ describe("parseCardsJson", () => {
   it("reports actionable errors for the correction round-trip", () => {
     expectError(parse(JSON.stringify([card({ startTime: "13:05 pm" })])), "startTime");
   });
+
+  it("orders model cards before validating revision coverage", () => {
+    const result = parse(
+      JSON.stringify([card({ startTime: "10:30:00", endTime: "11:00:00" }), card()]),
+    );
+    assert(result.ok);
+    expect(
+      validateCardCoverage({
+        drafts: result.drafts,
+        requiredSpans: [{ startMs: dayMs("10:00:00"), endMs: dayMs("11:00:00") }],
+        windowStartMs: dayMs("10:00:00"),
+        windowEndMs: dayMs("11:00:00"),
+      }),
+    ).toEqual({ ok: true });
+  });
 });
 
 it.each<[string, number[], number, boolean, number[] | null, number]>([
@@ -118,6 +133,23 @@ it.each<[string, number[], number, boolean, number[] | null, number]>([
     ids ? expect.objectContaining({ frameIds: ids, endMs: t0 + end }) : null,
   );
 });
+
+it.each(["2026-07-03", "2026-03-08", "2026-11-01"])(
+  "closes a batch at local midnight on %s without including next-day frames",
+  (day) => {
+    const first = new Date(`${day}T23:59:00`).getTime();
+    expect(
+      selectBatchFrames({
+        frames: [0, 30_000, 60_000].map((offset, id) => ({
+          id,
+          capturedAtMs: first + offset,
+        })),
+        windowMs: 900_000,
+        nowMs: first + 60_000,
+      }),
+    ).toEqual({ frameIds: [0, 1], startMs: first, endMs: first + 30_001 });
+  },
+);
 
 type Span = [number, number];
 const span = ([start, end]: Span) => ({

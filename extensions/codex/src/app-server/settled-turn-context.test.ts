@@ -32,25 +32,23 @@ function message(value: unknown, identity: string): AgentMessage {
   return attachCodexMirrorIdentity(value as AgentMessage, identity);
 }
 
+const user = (content: string, identity: string) => message({ role: "user", content }, identity);
+const call = (id: string, identity: string, name = "message") =>
+  message(
+    { role: "assistant", content: [{ type: "toolCall", id, name, arguments: {} }] },
+    identity,
+  );
+const result = (id: string, text: string, identity: string, toolName = "message") =>
+  message(
+    { role: "toolResult", toolCallId: id, toolName, content: [{ type: "text", text }] },
+    identity,
+  );
+
 function settledTurn(): [AgentMessage, AgentMessage, AgentMessage] {
   return [
-    message({ role: "user", content: "Send it." }, "turn-2:prompt"),
-    message(
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-2", name: "message", arguments: {} }],
-      },
-      "turn-2:tool:call-2:call",
-    ),
-    message(
-      {
-        role: "toolResult",
-        toolCallId: "call-2",
-        toolName: "message",
-        content: [{ type: "text", text: "sent" }],
-      },
-      "turn-2:tool:call-2:result",
-    ),
+    user("Send it.", "turn-2:prompt"),
+    call("call-2", "turn-2:tool:call-2:call"),
+    result("call-2", "sent", "turn-2:tool:call-2:result"),
   ];
 }
 
@@ -145,9 +143,9 @@ it.each([
 
 it("captures source selection and the exact settled branch", async () => {
   const modelProvider = "openai";
-  const prior = message({ role: "user", content: "Alice is the recipient." }, "turn-1:prompt");
+  const prior = user("Alice is the recipient.", "turn-1:prompt");
   const settledMessages = settledTurn();
-  const later = message({ role: "user", content: "later message" }, "turn-3:prompt");
+  const later = user("later message", "turn-3:prompt");
   const historyMessages = [prior, ...settledMessages, later];
   const selection = { model: "gpt-5.6-luna", modelProvider, authProfileId: "openai:captured" };
 
@@ -161,6 +159,51 @@ it("captures source selection and the exact settled branch", async () => {
     modelProvider,
     authProfileId: "openai:captured",
   });
+});
+
+it("captures a turn whose internal prompt was never mirrored, anchored at its first tool call", async () => {
+  // A stranded-reply retry suppresses its system prompt and carries no recorder, so the
+  // transcript holds no `turn-2:prompt` row; the turn's evidence starts at its tool call.
+  const prior = [
+    user("Send the update to Alice.", "turn-1:prompt"),
+    message(
+      { role: "assistant", content: [{ type: "text", text: "Update: shipped." }] },
+      "turn-1:final",
+    ),
+  ];
+  const settledMessages = settledTurn().slice(1);
+  const historyMessages = [...prior, ...settledMessages];
+
+  const rejected = await captureContext(settledMessages, historyMessages);
+  expect(rejected).toBeUndefined();
+
+  const context = await captureContext(settledMessages, historyMessages, {
+    promptSuppressed: true,
+  });
+  expect(context?.data).toEqual([
+    userItem("Send the update to Alice."),
+    {
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "Update: shipped." }],
+    },
+    ...settledItems().slice(1),
+  ]);
+});
+
+it("still rejects a suppressed-prompt turn whose evidence carries a prompt row", async () => {
+  const settledMessages = settledTurn();
+  const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+  try {
+    await expect(
+      captureContext(settledMessages, settledMessages, { promptSuppressed: true }),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith("codex settled-turn finalization context capture failed", {
+      reason: "provenance_rejected",
+    });
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 it.each([
@@ -197,10 +240,7 @@ it.each([
       settledMessages[0] = attachUpstreamUserText(settledMessages[0], prompt);
       expected[0] = userItem(prompt);
     }
-    const historyMessages = [
-      message({ role: "user", content: "Older context." }, "older:prompt"),
-      ...settledMessages,
-    ];
+    const historyMessages = [user("Older context.", "older:prompt"), ...settledMessages];
     const before = structuredClone(historyMessages);
     const context = await captureContext(settledMessages, historyMessages);
     if (overflow > 0) {
@@ -217,28 +257,11 @@ it.each([false, true])(
   "keeps tool pairs atomic across steering (oversized=%s)",
   async (oversized) => {
     const prior = [
-      message({ role: "user", content: "Look up Alice." }, "prior:prompt"),
-      message(
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "lookup", name: "lookup", arguments: {} }],
-        },
-        "prior:call",
-      ),
-      message(
-        { role: "user", content: oversized ? "x".repeat(65537) : "Use the work address." },
-        "steering:prompt",
-      ),
-      message(
-        {
-          role: "toolResult",
-          toolCallId: "lookup",
-          toolName: "lookup",
-          content: [{ type: "text", text: "Alice verified." }],
-        },
-        "prior:result",
-      ),
-      message({ role: "user", content: "Alice is the recipient." }, "recent:prompt"),
+      user("Look up Alice.", "prior:prompt"),
+      call("lookup", "prior:call", "lookup"),
+      user(oversized ? "x".repeat(65537) : "Use the work address.", "steering:prompt"),
+      result("lookup", "Alice verified.", "prior:result", "lookup"),
+      user("Alice is the recipient.", "recent:prompt"),
     ];
     const settledMessages = settledTurn();
     const captured = await captureContext(settledMessages, [...prior, ...settledMessages]);
@@ -257,9 +280,7 @@ it.each([false, true])(
 );
 
 it("still rejects duplicate identities in omitted history", async () => {
-  const prior = Array.from({ length: 201 }, (_, index) =>
-    message({ role: "user", content: "prior" }, `old-${index}:prompt`),
-  );
+  const prior = Array.from({ length: 201 }, (_, index) => user("prior", `old-${index}:prompt`));
   const settledMessages = settledTurn();
   await expect(
     captureContext(settledMessages, [...prior, prior[0]!, ...settledMessages]),
@@ -316,15 +337,7 @@ it.each<{
   const current = settledTurn();
   const persisted = settledTurn();
   if (drift) {
-    persisted[2] = message(
-      {
-        role: "toolResult",
-        toolCallId: "call-2",
-        toolName: "message",
-        content: [{ type: "text", text: "different result" }],
-      },
-      "turn-2:tool:call-2:result",
-    );
+    persisted[2] = result("call-2", "different result", "turn-2:tool:call-2:result");
   }
   const select = (messages: AgentMessage[], indices = [0, 1, 2]) =>
     indices.map((index) => messages[index]!);

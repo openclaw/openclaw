@@ -6,7 +6,6 @@ import {
   renderBillingReplyCopy as billingCopy,
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy as codeCopy,
-  renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy as missingKeyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
@@ -46,22 +45,6 @@ describe("failover user copy", () => {
     ).toBe(`⚠️ ${message}`);
   });
 
-  it.each([
-    [undefined, "Troubleshooting: run `openclaw logs --follow` in a terminal."],
-    [
-      "Codex session became active in another runner; wait for it to finish before continuing.",
-      "Details: Codex session became active in another runner; wait for it to finish before continuing.\nTroubleshooting: run `openclaw logs --follow` in a terminal.",
-    ],
-    [
-      "Gateway SDK resource host is not bound",
-      "Details: Gateway SDK resource host is not bound.\nTroubleshooting: run `openclaw logs --follow` in a terminal.",
-    ],
-  ])("keeps heartbeat diagnostics separate from the primary message for %j", (reason, details) => {
-    expect(renderHeartbeatRunFailureCopy(reason)).toBe(
-      `⚠️ The background check did not complete.\n\n${details}`,
-    );
-  });
-
   it("renders only the allowlisted selected-profile code", () => {
     expect(codeCopy("selected_auth_profile_unavailable")).toBe(
       "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
@@ -77,6 +60,13 @@ describe("failover user copy", () => {
     expect(billingCopy({})).toBe(
       "⚠️ The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.",
     );
+  });
+
+  it("keeps already rendered billing copy classified as billing", () => {
+    for (const authMode of [undefined, "oauth"] as const) {
+      const stored = `${billingCopy({ provider: "openrouter", model: "moonshotai/kimi-k3", authMode })} | 402`;
+      expect(sanitizedCopy(stored, { errorContext: true })).toBe(billingCopy({}));
+    }
   });
 
   it("renders provider-safe missing-key guidance", () => {

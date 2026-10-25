@@ -113,6 +113,7 @@ function prepareFixture(source: OpenClawTestState) {
       selection: { kind: "explicit-tmpdir", directory: root },
     },
     cleanupDirectories: [root],
+    prepareRuntime: async (assertCurrent) => assertCurrent(),
     cleanup,
   });
   const launch = vi.spyOn(commands, "runUtf8CommandWithTimeout").mockResolvedValue(childResult());
@@ -140,6 +141,10 @@ async function fixture(run: (f: ReturnType<typeof prepareFixture>) => Promise<vo
   await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
     const f = prepareFixture(source);
     await run(f);
+    for (const { migration: selected } of selection.entries) {
+      expect(selected.detectLegacyState).not.toHaveBeenCalled();
+      expect(selected.migrateLegacyState).not.toHaveBeenCalled();
+    }
     expect(fs.readFileSync(path.join(f.external, "retained.txt"), "utf8")).toBe(
       "external acknowledged data",
     );
@@ -189,10 +194,6 @@ it("consumes declared paths, admits legacy plugins with one typed reported warni
     });
     expect(fact.warnings).toHaveLength(1);
     expect(f.runtime.error).toHaveBeenCalledExactlyOnceWith(`Warning: ${fact.warnings[0].message}`);
-    expect(legacy.detectLegacyState).not.toHaveBeenCalled();
-    expect(legacy.migrateLegacyState).not.toHaveBeenCalled();
-    expect(declared.detectLegacyState).not.toHaveBeenCalled();
-    expect(declared.migrateLegacyState).not.toHaveBeenCalled();
     expect(f.cleanup).toHaveBeenCalledOnce();
   });
 });
@@ -239,8 +240,6 @@ it.each([
             : /escapes|unsafe ownership or links/,
     );
     expect(f.launch).not.toHaveBeenCalled();
-    expect(entry.detectLegacyState).not.toHaveBeenCalled();
-    expect(entry.migrateLegacyState).not.toHaveBeenCalled();
     expect(f.cleanup).toHaveBeenCalledOnce();
   });
 });
@@ -257,8 +256,6 @@ it("defers a declared external owner without authorizing its configured migratio
     expect(JSON.parse(f.runtime.log.mock.calls[0]![0]).notices).toEqual([
       "rehearsal: reef state migrations deferred; declared data outside the rehearsal root left untouched",
     ]);
-    expect(entry.detectLegacyState).not.toHaveBeenCalled();
-    expect(entry.migrateLegacyState).not.toHaveBeenCalled();
   });
 });
 
@@ -314,7 +311,6 @@ it.each([
     );
     expect(f.launch).not.toHaveBeenCalled();
     if (mode === "root-replaced") {
-      expect(fs.existsSync(retained)).toBe(true);
       expect(fs.readFileSync(retained, "utf8")).toBe("replacement must survive");
       expect(f.cleanup).not.toHaveBeenCalled();
       expect(fs.existsSync(path.join(displaced, "state", "openclaw.sqlite"))).toBe(true);

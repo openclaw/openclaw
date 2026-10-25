@@ -7,6 +7,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
@@ -112,6 +113,8 @@ describe("chat pane read markers", () => {
     await sessions.refresh({ force: true });
     onTestFinished(sessions.subscribe((state) => pane.applySessionsState(state)));
     pane.applySessionsState(sessions.state);
+    expect(sessions.state.result?.sessions[0]?.unread).toBe(false);
+    await withSessionMutationOperations(() => undefined);
     expect(patch).toHaveBeenCalledOnce();
 
     rejected.reject(

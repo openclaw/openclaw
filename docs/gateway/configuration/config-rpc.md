@@ -117,6 +117,11 @@ wildcards do not authorize descendant arrays. This prevents truncated
 `config.get` snapshots from silently clobbering routing or allowlist arrays. Use
 `config.apply` when you intend to replace the full config.
 
+For keyed agent rosters, setting an existing `agents.entries.<agentId>` entry to
+`null` in a revision-checked patch authorizes removing that entry. Multiple entries
+can be removed together; omitted siblings stay unchanged.
+Arrays inside removed entries still require their exact `replacePaths` acknowledgments.
+
 Arrays of objects with stable `id` fields merge by ID unless their path appears
 in `replacePaths`. These updates preserve authored fields in untouched entries;
 runtime defaults, such as model catalog compatibility and context budgets, are

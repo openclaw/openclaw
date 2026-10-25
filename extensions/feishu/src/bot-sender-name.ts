@@ -5,8 +5,6 @@ import { extractFeishuApiErrorMeta } from "./comment-shared.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 export type FeishuPermissionError = {
-  code: number;
-  message: string;
   grantUrl?: string;
 };
 
@@ -39,8 +37,6 @@ function extractPermissionError(feishuErr: FeishuApiError | null): FeishuPermiss
   }
   const urlMatch = feishuErr.message.match(/https:\/\/[^\s,]+\/app\/[^\s,]+/);
   return {
-    code: feishuErr.code,
-    message: feishuErr.message,
     grantUrl: urlMatch?.[0]
       ?.replaceAll(
         encodeURIComponent(STALE_CONTACT_SCOPE),
@@ -108,11 +104,11 @@ export async function resolveFeishuSenderName(params: {
     const feishuErr = typeof code === "number" ? { code, message } : null;
     const permErr = extractPermissionError(feishuErr);
     if (permErr) {
-      if (normalizeLowercaseStringOrEmpty(permErr.message).includes(STALE_CONTACT_SCOPE)) {
-        log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
+      if (normalizeLowercaseStringOrEmpty(message).includes(STALE_CONTACT_SCOPE)) {
+        log(`feishu: ignoring stale permission scope error: ${message}`);
         return {};
       }
-      log(`feishu: permission error resolving sender name: code=${permErr.code}`);
+      log(`feishu: permission error resolving sender name: code=${code}`);
       return { permissionError: permErr };
     }
     if (feishuErr?.code === FEISHU_USER_LOOKUP_UNAUTHORIZED_CODE) {

@@ -5,6 +5,7 @@ import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -71,7 +72,7 @@ it("keeps successive commentary inline and formatted across the live-to-history 
 
 it.each(["explicit", "segment", "tool", "cached"] as const)(
   "keeps only active durable commentary with %s run identity when retention is off",
-  (source) => {
+  async (source) => {
     const container = createComposerContainer();
     const props = {
       runId: source === "explicit" ? runId : null,
@@ -97,6 +98,7 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
     const segment: ChatStreamSegment = { text: "", ts: 1, runId };
     if (source === "cached") {
       draw(container, { ...props, messages: [user], streamSegments: [segment] });
+      await flushDeferredRowPrune();
     }
     draw(container, {
       ...props,
@@ -114,6 +116,7 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
             ]
           : [],
     });
+    await flushDeferredRowPrune();
     if (source === "explicit") {
       expect(container.querySelector(".chat-group.assistant .chat-text")?.textContent?.trim()).toBe(
         "Checking the result.",
@@ -122,9 +125,11 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
     expect(container.textContent).toContain("Checking the result.");
     expect(container.textContent).not.toContain("Older run's commentary.");
     draw(container, { ...props, runActive: false, runId: null, stream: null });
+    await flushDeferredRowPrune();
     expect(container.textContent).not.toContain("Checking the result.");
     if (source === "explicit") {
       renderChatInto(container, { messages: props.messages, persistCommentary: true });
+      await flushDeferredRowPrune();
       expect(container.textContent).toContain("Checking the result.");
       expect(props.messages).toHaveLength(3);
     }

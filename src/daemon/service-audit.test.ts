@@ -10,6 +10,7 @@ import {
   SERVICE_AUDIT_CODES as codes,
 } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import {
   execSystemctlMock,
   execSystemctlUserMock,
@@ -113,17 +114,15 @@ it.each([undefined, "Cannot use SQLite library /opt/broken/libsqlite3.dylib: mis
 );
 
 it.each([false, true])("reports Node capability status (supported=%s)", async (supported) => {
-  const message = supported
-    ? "Vendor Node capability check passed."
-    : "SQLite truncates TEXT at NUL.";
+  const message = "SQLite truncates TEXT at NUL.";
   resolveNodeRuntimeInfoMock.mockResolvedValue({
-    ...runtimeInfo(supported ? "24.15.0" : "26.8.1", "3.53.4", supported),
+    ...runtimeInfo("26.12.1", "3.53.4", supported),
     status: supported ? "supported" : "unsupported",
-    ...(supported ? { note: message } : { capabilityError: message }),
+    ...(!supported ? { capabilityError: message } : {}),
   });
   const result = await audit();
   if (supported) {
-    expect(result.runtimeNote).toBe(message);
+    expect(result.runtimeNote).toBeUndefined();
     expect(hasIssue(result, codes.gatewayRuntimeNode)).toBe(false);
   } else {
     expectIssue(result, codes.gatewayRuntimeNode, { message, detail: "/usr/bin/node" });
@@ -353,14 +352,17 @@ describe("auditGatewayServiceConfig systemd", () => {
   const auditUnit = (timeoutMs?: number) => audit({}, { env: env(), timeoutMs });
   const network = ["After=network-online.target", "Wants=network-online.target", "RestartSec=5"];
   async function writeUnit(lines: string[]) {
+    // systemd reads dependencies only from [Unit]; everything else here is a service directive.
+    const isUnitKey = (line: string) => /^(?:After|Wants)=/.test(line);
     await fs.mkdir(path.dirname(unitPath), { recursive: true });
     await fs.writeFile(
       unitPath,
       [
         "[Unit]",
         "Description=OpenClaw Gateway",
+        ...lines.filter(isUnitKey),
         "[Service]",
-        ...lines,
+        ...lines.filter((line) => !isUnitKey(line)),
         "ExecStart=/usr/bin/node gateway",
         "",
         "[Install]",
@@ -370,12 +372,7 @@ describe("auditGatewayServiceConfig systemd", () => {
     );
   }
   function manager(lines: string[]) {
-    execSystemctlUserMock.mockResolvedValueOnce({
-      stdout: lines.join("\n"),
-      stderr: "",
-      code: 0,
-      termination: "exit",
-    });
+    execSystemctlUserMock.mockResolvedValueOnce(nativeExit(lines.join("\n")));
   }
   const systemdCodes = (result: Awaited<ReturnType<typeof audit>>) =>
     result.issues.filter((issue) => issue.code.startsWith("systemd-")).map((issue) => issue.code);
@@ -436,12 +433,13 @@ describe("auditGatewayServiceConfig systemd", () => {
       "TimeoutStopUSec=5min 30s",
       "ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-audit.service",
     ]);
-    execSystemctlMock.mockResolvedValue({
-      code: timeout ? 0 : 1,
-      stdout: timeout ? `LoadState=loaded\nTimeoutStopUSec=${timeout}` : "",
-      stderr: "",
-      termination: "exit",
-    });
+    execSystemctlMock.mockResolvedValue(
+      nativeExit(
+        timeout ? `LoadState=loaded\nTimeoutStopUSec=${timeout}` : "",
+        "",
+        timeout ? 0 : 1,
+      ),
+    );
     const result = await auditUnit(321);
     expect(systemdCodes(result)).toEqual(warned ? ["systemd-user-manager-stop-timeout"] : []);
     if (warned) {

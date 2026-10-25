@@ -1,18 +1,21 @@
-import { createMemo, Match, onCleanup, refresh, Show, Switch } from "solid-js";
+import { createMemo, Errored, Loading, Match, onCleanup, refresh, Show, Switch } from "solid-js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { isSvgImageMediaPath, isTextAttachment } from "../../../lib/media-file-extension.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { AttachmentStateCard, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import "./chat-audio-player.tsx";
+import "./chat-video-player.tsx";
+import type { AttachmentDownload } from "./chat-attachment-download.ts";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
   safePlainTextAttachmentHref,
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
-import "./chat-audio-player.tsx";
-import "./chat-video-player.tsx";
 import type { FileSessionAttachment } from "./chat-file-session-attachment.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -29,11 +32,13 @@ import {
 } from "./chat-sidebar-file-mobile.tsx";
 import { ChatTextAttachment } from "./chat-text-attachment.tsx";
 
+registerEnglishCatalog(registerChatMediaEnglish);
+
 type SidebarAttachmentProps = {
   content: Extract<SidebarContent, { kind: "attachment" }>;
   runtime: AttachmentSidebarRuntime;
   embedSandboxMode: EmbedSandboxMode;
-  download?: { pending: boolean; error: string | null; onDownload: () => void };
+  download?: AttachmentDownload;
   mobile?: boolean;
   attachment?: FileSessionAttachment;
   back?: MobileFileBack;
@@ -125,7 +130,7 @@ export function SidebarAttachment(props: SidebarAttachmentProps) {
                     aria-label={t("chat.mediaPlayer.download", { filename: props.content.title })}
                     aria-busy={download().pending ? "true" : "false"}
                     disabled={download().pending}
-                    onClick={() => download().onDownload()}
+                    onClick={() => void download().onDownload()}
                   >
                     <Icon name="download" />
                   </button>
@@ -137,10 +142,14 @@ export function SidebarAttachment(props: SidebarAttachmentProps) {
               label={props.content.title}
               mimeType={props.content.mimeType ?? undefined}
               sizeBytes={props.content.sizeBytes}
-              onDownload={download().onDownload}
+              onDownload={() => void download().onDownload()}
               downloadPending={download().pending}
             />
-            <Show when={download().error}>{(error) => <div role="alert">{error()}</div>}</Show>
+            <Loading on={download().completion}>
+              <Errored fallback={(error) => <div role="alert">{formatUiError(error())}</div>}>
+                {download().outcome()}
+              </Errored>
+            </Loading>
           </>
         )}
       </Show>
@@ -149,20 +158,25 @@ export function SidebarAttachment(props: SidebarAttachmentProps) {
 }
 
 function AttachmentPreview(props: SidebarAttachmentProps) {
-  const sourceChanged = () => void refresh(model);
-  let resolver: SidebarAttachmentProps["content"]["resolveSource"];
-  let identity: string | undefined;
-  const model = createMemo(() => {
-    const nextResolver = props.content.resolveSource;
-    const nextIdentity = props.content.sourceIdentity ?? props.content.src;
-    if (resolver !== nextResolver || identity !== nextIdentity) {
-      releaseChatMediaResourceOwner(sourceChanged);
-      resolver = nextResolver;
-      identity = nextIdentity;
-    }
-    return prepareAttachment(props, sourceChanged);
+  const sourceKey = createMemo(
+    () => ({
+      resolver: props.content.resolveSource,
+      identity: props.content.sourceIdentity ?? props.content.src,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.resolver === next.resolver && previous.identity === next.identity,
+    },
+  );
+  const sourceModel = createMemo(() => {
+    sourceKey();
+    const sourceChanged = () => void refresh(currentModel);
+    // Resource notifications refresh the model without retiring its subscription.
+    onCleanup(() => releaseChatMediaResourceOwner(sourceChanged));
+    const currentModel = createMemo(() => prepareAttachment(props, sourceChanged));
+    return currentModel;
   });
-  onCleanup(() => releaseChatMediaResourceOwner(sourceChanged));
+  const model = () => sourceModel()();
   const mediaProps = () => ({
     "prop:sourceIdentity": props.content.sourceIdentity ?? props.content.src ?? model().src ?? "",
     "prop:label": props.content.title,

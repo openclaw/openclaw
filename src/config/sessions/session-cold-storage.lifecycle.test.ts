@@ -34,7 +34,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
-  persistCompactionBoundaryWithSessionEntrySync as persistBoundary,
   replaceSessionEntry,
   replaceSessionEntrySync,
   replaceTranscriptSuffixEventsSync as replaceSuffix,
@@ -69,7 +68,7 @@ import { maintenanceConfig } from "./session-cold-storage.test-support.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { createManualCompactRecords } from "./transcript-message.test-support.js";
+import { createManualCompactRecords, messageEvent } from "./transcript-message.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 // mock-isolation: Explicit cold archival owns this suite; automatic age retention is tested separately.
@@ -164,24 +163,9 @@ async function createColdCurrentSession(
     await replaceSessionEntry(scope, entry);
     await replaceTranscriptEvents(scope, [
       { type: "session", id: scope.sessionId, version: 3 },
-      {
-        type: "message",
-        id: "question",
-        parentId: null,
-        message: { role: "user", content: "Question" },
-      },
-      {
-        type: "message",
-        id: "answer",
-        parentId: "question",
-        message: { role: "assistant", content: "Original answer" },
-      },
-      {
-        type: "message",
-        id: "alternate",
-        parentId: "question",
-        message: { role: "assistant", content: "Alternate answer" },
-      },
+      messageEvent("question", null, { role: "user", content: "Question" }),
+      messageEvent("answer", "question", { role: "assistant", content: "Original answer" }),
+      messageEvent("alternate", "question", { role: "assistant", content: "Alternate answer" }),
       { type: "leaf", id: "selection", parentId: "alternate", targetId: "answer" },
     ]);
     await waitForSessionTranscriptIndexReconcile(options);
@@ -490,15 +474,6 @@ describe("cold current transcript lifecycle", () => {
     ).toEqual([{ current_session_id: scope.sessionId }]);
     const event = { type: "custom", id: "sync-custom", customType: "sync-write", data: {} };
     const message = { role: "user", content: "A new synchronous message", timestamp: 20 };
-    const boundary = {
-      type: "compaction" as const,
-      id: "sync-boundary",
-      parentId: "question",
-      timestamp: new Date(20).toISOString(),
-      summary: "Compacted",
-      firstKeptEntryId: "question",
-      tokensBefore: 100,
-    };
     const mutations = {
       "append event": () => appendTranscriptEventSync(scope, event),
       "append event snapshot": () => appendTranscriptEventSnapshotSync(scope, event),
@@ -509,15 +484,6 @@ describe("cold current transcript lifecycle", () => {
       "replace full suffix": () => replaceSuffix(scope, original, original.slice(0, 1)),
       "replace incremental suffix": () =>
         replaceSuffix(scope, original.slice(1), [], 1, undefined, undefined, true),
-      "compaction boundary": () =>
-        persistBoundary(scope, {
-          prepared: { scope, event: boundary },
-          transcriptByteCompactionLatch: {
-            sessionId: scope.sessionId,
-            activeBytes: 2048,
-            maxBytes: 1024,
-          },
-        }),
     };
     for (const [name, run] of Object.entries(mutations)) {
       expect(run, name).toThrow(expect.objectContaining({ code: "TRANSCRIPT_COLD" }));

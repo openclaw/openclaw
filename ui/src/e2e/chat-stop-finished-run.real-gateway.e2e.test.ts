@@ -7,6 +7,7 @@ import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../api/types.ts";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
@@ -42,20 +43,15 @@ type EventPayload = {
   data?: { phase?: string };
   session?: SessionDescriptor;
   sessions?: SessionDescriptor[];
-  ok?: boolean;
-  aborted?: boolean;
-  runIds?: string[];
   sessionInfo?: SessionDescriptor;
 };
 type Frame = {
   type: string;
   id?: string;
   ok?: boolean;
-  error?: { code?: string; message?: string };
   method?: string;
   params?: Record<string, unknown>;
   event?: string;
-  seq?: number;
   payload?: EventPayload;
 };
 let artifactDir: string;
@@ -341,16 +337,7 @@ suite.define(() => {
             const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
             const browserState = () =>
               pane.evaluate((element) => {
-                const state = (
-                  element as HTMLElement & {
-                    state: {
-                      sessionKey: string;
-                      chatRunId: string | null;
-                      chatSending: boolean;
-                      chatLoading: boolean;
-                    };
-                  }
-                ).state;
+                const state = (element as HTMLElement & { state: ChatPageHost }).state;
                 return {
                   sessionKey: state.sessionKey,
                   runId: state.chatRunId,

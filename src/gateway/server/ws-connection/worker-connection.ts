@@ -15,12 +15,14 @@ import {
   validateWorkerConnectRequestFrame,
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_EXEC_APPROVAL_METHOD } from "../../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import {
   WORKER_GATEWAY_TOOL_METHODS,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { WORKER_TURN_ADMISSION_METHOD } from "../../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -61,7 +63,11 @@ export type { WorkerConnectionService } from "./worker-connection-dispatch.js";
 type WorkerLogger = { warn(message: string): void };
 const MAX_QUEUED_WORKER_FRAMES = 16;
 const MAX_QUEUED_WORKER_BYTES = 32 * 1024 * 1024;
-const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
+const workerMethods = new Set<string>([
+  ...WORKER_PROTOCOL_METHODS,
+  ...WORKER_INFERENCE_METHODS,
+  WORKER_TURN_ADMISSION_METHOD,
+]);
 
 type WorkerWsMessageHandlerParams = {
   socket: WebSocket;
@@ -346,6 +352,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     if (
       frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES &&
       parsed.method !== WORKER_INFERENCE_METHODS[0] &&
+      parsed.method !== WORKER_TURN_ADMISSION_METHOD &&
       !mediaTranscript
     ) {
       failConnection(1009);
@@ -404,7 +411,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       );
     };
     const isLongToolOperation =
-      parsed.method === "worker.computer" || parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke;
+      parsed.method === "worker.computer" ||
+      parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke ||
+      parsed.method === WORKER_EXEC_APPROVAL_METHOD;
     if (isLongToolOperation) {
       if (toolOperations.has(parsed.id)) {
         failConnection(1008);

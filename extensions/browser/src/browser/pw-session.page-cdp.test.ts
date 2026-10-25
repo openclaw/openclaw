@@ -13,6 +13,23 @@ function cdpPage(send: ReturnType<typeof vi.fn>, detach = vi.fn(async () => {}))
   return { context: () => ({ newCDPSession: vi.fn(async () => ({ send, detach })) }) };
 }
 
+function markerReply(method: string) {
+  if (method === "DOM.getDocument") {
+    return { root: { backendNodeId: 1 } };
+  }
+  if (method === "DOM.resolveNode") {
+    return { object: { objectId: "document" } };
+  }
+  if (method === "DOM.pushNodesByBackendIdsToFrontend") {
+    return { nodeIds: [101, 202] };
+  }
+  return {};
+}
+const refs = [
+  { ref: "e1", backendDOMNodeId: 42 },
+  { ref: "ax2", backendDOMNodeId: 84 },
+];
+
 describe("pw-session page-scoped CDP client", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -27,14 +44,10 @@ describe("pw-session page-scoped CDP client", () => {
       let cleared = false;
       let released = false;
       const send = vi.fn(async (method: string, params?: { nodeId?: number }) => {
-        if (method === "DOM.getDocument") {
-          return { root: { backendNodeId: 1 } };
-        }
         if (method === "DOM.resolveNode") {
           if (stage === "after-resolve") {
             controller.abort(reason);
           }
-          return { object: { objectId: "document" } };
         }
         if (method === "Runtime.callFunctionOn") {
           cleared = true;
@@ -46,7 +59,6 @@ describe("pw-session page-scoped CDP client", () => {
           if (stage === "after-nodes") {
             controller.abort(reason);
           }
-          return { nodeIds: [101, 202] };
         }
         if (method === "DOM.setAttributeValue") {
           writes.push(params!.nodeId!);
@@ -54,11 +66,9 @@ describe("pw-session page-scoped CDP client", () => {
             controller.abort(reason);
           }
         }
-        return {};
+        return markerReply(method);
       });
-      const page = {
-        context: () => ({ newCDPSession: async () => ({ send, detach: async () => {} }) }),
-      };
+      const page = cdpPage(send);
       await expect(
         markBackendDomRefsOnPage({
           page: page as never,
@@ -173,17 +183,13 @@ describe("pw-session page-scoped CDP client", () => {
     vi.useFakeTimers();
     const gate = createDeferred<void>();
     const detach = vi.fn(async () => {});
-    const page = {
-      context: () => ({
-        newCDPSession: async () => ({
-          send: async () => {
-            await gate.promise;
-            return {};
-          },
-          detach,
-        }),
+    const page = cdpPage(
+      vi.fn(async () => {
+        await gate.promise;
+        return {};
       }),
-    };
+      detach,
+    );
     const identity = readDocumentIdentitiesForPage(page as never);
     const rejected = expect(identity).rejects.toThrow("timed out after 5000ms");
     try {
@@ -202,19 +208,14 @@ describe("pw-session page-scoped CDP client", () => {
     const sessionSend = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "DOM.getDocument") {
         documentRequested = true;
-        return { root: { backendNodeId: 1 } };
-      }
-      if (method === "DOM.resolveNode") {
-        return { object: { objectId: "document" } };
       }
       if (method === "DOM.pushNodesByBackendIdsToFrontend") {
         if (!documentRequested) {
           throw new Error("Document needs to be requested first");
         }
         expect(params).toEqual({ backendNodeIds: [42, 84] });
-        return { nodeIds: [101, 202] };
       }
-      return {};
+      return markerReply(method);
     });
     const sessionDetach = vi.fn(async () => {});
     const page = cdpPage(sessionSend, sessionDetach);
@@ -222,10 +223,7 @@ describe("pw-session page-scoped CDP client", () => {
     const marked = await markBackendDomRefsOnPage({
       assertCurrent: () => {},
       page: page as never,
-      refs: [
-        { ref: "e1", backendDOMNodeId: 42 },
-        { ref: "ax2", backendDOMNodeId: 84 },
-      ],
+      refs,
     });
 
     expect(marked).toEqual(new Set(["e1", "ax2"]));
@@ -233,16 +231,16 @@ describe("pw-session page-scoped CDP client", () => {
     expect(sessionSend).toHaveBeenCalledWith("DOM.pushNodesByBackendIdsToFrontend", {
       backendNodeIds: [42, 84],
     });
-    expect(sessionSend).toHaveBeenCalledWith("DOM.setAttributeValue", {
-      nodeId: 101,
-      name: BROWSER_REF_MARKER_ATTRIBUTE,
-      value: "e1",
-    });
-    expect(sessionSend).toHaveBeenCalledWith("DOM.setAttributeValue", {
-      nodeId: 202,
-      name: BROWSER_REF_MARKER_ATTRIBUTE,
-      value: "ax2",
-    });
+    for (const [nodeId, value] of [
+      [101, "e1"],
+      [202, "ax2"],
+    ]) {
+      expect(sessionSend).toHaveBeenCalledWith("DOM.setAttributeValue", {
+        nodeId,
+        name: BROWSER_REF_MARKER_ATTRIBUTE,
+        value,
+      });
+    }
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
 
@@ -295,19 +293,10 @@ describe("pw-session page-scoped CDP client", () => {
 
   it("keeps unmarked refs out of the marked set when marker writes fail", async () => {
     const sessionSend = vi.fn(async (method: string) => {
-      if (method === "DOM.getDocument") {
-        return { root: { backendNodeId: 1 } };
-      }
-      if (method === "DOM.resolveNode") {
-        return { object: { objectId: "document" } };
-      }
-      if (method === "DOM.pushNodesByBackendIdsToFrontend") {
-        return { nodeIds: [101, 202] };
-      }
       if (method === "DOM.setAttributeValue") {
         throw new Error("detached");
       }
-      return {};
+      return markerReply(method);
     });
     const sessionDetach = vi.fn(async () => {});
     const page = cdpPage(sessionSend, sessionDetach);

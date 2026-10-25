@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
+import { EmbeddingBatchUnavailableError } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { publishSessionTranscriptUpdateByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -25,23 +26,7 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   watch: observer.watch,
 }));
 
-const activity = vi.hoisted(() => ({
-  listener: undefined as ((busy: boolean) => void) | undefined,
-}));
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
-  return {
-    ...actual,
-    observeAgentRunActivity: (_agentId: string, listener: (busy: boolean) => void) => {
-      activity.listener = listener;
-      listener(false);
-      return () => {
-        activity.listener = undefined;
-      };
-    },
-  };
-});
+const { activity } = await vi.hoisted(() => import("./agent-activity.test-support.js"));
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -63,6 +48,7 @@ describe("background reindex resumption", () => {
     "close",
     "unsupported",
     "fallback",
+    "batch-disabled",
   ] as const)(
     "settles a background reindex interrupted by a foreground turn: %s",
     { timeout: 30_000 },
@@ -77,7 +63,16 @@ describe("background reindex resumption", () => {
         );
       }
       const mixedSources =
-        resume === "idle" || resume === "changed" || resume === "watch" || resume === "joined";
+        resume === "idle" ||
+        resume === "changed" ||
+        resume === "watch" ||
+        resume === "joined" ||
+        resume === "batch-disabled";
+      if (resume === "batch-disabled") {
+        fixture.provider.providerRuntimeBatchErrors.push(
+          new EmbeddingBatchUnavailableError("Synthetic batch unavailability"),
+        );
+      }
       const memoryPaths = mixedSources ? ["memory/2026-01-12.md", "memory/sibling.md"] : [];
       if (mixedSources) {
         await fs.writeFile(
@@ -109,22 +104,38 @@ describe("background reindex resumption", () => {
         } else {
           await fixture.seedSessionTranscript({
             ...session,
-            messages: [{ role: "user", timestamp: Date.now(), content: "resumeproof alpha" }],
+            messages: [
+              {
+                role: "user",
+                timestamp: Date.now(),
+                content:
+                  resume === "close"
+                    ? `resumeproof alpha ${session.sessionId}`
+                    : "resumeproof alpha",
+              },
+            ],
           });
         }
       }
       const manager = await fixture.getFreshManager(
         fixture.createConfig({
-          provider: mixedSources ? "batch-wide-test" : resume === "fallback" ? "openai" : "none",
+          provider: mixedSources
+            ? "batch-wide-test"
+            : resume === "fallback" || resume === "close"
+              ? "openai"
+              : "none",
           fallback: resume === "fallback" ? "fallback-provider" : undefined,
           batchEnabled: mixedSources,
-          cacheEnabled: false,
+          cacheEnabled: resume === "close",
           sources: mixedSources ? ["memory", "sessions"] : ["sessions"],
           sessionMemory: true,
           vectorEnabled: false,
         }),
       );
       onTestFinished(() => manager.close());
+      if (resume === "close") {
+        (manager as unknown as { cache: { maxEntries?: number } }).cache.maxEntries = 2;
+      }
       const database = Reflect.get(manager, "db") as DatabaseSync;
       const idle = () =>
         (manager as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
@@ -132,6 +143,19 @@ describe("background reindex resumption", () => {
       const shadowPaths = new Set<string>();
       const groups: string[][] = [];
       const memoryWrites: string[] = [];
+      let memoryReads = 0;
+      // Count actual shadow planning reads without replacing their results.
+      // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted owner.
+      const readSourceState = MemoryIndexDatabase.prototype.readSourceState;
+      vi.spyOn(MemoryIndexDatabase.prototype, "readSourceState").mockImplementation(function (
+        this: MemoryIndexDatabase,
+        ...args
+      ) {
+        if (this.isShadow && args[0].source === "memory") {
+          memoryReads += 1;
+        }
+        return readSourceState.apply(this, args);
+      });
       let joined: Promise<void> | undefined;
       let injectedFailures = 0;
       // Delegate every write: interruption follows a durably completed source group.
@@ -206,6 +230,9 @@ describe("background reindex resumption", () => {
         expect(groups).toHaveLength(1);
         expect(groups[0]).toHaveLength(8);
         expect(memoryWrites.toSorted()).toEqual(memoryPaths.toSorted());
+        if (mixedSources) {
+          expect(memoryReads).toBe(1);
+        }
         expect(publish).not.toHaveBeenCalled();
         expect(database.prepare("SELECT count(*) AS n FROM memory_index_sources").get()).toEqual({
           n: 0,
@@ -220,6 +247,10 @@ describe("background reindex resumption", () => {
         }
 
         if (resume === "close") {
+          const databasePath = database.location()!;
+          expect(
+            database.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get(),
+          ).toEqual({ n: 8 });
           expect(shadows.size).toBe(1);
           for (const shadow of shadows) {
             expect(shadow.isOpen).toBe(true);
@@ -229,6 +260,14 @@ describe("background reindex resumption", () => {
             expect((await fs.stat(pathname)).isFile()).toBe(true);
           }
           await manager.close();
+          const reopened = new DatabaseSync(databasePath, { readOnly: true });
+          try {
+            expect(
+              reopened.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get(),
+            ).toEqual({ n: 2 });
+          } finally {
+            reopened.close();
+          }
           expect(publish).not.toHaveBeenCalled();
           for (const shadow of shadows) {
             expect(shadow.shadowReleased).toBe(true);
@@ -280,7 +319,8 @@ describe("background reindex resumption", () => {
             path.join(fixture.paths.workspace, memoryPaths[0]!),
             "Memorychangedwhilepaused replaces the original memory.",
           );
-          (manager as unknown as { markMemoryWatchDirty(): void }).markMemoryWatchDirty();
+          await (manager as unknown as { memoryWatcherReady: Promise<void> }).memoryWatcherReady;
+          observer.observations.at(-1)!.dirty();
           expectedMemoryWrites.push(memoryPaths[0]!);
         }
         if (resume === "targeted") {
@@ -312,6 +352,11 @@ describe("background reindex resumption", () => {
         expect(publish).toHaveBeenCalledTimes(1);
         expect(groups.flat().toSorted()).toEqual(expectedPaths.toSorted());
         expect(memoryWrites.toSorted()).toEqual(expectedMemoryWrites.toSorted());
+        if (mixedSources) {
+          expect(memoryReads).toBe(
+            resume === "changed" || resume === "watch" || resume === "batch-disabled" ? 2 : 1,
+          );
+        }
         if (resume === "idle" || resume === "joined") {
           expect(groups).toHaveLength(3);
         }

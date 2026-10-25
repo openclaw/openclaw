@@ -28,5 +28,5 @@ export function hasUnresolvedImageCode(
       return true;
     }
   }
-  return false;
+  return brackets.some((bracket) => bracket.image && bracket.code);
 }

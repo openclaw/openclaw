@@ -196,11 +196,9 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
     ...(manifestRecords ? { manifestRecords } : {}),
   });
   return materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
+    ...options,
     ambientChannelIds,
     env,
-    homedir: options?.homedir,
-    materializeSessionStore: options?.materializeSessionStore,
-    materializeWorkspace: options?.materializeWorkspace,
   });
 }
 
@@ -215,10 +213,8 @@ export async function materializeLegacyAgentOwnershipForActiveChannelsResultAsyn
     ...(manifestRecords ? { manifestRecords } : {}),
   });
   return materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
+    ...options,
     ambientChannelIds,
     env,
-    homedir: options?.homedir,
-    materializeSessionStore: options?.materializeSessionStore,
-    materializeWorkspace: options?.materializeWorkspace,
   });
 }

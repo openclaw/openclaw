@@ -2,6 +2,7 @@ import { createServer, request as requestHttp, type IncomingMessage } from "node
 import { HttpStream } from "@microsoft/teams.apps/dist/http/http-stream.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 
 type TeamsLoopbackRequest = {
@@ -66,15 +67,7 @@ const provider = createServer((request, response) => {
 let providerUrl = "";
 
 beforeAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    provider.once("error", reject);
-    provider.listen(0, "127.0.0.1", resolve);
-  });
-  const address = provider.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Teams test provider did not expose a loopback address");
-  }
-  providerUrl = `http://127.0.0.1:${address.port}`;
+  providerUrl = `http://127.0.0.1:${await listenOnLoopback(provider)}`;
 });
 
 afterAll(async () => {

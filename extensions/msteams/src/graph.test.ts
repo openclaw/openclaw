@@ -49,12 +49,9 @@ import {
   fetchAllGraphPages,
   fetchGraphAbsoluteUrl,
   fetchGraphJson,
-  listChannelsForTeam,
   listChannelsForTeamWithPageInfo,
-  listTeamsByName,
   listTeamsByNameWithPageInfo,
   mutateGraphJson,
-  normalizeQuery,
   resolveGraphToken,
 } from "./graph.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
@@ -175,10 +172,6 @@ describe("msteams graph helpers", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.useRealTimers();
-  });
-
-  it("normalizes padded and blank queries", () => {
-    expect([normalizeQuery("  Team Alpha  "), normalizeQuery("   ")]).toEqual(["Team Alpha", ""]);
   });
 
   it("keeps channel parent and reply requests within their Graph query contracts", async () => {
@@ -494,10 +487,14 @@ describe("msteams graph helpers", () => {
       return Response.json(graphCollection(deploymentsChannel));
     });
 
-    await expect(listTeamsByName(graphToken, "Bob's Team")).resolves.toEqual([opsTeam]);
-    await expect(listChannelsForTeam(graphToken, "team/ops")).resolves.toEqual([
-      deploymentsChannel,
-    ]);
+    await expect(listTeamsByNameWithPageInfo(graphToken, "Bob's Team")).resolves.toEqual({
+      items: [opsTeam],
+      truncated: false,
+    });
+    await expect(listChannelsForTeamWithPageInfo(graphToken, "team/ops")).resolves.toEqual({
+      items: [deploymentsChannel],
+      truncated: false,
+    });
 
     expect(fetchCallSearchParam(0, "$filter")).toBe(
       "resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'Bob''s Team')",

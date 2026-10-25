@@ -357,17 +357,7 @@ export async function patchSessionEntry(
       ...sessionEntryCommitGuardOptions(
         captureExternalSessionCommitGuard(params.assertCommitAllowed),
       ),
-      fallbackEntry: params.fallbackEntry
-        ? projectPluginSessionEntry(params.fallbackEntry)
-        : undefined,
-      maintenanceConfig:
-        params.maintenanceConfig !== undefined
-          ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
-          : undefined,
-      preserveActivity: params.preserveActivity,
-      requireWriteSuccess: params.requireWriteSuccess,
-      replaceEntry: params.replaceEntry,
-      skipMaintenance: params.skipMaintenance,
+      ...sessionEntryPatchFields(params),
     },
   );
   return entry ? projectPluginSessionEntry(entry) : null;
@@ -416,14 +406,8 @@ export async function applySessionEntryPatch(
   return entry ? projectPluginSessionEntry(entry) : null;
 }
 
-function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "prepare">) {
-  const authority = params.authority;
-  assertSessionEntryPatchAuthority(authority);
+function sessionEntryPatchFields(params: Omit<PatchSessionEntryParams, "update">) {
   return {
-    workerGuard: {
-      assertCurrent: authority?.kind === "host" ? () => authority.assertCurrent() : undefined,
-      source: authority?.kind === "source" ? authority.source : undefined,
-    },
     fallbackEntry: params.fallbackEntry
       ? projectPluginSessionEntry(params.fallbackEntry)
       : undefined,
@@ -435,6 +419,18 @@ function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "
     requireWriteSuccess: params.requireWriteSuccess,
     replaceEntry: params.replaceEntry,
     skipMaintenance: params.skipMaintenance,
+  };
+}
+
+function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "prepare">) {
+  const authority = params.authority;
+  assertSessionEntryPatchAuthority(authority);
+  return {
+    workerGuard: {
+      assertCurrent: authority?.kind === "host" ? () => authority.assertCurrent() : undefined,
+      source: authority?.kind === "source" ? authority.source : undefined,
+    },
+    ...sessionEntryPatchFields(params),
   };
 }
 

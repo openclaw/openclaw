@@ -4,9 +4,10 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
-import type { LoginGateElement } from "../components/login-gate.ts";
+import type { LoginGateElement } from "../components/login-gate-solid.tsx";
+import { listStoredChatOutboxes } from "../lib/chat/outbox-store-projection.ts";
+import "../components/login-gate-solid.tsx";
 import { captureChatOutboxAdmission, storageTargetForComposer } from "../lib/chat/outbox-store.ts";
-import "../components/login-gate.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -23,7 +24,6 @@ import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
 import { createComposerQuestions } from "../pages/chat/components/chat-composer-questions.ts";
 import { ChatComposer } from "../pages/chat/components/chat-composer.tsx";
-import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";
 import {
   activeQueuedMessageEdit,
   beginQueuedMessageEdit,
@@ -34,6 +34,7 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { mountOpenClawApp } from "./app-root.tsx";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import {
@@ -211,12 +212,7 @@ describe("Control UI Gateway target lineage", () => {
       vi.stubGlobal("cancelAnimationFrame", () => undefined);
       const { gateway, clients, hello: admit, close, recover } = createGatewayHarness();
       const sessionKey = "agent:main:main";
-      const agentsList = {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      } satisfies AgentsListResult;
+      const agentsList = makeBootRoster() satisfies AgentsListResult;
       const hello: GatewayHelloOk = {
         ...HELLO,
         auth: { role: "operator", scopes: ["operator.read", "operator.write"] },

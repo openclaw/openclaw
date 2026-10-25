@@ -1,23 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../../gateway/cron-creator-authority-grant.js";
 import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
-import {
-  createCronCreatorAuthorityCapability,
-  runWithCronCreatorAuthorityCapability,
-} from "../cron-creator-authority-context.js";
 import { createCronTool } from "./cron-tool.js";
+import { withCronManagementCaller } from "./cron-tool.management.test-support.js";
 import type { CronToolOptions } from "./cron-tool.types.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as gatewayModule from "./gateway.js";
 
 const jobId = "existing-job";
@@ -38,58 +30,40 @@ async function withAdminTool(
   > = {},
 ) {
   const runId = "admin-management-tool-run";
-  const sessionKey = "agent:main:control-ui";
-  const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-  const authority = runRegistry.claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const capability = createCronCreatorAuthorityCapability(
+  return withCronManagementCaller(
     runId,
-    origin === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: origin },
-    origin === "channel-owner"
-      ? { source: "channel-owner", isCurrent: () => true }
-      : { source: "control-ui-admin" },
-  )!;
-  const identity: AgentRuntimeIdentity = {
-    kind: "agentRuntime",
-    agentId: "main",
-    sessionKey,
-    operationalRunInstance,
-    delegatedAuthority: { ...authority, kind: "local" },
-  };
-  const calls: Array<[method: string, params: unknown]> = [];
-  const resolveCreatorToolAuthority = vi.fn(async () => {
-    throw new Error("Admin management must not recapture the creator's tool authority");
-  });
-  async function callGatewayTool<T>(method: string, _options: unknown, params: unknown) {
-    const caller = getGatewayToolCallerIdentity();
-    expect(caller?.cronCreatorAuthorityGrant).toBeUndefined();
-    expect(caller?.cronManagementGrant).toBeDefined();
-    return withCronManagementGrant(caller!.cronManagementGrant!, identity, method, async () => {
-      getCronManagementAuthority(identity)!();
-      calls.push([method, params]);
-      return (
-        method === "cron.get" ? { id: jobId, configRevision, payload, ...storedJob } : { id: jobId }
-      ) as T;
-    });
-  }
-  try {
-    await runWithCronCreatorAuthorityCapability(capability, () =>
-      withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
-        const options = {
-          ...creatorOptions,
-          runId,
-          readOnly,
-          agentSessionKey: sessionKey,
-          resolveCreatorToolAuthority,
-        };
-        using _ = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(callGatewayTool);
-        const tool = createCronTool(options);
-        await run(tool, calls);
-        expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
-      }),
-    );
-  } finally {
-    runRegistry.releaseAgentRunDelegatedAuthority(authority);
-  }
+    async (identity) => {
+      const calls: Array<[method: string, params: unknown]> = [];
+      const resolveCreatorToolAuthority = vi.fn(async () => {
+        throw new Error("Admin management must not recapture the creator's tool authority");
+      });
+      async function callGatewayTool<T>(method: string, _options: unknown, params: unknown) {
+        const caller = getGatewayToolCallerIdentity();
+        expect(caller?.cronCreatorAuthorityGrant).toBeUndefined();
+        expect(caller?.cronManagementGrant).toBeDefined();
+        return withCronManagementGrant(caller!.cronManagementGrant!, identity, method, async () => {
+          getCronManagementAuthority(identity)!();
+          calls.push([method, params]);
+          return (
+            method === "cron.get"
+              ? { id: jobId, configRevision, payload, ...storedJob }
+              : { id: jobId }
+          ) as T;
+        });
+      }
+      const options = {
+        ...creatorOptions,
+        runId,
+        readOnly,
+        agentSessionKey: identity.sessionKey,
+        resolveCreatorToolAuthority,
+      };
+      using _ = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(callGatewayTool);
+      await run(createCronTool(options), calls);
+      expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
+    },
+    origin,
+  );
 }
 
 const command = { kind: "command", argv: ["printf", "proof"] };

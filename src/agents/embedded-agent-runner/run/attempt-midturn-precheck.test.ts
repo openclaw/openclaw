@@ -1,5 +1,7 @@
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
+import { createOpenAICompletionsTransportStreamFn } from "../../../../packages/ai/src/transports/openai-completions-transport.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { Context } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
@@ -12,6 +14,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -29,6 +32,23 @@ registerAgentSessionLoopTestLifecycle();
 
 describe("provider request admission", () => {
   it.each([
+    {
+      name: "measured compatible reasoning output budget",
+      usage: 1_500,
+      chars: 15_500,
+      cap: 16_000,
+      fits: true,
+      compatibleBudget: true,
+    },
+    {
+      name: "unchanged response schema is not charged twice on a tool continuation",
+      usage: 24_000,
+      chars: 100,
+      cap: 16_000,
+      fits: true,
+      compatibleBudget: true,
+      responseSchema: true,
+    },
     {
       name: "owning engine cannot submit oversized assembled history on its first request",
       usage: 15_000,
@@ -186,15 +206,48 @@ describe("provider request admission", () => {
       syntheticAssistant,
       ownsCompaction,
       oversizedAssembly,
+      compatibleBudget,
+      responseSchema,
     }) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
       const model = {
         ...testModel,
         api: opaque ? ("openai-responses" as const) : ("openai-completions" as const),
         contextWindow: 32_768,
-        maxTokens: 1_024,
+        maxTokens: compatibleBudget ? 8_192 : 1_024,
+        ...(compatibleBudget
+          ? {
+              provider: "reasoning-proof",
+              baseUrl: "http://127.0.0.1:19831/v1",
+              reasoning: true,
+              compat: { maxTokensField: "max_tokens" as const },
+            }
+          : {}),
       };
-      const systemPrompt = "Keep these instructions. ".repeat(2_200);
+      const systemPrompt = compatibleBudget
+        ? "Read the report."
+        : "Keep these instructions. ".repeat(2_200);
+      const reasoningHistory = "synthetic reasoning ".repeat(3_500);
+      const seededManager =
+        compatibleBudget && !responseSchema ? SessionManager.inMemory() : undefined;
+      if (seededManager) {
+        await seededManager.appendMessageAsync({
+          role: "user",
+          content: "Earlier question.",
+          timestamp: 1,
+        });
+        await seededManager.appendMessageAsync({
+          ...createAssistant(model, [
+            {
+              type: "thinking",
+              thinking: reasoningHistory,
+              thinkingSignature: "reasoning_content",
+            },
+            { type: "text", text: "Earlier answer." },
+          ]),
+          usage: makeZeroUsageSnapshot(),
+        });
+      }
       const requests: Context[] = [];
       const settingsManager = SettingsManager.inMemory({
         compaction: { enabled: false, reserveTokens: 8_192 },
@@ -203,6 +256,7 @@ describe("provider request admission", () => {
       const { session, sessionManager } = await createTestSession({
         model,
         systemPrompt,
+        ...(seededManager ? { sessionManager: seededManager } : {}),
         settingsManager,
         contextOverflowRecoveryOwner: "caller",
         customTools: [
@@ -292,6 +346,11 @@ describe("provider request admission", () => {
       runtime.cacheTrace = null;
       runtime.isOpenAIResponsesApi = opaque === true;
       runtime.transcriptPolicy = { ...runtime.transcriptPolicy, repairToolUseResultPairing: false };
+      const wireRequests: Array<{
+        max_tokens?: number;
+        messages: Array<Record<string, unknown>>;
+        response_format?: unknown;
+      }> = [];
       session.agent.streamFn = (_model, context) => {
         requests.push({ ...context, messages: structuredClone(context.messages) });
         const toolCall = {
@@ -356,6 +415,67 @@ describe("provider request admission", () => {
         }
         return createAssistantResultStream(message);
       };
+      if (compatibleBudget) {
+        const host = getAiTransportHost();
+        onTestFinished(() => configureAiTransportHost(host));
+        configureAiTransportHost({
+          ...host,
+          resolveProviderRequestCapabilities: (input) => ({
+            ...host.resolveProviderRequestCapabilities(input),
+            usesExplicitProxyLikeEndpoint: true,
+          }),
+          buildModelFetch: () => async (input, init) => {
+            wireRequests.push(await new Request(input, init).json());
+            const first = wireRequests.length === 1;
+            const event = {
+              id: `chatcmpl-fixture-${wireRequests.length}`,
+              object: "chat.completion.chunk",
+              created: 1,
+              model: model.id,
+              choices: [
+                {
+                  index: 0,
+                  finish_reason: first ? "tool_calls" : "stop",
+                  delta: first
+                    ? {
+                        tool_calls: [
+                          {
+                            index: 0,
+                            id: "read-report",
+                            type: "function",
+                            function: { name: "read", arguments: "{}" },
+                          },
+                        ],
+                      }
+                    : { content: "Report received." },
+                },
+              ],
+              usage: { prompt_tokens: usage, completion_tokens: 64, total_tokens: usage + 64 },
+            };
+            return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, {
+              headers: { "content-type": "text/event-stream" },
+            });
+          },
+        });
+        const transport = createOpenAICompletionsTransportStreamFn();
+        const responseFormat = responseSchema
+          ? {
+              type: "json_schema",
+              json_schema: {
+                name: "report",
+                schema: { type: "string", description: "x".repeat(16_000) },
+              },
+            }
+          : undefined;
+        session.agent.streamFn = (activeModel, context, options) => {
+          requests.push({ ...context, messages: structuredClone(context.messages) });
+          return transport(activeModel, context, {
+            ...options,
+            apiKey: "synthetic-key",
+            responseFormat,
+          });
+        };
+      }
       const streamGuards = installEmbeddedAttemptStreamGuards(fixture.input, {
         onRejectedProviderReplayRepaired: vi.fn(),
         onIdleTimeout: vi.fn(),
@@ -403,6 +523,19 @@ describe("provider request admission", () => {
           oversizedAssembly ? 0 : fits ? 2 : 1,
         );
         expect(pendingPrecheck !== null).toBe(!fits);
+        if (compatibleBudget) {
+          if (responseSchema) {
+            expect(wireRequests[0]?.response_format).toMatchObject({ type: "json_schema" });
+            expect(wireRequests[1]?.response_format).toEqual(wireRequests[0]?.response_format);
+          } else {
+            expect(
+              wireRequests.every((request) =>
+                request.messages.some((message) => message.reasoning_content === reasoningHistory),
+              ),
+            ).toBe(true);
+          }
+          expect(wireRequests.map((request) => request.max_tokens)).toEqual([8_192, 8_192]);
+        }
         if (fits) {
           const sent = requests[1]?.messages.find((message) => message.role === "toolResult");
           expect(sent?.content).toEqual([{ type: "text", text: expect.any(String) }]);

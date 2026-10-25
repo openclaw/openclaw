@@ -6,6 +6,7 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -86,6 +87,57 @@ function createFixture(
 }
 
 describe("Tool Search input-dependent output contracts", () => {
+  it("admits each immutable catalog/action schema once without sharing different contracts", async () => {
+    const fixtures = ["first", "second"].map((owner) => {
+      const outputSchema = freezeJsonSnapshot({
+        ...defineToolOutputSchema({
+          inputProperty: "operation",
+          variants: {
+            list: Type.Object({ records: Type.Array(Type.String()) }),
+            remove: Type.Object({ removed: Type.Boolean() }),
+          },
+        }),
+        title: `immutable-output-${owner}`,
+        type: "object",
+        properties: { owner: { const: owner } },
+        required: ["owner"],
+      });
+      const { runtime, execute } = createFixture({ outputSchema });
+      return { owner, runtime, execute };
+    });
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      for (let round = 0; round < 2; round++) {
+        for (const operation of ["list", "remove"]) {
+          for (const { owner, runtime, execute } of fixtures) {
+            const output = {
+              owner,
+              ...(operation === "list" ? { records: [] } : { removed: true }),
+            };
+            execute.mockResolvedValueOnce(jsonResult(output));
+            await expect(runtime.callValue("records", { operation })).resolves.toEqual(output);
+          }
+        }
+      }
+      expect(
+        stringify.mock.calls.filter(
+          ([value]) =>
+            value &&
+            typeof value === "object" &&
+            "title" in value &&
+            String(value.title).startsWith("immutable-output-") &&
+            "allOf" in value,
+        ),
+      ).toHaveLength(4);
+      fixtures[0]!.execute.mockResolvedValueOnce(jsonResult({ owner: "second", records: [] }));
+      await expectContractFailure(fixtures[0]!.runtime.callValue("records", { operation: "list" }));
+      fixtures[1]!.execute.mockResolvedValueOnce(jsonResult({ owner: "second", removed: true }));
+      await expectContractFailure(fixtures[1]!.runtime.callValue("records", { operation: "list" }));
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
   it("preserves explicit failures without applying the success output contract", async () => {
     const { runtime, execute } = createFixture();
     const failure = {
@@ -98,6 +150,23 @@ describe("Tool Search input-dependent output contracts", () => {
       failure.details,
     );
     expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("observes mutable descendants of a shallow-frozen output schema", async () => {
+    const branch = Type.Object({ removed: { ...Type.Boolean(), const: true } });
+    const outputSchema = Object.freeze(
+      defineToolOutputSchema({ inputProperty: "operation", variants: { remove: branch } }),
+    );
+    const { runtime, execute } = createFixture({ outputSchema });
+    await expect(runtime.callValue("records", { operation: "remove" })).resolves.toEqual({
+      removed: true,
+    });
+    branch.properties.removed.const = false;
+    await expectContractFailure(runtime.callValue("records", { operation: "remove" }));
+    execute.mockResolvedValueOnce(jsonResult({ removed: false }));
+    await expect(runtime.callValue("records", { operation: "remove" })).resolves.toEqual({
+      removed: false,
+    });
   });
 
   it.each([

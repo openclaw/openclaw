@@ -1,11 +1,19 @@
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as boundaryPath from "../infra/boundary-path.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import {
+  reconstructAgentDeletionJournal,
+  resolveAgentDeletionRecoveryHolds,
+} from "./agent-deletion-journal-recovery.js";
+import { readAgentDeletionMissingJournalHolds } from "./agent-deletion-journal-recovery.kernel.js";
 import {
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawRegisteredAgentDatabasePath,
 } from "./openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 vi.hoisted(() => {
   // The custody runner can preload these owners before the Windows path mock.
@@ -81,4 +89,21 @@ describe("Windows agent database inventory paths", () => {
     const device = String.raw`\\?\Volume{00000000-0000-0000-0000-000000000001}\agent.sqlite`;
     expect(resolveOpenClawAgentDatabaseStoredPath(registry, device)).toBe(device);
   });
+});
+
+it("preserves and releases reconstructed holds with Windows registry paths", () => {
+  using db = new DatabaseSync(":memory:");
+  db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+  db.exec("DROP TABLE agent_deletion_journal");
+  const database = { db, path: String.raw`C:\Users\operator\.openclaw\state\openclaw.sqlite` };
+  const held = ["main", "ayudante", "contador"].map((agentId) => ({
+    agentId,
+    path: `C:\\Users\\operator\\.openclaw\\agents\\${agentId}\\agent\\openclaw-agent.sqlite`,
+  }));
+  runSqliteImmediateTransactionSync(db, () => reconstructAgentDeletionJournal(database, held));
+  expect(readAgentDeletionMissingJournalHolds(database)).toEqual(held);
+  runSqliteImmediateTransactionSync(db, () =>
+    resolveAgentDeletionRecoveryHolds(database, "main", [held[0]!.path]),
+  );
+  expect(readAgentDeletionMissingJournalHolds(database)).toEqual(held.slice(1));
 });

@@ -233,14 +233,62 @@ it.each([
 });
 
 it.each([
-  { channel: "telegram", scopes: ["operator.write"] },
-  { channel: "discord", scopes: undefined },
-])("rejects unauthorized voice writes on $channel", async ({ channel, scopes }) => {
-  const { mutate, run } = createHarness(elevenlabs, claudia);
-  const result = await run("set Claudia", { channel, gatewayClientScopes: scopes });
-  expect(result.text).toContain("requires operator.admin");
-  expect(mutate).not.toHaveBeenCalled();
-});
+  { channel: "telegram", scopes: ["operator.write"], senderIsOwner: undefined },
+  { channel: "discord", scopes: undefined, senderIsOwner: undefined },
+  { channel: "discord", scopes: ["operator.write"], senderIsOwner: true },
+])(
+  "rejects unauthorized voice writes on $channel (owner=$senderIsOwner)",
+  async ({ channel, scopes, senderIsOwner }) => {
+    const { mutate, run, listVoices } = createHarness(elevenlabs, claudia);
+    const result = await run("set Claudia", {
+      channel,
+      gatewayClientScopes: scopes,
+      senderIsOwner,
+    });
+    expect(result.text).toContain("requires operator.admin");
+    expect(listVoices).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  {
+    query: "voice-b",
+    voices: [
+      { id: "voice-a", name: "voice-b" },
+      { id: "voice-b", name: "Claudia" },
+    ],
+    voiceId: "voice-b",
+    name: "Claudia",
+  },
+  {
+    query: "CLAUDIA",
+    voices: [
+      { id: "voice-a", name: "Claudia bright" },
+      { id: "voice-b", name: "Claudia" },
+    ],
+    voiceId: "voice-b",
+    name: "Claudia",
+  },
+  {
+    query: "bright",
+    voices: [
+      { id: "voice-a", name: "Claudia bright" },
+      { id: "voice-b", name: "Bright second" },
+    ],
+    voiceId: "voice-a",
+    name: "Claudia bright",
+  },
+])(
+  "selects voice $voiceId for $query by ID, exact name, then first partial name",
+  async ({ query, voices, voiceId, name }) => {
+    const { run, runtime } = createHarness(talkConfig("microsoft"), voices);
+    expect(await run(`set ${query}`, { senderIsOwner: true })).toEqual({
+      text: `✅ Microsoft Talk voice set to ${name}\n${voiceId}`,
+    });
+    expect(runtime.config.current()).toStrictEqual(talkConfig("microsoft", { voiceId }));
+  },
+);
 
 it("keeps read-only voice commands available without operator.admin", async () => {
   const { mutate, run } = createHarness(elevenlabs, claudia);

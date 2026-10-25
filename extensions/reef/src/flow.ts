@@ -1,6 +1,7 @@
 import { PluginStateOperationInvalidatedError } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { canonicalBytes, sha256Hex } from "../protocol/canonical.js";
 import { fromBase64url } from "../protocol/encoding.js";
-import { seal, type Envelope } from "../protocol/envelope.js";
+import { REEF_ENVELOPE_MAX_AGE_SECONDS, seal, type Envelope } from "../protocol/envelope.js";
 import { admitVerdict } from "../protocol/guard.js";
 import {
   composeInbound,
@@ -14,7 +15,6 @@ import {
   type AuditStore,
   type GuardAdapter,
   type ReplayStore,
-  type ReviewGate,
 } from "../protocol/index.js";
 import { getReefAuditOperationState } from "./audit-state.js";
 import type { ReefChannelConfig } from "./config-schema.js";
@@ -105,7 +105,11 @@ export function isPermanentReefOutboundRejection(error: unknown): boolean {
 export class ReefMessageFlow {
   // Entry ids whose last processing outcome parked (pending review, guard
   // outage): their re-polls skip the duplicate durable read observation.
-  private readonly parkedReadIds = new Set<string>();
+  private readonly parkedEntries = new Map<
+    string,
+    | { envelopeHash: string; policyVersion: string; expiresAt: number; assertCurrent: () => void }
+    | undefined
+  >();
   private readonly pendingOutbound = new Set<string>();
 
   constructor(
@@ -305,7 +309,7 @@ export class ReefMessageFlow {
     const rejections: ReefDeliveryRejection[] = [];
     // A parked entry is re-polled every reconcile interval; one durable read
     // observation per park keeps the audit chain from filling with retries.
-    const unreadIds = entries.map((entry) => entry.id).filter((id) => !this.parkedReadIds.has(id));
+    const unreadIds = entries.map((entry) => entry.id).filter((id) => !this.parkedEntries.has(id));
     if (unreadIds.length > 0) {
       await this.options.audit.appendEvent("read", { ids: unreadIds });
     }
@@ -319,14 +323,14 @@ export class ReefMessageFlow {
       }
       if (entry.envelope) {
         try {
-          await this.processEnvelope(entry.peer, entry.envelope);
+          await this.processEnvelope(entry.id, entry.peer, entry.envelope);
         } catch (error) {
-          if (error instanceof ReefInboxEntryParkedError) {
-            this.parkedReadIds.add(entry.id);
+          if (error instanceof ReefInboxEntryParkedError && !this.parkedEntries.has(entry.id)) {
+            this.parkedEntries.set(entry.id, undefined);
           }
           throw error;
         }
-        this.parkedReadIds.delete(entry.id);
+        this.parkedEntries.delete(entry.id);
       }
     }
     return rejections;
@@ -407,6 +411,7 @@ export class ReefMessageFlow {
   }
 
   private async processEnvelope(
+    entryId: string,
     relayPeer: string,
     envelope: NonNullable<InboxEntry["envelope"]>,
   ): Promise<void> {
@@ -416,6 +421,26 @@ export class ReefMessageFlow {
     const recipientSigningSecretKey = this.options.keys.signing.secretKey;
     if (parsed.handle !== relayPeer) {
       throw new Error("relay peer does not match envelope sender");
+    }
+    const policyVersion = this.guardPolicyVersion();
+    const parked = this.parkedEntries.get(entryId);
+    if (parked) {
+      this.parkedEntries.set(entryId, undefined);
+      if (
+        parked.policyVersion === policyVersion &&
+        Date.now() < parked.expiresAt &&
+        parked.envelopeHash === sha256Hex(canonicalBytes(envelope))
+      ) {
+        try {
+          parked.assertCurrent();
+          this.parkedEntries.set(entryId, parked);
+          throw new ReefInboxEntryParkedError("review approval pending");
+        } catch (error) {
+          if (!(error instanceof PluginStateOperationInvalidatedError)) {
+            throw error;
+          }
+        }
+      }
     }
     const observation = await this.options.trust.observePeer(relayPeer);
     const friend = observation?.trust;
@@ -431,6 +456,7 @@ export class ReefMessageFlow {
       this.options.authoritySignal?.throwIfAborted();
       observation.assertCurrent();
     };
+    let pendingReview: (() => void) | undefined;
     let result;
     try {
       result = await composeInbound({
@@ -442,8 +468,17 @@ export class ReefMessageFlow {
         replayStore: this.options.replay,
         guard: this.options.guard,
         audit: this.options.audit,
-        policyVersion: this.guardPolicyVersion(),
-        reviewGate: reviewGateFor(this.options.reviews),
+        policyVersion,
+        reviewGate: {
+          lookup: async (digest) => {
+            const receipt = await this.options.reviews.observeDecision(digest);
+            if (receipt.value === "pending") {
+              pendingReview = receipt.assertCurrent;
+            }
+            return receipt.value;
+          },
+          request: (request) => this.options.reviews.request(request),
+        },
       });
     } catch (error) {
       if (error instanceof PipelineError && error.receipt) {
@@ -455,6 +490,16 @@ export class ReefMessageFlow {
       // Pending reviews wait for the owner; guard_failure waits out a provider
       // outage. Neither may tear down the inbox socket or reject the peer.
       if (error instanceof PipelineError && isParkedInboundPipelineError(error)) {
+        if (pendingReview) {
+          // The review owner invalidates this fact on mutation. Unchanged polls
+          // need neither a replay claim nor another review/trust read.
+          this.parkedEntries.set(entryId, {
+            envelopeHash: sha256Hex(canonicalBytes(envelope)),
+            policyVersion,
+            expiresAt: (envelope.ts + REEF_ENVELOPE_MAX_AGE_SECONDS + 1) * 1000,
+            assertCurrent: pendingReview,
+          });
+        }
         throw new ReefInboxEntryParkedError(error.message);
       }
       if (isPluginStateCapacityError(error)) {
@@ -520,13 +565,6 @@ export class ReefMessageFlow {
     }
     return effectiveGuardPolicyVersion(guard.policyVersion, guard.rules);
   }
-}
-
-function reviewGateFor(reviews: ReviewApprovalStore): ReviewGate {
-  return {
-    lookup: (approvalDigest) => reviews.lookupDecision(approvalDigest),
-    request: (request) => reviews.request(request),
-  };
 }
 
 function isParkedInboundPipelineError(error: PipelineError): boolean {

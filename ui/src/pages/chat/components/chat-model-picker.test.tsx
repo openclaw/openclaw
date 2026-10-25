@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { findMenuShortcut } from "../../../components/menu-shortcuts.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
+import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   modelControlSelector,
@@ -10,6 +11,14 @@ import {
   mountModelPicker as mountPicker,
   waitForModelMenu as waitForMenu,
 } from "./chat-model-picker.test-support.tsx";
+
+// Cold code loading is covered in Chromium; these cases exercise the loaded panel.
+beforeAll(async () => {
+  await import("./chat-model-picker-panel.tsx");
+});
+
+beforeEach(installModelPickerLayout);
+afterEach(() => vi.restoreAllMocks());
 
 it.each([false, true])(
   "initially expands the selected provider and retains toggles on reopen (inherited=%s)",
@@ -33,25 +42,26 @@ it.each([false, true])(
     const selected = container.querySelector<HTMLButtonElement>(
       modelControlSelector("option", "selected/current"),
     )!;
-    const other = container.querySelector<HTMLButtonElement>(
-      modelControlSelector("option", "other/first"),
-    )!;
+    const other = () =>
+      container.querySelector<HTMLButtonElement>(modelControlSelector("option", "other/first"));
     const toggle = selected
       .closest("section")!
       .querySelector<HTMLButtonElement>("[data-chat-model-provider-toggle]")!;
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect([selected.hidden, other.hidden]).toEqual([false, true]);
+    expect(selected.hidden).toBe(false);
+    expect(other()).toBeNull();
 
     toggle.click();
     flush();
-    expect(selected.hidden).toBe(true);
+    expect(selected.isConnected).toBe(false);
     details.open = false;
     details.dispatchEvent(new Event("toggle"));
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
     await waitForMenu(container);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect([selected.hidden, other.hidden]).toEqual([true, true]);
+    expect(selected.isConnected).toBe(false);
+    expect(other()).toBeNull();
 
     // The next selection, including a change while closed, owns the open group.
     update({ ...params, open: false, selectedModelValue: "other/first" });
@@ -59,7 +69,8 @@ it.each([false, true])(
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
     await waitForMenu(container);
-    expect([other.hidden, selected.hidden]).toEqual([false, true]);
+    expect(other()?.hidden).toBe(false);
+    expect(selected.isConnected).toBe(false);
   },
 );
 
@@ -102,7 +113,7 @@ it("retains disclosure across catalog refreshes and forgets removed providers", 
   expect(toggle().getAttribute("aria-expanded")).toBe("false");
   toggle().click();
   flush();
-  expect(rest().hidden).toBe(true);
+  expect(rest()).toBeNull();
   expect(
     group().querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"))!.hidden,
   ).toBe(false);
@@ -124,30 +135,34 @@ it.each([false, true])(
       triggerModelLabel: "Model 299",
     });
     await waitForMenu(container);
-    const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-option]"));
-    const visibleRows = () => rows.filter((row) => !row.hidden);
-    expect([rows.length, visibleRows().length]).toEqual([300, 9]);
+    const visibleRows = () =>
+      Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-option]"));
+    const rows = visibleRows();
+    expect(rows).toHaveLength(9);
     expect(rows.slice(0, 3).map((row) => row.dataset.chatModelOption)).toEqual(
       hasDefault
         ? ["fixture/model-0", "fixture/model-299", "fixture/model-1"]
         : ["fixture/model-299", "fixture/model-0", "fixture/model-1"],
     );
     expect(rows[hasDefault ? 1 : 0]?.getAttribute("aria-selected")).toBe("true");
-    const more = container.querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"))!;
+    const more = () =>
+      container.querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"));
     const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
     search.value = "Model 298";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     expect(visibleRows().map((row) => row.dataset.chatModelOption)).toEqual(["fixture/model-298"]);
-    expect(more.hidden).toBe(true);
+    expect(more()).toBeNull();
     search.value = "";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     expect(visibleRows()).toHaveLength(9);
-    more.click();
+    more()!.click();
     flush();
-    expect(visibleRows()).toHaveLength(300);
-    expect(more.hidden).toBe(true);
+    expect(visibleRows().length).toBeLessThan(40);
+    expect(visibleRows()[0]?.getAttribute("aria-setsize")).toBe("9");
+    expect(visibleRows().some((row) => row.getAttribute("aria-setsize") === "291")).toBe(true);
+    expect(more()).toBeNull();
   },
 );
 
@@ -169,28 +184,30 @@ it.each([false, true])(
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
     await waitForMenu(container);
-    const rest = container.querySelector<HTMLButtonElement>(
-      modelControlSelector("option", "fixture/rest"),
-    )!;
+    const rest = () =>
+      container.querySelector<HTMLButtonElement>(modelControlSelector("option", "fixture/rest"));
     const group = container.querySelector<HTMLButtonElement>(
       modelControlSelector("provider-toggle"),
     )!;
-    expect([more.hidden, rest.hidden]).toEqual([false, true]);
+    expect(more.hidden).toBe(false);
+    expect(rest()).toBeNull();
 
     more.focus();
     more.click();
     flush();
-    expect([more.hidden, rest.hidden]).toEqual([true, false]);
+    expect(more.isConnected).toBe(false);
+    expect(rest()?.hidden).toBe(false);
     // Keyboard focus lands on the first selectable revealed model, else back on search.
     expect(document.activeElement).toBe(
-      restDisabled ? container.querySelector<HTMLElement>(modelControlSelector("search")) : rest,
+      restDisabled ? container.querySelector<HTMLElement>(modelControlSelector("search")) : rest(),
     );
 
     group.click();
     flush();
     group.click();
     flush();
-    expect([more.hidden, rest.hidden]).toEqual([true, false]);
+    expect(more.isConnected).toBe(false);
+    expect(rest()?.hidden).toBe(false);
   },
 );
 
@@ -209,6 +226,12 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
     ]),
   });
   await waitForMenu(container);
+  container
+    .querySelector<HTMLButtonElement>(
+      '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
+    )!
+    .click();
+  flush();
   const groups = Object.fromEntries(
     Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-provider-group]")).map(
       (group) => [

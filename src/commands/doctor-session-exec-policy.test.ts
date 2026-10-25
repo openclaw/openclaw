@@ -45,6 +45,18 @@ function askOffCase(
   };
 }
 
+const execConfig = (mode: ExecSecurity): OpenClawConfig => ({ tools: { exec: { mode } } });
+const denyConfig = execConfig("deny");
+const fullConfig = execConfig("full");
+const allowlistConfig = execConfig("allowlist");
+
+async function setup(cfg: OpenClawConfig = {}) {
+  state = await createOpenClawTestState({ prefix: "openclaw-doctor-exec-policy-" });
+  const config = { ...cfg, plugins: { enabled: false } };
+  setRuntimeConfigSnapshot(config);
+  return { config, env: state.env };
+}
+
 describe("doctor legacy session exec policy", () => {
   it.each<{
     name: string;
@@ -55,33 +67,18 @@ describe("doctor legacy session exec policy", () => {
     oldPolicy: { security: ExecSecurity; ask: ExecAsk };
     expected: SessionEntry["permissionMode"];
   }>([
-    askOffCase(
-      "partial ask under global deny",
-      { tools: { exec: { mode: "deny" } } },
-      "deny",
-      "read-only",
-    ),
+    askOffCase("partial ask under global deny", denyConfig, "deny", "read-only"),
     askOffCase(
       "partial ask under agent deny overriding global full",
       {
-        tools: { exec: { mode: "full" } },
+        ...fullConfig,
         agents: { entries: { worker: { tools: { exec: { mode: "deny" } } } } },
       },
       "deny",
       "read-only",
     ),
-    askOffCase(
-      "partial ask under allowlist config",
-      { tools: { exec: { mode: "allowlist" } } },
-      "allowlist",
-      "guarded",
-    ),
-    askOffCase(
-      "partial ask under full config",
-      { tools: { exec: { mode: "full" } } },
-      "full",
-      undefined,
-    ),
+    askOffCase("partial ask under allowlist config", allowlistConfig, "allowlist", "guarded"),
+    askOffCase("partial ask under full config", fullConfig, "full", undefined),
     {
       name: "partial security inherits global ask always",
       cfg: { tools: { exec: { security: "full", ask: "always" } } },
@@ -92,7 +89,7 @@ describe("doctor legacy session exec policy", () => {
     {
       name: "partial security inherits agent ask always",
       cfg: {
-        tools: { exec: { mode: "full" } },
+        ...fullConfig,
         agents: { entries: { worker: { tools: { exec: { ask: "always" } } } } },
       },
       legacy: { execSecurity: "full" },
@@ -107,10 +104,8 @@ describe("doctor legacy session exec policy", () => {
     }),
     askOffCase("partial ask with explicit gateway and no config policy", {}, "full", undefined),
   ])("does not broaden $name", async ({ cfg, legacy, host, sandbox, oldPolicy, expected }) => {
-    state = await createOpenClawTestState({ prefix: "openclaw-doctor-exec-base-" });
-    const config: OpenClawConfig = { ...cfg, plugins: { enabled: false } };
-    setRuntimeConfigSnapshot(config);
-    const scope = { agentId: "worker", env: state.env, sessionKey: "agent:worker:exec-policy" };
+    const { config, env } = await setup(cfg);
+    const scope = { agentId: "worker", env, sessionKey: "agent:worker:exec-policy" };
     await replaceSessionEntry(scope, {
       sessionId: "legacy-policy",
       updatedAt: Date.now(),
@@ -118,7 +113,7 @@ describe("doctor legacy session exec policy", () => {
       ...(sandbox ? { sandbox } : {}),
       ...legacy,
     });
-    await noteSessionTranscriptHealth({ cfg: config, env: state.env, shouldRepair: true });
+    await noteSessionTranscriptHealth({ cfg: config, env, shouldRepair: true });
     closeOpenClawAgentDatabasesForTest();
     const migrated = listSessionEntriesCore(scope)[0]?.entry;
     expect(migrated?.permissionMode).toBe(expected);
@@ -139,10 +134,7 @@ describe("doctor legacy session exec policy", () => {
   });
 
   it("migrates persisted restrictions without granting full access and reports each session once", async () => {
-    state = await createOpenClawTestState({ prefix: "openclaw-doctor-exec-policy-" });
-    const config: OpenClawConfig = { plugins: { enabled: false } };
-    setRuntimeConfigSnapshot(config);
-    const env = state.env;
+    const { config, env } = await setup();
     const policyCase = (
       name: string,
       execSecurity: string | undefined,
@@ -229,7 +221,7 @@ describe("doctor legacy session exec policy", () => {
       // Resolve the migrated mode alone: the fixture's sandbox binding would
       // deny on its own and make this assertion vacuous.
       const resolved = resolveExecDefaults({
-        cfg: { tools: { exec: { mode: "full" } } },
+        cfg: fullConfig,
         execApprovals: { version: 1 },
         sessionEntry: { permissionMode: migrated?.permissionMode },
       });

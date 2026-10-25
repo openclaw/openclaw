@@ -64,7 +64,7 @@ export function CatalogDiscoverySection(props: {
           <button
             type="button"
             class="btn btn--sm plugin-catalog-section__view-all oc-action oc-action-ghost"
-            onClick={props.onViewAll}
+            onClick={() => props.onViewAll?.()}
           >
             {props.viewAllLabel}
           </button>

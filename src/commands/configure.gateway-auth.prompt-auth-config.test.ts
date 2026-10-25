@@ -7,6 +7,7 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createTestWizardPrompter } from "../test-utils/plugin-setup-wizard.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { withLoopbackTestServer } from "./loopback-server.test-support.js";
 
@@ -65,6 +66,7 @@ vi.mock("./models/list.manifest-catalog.js", () => ({
 }));
 
 import { promptAuthConfig } from "./configure.gateway-auth.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const { applyAuthChoice: applyProviderAuthChoice } =
   await vi.importActual<typeof import("./auth-choice.apply.js")>("./auth-choice.apply.js");
@@ -99,17 +101,7 @@ function providerModels(id: string) {
   return {
     baseUrl: "https://provider.example/v1",
     api: "openai-completions" as const,
-    models: [
-      {
-        id,
-        name: id,
-        reasoning: false,
-        input: ["text"] as Array<"text" | "image" | "video" | "audio">,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      },
-    ],
+    models: [createTestModelDefinition(id, { contextWindow: 128_000 })],
   };
 }
 
@@ -347,12 +339,8 @@ describe("promptAuthConfig", () => {
     });
     await withLoopbackTestServer(server, async (port) => {
       const baseUrl = `http://127.0.0.1:${port}/v1`;
-      const prompter: WizardPrompter = {
-        intro: vi.fn(),
-        outro: vi.fn(),
-        note: vi.fn(),
+      const prompter = createTestWizardPrompter({
         select: vi.fn().mockResolvedValueOnce("plaintext").mockResolvedValueOnce("openai"),
-        multiselect: vi.fn(),
         text: vi
           .fn()
           .mockResolvedValueOnce(baseUrl)
@@ -361,8 +349,7 @@ describe("promptAuthConfig", () => {
           .mockResolvedValueOnce("custom")
           .mockResolvedValueOnce("Custom"),
         confirm: vi.fn().mockResolvedValue(false),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      };
+      });
 
       const config = agentConfig({ model: defaultModel }, agentModel, explicit, {});
       const result = await promptAuthConfig(config, makeRuntime(), prompter, target);

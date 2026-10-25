@@ -32,6 +32,18 @@ function harness(sessionUpdate: AgentSideConnection["sessionUpdate"] = vi.fn(asy
 }
 
 describe("AcpTranslatorSessionUpdates", () => {
+  it("advertises Ultra in the thinking command", async () => {
+    const sessionUpdate = vi.fn<AgentSideConnection["sessionUpdate"]>(async () => {});
+    const { updates } = harness(sessionUpdate);
+    await updates.sendAvailableCommands(session, { record: false });
+    const publishedUpdate = sessionUpdate.mock.calls[0]?.[0].update;
+    const think =
+      publishedUpdate?.sessionUpdate === "available_commands_update"
+        ? publishedUpdate.availableCommands.find((command) => command.name === "think")
+        : undefined;
+    expect(think?.description).toContain("off|minimal|low|medium|high|xhigh|adaptive|max|ultra");
+  });
+
   it("joins admitted ledger work and blocks reads and writes after shutdown starts", async () => {
     const reading = createDeferred<{ complete: boolean; events: [] }>();
     const { updates, ledger, sessionUpdate } = harness();

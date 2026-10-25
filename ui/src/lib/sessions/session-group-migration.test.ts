@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
@@ -135,22 +135,17 @@ it("does not replace saved groups from an invalidated legacy import", async () =
     "sessions.groups.defaults": () => ({ defaults: [clientDefaults] }),
   });
   const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
-  try {
-    const staleLoad = sessions.groupsLoad();
-    sessions.groupsInvalidate();
-    const currentLoad = sessions.groupsLoad();
-    stale.resolve({ groups: [] });
-    await staleLoad;
-
-    expect(request).not.toHaveBeenCalledWith("sessions.groups.put", expect.anything());
-    expect(localStorage.getItem(legacyKey)).toBe(legacy);
-    current.resolve({ groups: [{ name: "Client", position: 0 }] });
-    await currentLoad;
-    expect(sessions.state.groupSettings).toEqual(expectedClient);
-  } finally {
-    current.resolve({ groups: [{ name: "Client", position: 0 }] });
-    sessions.dispose();
-  }
+  onTestFinished(() => current.resolve({ groups: [clientGroup] }));
+  const staleLoad = sessions.groupsLoad();
+  sessions.groupsInvalidate();
+  const currentLoad = sessions.groupsLoad();
+  stale.resolve({ groups: [] });
+  await staleLoad;
+  expect(request).not.toHaveBeenCalledWith("sessions.groups.put", expect.anything());
+  expect(localStorage.getItem(legacyKey)).toBe(legacy);
+  current.resolve({ groups: [clientGroup] });
+  await currentLoad;
+  expect(sessions.state.groupSettings).toEqual(expectedClient);
 });
 
 it("clears cached cwd when a defaults update omits the removed value", async () => {

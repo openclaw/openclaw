@@ -9,10 +9,7 @@ import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import type { ChannelDmPolicyMetadata } from "./channel-config-metadata.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import {
-  type DmPolicyAllowFromViolation,
-  evaluateDmPolicyAllowFromDependency,
-} from "./zod-schema.core.js";
+import { evaluateDmPolicyAllowFromDependency } from "./zod-schema.core.js";
 
 const bundledChannelSchemaById = new Map<string, unknown>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).map(
@@ -25,31 +22,6 @@ export const bundledChannelIds = Object.freeze(
     .map((entry) => normalizeLowercaseStringOrEmpty(entry.channelId))
     .filter((channelId) => channelId.length > 0),
 );
-
-function buildDmPolicyDependencyWarning(params: {
-  channelId: string;
-  accountId?: string;
-  allowFromSource?: "explicit" | "inherited";
-  violation: DmPolicyAllowFromViolation;
-}): ConfigValidationIssue {
-  const channelBase = `channels.${params.channelId}`;
-  const scope = params.accountId ? `${channelBase}.accounts.${params.accountId}` : channelBase;
-  const allowFromPath = `${scope}.allowFrom`;
-  const inherited = params.accountId && params.allowFromSource === "inherited";
-  const allowFromSubject = inherited
-    ? `${allowFromPath} is unset and ${channelBase}.allowFrom`
-    : allowFromPath;
-  const accountInheritedTarget = inherited ? ` or ${channelBase}.allowFrom` : "";
-  const accountOverrideFix =
-    params.accountId && !inherited
-      ? `, remove ${allowFromPath} to inherit ${channelBase}.allowFrom,`
-      : "";
-  const message =
-    params.violation === "open_requires_wildcard"
-      ? `${scope}.dmPolicy="open" but ${allowFromSubject} does not include "*"; all DMs will be dropped. Add "*" to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or set ${scope}.dmPolicy to "pairing"/"allowlist".`
-      : `${scope}.dmPolicy="allowlist" but ${allowFromSubject} is empty; all DMs will be dropped. Add at least one sender ID to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or change ${scope}.dmPolicy.`;
-  return { path: allowFromPath, message };
-}
 
 // Channel map keys that are not channels and must be skipped while scanning DM policy.
 const DM_POLICY_PSEUDO_CHANNEL_KEYS = new Set(["defaults", "modelByChannel", "tools"]);
@@ -79,16 +51,8 @@ export function hasChannelDmPolicyDependencyWarningCandidates(config: OpenClawCo
 }
 
 /**
- * Surface dmPolicy/allowFrom dependency problems generically for every channel that
- * exposes DM policy via the canonical top-level `dmPolicy`/`allowFrom` fields. These
- * configs parse fine but drop every DM at runtime, so we warn (rather than reject) to
- * stay consistent with `security audit`/`doctor` and avoid breaking existing-but-usable
- * configs on upgrade.
- *
- * Resolution goes through the shared DM-access helpers so the warning matches the
- * effective policy/allowFrom the runtime sees, including the legacy `dm.*` aliases and
- * account->channel inheritance. `nestedOnly` channels (canonical fields under `dm.*`)
- * are skipped because their config shape does not match this warning's top-level paths.
+ * Warn about DM policy/allowlist dependencies without rejecting otherwise usable
+ * configs. Shared readers resolve account inheritance; paths follow canonical fields.
  */
 export function collectChannelDmPolicyDependencyWarnings(
   config: OpenClawConfig,
@@ -111,12 +75,23 @@ export function collectChannelDmPolicyDependencyWarnings(
     const metadata = options.dmPolicyMetadata?.get(channelId);
     const mode: ChannelDmAllowFromMode = metadata?.dmAllowFromMode ?? "topOnly";
     const openDmRequiresAllowFromWildcard = metadata?.openDmRequiresAllowFromWildcard !== false;
-    if (mode === "nestedOnly") {
-      continue;
-    }
+    const nested = mode === "nestedOnly";
+    const policyKey = nested ? "dm.policy" : "dmPolicy";
+    const allowFromKey = nested ? "dm.allowFrom" : "allowFrom";
     const appendWarning = (account: Record<string, unknown>, accountId?: string) => {
       const parent = accountId === undefined ? undefined : channelValue;
-      const access = { account, parent, mode };
+      const accountDm = isRecord(account.dm) ? account.dm : undefined;
+      const parentDm = parent && isRecord(parent.dm) ? parent.dm : undefined;
+      if (nested && (accountDm?.enabled ?? parentDm?.enabled) === false) {
+        return;
+      }
+      // Doctor reads legacy aliases for migration, but nested-only runtimes ignore
+      // them. Project canonical fields so aliases cannot conceal a runtime denial.
+      const access = {
+        account: nested ? { dm: accountDm } : account,
+        parent: nested ? { dm: parentDm } : parent,
+        mode,
+      };
       const violation = evaluateDmPolicyAllowFromDependency({
         policy: resolveChannelDmPolicy(access),
         allowFrom: resolveChannelDmAllowFrom(access),
@@ -125,19 +100,25 @@ export function collectChannelDmPolicyDependencyWarnings(
         violation &&
         (violation !== "open_requires_wildcard" || openDmRequiresAllowFromWildcard)
       ) {
-        warnings.push(
-          buildDmPolicyDependencyWarning({
-            channelId,
-            accountId,
-            allowFromSource:
-              accountId === undefined
-                ? undefined
-                : hasConfiguredDmAllowFrom(account)
-                  ? "explicit"
-                  : "inherited",
-            violation,
-          }),
-        );
+        const channelBase = `channels.${channelId}`;
+        const scope = accountId ? `${channelBase}.accounts.${accountId}` : channelBase;
+        const allowFromPath = `${scope}.${allowFromKey}`;
+        const channelAllowFromPath = `${channelBase}.${allowFromKey}`;
+        const policyPath = `${scope}.${policyKey}`;
+        const inherited = Boolean(accountId) && !hasConfiguredDmAllowFrom(access.account);
+        const allowFromSubject = inherited
+          ? `${allowFromPath} is unset and ${channelAllowFromPath}`
+          : allowFromPath;
+        const accountInheritedTarget = inherited ? ` or ${channelAllowFromPath}` : "";
+        const accountOverrideFix =
+          accountId && !inherited
+            ? `, remove ${allowFromPath} to inherit ${channelAllowFromPath},`
+            : "";
+        const message =
+          violation === "open_requires_wildcard"
+            ? `${policyPath}="open" but ${allowFromSubject} does not include "*"; DMs from unlisted senders will be dropped. Add "*" to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or set ${policyPath} to "pairing"/"allowlist".`
+            : `${policyPath}="allowlist" but ${allowFromSubject} is empty; all DMs will be dropped. Add at least one sender ID to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or change ${policyPath}.`;
+        warnings.push({ path: allowFromPath, message });
       }
     };
     appendWarning(channelValue);

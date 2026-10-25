@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasExplicitRetryText,
+  parseGoogleRetryDelaySeconds,
   parseRetryAfterErrorSeconds,
+  parseRetryAfterErrorTiming,
   parseRetryAfterHeadersSeconds,
+  parseRetryAfterTextSeconds,
+  resolveProviderErrorRetrySeconds,
   parseRetryAfterHttpDateMs as parseDate,
 } from "./retry-after.js";
 
@@ -9,6 +14,10 @@ const EXAMPLE_TIMESTAMP = Date.UTC(1994, 10, 6, 8, 49, 37);
 const quotaHeaders = (dimension: string, remaining: string, reset: string) => ({
   [`x-ratelimit-remaining-${dimension}`]: remaining,
   [`x-ratelimit-reset-${dimension}`]: reset,
+});
+const anthropicQuotaHeaders = (dimension: string, remaining: string, reset: string) => ({
+  [`anthropic-ratelimit-${dimension}-remaining`]: remaining,
+  [`anthropic-ratelimit-${dimension}-reset`]: reset,
 });
 
 describe("retry header floors", () => {
@@ -27,7 +36,13 @@ describe("retry header floors", () => {
     [quotaHeaders("tokens", "1", "1m"), undefined],
     [{ "x-ratelimit-reset-tokens": "1m" }, undefined],
     [quotaHeaders("tokens", "0", "tomorrow"), undefined],
-    [{ "retry-after": "7", ...quotaHeaders("tokens", "0", "9s") }, 9],
+    // An explicit retry instruction outranks a bucket's full-refill time.
+    [{ "retry-after": "7", ...quotaHeaders("tokens", "0", "9s") }, 7],
+    [anthropicQuotaHeaders("output-tokens", "0", "1994-11-06T08:49:42Z"), 12],
+    [anthropicQuotaHeaders("requests", "0", "1994-11-06T08:49:31.5Z"), 1.5],
+    [anthropicQuotaHeaders("tokens", "12", "1994-11-06T08:49:42Z"), undefined],
+    [anthropicQuotaHeaders("input-tokens", "0", "later"), undefined],
+    [{ "retry-after": "3", ...anthropicQuotaHeaders("tokens", "0", "1994-11-06T08:50:30Z") }, 3],
   ])("keeps the greatest valid native and record floor: %j", (headers, expected) => {
     const native = new Headers(Object.entries(headers).map(([key, value]) => [key, String(value)]));
     for (const source of [headers, native]) {
@@ -93,6 +108,80 @@ describe("retry header floors", () => {
       expect(parseRetryAfterErrorSeconds({ headers })).toBeUndefined();
     }
     expect(parseRetryAfterErrorSeconds(proxy)).toBeUndefined();
+  });
+});
+
+describe("provider error retry authority", () => {
+  const exhausted = { status: 429, headers: quotaHeaders("tokens", "0", "5m") };
+
+  it("separates explicit instructions from bucket refills", () => {
+    expect(parseRetryAfterErrorTiming(exhausted)).toEqual({ resetSeconds: 300 });
+    expect(
+      parseRetryAfterErrorTiming({
+        ...exhausted,
+        response: { headers: { "retry-after": "4" } },
+      }),
+    ).toEqual({ explicitSeconds: 4, resetSeconds: 300 });
+    expect(
+      parseRetryAfterErrorSeconds({ ...exhausted, response: { headers: { "retry-after": "4" } } }),
+    ).toBe(4);
+  });
+
+  it("drops a refill reset when the provider wrote an explicit retry time", () => {
+    expect(resolveProviderErrorRetrySeconds(exhausted)).toBe(300);
+    for (const message of ["Please try again in 6s.", "Please retry in 32.5s.", "Retry-After: 2"]) {
+      expect(resolveProviderErrorRetrySeconds({ ...exhausted, message })).toBeUndefined();
+    }
+    for (const message of ["Please try again later.", "Please try again in 6 attempts."]) {
+      expect(resolveProviderErrorRetrySeconds({ ...exhausted, message })).toBe(300);
+    }
+    expect(
+      resolveProviderErrorRetrySeconds({
+        ...exhausted,
+        message: "Please try again in 6s.",
+        body: '{"details":[{"retryDelay":"8s"}]}',
+      }),
+    ).toBe(8);
+  });
+
+  it("recognizes explicit retry prose only with a parseable time", () => {
+    expect(hasExplicitRetryText("try again in 6s")).toBe(true);
+    expect(hasExplicitRetryText("Retry-After: Sun, 06 Nov 1994 08:49:37 GMT")).toBe(true);
+    expect(hasExplicitRetryText("please try again in a moment")).toBe(false);
+    expect(hasExplicitRetryText("please try again in 6 attempts")).toBe(false);
+    expect(hasExplicitRetryText(undefined)).toBe(false);
+  });
+
+  it("parses retry-text durations with the same grammar the failover path uses", () => {
+    expect(parseRetryAfterTextSeconds("6s")).toBe(6);
+    expect(parseRetryAfterTextSeconds("250ms")).toBe(0.25);
+    expect(parseRetryAfterTextSeconds("2 minutes")).toBe(120);
+    expect(parseRetryAfterTextSeconds("1.5 hours")).toBe(5400);
+    expect(parseRetryAfterTextSeconds("7")).toBe(7);
+    expect(parseRetryAfterTextSeconds("Sun, 06 Nov 1994 08:49:44 GMT", EXAMPLE_TIMESTAMP)).toBe(7);
+    for (const invalid of ["6 attempts", "a moment", "-1s", ""]) {
+      expect(parseRetryAfterTextSeconds(invalid)).toBeUndefined();
+    }
+  });
+
+  it("reads RetryInfo in any key order without invoking getters", () => {
+    const retryInfo = (retryDelay: unknown) => ({
+      error: { details: [{ retryDelay, "@type": "type.googleapis.com/google.rpc.RetryInfo" }] },
+    });
+    expect(parseGoogleRetryDelaySeconds(retryInfo("1.25s"))).toBe(1.25);
+    expect(parseGoogleRetryDelaySeconds(JSON.stringify(retryInfo("7s")))).toBe(7);
+    for (const invalid of ["soon", "7", 7, "-1s"]) {
+      expect(parseGoogleRetryDelaySeconds(retryInfo(invalid))).toBeUndefined();
+    }
+    let invoked = false;
+    const hostile = Object.defineProperty({}, "details", {
+      get: () => {
+        invoked = true;
+        return [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "9s" }];
+      },
+    });
+    expect(parseGoogleRetryDelaySeconds(hostile)).toBeUndefined();
+    expect(invoked).toBe(false);
   });
 });
 

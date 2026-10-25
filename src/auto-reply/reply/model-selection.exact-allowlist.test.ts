@@ -2,6 +2,7 @@ import { expect, test, vi } from "vitest";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { makeConfiguredModel as configuredModel } from "./model-selection.inputs.test-support.js";
 import { createModelSelectionState } from "./model-selection.js";
 
 vi.mock("../../agents/auth-profiles.runtime.js", async (importOriginal) => ({
@@ -11,17 +12,6 @@ vi.mock("../../agents/auth-profiles.runtime.js", async (importOriginal) => ({
 
 const PROVIDER = "chutes";
 const ALLOWLISTED = "chutes/deepseek-ai/DeepSeek-V3.2-TEE";
-
-const configuredModel = (overrides: Record<string, unknown> = {}) => ({
-  id: "gpt-5.4",
-  name: "GPT-5.4",
-  reasoning: true,
-  input: ["text"] as Array<"text">,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 16_384,
-  ...overrides,
-});
 
 const configuredModelIds = [
   "deepseek-ai/DeepSeek-V3.2-TEE",

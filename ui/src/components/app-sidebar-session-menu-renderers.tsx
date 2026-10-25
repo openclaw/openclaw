@@ -2,13 +2,13 @@ import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import { SidebarDropdown } from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { countSidebarSessionFilters } from "./app-sidebar-session-filter-summary.tsx";
 import {
   SIDEBAR_SESSION_SORT_OPTIONS,
@@ -288,7 +288,7 @@ export function renderSidebarSessionSortMenuForMenus(
     onChange: (value: T) => void,
     inputRef?: (value: T, element: HTMLInputElement) => void,
   ) => (
-    <div id={id} class="sidebar-session-menu-row">
+    <div id={id} class="sidebar-session-menu-row sidebar-session-menu-row--segmented">
       <span aria-hidden="true" title={label()}>
         {label()}
       </span>
@@ -489,16 +489,15 @@ export function renderSidebarSessionSortMenuForMenus(
                 sessionSources.search +
                 sessionSources.hash
               }
-              onClick={(event: MouseEvent) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
+              onClick={(event: MouseEvent) =>
+                handleNavigationClick(event, () => {
                   menus.closePositionedMenu("sessionSort");
                   host.onNavigate?.(sessionSources.routeId, {
                     search: sessionSources.search,
                     hash: sessionSources.hash,
                   });
-                }
-              }}
+                })
+              }
             >
               <span aria-hidden="true">{<Icon name="settings" />}</span>
               {t("chat.sidebar.sessionSources")}

@@ -228,7 +228,7 @@ it("refreshes prices only for the published agent", async ({ home }) => {
 
   const updated = await ensureOpenClawModelsJson(configFor(9), firstDir, options);
 
-  expect(updated).toEqual({ agentDir: firstDir, wrote: true });
+  expect(updated).toEqual({});
   expect(await readGeneratedModelsJson(firstDir)).toEqual({
     providers: configFor(9).models.providers,
   });
@@ -252,11 +252,10 @@ it("writes privately into the configured default agent dir", async ({ home }) =>
     },
   };
 
-  const result = await ensureOpenClawModelsJson(cfg);
+  await ensureOpenClawModelsJson(cfg);
 
   expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
-  expect(result.agentDir).toBe(path.join(home, ".openclaw", "agents", "ops", "agent"));
-  const modelsPath = path.join(result.agentDir, "models.json");
+  const modelsPath = path.join(home, ".openclaw", "agents", "ops", "agent", "models.json");
   await fs.access(modelsPath);
   if (process.platform !== "win32") {
     // The captured mode proves privacy before the writer's follow-up chmod.
@@ -309,7 +308,6 @@ it("removes stale plugin catalogs from SQLite", async ({ agentDir }) => {
 
   const result = await ensureOpenClawModelsJson({}, agentDir);
 
-  expect(result.wrote).toBe(true);
   expect(result.publishedSource?.pluginCatalogs).toEqual([]);
   expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
 });
@@ -364,14 +362,14 @@ it("repairs permissions without cooling the ready cache", async ({ home: _home }
     modelsJsonContents: emptyModelsJson,
     pluginCatalogs: [{ pluginId: "fixture", contents }],
   });
-  const modelsPath = path.join(first.agentDir, "models.json");
+  const modelsPath = path.join(resolveDefaultAgentDir(CUSTOM_PROXY_MODELS_CONFIG), "models.json");
   const rootContents = await fs.readFile(modelsPath, "utf8");
   if (process.platform !== "win32") {
     await fs.chmod(modelsPath, 0o644);
   }
   const cached = await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
-  expect(cached).toEqual({ agentDir: first.agentDir, wrote: true });
+  expect(cached).toEqual({});
   expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
   expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
   expect(await fs.readFile(modelsPath, "utf8")).toBe(rootContents);
@@ -392,9 +390,8 @@ it.for(["noop", "write"] as const)(
       action === "noop" ? { action } : { action, contents },
     );
 
-    const result = await ensureOpenClawModelsJson({}, agentDir);
+    await ensureOpenClawModelsJson({}, agentDir);
 
-    expect(result.wrote).toBe(false);
     expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
     expect(writePrivateStoreTextWriteMock).not.toHaveBeenCalled();
     expect(await fs.readFile(modelsPath, "utf8")).toBe(contents);

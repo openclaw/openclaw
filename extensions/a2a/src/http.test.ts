@@ -446,8 +446,8 @@ describe("A2A HTTP authentication and request limits", () => {
 
   it("preserves batch response IDs when aggregate results exceed the response limit", async () => {
     const harness = await startHttpHarness();
-    const taskA = harness.taskStore.create("ctx-large-a", "alpha");
-    const taskB = harness.taskStore.create("ctx-large-b", "alpha");
+    const taskA = harness.taskStore.create("ctx-large-a", "alpha", "large-a");
+    const taskB = harness.taskStore.create("ctx-large-b", "alpha", "large-b");
     harness.taskStore.complete(taskA.id, "a".repeat(600 * 1024));
     harness.taskStore.complete(taskB.id, "b".repeat(600 * 1024));
     const stringifySpy = vi.spyOn(JSON, "stringify");
@@ -654,7 +654,11 @@ describe("A2A SendMessage task references", () => {
     const referenced =
       kind === "unknown"
         ? undefined
-        : harness.taskStore.create("existing-context", kind === "foreign" ? "beta" : "alpha");
+        : harness.taskStore.create(
+            "existing-context",
+            kind === "foreign" ? "beta" : "alpha",
+            "existing-message",
+          );
     const before = referenced && structuredClone(referenced);
     const create = vi.spyOn(harness.taskStore, "create");
 
@@ -671,13 +675,15 @@ describe("A2A SendMessage task references", () => {
     expect(create).not.toHaveBeenCalled();
     expect(onDispatch).not.toHaveBeenCalled();
     if (referenced) {
-      expect(harness.taskStore.get(referenced.id)).toEqual(before);
+      expect(harness.taskStore.get(referenced.id, kind === "foreign" ? "beta" : "alpha")).toEqual(
+        before,
+      );
     }
   });
 
   it("accepts a context-only follow-up as a new task", async () => {
     const harness = await startHttpHarness();
-    const original = harness.taskStore.create("shared-context", "alpha");
+    const original = harness.taskStore.create("shared-context", "alpha", "original-message");
     harness.taskStore.complete(original.id, "original reply");
 
     const response = await harness.post(
@@ -692,7 +698,7 @@ describe("A2A SendMessage task references", () => {
         artifacts: [{ parts: [{ text: "echo: follow up" }] }],
       }),
     );
-    expect(harness.taskStore.get(original.id)?.artifacts[0]?.parts).toEqual([
+    expect(harness.taskStore.get(original.id, "alpha")?.artifacts[0]?.parts).toEqual([
       { text: "original reply" },
     ]);
   });

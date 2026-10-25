@@ -25,6 +25,7 @@ function recoveryRecord(
 ): SessionPlacementRecovery {
   return {
     sessionKey,
+    sessionId: "physical-startup-session",
     message,
     messageId: `message-${sessionKey.split(":").at(-1)}`,
     target: { kind: "profile", profileId: "aws" },
@@ -63,6 +64,22 @@ function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClien
   return { request: request as GatewayBrowserClient["request"] };
 }
 
+async function expectPaused(
+  request: ReturnType<typeof vi.fn>,
+  recovery: SessionPlacementRecovery,
+  expected: object,
+  options: AdvanceOptions = {},
+) {
+  const clearRecovery = vi.fn();
+  await expect(
+    advanceSessionPlacementDraft(request, recovery, { ...options, clearRecovery }),
+  ).resolves.toMatchObject({
+    status: "paused",
+    recovery: { message: recovery.message, ...expected },
+  });
+  expect(clearRecovery).not.toHaveBeenCalled();
+}
+
 const recoveryStorageKey = (sessionKey: string) =>
   sessionPlacementRecoveryExactStorageKey("ws://gateway.example", "principal-a", sessionKey);
 
@@ -74,7 +91,10 @@ describe("session placement draft advancement", () => {
   });
 
   it("preserves a recovered session when recovery storage becomes unavailable", async () => {
-    storeRecovery(recoveryRecord("agent:cloud:recovered", "resume remotely", { phase: "sending" }));
+    const recovery = recoveryRecord("agent:cloud:recovered", "resume remotely", {
+      phase: "sending",
+    });
+    storeRecovery(recovery);
     vi.stubGlobal("sessionStorage", {
       getItem: vi.fn(() => {
         throw new DOMException("storage disabled", "SecurityError");
@@ -84,25 +104,11 @@ describe("session placement draft advancement", () => {
         throw new DOMException("storage disabled", "SecurityError");
       }),
     });
-    const request = vi.fn().mockRejectedValue(new Error("history unavailable"));
-    const clearRecovery = vi.fn();
-
+    const request = vi.fn().mockRejectedValue(new Error("connection unavailable"));
     await expect(
-      advanceSessionPlacementDraft(
-        request,
-        recoveryRecord("agent:cloud:recovered", "resume remotely", { phase: "sending" }),
-        { mode: "recover", clearRecovery },
-      ),
-    ).resolves.toMatchObject({
-      status: "paused",
-      recovery: {
-        reason: "unconfirmed",
-        message: "resume remotely",
-        error: expect.stringContaining("Keep this page open"),
-      },
-    });
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
-    expect(clearRecovery).not.toHaveBeenCalled();
+      advanceSessionPlacementDraft(request, recovery, { mode: "recover" }),
+    ).resolves.toEqual({ status: "pending", recovery, retryAfterMs: 500 });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.send"]);
   });
 
   it("normalizes recovered mentions without replacing a newer durable session", async () => {
@@ -121,7 +127,7 @@ describe("session placement draft advancement", () => {
         expect(writeSessionPlacementRecovery(newerRecovery)).toBe(true);
         return Promise.resolve({ placement: { state: "active", environmentId: "worker-older" } });
       }
-      if (method === "sessions.send") {
+      if (method === "chat.send") {
         return Promise.resolve({ runId: "run-older", status: "started" });
       }
       throw new Error(`unexpected method ${method}`);
@@ -141,7 +147,7 @@ describe("session placement draft advancement", () => {
         { clearRecovery, setRecoveryPhase },
       ),
     ).resolves.toMatchObject({ status: "started", messageId: "message-older" });
-    expect(setRecoveryPhase).toHaveBeenCalledWith("sending", true);
+    expect(setRecoveryPhase).toHaveBeenCalledWith("sending", true, "physical-startup-session");
     expect(
       readSessionPlacementRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey),
     ).toEqual({
@@ -152,11 +158,16 @@ describe("session placement draft advancement", () => {
       JSON.parse(sessionStorage.getItem(recoveryStorageKey(newerRecovery.sessionKey)) ?? "null")
         .mentions,
     ).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
-    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "sessions.dispatch",
+      "chat.send",
+    ]);
     expect(request).toHaveBeenCalledWith(
-      "sessions.send",
+      "chat.send",
       {
-        key: sessionKey,
+        sessionKey,
+        sessionId: "physical-startup-session",
+        expectedLeafEntryId: null,
         agentId: "cloud",
         message: "@Alex older task",
         mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
@@ -165,7 +176,6 @@ describe("session placement draft advancement", () => {
       },
       expect.anything(),
     );
-    expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(0);
     expect(clearRecovery).toHaveBeenCalledWith("resolved");
   });
 
@@ -189,25 +199,22 @@ describe("session placement draft advancement", () => {
     });
     const setRecoveryPhase = vi.fn();
 
-    await expect(
-      advanceSessionPlacementDraft(request, recoveryRecord("agent:cloud:current", "current task"), {
-        setRecoveryPhase,
-      }),
-    ).resolves.toMatchObject({
-      status: "paused",
-      recovery: {
+    await expectPaused(
+      request,
+      recoveryRecord("agent:cloud:current", "current task"),
+      {
         reason: "not-sent",
-        message: "current task",
         error:
           "Recovery could not be saved in this tab. Keep this page open.\nplacement recovery storage is unavailable",
       },
-    });
+      { setRecoveryPhase },
+    );
     expect(setRecoveryPhase).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith("sessions.reclaim", {
       key: "agent:cloud:current",
       agentId: "cloud",
     });
-    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
   });
 
   it.each([
@@ -329,30 +336,17 @@ describe("session placement draft advancement", () => {
     }
   });
 
-  it("pauses uncertain delivery without allocating after terminal placement", async () => {
+  it("reconciles attempted delivery without allocating after terminal placement", async () => {
     const recovery = recoveryRecord("agent:cloud:recovered", "possibly accepted task", {
       phase: "sending",
       target: { kind: "profile", profileId: "aws", machineClass: "fast" },
     });
     storeRecovery(recovery);
-    const request = vi.fn().mockResolvedValueOnce({ messages: [] });
-    const clearRecovery = vi.fn();
-
+    const request = vi.fn().mockResolvedValueOnce({ runId: "message-recovered", status: "ok" });
     await expect(
-      advanceSessionPlacementDraft(request, recovery, { mode: "recover", clearRecovery }),
-    ).resolves.toMatchObject({
-      status: "paused",
-      recovery: {
-        reason: "unconfirmed",
-        messageId: "message-recovered",
-        message: "possibly accepted task",
-      },
-    });
-    expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
-    expect(request).not.toHaveBeenCalledWith("sessions.delete", expect.anything());
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
-    expect(clearRecovery).not.toHaveBeenCalled();
+      advanceSessionPlacementDraft(request, recovery, { mode: "recover" }),
+    ).resolves.toEqual({ status: "started", messageId: "message-recovered" });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.send"]);
   });
 
   it("keeps the visible session after a definitive redispatch rejection", async () => {
@@ -364,33 +358,21 @@ describe("session placement draft advancement", () => {
         retryable: false,
       }),
     );
-    const clearRecovery = vi.fn();
-
-    await expect(
-      advanceSessionPlacementDraft(
-        request,
-        recoveryRecord("agent:cloud:recovered", "retry this task"),
-        { clearRecovery },
-      ),
-    ).resolves.toMatchObject({
-      status: "paused",
-      recovery: {
-        reason: "not-sent",
-        error: "cloud profile was removed",
-        message: "retry this task",
-      },
+    await expectPaused(request, recoveryRecord("agent:cloud:recovered", "retry this task"), {
+      reason: "not-sent",
+      error: "cloud profile was removed",
     });
     expect(request).not.toHaveBeenCalledWith("sessions.delete", expect.anything());
-    expect(clearRecovery).not.toHaveBeenCalled();
   });
 
   it("clears recovery when its draft session no longer exists", async () => {
-    storeRecovery(recoveryRecord("agent:cloud:missing", "missing task"));
+    const recovery = recoveryRecord("agent:cloud:missing", "missing task");
+    storeRecovery(recovery);
     const request = vi.fn().mockResolvedValueOnce({ session: null });
     const clearRecovery = vi.fn();
 
     await expect(
-      advanceSessionPlacementDraft(request, recoveryRecord("agent:cloud:missing", "missing task"), {
+      advanceSessionPlacementDraft(request, recovery, {
         mode: "recover",
         clearRecovery,
       }),
@@ -400,7 +382,8 @@ describe("session placement draft advancement", () => {
   });
 
   it("keeps a terminal recovery session visible before first-turn sending", async () => {
-    storeRecovery(recoveryRecord("agent:cloud:pre-send", "not sent yet"));
+    const recovery = recoveryRecord("agent:cloud:pre-send", "not sent yet");
+    storeRecovery(recovery);
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -412,27 +395,18 @@ describe("session placement draft advancement", () => {
         },
       })
       .mockResolvedValueOnce({ ok: true });
-    const clearRecovery = vi.fn();
-
-    await expect(
-      advanceSessionPlacementDraft(
-        request,
-        recoveryRecord("agent:cloud:pre-send", "not sent yet"),
-        { mode: "recover", clearRecovery },
-      ),
-    ).resolves.toMatchObject({
-      status: "paused",
-      recovery: {
+    await expectPaused(
+      request,
+      recovery,
+      {
         reason: "not-sent",
-        message: "not sent yet",
         error: "Provider could not allocate the requested environment",
       },
-    });
-    expect(request).not.toHaveBeenCalledWith("sessions.delete", expect.anything());
+      { mode: "recover" },
+    );
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "sessions.describe",
       "sessions.reclaim",
     ]);
-    expect(clearRecovery).not.toHaveBeenCalled();
   });
 });

@@ -212,7 +212,7 @@ it("preserves original config bytes before Doctor relocates and repairs legacy s
     await runDoctorHealthFlow(runtime, repairOptions);
     expect(repair).toHaveBeenCalledOnce();
     expect(fs.existsSync(expiredCapture)).toBe(false);
-    expect(runtime.log).toHaveBeenCalledWith(
+    expect(runtime.log).not.toHaveBeenCalledWith(
       `Retired superseded or expired standalone Doctor capture: ${expiredCapture}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
     );
     expect(fs.existsSync(legacyRoot)).toBe(false);
@@ -339,7 +339,11 @@ it("reuses the admitted original capture and refuses changed evidence before Doc
                 : baseline.ref,
             ),
             fault,
-          ).rejects.toThrow(/admitted original update capture/i);
+          ).rejects.toMatchObject({
+            name: "DoctorMaintenanceRefusalError",
+            refusal: { kind: "data-at-risk", reason: "unreadable-state" },
+            message: expect.stringContaining("admitted original recovery copy"),
+          });
           expect(repair, fault).not.toHaveBeenCalled();
           expect(mocks.runContributions, fault).toHaveBeenCalledTimes(2);
           expect(read(state.configPath), fault).toEqual(current);
@@ -356,11 +360,11 @@ it("reuses the admitted original capture and refuses changed evidence before Doc
         expectCaptureIntact();
       }
       expect(mocks.runContributions).toHaveBeenCalledTimes(2);
-      const retainedMessage = `Original update capture retained at ${baseline.ref.manifestPath}.`;
+      const retainedMessage = `Original update recovery copy retained. For manual recovery: ${baseline.ref.manifestPath}.`;
       expect(
         runtime.log.mock.calls.filter(([message]) => message === retainedMessage),
         runtime.log.mock.calls.flat().join("\n"),
-      ).toHaveLength(2);
+      ).toHaveLength(0);
 
       const foreign = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
         stdio: ["pipe", "ignore", "ignore"],

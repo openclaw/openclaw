@@ -131,6 +131,26 @@ export function getActiveTranscriptKysely(database: Pick<TranscriptReadDatabase,
   return getNodeSqliteKysely<ActiveTranscriptDatabase>(database.db);
 }
 
+export function selectActiveTranscriptIdentityRows(database: Pick<TranscriptReadDatabase, "db">) {
+  return getActiveTranscriptKysely(database)
+    .selectFrom("transcript_event_identities as identity")
+    .innerJoin("session_transcript_active_events as active", (join) =>
+      join
+        .onRef("active.session_id", "=", "identity.session_id")
+        .onRef("active.event_seq", "=", "identity.seq"),
+    );
+}
+
+export function selectActiveTranscriptEventRows(database: Pick<TranscriptReadDatabase, "db">) {
+  return getActiveTranscriptKysely(database)
+    .selectFrom("session_transcript_active_events as active")
+    .innerJoin("transcript_events as event", (join) =>
+      join
+        .onRef("event.session_id", "=", "active.session_id")
+        .onRef("event.seq", "=", "active.event_seq"),
+    );
+}
+
 /** Materialize only physical events already selected in the caller's admitted snapshot. */
 export function readSnapshotEventRows(
   projection: CurrentTranscriptProjection,
@@ -184,13 +204,7 @@ export function selectMessageRows(
     | { positions: number[] }
     | { start: number | RawBuilder<number>; endExclusive: number | RawBuilder<number> },
 ) {
-  const query = getActiveTranscriptKysely(database)
-    .selectFrom("session_transcript_active_events as active")
-    .innerJoin("transcript_events as event", (join) =>
-      join
-        .onRef("event.session_id", "=", "active.session_id")
-        .onRef("event.seq", "=", "active.event_seq"),
-    )
+  const query = selectActiveTranscriptEventRows(database)
     .where("active.session_id", "=", sessionId)
     .where("active.message_position", "is not", null)
     .orderBy("active.message_position", "asc");
@@ -230,22 +244,24 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
 
 const messageRangeReaders = createSqliteQueryCache((db: EngineConnection) => {
   const database = { db };
+  const rangeRows = (
+    parameter: Parameters<Parameters<typeof prepareSqliteQuerySync<MessageRangeParameters>>[1]>[0],
+  ) =>
+    selectMessageRows(
+      database,
+      parameter((params) => params.sessionId),
+      {
+        start: parameter((params) => params.start),
+        endExclusive: parameter((params) => params.endExclusive),
+      },
+    );
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
       MessageRangeParameters,
       { event_seq: number; message_position: number; serialized_bytes: number }
     >(database.db, (parameter) =>
       selectMessageMetadata(
-        selectMessageRows(
-          database,
-          parameter((params) => params.sessionId),
-          {
-            start: parameter((params) => params.start),
-            endExclusive: parameter((params) => params.endExclusive),
-          },
-        )
-          .clearOrderBy()
-          .orderBy("active.message_position", direction),
+        rangeRows(parameter).clearOrderBy().orderBy("active.message_position", direction),
       ),
     );
   return {
@@ -253,16 +269,7 @@ const messageRangeReaders = createSqliteQueryCache((db: EngineConnection) => {
       MessageRangeParameters,
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
-      selectMessagePayload(
-        selectMessageRows(
-          database,
-          parameter((params) => params.sessionId),
-          {
-            start: parameter((params) => params.start),
-            endExclusive: parameter((params) => params.endExclusive),
-          },
-        ),
-      )
+      selectMessagePayload(rangeRows(parameter))
         .clearOrderBy()
         .orderBy("active.message_position", "desc")
         .limit(1),
@@ -270,18 +277,7 @@ const messageRangeReaders = createSqliteQueryCache((db: EngineConnection) => {
     messages: prepareSqliteQueryIterator<
       MessageRangeParameters,
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
-    >(database.db, (parameter) =>
-      selectMessagePayload(
-        selectMessageRows(
-          database,
-          parameter((params) => params.sessionId),
-          {
-            start: parameter((params) => params.start),
-            endExclusive: parameter((params) => params.endExclusive),
-          },
-        ),
-      ),
-    ),
+    >(database.db, (parameter) => selectMessagePayload(rangeRows(parameter))),
     metadata: metadata("asc"),
     metadataDescending: metadata("desc"),
   };

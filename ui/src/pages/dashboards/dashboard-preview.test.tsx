@@ -2,6 +2,7 @@
 
 import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DashboardPreview } from "./dashboard-preview.tsx";
@@ -19,11 +20,8 @@ afterEach(() => {
 });
 
 it("resumes near-viewport rendering and its error boundary after being remounted", async () => {
-  const frames: FrameRequestCallback[] = [];
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-    frames.push(callback);
-    return frames.length;
-  });
+  const { frames, request } = createFrameQueue();
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(request);
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
   let setVisible!: (value: boolean) => void;
   const { container } = mountSolid(() => {

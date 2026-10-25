@@ -134,6 +134,51 @@ describe("DashboardsPage", () => {
     vi.useRealTimers();
   });
 
+  it("keeps the gallery skeleton through a held first read and an error retry", async () => {
+    let pending = Promise.withResolvers<SessionsListResult>();
+    const client = createTestGatewayClient(async (method, params) => {
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method === "sessions.list") {
+        return Reflect.get(params ?? {}, "hasBoard") ? pending.promise : sessionsResult([]);
+      }
+      throw new Error(`Unexpected Gateway method: ${method}`);
+    });
+    const source = createApplicationGateway();
+    source.publish({ ...source.gateway.snapshot, client, phase: "connected" });
+    const sessions = createTestSessionCapability(source.gateway);
+    const mounted = await mountDashboard(pageContext({ gateway: source.gateway, sessions }));
+    try {
+      await waitForSolid(() =>
+        expect(mounted.container.querySelector('[aria-busy="true"]')).not.toBeNull(),
+      );
+      pending.reject(new Error("Dashboard service unavailable"));
+      await waitForSolid(() => {
+        expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain(
+          "Dashboard service unavailable",
+        );
+        expect(mounted.container.querySelector('[aria-busy="true"]')).toBeNull();
+      });
+      pending = Promise.withResolvers<SessionsListResult>();
+      const retry = sessions.refreshList({ ...dashboardSessionListQuery(), force: true });
+      await waitForSolid(() => {
+        expect(mounted.container.querySelector('[aria-busy="true"]')).not.toBeNull();
+        expect(mounted.container.querySelector('[role="alert"]')).toBeNull();
+      });
+      pending.resolve(sessionsResult([]));
+      await retry;
+      await waitForSolid(() =>
+        expect(mounted.container.querySelector("[data-dashboards-empty]")).not.toBeNull(),
+      );
+      expect(mounted.container.querySelector('[aria-busy="true"]')).toBeNull();
+    } finally {
+      pending.resolve(sessionsResult([]));
+      mounted.unmount();
+      sessions.dispose();
+    }
+  });
+
   it("subscribes to the exact query and preserves owner rows through agent-scope and route updates", async () => {
     const runFrame = controlPreviewFrames();
     const selectionState = { selectedId: "main", scopeId: null as string | null };
@@ -208,8 +253,10 @@ describe("DashboardsPage", () => {
       flush();
     };
     publishWriter(null, "Writer initial load failed");
-    expect(element.querySelector('[role="alert"]')?.textContent).toContain(
-      "Writer initial load failed",
+    await waitForSolid(() =>
+      expect(element.querySelector('[role="alert"]')?.textContent).toContain(
+        "Writer initial load failed",
+      ),
     );
     expect(element.querySelector('[aria-busy="true"]')).toBeNull();
     expect(refreshList).toHaveBeenCalledTimes(1);
@@ -237,7 +284,11 @@ describe("DashboardsPage", () => {
     const writerListener = listListeners.get("writer")!;
     publishWriter("Writer dashboard", "Writer refresh failed");
     expect(element.textContent).toContain("Writer dashboard");
-    expect(element.querySelector('[role="alert"]')?.textContent).toContain("Writer refresh failed");
+    await waitForSolid(() =>
+      expect(element.querySelector('[role="alert"]')?.textContent).toContain(
+        "Writer refresh failed",
+      ),
+    );
     expect(element.querySelector('[role="alert"] button')).toBeNull();
     publishWriter("Recovered dashboard");
     await settleDashboardPreviews(element, runFrame);

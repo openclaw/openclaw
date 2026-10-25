@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { SubagentRunRecordOverrides } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildActiveSubagentRuntimeContext } from "./subagent-active-context.js";
+import * as readTopology from "./subagent-registry-read-topology.js";
 import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
@@ -44,6 +45,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await resetSubagentRegistryForTests({ persist: false });
   clearRuntimeConfigSnapshot();
 });
@@ -94,6 +96,7 @@ it("summarizes active child state without promising collector events", async () 
     collect: true,
     expectsCompletionMessage: false,
   });
+  const topology = vi.spyOn(readTopology, "buildSubagentRunReadTopology");
   const prompt = await promptFor();
 
   expectText(
@@ -107,6 +110,7 @@ it("summarizes active child state without promising collector events", async () 
     ["For announcing children", "reports/evidence"],
   );
   expect(prompt).not.toMatch(/`subagents`|`sessions_list`/);
+  expect(topology).toHaveBeenCalledOnce();
 });
 
 it("normalizes public main aliases before looking up active children", async () => {
@@ -239,6 +243,7 @@ it.each([
         : undefined,
     });
 
+    const topology = vi.spyOn(readTopology, "buildSubagentRunReadTopology");
     const prompt = await promptFor({ includeSpawnContext: false });
     if (outstanding) {
       expect(prompt).toContain("## Child results awaiting delivery");
@@ -246,6 +251,7 @@ it.each([
     } else {
       expect(prompt).toBeUndefined();
     }
+    expect(topology).not.toHaveBeenCalled();
   },
 );
 

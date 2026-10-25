@@ -10,6 +10,7 @@ import {
 } from "./workspace-manifest-comparison.js";
 import {
   captureWorkspaceManifest,
+  captureWorkspaceManifestReference,
   preflightWorkspaceApply,
   readWorkspaceNodes,
 } from "./workspace-manifest-worker.js";
@@ -127,8 +128,8 @@ export async function assertActualWorkspaceManifest(params: {
   includePaths?: ReadonlySet<string>;
   buildCacheInputs?: ReadonlySet<string>;
 }): Promise<void> {
-  const actual = await captureWorkspaceManifest(params);
-  if (actual.manifestRef !== params.expectedRef) {
+  const actual = await captureWorkspaceManifestReference(params);
+  if (actual !== params.expectedRef) {
     throw new ConcurrentWorkspacePathError("Gateway workspace changed after cloud reconciliation");
   }
 }

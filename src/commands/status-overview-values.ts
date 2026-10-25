@@ -3,7 +3,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import type { HostDesktopStatus } from "../gateway/desktop/host-source.js";
 import { redactSecretDegradationReason } from "../secrets/runtime-degraded-state.js";
 import type { StatusSummary } from "../status/summary.js";
-import { redactStatusSecrets } from "./status-all/format.js";
+import { redactStatusSecrets } from "./status-redaction.js";
 
 export function formatHostDesktopStatus(status?: HostDesktopStatus): string {
   if (!status || status.state === "disabled") {

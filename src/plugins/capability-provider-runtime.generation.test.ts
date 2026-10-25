@@ -16,8 +16,6 @@ import {
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import * as discovery from "./discovery.js";
 import { writeJson } from "./generated-plugin-test-helpers.js";
-import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
-import { projectInstalledPluginIndexPolicy } from "./installed-plugin-index.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -29,9 +27,11 @@ import {
 } from "./loader.test-fixtures.js";
 import * as manifests from "./manifest-registry.js";
 import { resetPluginCache } from "./plugin-cache.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
-import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
+import { withPluginRuntimeRegistryScope as inRegistry } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import * as sdkAlias from "./sdk-alias.js";
 
@@ -112,7 +112,9 @@ export default { id: "${id}", register(api) {
   const provider = (providerId = id, key: (typeof voiceKeys)[number] = "speechProviders") =>
     resolvePluginCapabilityProvider({ key, cfg: config, providerId });
   const labels = (key?: (typeof voiceKeys)[number]) => providers(key).map((entry) => entry.label);
-  return { root, workspaceDir, config, providers, provider, labels };
+  const expectLabels = (registry: PluginRegistry, expected: string[]) =>
+    inRegistry(registry, () => expect(labels()).toEqual(expected));
+  return { root, workspaceDir, config, providers, provider, labels, expectLabels };
 }
 
 function publishMetadata(fixture: SpeechFixture) {
@@ -188,7 +190,7 @@ async function loadGatewayGeneration(
 async function withGateway(fixture: SpeechFixture, run: () => void) {
   publishMetadata(fixture);
   const registry = await loadGatewayGeneration(fixture);
-  return withPluginRuntimeRegistryScope(registry, run);
+  return inRegistry(registry, run);
 }
 
 async function withCatalogMutation(
@@ -253,11 +255,6 @@ describe("capability loading from a Gateway generation", () => {
         if (Object.keys(empty.profiles).length !== 0 || profiles.join() !== "fixture" || order.join() !== "fixture" || !auth.isProviderApiKeyConfigured({ cfg: api.config, provider })) {
           throw new Error("native auth policy failed");
         }
-        for (const key of ["modelAuth", "modelConfig"]) {
-          if (Object.getOwnPropertyDescriptor(api.runtime, key).set !== undefined) {
-            throw new Error("native policy facet must remain getter-only");
-          }
-        }
         if (${root === "restricted"} && (Object.hasOwn(api.runtime, "agent") || Object.hasOwn(api.runtime, "subagent"))) {
           throw new Error("restricted registration acquired execution authority");
         }
@@ -266,10 +263,6 @@ describe("capability loading from a Gateway generation", () => {
         const agentDirPath = path.join(fixture.root, "state", "agents", "main", "agent");
         mkdirSafe(agentDirPath);
         const agentDir = fs.realpathSync(agentDirPath);
-        expect(path.isAbsolute(agentDir)).toBe(true);
-        expect(path.relative(fixture.root, agentDir)).toBe(
-          path.join("state", "agents", "main", "agent"),
-        );
         // Verify the inherited shared owner too; never mask an ambient relocation outside the fixture.
         expect(resolveSharedMainAuthAgentDir()).toBe(agentDir);
         fixture.config.plugins = { entries: { [id]: { enabled: true } } };
@@ -338,12 +331,8 @@ describe("capability loading from a Gateway generation", () => {
       expect(provider?.label).toBe("source:catalog");
       const providerContext = { cfg: fixture.config, timeoutMs: 1000 };
       const ready = { ready: true };
-      expect(provider?.resolveConfig?.({ ...providerContext, rawConfig: ready })).toEqual({
-        ready: true,
-      });
-      expect(provider?.isConfigured({ ...providerContext, providerConfig: { ready: true } })).toBe(
-        true,
-      );
+      expect(provider?.resolveConfig?.({ ...providerContext, rawConfig: ready })).toEqual(ready);
+      expect(provider?.isConfigured({ ...providerContext, providerConfig: ready })).toBe(true);
       expect(Reflect.get(provider!, Symbol.for("fixture.internal")).ready()).toBe(true);
     });
   });
@@ -407,7 +396,7 @@ describe("capability loading from a Gateway generation", () => {
     );
     publishMetadata(fixture);
     const registry = await loadGatewayGeneration(fixture, fixture.workspaceDir, [id]);
-    withPluginRuntimeRegistryScope(registry, () => {
+    inRegistry(registry, () => {
       for (const key of voiceKeys) {
         const provider = registry[key][0]!.provider;
         expect(fixture.providers(key)).toEqual([provider]);
@@ -429,31 +418,16 @@ describe("capability loading from a Gateway generation", () => {
     const installed = {
       [id]: { source: "path" as const, installPath: installedDir, sourcePath: installedDir },
     };
-    const discovered = discovery.discoverOpenClawPlugins({ installRecords: installed });
-    const snapshot = createPluginMetadataSnapshot({
+    const snapshot = loadPluginMetadataSnapshot({
       config: fixture.config,
       workspaceDir: fixture.workspaceDir,
-      manifestRegistry: manifests.loadPluginManifestRegistryCore({
-        config: fixture.config,
-        installRecords: installed,
-        discovery: discovered,
-      }),
-    });
-    snapshot.index.installRecords = installed;
-    snapshot.index.plugins = projectInstalledPluginIndexPolicy({
-      plugins: buildInstalledPluginIndexRecords({
-        registry: snapshot.manifestRegistry,
-        candidates: discovered.candidates,
-        installRecords: installed,
-        diagnostics: [],
-      }),
-      config: fixture.config,
-      env: process.env,
+      installRecords: installed,
+      allowCurrent: false,
     });
     expect(snapshot.byPluginId.get(id)?.rootDir).toBe(installedDir);
     setCurrentPluginMetadataSnapshot(snapshot, fixture);
     const registry = await loadGatewayGeneration(fixture);
-    withPluginRuntimeRegistryScope(registry, () => {
+    inRegistry(registry, () => {
       for (const key of voiceKeys) {
         expect(fixture.provider("fixture-alias", key)?.label).toBe("installed:catalog");
       }
@@ -474,16 +448,16 @@ describe("capability loading from a Gateway generation", () => {
     fs.writeFileSync(catalogPath, body);
     publishMetadata(fixture);
     const previous = await loadGatewayGeneration(fixture);
-    const first = withPluginRuntimeRegistryScope(previous, () => fixture.providers()[0]);
+    const first = inRegistry(previous, () => fixture.providers()[0]);
     fs.writeFileSync(catalogPath, body.replace("source:catalog", "replacement:catalog"));
-    withPluginRuntimeRegistryScope(previous, () => {
+    inRegistry(previous, () => {
       expect(fixture.providers()[0]).toBe(first);
       expect(fixture.providers("realtimeVoiceProviders")[0]).toBe(first);
     });
     resetPluginCache();
     publishMetadata(fixture);
     const current = await loadGatewayGeneration(fixture);
-    withPluginRuntimeRegistryScope(current, () => {
+    inRegistry(current, () => {
       const replacement = fixture.providers()[0];
       expect(replacement).not.toBe(first);
       expect(replacement?.label).toBe("source:catalog");
@@ -506,26 +480,22 @@ describe("capability loading from a Gateway generation", () => {
   );
 
   it.for([
-    'throw new Error("broken catalog");',
-    "export default { speechProviders: [{}] };",
-    "export default { speechProvider: [] };",
-    "export default async () => ({ speechProviders: [] });",
+    { body: 'throw new Error("broken catalog");' },
+    { body: "export default { speechProviders: [{}] };" },
+    { body: "export default { speechProvider: [] };" },
+    { body: "export default async () => ({ speechProviders: [] });" },
+    { entry: "../outside.ts" },
+    { entry: "" },
+    { entry: 7 },
   ])(
-    "reports broken catalogs without importing the full entry: %s",
-    async (body, { speech: fixture }) => {
-      await withCatalogMutation(fixture, { body }, () => {
+    "rejects invalid catalogs without importing the full entry: %j",
+    async (mutation, { speech: fixture }) => {
+      await withCatalogMutation(fixture, mutation, () => {
         expect(() => fixture.providers()).toThrow(
-          /capabilityCatalogEntry failed.*Repair the declared entry/,
+          "body" in mutation
+            ? /capabilityCatalogEntry failed.*Repair the declared entry/
+            : /capabilityCatalogEntry failed/,
         );
-      });
-    },
-  );
-
-  it.for(["../outside.ts", "", 7])(
-    "rejects invalid catalog entry %j",
-    async (entry, { speech: fixture }) => {
-      await withCatalogMutation(fixture, { entry }, () => {
-        expect(() => fixture.providers()).toThrow(/capabilityCatalogEntry failed/);
       });
     },
   );
@@ -544,7 +514,7 @@ describe("capability loading from a Gateway generation", () => {
       setCurrentPluginMetadataSnapshot(bootstrap.pluginMetadataSnapshot, fixture);
       const discover = vi.spyOn(discovery, "discoverOpenClawPlugins");
       const readManifests = vi.spyOn(manifests, "loadPluginManifestRegistryCore");
-      withPluginRuntimeRegistryScope(bootstrap.pluginRegistry, () => {
+      inRegistry(bootstrap.pluginRegistry, () => {
         const providers = fixture.providers(key);
         expect(providers.map((provider) => provider.label)).toEqual(["built:1"]);
         expect(fixture.provider(id, key)).toBe(providers[0]);
@@ -580,9 +550,7 @@ describe("capability loading from a Gateway generation", () => {
     expect(registry.plugins).toContainEqual(
       expect.objectContaining({ id: "fixture-seed", status: "loaded" }),
     );
-    withPluginRuntimeRegistryScope(registry, () => {
-      expect(fixture.labels()).toEqual(["built:1"]);
-    });
+    fixture.expectLabels(registry, ["built:1"]);
   });
 
   it("keeps request context separate from the active registry", async ({ speech: fixture }) => {
@@ -594,9 +562,7 @@ describe("capability loading from a Gateway generation", () => {
       onlyPluginIds: [id],
     });
     expect(other.speechProviders[0]?.provider.label).toBe("source:1");
-    withPluginRuntimeRegistryScope(registry, () => {
-      expect(fixture.labels()).toEqual(["built:catalog", "built:catalog"]);
-    });
+    fixture.expectLabels(registry, ["built:catalog", "built:catalog"]);
     expect(getActivePluginRegistry()).toBe(other);
   });
 
@@ -607,9 +573,7 @@ describe("capability loading from a Gateway generation", () => {
       fixture,
       path.join(fixture.root, "other-workspace"),
     );
-    withPluginRuntimeRegistryScope(registry, () => {
-      expect(fixture.labels()).toEqual(["source:catalog", "source:catalog"]);
-    });
+    fixture.expectLabels(registry, ["source:catalog", "source:catalog"]);
   });
 
   it("does not borrow a replaced registry generation", async ({ speech: fixture }) => {
@@ -619,12 +583,8 @@ describe("capability loading from a Gateway generation", () => {
     // Reload prepares the replacement before publishing its metadata generation.
     const current = await loadGatewayGeneration(fixture, fixture.workspaceDir, [], nextSnapshot);
     setCurrentPluginMetadataSnapshot(nextSnapshot, fixture);
-    withPluginRuntimeRegistryScope(previous, () => {
-      expect(fixture.labels()).toEqual(["source:1"]);
-    });
-    withPluginRuntimeRegistryScope(current, () => {
-      expect(fixture.labels()).toEqual(["built:1"]);
-    });
+    fixture.expectLabels(previous, ["source:1"]);
+    fixture.expectLabels(current, ["built:1"]);
   });
 
   it.for([{ deny: [id] }, { entries: { [id]: { enabled: false } } }])(

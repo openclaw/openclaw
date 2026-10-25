@@ -1,4 +1,3 @@
-// Covers exec host JSONL framing and response lifetime through the authenticated requester.
 import { getEventListeners } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
@@ -64,6 +63,20 @@ async function withControlledTimers(run: () => Promise<void>): Promise<void> {
 
 const token = "exec-host-framing-test-token";
 const request = { command: ["echo", "hi"] };
+function requestExec(
+  socketPath: string,
+  options: Partial<Parameters<typeof requestExecHostViaSocket>[0]> = {},
+) {
+  return requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 500, ...options });
+}
+function waitingServer() {
+  const received = createDeferred<net.Socket>();
+  const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+    socket.resume();
+    socket.on("end", () => received.resolve(socket));
+  });
+  return { received, server };
+}
 const success = {
   ok: true,
   payload: { timedOut: false, success: true, stdout: "done", stderr: "" },
@@ -99,9 +112,7 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
         });
       });
       await withSocketServer(server, async (socketPath) => {
-        await expect(
-          requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 500 }),
-        ).resolves.toEqual(response);
+        await expect(requestExec(socketPath)).resolves.toEqual(response);
       });
     },
   );
@@ -120,9 +131,7 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
       });
     });
     await withSocketServer(server, async (socketPath) => {
-      await expect(
-        requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 500 }),
-      ).resolves.toEqual(response);
+      await expect(requestExec(socketPath)).resolves.toEqual(response);
     });
   });
 
@@ -134,15 +143,7 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
       socket.on("end", () => socket.end(JSON.stringify({ type: "exec-res", ...success }) + "\n"));
     });
     await withSocketServer(server, async (socketPath) => {
-      await expect(
-        requestExecHostViaSocket({
-          socketPath,
-          token,
-          request,
-          timeoutMs: 500,
-          signal: AbortSignal.abort(),
-        }),
-      ).resolves.toBeNull();
+      await expect(requestExec(socketPath, { signal: AbortSignal.abort() })).resolves.toBeNull();
       expect(connected).not.toHaveBeenCalled();
     });
   });
@@ -204,13 +205,9 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
     await withSocketServer(server, async (socketPath) => {
       const controller = new AbortController();
       const completed = vi.fn();
-      const pending = requestExecHostViaSocket({
-        socketPath,
-        token,
-        request,
-        timeoutMs: 0,
-        signal: controller.signal,
-      }).then(completed);
+      const pending = requestExec(socketPath, { timeoutMs: 0, signal: controller.signal }).then(
+        completed,
+      );
       try {
         const { socket, buffer } = await received.promise;
         expect(buffer.endsWith("\n")).toBe(true);
@@ -245,21 +242,11 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
   });
 
   it("returns a timeout outcome after the request is submitted", async () => {
-    const received = createDeferred();
-    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
-      socket.resume();
-      // Keep the response side open after the request half-close.
-      socket.on("end", () => received.resolve());
-    });
+    const { received, server } = waitingServer();
     await withSocketServer(server, async (socketPath) => {
       await withControlledTimers(async () => {
         const completed = vi.fn();
-        const pending = requestExecHostViaSocket({
-          socketPath,
-          token,
-          request,
-          timeoutMs: 50,
-        }).then(completed);
+        const pending = requestExec(socketPath, { timeoutMs: 50 }).then(completed);
         await received.promise;
         await vi.advanceTimersByTimeAsync(49);
         expect(completed).not.toHaveBeenCalled();
@@ -277,18 +264,13 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
   ])(
     "derives the response deadline from command timeout $commandTimeoutMs",
     async ({ commandTimeoutMs, responseTimeoutMs }) => {
-      const received = createDeferred();
-      const server = net.createServer({ allowHalfOpen: true }, (socket) => {
-        socket.resume();
-        socket.on("end", () => received.resolve());
-      });
+      const { received, server } = waitingServer();
       await withSocketServer(server, async (socketPath) => {
         await withControlledTimers(async () => {
           const completed = vi.fn();
-          const pending = requestExecHostViaSocket({
-            socketPath,
-            token,
+          const pending = requestExec(socketPath, {
             request: { ...request, timeoutMs: commandTimeoutMs },
+            timeoutMs: undefined,
           }).then(completed);
           await received.promise;
           await vi.advanceTimersByTimeAsync(responseTimeoutMs - 1);
@@ -308,25 +290,18 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
       socket.on("data", () => socket.write("x".repeat(16 * 1024 * 1024 + 1)));
     });
     await withSocketServer(server, async (socketPath) => {
-      await expect(
-        requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 0 }),
-      ).resolves.toEqual(responseLost);
+      await expect(requestExec(socketPath, { timeoutMs: 0 })).resolves.toEqual(responseLost);
     });
   });
 
   it("can wait without a transport deadline when command timeoutMs is zero", async () => {
-    const received = createDeferred<net.Socket>();
-    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
-      socket.resume();
-      socket.on("end", () => received.resolve(socket));
-    });
+    const { received, server } = waitingServer();
     await withSocketServer(server, async (socketPath) => {
       await withControlledTimers(async () => {
         const completed = vi.fn();
-        const pending = requestExecHostViaSocket({
-          socketPath,
-          token,
+        const pending = requestExec(socketPath, {
           request: { ...request, timeoutMs: 0 },
+          timeoutMs: undefined,
         }).then(completed);
         const socket = await received.promise;
         expect(vi.getTimerCount()).toBe(0);
@@ -348,12 +323,7 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
     await withSocketServer(server, async (socketPath) => {
       // Leave the deadline frozen: only the real socket close can settle this request.
       await withControlledTimers(async () => {
-        const pending = requestExecHostViaSocket({
-          socketPath,
-          token,
-          request,
-          timeoutMs: 250,
-        });
+        const pending = requestExec(socketPath, { timeoutMs: 250 });
         expect(vi.getTimerCount()).toBe(1);
         await expect(pending).resolves.toEqual(responseLost);
         expect(vi.getTimerCount()).toBe(0);

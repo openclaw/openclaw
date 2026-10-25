@@ -26,7 +26,6 @@ import {
   resolveMattermostMonitorInboundAccess,
   shouldRetainMattermostSenderHistory,
 } from "./monitor-auth.js";
-import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import {
   matchesMattermostBotMention,
@@ -128,11 +127,9 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       agentId: route.agentId,
       sessionKey,
     });
-    const historyKey = resolveMattermostPendingHistoryKey({
-      kind,
-      sessionKey,
-      threadRootId: effectiveReplyToId,
-    });
+    // Flat DMs dispatch immediately. Opted-in threads have an independent session
+    // and need a recoverable context window just like room threads.
+    const historyKey = kind === "direct" && !effectiveReplyToId ? null : sessionKey;
     const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
     const nativeMedia = fileIds.map(() => ({}));
     const pendingBody = formatMattermostPendingMediaText({ body: rawText, media: nativeMedia });

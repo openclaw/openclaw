@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
 import type { SessionRowDatabaseFacts } from "../../config/sessions/session-row-facts.types.js";
@@ -39,10 +40,17 @@ export function readSessionRowFacts(params: {
   activitySummaryEnabled?: boolean;
   databaseFacts: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
 }) {
-  const { cfg, entry, preparedRuntimeOwnership, placementFactsReader, activitySummaryEnabled } =
-    params;
+  const {
+    cfg,
+    entry,
+    preparedRuntimeOwnership,
+    placementFactsReader,
+    activitySummaryEnabled,
+    context: sourceContext,
+  } = params;
   const { key, agentId } = params.target;
-  const context = params.context ?? {};
+  const context = sourceContext ?? {};
+  const hasBoard = params.databaseFacts.hasBoard;
   let placementSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
   const readPlacementFacts = () => {
     const {
@@ -120,7 +128,24 @@ export function readSessionRowFacts(params: {
   let runnerVersion: number | undefined;
   let runtimeInstallVersion: number | undefined;
   return {
-    hasBoard: params.databaseFacts.hasBoard,
+    hasBoard,
+    matches(next: Parameters<typeof readSessionRowFacts>[0]) {
+      return (
+        cfg === next.cfg &&
+        entry === next.entry &&
+        key === next.target.key &&
+        agentId === next.target.agentId &&
+        sourceContext === next.context &&
+        placementFactsReader === next.placementFactsReader &&
+        activitySummaryEnabled === next.activitySummaryEnabled &&
+        hasBoard === next.databaseFacts.hasBoard &&
+        isDeepStrictEqual(preparedRuntimeOwnership, next.preparedRuntimeOwnership) &&
+        isDeepStrictEqual(
+          activitySummaryFacts.activitySummaryWatermark,
+          next.databaseFacts.activitySummaryWatermark,
+        )
+      );
+    },
     refreshActivitySummary(databaseFacts = activitySummaryFacts) {
       activitySummaryFacts = databaseFacts;
       activitySummary = readActivitySummary();

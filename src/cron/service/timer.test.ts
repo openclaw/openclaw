@@ -32,7 +32,6 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 });
 let storePath: string;
 let enqueueSystemEvent = vi.fn();
-let requestHeartbeat = vi.fn();
 let runSessionEvent = vi.fn<NonNullable<StateDeps["runSessionEvent"]>>(async () => ({
   status: "ok",
 }));
@@ -40,7 +39,6 @@ let states: ReturnType<typeof createCronServiceStateBase>[];
 beforeEach(async () => {
   ({ storePath } = await makeStorePath());
   enqueueSystemEvent = vi.fn();
-  requestHeartbeat = vi.fn();
   runSessionEvent = vi.fn<NonNullable<StateDeps["runSessionEvent"]>>(async () => ({
     status: "ok",
   }));
@@ -57,7 +55,6 @@ function createCronServiceState(
     nowMs: () => now,
     scheduler: createTestGatewayScheduler(),
     enqueueSystemEvent,
-    requestHeartbeat,
     runSessionEvent,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     cronEnabled: true,
@@ -146,7 +143,6 @@ describe("cron service timer seam coverage", () => {
       }),
     );
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
 
     const persistedState = (await readJob()).state;
     expect(persistedState).toMatchObject({
@@ -210,7 +206,6 @@ describe("cron service timer seam coverage", () => {
 
       await expect(result).resolves.toMatchObject({ status: "error" });
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
       expect(runCommandJob).not.toHaveBeenCalled();
       expect(runScriptJob).not.toHaveBeenCalled();
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
@@ -318,7 +313,6 @@ describe("cron service timer seam coverage", () => {
         expect.objectContaining({ agentId: "ops", sessionKey, expectedTarget, deliveryContext }),
       );
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
     },
   );
 
@@ -351,7 +345,6 @@ describe("cron service timer seam coverage", () => {
     expect(runSessionEvent).not.toHaveBeenCalled();
     expect(enqueueSessionEvent).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 
   it("rejects nextCheck without pacing before applying state", async () => {

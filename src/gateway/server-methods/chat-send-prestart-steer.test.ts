@@ -33,6 +33,7 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { initializeRepository } from "../server.sessions.create.projects.test-support.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { dispatchInboundMessageMock, testState } from "../test-helpers.js";
 import {
@@ -60,12 +61,7 @@ function createRequestClients() {
       scopes: ["operator.write"],
     }),
     usesSharedGatewayAuth: true,
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
     internal: {
       authenticatedOperator: true as const,
       operatorRoleActor: { kind: "system" as const },
@@ -361,11 +357,8 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         releaseRun.resolve();
         await withinTest(followupStarted.promise, signal);
         expect(runtime.execute).toHaveBeenCalledTimes(2);
-        expect(consumed).toEqual([
-          { runId: expect.any(String), text: expect.stringContaining(steerText) },
-        ]);
+        expect(consumed).toEqual([{ runId: steerRunId, text: expect.stringContaining(steerText) }]);
         expect(consumed[0]?.runId).not.toBe(createdSession.runId);
-        expect(consumed[0]?.runId).toBe(steerRunId);
         expect(earlyTerminals).toEqual([]);
         releaseFollowup.resolve();
         await withinTest(queuedSettled.promise, signal);
@@ -377,19 +370,13 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         );
       }
       expect(getFollowupQueueDepth(sessionKey)).toBe(0);
-      const slowSends = logGateway.info.mock.calls.filter(([message]) =>
-        message.startsWith("slow chat send"),
-      );
       // Independent requests can finish in either order; each keeps its own disposition.
-      const stages = injection === "accepted" ? ["steer"] : ["queued", "startup"];
-      expect(slowSends).toHaveLength(stages.length);
-      expect(slowSends).toEqual(
-        expect.arrayContaining(
-          stages.map((stage) => [
-            expect.stringContaining(`slow chat send 15800ms stage=${stage} ack=0ms`),
-          ]),
-        ),
-      );
+      expect(
+        logGateway.info.mock.calls
+          .filter(([message]) => message.startsWith("slow chat send"))
+          .map(([message]) => message.match(/stage=(\w+)/)?.[1])
+          .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+      ).toEqual(injection === "accepted" ? ["steer"] : ["queued", "startup"]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expectSingleUserInput(storePath, sessionKey, steerText);
     } finally {

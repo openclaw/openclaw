@@ -46,6 +46,21 @@ import { closeOpenClawStateDatabaseForTest as closeStateDbForTest } from "./open
 
 const tempDirs = createTempDirTracker();
 const makeEnv = () => ({ OPENCLAW_STATE_DIR: tempDirs.make("agent-admission-") });
+
+it("reports exhausted lock admission without recommending database repair", () => {
+  const refusal = inspectionRefusal({
+    agentId: "worker",
+    paths: ["/synthetic/openclaw-agent.sqlite"],
+    reason: "database is locked",
+    cause: Object.assign(new Error("database is locked"), { errcode: 5 }),
+  });
+  expect(refusal).toMatchObject({
+    code: "agent-database-inspection-failed",
+    reason: "database locked by another process",
+    repairHint: expect.stringContaining("restart the Gateway to retry admission"),
+  });
+  expect(refusal.repairHint).not.toContain("doctor --fix");
+});
 function closeDatabases() {
   closeAgentDbsForTest();
   closeStateDbForTest();

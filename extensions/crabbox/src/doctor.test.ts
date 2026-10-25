@@ -7,6 +7,7 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import * as managedBinary from "./crabbox-managed-binary.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
@@ -99,7 +100,7 @@ describe("Crabbox worker doctor", () => {
               target: "sandbox",
               ocPath: "plugins.entries.crabbox.config.sandbox.binary",
               message: expect.stringContaining("Crabbox sandbox uses outdated Crabbox 0.76.0"),
-              requirement: "Crabbox 0.77.0 or newer",
+              requirement: "Crabbox 0.79.2 or newer",
             }
           : kind === "wsl2"
             ? { ...outdated, target: "worker" }
@@ -133,14 +134,9 @@ describe("Crabbox worker doctor", () => {
       );
       await mkdir(path.dirname(binary), { recursive: true });
       await writeFile(binary, version);
-      const command = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
-        stdout: version,
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
+      const command = vi
+        .spyOn(processRuntime, "runCommandWithTimeout")
+        .mockResolvedValue(commandResult({ stdout: version }));
       const install = vi.spyOn(managedBinary, "ensureManagedCrabboxBinary");
       const ctx = context({ binary: "/nonexistent/crabbox" }, { env });
       const check = captureCrabboxDoctorCheck();
@@ -225,6 +221,9 @@ describe("Crabbox warm-image doctor", () => {
                 provider: "aws",
                 startedAtMs: now - (operation === "scrubbing" ? 1_200_000 : 0),
                 phase: operation,
+                ...(operation === "uncertain"
+                  ? { checkpointIds: ["chk_interrupted_a", "chk_interrupted_b"] }
+                  : {}),
               });
       }
       store.register("profile", record);
@@ -259,6 +258,7 @@ describe("Crabbox warm-image doctor", () => {
           "supports native checkpoints",
         ]);
       } else if (operation === "uncertain") {
+        expectText(findings[0]?.fixHint, ["chk_interrupted_a", "chk_interrupted_b"]);
         expect(findings[0]?.fixHint).toContain(
           "--recover capture-selector --acknowledge-provider-cleanup",
         );

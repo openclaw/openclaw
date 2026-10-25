@@ -9,7 +9,9 @@ import {
   runWithCliHistoryWriter,
 } from "../../config/sessions/cli-history-boundary.js";
 import {
+  appendTranscriptMessage,
   loadSessionEntryReadOnly,
+  loadTranscriptEvents,
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -18,17 +20,36 @@ import {
   getOwnedSessionTranscriptWriterFence,
   runWithoutOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { CliSessionBinding, InternalSessionEntry } from "../../config/sessions/types.js";
+import { commitCronConversationResult } from "../../cron/conversation-result.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { buildPersistedVoiceMessage } from "../../talk/voice-transcript.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { persistCliSessionBindingResult } from "../cli-session-store.js";
+import { getCliSessionBinding } from "../cli-session.js";
 import { claimAgentSessionWriter } from "../embedded-agent-runner/run/session-bootstrap.js";
-import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { buildCliSessionBinding } from "./cli-run-settlement.js";
+import {
+  persistApprovedCliUserTurnTranscript,
+  persistCliAssistantTranscript,
+} from "./cli-run-transcript.js";
+import { executePreparedCliRun } from "./execute.js";
+import {
+  createManagedRun,
+  createSuccessfulProcessExit,
+  supervisorSpawnMock,
+} from "./execute.test-support.js";
 import {
   prepareCliHistoryBoundary,
   prepareCliHistoryCompactionBoundary,
 } from "./history-boundary.js";
 import { createHistoryBoundaryFixture, history } from "./history-boundary.test-support.js";
+import { loadCliSessionPromptContext } from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(
@@ -48,6 +69,7 @@ const fixture = (withHeader?: boolean) => createHistoryBoundaryFixture(sessionDi
 async function settleNativeBinding(
   params: PreparedCliRunContext["params"],
   assertSettlementCurrent: () => void,
+  binding?: CliSessionBinding,
 ) {
   return await persistCliSessionBindingResult({
     agentId: "main",
@@ -63,7 +85,7 @@ async function settleNativeBinding(
           sessionId: "native-recovered",
           provider: params.provider,
           model: "test-model",
-          cliSessionBinding: {
+          cliSessionBinding: binding ?? {
             sessionId: "native-recovered",
             authProfileId: "test-cli:saved",
           },
@@ -74,6 +96,178 @@ async function settleNativeBinding(
 }
 
 describe("CLI transcript account boundary", () => {
+  it.each(["claude-cli", "google-gemini-cli"] as const)(
+    "hands cron and Talk results to the next native-only %s resume once without granting recovery",
+    async (provider) => {
+      const f = await fixture();
+      const config = { session: { store: f.target.storePath } };
+      const prompts: string[] = [];
+      const markers = ["CRON_RESULT", "VOICE_CORRECTION", "VOICE_DRAFT_B"] as const;
+      for (const turn of [0, 1, 2]) {
+        if (turn === 1) {
+          await appendTranscriptMessage(f.target, {
+            message: buildPersistedVoiceMessage({
+              role: "user",
+              text: markers[1],
+              timestamp: 2,
+              provider: "realtime",
+            }),
+          });
+          const manager = f.manager();
+          const consult: PersistedUserTurnMessage = {
+            role: "user",
+            content: "PRIVATE_CONSULT_PROMPT",
+            timestamp: 3,
+            display: false,
+            excludeFromContext: true,
+          };
+          await manager.appendMessageAsync(consult);
+          await manager.appendMessageAsync(
+            makeAssistantMessageFixture({
+              provider: "anthropic",
+              stopReason: "stop",
+              errorMessage: undefined,
+              content: [{ type: "text", text: markers[2] }],
+              timestamp: 4,
+            }),
+          );
+        }
+        const binding = getCliSessionBinding(loadSessionEntryReadOnly(f.target), provider);
+        await f.run(
+          undefined,
+          async (allowed, params) => {
+            expect(allowed).toBe(false);
+            params.persistAssistantTranscript = true;
+            params.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+              input: { text: params.prompt, idempotencyKey: `${params.runId}:user` },
+              target: { ...f.target, sessionEntry: undefined, config },
+            });
+            const before = JSON.stringify(await loadTranscriptEvents(f.target));
+            const notes = await loadCliSessionPromptContext({
+              ...params,
+              nativeSessionId: binding?.sessionId,
+              cliSessionBinding: binding,
+              rawTranscriptReseedReason: "auth-unknown",
+              allowRawTranscriptReseed: true,
+            });
+            expect(JSON.stringify(await loadTranscriptEvents(f.target))).toBe(before);
+            expect(notes.reseedMessages).toEqual([]);
+            expect(notes.durableContext).toBeUndefined();
+            if (turn === 1) {
+              const fresh = await loadCliSessionPromptContext({
+                ...params,
+                nativeSessionId: undefined,
+                rawTranscriptReseedReason: "auth-unknown",
+                allowRawTranscriptReseed: true,
+              });
+              expect(fresh.resumeContext).toBeUndefined();
+              expect(fresh.reseedMessages).toEqual([]);
+              expect(fresh.durableContext).toBeUndefined();
+            }
+            const context = buildPreparedCliRunContext({
+              provider,
+              sessionTarget: f.target,
+              workspaceDir: params.workspaceDir,
+              backend: {
+                command: "/bin/sh",
+                args: [],
+                resumeArgs: ["--resume", "{sessionId}"],
+                output: "json",
+                sessionIdFields: ["session_id"],
+                input: "stdin",
+                systemPromptFileArg: undefined,
+              },
+            });
+            context.params = params;
+            context.resumeContext = notes.resumeContext;
+            context.transcriptCursor = notes.transcriptCursor;
+            context.reusableCliSession = binding
+              ? { mode: "reuse", sessionId: binding.sessionId }
+              : { mode: "none" };
+            await persistApprovedCliUserTurnTranscript(params);
+            supervisorSpawnMock.mockImplementationOnce(async (spawn) => {
+              if (spawn.mode !== "child") {
+                throw new Error("Expected CLI child process");
+              }
+              prompts.push(spawn.input ?? "");
+              // A completion arriving during the CLI turn precedes its assistant row,
+              // but was absent from that turn's input snapshot.
+              if (turn === 0) {
+                await expect(
+                  commitCronConversationResult({
+                    config,
+                    agentId: f.target.agentId,
+                    jobId: "catch-up",
+                    runStartedAt: 1,
+                    conversation: {
+                      ...f.target,
+                      lifecycleRevision: loadSessionEntryReadOnly(f.target)?.lifecycleRevision,
+                    },
+                    payloads: [{ text: markers[0] }],
+                    deliveryAttemptFence: null,
+                  }),
+                ).resolves.toMatchObject({ ok: true });
+                const steered = createUserTurnTranscriptRecorder({
+                  input: { text: "ACCEPTED_STEER", idempotencyKey: "accepted-steer:user" },
+                  target: { ...f.target, sessionEntry: undefined, config },
+                });
+                await steered.persistApproved();
+                await steered.confirmSteerTargetRunIdForPersistence?.(params.runId);
+              }
+              const sessionFlag = spawn.argv.includes("--resume") ? "--resume" : "--session-id";
+              return createManagedRun({
+                ...createSuccessfulProcessExit(),
+                stdout: JSON.stringify({
+                  result: `CLI_REPLY_${turn}`,
+                  session_id: spawn.argv.includes(sessionFlag)
+                    ? spawn.argv[spawn.argv.indexOf(sessionFlag) + 1]
+                    : "native-session",
+                }),
+              });
+            });
+            const output = await executePreparedCliRun(context, binding?.sessionId);
+            expect(output.sessionId).toBeTruthy();
+            const persisted = await persistCliAssistantTranscript({
+              runParams: params,
+              text: output.text,
+              modelId: context.modelId,
+              stopReason: "stop",
+            });
+            expect(persisted.owned).toBe(true);
+            await appendTranscriptMessage(f.target, {
+              message: makeAssistantMessageFixture({
+                provider: "openclaw",
+                model: "delivery-mirror",
+                content: [{ type: "text", text: `CLI_REPLY_${turn}` }],
+              }),
+            });
+            await settleNativeBinding(
+              { ...params, sessionEntry: loadSessionEntryReadOnly(f.target) },
+              () => {},
+              buildCliSessionBinding(context, output.sessionId!, output),
+            );
+          },
+          {
+            provider,
+            config,
+            nativeAuthOnly: true,
+            cliSessionBinding: binding,
+            prompt: `TYPED_REQUEST_${turn}`,
+          },
+        );
+      }
+      for (const marker of markers) {
+        expect(prompts[0]).not.toContain(marker);
+        expect.soft(prompts[1]?.split(marker)).toHaveLength(2);
+        expect(prompts[2]).not.toContain(marker);
+      }
+      expect(prompts[1]).not.toContain("PRIVATE_CONSULT_PROMPT");
+      expect(prompts[1]).not.toContain("CLI_REPLY_0");
+      expect(prompts[1]).not.toContain("ACCEPTED_STEER");
+      expect(prompts[2]).not.toContain("TYPED_REQUEST_1");
+    },
+  );
+
   it("prepares and commits CLI history without caller-thread data SQL", async () => {
     const f = await fixture();
     await f.seed();
@@ -417,9 +611,23 @@ describe("CLI transcript account boundary", () => {
       await f.withRun("direct-cli-blocked", async (direct) => {
         direct.sessionEntry = loadSessionEntryReadOnly(f.target);
         const before = structuredClone(direct.sessionEntry);
-        await expect(prepareCliHistoryBoundary(direct, identity)).rejects.toThrow(
-          "CLI history owner changed before preparation",
+        const run = vi.fn(async (provider: string) =>
+          provider === "fixture-next"
+            ? "replayed"
+            : (await prepareCliHistoryBoundary(direct, identity), "prepared"),
         );
+        // The refusal is local session ownership; replaying on another model cannot repair it.
+        const refusal = runWithModelFallback({
+          cfg: undefined,
+          provider: "test-cli",
+          model: "fixture-model",
+          manifestPlugins: [],
+          fallbacksOverride: ["fixture-next/fixture-model"],
+          run,
+        });
+        await expect(refusal).rejects.toMatchObject({ name: "CliHistoryOwnerChangedError" });
+        await expect(refusal).rejects.toThrow("CLI history owner changed before preparation");
+        expect(run).toHaveBeenCalledOnce();
         expect(direct.sessionEntry).toEqual(before);
       });
     });

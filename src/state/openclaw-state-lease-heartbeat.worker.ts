@@ -12,6 +12,7 @@ import {
 } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-database-admission-relay.js";
+import { serveWorkerMemorySamples } from "../infra/worker-memory.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { openExistingStatePostgresConnection } from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
@@ -465,6 +466,7 @@ function startHeartbeat(
 if (!parentPort) {
   throw new Error("State lease heartbeat requires its parent port");
 }
+serveWorkerMemorySamples(parentPort);
 parentPort.on(
   "message",
   (message: LeaseHeartbeatParentMessage | { close: true } | HeartbeatRegistration) => {

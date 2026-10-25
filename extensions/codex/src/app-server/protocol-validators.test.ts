@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { threadStartResult } from "./codex-app-server.test-fixtures.js";
+import { createModelFixture } from "./model-fixture.test-support.js";
 import {
   assertCodexModelListResponse,
   assertCodexPassiveTurnItems,
@@ -10,36 +12,12 @@ import {
   readCodexErrorNotification,
 } from "./protocol-validators.js";
 import type { CodexThreadItem } from "./protocol.js";
-import { CODEX_APP_SERVER_VERSION } from "./version.js";
-
-function makeMinimalThread(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "thread-1",
-    sessionId: "session-1",
-    projectId: null,
-    cliVersion: CODEX_APP_SERVER_VERSION,
-    createdAt: 1715299200,
-    updatedAt: 1715299200,
-    cwd: "/tmp",
-    ephemeral: false,
-    modelProvider: "openai",
-    preview: "test thread",
-    source: "appServer",
-    status: { type: "notLoaded" },
-    turns: [],
-    ...overrides,
-  };
-}
 
 function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
+  const response = threadStartResult();
   return {
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    cwd: "/tmp",
-    model: "gpt-5.4",
-    modelProvider: "openai",
-    sandbox: { type: "dangerFullAccess" },
-    thread: makeMinimalThread(threadOverrides),
+    ...response,
+    thread: { ...response.thread, ...threadOverrides },
   };
 }
 
@@ -160,13 +138,7 @@ describe("Codex thread response validators", () => {
 describe("assertCodexModelListResponse", () => {
   it("validates nested model reasoning options", () => {
     const model = {
-      id: "synthetic-model",
-      model: "synthetic-model",
-      displayName: "Synthetic model",
-      description: "Synthetic fixture",
-      hidden: false,
-      isDefault: false,
-      defaultReasoningEffort: "medium",
+      ...createModelFixture("synthetic-model"),
       supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }],
     };
     expect(assertCodexModelListResponse({ data: [model] })).toMatchObject({ data: [model] });
@@ -244,6 +216,23 @@ describe("generated response resources", () => {
     expect(assertCodexTurnStartResponse(response)).toMatchObject(response);
     expect(() =>
       assertCodexTurnStartResponse({ turn: { ...turn(12), status: "inProgress" } }),
+    ).toThrow("Invalid Codex app-server");
+  });
+
+  it("preserves closed question records in native turn responses", () => {
+    const question = { title: "Continue?", options: ["Yes", "No"] };
+    const item = {
+      id: "item-1",
+      type: "agentMessage",
+      text: "Choose an option.",
+      questions: [question],
+    };
+    const response = { turn: { id: "turn-1", status: "inProgress", items: [item] } };
+    expect(assertCodexTurnStartResponse(response)).toBe(response);
+    expect(() =>
+      assertCodexTurnStartResponse({
+        turn: { ...response.turn, items: [{ ...item, questions: [{ ...question, extra: true }] }] },
+      }),
     ).toThrow("Invalid Codex app-server");
   });
 });

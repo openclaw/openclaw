@@ -55,30 +55,19 @@ export function buildSandboxCreateArgs(params: {
   name: string;
   cfg: SandboxDockerConfig;
   scopeKey: string;
-  createdAtMs?: number;
   labels?: Record<string, string>;
   configHash?: string;
   bindSourceRoots?: string[];
-  allowSourcesOutsideAllowedRoots?: boolean;
-  allowReservedContainerTargets?: boolean;
-  allowContainerNamespaceJoin?: boolean;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   validateSandboxSecurity({
     ...params.cfg,
     allowedSourceRoots: params.bindSourceRoots,
-    allowSourcesOutsideAllowedRoots:
-      params.allowSourcesOutsideAllowedRoots ??
-      params.cfg.dangerouslyAllowExternalBindSources === true,
-    allowReservedContainerTargets:
-      params.allowReservedContainerTargets ??
-      params.cfg.dangerouslyAllowReservedContainerTargets === true,
-    dangerouslyAllowContainerNamespaceJoin:
-      params.allowContainerNamespaceJoin ??
-      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
+    allowSourcesOutsideAllowedRoots: params.cfg.dangerouslyAllowExternalBindSources === true,
+    allowReservedContainerTargets: params.cfg.dangerouslyAllowReservedContainerTargets === true,
   });
 
-  const createdAtMs = params.createdAtMs ?? Date.now();
+  const createdAtMs = Date.now();
   const args = ["create", "--name", params.name];
   // The container engine's init owns PID 1 so orphaned children from long-running
   // tool and browser workloads are reaped instead of accumulating against pidsLimit.

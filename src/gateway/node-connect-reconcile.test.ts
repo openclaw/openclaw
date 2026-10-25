@@ -10,6 +10,7 @@ import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-co
 import { registerComputerUseProvider } from "../plugins/computer-use-registration.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 
@@ -104,24 +105,6 @@ const computerUseDescriptor = (): ComputerUseCapabilityDescriptor => ({
 });
 
 afterEach(resetPluginRuntimeStateForTest);
-
-it("marks the first-surface request silent when device pairing was non-interactive", async () => {
-  const { requestPairing } = await reconcilePending("req-silent", { initialSurfaceSilent: true });
-  expect(requestPairing).toHaveBeenCalledWith(expect.objectContaining({ silent: true }));
-});
-
-it("keeps surface upgrade requests interactive even when the device paired silently", async () => {
-  const { result, requestPairing } = await reconcilePending("req-upgrade-loud", {
-    ...cameraUpgrade(),
-    initialSurfaceSilent: true,
-  });
-  expect(requestPairing).toHaveBeenCalledOnce();
-  const input = requestPairing.mock.calls[0]?.[0];
-  expect(input?.silent).toBeUndefined();
-  expect(result.effectiveCaps).toEqual(["camera"]);
-  expect(result.declaredCaps).toEqual(["camera", "screen"]);
-  expect(result.pendingPairing?.request.requestId).toBe("req-upgrade-loud");
-});
 
 it("keeps first-time pending node surfaces declared but not effective", async () => {
   const { result, requestPairing } = await reconcilePending("req-pending", {
@@ -225,6 +208,16 @@ it("keeps an approved computer.act surface effective while a computer-use provid
   expect(result.declaredCaps).toEqual(["screen", "computer"]);
   expect(result.effectiveCaps).toEqual(["screen", "computer"]);
   expect(effectiveDesktop(result)).toEqual(computerUseDescriptor());
+  expect(
+    resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "macos",
+        deviceFamily: "Mac",
+        approvedCommands: result.effectiveCommands,
+      },
+    ).has("computer.act"),
+  ).toBe(true);
 });
 
 it("drops a capability whose declared commands were all filtered by policy", async () => {

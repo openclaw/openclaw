@@ -105,25 +105,19 @@ describe("worker transfer HTTP routing", () => {
 describe("node workspace transfer HTTP routing", () => {
   it("reserves the namespace before hooks and collapses missing or rejected auth", async () => {
     const hooks = vi.fn(async () => false);
-    const callback = vi.fn<NodeWorkspaceTransferHttpCallback>(async () => ({
-      kind: "unauthorized",
-    }));
+    const callback = vi.fn<NodeWorkspaceTransferHttpCallback>(unauthorized);
     await withTransferServer({
       handleNodeWorkspaceTransferRequest: callback,
       handleHooksRequest: hooks,
       run: async (origin) => {
-        const path = `/__openclaw__/worker-transfer/v1/environments/worker%3Afixture/snapshots/${"a".repeat(64)}/pack`;
-        const missing = await fetch(`${origin}${path}`);
-        const rejected = await fetch(`${origin}${path}`, {
-          headers: { authorization: "Bearer rejected-transfer-token" },
-        });
-
-        expect(missing.status).toBe(404);
-        expect(rejected.status).toBe(404);
-        expect(missing.headers.get("cache-control")).toBe("no-store");
-        expect(rejected.headers.get("cache-control")).toBe("no-store");
-        await expect(missing.json()).resolves.toEqual({ error: "not_found" });
-        await expect(rejected.json()).resolves.toEqual({ error: "not_found" });
+        const url = `${origin}${transferPath}/snapshots/${digest}/pack`;
+        const missing = await fetch(url);
+        const rejected = await authorizedFetch(url, "rejected-transfer-token");
+        for (const response of [missing, rejected]) {
+          expect(response.status).toBe(404);
+          expect(response.headers.get("cache-control")).toBe("no-store");
+          await expect(response.json()).resolves.toEqual({ error: "not_found" });
+        }
         expect(callback).toHaveBeenCalledOnce();
         expect(hooks).not.toHaveBeenCalled();
       },

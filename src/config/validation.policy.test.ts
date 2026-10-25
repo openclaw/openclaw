@@ -6,6 +6,7 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
+import { validationIssues as requireIssues } from "./validation.test-helpers.js";
 
 // mock-isolation: Supply fixed unsupported surfaces without loading plugin policy discovery.
 vi.mock("../secrets/unsupported-surface-policy.js", async () => {
@@ -29,13 +30,6 @@ vi.mock("../secrets/unsupported-surface-policy.js", async () => {
     },
   };
 });
-
-function requireIssues(result: ReturnType<typeof validateConfigObjectRaw>) {
-  if (result.ok) {
-    throw new Error("Expected invalid config");
-  }
-  return result.issues;
-}
 
 const issueMessage = (issues: ReturnType<typeof requireIssues>, path: string) =>
   issues.find((entry) => entry.path === path)?.message;

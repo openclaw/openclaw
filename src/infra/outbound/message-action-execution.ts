@@ -36,7 +36,6 @@ import { throwIfAborted } from "./abort.js";
 import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./deliver-handoff.js";
 import {
   createChannelActionContext,
-  type MessageActionGateway,
   type MessageActionInput,
   type MessageActionResult,
   type ResolvedActionContext,
@@ -47,7 +46,6 @@ import {
   loadMessageGatewayRuntime,
   resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
-  type OutboundGatewayRequestContext,
 } from "./message-gateway-options.js";
 import {
   applyCrossContextDecoration,
@@ -97,83 +95,6 @@ export async function beforeMessageDeliveryAttempt(input: MessageActionInput): P
   assertMessageDeliveryCurrent(input);
   await deliveryAttempt.beforeAttempt();
   assertMessageDeliveryCurrent(input);
-}
-
-async function callGatewayMessageAction<T>(params: {
-  gateway?: MessageActionGateway;
-  actionParams: Record<string, unknown>;
-  agentRuntimeIdentityToken?: string;
-  requestContext?: OutboundGatewayRequestContext;
-  abortSignal?: AbortSignal;
-  assertDirectAdapterHandoff?: SessionSourceAssertion;
-  onUnknownDeliveryOutcome?: () => void;
-}): Promise<T> {
-  const { callGatewayLeastPrivilege, isGatewayTransportError } = await loadMessageGatewayRuntime();
-  const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
-  // A timed-out send is reattached with the same idempotency key. Cap only the
-  // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
-  const timeoutMs =
-    params.actionParams.action === "send"
-      ? Math.min(gateway.timeoutMs, MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS)
-      : gateway.timeoutMs;
-  const call = {
-    ...gateway,
-    method: "message.action",
-    params: params.actionParams,
-    timeoutMs,
-    signal: params.abortSignal,
-    agentRuntimeIdentityToken: params.agentRuntimeIdentityToken,
-  };
-  const request = <R>(
-    options: typeof call | (Omit<typeof call, "timeoutMs"> & { timeoutMs: number | null }),
-  ) =>
-    params.gateway?.request
-      ? params.gateway.request<R>(options, params.requestContext)
-      : callGatewayLeastPrivilege<R>(options);
-  try {
-    return await runWithSessionSourceScope(
-      params.assertDirectAdapterHandoff,
-      async () => {
-        assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-        return request<T>(call);
-      },
-      { checkAfter: false },
-    );
-  } catch (error) {
-    if (
-      !(
-        (isGatewayTransportError(error) && error.kind === "timeout") ||
-        (error instanceof GatewayProtocolRequestTimeoutError && error.requestSent)
-      ) ||
-      params.actionParams.action !== "send"
-    ) {
-      throw error;
-    }
-    // The Gateway may still finish the first request after the local timer.
-    // Nothing learned by a later reattach can prove that attempt did not send.
-    params.onUnknownDeliveryOutcome?.();
-    throwIfAborted(params.abortSignal);
-  }
-
-  const reconciliationSignal = params.abortSignal
-    ? AbortSignal.any([
-        params.abortSignal,
-        AbortSignal.timeout(MESSAGE_ACTION_RECONCILIATION_MAX_MS),
-      ])
-    : undefined;
-  const reconciliationCall = {
-    ...call,
-    // `null` keeps startup bounded but removes the per-request timer after
-    // hello. The dedicated signal bounds a joined in-flight action without
-    // reconnecting every minute or inheriting the run's much longer lifetime.
-    timeoutMs: params.abortSignal
-      ? null
-      : Math.max(call.timeoutMs, MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS),
-    signal: reconciliationSignal,
-  };
-  // A caller-side timeout does not cancel Gateway work. Reattach once with the
-  // unchanged idempotency key so the live Gateway can join the original work.
-  return await request<T>(reconciliationCall);
 }
 
 function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
@@ -348,30 +269,87 @@ export async function executeGatewayAction(
   let hadUnknownDeliveryOutcome = false;
   let payload: unknown;
   try {
-    payload = await callGatewayMessageAction<unknown>({
-      gateway: ctx.gateway,
-      abortSignal: ctx.input.abortSignal,
-      assertDirectAdapterHandoff: ctx.input.assertDirectAdapterHandoff,
+    const messageGateway = ctx.gateway;
+    const abortSignal = ctx.input.abortSignal;
+    const assertDirectAdapterHandoff = ctx.input.assertDirectAdapterHandoff;
+    const actionParams = {
+      channel: ctx.channel,
+      action: params.action,
+      params: ctx.params,
+      ...(params.reply ? { reply: params.reply } : {}),
+      accountId: ctx.accountId ?? undefined,
+      senderIsOwner: ctx.input.senderIsOwner,
+      sessionKey: ctx.input.sessionKey,
+      sessionId: ctx.input.sessionId,
+      inboundTurnKind: ctx.input.inboundEventKind,
+      agentId: ctx.agentId,
+      ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
+      idempotencyKey,
+    };
+    const { callGatewayLeastPrivilege, isGatewayTransportError } =
+      await loadMessageGatewayRuntime();
+    const gateway = resolveOutboundMessageGatewayOptions(messageGateway);
+    // A timed-out send is reattached with the same idempotency key. Cap only the
+    // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
+    const timeoutMs =
+      actionParams.action === "send"
+        ? Math.min(gateway.timeoutMs, MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS)
+        : gateway.timeoutMs;
+    const call = {
+      ...gateway,
+      method: "message.action",
+      params: actionParams,
+      timeoutMs,
+      signal: abortSignal,
       agentRuntimeIdentityToken,
-      requestContext,
-      onUnknownDeliveryOutcome: () => {
-        hadUnknownDeliveryOutcome = true;
-      },
-      actionParams: {
-        channel: ctx.channel,
-        action: params.action,
-        params: ctx.params,
-        ...(params.reply ? { reply: params.reply } : {}),
-        accountId: ctx.accountId ?? undefined,
-        senderIsOwner: ctx.input.senderIsOwner,
-        sessionKey: ctx.input.sessionKey,
-        sessionId: ctx.input.sessionId,
-        inboundTurnKind: ctx.input.inboundEventKind,
-        agentId: ctx.agentId,
-        ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
-        idempotencyKey,
-      },
-    });
+    };
+    const request = <R>(
+      options: typeof call | (Omit<typeof call, "timeoutMs"> & { timeoutMs: number | null }),
+    ) =>
+      messageGateway?.request
+        ? messageGateway.request<R>(options, requestContext)
+        : callGatewayLeastPrivilege<R>(options);
+    try {
+      payload = await runWithSessionSourceScope(
+        assertDirectAdapterHandoff,
+        async () => {
+          assertOutboundHandoffCurrent(assertDirectAdapterHandoff);
+          return request<unknown>(call);
+        },
+        { checkAfter: false },
+      );
+    } catch (error) {
+      if (
+        !(
+          (isGatewayTransportError(error) && error.kind === "timeout") ||
+          (error instanceof GatewayProtocolRequestTimeoutError && error.requestSent)
+        ) ||
+        actionParams.action !== "send"
+      ) {
+        throw error;
+      }
+      // The Gateway may still finish the first request after the local timer.
+      // Nothing learned by a later reattach can prove that attempt did not send.
+      hadUnknownDeliveryOutcome = true;
+      throwIfAborted(abortSignal);
+
+      const reconciliationSignal = abortSignal
+        ? AbortSignal.any([abortSignal, AbortSignal.timeout(MESSAGE_ACTION_RECONCILIATION_MAX_MS)])
+        : undefined;
+      const reconciliationCall = {
+        ...call,
+        // `null` keeps startup bounded but removes the per-request timer after
+        // hello. The dedicated signal bounds a joined in-flight action without
+        // reconnecting every minute or inheriting the run's much longer lifetime.
+        timeoutMs: abortSignal
+          ? null
+          : Math.max(call.timeoutMs, MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS),
+        signal: reconciliationSignal,
+      };
+      // A caller-side timeout does not cancel Gateway work. Reattach once with the
+      // unchanged idempotency key so the live Gateway can join the original work.
+      payload = await request<unknown>(reconciliationCall);
+    }
   } catch (error) {
     const partialDelivery = ctx.input.messageActionAuthorization?.scheduled
       ? projectMessageActionPartialDelivery(error)

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { runManagerCloseSession } from "./manager.close-session.js";
+import { gate as barrier } from "./manager.ownership.test-support.js";
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {
@@ -24,19 +24,6 @@ installAcpSessionManagerTestLifecycle();
 
 const sessionTarget = { cfg: baseCfg, sessionKey: "agent:codex:acp:actor-epoch-fencing" };
 const initialization = { ...sessionTarget, agent: "codex", mode: "persistent" as const };
-
-function barrier() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: () => release.resolve(),
-    wait: () => {
-      entered.resolve();
-      return release.promise;
-    },
-  };
-}
 
 function expectIdle(...mocks: unknown[]) {
   for (const mock of mocks) {

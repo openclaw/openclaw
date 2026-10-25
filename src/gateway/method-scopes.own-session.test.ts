@@ -92,44 +92,69 @@ describe("method scope resolution and authorization", () => {
       });
     }
   });
-  it("keeps private background mutations under ordinary write scope", () => {
-    expectScope("operator.read", "users.background.get");
-    for (const method of ["users.background.upload", "users.background.remove"]) {
-      expectAccess("operator.write", method, undefined, "operator.read");
-    }
+  const incognitoKey = "agent:main:dashboard:incognito-parent";
+  const guarded = {
+    key: "agent:main:ios-1",
+    expectedPermissionMode: "read-only",
+    permissionMode: "guarded",
+  };
+  const move = (target: { kind: "gateway" } | { kind: "profile"; profileId: string }) => ({
+    key: "agent:main:thread",
+    expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+    target,
   });
-
-  it("requires write scope for runtime-aware inventory", () => {
-    const params = { runtimeId: "openclaw" };
-    deny("operator.write", "environments.list", ["operator.read"], params);
-    allow("environments.list", ["operator.write"], params);
-  });
+  it.each([
+    ["users.background.get", undefined, "operator.read"],
+    ["users.background.upload", undefined, "operator.write", "operator.read"],
+    ["users.background.remove", undefined, "operator.write", "operator.read"],
+    ["environments.list", { runtimeId: "openclaw" }, "operator.write", "operator.read"],
+    ["agent", { message: "hello" }, "operator.write"],
+    ["agent", { message: "/reset" }, "operator.admin", "operator.write"],
+    ["agent", { message: "/new follow up" }, "operator.admin"],
+    ["node.invoke", { command: "device.info" }, "operator.write"],
+    ["node.invoke", { command: "browser.proxy" }, "operator.admin"],
+    ["node.invoke", { command: "browser.proxy.upload.v1" }, "operator.admin"],
+    ["node.invoke", { command: "fs.listDir" }, "operator.admin", "operator.write"],
+    [
+      "node.invoke",
+      { command: "browser.proxy.upload.v1", params: { method: "POST", path: "/profiles/create" } },
+      "operator.write",
+    ],
+    ["sessions.create", { worktree: true }, "operator.write"],
+    ["sessions.create", { cwd: "/other/repo" }, "operator.write"],
+    ["sessions.create", { worktree: true, cwd: "/other/repo" }, "operator.write"],
+    ["sessions.create", { execNode: "macbook", cwd: "/other/repo" }, "operator.admin"],
+    [
+      "sessions.create",
+      { deviceFolder: { deviceId: "paired-device", path: "~/project" } },
+      "operator.write",
+      "operator.sessions.write",
+    ],
+    ["sessions.create", { agentId: "main", incognito: true }, "operator.admin", "operator.write"],
+    ["sessions.create", { key: incognitoKey }, "operator.admin", "operator.write"],
+    ["sessions.create", { parentSessionKey: incognitoKey }, "operator.admin", "operator.write"],
+    [
+      "sessions.create",
+      { agentId: "main", toolOverrides: { skills: { release: false } } },
+      "operator.admin",
+      "operator.write",
+    ],
+    ["sessions.create", { incognito: false }, "operator.write"],
+    ["fs.listDir", {}, "operator.write"],
+    ["fs.listDir", { path: "/configured/workspace" }, "operator.write"],
+    ["fs.listDir", { nodeId: "macbook" }, "operator.admin", "operator.write"],
+    ["node.pair.approve", undefined, "operator.pairing", "operator.write"],
+    ["approval.resolve", undefined, "operator.approvals", "operator.write"],
+    ["sessions.patch", guarded, "operator.write"],
+    ["sessions.patch", { ...guarded, permissionMode: "full" }, "operator.admin", "operator.write"],
+  ] satisfies [string, unknown, string, string?][])(
+    "%s (%j) requires %s",
+    (method, params, scope, denied?: string) => expectAccess(scope, method, params, denied),
+  );
 
   it("leaves node-only pending drain outside operator scopes", () => {
     expect(isGatewayMethodClassified("node.pending.drain")).toBe(true);
     required("node.pending.drain").toStrictEqual([]);
-  });
-
-  it("raises agent reset commands from write to admin scope", () => {
-    expectScope("operator.write", "agent", { message: "hello" });
-    expectScope("operator.admin", "agent", { message: "/reset" });
-    expectScope("operator.admin", "agent", { message: "/new follow up" });
-    deny("operator.admin", "agent", ["operator.write"], { message: "/reset" });
-  });
-
-  it("raises host-sensitive node commands from write to admin scope", () => {
-    expectScope("operator.write", "node.invoke", { command: "device.info" });
-    expectScope("operator.admin", "node.invoke", { command: "browser.proxy" });
-    expectScope("operator.admin", "node.invoke", {
-      command: "browser.proxy.upload.v1",
-    });
-    deny("operator.admin", "node.invoke", ["operator.write"], {
-      command: "fs.listDir",
-    });
-    expectScope("operator.write", "node.invoke", {
-      command: "browser.proxy.upload.v1",
-      params: { method: "POST", path: "/profiles/create" },
-    });
   });
 
   it("adds talk secret scope only when unredacted config is requested", () => {
@@ -198,32 +223,6 @@ describe("method scope resolution and authorization", () => {
     }).toEqual(createExpectedBroadOperatorScopes());
   });
 
-  it("defers Gateway cwd containment to sessions.create while keeping node cwd admin-only", () => {
-    expectScope("operator.write", "sessions.create", { worktree: true });
-    for (const params of [{ cwd: "/other/repo" }, { worktree: true, cwd: "/other/repo" }]) {
-      expectAccess("operator.write", "sessions.create", params);
-    }
-    expectScope("operator.admin", "sessions.create", {
-      execNode: "macbook",
-      cwd: "/other/repo",
-    });
-  });
-
-  it("requires operator.write rather than own-session scope for device folders", () => {
-    const params = { deviceFolder: { deviceId: "paired-device", path: "~/project" } };
-    expectAccess("operator.write", "sessions.create", params, "operator.sessions.write");
-  });
-
-  it("keeps Gateway fs.listDir write-scoped and node browsing admin-only", () => {
-    expectScope("operator.write", "fs.listDir", {});
-    allow("fs.listDir", ["operator.write"], {
-      path: "/configured/workspace",
-    });
-    const nodeParams = { nodeId: "macbook" };
-    expectScope("operator.admin", "fs.listDir", nodeParams);
-    deny("operator.admin", "fs.listDir", ["operator.write"], nodeParams);
-  });
-
   it.each([
     [
       "device dispatch",
@@ -237,24 +236,11 @@ describe("method scope resolution and authorization", () => {
       { key: "agent:main:thread", profileId: "development" },
       "operator.admin",
     ],
-    [
-      "gateway move",
-      "sessions.move",
-      {
-        key: "agent:main:thread",
-        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
-        target: { kind: "gateway" },
-      },
-      "operator.write",
-    ],
+    ["gateway move", "sessions.move", move({ kind: "gateway" }), "operator.write"],
     [
       "profile move",
       "sessions.move",
-      {
-        key: "agent:main:thread",
-        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
-        target: { kind: "profile", profileId: "development" },
-      },
+      move({ kind: "profile", profileId: "development" }),
       "operator.admin",
     ],
   ] as const)(
@@ -268,19 +254,6 @@ describe("method scope resolution and authorization", () => {
       );
     },
   );
-
-  it("requires admin for sensitive session creation parameters", () => {
-    const incognitoKey = "agent:main:dashboard:incognito-parent";
-    for (const params of [
-      { agentId: "main", incognito: true },
-      { key: incognitoKey },
-      { parentSessionKey: incognitoKey },
-      { agentId: "main", toolOverrides: { skills: { release: false } } },
-    ]) {
-      expectAccess("operator.admin", "sessions.create", params, "operator.write");
-    }
-    expectScope("operator.write", "sessions.create", { incognito: false });
-  });
 
   it("grants write-scope sessions.delete only with the archivedOnly opt-in", () => {
     expectScope("operator.admin", "sessions.delete");
@@ -313,17 +286,6 @@ describe("method scope resolution and authorization", () => {
     setPluginGatewayMethodScope("browser.request", "operator.admin");
 
     expectAccess("operator.admin", "browser.request", undefined, "operator.write");
-  });
-
-  it("requires pairing scope for node pairing approvals", () => {
-    allow("node.pair.approve", ["operator.pairing"]);
-    deny("operator.pairing", "node.pair.approve", ["operator.write"]);
-  });
-
-  it("requires approvals scope to resolve approvals", () => {
-    const method = "approval.resolve";
-    deny("operator.approvals", method, ["operator.write"]);
-    allow(method, ["operator.approvals"]);
   });
 
   it("keeps broad question authority distinct from own-run admission", () => {
@@ -367,19 +329,6 @@ describe("method scope resolution and authorization", () => {
         );
       }
     }
-  });
-
-  it("keeps permission CAS write-scoped while full remains admin-only", () => {
-    const guarded = {
-      key: "agent:main:ios-1",
-      expectedPermissionMode: "read-only",
-      permissionMode: "guarded",
-    };
-    expectAccess("operator.write", "sessions.patch", guarded);
-    deny("operator.admin", "sessions.patch", ["operator.write"], {
-      ...guarded,
-      permissionMode: "full",
-    });
   });
 });
 

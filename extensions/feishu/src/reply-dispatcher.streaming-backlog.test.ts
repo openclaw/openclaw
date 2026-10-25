@@ -4,20 +4,11 @@ import { buffer } from "node:stream/consumers";
 import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { promisify } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  chunkMarkdownTextWithMode,
-  chunkTextWithMode,
-  resolveChunkMode,
-  resolveTextChunkLimit,
-} from "openclaw/plugin-sdk/reply-chunking";
-import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "openclaw/plugin-sdk/test-env";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { beforeAll, expect, it, vi } from "vitest";
 import type { FeishuReplyDeliveryResultWithFinalization } from "./reply-delivery-result.js";
+import { installReplyRuntime } from "./reply-dispatcher.test-support.js";
 
 type WireRequest = { method: string; path: string; search: string; body: Record<string, unknown> };
 type CreateDispatcher = typeof import("./reply-dispatcher.js").createFeishuReplyDispatcher;
@@ -93,26 +84,13 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
   if (!address || typeof address === "string") {
     throw new Error("Owned server did not receive a TCP port");
   }
-  const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
-    pluginId: "feishu",
-    errorMessage: "Feishu runtime not initialized",
-  });
-  const previousRuntime = runtimeStore.tryGetRuntime();
-  const runtime = createPluginRuntimeMock();
-  Object.assign(runtime.channel.text, {
-    resolveTextChunkLimit,
-    resolveChunkMode,
-    chunkTextWithMode,
-    chunkMarkdownTextWithMode,
-    convertMarkdownTables,
-    resolveMarkdownTableMode,
-  });
+  let restoreRuntime = () => {};
   // Trust the fixture CA without disabling TLS/hostname checks; restore it in finally.
   const previousCertificates = getCACertificates("default");
   let idle: Promise<void> | undefined;
   let cleanup: (() => void) | undefined;
   try {
-    runtimeStore.setRuntime(runtime);
+    restoreRuntime = installReplyRuntime(true);
     setDefaultCACertificates([...previousCertificates, PROXY_FIXTURE_CERTIFICATE]);
     const feishu = {
       enabled: true,
@@ -202,11 +180,7 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
     releaseFirstWrite.resolve();
     await idle?.catch(() => {});
     cleanup?.();
-    if (previousRuntime) {
-      runtimeStore.setRuntime(previousRuntime);
-    } else {
-      runtimeStore.clearRuntime();
-    }
+    restoreRuntime();
     setDefaultCACertificates(previousCertificates);
     server.closeAllConnections();
     await promisify(server.close.bind(server))();

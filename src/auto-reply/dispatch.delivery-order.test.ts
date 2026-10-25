@@ -31,12 +31,17 @@ function sendFinal(params: DispatchReplyFromConfigParams, text: string) {
   return queuedFinalResult();
 }
 
-function finalReply(text: string, wait?: () => Promise<unknown>): DispatchReplyFromConfigFn {
+function finalReply(
+  text?: string,
+  wait?: () => Promise<unknown>,
+  started?: () => void,
+): DispatchReplyFromConfigFn {
   return async (params) => {
+    started?.();
     if (wait) {
       await wait();
     }
-    return sendFinal(params, text);
+    return text === undefined ? expectedNoQueuedReplyResult() : sendFinal(params, text);
   };
 }
 
@@ -140,14 +145,8 @@ describe("foreground reply delivery order", () => {
 
     mockReplies({
       "old-message": finalReply("old final"),
-      "waiting-message": async () => {
-        await waiting.wait();
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      },
-      "new-message": async (params) => {
-        newestStarted.resolve();
-        return sendFinal(params, "new final");
-      },
+      "waiting-message": finalReply(undefined, waiting.wait),
+      "new-message": finalReply("new final", undefined, newestStarted.resolve),
     });
 
     const olderDispatch = dispatch("old-message", deliveries, {
@@ -219,12 +218,8 @@ describe("foreground reply delivery order", () => {
 
     mockReplies({
       "old-message": finalReply("old final", older.wait),
-      "new-message": async () => {
-        newerStarted.resolve();
-        // Same-session follow-up admission waits for the owning final delivery.
-        await olderDelivered.promise;
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      },
+      // Same-session follow-up admission waits for the owning final delivery.
+      "new-message": finalReply(undefined, () => olderDelivered.promise, newerStarted.resolve),
     });
 
     const olderDispatch = dispatch("old-message", deliveries, {
@@ -257,10 +252,7 @@ describe("foreground reply delivery order", () => {
 
       mockReplies({
         "old-message": finalReply("old final"),
-        "new-message": async () => {
-          newerStarted.resolve();
-          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-        },
+        "new-message": finalReply(undefined, undefined, newerStarted.resolve),
       });
 
       const olderDispatch = dispatch("old-message", deliveries, {

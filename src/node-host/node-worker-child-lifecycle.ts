@@ -562,7 +562,7 @@ export class NodeWorkerChildLifecycle {
         throw new Error("node worker returned a result outside its active turn");
       }
       // Publish this operation before finish can invoke a reentrant cancellation.
-      const settling = Promise.resolve()
+      await (turn.settling = Promise.resolve()
         .then(async () => {
           const receipt = await this.options.turns.finish({
             expected: turn.claim,
@@ -584,12 +584,8 @@ export class NodeWorkerChildLifecycle {
           turn.settle();
         })
         .finally(() => {
-          if (turn.settling === settling) {
-            turn.settling = undefined;
-          }
-        });
-      turn.settling = settling;
-      await settling;
+          turn.settling = undefined;
+        }));
     } else if (active.turn || active.retention?.turnId !== frame.turnId) {
       return;
     }

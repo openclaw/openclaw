@@ -719,7 +719,6 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/config/sessions/session-sharing-store.worker.ts",
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
       "src/gateway/worker-environments/transcript-commit.worker.ts",
-      "src/infra/heartbeat-outcome-store.worker.ts",
       "src/session-cards/progress-card-store.worker.ts",
     ]),
   ],

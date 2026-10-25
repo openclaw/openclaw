@@ -40,6 +40,10 @@ const nodesCameraMocks = vi.hoisted(() => ({
     facing ? `/tmp/camera-${facing}.mp4` : "/tmp/camera.mp4",
   ),
   writeCameraPayloadToFile: vi.fn(async () => undefined),
+  // This suite isolates tool orchestration; rollback ownership has real-filesystem coverage.
+  withCameraArtifactBatch: vi.fn(
+    async (paths: string[], publish: (paths: string[]) => Promise<unknown>) => publish(paths),
+  ),
 }));
 
 const screenMocks = vi.hoisted(() => ({
@@ -179,6 +183,20 @@ it.each<[string, Record<string, unknown>, string, Parameters<typeof createNodesT
     "invoke",
     { node: "pixel", invokeCommand: "mobile.ui.act", invokeParamsJson: "{}" },
     "use the dedicated mobile_ui tool",
+  ],
+  [
+    "invoke",
+    {
+      invokeCommand: "browser.proxy",
+      invokeParamsJson:
+        '{"method":"POST","path":"/act","body":{"kind":"click","ref":"e3","targetId":"T1"}}',
+    },
+    "use the dedicated browser tool",
+  ],
+  [
+    "invoke",
+    { node: "pixel", invokeCommand: "browser.proxy.upload.v1", invokeParamsJson: "{}" },
+    "use the dedicated browser tool",
   ],
   [
     "invoke",

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { assertSignalDaemonEndpointAvailable, spawnSignalDaemon } from "./daemon.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -54,6 +55,14 @@ function startDaemon(overrides: Partial<Parameters<typeof spawnSignalDaemon>[0]>
   });
 }
 
+function daemonEnvironment(values: Record<string, string>) {
+  for (const [name, value] of Object.entries(values)) {
+    vi.stubEnv(name, value);
+  }
+  startDaemon();
+  return spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv;
+}
+
 beforeEach(() => {
   child = createMockChild();
   spawnMock.mockReset().mockReturnValue(child);
@@ -63,6 +72,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   child.stdout.end();
   child.stderr.end();
   child.removeAllListeners();
@@ -83,20 +93,13 @@ describe("spawnSignalDaemon", () => {
   });
   it("rejects an occupied managed endpoint with actionable port guidance", async () => {
     const listener = createServer();
-    await new Promise<void>((resolve, reject) => {
-      listener.once("error", reject);
-      listener.listen(0, "127.0.0.1", resolve);
-    });
-    const address = listener.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected a TCP listener address");
-    }
+    const port = await listenOnLoopback(listener);
 
     try {
       await expect(
-        assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: address.port }),
+        assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: port }),
       ).rejects.toThrow(
-        `Signal managed native endpoint 127.0.0.1:${address.port} is unavailable: Port ${address.port} is already in use. Stop the conflicting service, configure this Signal account with a different transport.httpPort, or use external-native for an intentionally operator-managed daemon.`,
+        `Signal managed native endpoint 127.0.0.1:${port} is unavailable: Port ${port} is already in use. Stop the conflicting service, configure this Signal account with a different transport.httpPort, or use external-native for an intentionally operator-managed daemon.`,
       );
       expect(listener.listening).toBe(true);
     } finally {
@@ -135,47 +138,32 @@ describe("spawnSignalDaemon", () => {
   });
 
   it("starts signal-cli with process essentials but without Gateway secrets", () => {
-    vi.stubEnv("JAVA_HOME", "/opt/java");
-    vi.stubEnv("JAVA_OPTS", "-Xmx256m");
-    vi.stubEnv("LC_ALL", "C.UTF-8");
-    vi.stubEnv("XDG_DATA_HOME", "/srv/signal-test/share");
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "synthetic-gateway-token");
-    vi.stubEnv("OPENCLAW_HOOK_TOKEN", "synthetic-hook-token");
-    vi.stubEnv("OP_CONNECT_TOKEN", "synthetic-connect-token");
-    vi.stubEnv("OPENAI_API_KEY", "synthetic-provider-key");
-    try {
-      startDaemon();
-      const env = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv;
-      // PATH and HOME are kept too, but Windows hosts expose them under their own casing.
-      expect(env).toMatchObject({
-        JAVA_HOME: "/opt/java",
-        JAVA_OPTS: "-Xmx256m",
-        LC_ALL: "C.UTF-8",
-        XDG_DATA_HOME: "/srv/signal-test/share",
-      });
-      expect(Object.values(env).join("\n")).not.toContain("synthetic-");
-      expect(env).not.toHaveProperty("OPENCLAW_GATEWAY_TOKEN");
-      expect(env).not.toHaveProperty("OPENCLAW_HOOK_TOKEN");
-      expect(env).not.toHaveProperty("OP_CONNECT_TOKEN");
-      expect(env).not.toHaveProperty("OPENAI_API_KEY");
-    } finally {
-      vi.unstubAllEnvs();
+    const essentials = {
+      JAVA_HOME: "/opt/java",
+      JAVA_OPTS: "-Xmx256m",
+      LC_ALL: "C.UTF-8",
+      XDG_DATA_HOME: "/srv/signal-test/share",
+    };
+    const secrets = {
+      OPENCLAW_GATEWAY_TOKEN: "synthetic-gateway-token",
+      OPENCLAW_HOOK_TOKEN: "synthetic-hook-token",
+      OP_CONNECT_TOKEN: "synthetic-connect-token",
+      OPENAI_API_KEY: "synthetic-provider-key",
+    };
+    const env = daemonEnvironment({ ...essentials, ...secrets });
+    expect(env).toMatchObject(essentials);
+    expect(Object.values(env).join("\n")).not.toContain("synthetic-");
+    for (const name of Object.keys(secrets)) {
+      expect(env).not.toHaveProperty(name);
     }
   });
 
   it("keeps the environment signal-cli reads for its own configuration", () => {
-    vi.stubEnv("SIGNAL_CLI_CONFIG", "/srv/signal-test/config.json");
-    vi.stubEnv("SIGNAL_CLI_USER_AGENT", "Signal-Android/9.0.0");
-    try {
-      startDaemon();
-      const env = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv;
-      expect(env).toMatchObject({
-        SIGNAL_CLI_CONFIG: "/srv/signal-test/config.json",
-        SIGNAL_CLI_USER_AGENT: "Signal-Android/9.0.0",
-      });
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    const config = {
+      SIGNAL_CLI_CONFIG: "/srv/signal-test/config.json",
+      SIGNAL_CLI_USER_AGENT: "Signal-Android/9.0.0",
+    };
+    expect(daemonEnvironment(config)).toMatchObject(config);
   });
 
   it("matches Windows environment names case-insensitively", () => {
@@ -184,21 +172,16 @@ describe("spawnSignalDaemon", () => {
       throw new Error("process.platform descriptor is unavailable");
     }
     Object.defineProperty(process, "platform", { ...platform, value: "win32" });
-    vi.stubEnv("SystemRoot", "C:\\Windows");
-    vi.stubEnv("ComSpec", "C:\\Windows\\System32\\cmd.exe");
-    vi.stubEnv("LocalAppData", "C:\\Users\\signal\\AppData\\Local");
-    vi.stubEnv("Openclaw_Hook_Token", "synthetic-hook-token");
+    const essentials = {
+      SystemRoot: "C:\\Windows",
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      LocalAppData: "C:\\Users\\signal\\AppData\\Local",
+    };
     try {
-      startDaemon();
-      const env = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv;
-      expect(env).toMatchObject({
-        SystemRoot: "C:\\Windows",
-        ComSpec: "C:\\Windows\\System32\\cmd.exe",
-        LocalAppData: "C:\\Users\\signal\\AppData\\Local",
-      });
+      const env = daemonEnvironment({ ...essentials, Openclaw_Hook_Token: "synthetic-hook-token" });
+      expect(env).toMatchObject(essentials);
       expect(env).not.toHaveProperty("Openclaw_Hook_Token");
     } finally {
-      vi.unstubAllEnvs();
       Object.defineProperty(process, "platform", platform);
     }
   });
@@ -230,10 +213,6 @@ describe("spawnSignalDaemon", () => {
       for (const name of hintNames) {
         vi.stubEnv(name, undefined);
       }
-    });
-
-    afterEach(() => {
-      vi.unstubAllEnvs();
     });
 
     it("warns once, by name only, when proxy or CA variables are not passed through", async () => {

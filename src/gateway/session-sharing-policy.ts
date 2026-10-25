@@ -294,7 +294,10 @@ export function prepareSessionSharingRole(
   params: Pick<SessionSharingRoleParams, "cfg" | "client">,
   preparedCap?: { value: ReturnType<typeof operatorSessionCap> },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
-): (target: SessionSharingTarget, isMember?: boolean) => SessionSharingRole {
+): (
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry">,
+  isMember?: boolean,
+) => SessionSharingRole {
   if (isGatewayAdmin(params.client)) {
     return () => "admin";
   }
@@ -337,6 +340,20 @@ export function prepareSessionSharingRole(
 
 export function canManageSessionSharing(role: SessionSharingRole): boolean {
   return role === "admin" || role === "owner";
+}
+
+/**
+ * Owner-only conversation work: between attributed people only the creator qualifies, even with
+ * admin scope. Unattributed callers and creators keep the owner-equivalent sharing role.
+ */
+export function isSessionOwnRequester(
+  params: Pick<SessionSharingRoleParams, "cfg" | "client">,
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry">,
+  profileId = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client))?.id,
+): boolean {
+  return profileId && sessionCreatorProfileId(target.entry.createdActor)
+    ? isSessionCreatorProfile(target.entry.createdActor, profileId)
+    : canManageSessionSharing(prepareSessionSharingRole(params, { value: "none" })(target));
 }
 
 export function hiddenSessionNotFound(sessionKey: string, incognito = false): ErrorShape {
@@ -459,22 +476,17 @@ export function authorizePreparedSessionMutation(
   if (!target) {
     return null;
   }
+  const sharing = { cfg: params.cfg, client: params.client, target };
   const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
   const cap = { value: prepared.policy?.sessions.others };
-  return authorizeSessionSharingTarget(
-    target,
-    resolveSessionSharingRole(
-      {
-        cfg: params.cfg,
-        client: params.client,
-        target,
-        isMember: Boolean(identity && facts.membership.has(identity.id)),
-      },
+  return authorizeSessionSharingTarget(sharing, {
+    ...cap,
+    role: resolveSessionSharingRole(
+      { ...sharing, isMember: Boolean(identity && facts.membership.has(identity.id)) },
       cap,
       prepareSessionCreatorProfile(identity?.id, prepared.aliases),
     ),
-    cap.value,
-  );
+  });
 }
 
 /** Narrow mutation admission never borrows write access from sharing or membership. */
@@ -534,19 +546,21 @@ export function authorizeSessionAgentRun(
 }
 
 export function authorizeSessionSharingTarget(
-  target: SessionSharingTarget,
-  role: SessionSharingRole,
-  sessionCap: ReturnType<typeof operatorSessionCap>,
-  ownership?: { requireOwner?: boolean; ownerAction?: string },
+  params: SessionSharingRoleParams & { requireOwner?: boolean; ownerAction?: string },
+  prepared?: { value: ReturnType<typeof operatorSessionCap>; role: SessionSharingRole },
 ): ErrorShape | null {
-  const visibility = resolveSessionVisibility(target.entry);
+  const visibility = resolveSessionVisibility(params.target.entry);
+  const sessionCap = prepared
+    ? prepared.value
+    : params.cfg && operatorSessionCap(params.client, params.cfg);
+  const role = prepared?.role ?? resolveSessionSharingRole(params, { value: sessionCap });
   if (sessionCap === "none" && role !== "owner" && role !== "admin") {
-    return hiddenSessionNotFound(target.canonicalKey);
+    return hiddenSessionNotFound(params.target.canonicalKey);
   }
-  if (ownership?.requireOwner && !canManageSessionSharing(role)) {
+  if (params.requireOwner && !canManageSessionSharing(role)) {
     return errorShape(
       ErrorCodes.FORBIDDEN,
-      `Only the session creator or an admin can ${ownership.ownerAction ?? "archive or restore this session"}.`,
+      `Only the session creator or an admin can ${params.ownerAction ?? "archive or restore this session"}.`,
     );
   }
   const capped = sessionCap === "view" || sessionCap === "suggest";
@@ -560,7 +574,7 @@ export function authorizeSessionSharingTarget(
     : errorShape(ErrorCodes.INVALID_REQUEST, `session is ${visibility} for this connection`, {
         details: {
           code: "SESSION_PARTICIPATION_REQUIRED",
-          sessionKey: target.canonicalKey,
+          sessionKey: params.target.canonicalKey,
           visibility,
         },
       });

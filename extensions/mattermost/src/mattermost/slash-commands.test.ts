@@ -10,22 +10,11 @@ import {
   type MattermostCommandResponse,
 } from "./slash-commands.js";
 
-const fetchFixture = vi.hoisted((): { current: typeof fetch } => ({
-  current: vi.fn<typeof fetch>(),
-}));
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard: async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
-      params.beforeRequest?.();
-      return {
-        response: await fetchFixture.current(params.url, params.init),
-        release: async () => {},
-      };
-    },
-  };
-});
+const fetchFixture = await vi.hoisted(async () =>
+  (await import("./fetch.test-support.js")).createMattermostFetchFixture(),
+);
+// mock-isolation: Preserve real exports while binding fetch to this suite's transport fixture.
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", fetchFixture.mockRuntime);
 
 const command = (overrides: Partial<MattermostCommandResponse> = {}) => ({
   id: "cmd-1",
@@ -63,16 +52,20 @@ const registeredCommand = (id: string, token: string, managed: boolean) => ({
 });
 
 async function registerSingleStatusCommand(
-  requestImpl: (path: string, init?: RequestInit) => Promise<unknown>,
+  requestImpl: MattermostClient | ((path: string, init?: RequestInit) => Promise<unknown>),
   description = "status",
 ) {
-  const client: MattermostClient = {
-    baseUrl: "https://chat.example.com",
-    apiBaseUrl: "https://chat.example.com/api/v4",
-    token: "bot-token",
-    request: async <T>(path: string, init?: RequestInit) => (await requestImpl(path, init)) as T,
-    fetchImpl: vi.fn<typeof fetch>(),
-  };
+  const client: MattermostClient =
+    typeof requestImpl === "function"
+      ? {
+          baseUrl: "https://chat.example.com",
+          apiBaseUrl: "https://chat.example.com/api/v4",
+          token: "bot-token",
+          request: async <T>(path: string, init?: RequestInit) =>
+            (await requestImpl(path, init)) as T,
+          fetchImpl: vi.fn<typeof fetch>(),
+        }
+      : requestImpl;
   return registerSlashCommands({
     client,
     teamId: "team-1",
@@ -83,30 +76,35 @@ async function registerSingleStatusCommand(
 }
 
 it("parses application/json payloads", () => {
+  const fields = {
+    token: "t2",
+    team_id: "team",
+    channel_id: "ch2",
+    user_id: "u2",
+    command: "/oc_model",
+    text: "gpt-5",
+  };
   const payload = parseSlashCommandPayload(
-    JSON.stringify({
-      token: "t2",
-      team_id: "team",
-      channel_id: "ch2",
-      user_id: "u2",
-      command: "/oc_model",
-      text: "gpt-5",
-    }),
+    JSON.stringify(fields),
     "application/json; charset=utf-8",
   );
   expect(payload).toEqual({
-    token: "t2",
-    team_id: "team",
+    ...fields,
     team_domain: undefined,
-    channel_id: "ch2",
     channel_name: undefined,
-    user_id: "u2",
     user_name: undefined,
-    command: "/oc_model",
-    text: "gpt-5",
     trigger_id: undefined,
     response_url: undefined,
+    root_id: undefined,
   });
+});
+
+it("keeps the thread root in a form callback", () => {
+  const payload = parseSlashCommandPayload(
+    "token=t1&team_id=team&channel_id=ch1&user_id=u1&command=%2Foc_status&text=&root_id=root-1",
+    "application/x-www-form-urlencoded",
+  );
+  expect(payload?.root_id).toBe("root-1");
 });
 
 it("returns null for malformed payloads missing required fields", () => {
@@ -135,11 +133,27 @@ it("falls back to localhost callback URL for wildcard bind hosts", () => {
   expect(callbackUrl).toBe("http://localhost:18789/api/channels/mattermost/command");
 });
 
-it("reuses existing command when trigger already points to callback URL", async () => {
-  const request = commandRequests([command()]);
-  const result = await registerSingleStatusCommand(request);
-
-  expect(result).toMatchObject([{ managed: false, id: "cmd-1" }]);
+it.each([
+  {
+    name: "reuses matching owned command",
+    existing: command(),
+    result: [{ managed: false, id: "cmd-1" }],
+  },
+  {
+    name: "skips foreign trigger collision",
+    existing: command({
+      id: "cmd-foreign-1",
+      token: "tok-foreign-1",
+      creator_id: "another-bot-user",
+      url: "http://foreign/callback",
+    }),
+    result: [],
+  },
+])("$name without mutation", async ({ existing, result }) => {
+  const request = commandRequests([existing]);
+  const registered = await registerSingleStatusCommand(request);
+  expect(registered).toHaveLength(result.length);
+  expect(registered).toMatchObject(result);
   expect(request).toHaveBeenCalledTimes(1);
 });
 
@@ -160,21 +174,6 @@ it("truncates command descriptions to Mattermost's UTF-8 byte limit", async () =
 
   expect(result).toHaveLength(1);
   expect(request).toHaveBeenCalledTimes(2);
-});
-
-it("skips foreign command trigger collisions instead of mutating non-owned commands", async () => {
-  const request = commandRequests([
-    command({
-      id: "cmd-foreign-1",
-      token: "tok-foreign-1",
-      creator_id: "another-bot-user",
-      url: "http://foreign/callback",
-    }),
-  ]);
-  const result = await registerSingleStatusCommand(request);
-
-  expect(result).toHaveLength(0);
-  expect(request).toHaveBeenCalledTimes(1);
 });
 
 it("updates owned commands when callback method drifts from POST", async () => {
@@ -229,13 +228,7 @@ it("recreates a drifted command when its accepted delete body cannot be read", a
     botToken: "bot-token",
   });
 
-  const result = await registerSlashCommands({
-    client,
-    teamId: "team-1",
-    creatorUserId: "bot-user",
-    callbackUrl: "http://gateway/callback",
-    commands: [{ trigger: "oc_status", description: "status", autoComplete: true }],
-  });
+  const result = await registerSingleStatusCommand(client);
 
   expect(calls).toEqual([
     "GET /commands?team_id=team-1&custom_only=true",

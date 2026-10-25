@@ -46,8 +46,27 @@ export function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
   return !vitest || ["0", "false", "off"].includes(vitest);
 }
 
+// Under trusted-proxy auth, gateway.auth.password is a local-direct Gateway login and any
+// gateway.auth change restarts the Gateway. Listeners register this process-local credential
+// for their port (bridge-auth-registry), so it never needs to reach config.
+let trustedProxyBrowserPassword: string | undefined;
+
+function resolveTrustedProxyBrowserPassword(): {
+  auth: BrowserControlAuth;
+  generatedToken?: string;
+} {
+  if (trustedProxyBrowserPassword) {
+    return { auth: { password: trustedProxyBrowserPassword } };
+  }
+  trustedProxyBrowserPassword = crypto.randomBytes(24).toString("hex");
+  return {
+    auth: { password: trustedProxyBrowserPassword },
+    generatedToken: trustedProxyBrowserPassword,
+  };
+}
+
 async function generateAndPersistBrowserControlCredential(params: {
-  kind: "token" | "password";
+  kind: "token";
   env: NodeJS.ProcessEnv;
 }): Promise<{
   auth: BrowserControlAuth;
@@ -107,11 +126,11 @@ export async function ensureBrowserControlAuth(params: {
       // Startup will fail closed if no resolved browser auth is available.
       return { auth: latestAuth };
     }
-    // trusted-proxy must use a browser-only password, never a gateway auth token.
-    return await generateAndPersistBrowserControlCredential({
-      kind,
-      env,
-    });
+    // trusted-proxy must use a browser-only password, never a gateway auth token or config write.
+    if (kind === "password") {
+      return resolveTrustedProxyBrowserPassword();
+    }
+    return await generateAndPersistBrowserControlCredential({ kind, env });
   }
 
   const ensured = await ensureGatewayStartupAuth({

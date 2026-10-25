@@ -153,7 +153,7 @@ it("keeps execution typing alive past its base TTL until the dispatcher settles"
   });
   const lifecycle = createReplyDispatcherWithTyping({ deliver: async () => undefined });
   lifecycle.replyOptions.onTypingController?.(typing);
-  const signaler = createTypingSignaler({ typing, mode: "message", isHeartbeat: false });
+  const signaler = createTypingSignaler({ typing, mode: "message" });
   await signaler.signalExecutionActivity?.();
   expect(onReplyStart).toHaveBeenCalledTimes(1);
   await advance(243_000, 3);
@@ -174,8 +174,8 @@ it("sends the first typing signal without periodic keepalive refreshes", async (
   await advance(5_000, 1);
 });
 
-it("resolves defaults, configured overrides, and heartbeat suppression", () => {
-  const defaults = { isGroupChat: false, wasMentioned: false, isHeartbeat: false };
+it("resolves defaults, configured overrides, and explicit typing suppression", () => {
+  const defaults = { isGroupChat: false, wasMentioned: false };
   const cases: Array<
     [Partial<Parameters<typeof resolveTypingMode>[0]>, ReturnType<typeof resolveTypingMode>]
   > = [
@@ -187,7 +187,6 @@ it("resolves defaults, configured overrides, and heartbeat suppression", () => {
       "message",
     ],
     [{ isGroupChat: true, wasMentioned: true }, "instant"],
-    [{ configured: "instant", isHeartbeat: true }, "never"],
     [{ configured: "instant", suppressTyping: true }, "never"],
     [{ configured: "instant", typingPolicy: "system_event" }, "never"],
   ];
@@ -205,9 +204,9 @@ it.each([
   expect(resolveResponsePrefixTemplate(template, context)).toBe(expected);
 });
 
-function createTestSignaler(mode: TypingMode = "message", isHeartbeat = false) {
+function createTestSignaler(mode: TypingMode = "message") {
   const typing = createMockTypingController();
-  return { typing, signaler: createTypingSignaler({ typing, mode, isHeartbeat }) };
+  return { typing, signaler: createTypingSignaler({ typing, mode }) };
 }
 type MockTyping = ReturnType<typeof createMockTypingController>;
 function expectTypingCalls(typing: MockTyping, loop: number, refresh: number, text = 0) {
@@ -258,11 +257,8 @@ it("suppresses tool-start typing in message mode until renderable text arrives",
 });
 
 it("suppresses typing when disabled", async () => {
-  for (const params of [
-    { mode: "instant", isHeartbeat: true },
-    { mode: "never", isHeartbeat: false },
-  ] as const) {
-    const { typing, signaler } = createTestSignaler(params.mode, params.isHeartbeat);
+  for (const params of [{ mode: "never" }] as const) {
+    const { typing, signaler } = createTestSignaler(params.mode);
     await signaler.signalRunStart();
     await signaler.signalTextDelta("hi");
     await signaler.signalReasoningDelta();

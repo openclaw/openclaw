@@ -25,6 +25,14 @@ read_when:
 Plugin attribution is span-only. It does not add a plugin dimension to shared
 OpenTelemetry metrics or change Prometheus metric labels.
 
+Embedded and simple model requests compute prompt component sizes only when a
+diagnostic subscriber requests them. Activity tracking, the stability recorder,
+Prometheus, and metrics-only OpenTelemetry do not request these sizes. Tracing
+retains the same pre-provider JSON character counts; these are distinct from the
+encoded request's UTF-8 byte count. Internal diagnostic subscribers can set
+`includePromptStats: false` in their event filter to avoid requesting this work.
+Omitting the option preserves prompt statistics for interested subscribers.
+
 - `openclaw.run`
   - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`, optional `openclaw.agent`
 - `openclaw.model.call`
@@ -117,6 +125,9 @@ permanently exhaustive.
 
 Events with no interested subscriber or tracing exporter are discarded before
 payload enrichment and queuing; they are not buffered for future subscribers.
+Queued events capture their payloads when emitted, so later producer changes do
+not change delivery. Listeners share immutable plain-data snapshots; opaque
+values such as maps and typed arrays retain separate listener copies.
 
 `agent.commentary` records completed preambles, not text deltas. It carries the
 original agent-event sequence and timestamp and attaches to the active harness
@@ -186,6 +197,10 @@ The Gateway's `/tmp/openclaw/openclaw-YYYY-MM-DD.log` JSONL file and
 diagnostics-otel plugin converts them to metrics such as `openclaw.tokens` and
 `openclaw.cost.usd` and to `openclaw.model.usage` spans; those usage metrics
 and spans intentionally omit session identifiers.
+
+Completed memory-flush and Skill Workshop review inference records its own usage
+and available cost estimate. These internal runs do not add their usage to the
+foreground conversation's totals.
 
 For an external integration that needs session-correlated usage, query the
 authenticated Gateway instead:

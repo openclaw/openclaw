@@ -267,10 +267,7 @@ it("maps native Buzz reply relations back to portable thread ids", async () => {
 });
 
 it("waits for a racing inbound id mapping before recording reply relations", async () => {
-  let releaseInbound = () => {};
-  const inboundGate = new Promise<void>((resolve) => {
-    releaseInbound = resolve;
-  });
+  const { promise: inboundGate, resolve: releaseInbound } = Promise.withResolvers<void>();
   const { addInboundMessage, addOutboundMessage } = messages;
   const recordInbound = addInboundMessage.getMockImplementation()!;
   addInboundMessage.mockImplementationOnce(async (input) => {

@@ -1,3 +1,4 @@
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
@@ -78,8 +79,10 @@ export async function mergeSessionTranscriptContext(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     limit,
+    // A session-generated window must retain delivered close-outs alongside
+    // their questions. Native channel windows already own their delivery history.
     ...(windows.length === 0 && options?.chatWindow === true
-      ? { includeCronDirectDeliveryContext: true }
+      ? { includeCronDirectDeliveryContext: true, includeMessageToolSourceReplies: true }
       : {}),
     ...((options?.beforeTimestampMs ?? params.ctx.Timestamp) !== undefined
       ? { beforeTimestampMs: options?.beforeTimestampMs ?? params.ctx.Timestamp }
@@ -148,9 +151,7 @@ export async function mergeSessionTranscriptContext(params: {
       : [];
     const dedupeIds = window.sessionTranscriptDedupeMessageIds;
     const assistantTextKeys = window.sessionTranscriptAssistantTextDedupeKeys;
-    const ids = Array.isArray(dedupeIds)
-      ? new Set(dedupeIds.filter((id): id is string => typeof id === "string"))
-      : new Set<string>();
+    const ids = new Set(filterStringEntries(dedupeIds));
     const assistantDedupeKeys = new Set(assistantTextKeys ?? []);
     const seen = new Set(existing.flatMap(messageKeys));
     const seenTranscript = new Set<string>();

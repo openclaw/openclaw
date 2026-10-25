@@ -139,8 +139,16 @@ it.each<{
     evidence: true,
   },
   {
-    name: "unmanaged sandbox",
+    // An ordinary local Docker or Podman conversation adopts a managed workspace.
+    name: "unmanaged local sandbox",
     sandbox: { workspaceSource: undefined },
+    prepare: true,
+    refresh: false,
+    evidence: true,
+  },
+  {
+    name: "unmanaged remote sandbox",
+    sandbox: { workspaceSource: undefined, backendId: "ssh" },
     prepare: false,
     refresh: false,
     evidence: true,
@@ -236,9 +244,15 @@ it.each([
   expect(callGateway).not.toHaveBeenCalled();
 });
 
-it.each(["managed-worktree", undefined] as const)(
-  "dispatches preparation with its current %s sandbox before owner qualification",
-  async (workspaceSource) => {
+// Unbound sandboxed conversations yield first; github-publish-tool.handoff.test.ts owns that path.
+it.each([
+  {},
+  { conflictsResolved: false },
+  { conflictsResolved: true, expectedHeadCommit: "a".repeat(40) },
+])(
+  "dispatches preparation with its current sandbox and acknowledgement %j before owner qualification",
+  async (acknowledgement) => {
+    const workspaceSource = "managed-worktree";
     const sandbox = publicationSandbox({ workspaceSource });
     const callGateway = vi
       .mocked(callInProcessGatewayTool)
@@ -251,6 +265,7 @@ it.each(["managed-worktree", undefined] as const)(
     const input = {
       action: "prepare_pr",
       pullRequestUrl: "https://github.com/example/repository/pull/1",
+      ...acknowledgement,
     };
     expect(Value.Check(tool.parameters, input)).toBe(workspaceSource === "managed-worktree");
     await withGatewayToolCallerIdentity(caller, () => tool.execute("prepare", input));

@@ -17,6 +17,7 @@ import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import {
   bindApprovalHandlers,
   createHandlers,
@@ -137,12 +138,7 @@ describe("approval authority boundaries", () => {
       } as GatewayRequestHandlerOptions["context"];
       const roleClient = {
         ...createClient({ deviceId: "reviewer" }),
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: gatewayProfile(profile.id),
       } as GatewayRequestHandlerOptions["client"];
       const ownerClient = {
         ...createClient({ deviceId: "reviewer" }),

@@ -192,6 +192,27 @@ afterEach(() => {
 });
 
 describe("terminal gateway policy", () => {
+  it("rejects Gateway-local catalog terminals before the provider can prepare a shell", async () => {
+    const openTerminal = vi.fn(async () => localPlan());
+    installTerminalCatalog(openTerminal);
+    const { opts, respond } = makeOpts(catalogParams());
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      disableGatewayLocalTerminals: true,
+    });
+    opts.context.terminalSessions = manager;
+    try {
+      await runTerminal("terminal.open", opts);
+      expect(openTerminal).not.toHaveBeenCalled();
+      expectFailure(respond, {
+        code: ErrorCodes.UNAVAILABLE,
+        message: expect.stringContaining("contact the Gateway deployment administrator"),
+      });
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
   it("binds a UI terminal to its exact agent session while keeping the UI attached", async () => {
     const backend = makeFakePty();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });

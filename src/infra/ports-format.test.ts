@@ -39,10 +39,11 @@ describe("ports-format", () => {
     // "close the tunnel / change -L port" remediation does not apply to them.
     [{ command: "sshd" }, "non_gateway"],
     [{ command: "sshd-session.exe" }, "non_gateway"],
-    [{ commandLine: "/opt/fast-ssh/server --listen 18789" }, "non_gateway"],
-    // ssh-named non-tunnel that merely mentions the queried port with a colon: there
-    // is no -L/-R forward, so it must not classify as a tunnel or emit the hint.
-    [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "non_gateway"],
+    [{ commandLine: "/usr/sbin/sshd -D" }, "non_gateway"],
+    [{ commandLine: "/opt/fast-ssh-server --listen 18789" }, "non_gateway"],
+    // A directory name is not executable identity, even when a later argument
+    // mentions the queried port.
+    [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "unknown"],
     [{ commandLine: "ssh -N -L 9999:remote:22 host" }, "ssh"],
     [{ command: "socat" }, "non_gateway"],
     [{ command: "socat1" }, "non_gateway"],
@@ -57,6 +58,8 @@ describe("ports-format", () => {
     [{ command: "openclaw-search" }, "unknown"],
     [{ commandLine: "python worker.py openclaw gateway" }, "unknown"],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
+    [{ commandLine: 'node "/tmp/ssh workspace/dist/index.js" logs --follow' }, "unknown"],
+    [{ commandLine: "node /tmp/app.js --cache /tmp/ssh" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
     expect(classifyPortListener(listener)).toBe(expected);
   });

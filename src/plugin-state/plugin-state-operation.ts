@@ -131,6 +131,12 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
     async execute(command, options) {
       assertActive();
       const writes = select(options.writeStores);
+      if (options.ifEmpty) {
+        select([options.ifEmpty.store]);
+        if (writes.length) {
+          throw invalidInput("Plugin state empty shortcuts require a read-only operation.");
+        }
+      }
       const watches = select(options.watchStores ?? bindings.map((_, index) => index));
       const receiptId = randomUUID();
       const missing = Object.hasOwn(options, "missingValue")
@@ -175,6 +181,7 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
             exportName: handler.exportName,
             stores: bindings.map(({ options: { env: _env, ...scope } }) => scope),
             writeStores: [...options.writeStores],
+            ifEmpty: options.ifEmpty,
             command,
             receiptId,
           },

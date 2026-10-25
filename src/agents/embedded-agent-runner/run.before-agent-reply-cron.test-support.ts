@@ -11,9 +11,11 @@ import {
   mockedGlobalHookRunner as hooks,
   mockedRunEmbeddedAttempt,
   createOverflowRunParams,
-  resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -51,11 +53,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
   });
 
   beforeEach(async () => {
-    resetSharedRunIntegrationHarnessMocks();
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "run.before-agent-reply-cron" });
-    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot({});
+    state = await createFreshRunIntegrationState("run.before-agent-reply-cron");
     hooks.hasHooks.mockImplementation((hookName: string) => hookName === "before_agent_reply");
   });
 
@@ -100,21 +98,31 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(result.meta.providerStarted).toBe(false);
   });
 
-  it("passes the heartbeat queue and re-arms setup progress when its hook does not claim", async () => {
+  it("re-arms setup progress when a scheduled hook does not claim", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
     const onExecutionPhase = vi.fn();
 
     await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      trigger: "heartbeat",
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      ...(await prepareHookSession("agent:main:cron:scheduled")),
+      provider: "test-local",
+      model: "test-model",
+      config: {
+        models: {
+          providers: {
+            "test-local": {
+              baseUrl: "http://127.0.0.1:11434/v1",
+              api: "openai-completions",
+              auth: "none",
+              models: [],
+            },
+          },
+        },
+      },
       onExecutionPhase,
     });
 
     expect(firstBeforeAgentReplyCall()[1]).toMatchObject({
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      sessionKey: "agent:main:cron:scheduled",
     });
     expect(onExecutionPhase).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "before_agent_reply" }),

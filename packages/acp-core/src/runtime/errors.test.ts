@@ -42,6 +42,23 @@ describe("withAcpRuntimeErrorBoundary", () => {
     }
   });
 
+  it.each([
+    [Object.assign([], { details: "array diagnostic" }), "boom: array diagnostic"],
+    [{ details: false }, "boom: false"],
+    [42, "boom"],
+    [null, "boom"],
+    [Object.assign(() => {}, { details: "not an object" }), "boom"],
+  ])("reads numeric request details from object-backed data: %j", (data, message) => {
+    const source = Object.assign(new Error("boom"), { code: -32603, data });
+    const error = toAcpRuntimeError({
+      error: source,
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "fallback",
+    });
+    expect(error.message).toBe(message);
+    expect(error.cause).toBe(source);
+  });
+
   it("passes through existing ACP runtime errors", async () => {
     const existing = new AcpRuntimeError("ACP_BACKEND_MISSING", "backend missing");
     await expect(rejectThroughBoundary(existing)).rejects.toBe(existing);
@@ -66,6 +83,18 @@ describe("withAcpRuntimeErrorBoundary", () => {
 });
 
 describe("formatAcpErrorChain redaction", () => {
+  it("retains numeric codes and a non-Error false cause in order", () => {
+    const request = Object.assign(new Error("request failed", { cause: false }), {
+      name: "RequestError",
+      code: -32603,
+    });
+    expect(
+      formatAcpErrorChain(new AcpRuntimeError("ACP_TURN_FAILED", "outer", { cause: request })),
+    ).toBe(
+      "AcpRuntimeError [ACP_TURN_FAILED]: outer <- RequestError [-32603]: request failed <- false",
+    );
+  });
+
   it.each([false, true])("redacts secret-shaped tokens (nested cause: %s)", (nested) => {
     const message = `upstream rejected token=${token}`;
     const source = nested

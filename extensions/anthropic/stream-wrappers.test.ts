@@ -119,7 +119,6 @@ function runCompactionProviderWrapper(
     options: {
       apiKey: params.apiKey ?? "sk-ant-api03-test-key",
       headers: params.headers,
-      onPayload: (generated: unknown) => Object.assign(generated as Record<string, unknown>, {}),
     },
   });
 }
@@ -131,7 +130,6 @@ describe("anthropic stream wrappers", () => {
       model: { id: "claude-opus-4-6" },
       options: { apiKey: "sk-ant-oat01-123" },
     });
-    expect(headers?.["anthropic-beta"]).toBeDefined();
     expect(headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
@@ -328,9 +326,11 @@ describe("anthropic stream wrappers", () => {
     }
     const captured = runNativeFastModeWrapper(params);
 
-    expect(captured.headers).toBeUndefined();
-    expect(captured.payload).toEqual({});
-    expect(captured.model?.cost.input).toBe(5);
+    expect([captured.headers, captured.payload, captured.model?.cost.input]).toEqual([
+      undefined,
+      {},
+      5,
+    ]);
   });
 
   it("lets explicit service tier configuration override fast mode", () => {
@@ -380,7 +380,6 @@ describe("Anthropic service_tier payload wrappers", () => {
       options: { apiKey: "sk-ant-api03-test-key" },
       wrap: (base) => createAnthropicFastModeWrapper(base, () => enabled),
     }).payload;
-    expect(first?.service_tier).toBe("auto");
-    expect(second?.service_tier).toBe("standard_only");
+    expect([first?.service_tier, second?.service_tier]).toEqual(["auto", "standard_only"]);
   });
 });

@@ -283,7 +283,7 @@ describe("update-cli", () => {
       expect(result).toMatchObject({
         status: "skipped",
         reason: "already-current",
-        steps: [
+        steps: expect.arrayContaining([
           expect.objectContaining({
             exitCode: 0,
             advisory: {
@@ -293,8 +293,12 @@ describe("update-cli", () => {
               ),
             },
           }),
-        ],
+          expect.objectContaining({ name: "recovery-artifact-cleanup", exitCode: 0 }),
+        ]),
       });
+      expect(
+        result.steps.find((step) => step.name === "recovery-artifact-cleanup")?.advisory,
+      ).toBeUndefined();
       expect(modules.replaceConfigFile).not.toHaveBeenCalled();
       expect(modules.getUpdateRun(proof.requireValue(result.runId, "no-op run id"))).toMatchObject({
         status: "skipped",

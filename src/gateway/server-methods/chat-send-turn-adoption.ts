@@ -230,6 +230,10 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       params.retireOperatorRunCancellation?.();
     },
     onAbandoned: () => {
+      // Direct dispatch owns preparation failures before source adoption.
+      if (!params.sourceRef.input.custody.enqueued) {
+        return;
+      }
       recordQueuedTerminal(
         { kind: "aborted", stopReason: "aborted" },
         params.sourceRef.adapter.projectSessionTerminalPending !== true,

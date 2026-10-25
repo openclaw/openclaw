@@ -223,6 +223,26 @@ it("retires a pending transcript copy when its source view changes", async () =>
   await rejectCopy();
 });
 
+it("retires a transcript copy before its deferred reader starts", async () => {
+  let current = true;
+  params.isCurrent = () => current;
+  const pending = copy();
+  current = false;
+  await pending;
+  expect(request).not.toHaveBeenCalled();
+  expect(copyToClipboard).not.toHaveBeenCalled();
+  expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.copyTranscriptChanged") });
+});
+
+it("keeps the deferred transcript read on its initiating connection", async () => {
+  const pending = copy();
+  params.context.gateway.snapshot.client = null;
+  await pending;
+  expect(request).not.toHaveBeenCalled();
+  expect(copyToClipboard).not.toHaveBeenCalled();
+  expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.copyTranscriptChanged") });
+});
+
 it("denies transcript reads without a compatible read scope", async () => {
   params.context.gateway.snapshot.hello!.auth!.scopes = [];
   await rejectCopy(t("sessionsView.actionRequiresScope", { scope: "operator.sessions.read" }));

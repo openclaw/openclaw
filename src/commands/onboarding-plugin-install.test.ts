@@ -605,83 +605,69 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(enablePluginInConfig).not.toHaveBeenCalled();
   });
 
-  it("uses a guarded npm-pack install override for the matching plugin id", async () => {
-    const archivePath = path.resolve("tmp/demo-plugin.tgz");
-    const cfg = installPolicyConfig();
-    installOverrides(
-      ["other-plugin", "npm:@demo/other@1.0.0"],
-      ["demo-plugin", `npm-pack:${archivePath}`],
-    );
-    installers.archive.mockResolvedValue(
-      installedPlugin({
-        targetDir: "/tmp/openclaw/extensions/demo-plugin",
-        npmTarballName: "demo-plugin-1.2.3.tgz",
-        npmResolution: {
-          resolvedSpec: "file:demo-plugin-1.2.3.tgz",
-          integrity: "sha512-demo",
-          shasum: "abc123",
-        },
-      }),
-    );
+  it.each(["npm-pack", "npm"] as const)(
+    "uses a guarded %s override without catalog trust",
+    async (kind) => {
+      const archivePath = path.resolve("tmp/demo-plugin.tgz");
+      const spec = "@openclaw/demo-plugin@2026.5.8";
+      const cfg = installPolicyConfig();
+      installOverrides(
+        ["other-plugin", "npm:@demo/other@1.0.0"],
+        ["demo-plugin", kind === "npm-pack" ? `npm-pack:${archivePath}` : `npm:${spec}`],
+      );
+      const installer = kind === "npm-pack" ? installers.archive : installers.npm;
+      installer.mockResolvedValue(
+        installedPlugin({
+          targetDir: "/tmp/openclaw/extensions/demo-plugin",
+          npmTarballName: "demo-plugin-1.2.3.tgz",
+          npmResolution: {
+            resolvedSpec: "file:demo-plugin-1.2.3.tgz",
+            integrity: "sha512-demo",
+            shasum: "abc123",
+          },
+        }),
+      );
 
-    const select = vi.fn(async () => "npm");
-    const result = await runInstall(
-      installEntry({ npmSpec: "@demo/plugin@1.2.3" }, { trustedSourceLinkedOfficialInstall: true }),
-      { select, note: vi.fn(), progress: progress() } as never,
-      { cfg, runtime: { log: vi.fn() } as never, workspaceDir: "/tmp/workspace" },
-    );
+      const select = vi.fn(async () => "npm");
+      const result = await runInstall(
+        installEntry(
+          { npmSpec: "@demo/plugin@1.2.3" },
+          { trustedSourceLinkedOfficialInstall: true },
+        ),
+        { select, note: vi.fn(), progress: progress() } as never,
+        { cfg, runtime: { log: vi.fn() } as never, workspaceDir: "/tmp/workspace" },
+      );
 
-    expect(select).not.toHaveBeenCalled();
-    expect(installers.npm).not.toHaveBeenCalled();
-    const [packCall] = firstCall(installers.archive);
-    expect(packCall).toMatchObject({ archivePath, expectedPluginId: "demo-plugin" });
-    expect(packCall.config).toBe(cfg);
-    expect(packCall).not.toHaveProperty("trustedSourceLinkedOfficialInstall");
-    expect(installRecord()).toEqual({
-      pluginId: "demo-plugin",
-      source: "npm",
-      spec: "file:demo-plugin-1.2.3.tgz",
-      sourcePath: archivePath,
-      installPath: "/tmp/openclaw/extensions/demo-plugin",
-      version: "1.2.3",
-      artifactKind: "npm-pack",
-      artifactFormat: "tgz",
-      npmIntegrity: "sha512-demo",
-      npmShasum: "abc123",
-      npmTarballName: "demo-plugin-1.2.3.tgz",
-    });
-    expect(result.status).toBe("installed");
-    expectDiscoveryInvalidated();
-  });
-
-  it("uses a guarded npm install override without official-trust flags", async () => {
-    installOverrides(
-      ["codex", "npm:@openclaw/codex@2026.5.8"],
-      ["other-plugin", "npm-pack:/tmp/other.tgz"],
-    );
-    installers.npm.mockResolvedValue(
-      installedPlugin({
-        pluginId: "codex",
-        targetDir: "/tmp/openclaw/extensions/codex",
-        version: "2026.5.8",
-      }),
-    );
-
-    await runInstall(
-      installEntry(
-        { npmSpec: "@openclaw/codex" },
-        { pluginId: "codex", label: "Codex", trustedSourceLinkedOfficialInstall: true },
-      ),
-      choose("npm", { note: vi.fn(), progress: progress() }),
-      { runtime: { log: vi.fn() } as never },
-    );
-
-    expect(npmCall().trustedSourceLinkedOfficialInstall).toBeUndefined();
-    expect(npmCall()).toMatchObject({
-      spec: "@openclaw/codex@2026.5.8",
-      expectedPluginId: "codex",
-    });
-  });
+      expect(select).not.toHaveBeenCalled();
+      expect(kind === "npm-pack" ? installers.npm : installers.archive).not.toHaveBeenCalled();
+      const call = requireCapturedPrompt(installer.mock.calls[0]?.[0]);
+      expect(call).toMatchObject({
+        ...(kind === "npm-pack" ? { archivePath } : { spec }),
+        expectedPluginId: "demo-plugin",
+      });
+      expect(call.config).toBe(cfg);
+      expect(call).not.toHaveProperty("trustedSourceLinkedOfficialInstall");
+      expect(installRecord()).toEqual({
+        pluginId: "demo-plugin",
+        source: "npm",
+        spec: kind === "npm-pack" ? "file:demo-plugin-1.2.3.tgz" : spec,
+        installPath: "/tmp/openclaw/extensions/demo-plugin",
+        version: "1.2.3",
+        ...(kind === "npm-pack"
+          ? {
+              sourcePath: archivePath,
+              artifactKind: "npm-pack",
+              artifactFormat: "tgz",
+              npmIntegrity: "sha512-demo",
+              npmShasum: "abc123",
+              npmTarballName: "demo-plugin-1.2.3.tgz",
+            }
+          : {}),
+      });
+      expect(result.status).toBe("installed");
+      expectDiscoveryInvalidated();
+    },
+  );
 
   it("retries the operator ClawHub selector when no beta release is published", async () => {
     const spec = "clawhub:demo-plugin@latest";

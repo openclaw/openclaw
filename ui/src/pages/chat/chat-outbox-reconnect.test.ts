@@ -1,57 +1,100 @@
 /* @vitest-environment jsdom */
-import { createComponent, createMemo, createSignal } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
+import { expect, it, onTestFinished } from "vitest";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { makeChatHost, requestCalls, requireRecord } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { admitHostQueueItems, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
+import { admitHostQueueItems } from "./chat-outbox-recovery.test-support.ts";
 import { keepVolatileQueuedMessage } from "./chat-queue.ts";
-import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { createChatViewFrame } from "./chat-view-frame.ts";
-import { resetChatViewState } from "./chat-view-state.test-support.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
-import { createComposerQuestions } from "./components/chat-composer-questions.ts";
-import { ComposerQueue } from "./components/chat-composer-regions.tsx";
-import { ChatThread } from "./components/chat-thread-view.tsx";
-import {
-  installTranscriptDomMocks,
-  resetTranscriptTestDom,
-} from "./components/chat-transcript.test-support.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
+import { resumeStoredChatOutboxes, retryQueuedChatMessage } from "./chat-send-actions.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
 
-it("shows connected review waits without changing delivery versions or crossing the barrier", async () => {
-  installTranscriptDomMocks();
-  onTestFinished(() => {
-    resetChatViewState();
-    resetTranscriptTestDom();
-  });
+it.each(["ready", "identity unavailable"] as const)(
+  "holds an unbound attempted send until its conversation is reviewed (%s)",
+  async (review) => {
+    const host = makeChatHost({
+      currentSessionId: "reviewed-physical-session",
+      chatQueue: [
+        {
+          id: "unbound-attempt",
+          text: "Retained input",
+          createdAt: 1,
+          sendRunId: "original-unbound-key",
+          sendAttempts: 1,
+          sendState: "waiting-reconnect",
+        },
+      ],
+      requestHandlers: {
+        "chat.send": (params: unknown) => ({
+          runId: requireRecord(params, "reviewed send").idempotencyKey,
+          status: "ok",
+        }),
+      },
+    });
+    const sessionKey = host.sessionKey;
+    admitHostQueueItems(host);
+    onTestFinished(chatOutboxOwner(host).subscribe(host));
+
+    await resumeStoredChatOutboxes(host);
+
+    expect(requestCalls(host.request, "chat.send")).toEqual([]);
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "Retained input",
+      sendState: "held",
+      sendRunId: "original-unbound-key",
+      sendAttempts: 1,
+    });
+    if (review !== "ready") {
+      host.currentSessionId = null;
+      await retryQueuedChatMessage(host, "unbound-attempt");
+      expect(requestCalls(host.request, "chat.send")).toEqual([]);
+      expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendState).toBe("held");
+      host.sessionKey = sessionKey;
+      host.currentSessionId = "reviewed-physical-session";
+      chatOutboxOwner(host).syncHost(host);
+    }
+
+    await retryQueuedChatMessage(host, "unbound-attempt");
+
+    const sends = requestCalls(host.request, "chat.send");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.[1]).toMatchObject({
+      sessionKey,
+      sessionId: "reviewed-physical-session",
+      idempotencyKey: "original-unbound-key",
+      message: "Retained input",
+    });
+    await waitForFast(() => expect(host.chatQueue).toEqual([]));
+  },
+);
+
+it("replays attempted durable and memory-only sends FIFO with their original keys", async () => {
   const host = makeChatHost({
     connected: false,
+    currentSessionId: "original-physical-session",
+    chatRunId: "stale-local-run",
+    chatStream: "The socket missed this run's terminal event",
     chatQueue: [
-      {
-        id: "a",
-        text: "Attempted before disconnect",
-        createdAt: 1,
-        sendState: "waiting-reconnect",
-        sendRunId: "run-a",
-        sendAttempts: 1,
-        sendRequestStartedAtMs: 1,
-      },
-      {
-        id: "b",
-        text: "> Which audience?\n\nEveryone",
-        asyncQuestionItemId: "question-b",
-        createdAt: 2,
-        sendState: "waiting-reconnect",
-        sendRunId: "run-b",
-        sendAttempts: 0,
-      },
-    ],
-    requestHandlers: { "chat.history": idleChatHistory() },
+      { id: "a", createdAt: 1 },
+      { id: "c", createdAt: 3 },
+    ].map(({ id, createdAt }) => ({
+      id,
+      text: `Attempted ${id}`,
+      createdAt,
+      sendState: "waiting-reconnect" as const,
+      sendRunId: `run-${id}`,
+      sessionId: "original-physical-session",
+      sendAttempts: 1,
+      sendRequestStartedAtMs: createdAt,
+    })),
+    requestHandlers: {
+      "chat.send": (params: unknown) => ({
+        runId: requireRecord(params, "replayed send").idempotencyKey,
+        status: "in_flight",
+      }),
+    },
   });
   admitHostQueueItems(host);
   onTestFinished(chatOutboxOwner(host).subscribe(host));
@@ -59,137 +102,39 @@ it("shows connected review waits without changing delivery versions or crossing 
     host,
     host.sessionKey,
     {
-      id: "c",
-      text: "Memory-only successor",
-      createdAt: 3,
+      id: "b",
+      text: "Memory-only attempt",
+      createdAt: 2,
+      orderKey: 2,
       sendState: "waiting-reconnect",
-      sendRunId: "run-c",
+      sendRunId: "run-b",
+      sessionId: "original-physical-session",
       sendAttempts: 1,
-      sendRequestStartedAtMs: 3,
+      sendRequestStartedAtMs: 2,
     },
     undefined,
     { retryable: true },
   );
-  const before = host.chatQueue;
-  const container = document.createElement("div");
-  document.body.append(container);
-  const props = createChatProps({
-    sessionKey: host.sessionKey,
-    messages: [
-      {
-        role: "assistant",
-        content: "Which audience?",
-        phase: "final_answer",
-        openclawAsyncDelivery: {
-          itemId: "question-b",
-          questions: [{ title: "Which audience?", options: ["Everyone"] }],
-        },
-      },
-    ],
-    onAsyncQuestionSubmit: vi.fn(async () => true),
-    onQueueRetry: vi.fn(),
-  });
-  const currentProps = () => ({
-    ...props,
-    queue: host.chatQueue,
-    connected: host.connected,
-    offline: !host.connected,
-  });
-  const [viewProps, setViewProps] = createSignal(currentProps());
-  const view = mountSolid(
-    () => {
-      const questions = createComposerQuestions(props.paneId, viewProps);
-      const frame = createMemo(() =>
-        createChatViewFrame(viewProps(), () => undefined, questions.source()!.asyncQuestions),
-      );
-      return [
-        createComponent(ChatThread, {
-          get props() {
-            return frame().threadProps;
-          },
-          transcript: props.transcript,
-        }),
-        createComponent(ComposerQueue, {
-          get composer() {
-            return { ...viewProps(), displayQueue: frame().displayQueue };
-          },
-          showAbortableUi: false,
-        }),
-      ];
-    },
-    { container },
-  );
-  onTestFinished(() => {
-    view.unmount();
-    props.transcript.dispose();
-    container.remove();
-  });
-  const draw = () => {
-    setViewProps(currentProps());
-    flush();
-    props.transcript.start();
-    props.transcript.update();
-    flush();
-  };
 
   await resumeStoredChatOutboxes(host);
-  expect(host.chatQueue).toEqual(before);
-  draw();
-  await waitForSolid(() =>
-    expect(container.querySelector(".chat-queue__badge")?.textContent).toContain(
-      "Waiting for reconnect",
-    ),
-  );
-  expect(container.textContent).toContain("Waiting for reconnect");
-  expect(container.querySelector(".chat-send-status")?.textContent).toContain(
-    "Waiting for reconnect",
-  );
-  expect(container.querySelector(".chat-question-summary__delivery")?.textContent).toContain(
-    "Waiting for reconnect",
-  );
+  expect(requestCalls(host.request, "chat.send")).toEqual([]);
+  expect(host.chatQueue.map((item) => item.sendState)).toEqual([
+    "waiting-reconnect",
+    "waiting-reconnect",
+    "waiting-reconnect",
+  ]);
 
   host.connected = true;
   host.connectionEpoch += 1;
   await resumeStoredChatOutboxes(host);
 
-  expect(host.chatQueue).toEqual([
-    expect.objectContaining({ ...before[0], sendState: "unconfirmed" }),
-    before[1],
-    before[2],
-  ]);
-  expect(listStoredChatOutboxes(host)[0]?.queue.map((item) => [item.id, item.sendState])).toEqual([
-    ["a", "unconfirmed"],
-    ["b", "waiting-reconnect"],
-  ]);
-  expect(chatOutboxOwner(host).hasVolatile(host, "c")).toBe(true);
-  draw();
-  expect(container.textContent).not.toContain("Waiting for reconnect");
-  const unconfirmed = container.querySelector('.chat-send-status[data-send-state="unconfirmed"]');
-  expect(unconfirmed?.textContent).toContain("Delivery unconfirmed");
-  expect(unconfirmed?.querySelector(".chat-send-status__retry")).not.toBeNull();
-  expect(unconfirmed?.querySelector(".chat-send-status__discard")).not.toBeNull();
-  const pending = container.querySelector('.chat-send-status[data-send-state="waiting-reconnect"]');
-  expect(pending?.textContent).toContain("Queued");
-  expect(pending?.querySelector(".chat-send-status__discard")).not.toBeNull();
-  expect(pending?.querySelector(".chat-send-status__retry")).toBeNull();
-  expect(container.querySelector(".chat-question-summary__delivery")?.textContent).toContain(
-    "Answer queued",
-  );
-  expect(container.querySelector(".chat-queue__global-state")?.textContent?.trim()).toBe(
-    "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
-  );
-  expect(requestCalls(host.request, "chat.send")).toEqual([]);
-
-  // Connection-only updates must invalidate cached transcript/question labels.
-  host.connected = false;
-  draw();
   expect(
-    container.querySelector(".chat-send-status[data-send-state='waiting-reconnect']"),
-  ).not.toBeNull();
-  expect(container.querySelector(".chat-question-summary__delivery")?.textContent).toContain(
-    "Waiting for reconnect",
-  );
-  host.connected = true;
-  draw();
-  expect(container.textContent).not.toContain("Waiting for reconnect");
+    requestCalls(host.request, "chat.send").map(
+      (call) => requireRecord(call[1], "replayed send").idempotencyKey,
+    ),
+  ).toEqual(["run-a", "run-b", "run-c"]);
+  expect(requestCalls(host.request, "chat.history")).toEqual([]);
+  expect(listStoredChatOutboxes(host)).toEqual([]);
+  expect(host.chatQueue).toEqual([]);
+  expect(chatOutboxOwner(host).hasVolatile(host, "b")).toBe(false);
 });

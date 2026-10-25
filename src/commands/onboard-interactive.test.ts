@@ -160,14 +160,15 @@ describe("runConversationalOnboarding", () => {
       binding: fixture.binding,
     });
     const launchConversation = vi.fn(async () => {});
+    vi.spyOn(
+      await import("../system-agent/tui-backend.js"),
+      "runSystemAgentTui",
+    ).mockImplementation(launchConversation);
     const { runSystemAgent } = await vi.importActual<
       typeof import("../system-agent/system-agent.js")
     >("../system-agent/system-agent.js");
     mocks.runSystemAgent.mockImplementation((opts, runtime) =>
-      runSystemAgent(
-        { ...opts, input: terminal, output: terminal, runInteractiveTui: launchConversation },
-        runtime,
-      ),
+      runSystemAgent({ ...opts, input: terminal, output: terminal }, runtime),
     );
     return {
       binding: fixture.binding,

@@ -205,17 +205,15 @@ describe("native session binding generation authority", () => {
         await gate.pause();
         return { kind: "verify", expectedPreviousSessionId: bindingSessionId };
       },
-      adopt: async (_expectedPreviousSessionId, authority) => {
-        return authority.withCurrent(() => {
+      adopt: async (_expectedPreviousSessionId, authority) =>
+        authority.withCurrent(() => {
           bindingSessionId = target.sessionId;
           return "adopted" as const;
-        });
-      },
-      reclaim: async (_expectedPreviousSessionId, authority) => {
-        return authority.withCurrent(() => {
+        }),
+      reclaim: async (_expectedPreviousSessionId, authority) =>
+        authority.withCurrent(() => {
           throw new Error("Stale reclaim is disabled");
-        });
-      },
+        }),
     };
     await upsertSessionEntryCore(scope(), { sessionId: previous.sessionId, updatedAt: 1 });
     await patchSessionEntryCore(scope(), () => ({ sessionId: target.sessionId }));

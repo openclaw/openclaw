@@ -1,5 +1,5 @@
 import type { BoardGetParams, ProgressCardGetParams } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, Errored, latest, Loading, onSettled, Show } from "solid-js";
 import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
 import { projectGateway } from "../../reactive/application.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
@@ -131,23 +131,34 @@ function SessionProgressWidgetContent(
           (entry.agentId ?? parseAgentSessionKey(entry.key)?.agentId) === current.agentId,
       );
   });
-  const state = createMemo(progress.read);
+  const card = createMemo(() => progress.read().card);
+  const error = createMemo(() => progress.read().error);
+  const receipt = createMemo(() => ({ completion: progress.read().completion }), {
+    equals: (previous, next) => previous.completion === next.completion,
+  });
+  // Readiness observes the owner's admitted work; accepted cards stay independently live.
+  const ready = createMemo(() => receipt().completion?.then(() => null) ?? null);
+  const LoadingNotice = () => (
+    <Show when={card() === undefined}>
+      <p class="board-widget__plugin-loading">{t("sessionProgressCard.widgetLoading")}</p>
+    </Show>
+  );
   const ErrorNotice = () => (
-    <Show when={state().error}>
-      {(error) => (
+    <Show when={error()}>
+      {(failure) => (
         <div
-          class={state().card ? "callout info" : "board-widget__plugin-loading"}
+          class={card() ? "callout info" : "board-widget__plugin-loading"}
           data-test-id="session-progress-error"
           role="alert"
         >
           <span>
             {t(
-              error() === "access-denied"
+              failure() === "access-denied"
                 ? "sessionProgressCard.widgetAccessDenied"
                 : "sessionProgressCard.widgetUnavailable",
             )}
           </span>
-          <Show when={error() === "unavailable"}>
+          <Show when={failure() === "unavailable"}>
             <button
               class="btn btn--sm"
               type="button"
@@ -167,22 +178,23 @@ function SessionProgressWidgetContent(
   return (
     <>
       <ErrorNotice />
-      <Show when={!state().error || state().card}>
-        <Show
-          when={!state().loading}
-          fallback={
-            <p class="board-widget__plugin-loading">{t("sessionProgressCard.widgetLoading")}</p>
-          }
-        >
+      <Show when={!error() || card()}>
+        <Loading on={receipt()} fallback={<LoadingNotice />}>
+          <Errored fallback={null}>{card() === undefined ? ready() : latest(ready)}</Errored>
+          <Show when={!receipt().completion}>
+            <LoadingNotice />
+          </Show>
+        </Loading>
+        <Show when={card() !== undefined}>
           <Show
-            when={state().card}
+            when={card()}
             fallback={
               <p class="board-widget__plugin-loading">{t("sessionProgressCard.widgetEmpty")}</p>
             }
           >
-            {(card) => (
+            {(acceptedCard) => (
               <SessionProgressCard
-                card={card()}
+                card={acceptedCard()}
                 placement="board"
                 sessionStatus={row()?.status}
                 startedAt={row()?.startedAt}

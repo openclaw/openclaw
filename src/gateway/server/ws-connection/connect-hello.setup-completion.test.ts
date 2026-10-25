@@ -103,20 +103,16 @@ function createBootstrapState(paired: PairedDevice, bootstrapTokenCandidate: str
 }
 
 function createFailedHelloContext(
-  name: string,
-  sendFrame: () => Promise<void>,
-  broadcast?: ReturnType<typeof vi.fn>,
+  sendFrame: () => Promise<void> = rejectHello,
+  broadcast = vi.fn(),
 ) {
   return {
     handler: {
       getClient: () => null,
-      connId: `conn-${name}`,
+      connId: "conn-setup",
       gatewayMethods: [],
       events: [],
-      buildRequestContext: () => ({
-        broadcast: broadcast ?? vi.fn(),
-        publishPresence: vi.fn(),
-      }),
+      buildRequestContext: () => ({ broadcast, publishPresence: vi.fn() }),
       refreshHealthSnapshot: vi.fn(async () => ({})),
       close: vi.fn(),
       advanceHandshakePhase: vi.fn(),
@@ -124,7 +120,7 @@ function createFailedHelloContext(
       logGateway: { warn: vi.fn() },
       logHealth: { error: vi.fn() },
     },
-    frame: { id: `hello-${name}` },
+    frame: { id: "hello-setup" },
     connectParams: {
       client: { id: "openclaw-ios", version: "dev", platform: "test", mode: "backend" },
       role: "operator",
@@ -179,14 +175,10 @@ it.each([false, true])(
       presence.stop();
       await scheduler.stop();
     });
-    const base = createFailedHelloContext(
-      "setup-order",
-      async () => {
-        handoffStarted.resolve();
-        await releaseHandoff.promise;
-      },
-      broadcast,
-    );
+    const base = createFailedHelloContext(async () => {
+      handoffStarted.resolve();
+      await releaseHandoff.promise;
+    }, broadcast);
     const context = {
       ...base,
       handler: {
@@ -253,7 +245,7 @@ it("keeps correlated setup completion uncertain when hello delivery fails", asyn
   });
 
   const broadcast = vi.fn();
-  const context = createFailedHelloContext("setup-send-failure", rejectHello, broadcast);
+  const context = createFailedHelloContext(rejectHello, broadcast);
   const { onHelloDelivered } = context;
   const { close } = context.handler;
 
@@ -285,7 +277,7 @@ it("does not consume a setup bearer after the paired public key is replaced", as
     publicKey: "public-key-original",
   });
   persistPaired({ ...paired, publicKey: "public-key-replacement" });
-  const context = createFailedHelloContext("setup-replaced", async () => undefined);
+  const context = createFailedHelloContext(async () => undefined);
   const { close } = context.handler;
 
   await sendGatewayHello(context as never, state as never, {});
@@ -303,7 +295,7 @@ it.each(["preparation", "transport"] as const)(
     const issued = await issueDeviceBootstrapToken({ profile: bootstrapProfile });
     const verifyParams = await verifyBootstrap(paired, issued.token);
 
-    const context = createFailedHelloContext("generic-send-failure", rejectHello);
+    const context = createFailedHelloContext();
     const { close } = context.handler;
     const state = createBootstrapState(paired, issued.token);
 

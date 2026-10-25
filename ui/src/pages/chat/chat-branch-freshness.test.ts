@@ -19,14 +19,6 @@ function branch(leafEntryId = "original-reply", active = false): SessionBranch {
   return { leafEntryId, headline: "Original reply", messageCount: 2, active };
 }
 
-function withBranches(chatBranches: SessionBranch[]) {
-  return {
-    chatBranches,
-    chatBranchesSessionKey: "agent:main:main",
-    chatBranchesConnectionEpoch: 1,
-  };
-}
-
 function chatEvent(state: ChatPageHost, payload: Record<string, unknown>) {
   handlePageGatewayEvent(state, {
     type: "event",
@@ -93,7 +85,7 @@ describe("chat branch freshness", () => {
     expect(state.chatBranchesSessionKey).toBe("agent:main:main");
   });
 
-  function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
+  function createSessionEventState(branches?: SessionBranch[]) {
     const request = vi.fn().mockResolvedValue({
       messages: [],
       sessionId: "selected-session",
@@ -103,22 +95,16 @@ describe("chat branch freshness", () => {
       client: createTestGatewayClient(request),
       connectionEpoch: 1,
       sessionKey: "agent:main:main",
-      ...overrides,
     });
-    if (!overrides.sessions) {
-      vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
-      vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
-    }
+    vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
+    vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
     const state = {
       ...host,
-      chatBranches: [],
-      chatBranchesSessionKey: null,
-      chatBranchesConnectionEpoch: null,
+      chatBranches: branches ?? [],
+      chatBranchesSessionKey: branches ? host.sessionKey : null,
+      chatBranchesConnectionEpoch: branches ? host.connectionEpoch : null,
       currentSessionId: "selected-session",
       chatMessagesBySession: new Map(),
-      chatVerboseLevel: null,
-      chatStreamStartedAt: null,
-      ...overrides,
     } as unknown as ChatPageHost;
     return { request, state };
   }
@@ -157,9 +143,7 @@ describe("chat branch freshness", () => {
 
   it("keeps unchanged and failed branch reads idle, then publishes recovered branch changes", async () => {
     const original = branch("original-reply", true);
-    const { state } = createSessionEventState({
-      ...withBranches([original]),
-    });
+    const { state } = createSessionEventState([original]);
     const published = observeBranchMenu(state);
     const listBranches = vi
       .mocked(state.sessions.listBranches)
@@ -193,7 +177,7 @@ describe("chat branch freshness", () => {
     async ({ role, historyPending }) => {
       const original = branch();
       const replacement = { ...branch("replacement-reply", true), headline: "Replacement reply" };
-      const { request, state } = createSessionEventState(withBranches([original]));
+      const { request, state } = createSessionEventState([original]);
       const listBranches = vi
         .mocked(state.sessions.listBranches)
         .mockResolvedValue([replacement, original]);
@@ -232,7 +216,7 @@ describe("chat branch freshness", () => {
   it("retires a pre-append branch read and defers hidden-pane refresh until presentation", async () => {
     const original = branch();
     const replacement = { ...original, leafEntryId: "replacement", active: true };
-    const { state } = createSessionEventState(withBranches([original]));
+    const { state } = createSessionEventState([original]);
     const stale = createDeferred<SessionBranch[]>();
     const listBranches = vi
       .mocked(state.sessions.listBranches)

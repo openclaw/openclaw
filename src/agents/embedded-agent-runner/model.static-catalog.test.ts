@@ -2,7 +2,7 @@ import type { ModelCatalogAlias } from "@openclaw/model-catalog-core/model-catal
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
-import { createManifestRecord } from "./model.static-catalog.test-helpers.js";
+import { createManifestRecord, setManifestPlugins } from "./model.static-catalog.test-helpers.js";
 
 const mistralLookup = { provider: "mistral", modelId: "mistral-medium-3-5" };
 
@@ -63,30 +63,6 @@ import {
   resolveManifestModelCatalogProviderAliasMetadata as resolveAlias,
 } from "./model.static-catalog.js";
 
-function setManifestPlugins(plugins: unknown[]) {
-  // Static catalog resolution reads scan metadata first, then loads the manifest
-  // from disk; the mock preserves that two-step contract.
-  const byPluginDir = new Map(
-    plugins.map((plugin) => {
-      const id = (plugin as { id?: string }).id ?? "plugin";
-      return [`/fixtures/${id}`, plugin];
-    }),
-  );
-  manifestMocks.listOpenClawPluginManifestMetadata.mockReturnValue(
-    [...byPluginDir].map(([pluginDir, plugin]) => ({
-      pluginDir,
-      manifest: plugin,
-      origin: (plugin as { origin?: string }).origin,
-    })),
-  );
-  manifestMocks.loadPluginManifest.mockImplementation((pluginDir: string) => {
-    const plugin = byPluginDir.get(pluginDir);
-    return plugin
-      ? { ok: true, manifest: plugin }
-      : { ok: false, error: "missing manifest", manifestPath: `${pluginDir}/openclaw.plugin.json` };
-  });
-}
-
 function createMistralManifestPlugin(overrides?: {
   discovery?: "static" | "refreshable" | "runtime";
   origin?: string;
@@ -130,7 +106,7 @@ beforeEach(() => {
   for (const mock of [...Object.values(manifestMocks), ...Object.values(providerMocks)]) {
     mock.mockReset();
   }
-  setManifestPlugins([]);
+  setManifestPlugins(manifestMocks, []);
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
   manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins: [] });
   providerMocks.resolveActivatableProviderOwnerPluginIds.mockImplementation(
@@ -155,7 +131,7 @@ describe("resolveBundledStaticCatalogModel", () => {
         { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0.4, range: [200_001] },
       ],
     };
-    setManifestPlugins([createMistralManifestPlugin({ cost })]);
+    setManifestPlugins(manifestMocks, [createMistralManifestPlugin({ cost })]);
     expect(
       resolveBundledStaticCatalogModel({
         ...mistralLookup,
@@ -194,7 +170,7 @@ describe("resolveBundledStaticCatalogModel", () => {
       createMistralManifestPlugin({ discovery: "refreshable" }),
       createMistralManifestPlugin({ discovery: "runtime" }),
     ]) {
-      setManifestPlugins([plugin]);
+      setManifestPlugins(manifestMocks, [plugin]);
 
       expect(
         resolveBundledStaticCatalogModel({

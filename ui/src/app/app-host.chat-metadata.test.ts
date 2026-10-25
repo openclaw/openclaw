@@ -73,7 +73,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
       gateway,
       runtimeConfig: {
         state: { configFormDirty: false },
-        refresh: vi.fn(async () => null),
+        refreshDisplay: vi.fn(async () => null),
       },
     } as unknown as ApplicationContext,
   };
@@ -339,6 +339,57 @@ it("refreshes a changed session projection through the catalog owner after expli
   }
 });
 
+it("updates service-tier hints without rereading unchanged session facts", async () => {
+  const { gateway, current, client } = connectedGateway();
+  const observations = [{ requestedTier: "priority", responseTier: "default" }];
+  let fallback = false;
+  const request = current().request.mockImplementation(async (method) =>
+    method === "models.list"
+      ? {
+          models: [
+            {
+              id: "model",
+              name: "Model",
+              provider: "fixture",
+              serviceTierObservations: fallback ? observations : [],
+            },
+          ],
+          sessionModelRevision: "same-selection",
+        }
+      : { commands: [] },
+  );
+  const state = makeChatHost({ client }) as ChatPageHost;
+  state.connected = true;
+  state.sessionKey = "agent:main:current";
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = { context: { gateway } as unknown as ApplicationContext };
+  try {
+    await refreshChatMetadata(state);
+    request.mockClear();
+    for (fallback of [true, false]) {
+      shell.handleGatewayEvent({
+        event: "chat.metadata.changed",
+        payload: {
+          agentId: "main",
+          modelCatalogChanged: true,
+          authChanged: false,
+          commandsChanged: false,
+        },
+      });
+      await refreshChatMetadata(state);
+      expect(state.chatModelCatalog[0]?.serviceTierObservations).toEqual(
+        fallback ? observations : [],
+      );
+    }
+    expect(metadataCalls(request, "models.list")).toHaveLength(2);
+    expect(metadataCalls(request, "chat.metadata")).toHaveLength(0);
+    expect(metadataCalls(request, "sessions.describe")).toHaveLength(0);
+  } finally {
+    retireChatMetadataRequests(state);
+    gateway.stop();
+  }
+});
+
 it.each([
   { event: "config.changed", payload: {}, clearsChoices: false },
   { event: "chat.metadata.changed", payload: { modelSelectionChanged: true }, clearsChoices: true },
@@ -387,8 +438,8 @@ it.each([
         agentSelection: { state: { selectedId: "main" } },
         runtimeConfig: {
           state: { configFormDirty: false, configSnapshot: null },
-          ensureLoaded: vi.fn(async () => null),
-          refresh: vi.fn(async () => null),
+          ensureDisplayLoaded: vi.fn(async () => null),
+          refreshDisplay: vi.fn(async () => null),
         },
       } as unknown as ApplicationContext,
     };
@@ -446,8 +497,8 @@ it("retires chat metadata through config.changed and the Gateway close callback"
     connectionBootstrap,
     runtimeConfig: {
       state: { configFormDirty: false, configSnapshot: null },
-      ensureLoaded: vi.fn(async () => null),
-      refresh: vi.fn(async () => null),
+      ensureDisplayLoaded: vi.fn(async () => null),
+      refreshDisplay: vi.fn(async () => null),
     },
   } as unknown as ApplicationContext;
   const shell = createShellOwner() as unknown as ChatMetadataShell;
@@ -490,22 +541,6 @@ it.each([
     .mockImplementation(() => fresh.promise);
   const client = gateway.snapshot.client;
   assert.ok(client);
-  const context = {
-    config: createShellConfigFixture(),
-    gateway,
-    connectionBootstrap: {
-      reset: vi.fn(),
-      run: (_key: string, task: () => Promise<unknown>) => task(),
-      synchronize: vi.fn(),
-    },
-    runtimeConfig: {
-      state: { configFormDirty: false, configSnapshot: null },
-      ensureLoaded: vi.fn(async () => null),
-      refresh: vi.fn(async () => null),
-    },
-  } as unknown as ApplicationContext;
-  const shell = createShellOwner() as unknown as ChatMetadataShell;
-  shell.runtime = { context };
   const read = () =>
     kind === "auth"
       ? loadModelAuthStatus(client, { agentId: "main" })
@@ -514,7 +549,7 @@ it.each([
   if (transition === "same-client reconnect") {
     current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
     current().testOptions.onHello?.({ ...hello });
-  } else if (transition === "same-client identity") {
+  } else {
     current().testOptions.onEvent?.({
       type: "event",
       event: "presence",
@@ -525,12 +560,10 @@ it.each([
         presence: [{ ts: 1, instanceId: current().instanceId, user: { id: "replacement" } }],
       },
     });
-  } else {
-    shell.handleGatewayEvent({ event: transition, payload: {} });
   }
   const replacement = read();
   stale.resolve(staleResult);
-  if (kind === "catalog" && transition !== "chat.metadata.changed") {
+  if (kind === "catalog") {
     expect(await before).toHaveProperty("name", "AbortError");
   } else {
     expect(await before).toEqual(staleResult);

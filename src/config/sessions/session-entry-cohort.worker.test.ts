@@ -2,9 +2,10 @@ import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareEmbeddedRunSession } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
-import { bindReplyOperationDatabaseAdmission } from "../../auto-reply/reply/reply-turn-database-admission.js";
+import { bindReplyAdmissionRelease } from "../../auto-reply/reply/reply-turn-admission-lifecycle.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import * as readOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createAgentWorkerTestLoaders } from "../../state/openclaw-agent-execution-operations.test-support.js";
@@ -22,6 +23,7 @@ import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcrip
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 async function entryReader(
   database: ReturnType<typeof openOpenClawAgentDatabase>,
@@ -298,12 +300,7 @@ it("prepares bounded facts on one admitted source and refreshes after sibling an
     });
     replaceTranscriptEventsSync(scope, [
       { type: "session", id: "cohort", version: 3, timestamp: 123 },
-      {
-        type: "message",
-        id: "question",
-        parentId: null,
-        message: { role: "user", content: "cohort input" },
-      },
+      messageEvent("question", null, { role: "user", content: "cohort input" }),
     ]);
     const readEntry = await entryReader(database, env);
     const request: SessionEntryCohortRequest = {
@@ -542,16 +539,18 @@ it("prepares the admitted run target with its entry and refuses source loss afte
     replaceSessionEntrySync(scope, { sessionId: "bootstrap", updatedAt: 1 });
     const admission = await loadSessionEntryForAdmission(scope);
     const operation = createTestReplyOperation({ sessionKey, sessionId: "bootstrap" });
-    const bound = bindReplyOperationDatabaseAdmission(
+    bindReplyAdmissionRelease({
       operation,
-      { sessionKey },
-      undefined,
-      admission.databaseClaim,
-    );
+      sessionKey,
+      sessionId: operation.sessionId,
+      admission: undefined,
+      recoveryOwnerLease: undefined,
+      databaseClaim: admission.databaseClaim,
+    });
     const reader = getReplyOperationSessionReader(operation);
     if (!reader) {
-      await admission.databaseClaim.release();
       operation.complete();
+      await waitForReplyRunSuccessorAdmission(operation.key, null);
       throw new Error("Expected an admitted bootstrap reader");
     }
     const controller = new AbortController();
@@ -612,8 +611,11 @@ it("prepares the admitted run target with its entry and refuses source loss afte
     } finally {
       reads.mockRestore();
       requests.mockRestore();
-      await bound.releaseWorkerDatabaseClaim?.();
       operation.complete();
+      expect(await waitForReplyRunSuccessorAdmission(operation.key, null)).toMatchObject({
+        settled: true,
+      });
+      expect(admission.databaseClaim.isCurrent()).toBe(false);
     }
   });
 });

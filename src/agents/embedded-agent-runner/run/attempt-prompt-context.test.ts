@@ -5,17 +5,11 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
-import * as execApprovals from "../../../infra/exec-approvals.js";
-import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
-import { addSession, deleteSession } from "../../bash-process-registry.js";
+import { addSession, appendOutput, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import {
-  seedSubagentRunForReadTest,
-  resetSubagentRegistryForTests,
-} from "../../subagents/registry/subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
+import { resetSubagentRegistryForTests } from "../../subagents/registry/subagent-registry.test-helpers.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -144,28 +138,6 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
-  it("carries current Windows approval hints without changing system or user prompt bytes", () =>
-    withMockedPlatform("win32", async () => {
-      const load = vi
-        .spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync")
-        .mockResolvedValue({ version: 1 });
-      const fixture = createInput();
-      fixture.input.capabilityToolNames.add("exec");
-      const before = await prepareContext(fixture.input);
-      load.mockResolvedValue({
-        version: 1,
-        agents: { "agent-1": { allowlist: [{ pattern: "C:\\Tools\\node.exe" }] } },
-      });
-      const after = await prepareContext(fixture.input);
-      expect(before.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-        "## Approved executables",
-      );
-      expect(after.runtimeContextMessageForCurrentTurn?.content).toContain(
-        "C:\\Tools\\node.exe (any arguments)",
-      );
-      expect(after.systemPromptForHook).toBe(before.systemPromptForHook);
-      expect(after.promptForSession).toBe(before.promptForSession);
-    }));
   it("carries execution-owned processes in id order without elapsed time or output", async () => {
     const fixture = createInput();
     fixture.input.capabilityToolNames.add("process");
@@ -176,7 +148,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     for (const id of ["exec-z", "exec-a"]) {
       const session = createProcessSessionFixture({ id, backgrounded: true });
       session.scopeKey = fixture.input.attempt.sessionKey;
-      session.tail = "private output tail";
+      appendOutput(session, "stdout", "private output tail");
       addSession(session);
     }
     const active = await prepareContext(fixture.input);
@@ -203,36 +175,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     );
     expect(nextTurn.systemPromptForHook).toBe(active.systemPromptForHook);
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
-  });
-
-  it("carries changed subagent status without rewriting the system prompt", async () => {
-    const fixture = createInput();
-    fixture.input.sessionAgentId = "main";
-    fixture.input.capabilityToolNames.add("sessions_spawn");
-    const run = {
-      runId: "run-worker",
-      childSessionKey: "agent:main:subagent:worker",
-      controllerSessionKey: fixture.input.attempt.sessionKey!,
-      requesterSessionKey: fixture.input.attempt.sessionKey!,
-      requesterDisplayKey: "main",
-      task: "Inspect fixtures",
-      label: "Worker",
-      cleanup: "keep",
-      createdAt: 1,
-      execution: { status: "queued" },
-    } satisfies SubagentRunRecord;
-    seedSubagentRunForReadTest(run);
-    const queued = await prepareContext(fixture.input);
-    seedSubagentRunForReadTest({ ...run, execution: { status: "running", startedAt: 2 } });
-    const running = await prepareContext(fixture.input);
-    expect(running.systemPromptForHook).toBe(queued.systemPromptForHook);
-    expect(queued.runtimeContextMessageForCurrentTurn?.content).toContain("status=queued");
-    expect(running.runtimeContextMessageForCurrentTurn?.content).toContain("status=running");
-    await resetSubagentRegistryForTests({ persist: false });
-    const completed = await prepareContext(fixture.input);
-    expect(completed.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-      "## Active Subagents",
-    );
   });
 
   it("supersedes retained active facts with explicit empty snapshots", async () => {

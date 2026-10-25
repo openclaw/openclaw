@@ -1,6 +1,5 @@
 // Level filter tests cover logger filtering by configured log level.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
 import { levelToMinLevel } from "./levels.js";
 
 const { readLoggingConfigMock } = vi.hoisted(() => ({
@@ -14,7 +13,6 @@ vi.mock("./config.js", () => ({
   readLoggingConfig: readLoggingConfigMock,
 }));
 
-let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 let logging: typeof import("./logger.js");
 let consoleLogging: typeof import("./console.js");
 
@@ -26,22 +24,16 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  envSnapshot = captureEnv([
-    "OPENCLAW_TEST_FILE_LOG",
-    "OPENCLAW_TEST_CONSOLE",
-    "OPENCLAW_LOG_LEVEL",
-  ]);
-  delete process.env.OPENCLAW_TEST_FILE_LOG;
-  delete process.env.OPENCLAW_TEST_CONSOLE;
-  delete process.env.OPENCLAW_LOG_LEVEL;
+  vi.stubEnv("OPENCLAW_TEST_FILE_LOG", undefined);
+  vi.stubEnv("OPENCLAW_TEST_CONSOLE", undefined);
+  vi.stubEnv("OPENCLAW_LOG_LEVEL", undefined);
   readLoggingConfigMock.mockClear();
   logging.resetLogger();
   logging.setLoggerOverride(null);
 });
 
 afterEach(() => {
-  envSnapshot?.restore();
-  envSnapshot = undefined;
+  vi.unstubAllEnvs();
   logging.resetLogger();
   logging.setLoggerOverride(null);
   vi.restoreAllMocks();

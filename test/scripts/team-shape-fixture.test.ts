@@ -16,6 +16,9 @@ const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => resetLogger());
 const read = (file: string) => fs.readFileSync(file, "utf8");
 const readJson = (file: string) => JSON.parse(read(file));
+const openDb = (file: string) => new DatabaseSync(file, { readOnly: true });
+const options = (stateDir: string, flags: string) =>
+  parseTeamShapeOptions(["--state-dir", stateDir, ...flags.split(" ")]);
 function expectCounts(db: DatabaseSync, expected: Record<string, number>) {
   for (const [table, n] of Object.entries(expected)) {
     expect(db.prepare(`SELECT count(*) AS n FROM ${table}`).get(), table).toEqual({ n });
@@ -32,6 +35,8 @@ it("rejects unsafe ports and refuses to overwrite existing state", async () => {
     ["--projects", "0", "--worktree-files", "1"],
     ["--projects", "0", "--nested-repository"],
     ["--projects", "0", "--github-options-connected"],
+    ["--cron-announce-last", "--cron", "0"],
+    ["--cron-announce-last", "--sessions", "1", "--runs", "0"],
   ]) {
     expect(() => parseTeamShapeOptions(["--state-dir", "/unused", ...args])).toThrow();
   }
@@ -48,13 +53,10 @@ it("rejects unsafe ports and refuses to overwrite existing state", async () => {
 it("adds bounded long histories and an unchanged tracked inventory with a nested checkout", async () => {
   const stateDir = path.join(temporary.make("team-shape-stress-"), "state");
   const { summary, env } = await generateTeamShapeFixture(
-    parseTeamShapeOptions([
-      "--state-dir",
+    options(
       stateDir,
-      ..."--sessions 2 --runs 0 --approvals 0 --cron 0 --projects 1 --transcript-mib 0 --long-transcript-entries 4 --long-transcript-sessions 1 --worktree-files 5 --nested-repository --github-options-connected".split(
-        " ",
-      ),
-    ]),
+      "--sessions 2 --runs 0 --approvals 0 --cron 0 --projects 1 --transcript-mib 0 --long-transcript-entries 4 --long-transcript-sessions 1 --worktree-files 5 --nested-repository --github-options-connected",
+    ),
   );
   expect(summary).toMatchObject({
     logicalTranscriptBytes: 4 * 1024,
@@ -65,9 +67,7 @@ it("adds bounded long histories and an unchanged tracked inventory with a nested
     nestedRepository: true,
     githubOptionsConnected: true,
   });
-  using agent = new DatabaseSync(path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite"), {
-    readOnly: true,
-  });
+  using agent = openDb(path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite"));
   const rows = agent
     .prepare(
       "SELECT session_id, event_json, event_zstd FROM transcript_events ORDER BY session_id, seq",
@@ -106,7 +106,7 @@ it("adds bounded long histories and an unchanged tracked inventory with a nested
   const { resolveRepositoryIdentity } =
     await import("../../src/agents/worktrees/repository-paths.js");
   const repository = await resolveRepositoryIdentity(worktree);
-  using state = new DatabaseSync(path.join(stateDir, "state/openclaw.sqlite"), { readOnly: true });
+  using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
   expect(state.prepare("SELECT repo_fingerprint FROM worktrees").get()).toEqual({
     repo_fingerprint: repository.fingerprint,
   });
@@ -143,13 +143,10 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
     process.env.GIT_WORK_TREE = sentinel;
     process.env.GIT_INDEX_FILE = path.join(sentinel, "redirected-index");
     const generated = await generateTeamShapeFixture(
-      parseTeamShapeOptions([
-        "--state-dir",
+      options(
         stateDir,
-        ..."--sessions 20 --runs 20 --approvals 3 --cron 2 --projects 1 --transcript-mib 1".split(
-          " ",
-        ),
-      ]),
+        "--sessions 20 --runs 20 --approvals 3 --cron 2 --projects 1 --transcript-mib 1",
+      ),
     );
     expect(process.env === originalEnv).toBe(true);
     expect(generated.env).toMatchObject({
@@ -173,6 +170,7 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
     retainedRuns: 20,
     approvals: 3,
     cronJobs: 2,
+    cronAnnounceLast: false,
     projects: 1,
     githubOptionsConnected: false,
     logicalTranscriptBytes: 1024 * 1024,
@@ -180,10 +178,8 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
   });
   expect(summary.agentDatabaseBytes).toBeGreaterThan(512 * 1024);
   {
-    using agent = new DatabaseSync(at("agents/main/agent/openclaw-agent.sqlite"), {
-      readOnly: true,
-    });
-    using state = new DatabaseSync(at("state/openclaw.sqlite"), { readOnly: true });
+    using agent = openDb(at("agents/main/agent/openclaw-agent.sqlite"));
+    using state = openDb(at("state/openclaw.sqlite"));
     expectCounts(agent, {
       "session_nodes WHERE entry_valid = 1": 20,
       "session_nodes WHERE owner_actor_type = 'human'": 20,
@@ -222,4 +218,46 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
     gateway: { bind: "loopback", port: 40967 },
     cron: { enabled: false },
   });
+});
+
+it("retains settled history and seeds disabled announce/last jobs without delivery routes", async () => {
+  const stateDir = path.join(temporary.make("team-shape-settled-"), "state");
+  const { summary } = await generateTeamShapeFixture(
+    options(
+      stateDir,
+      "--sessions 20 --runs 60 --settled-runs --approvals 0 --cron 40 --cron-announce-last --projects 0 --transcript-mib 0",
+    ),
+  );
+  await flushLogger();
+  expect(summary).toMatchObject({
+    sessionCount: 20,
+    retainedRuns: 60,
+    settledRuns: true,
+    cronJobs: 40,
+    cronAnnounceLast: true,
+    retainedRunStates: { successful: 51, failed: 9, pending: 0, interrupted: 0 },
+  });
+  using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
+  expectCounts(state, {
+    subagent_runs: 60,
+    "subagent_runs WHERE json_extract(payload_json, '$.execution.status') = 'terminal' AND json_extract(payload_json, '$.delivery.status') = 'delivered' AND json_extract(payload_json, '$.cleanupHandled') = 1": 60,
+  });
+  const jobs = state.prepare("SELECT job_json FROM cron_jobs").all();
+  expect(jobs).toHaveLength(40);
+  for (const row of jobs) {
+    expect(JSON.parse(String(row.job_json))).toMatchObject({
+      enabled: false,
+      sessionTarget: "isolated",
+      sessionKey: "agent:main:team-shape-session-1",
+      payload: { kind: "agentTurn", message: expect.stringContaining("Synthetic inspection") },
+      delivery: { mode: "announce", channel: "last" },
+      failureAlert: false,
+    });
+  }
+  using agent = openDb(path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite"));
+  const target = agent
+    .prepare("SELECT archived_at, entry_json FROM session_nodes WHERE session_key = ?")
+    .get("agent:main:team-shape-session-1");
+  expect(target?.archived_at).toBeNull();
+  expect(JSON.parse(String(target?.entry_json))).not.toHaveProperty("deliveryContext");
 });

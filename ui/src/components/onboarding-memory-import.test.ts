@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./onboarding-memory-import-solid.tsx";
@@ -94,11 +95,9 @@ function createContext(
 ) {
   const connected = options.connected ?? true;
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: connected ? client : null,
     phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: {
       auth: {
         role: "operator",
@@ -107,9 +106,7 @@ function createContext(
     } as ApplicationGatewaySnapshot["hello"],
     assistantAgentId: "research",
     sessionKey: "agent:research:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const listeners = new Set<() => void>();
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
@@ -411,6 +408,34 @@ describe("OnboardingMemoryImport", () => {
     element.context = createContext(vi.fn(async () => createPlan()));
     await element.updateComplete;
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
+  it("shows a completed provider while the next import is pending", async () => {
+    const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
+    const request = vi.fn(async (method: string, params?: { providerId?: string }) => {
+      if (method === "migrations.memory.plan") {
+        return createPlan(["codex", "claude"]);
+      }
+      return params?.providerId === "claude"
+        ? await pendingApply.promise
+        : createApplyResult("codex");
+    });
+    const element = await mount(createContext(request));
+    (await waitForAction(element)).click();
+    try {
+      await waitForSolid(() => {
+        expect(request).toHaveBeenCalledTimes(3);
+        expect(element.querySelector("[data-provider-id='codex']")?.textContent).toContain(
+          "Migrated 1, skipped 0",
+        );
+        expect(element.querySelector("[data-provider-id='claude']")?.textContent).toContain(
+          "Importing",
+        );
+      });
+    } finally {
+      pendingApply.resolve(createApplyResult("claude"));
+    }
+    await waitForAction(element, "continue");
   });
 
   it("sets the guard when skipped", async () => {

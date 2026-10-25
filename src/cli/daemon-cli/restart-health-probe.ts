@@ -2,7 +2,11 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  classifyGatewayConnectFailure,
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -26,7 +30,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
-import { sleep } from "../../utils.js";
+import { sleep, tryParseJson } from "../../utils.js";
 import type {
   GatewayPortHealthSnapshot,
   UnavailablePluginHealthSummary,
@@ -78,6 +82,7 @@ export type GatewayReachability = {
   channelRuntimeWarnings?: Array<{ id: string; error: string }>;
   probeError?: string;
   authenticationError?: string;
+  protocolMismatch?: string;
   staleConnection?: GatewayStaleConnectionReason;
 };
 
@@ -89,20 +94,16 @@ type GatewayHttpReadiness = {
 };
 
 function readGatewayFailingChannels(response: { statusCode: number; body: string } | null) {
-  try {
-    const readiness = asOptionalRecord(JSON.parse(response?.body ?? ""));
-    const failing = readiness?.failing;
-    return response?.statusCode === 503 &&
-      readiness?.ready === false &&
-      readiness.coreReady === true &&
-      Array.isArray(failing) &&
-      failing.length > 0 &&
-      failing.every((id): id is string => typeof id === "string" && id.trim().length > 0)
-      ? failing
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const readiness = asOptionalRecord(tryParseJson(response?.body ?? ""));
+  const failing = readiness?.failing;
+  return response?.statusCode === 503 &&
+    readiness?.ready === false &&
+    readiness.coreReady === true &&
+    Array.isArray(failing) &&
+    failing.length > 0 &&
+    failing.every((id): id is string => typeof id === "string" && id.trim().length > 0)
+    ? failing
+    : undefined;
 }
 
 /** Waits for the unauthenticated HTTP(S) readiness contracts reported by service start. */
@@ -300,8 +301,10 @@ export async function confirmGatewayReachable(params: {
   allowHttpVerification?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
+  assertCurrent?: () => void;
 }): Promise<GatewayReachability> {
   params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   const result: GatewayReachability = {
     reachable: false,
     gatewayVersion: null,
@@ -335,6 +338,8 @@ export async function confirmGatewayReachable(params: {
       ...controlAuth,
       tlsFingerprint: target.tlsFingerprint,
       method: "health",
+      assertConnectionCurrent: params.assertCurrent,
+      assertDispatchCurrent: params.assertCurrent,
       scopes: [READ_SCOPE],
       timeoutMs: params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
       ...(params.signal ? { signal: params.signal } : {}),
@@ -355,6 +360,7 @@ export async function confirmGatewayReachable(params: {
     }
   } catch (error) {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const reason = isGatewayProtocolResponseError(error)
       ? error.message
       : isGatewayTransportError(error) && error.code === 1008
@@ -362,6 +368,14 @@ export async function confirmGatewayReachable(params: {
         : undefined;
     if ((reason && isGatewayAuthRejection(reason)) || isGatewayCredentialsRequiredError(error)) {
       result.authenticationError = formatGatewayRestartProbeError(reason ?? error);
+    }
+    // Updates verify with the previous package, so any protocol change between it and the
+    // restarted Gateway rejects this handshake. HTTP identity is protocol-independent.
+    if (
+      isGatewayProtocolResponseError(error) &&
+      readConnectErrorDetailCode(error.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH
+    ) {
+      result.protocolMismatch = formatGatewayRestartProbeError(error);
     }
     // A close frame alone cannot prove a Gateway. Preserve the correlated
     // liveness contract; update verification additionally needs HTTP identity.
@@ -371,7 +385,11 @@ export async function confirmGatewayReachable(params: {
       ((isGatewayAuthRejection(error.message) && error.message !== "device identity required") ||
         (params.allowDeviceIdentityRequired === true &&
           error.message === "device identity required"));
-    if (result.authenticationError && params.allowHttpVerification && configuredProbe) {
+    if (
+      (result.authenticationError || result.protocolMismatch) &&
+      params.allowHttpVerification &&
+      configuredProbe
+    ) {
       result.reachable = false;
       const httpProbe = configuredProbe;
       const request = (pathname: "/startupz" | "/readyz") =>

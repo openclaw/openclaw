@@ -17,6 +17,7 @@ import {
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { trimSessionTranscriptForManualCompact } from "./session-accessor.transcript.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -25,7 +26,7 @@ import * as rewrite from "./session-message-rewrite-domain.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
 import * as reconcile from "./session-transcript-reconcile.js";
-import { createManualCompactRecords } from "./transcript-message.test-support.js";
+import { createManualCompactRecords, messageEvent } from "./transcript-message.test-support.js";
 
 const metadataFault = useSqliteWorkerFault([
   {
@@ -48,16 +49,13 @@ it("commits a bounded next-turn projection after trimming a large compressed tra
       .mockImplementation(() => {});
     replaceTranscriptEventsSync(f.scope, [
       createManualCompactRecords(f.scope.sessionId)[0]!,
-      ...Array.from({ length: 4_100 }, (_, index) => ({
-        type: "message",
-        id: `entry-${index + 1}`,
-        parentId: index === 0 ? null : `entry-${index}`,
-        message: {
+      ...Array.from({ length: 4_100 }, (_, index) =>
+        messageEvent(`entry-${index + 1}`, index === 0 ? null : `entry-${index}`, {
           role: "user",
           content: index === 0 ? "old payload ".repeat(130_000) : `message ${index + 1}`,
           timestamp: index + 1,
-        },
-      })),
+        }),
+      ),
     ]);
     runOpenClawAgentWriteTransaction(
       (database) => reconcileSessionTranscriptIndexInTransaction(database.db, f.scope.sessionId),
@@ -120,6 +118,18 @@ it("trims through the worker and clears accounting without host data SQL", async
       cliSessionIds: { synthetic: "obsolete" },
     });
     replaceTranscriptEventsSync(f.scope, createManualCompactRecords(f.scope.sessionId));
+    const prior = readSessionTranscriptWatermark(f.scope);
+    replaceSessionEntrySync(f.scope, {
+      ...f.read()!,
+      worktree: { id: "adopted", branch: "pr", repoRoot: "/synthetic/current" },
+      priorWorkspace: {
+        worktreeId: "adopted",
+        sessionId: f.scope.sessionId,
+        workspaceDir: "/synthetic/original",
+        fileRoot: "/synthetic/original",
+        through: { generation: prior.generation, maxSeq: 3 },
+      },
+    });
     const sql = observeHostDataSql();
     try {
       await expect(
@@ -139,6 +149,9 @@ it("trims through the worker and clears accounting without host data SQL", async
     expect(entry?.inputTokens).toBeUndefined();
     expect(entry?.totalTokens).toBeUndefined();
     expect(entry?.cliSessionIds).toBeUndefined();
+    const current = readSessionTranscriptWatermark(f.scope);
+    expect(current.generation).not.toBe(prior.generation);
+    expect(entry?.priorWorkspace?.through).toEqual({ generation: current.generation, maxSeq: 1 });
   });
 });
 

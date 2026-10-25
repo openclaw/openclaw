@@ -1,5 +1,6 @@
 /** Owns the execution deadline, approval pauses, and one compaction grace. */
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { createChangeListeners } from "../../../shared/listeners.js";
 import { observeAgentRunApprovalWait } from "../../agent-run-approval-wait.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { log } from "../logger.js";
@@ -35,6 +36,7 @@ export function prepareEmbeddedAttemptTimeout(input: {
   let deadline: ExecutionDeadline = { kind: "unlimited" };
   let abortTimer: NodeJS.Timeout | undefined;
   let abortWarnTimer: NodeJS.Timeout | undefined;
+  const deadlineChanged = createChangeListeners();
   const approvalWait = observeAgentRunApprovalWait(attempt);
   const clearTimers = () => {
     deadline = { kind: "closed" };
@@ -42,10 +44,13 @@ export function prepareEmbeddedAttemptTimeout(input: {
     runAbortSignal.removeEventListener("abort", clearTimers);
     clearTimeout(abortTimer);
     clearTimeout(abortWarnTimer);
+    deadlineChanged.publish();
+    deadlineChanged.clear();
   };
   const timeout = {
     getRunAbortDeadlineAtMs: () =>
       deadline.kind === "bounded" ? deadline.deadlineAtMs : undefined,
+    onRunAbortDeadlineChanged: deadlineChanged.subscribe,
     clearTimers,
   };
   if (runAbortSignal.aborted) {
@@ -112,6 +117,7 @@ export function prepareEmbeddedAttemptTimeout(input: {
       Math.max(1, delayMs),
     );
     attempt.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: armed.deadlineAtMs });
+    deadlineChanged.publish();
   };
 
   approvalWait.onChange = (pending) => {
@@ -125,6 +131,7 @@ export function prepareEmbeddedAttemptTimeout(input: {
       };
       clearTimeout(abortTimer);
       attempt.onAttemptDeadlineChanged?.({ kind: "unlimited" });
+      deadlineChanged.publish();
     } else if (!pending && deadline.kind === "paused") {
       scheduleAbortTimer(deadline.remainingMs, deadline.compactionGraceUsed);
     }

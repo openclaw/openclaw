@@ -8,7 +8,10 @@ import {
 } from "../../../../src/agents/bash-process-registry.js";
 import { resetProcessRegistryForTests } from "../../../../src/agents/bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "../../../../src/agents/bash-tools.js";
-import { getProcessSupervisor } from "../../../../src/process/supervisor/index.js";
+import {
+  fullGatewayExec,
+  nodeCommand,
+} from "../../../../src/agents/bash-tools.lifecycle.test-support.js";
 import { withinTest } from "../../../helpers/promise.js";
 
 type ExecTool = ReturnType<typeof createExecTool>;
@@ -39,20 +42,6 @@ afterEach(async () => {
   await cleanupProcesses?.();
   cleanupProcesses = undefined;
 });
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-  return result.content.find((part) => part.type === "text")?.text ?? "";
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
-}
-
-function nodeEvalCommand(source: string): string {
-  const node = shellQuote(process.execPath);
-  const script = shellQuote(source);
-  return process.platform === "win32" ? `& ${node} -e ${script}` : `${node} -e ${script}`;
-}
 
 function requireSession(result: ToolResult): { pid: number; sessionId: string } {
   const details = result.details as ProcessDetails;
@@ -122,36 +111,25 @@ async function pollTerminal(action: ProcessAction, sessionId: string) {
   return terminal;
 }
 
-test("OpenClaw executes and controls the complete real process lifecycle", async ({
+test("real child kill errors stay nonterminal until cancellation disposes its listeners", async ({
   signal,
   onTestFinished,
 }) => {
   resetProcessRegistryForTests();
   const scopeKey = `agent:qa:exec-lifecycle-${process.pid}`;
-  const execOptions = {
-    host: "gateway",
-    security: "full",
-    ask: "off",
+  const execTool = createExecTool({
+    ...fullGatewayExec,
     notifyOnExit: false,
     scopeKey,
-  } as const;
-  const execTool = createExecTool({ ...execOptions, allowBackground: true, backgroundMs: 20 });
-  const foregroundExecTool = createExecTool({ ...execOptions, allowBackground: false });
+    allowBackground: true,
+    backgroundMs: 20,
+  });
   const action = processActions(createProcessTool({ scopeKey }));
   const cleanupPids = new Set<number>();
   const track = (result: ToolResult) => {
     const session = requireSession(result);
     cleanupPids.add(session.pid);
     return session;
-  };
-  const finish = async (session: ReturnType<typeof track>, expected: object, forget = true) => {
-    expect((await pollTerminal(action, session.sessionId)).details).toMatchObject(expected);
-    expect((await action("clear", session.sessionId)).details).toMatchObject({
-      status: "completed",
-    });
-    if (forget) {
-      cleanupPids.delete(session.pid);
-    }
   };
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () =>
@@ -173,81 +151,6 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
   onTestFinished(cleanup);
 
   try {
-    await expect(
-      getProcessSupervisor().spawn({
-        mode: "child",
-        argv: ["/definitely/not/a/real-openclaw-command"],
-        env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: "0" },
-        runId: `missing-command-${process.pid}`,
-      }),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-
-    const foregroundCommand =
-      process.platform === "win32"
-        ? 'Write-Output -NoNewline shell-route; Write-Output -NoNewline "|$env:OPENCLAW_SHELL"'
-        : 'printf shell-route && printf "|%s" "$OPENCLAW_SHELL"';
-    const foreground = await foregroundExecTool.execute("foreground-shell", {
-      command: foregroundCommand,
-    });
-    expect(foreground.details).toMatchObject({ status: "completed", exitCode: 0 });
-    expect(textOf(foreground)).toContain("shell-route|exec");
-
-    const background = await execTool.execute("explicit-background", {
-      command: nodeEvalCommand(
-        "console.log('background-start');setTimeout(() => console.log('background-end'), 350);",
-      ),
-      background: true,
-    });
-    const backgroundSession = track(background);
-
-    const listed = await action("list");
-    expect((listed.details as ProcessDetails).sessions).toContainEqual(
-      expect.objectContaining({ sessionId: backgroundSession.sessionId, status: "running" }),
-    );
-
-    await expect
-      .poll(async () => {
-        const log = await action("log", backgroundSession.sessionId);
-        return textOf(log);
-      }, POLL_OPTIONS)
-      .toContain("background-start");
-
-    await finish(backgroundSession, {
-      status: "completed",
-      exitCode: 0,
-      aggregated: expect.stringContaining("background-end"),
-    });
-
-    const yielded = await execTool.execute("yielded-background", {
-      command: nodeEvalCommand("setTimeout(() => console.log('yielded-terminal'), 350);"),
-      yieldMs: 20,
-    });
-    await finish(track(yielded), {
-      status: "completed",
-      exitCode: 0,
-      aggregated: expect.stringContaining("yielded-terminal"),
-    });
-
-    const timedOut = await foregroundExecTool.execute("foreground-timeout", {
-      command: nodeEvalCommand("setTimeout(() => {}, 5000);"),
-      timeoutSeconds: 0.05,
-    });
-    expect(timedOut.details).toMatchObject({
-      status: "failed",
-      exitReason: "overall-timeout",
-      timedOut: true,
-    });
-    expect(textOf(timedOut)).toContain("Command timed out after 0.05 seconds.");
-
-    const pty = await foregroundExecTool.execute("foreground-pty", {
-      command: nodeEvalCommand(
-        'process.stdout.write("pty-route:" + Boolean(process.stdout.isTTY) + ":" + (process.env.OPENCLAW_SHELL || ""));',
-      ),
-      pty: true,
-    });
-    expect(pty.details).toMatchObject({ status: "completed", exitCode: 0 });
-    expect(textOf(pty)).toContain("pty-route:true:exec");
-
     const spawnedChildren = new Map<number, ChildProcess>();
     // oxlint-disable-next-line typescript/unbound-method -- Forward with each child's receiver via originalEmit.call(this, ...).
     const originalEmit = ChildProcess.prototype.emit;
@@ -263,7 +166,7 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     });
     let killTarget: ToolResult;
     try {
-      const childCommand = nodeEvalCommand("setInterval(() => {}, 1000);");
+      const childCommand = nodeCommand("setInterval(() => {}, 1000);");
       killTarget = await execTool.execute("kill-background", {
         command: process.platform === "win32" ? childCommand : `exec ${childCommand}`,
         background: true,
@@ -297,7 +200,13 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
 
     const killed = await action("kill", killedSession.sessionId);
     expect(killed.details).toMatchObject({ status: "completed" });
-    await finish(killedSession, { status: "completed", exitReason: "manual-cancel" }, false);
+    expect((await pollTerminal(action, killedSession.sessionId)).details).toMatchObject({
+      status: "completed",
+      exitReason: "manual-cancel",
+    });
+    expect((await action("clear", killedSession.sessionId)).details).toMatchObject({
+      status: "completed",
+    });
     await waitForExitedPids([killedSession.pid], signal);
     expect(pidExists(killedSession.pid)).toBe(false);
     for (const event of ["error", "exit", "close"]) {

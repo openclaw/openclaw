@@ -1,7 +1,7 @@
+import { randomUUID } from "node:crypto";
 // Load the real Gateway/model runtime during collection, outside the proof deadline.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -11,6 +11,7 @@ import { rawDataToString } from "../../packages/gateway-client/src/websocket-dat
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   acquireGatewayTestWebSocket,
   closeGatewayTestWebSocket,
@@ -23,6 +24,7 @@ import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../agents/restart-recovery-prompt.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { createGatewayCrashLoopRecovery } from "../cli/gateway-cli/crash-loop-recovery.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -36,6 +38,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
+import {
+  beginGatewayBootLifecycle,
+  completeGatewayBootLifecycle,
+} from "../infra/gateway-boot-lifecycle.js";
 import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -44,7 +50,6 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
@@ -85,11 +90,15 @@ async function interruptInput(
   await receipt.settled?.();
 }
 
-it.for(["steer", "followup"] as const)(
-  "rechecks captured chat operators and resumes their predecessor before %s replay",
+it.for([
+  { queueMode: "steer", quarantine: false },
+  { queueMode: "followup", quarantine: false },
+  { queueMode: "followup", quarantine: true },
+] as const)(
+  "rechecks captured chat operators before $queueMode replay (quarantine: $quarantine)",
   { timeout: 90_000 },
-  async (queueMode) => {
-    const runPrefix = `replay-${queueMode}`;
+  async ({ queueMode, quarantine }) => {
+    const runPrefix = `replay-${queueMode}${quarantine ? "-quarantine" : ""}`;
     const state = await createOpenClawTestState({
       label: "chat-replay-authority",
       env: {
@@ -122,7 +131,7 @@ it.for(["steer", "followup"] as const)(
           response.writeHead(200).end('{"data":[]}');
           return;
         }
-        const body = await readProviderBody(request);
+        const body = await readRequestText(request);
         const payload = JSON.parse(body) as {
           input: Array<{
             type?: string;
@@ -172,13 +181,19 @@ it.for(["steer", "followup"] as const)(
     let startupProbe: WebSocket | undefined;
     const recoveryStarted = createDeferred();
     const releaseRecovery = createDeferred();
+    const quarantineObserved = createDeferred();
+    let recoverBoot: ReturnType<typeof createGatewayCrashLoopRecovery> | undefined;
     const recover = deliveryRecovery.recoverSessionSendDeliveries;
     const recoverySpy = vi
       .spyOn(deliveryRecovery, "recoverSessionSendDeliveries")
-      .mockImplementation(async (...args) => {
+      .mockImplementation((...args) => {
         recoveryStarted.resolve();
-        await releaseRecovery.promise;
-        return recover(...args);
+        const recovery = releaseRecovery.promise.then(() => recover(...args));
+        return {
+          initial: recovery.then((progress) => progress.initial),
+          pending: new Map(),
+          settled: recovery.then((progress) => progress.settled),
+        };
       });
     try {
       const provider = buildMockOpenAiResponsesProvider(
@@ -394,6 +409,21 @@ it.for(["steer", "followup"] as const)(
         cfg: config,
         configPath: state.configPath,
         token: "synthetic-replay-token",
+        ...(quarantine
+          ? {
+              channelAutostartSuppression: {
+                reason: "crash-loop-breaker" as const,
+                message: "Synthetic interrupted-input quarantine",
+              },
+              tryRecoverChannelAutostartSuppression: async (signal?: AbortSignal) => {
+                const pausedUntil = await expectDefined(recoverBoot, "boot recovery")(signal);
+                if (pausedUntil !== undefined) {
+                  quarantineObserved.resolve();
+                }
+                return pausedUntil;
+              },
+            }
+          : {}),
       });
       const client = gateway.client;
       const expectRunOk = async (runId: string) => {
@@ -441,12 +471,52 @@ it.for(["steer", "followup"] as const)(
           error: { code: "UNAVAILABLE", retryable: true },
         });
         expect(requests).toEqual([]);
+        if (quarantine) {
+          // Real persisted crashes leave a short quarantine window after fixture startup.
+          const now = Date.now();
+          for (let i = 0; i < 3; i++) {
+            const failedAt = now - 295_000 + i;
+            const boot = await beginGatewayBootLifecycle(process.env, failedAt);
+            await completeGatewayBootLifecycle(
+              boot.id,
+              { outcome: "startup_failed" },
+              process.env,
+              failedAt,
+            );
+          }
+          const boot = await beginGatewayBootLifecycle(process.env, now - 290_000);
+          expect(boot.decision.tripped).toBe(true);
+          let activeBootId = boot.id;
+          recoverBoot = createGatewayCrashLoopRecovery({
+            bootId: activeBootId,
+            getActiveBootId: () => activeBootId,
+            onRecovered: (bootId) => {
+              activeBootId = bootId;
+            },
+          });
+        }
       } finally {
         if (startupProbe) {
           await closeGatewayTestWebSocket(startupProbe);
           startupProbe = undefined;
         }
         releaseRecovery.resolve();
+      }
+      if (quarantine) {
+        await quarantineObserved.promise;
+        const { fixture } = expectDefined(
+          cases.find(({ change }) => change === "unchanged"),
+          "quarantined operator fixture",
+        );
+        expect(startedRuns).toEqual([]);
+        expect((await listSessionPendingInputs(fixture.target)).items).toMatchObject([
+          { runId: `${runPrefix}-peer`, state: "interrupted" },
+          { runId: `${runPrefix}-unchanged`, state: "interrupted" },
+        ]);
+        await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-recovery-predecessor`), {
+          timeout: 30_000,
+        });
+        await expectRunOk(`${runPrefix}-recovery-predecessor`);
       }
       await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-peer`), {
         timeout: 30_000,

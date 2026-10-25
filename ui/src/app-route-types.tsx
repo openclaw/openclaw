@@ -9,40 +9,18 @@ export type SolidRouteProps<Data = unknown> = {
 };
 
 type ForwardedRouteProps<Data> = { routeData: Data | undefined; loaderPending: boolean };
-type SolidPageOptions<Id extends RouteId, Context, Data> = Omit<
-  PageDefinition<Id, Context, unknown, Data>,
-  "id" | "path" | "component"
-> & { header?: boolean };
-type SolidPageDefinition<Id extends RouteId, Context, Data> = PageDefinition<
-  Id,
-  Context,
-  { header: boolean; renderSolid: Component<SolidRouteProps<Data>> },
-  Data
->;
 
 /** Keep simple page renderers behind their route's existing lazy boundary. */
 export function defineSolidPage<Id extends RouteId, Context = unknown, Data = unknown>(
   id: Id,
-  load: () => Promise<Component>,
-  options?: SolidPageOptions<Id, Context, Data>,
-): SolidPageDefinition<Id, Context, Data>;
-export function defineSolidPage<Id extends RouteId, Context, Data>(
-  id: Id,
   load: () => Promise<Component<ForwardedRouteProps<Data>>>,
-  options?: SolidPageOptions<Id, Context, Data>,
-): SolidPageDefinition<Id, Context, Data>;
-export function defineSolidPage<Id extends RouteId, Context = unknown, Data = unknown>(
-  id: Id,
-  load: () => Promise<Component | Component<ForwardedRouteProps<Data>>>,
-  options: SolidPageOptions<Id, Context, Data> = {},
-): SolidPageDefinition<Id, Context, Data> {
-  const { header = true, ...route } = options;
+  options: Omit<PageDefinition<Id, Context, unknown, Data>, "id" | "path" | "component"> = {},
+): PageDefinition<Id, Context, { renderSolid: Component<SolidRouteProps<Data>> }, Data> {
   return definePage({
     ...routePageSpec(id),
-    ...route,
+    ...options,
     component: () =>
       load().then((Page) => ({
-        header,
         renderSolid: (props: SolidRouteProps<Data>) => (
           <Page routeData={props.data} loaderPending={props.loaderPending} />
         ),

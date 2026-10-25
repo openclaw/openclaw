@@ -29,7 +29,8 @@ import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import { createRpcSourceForTest, claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
-const { createQueuedReservation, requestContext, launchedRunIds } = useQueuedCollectorFixture();
+const { createQueuedReservation, requestContext, requestOptions, launchedRunIds } =
+  useQueuedCollectorFixture();
 
 async function reserve(name: string, profile: string) {
   const client = roleClient("view", profile);
@@ -44,16 +45,14 @@ async function reserve(name: string, profile: string) {
 }
 
 function abort(client: ReturnType<typeof roleClient>, key: string, context = requestContext()) {
-  const respond = vi.fn();
+  const options = requestOptions(context, "sessions.abort", { key });
   const done = handleGatewayRequest({
-    req: { type: "req", id: "collector-stop", method: "sessions.abort", params: { key } },
-    context,
+    ...options,
+    req: { ...options.req, params: options.params },
     client,
-    respond,
-    isWebchatConnect: () => false,
     extraHandlers: { "sessions.abort": sessionAbortHandlers["sessions.abort"]! },
   });
-  return { respond, done };
+  return { respond: options.respond, done };
 }
 
 it.each(["active", "queued", "pending-chat"] as const)(
@@ -78,17 +77,16 @@ it.each(["active", "queued", "pending-chat"] as const)(
     const descendantSession = descendant
       ? await loadGatewaySessionEntryReadOnlyAsync(descendant.entry.childSessionKey)
       : undefined;
-    const source = (runId: string, sessionId: string) =>
+    const source = (
+      runId: string,
+      sessionId: string,
+      sessionKey = expectDefined(descendant, "descendant").entry.childSessionKey,
+      storeScope = expectDefined(descendantSession, "descendant session").storePath,
+      phase: "waiting" | "preparing" = "waiting",
+    ) =>
       createRpcSourceForTest(
         { requester: { connectionId: client.connId } },
-        {
-          runId,
-          sessionId,
-          phase: "waiting",
-          agentId: "main",
-          storeScope: expectDefined(descendantSession, "descendant session").storePath,
-          sessionKey: expectDefined(descendant, "descendant").entry.childSessionKey,
-        },
+        { runId, sessionId, phase, agentId: "main", storeScope, sessionKey },
       );
     const descendantSource = descendant
       ? source("prior-descendant-input", "previous-descendant-session")
@@ -101,16 +99,12 @@ it.each(["active", "queued", "pending-chat"] as const)(
       : undefined;
     const context = requestContext();
     const oldRunId = "prior-incarnation-input";
-    const old = createRpcSourceForTest(
-      { requester: { connectionId: client.connId } },
-      {
-        runId: oldRunId,
-        storeScope: loaded.storePath,
-        phase: kind === "queued" ? "waiting" : "preparing",
-        sessionKey: entry.childSessionKey,
-        agentId: "main",
-        sessionId: "previous-child-session",
-      },
+    const old = source(
+      oldRunId,
+      "previous-child-session",
+      entry.childSessionKey,
+      loaded.storePath,
+      kind === "queued" ? "waiting" : "preparing",
     );
     if (kind === "active") {
       await claimRpcSourceForTest(old);

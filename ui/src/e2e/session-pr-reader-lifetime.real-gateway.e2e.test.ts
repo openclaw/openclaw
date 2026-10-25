@@ -460,9 +460,9 @@ suite.define(() => {
                   pane
                     .locator(".chat-pane__workspace-chip")
                     .filter({ visible: true })
-                    .getAttribute("title"),
+                    .getAttribute("aria-label"),
                 )
-                .toBe(replacement.root);
+                .toBe("Workspace actions for replacement-workspace");
             };
             await expect
               .poll(() => prLink(original).getAttribute("href"))

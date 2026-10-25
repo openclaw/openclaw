@@ -11,6 +11,7 @@ import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-ss
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { sendChatAndWait } from "./gateway-chat-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -101,21 +102,7 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
       const sessionKey = `agent:main:continuation-${randomUUID()}`;
       const turn = async (message: string): Promise<string> => {
         const requestStart = requests.length;
-        const started = await client.request<{ runId: string; status: string }>("chat.send", {
-          sessionKey,
-          message,
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        });
-        expect(started.status).toBe("started");
-        // Keep the client's deadline beyond the server-side wait on loaded runners.
-        await expect(
-          client.request<{ status: string }>(
-            "agent.wait",
-            { runId: started.runId, timeoutMs: 30_000 },
-            { timeoutMs: 35_000 },
-          ),
-        ).resolves.toMatchObject({ status: "ok" });
+        await sendChatAndWait(client, sessionKey, message);
         const sent = requests.slice(requestStart);
         expect(sent).toHaveLength(1);
         return sent[0]!;

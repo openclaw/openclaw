@@ -27,7 +27,7 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
   ["irc/src/monitor", "channelIngress: access", coreBuilder],
   [
     "line/src/bot-message-context",
-    "channelIngress: params.channelIngress",
+    "channelIngress,",
     injected,
     "getLineRuntime().channel.inbound.buildContext",
   ],
@@ -52,7 +52,7 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
     "getSlackRuntime().channel.inbound.buildContext",
   ],
   ["sms/src/inbound", "channelIngress: auth", "params.channelRuntime.inbound.buildContext"],
-  ["synology-chat/src/inbound-event", "channelIngress,", "rt.channel.inbound.buildContext"],
+  ["synology-chat/src/gateway-runtime", "channelIngress,", "rt.channel.inbound.buildContext"],
   [
     "telegram/src/bot-message-context.session",
     "channelIngress,",

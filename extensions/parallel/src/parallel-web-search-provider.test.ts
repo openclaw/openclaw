@@ -185,6 +185,22 @@ describe("parallel web search provider", () => {
     ).resolves.toMatchObject({ error: "invalid_base_url" });
     expect(endpointMockState.calls).toHaveLength(1);
   });
+  it.each([
+    "ftp://fixture-user:fixture-url-password@proxy.example/parallel?api_key=fixture-query-token",
+    "fixture-user:fixture-url-password@proxy.example:invalid/parallel?api_key=fixture-query-token",
+    "custom://fixture-user:fixture-url-password@proxy.example/parallel?api_key=fixture-query-token",
+  ])("redacts credentials from rejected custom endpoint %s", async (baseUrl) => {
+    const result = await paidTool({
+      parallel: { apiKey: "par-secret", baseUrl },
+    }).execute({ search_queries: ["invalid credential-bearing endpoint"] });
+    expect(result.message).not.toContain("fixture-url-password");
+    expect(result.message).not.toContain("fixture-query-token");
+    expect(result).toMatchObject({
+      error: "invalid_base_url",
+      message: expect.stringContaining("plugins.entries.parallel.config.webSearch.baseUrl"),
+    });
+    expect(endpointMockState.calls).toHaveLength(0);
+  });
   it("normalizes bounded request fields before sending them", async () => {
     enqueueJson();
     await paidTool().execute({

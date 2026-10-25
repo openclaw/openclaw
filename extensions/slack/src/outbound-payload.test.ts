@@ -1,8 +1,15 @@
 // Slack tests cover outbound payload plugin behavior.
 import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/channel-contract-testing";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { slackSetupPlugin } from "./channel.setup.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import { createSlackOutboundPayloadHarness as createHarness } from "./outbound-payload.test-harness.js";
 import type { SlackReplyBlockSegment } from "./reply-blocks.js";
@@ -54,45 +61,51 @@ function renderedPresentationSegments(payload: ReplyPayload | null | undefined) 
   const value = (
     payload?.channelData?.slack as { renderedPresentationSegments?: unknown } | undefined
   )?.renderedPresentationSegments;
-  if (!Array.isArray(value)) {
-    throw new Error("Expected rendered Slack presentation segments");
-  }
+  assert(Array.isArray(value), "Expected rendered Slack presentation segments");
   return value as SlackReplyBlockSegment[];
 }
 
-async function renderPresentation(payload: ReplyPayload, text = ""): Promise<ReplyPayload> {
+async function renderPresentation(
+  payload: ReplyPayload,
+  text = "",
+  cfg: OpenClawConfig = {},
+): Promise<ReplyPayload> {
   const rendered = await slackOutbound.renderPresentation?.({
     payload,
     presentation: payload.presentation!,
-    ctx: { cfg: {}, to: "C12345", text, payload },
+    ctx: { cfg, to: "C12345", text, payload },
   });
-  if (!rendered) {
-    throw new Error("Expected rendered Slack presentation");
-  }
+  assert(rendered, "Expected rendered Slack presentation");
   return rendered;
 }
 
-async function renderPayloadForSend(payload: ReplyPayload, text = ""): Promise<ReplyPayload> {
+async function renderPayloadForSend(
+  payload: ReplyPayload,
+  text = "",
+  cfg: OpenClawConfig = {},
+): Promise<ReplyPayload> {
   const { presentation: _presentation, ...payloadForSend } = await renderPresentation(
     payload,
     text,
+    cfg,
   );
   return payloadForSend;
 }
 
 async function sendThroughRealSlack(params: {
   payload: ReplyPayload;
+  cfg?: OpenClawConfig;
   rejectFirstNativeBlocks?: boolean;
   renderText?: string;
   deliveryQueueId?: string;
   onPlatformSendDispatch?: () => Promise<void>;
 }) {
-  const payload = await renderPayloadForSend(params.payload, params.renderText);
+  const cfg = params.cfg ?? { channels: { slack: { botToken: "xoxb-test" } } };
+  const payload = await renderPayloadForSend(params.payload, params.renderText, cfg);
   const client = createSlackSendTestClient();
   if (params.rejectFirstNativeBlocks) {
     client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
   }
-  const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
   const capturedSendOptions: Array<NonNullable<Parameters<typeof sendMessageSlack>[2]>> = [];
   const sendSlack: typeof sendMessageSlack = async (to, text, opts) => {
     capturedSendOptions.push(opts);
@@ -182,6 +195,138 @@ function createMixedPresentationPayload(): ReplyPayload {
 }
 
 describe("slackOutbound sendPayload", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackSetupPlugin }]),
+    );
+  });
+  afterEach(() => resetPluginRuntimeStateForTest());
+
+  it.each<{ name: string; payload: ReplyPayload; expected: string[] }>([
+    {
+      name: "represented authored Markdown",
+      payload: {
+        text: "**Overview**",
+        presentation: { blocks: [{ type: "text", text: "*Overview*" }] },
+      },
+      expected: ["*Overview*"],
+    },
+    {
+      name: "distinct code whitespace",
+      payload: {
+        text: "`a  b`",
+        channelData: {
+          slack: {
+            blocks: [{ type: "section", text: { type: "mrkdwn", text: "`a b`" } }],
+          },
+        },
+      },
+      expected: ["`a b`", "`a  b`"],
+    },
+  ])("renders $name once through the sender", async ({ payload, expected }) => {
+    const { client } = await sendThroughRealSlack({
+      payload,
+      renderText: payload.text,
+    });
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+    expect(postedSlackMessage(client, 0).blocks?.map((block) => block.text?.text)).toEqual(
+      expected,
+    );
+  });
+
+  it("uses the selected account's table policy when recognizing presented text", async () => {
+    const authored = "| Name | Value |\n| --- | --- |\n| Beta | 2 |";
+    const presented = "*Beta*\n• Value: 2";
+    const { client } = await sendThroughRealSlack({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            defaultAccount: "work",
+            markdown: { tables: "off" },
+            accounts: { work: { markdown: { tables: "bullets" } } },
+          },
+        },
+      },
+      payload: { text: authored, presentation: { blocks: [{ type: "text", text: presented }] } },
+      renderText: authored,
+    });
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+    expect(postedSlackMessage(client, 0).blocks?.map((block) => block.text?.text)).toEqual([
+      presented,
+    ]);
+  });
+
+  it.each([
+    {
+      name: "bold",
+      authored: "**Overview**",
+      text: "Overview",
+      style: { bold: true },
+      append: false,
+      rendered: "*Overview*",
+    },
+    {
+      name: "italic",
+      authored: "*Overview*",
+      text: "Overview",
+      style: { italic: true },
+      append: false,
+      rendered: "_Overview_",
+    },
+    {
+      name: "strike",
+      authored: "~~Overview~~",
+      text: "Overview",
+      style: { strike: true },
+      append: false,
+      rendered: "~Overview~",
+    },
+    {
+      name: "code",
+      authored: "`Overview`",
+      text: "Overview",
+      style: { code: true },
+      append: false,
+      rendered: "`Overview`",
+    },
+    {
+      name: "literal markers",
+      authored: "**Overview**",
+      text: "*Overview*",
+      style: {},
+      append: true,
+      rendered: "*Overview*",
+    },
+    {
+      name: "distinct code whitespace",
+      authored: "`a  b`",
+      text: "a b",
+      style: { code: true },
+      append: true,
+      rendered: "`a  b`",
+    },
+  ])(
+    "compares native rich text without losing $name",
+    async ({ authored, text, style, append, rendered }) => {
+      const native = {
+        type: "rich_text",
+        elements: [{ type: "rich_text_section", elements: [{ type: "text", text, style }] }],
+      };
+      const { client } = await sendThroughRealSlack({
+        payload: { text: authored, channelData: { slack: { blocks: [native] } } },
+        renderText: authored,
+      });
+      expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+      expect(postedSlackMessage(client, 0).blocks).toEqual([
+        native,
+        ...(append
+          ? [{ type: "section", text: { type: "mrkdwn", text: rendered, verbatim: true } }]
+          : []),
+      ]);
+    },
+  );
+
   it("keeps Markdown-authored text placed in its compiled section", async () => {
     const payload: ReplyPayload = {
       text: "**Overview**",

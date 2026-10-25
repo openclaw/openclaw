@@ -1,11 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { AssistantMessageEventStream, type ToolCall } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
-import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
-import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
 import { Agent } from "../../../plugin-sdk/agent-core.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
@@ -13,8 +9,9 @@ import { makeAssistantMessageFixture } from "../../test-helpers/assistant-messag
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
-import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
+import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
+import { createSettledStreamResult } from "./attempt-stream.test-helpers.js";
 import { resolveSettledToolTerminalContinuation } from "./incomplete-turn-recovery.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
@@ -26,7 +23,6 @@ type ResultInput = {
   terminal?: EmbeddedRunAttemptResult["terminal"];
   currentAttemptCompletedAssistant?: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
   hasSuccessfulModelResponse?: boolean;
-  heartbeatToolResponse?: EmbeddedRunAttemptResult["heartbeatToolResponse"];
   messagesSnapshot?: EmbeddedRunAttemptResult["messagesSnapshot"];
   latestMcpAppChannelView?: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
   toolMetas?: EmbeddedRunAttemptResult["toolMetas"];
@@ -53,21 +49,11 @@ function createResultFixture(params: ResultInput = {}) {
     beforeAgentRunBlockedBy: undefined,
     trajectoryEndRecorded: false,
   };
-  const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = {
-    promptError: null,
-    promptErrorSource: null,
-    timedOutDuringCompaction: false,
-    compactionOccurredThisAttempt: false,
-    sessionIdUsed: "session-1",
+  const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = createSettledStreamResult({
     messagesSnapshot: params?.messagesSnapshot ?? [],
-    lastAssistant: undefined,
-    currentAttemptAssistant: undefined,
     currentAttemptCompletedAssistant: params?.currentAttemptCompletedAssistant,
     successfulNestedToolNames: params?.successfulNestedToolNames ?? [],
-    attemptUsage: undefined,
-    lastCallUsage: undefined,
-    promptCache: undefined,
-  };
+  });
   const prompt: Parameters<typeof completeEmbeddedAttemptResult>[2] = {
     preflightRecovery: undefined,
     contextBudgetStatus: undefined,
@@ -81,7 +67,6 @@ function createResultFixture(params: ResultInput = {}) {
     answerSegments: undefined,
     assistantTexts: [...(params?.assistantTexts ?? [])],
     didSendViaMessagingTool: () => params?.didSendViaMessagingTool ?? false,
-    getHeartbeatToolResponse: () => params?.heartbeatToolResponse,
     getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
     getMessagingToolSentMediaUrls: () => params?.messagingToolSentMediaUrls ?? [],
     getPendingToolMediaReply: () => params?.pendingToolMediaReply,
@@ -131,14 +116,6 @@ function completeFixture({ input, settled, prompt }: ReturnType<typeof createRes
 
 function completeResult(params?: ResultInput) {
   return completeFixture(createResultFixture(params));
-}
-
-function heartbeatPayloads(result: ReturnType<typeof completeResult>) {
-  return buildPayloads({
-    isHeartbeatTrigger: true,
-    assistantTexts: result.assistantTexts,
-    heartbeatToolResponse: result.heartbeatToolResponse,
-  });
 }
 
 function textAssistant(
@@ -405,57 +382,6 @@ describe("attempt result projection", () => {
       hadPotentialSideEffects: true,
       replaySafe: false,
     });
-  });
-
-  it.each([false, true])("keeps heartbeat carryover scoped to its run (fresh=%s)", (fresh) => {
-    const carryover = createAttemptCarryover();
-    const publicResponse = {
-      outcome: "done" as const,
-      notify: fresh,
-      summary: "The task reached its completion condition.",
-      notificationText: "The monitored task is complete.",
-    };
-    const scratch = "Private monitor notes: completion checked; no follow-up needed.";
-    const providerFailure = {
-      kind: "failed" as const,
-      source: "prompt" as const,
-      error: Object.assign(new Error("529 overloaded"), { status: 529 }),
-    };
-    carryover.apply(
-      completeResult({
-        heartbeatToolResponse: { ...publicResponse, scratch },
-        terminal: fresh ? { kind: "ok" } : providerFailure,
-      }),
-    );
-    const completed = completeResult({
-      assistantTexts: [fresh ? "Still running." : "Retry fallback."],
-    });
-    if (fresh) {
-      createAttemptCarryover().apply(completed);
-    } else {
-      carryover.apply(completeResult({ terminal: providerFailure }));
-      carryover.apply(completed);
-    }
-    const payloads = heartbeatPayloads(completed);
-    expect(payloads).toHaveLength(1);
-    if (fresh) {
-      expect(payloads[0]?.text).toBe("Still running.");
-      expect(selectHeartbeatToolResponse(payloads)).toBeUndefined();
-      expect(
-        getReplyPayloadMetadata(expectDefined(payloads[0], "fresh-run payload"))
-          ?.heartbeatScratchProposal,
-      ).toBeUndefined();
-      return;
-    }
-    expect(payloads[0]?.text).toBe(HEARTBEAT_TOKEN);
-    const selected = expectDefined(
-      selectHeartbeatToolResponse(payloads),
-      "expected the carried heartbeat response",
-    );
-    expect(selected.response).toEqual(publicResponse);
-    expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(scratch);
-    expect(JSON.stringify(payloads)).not.toContain(scratch);
-    expect(JSON.stringify(payloads)).not.toContain("Retry fallback.");
   });
 
   it("keeps completed client tool calls in reserved source order", () => {

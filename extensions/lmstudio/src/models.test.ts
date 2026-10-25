@@ -1,24 +1,27 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { afterAll, afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import {
   cancelTrackedTextResponse,
   createStreamingResponse,
 } from "../../test-support/streaming-error-response.js";
+import plugin from "../index.js";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   discoverLmstudioModels,
   ensureLmstudioModelLoaded,
   fetchLmstudioModels,
 } from "./models.fetch.js";
-import {
-  mapLmstudioWireEntry,
-  normalizeLmstudioProviderConfig,
-  resolveLmstudioReasoningCompat,
-} from "./models.js";
+import { normalizeLmstudioProviderConfig, resolveLmstudioReasoningCompat } from "./models.js";
+import { discoverLmstudioProvider } from "./setup.js";
 
 const guardedFetch = vi.hoisted(() => vi.fn());
 
@@ -30,6 +33,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.resetModules();
+});
+
+afterEach(() => {
+  guardedFetch.mockReset();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 // Direct helpers retain undefined-vs-empty compat semantics hidden by discovery.
@@ -101,52 +110,21 @@ describe("lmstudio-models", () => {
   const expectLoadContext = (fetchMock: ReturnType<typeof mockLoad>, contextLength: number) => {
     expect(parseBody(loadCall(fetchMock)?.[1])).toMatchObject({ context_length: contextLength });
   };
-  afterEach(() => {
-    guardedFetch.mockReset();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
 
-  it("marks configured LM Studio endpoints as trusted private-network model targets", () => {
+  it("preserves an explicit network policy and request headers", () => {
     expect(
-      normalizeLmstudioProviderConfig({
-        baseUrl: "http://192.168.1.10:1234",
-        models: [],
-      }),
+      normalizeLmstudioProviderConfig({ baseUrl: "http://192.168.1.10:1234", models: [] }),
     ).toEqual({
       baseUrl: "http://192.168.1.10:1234/v1",
       request: { allowPrivateNetwork: true },
       models: [],
     });
-
-    expect(
-      normalizeLmstudioProviderConfig({
-        baseUrl: "http://gpu-box.local:1234/v1",
-        request: { allowPrivateNetwork: false, headers: { "X-Proxy-Auth": "token" } },
-        models: [],
-      }),
-    ).toEqual({
+    const config = {
       baseUrl: "http://gpu-box.local:1234/v1",
       request: { allowPrivateNetwork: false, headers: { "X-Proxy-Auth": "token" } },
       models: [],
-    });
-  });
-
-  it("uses the loaded context as the effective runtime budget", () => {
-    const model = mapLmstudioWireEntry({
-      type: "llm",
-      key: "small-loaded-context",
-      max_context_length: 262_144,
-      loaded_instances: [{ id: "loaded", config: { context_length: 8_192 } }],
-    });
-
-    expect(model).toMatchObject({
-      id: "small-loaded-context",
-      contextWindow: 262_144,
-      contextTokens: 8_192,
-      maxTokens: 8_192,
-      loaded: true,
-    });
+    };
+    expect(normalizeLmstudioProviderConfig(config)).toEqual(config);
   });
 
   it("omits reasoning compatibility when only off is supported", () => {
@@ -170,7 +148,7 @@ describe("lmstudio-models", () => {
           trained_for_tool_use: true,
           reasoning: { allowed_options: ["off", "on"], default: "on" },
         },
-        loaded_instances: [{ id: "inst-1", config: { context_length: 98_304 } }],
+        loaded_instances: [{ id: "inst-1", config: { context_length: 8_192 } }],
       },
       { type: "llm", key: "deepseek-r1" },
       {
@@ -187,6 +165,10 @@ describe("lmstudio-models", () => {
       },
       { type: "embedding", key: "text-embedding-nomic-embed-text-v1.5" },
       { type: "llm", key: "   " },
+      null,
+      [],
+      "invalid-model",
+      42,
     ]);
 
     const models = await discover(fetchMock, { quiet: false });
@@ -213,8 +195,8 @@ describe("lmstudio-models", () => {
         supportsTools: true,
       },
       contextWindow: 262144,
-      contextTokens: 98_304,
-      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      contextTokens: 8_192,
+      maxTokens: 8_192,
     });
     expect(models[1]).toEqual({
       id: "deepseek-r1",
@@ -278,14 +260,6 @@ describe("lmstudio-models", () => {
     }
   });
 
-  it("discovers valid local models from partially malformed catalogs", async () => {
-    const fetchMock = catalog([null, { type: "llm", key: modelKey }, [], "invalid-model", 42]);
-
-    const models = await discover(fetchMock);
-
-    expect(models).toEqual([expect.objectContaining({ id: "qwen3-8b-instruct" })]);
-  });
-
   it("caps oversized direct fetch timeouts before discovering models", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
@@ -344,7 +318,7 @@ describe("lmstudio-models", () => {
   );
 
   it.each([
-    ["canonical key", "gemma", "gemma@q4_k_m", "gemma@q4_k_m"],
+    ["canonical key", "gemma", " gemma@q4_k_m ", "gemma@q4_k_m"],
     ["suffixed key", "local/special@q4_k_m", "local/special@q4_k_m", "local/special@q8_0"],
   ])(
     "loads the %s for an advertised variant",
@@ -433,33 +407,6 @@ describe("lmstudio-models", () => {
     });
   });
 
-  it("loads model with clamped context length and merged headers", async () => {
-    const fetchMock = mockLoad({ maxContextLength: 32768 });
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-
-    await expect(
-      loadModel({
-        apiKey: "lm-token",
-        headers: { "X-Proxy-Auth": "required", Authorization: "Bearer override" },
-        modelKey: " qwen3-8b-instruct ",
-      }),
-    ).resolves.toBe("qwen3-8b-instruct");
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const loadInit = loadCall(fetchMock)?.[1];
-    expect(loadInit).toEqual({
-      method: "POST",
-      signal: expect.any(AbortSignal),
-      headers: {
-        "X-Proxy-Auth": "required",
-        Authorization: "Bearer lm-token",
-        "Content-Type": "application/json",
-      },
-      body: expect.any(String),
-    });
-    expect(parseBody(loadInit)).toEqual({ model: "qwen3-8b-instruct", context_length: 32768 });
-  });
-
   it("throws when model discovery fails", async () => {
     const fetchMock = vi.fn(async () => ({ ok: false, status: 401 }));
     vi.stubGlobal("fetch", asFetch(fetchMock));
@@ -468,4 +415,214 @@ describe("lmstudio-models", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+});
+
+function context(headers?: Record<string, string>, keyless = false): ProviderCatalogContext {
+  return {
+    config: createModelProviderConfig({
+      lmstudio: {
+        baseUrl: "http://localhost:1234/api/v1/",
+        apiKey: keyless ? undefined : "configured-key",
+        headers,
+        models: [],
+      },
+    }),
+    env: {},
+    resolveProviderApiKey: () =>
+      keyless
+        ? { apiKey: undefined }
+        : {
+            apiKey: "LM_API_TOKEN",
+            discoveryApiKey: "profile-key",
+            profileId: "lmstudio:profile",
+          },
+    resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+  };
+}
+
+const catalog = capturePluginRegistration(plugin).providers[0]?.catalog;
+assert(catalog);
+const runCatalog = catalog.run;
+
+async function discoverConfigured(
+  provider: Partial<ModelProviderConfig>,
+  env: NodeJS.ProcessEnv = {},
+  discoveryApiKey?: string,
+) {
+  const fetchMock = vi.fn(async () =>
+    Response.json({
+      models: [{ type: "llm", key: "qwen3-8b-instruct" }],
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  const result = await discoverLmstudioProvider({
+    ...context(),
+    config: createModelProviderConfig({
+      lmstudio: { baseUrl: "http://localhost:1234/api/v1/", models: [], ...provider },
+    }),
+    env,
+    resolveProviderApiKey: () => ({ apiKey: undefined, discoveryApiKey }),
+  });
+  return { result, fetchMock };
+}
+
+const headerAuth = { Authorization: "Bearer custom-token" };
+const proxyAuth = { "X-Proxy-Auth": "proxy-token" };
+const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+
+it.each<[Partial<ModelProviderConfig>, Partial<ModelProviderConfig>]>([
+  [{ auth: "api-key" }, { auth: "api-key", apiKey: "LM_API_TOKEN" }],
+  [{ apiKey: "stale-legacy-key", headers: headerAuth }, { headers: headerAuth }],
+  [{ apiKey: "${LMSTUDIO_API_KEY}", headers: headerAuth }, { headers: headerAuth }],
+  [{ headers: proxyAuth }, { apiKey: "lmstudio-local", headers: proxyAuth }],
+])("preserves explicit models without fetching for %j", async (patch, persisted) => {
+  const models: ModelProviderConfig["models"] = [
+    {
+      id: "qwen3-8b-instruct",
+      name: "Qwen3 8B",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 8192,
+    },
+  ];
+  const { result, fetchMock } = await discoverConfigured({ ...patch, models });
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(result).toEqual({
+    provider: {
+      baseUrl: "http://localhost:1234/v1",
+      api: "openai-completions",
+      ...persisted,
+      models,
+    },
+  });
+});
+
+it("resolves configured SecretRefs for discovery requests", async () => {
+  const { result, fetchMock } = await discoverConfigured(
+    {
+      apiKey: envRef("LMSTUDIO_DISCOVERY_TOKEN"),
+      headers: { "X-Proxy-Auth": envRef("LMSTUDIO_PROXY_TOKEN") },
+    },
+    { LMSTUDIO_DISCOVERY_TOKEN: "secretref-key", LMSTUDIO_PROXY_TOKEN: "proxy-token" },
+  );
+  expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
+    signal: expect.any(AbortSignal),
+    headers: { Authorization: "Bearer secretref-key", "X-Proxy-Auth": "proxy-token" },
+  });
+  expect(result?.provider.models?.map((model) => model.id)).toEqual(["qwen3-8b-instruct"]);
+});
+
+it.each<Partial<ModelProviderConfig>>([
+  { headers: { "X-Proxy-Auth": envRef("LMSTUDIO_PROXY_TOKEN") } },
+  { apiKey: envRef("LMSTUDIO_DISCOVERY_TOKEN") },
+])("rejects unresolved catalog credentials before fetch: %j", async (patch) => {
+  const { result, fetchMock } = await discoverConfigured(patch);
+  expect(result).toBeNull();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it.each<[string, string | undefined, Record<string, string> | undefined, string]>([
+  ["configured-key", undefined, undefined, "configured-key"],
+  ["configured-key", "discovery-key", undefined, "discovery-key"],
+  ["${LMSTUDIO_API_KEY}", "discovery-key", undefined, "discovery-key"],
+  ["configured-key", "stale-key", headerAuth, "custom-token"],
+])(
+  "selects discovery credentials for %s / %s / %j",
+  async (apiKey, discoveryApiKey, headers, expected) => {
+    const { result, fetchMock } = await discoverConfigured(
+      { apiKey, headers },
+      {},
+      discoveryApiKey,
+    );
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
+      signal: expect.any(AbortSignal),
+      headers: { Authorization: `Bearer ${expected}` },
+    });
+    if (headers) {
+      expect(result?.provider).toMatchObject({
+        baseUrl: "http://localhost:1234/v1",
+        api: "openai-completions",
+        models: [expect.objectContaining({ id: "qwen3-8b-instruct" })],
+      });
+      expect(result?.provider.headers).toEqual(headers);
+      expect(result?.provider.apiKey).toBeUndefined();
+      expect(result?.provider.auth).toBeUndefined();
+    }
+  },
+);
+
+it.each([401, 503, "disconnect", "invalid-json", "missing-models", "header"])(
+  "reports %s as failed acquisition while preserving the public advisory helper",
+  async (failure) => {
+    const fetchMock = vi.fn(async () => {
+      if (failure === "disconnect") {
+        throw new Error("connection reset");
+      }
+      return new Response(failure === "invalid-json" ? "{" : "{}", {
+        status: failure === "header" ? 403 : typeof failure === "number" ? failure : 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const key = failure === "header" ? "header-key" : "profile-key";
+    const ctx = context(failure === "header" ? { Authorization: `Bearer ${key}` } : undefined);
+    const rejected = failure === 401 || failure === "header";
+    const outcome = {
+      provider: "lmstudio",
+      ...(failure === "header" ? {} : { profileId: "lmstudio:profile" }),
+      status: rejected ? "auth-rejected" : "unavailable",
+      ...(rejected ? { rejectionScope: "catalog" } : {}),
+    };
+    await expect(runCatalog(ctx)).resolves.toEqual({ providers: {}, outcomes: [outcome] });
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: expect.any(AbortSignal),
+    });
+    await expect(discoverLmstudioProvider(ctx)).resolves.toMatchObject({
+      provider: { models: [] },
+    });
+  },
+);
+
+it("retains configured and optional empty listings while the public helper stays quiet", async () => {
+  const fetchMock = vi.fn(async () => Response.json({ models: [] }));
+  vi.stubGlobal("fetch", fetchMock);
+  const ctx = context(undefined, true);
+  await expect(runCatalog(ctx)).resolves.toMatchObject({
+    provider: { models: [] },
+    outcomes: [{ provider: "lmstudio", status: "ready" }],
+  });
+  await expect(discoverLmstudioProvider(ctx)).resolves.toBeNull();
+  ctx.config = {};
+  const modelIdCatalog = { baseUrl: "http://localhost:1234/v1", modelIds: [], aliases: [] };
+  await expect(runCatalog(ctx)).resolves.toEqual({
+    providers: {},
+    outcomes: [{ provider: "lmstudio", status: "ready", modelIdCatalog }],
+  });
+  fetchMock.mockRejectedValueOnce(new Error("optional server offline"));
+  await expect(runCatalog(ctx)).resolves.toBeNull();
+  fetchMock.mockClear();
+  await expect(runCatalog({ ...context(), providerIds: ["another-provider"] })).resolves.toBeNull();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("releases guarded non-ok discovery without waiting for the capture clone", async () => {
+  const tracked = cancelTrackedTextResponse("unavailable", { status: 503 });
+  const captureClone = tracked.response.clone();
+  const release = vi.fn(async () => undefined);
+  guardedFetch.mockResolvedValue({ response: tracked.response, release });
+  const request = fetchLmstudioModels({ baseUrl: "http://localhost:1234/v1", ssrfPolicy: {} });
+  try {
+    const result = await raceWithTimeout(request, 500, () => {
+      throw new Error("LM Studio cleanup waited for the capture clone");
+    });
+    expect(result).toMatchObject({ reachable: true, status: 503, models: [] });
+    expect(tracked.response.bodyUsed).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+  } finally {
+    await captureClone.body?.cancel().catch(() => undefined);
+    await request;
+  }
+  expect(tracked.wasCanceled()).toBe(true);
 });

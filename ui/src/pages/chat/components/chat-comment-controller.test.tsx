@@ -17,6 +17,22 @@ import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
 import { removeChatSelectionPopup } from "./chat-selection-popup.tsx";
 
 const payloads = new Set<string>();
+const annotation = (
+  comment = "Original comment",
+  sessionKey = "agent:main:main",
+  text = "Selected passage",
+) => ({ text, comment, sessionKey, start: 0, end: text.length });
+const comment = (id: string, value = annotation()): ChatAttachment => ({
+  id,
+  mimeType: "text/plain",
+  selectionAnnotation: value,
+});
+const file = (id: string): ChatAttachment => ({
+  id,
+  mimeType: "text/plain",
+  fileName: "notes.txt",
+  dataUrl: "data:text/plain;base64,bm90ZXM=",
+});
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -41,17 +57,7 @@ afterEach(() => {
 });
 
 async function mountComments(additional: ChatAttachment[] = []) {
-  const attachment = createChatSelectionAttachment(
-    {
-      text: "Selected passage",
-      comment: "Original comment",
-      sessionKey: "agent:main:main",
-      start: 0,
-      end: 16,
-    },
-    {},
-    0,
-  )!;
+  const attachment = createChatSelectionAttachment(annotation(), {}, 0)!;
   let attachments: ChatAttachment[] = [attachment, ...additional];
   for (const item of attachments) {
     payloads.add(item.id);
@@ -93,8 +99,10 @@ async function mountComments(additional: ChatAttachment[] = []) {
   )!;
   document.body.append(card);
   flush();
-  const edit = () =>
+  const edit = async () => {
     composer.querySelector<HTMLButtonElement>('button[aria-label="Edit comment 1"]')!.click();
+    await waitForSolid(() => expect(input()).not.toBeNull());
+  };
   const input = () =>
     document.querySelector<HTMLTextAreaElement>(".chat-annotation-editor textarea");
   const save = () =>
@@ -124,17 +132,7 @@ describe("comment actions outside the transcript", () => {
       container,
       createChatProps({
         attachments: [
-          {
-            id: "detached-transcript-comment",
-            mimeType: "text/plain",
-            selectionAnnotation: {
-              text: "Selected passage",
-              comment: "Original comment",
-              sessionKey: "main",
-              start: 0,
-              end: 16,
-            },
-          },
+          comment("detached-transcript-comment", annotation("Original comment", "main")),
         ],
         onAttachmentsChange,
       }),
@@ -163,7 +161,7 @@ describe("comment actions outside the transcript", () => {
       action = (event as CustomEvent<ChatCommentAction>).detail;
     });
 
-    fixture.edit();
+    await fixture.edit();
 
     expect(action).toMatchObject({ id: fixture.attachment.id, action: "edit" });
     expect(action?.anchor).toBe(trigger);
@@ -173,17 +171,10 @@ describe("comment actions outside the transcript", () => {
   it.each(["open", "closed", "disconnected"] as const)(
     "restores focus to the next comment delete button only while its preview remains open (%s)",
     async (presentation) => {
-      const second: ChatAttachment = {
-        id: "second-comment",
-        mimeType: "text/plain",
-        selectionAnnotation: {
-          text: "Another passage",
-          comment: "Another comment",
-          sessionKey: "agent:main:main",
-          start: 0,
-          end: 15,
-        },
-      };
+      const second = comment(
+        "second-comment",
+        annotation("Another comment", "agent:main:main", "Another passage"),
+      );
       const fixture = await mountComments([second]);
       const preview = fixture.composer.querySelector<HTMLElement>(".chat-comment-preview")!;
       const nextDelete = fixture.composer.querySelector<HTMLButtonElement>(
@@ -218,17 +209,7 @@ describe("comment actions outside the transcript", () => {
   it("keeps an editor across draft renders and retires it when composition is disabled", async () => {
     const container = createComposerContainer();
     document.body.append(container);
-    const attachment: ChatAttachment = {
-      id: "rendered-comment",
-      mimeType: "text/plain",
-      selectionAnnotation: {
-        text: "Selected passage",
-        comment: "In-progress edit",
-        sessionKey: "main",
-        start: 0,
-        end: 16,
-      },
-    };
+    const attachment = comment("rendered-comment", annotation("In-progress edit", "main"));
     const props = createChatProps({ loading: true, attachments: [attachment] });
     renderChatPropsInto(container, props);
     const controller = container.querySelector<HTMLElement>("openclaw-chat-comment-controller")!;
@@ -239,7 +220,11 @@ describe("comment actions outside the transcript", () => {
         detail: { action: "edit", id: attachment.id },
       }),
     );
-    const editor = document.querySelector<HTMLTextAreaElement>(".chat-annotation-editor textarea")!;
+    const editor = await waitForSolid(() => {
+      const input = document.querySelector<HTMLTextAreaElement>(".chat-annotation-editor textarea");
+      expect(input).not.toBeNull();
+      return input!;
+    });
     expect(editor.value).toBe("In-progress edit");
     editor.value = "A draft that must survive";
 
@@ -259,7 +244,7 @@ describe("comment actions outside the transcript", () => {
 
   it("edits and deletes staged comments without a built-in transcript, releasing replaced payloads", async () => {
     const fixture = await mountComments();
-    fixture.edit();
+    await fixture.edit();
     expect(fixture.input()?.value).toBe("Original comment");
     fixture.input()!.value = "Revised comment";
     fixture.save().click();
@@ -276,13 +261,8 @@ describe("comment actions outside the transcript", () => {
   });
 
   it("keeps overflowing edits correctable and counts only the replacement toward the frame budget", async () => {
-    const file: ChatAttachment = {
-      id: "retained-file",
-      mimeType: "text/plain",
-      fileName: "notes.txt",
-      dataUrl: "data:text/plain;base64,bm90ZXM=",
-    };
-    const fixture = await mountComments([file]);
+    const retainedFile = file("retained-file");
+    const fixture = await mountComments([retainedFile]);
     const originalPayload = getChatAttachmentDataUrl(fixture.attachment)!;
     const originalBytes = Buffer.from(originalPayload.split(",")[1]!, "base64").byteLength;
     fixture.update({
@@ -296,12 +276,12 @@ describe("comment actions outside the transcript", () => {
       },
     });
     flush();
-    fixture.edit();
+    await fixture.edit();
     fixture.input()!.value = "Original comment!";
     fixture.save().click();
     flush();
     expect(fixture.input()?.value).toBe("Original comment!");
-    expect(fixture.attachments()).toEqual([fixture.attachment, file]);
+    expect(fixture.attachments()).toEqual([fixture.attachment, retainedFile]);
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBe(originalPayload);
     await waitForSolid(() =>
       expect(fixture.toast.querySelector(".app-toast__message")?.textContent).toBe(
@@ -315,39 +295,28 @@ describe("comment actions outside the transcript", () => {
     expect(fixture.input()).toBeNull();
     expect(fixture.attachments()).toMatchObject([
       { selectionAnnotation: { comment: "Replaced comment" } },
-      file,
+      retainedFile,
     ]);
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBeNull();
-    expect(getChatAttachmentDataUrl(file)).toBe(file.dataUrl);
+    expect(getChatAttachmentDataUrl(retainedFile)).toBe(retainedFile.dataUrl);
   });
 
   it("removes all current-session comments while retaining other attachments and their payloads", async () => {
     const createComment = (sessionKey: string) =>
       createChatSelectionAttachment(
-        {
-          text: "Another passage",
-          comment: "Keep its context",
-          sessionKey,
-          start: 0,
-          end: 15,
-        },
+        annotation("Keep its context", sessionKey, "Another passage"),
         {},
         0,
       )!;
     const second = createComment("agent:main:main");
     const otherSession = createComment("agent:main:other");
-    const file: ChatAttachment = {
-      id: "ordinary-file",
-      mimeType: "text/plain",
-      fileName: "notes.txt",
-      dataUrl: "data:text/plain;base64,bm90ZXM=",
-    };
-    const fixture = await mountComments([second, file, otherSession]);
-    fixture.edit();
+    const ordinaryFile = file("ordinary-file");
+    const fixture = await mountComments([second, ordinaryFile, otherSession]);
+    await fixture.edit();
     fixture.composer
       .querySelector<HTMLButtonElement>('button[aria-label="Remove all comments"]')!
       .click();
-    expect(fixture.attachments()).toEqual([file, otherSession]);
+    expect(fixture.attachments()).toEqual([ordinaryFile, otherSession]);
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBeNull();
     expect(getChatAttachmentDataUrl(second)).toBeNull();
     await fixture.toast.updateComplete;
@@ -360,7 +329,7 @@ describe("comment actions outside the transcript", () => {
     "retires an open editor and rejects its detached Save control when %s",
     async (reason) => {
       const fixture = await mountComments();
-      fixture.edit();
+      await fixture.edit();
       fixture.input()!.value = "Retired edit";
       const save = fixture.save();
       if (reason === "disabled") {
@@ -389,7 +358,7 @@ describe("comment actions outside the transcript", () => {
     fixture.controller.remove();
     fixture.card.prepend(fixture.controller);
     flush();
-    fixture.edit();
+    await fixture.edit();
     expect(fixture.input()).not.toBeNull();
     fixture.signalOwner.abort();
     expect(fixture.input()).toBeNull();
@@ -397,7 +366,7 @@ describe("comment actions outside the transcript", () => {
 
   it("keeps same-scope editors open and transfers abort ownership when the read signal changes", async () => {
     const fixture = await mountComments();
-    fixture.edit();
+    await fixture.edit();
     fixture.update({ props: { ...fixture.view().props, draft: "A new draft" } });
     flush();
     expect(fixture.input()).not.toBeNull();
@@ -406,7 +375,7 @@ describe("comment actions outside the transcript", () => {
     fixture.update({ props: { ...fixture.view().props, readSignal: nextOwner.signal } });
     flush();
     expect(fixture.input()).toBeNull();
-    fixture.edit();
+    await fixture.edit();
     fixture.signalOwner.abort();
     expect(fixture.input()).not.toBeNull();
     nextOwner.abort();

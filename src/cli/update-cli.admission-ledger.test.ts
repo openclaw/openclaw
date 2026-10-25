@@ -11,6 +11,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
+import { ExpectedCliError } from "./failure-output.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -464,14 +465,19 @@ describe("update-cli", () => {
   it.each([
     { name: "update channel", run: () => update.invokeUpdateCli({ channel: "" }) },
     { name: "finalization channel", run: () => update.updateFinalizeCommand({ channel: "" }) },
-  ])("rejects an explicitly empty $name before mutation", async ({ run }) => {
+  ])("rejects an explicitly empty $name before mutation", async ({ name, run }) => {
     const runsBefore = update.listUpdateRuns();
-    await run();
-
-    expect(update.defaultRuntime.error).toHaveBeenCalledWith(
-      '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")',
-    );
-    expect(update.defaultRuntime.exit).toHaveBeenCalledWith(1);
+    const message = '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")';
+    if (name === "finalization channel") {
+      const failure = await run().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ExpectedCliError);
+      expect(failure).toMatchObject({ humanOutput: message, machineOutput: message });
+      expectNoSideEffects(update.defaultRuntime.error, update.defaultRuntime.exit);
+    } else {
+      await run();
+      expect(update.defaultRuntime.error).toHaveBeenCalledWith(message);
+      expect(update.defaultRuntime.exit).toHaveBeenCalledWith(1);
+    }
     expect(update.listUpdateRuns()).toEqual(runsBefore);
     expectNoSideEffects(
       cleanupStaleManagedServiceUpdateHandoffs,

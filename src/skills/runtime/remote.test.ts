@@ -215,7 +215,7 @@ describe("skills-remote", () => {
       recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
       const before = getSkillsSnapshotVersion(workspaceDir);
 
-      await probe(nodeId, cfg, { timeoutMs: 10 });
+      await probe(nodeId, cfg);
 
       expect(invokeCalls).toEqual([command]);
       expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
@@ -246,7 +246,7 @@ describe("skills-remote", () => {
     recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
     const before = getSkillsSnapshotVersion(workspaceDir);
 
-    await probe(nodeId, cfg, { timeoutMs: 10 });
+    await probe(nodeId, cfg);
 
     expect(invokeCalls).toEqual([]);
     expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
@@ -280,7 +280,7 @@ describe("skills-remote", () => {
     } as unknown as NodeRegistry);
     recordRemoteNodeInfo(testRemoteSession(nodeId, { connId, displayName: "Remote Mac" }));
 
-    await probe(nodeId, cfg, { timeoutMs: 10 });
+    await probe(nodeId, cfg);
 
     expect(connectivityCalls).toEqual(["conn-old", "conn-new"]);
     expect(invokeCalls).toEqual(["system.which"]);
@@ -298,7 +298,7 @@ describe("skills-remote", () => {
     let second: Promise<void> | undefined;
     const completed = vi.fn();
     const refresh = (readinessSignal: AbortSignal) =>
-      probe(nodeId, cfg, { timeoutMs: 10, readinessSignal }).then(completed);
+      probe(nodeId, cfg, { readinessSignal }).then(completed);
     const invoke = vi.fn(async () => {
       probeStarted.resolve();
       await releaseProbe.promise;
@@ -640,7 +640,7 @@ describe("skills-remote", () => {
     recordRemoteMacWithSystemWhich(nodeId);
     const before = getSkillsSnapshotVersion(workspaceDir);
 
-    await probe(nodeId, cfg, { timeoutMs: 10 });
+    await probe(nodeId, cfg);
 
     expect(invokeCalls).toEqual(["system.which"]);
     expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);

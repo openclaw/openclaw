@@ -16,6 +16,59 @@ export function registerCopilotCleanupTests({
   makeParams: (overrides?: Pick<Params, "onAgentEvent">) => Params;
   requireSession: (sdk: copilot.FakeSdk) => copilot.FakeSession;
 }) {
+  it("joins detached background compaction before deleting its fresh native session", async () => {
+    const compacted = copilot.createAttemptGate();
+    const sdk = copilot.makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
+        session.emit("session.compaction_start", {});
+        void compacted.wait().then(() => {
+          session.emit("session.compaction_complete", { success: true });
+          session.emit("session.idle", {});
+        });
+        return copilot.makeAssistantMessageEvent("done");
+      });
+    });
+    const pool = copilot.makeFakePool(sdk);
+    const attempt = copilot.runCopilotAttempt(
+      { ...makeParams(), sessionPersistence: "detached" },
+      { pool },
+    );
+    try {
+      await copilot.awaitAttemptStage(compacted.entered, attempt);
+      expect(sdk.client.deleteSession).not.toHaveBeenCalled();
+      expect(pool.release).not.toHaveBeenCalled();
+    } finally {
+      compacted.release();
+    }
+    expect((await attempt).terminal.kind).toBe("ok");
+    expect(requireSession(sdk).disconnect).toHaveBeenCalledOnce();
+    expect(sdk.client.deleteSession).toHaveBeenCalledWith(requireSession(sdk).sessionId);
+    expect(pool.release).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the primary failure when detached native deletion also fails", async () => {
+    const primary = new Error("synthetic send failure");
+    const cleanupFailure = new Error("synthetic deletion failure");
+    const sdk = copilot.makeFakeSdk((session) => {
+      session.sendAndWait.mockRejectedValueOnce(primary);
+    });
+    sdk.client.deleteSession.mockRejectedValueOnce(cleanupFailure);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const pool = copilot.makeFakePool(sdk);
+    const result = await copilot.runCopilotAttempt(
+      { ...makeParams(), sessionPersistence: "detached" },
+      { pool },
+    );
+    const { promptError } = copilot.projectAgentRunAttemptTerminal(result.terminal);
+    expect(promptError).toBe(primary);
+    expect(warning).toHaveBeenCalledWith(
+      "[copilot-attempt] detached session cleanup failed after primary error",
+      cleanupFailure,
+    );
+    expect(pool.release).toHaveBeenCalledOnce();
+  });
+
   it.each(["auth", "proxy"] as const)("cleans up pre-session %s failures", async (stage) => {
     const controller = new AbortController();
     const callerAbort = vi.fn();

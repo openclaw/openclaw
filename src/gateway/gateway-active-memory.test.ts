@@ -6,10 +6,9 @@ import { describe, expect, it, onTestFailed } from "vitest";
 import { GatewayClient } from "../../packages/gateway-client/src/index.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
-  BUILD_STAMP_FILE,
-  resolveGitHead,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata.mts";
+  createFixtureRequest,
+  verifyBuiltGatewayHead,
+} from "../../test/helpers/gateway-built-fixture.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -68,22 +67,7 @@ describe("Gateway Active Memory", () => {
         async ({ signal, verifyCleanup, createTempDir }) => {
           signal.throwIfAborted();
           const repoRoot = process.cwd();
-          const head = resolveGitHead({ cwd: repoRoot });
-          expect(head).toMatch(/^[0-9a-f]{40}$/u);
-          // Fail before the process helper can rebuild shared dist or choose source.
-          await fs.access(path.join(repoRoot, "dist/index.js"));
-          signal.throwIfAborted();
-          for (const [file, field] of [
-            [BUILD_STAMP_FILE, "head"],
-            [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
-            ["build-info.json", "commit"],
-          ] as const) {
-            const metadata = JSON.parse(
-              await fs.readFile(path.join(repoRoot, "dist", file), "utf8"),
-            ) as Record<string, unknown>;
-            signal.throwIfAborted();
-            expect(metadata[field], file).toBe(head);
-          }
+          await verifyBuiltGatewayHead(repoRoot, signal);
           signal.throwIfAborted();
           const home = createTempDir("openclaw-active-memory-gateway-");
           const timelinePath = path.join(home, "gateway-timeline.jsonl");
@@ -95,12 +79,7 @@ describe("Gateway Active Memory", () => {
           let recallRequests = 0;
           let memoryToolIssued = false;
           let phase = "preparing fixture";
-          const diagnostics: {
-            statusLines?: string[];
-            preparedRecallConfig?: Record<string, boolean>;
-          } = {};
-          let sessionFound = false;
-          let modelSelectionLocked = false;
+          const diagnostics: { statusLines?: string[] } = {};
           onTestFailed(async () => {
             const gatewayLogs = instance?.logs() ?? "";
             console.info({
@@ -109,21 +88,9 @@ describe("Gateway Active Memory", () => {
               recallRequests,
               memoryResults: memoryResults.length,
               mainRequests: mainRequests.length,
-              preparedRecallConfig: diagnostics.preparedRecallConfig,
-              sessionFound,
-              modelSelectionLocked,
               recallStatus: diagnostics.statusLines
                 ?.find((line) => line.startsWith("🧩 Active Memory: status="))
                 ?.slice(0, 240),
-              preflightTimeoutObserved: gatewayLogs.includes(
-                "active-memory: before_prompt_build preflight timed out",
-              ),
-              promptBuildFailureObserved: gatewayLogs.includes(
-                "active-memory: before_prompt_build failed, skipping memory lookup:",
-              ),
-              noToolAuthorityObserved: gatewayLogs.includes(
-                "active-memory: recall skipped because this prompt has no turn tool authority",
-              ),
             });
             console.info("Active Memory Gateway log tail", gatewayLogs.slice(-12_000));
             const timeline = await fs.readFile(timelinePath, "utf8").catch(() => "unavailable");
@@ -286,20 +253,6 @@ describe("Gateway Active Memory", () => {
             },
           });
           signal.throwIfAborted();
-          const preparedConfig = JSON.parse(
-            await fs.readFile(instance.configPath, "utf8"),
-          ) as OpenClawConfig;
-          signal.throwIfAborted();
-          const preparedPlugin = preparedConfig.plugins?.entries?.["active-memory"];
-          diagnostics.preparedRecallConfig = {
-            pluginAllowed: preparedConfig.plugins?.allow?.includes("active-memory") === true,
-            pluginEnabled: preparedPlugin?.enabled === true,
-            memoryCoreSlot: preparedConfig.plugins?.slots?.memory === "memory-core",
-            alwaysMode: preparedPlugin?.config?.mode === "always",
-            mainAgent: Array.isArray(preparedPlugin?.config?.agents)
-              ? preparedPlugin.config.agents.includes("main")
-              : false,
-          };
           expect(await instance.entrypoint()).toEqual(["dist/index.js"]);
           signal.throwIfAborted();
           await instance.startGateway();
@@ -355,31 +308,25 @@ describe("Gateway Active Memory", () => {
           }
           signal.throwIfAborted();
           phase = "starting main turn";
+          const request = createFixtureRequest(client, signal);
           // Interactive chat supplies the finalized turn tool authority that recall requires.
-          const accepted = await client.request<{ runId: string; status: string }>(
-            "chat.send",
-            {
-              sessionKey,
-              message: "What do I usually have for lunch?",
-              deliver: false,
-              idempotencyKey: runId,
-            },
-            { signal },
-          );
-          signal.throwIfAborted();
-          expect(accepted.status).toBe("started");
-          expect(accepted.runId).toBe(runId);
+          const accepted = await request<{ runId: string; status: string }>("chat.send", {
+            sessionKey,
+            message: "What do I usually have for lunch?",
+            deliver: false,
+            idempotencyKey: runId,
+          });
+          expect(accepted).toMatchObject({ status: "started", runId });
           phase = "waiting for main reply";
           // Recall and the main turn use the test budget; agent.wait only checks final settlement.
           const reply = await withinTest(terminal.promise, signal);
           expect(reply.state, JSON.stringify(reply)).toBe("final");
           phase = "waiting for main run settlement";
-          const completed = await client.request<{ status: string }>(
+          const completed = await request<{ status: string }>(
             "agent.wait",
             { runId: accepted.runId, timeoutMs: 30_000 },
-            { timeoutMs: 35_000, signal },
+            { timeoutMs: 35_000 },
           );
-          signal.throwIfAborted();
           expect(completed).toMatchObject({ status: "ok" });
           phase = "checking recall and main reply";
           const entry = loadSessionEntryReadOnly({
@@ -388,8 +335,6 @@ describe("Gateway Active Memory", () => {
             env: instance.env,
             storePath: path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
           });
-          sessionFound = entry !== undefined;
-          modelSelectionLocked = entry?.modelSelectionLocked === true;
           diagnostics.statusLines = entry?.pluginDebugEntries?.find(
             (item) => item.pluginId === "active-memory",
           )?.lines;
@@ -405,12 +350,7 @@ describe("Gateway Active Memory", () => {
           expect(mainRequests[0]).not.toContain("<active_memory_plugin>");
           expect(mainRequests[0]).not.toContain("Please try again.");
           signal.throwIfAborted();
-          const history = await client.request<{ messages: unknown[] }>(
-            "chat.history",
-            { sessionKey },
-            { signal },
-          );
-          signal.throwIfAborted();
+          const history = await request<{ messages: unknown[] }>("chat.history", { sessionKey });
           expect(JSON.stringify(history.messages)).toContain(mainReply);
         },
         async () => {

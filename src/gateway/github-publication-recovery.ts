@@ -44,7 +44,7 @@ export async function recoverGitHubPublicationWorkspace(
   });
 }
 
-export async function readKnownGitHubPublicationPullRequestUrls(
+async function readKnownGitHubPublicationPullRequestUrls(
   row: GitHubPublicationExecutionRow,
 ): Promise<string[]> {
   const result = await executeExistingOpenClawStateRead(

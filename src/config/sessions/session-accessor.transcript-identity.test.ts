@@ -55,6 +55,23 @@ describe("transcript turn physical identity", () => {
       messages: [{ message }],
       updateMode: "none",
     });
+  const resolveTarget = (target: ReturnType<typeof scope>) =>
+    transcriptTargets.resolveSessionTranscriptRuntimeTarget(target, undefined, {
+      keyFormat: "agent-qualified",
+    });
+  const retainEntry = (target: ReturnType<typeof scope>) =>
+    readSessionEntriesFromStoreInWorker({
+      agentId: "main",
+      storePath: target.storePath,
+      sessionKeys: [target.sessionKey],
+    });
+  const inventoryReader =
+    (...args: Parameters<typeof prepareSessionStoreTargetInventory>) =>
+    () =>
+      prepareSessionStoreTargetInventoryRead(prepareSessionStoreTargetInventory(...args)).withRead(
+        async (inventory) => inventory.agents[0]?.result,
+      );
+  const agents = { entries: { main: {}, other: {} } };
   const keys = () =>
     database().db.prepare("SELECT session_key FROM session_nodes ORDER BY session_key").all();
   const retainWindowOnly = () => {
@@ -67,26 +84,14 @@ describe("transcript turn physical identity", () => {
   it("resolves the current transcript and lifecycle revision across entry writes", async () => {
     const selected = scope("agent:main:current");
     replaceSessionEntrySync(selected, { sessionId, updatedAt: 1, lifecycleRevision: "first" });
-    await readSessionEntriesFromStoreInWorker({
-      agentId: "main",
-      storePath: selected.storePath,
-      sessionKeys: [selected.sessionKey],
-    });
-    expect(
-      await transcriptTargets.resolveSessionTranscriptRuntimeTarget(selected, undefined, {
-        keyFormat: "agent-qualified",
-      }),
-    ).toMatchObject({
+    await retainEntry(selected);
+    expect(await resolveTarget(selected)).toMatchObject({
       sessionId,
       sessionKey: selected.sessionKey,
       selectedLifecycleRevision: "first",
     });
     await replaceSessionEntry(selected, { sessionId, updatedAt: 2, lifecycleRevision: "second" });
-    expect(
-      await transcriptTargets.resolveSessionTranscriptRuntimeTarget(selected, undefined, {
-        keyFormat: "agent-qualified",
-      }),
-    ).toMatchObject({
+    expect(await resolveTarget(selected)).toMatchObject({
       sessionId,
       sessionKey: selected.sessionKey,
       selectedLifecycleRevision: "second",
@@ -98,16 +103,8 @@ describe("transcript turn physical identity", () => {
     const run = scope(`${base.sessionKey}:run:${sessionId}`);
     replaceSessionEntrySync(base, { sessionId, updatedAt: 1, lifecycleRevision: "base" });
     replaceSessionEntrySync(run, { sessionId, updatedAt: 2, lifecycleRevision: "run" });
-    await readSessionEntriesFromStoreInWorker({
-      agentId: "main",
-      storePath: base.storePath,
-      sessionKeys: [base.sessionKey],
-    });
-    expect(
-      await transcriptTargets.resolveSessionTranscriptRuntimeTarget(base, undefined, {
-        keyFormat: "agent-qualified",
-      }),
-    ).toMatchObject({
+    await retainEntry(base);
+    expect(await resolveTarget(base)).toMatchObject({
       sessionId,
       sessionKey: run.sessionKey,
       selectedSessionId: sessionId,
@@ -159,16 +156,7 @@ describe("transcript turn physical identity", () => {
       { sessionId, updatedAt: 1 },
     );
     const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
-    const select = () =>
-      prepareSessionStoreTargetInventoryRead(
-        prepareSessionStoreTargetInventory(
-          {
-            agents: { entries: { main: {}, other: {} } },
-            session: { store: storePath },
-          },
-          ["other"],
-        ),
-      ).withRead(async (inventory) => inventory.agents[0]?.result);
+    const select = inventoryReader({ agents, session: { store: storePath } }, ["other"]);
     const selected = await select();
     expect(selected).toEqual({ available: true, targets: [] });
     const initialReads = reads.mock.calls.length;
@@ -198,16 +186,7 @@ describe("transcript turn physical identity", () => {
     replaceSessionEntrySync(session, { sessionId, updatedAt: 1 });
     const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
     const closes = vi.spyOn(targetDiscoveryLane.pool, "closeResources");
-    const select = () =>
-      prepareSessionStoreTargetInventoryRead(
-        prepareSessionStoreTargetInventory(
-          {
-            agents: { entries: { main: {} } },
-          },
-          ["main"],
-          env,
-        ),
-      ).withRead(async (inventory) => inventory.agents[0]?.result);
+    const select = inventoryReader({ agents: { entries: { main: {} } } }, ["main"], env);
     const expected = { available: true, targets: [{ agentId: "main", storePath }] };
     expect(await select()).toEqual(expected);
     const initialReads = reads.mock.calls.length;
@@ -222,13 +201,9 @@ describe("transcript turn physical identity", () => {
 
   it("refreshes family inventory after writing an already registered sibling", async () => {
     const storePath = `${fixture.storePath()}.family.json`;
-    const request = prepareSessionStoreTargetInventory(
-      {
-        agents: { entries: { main: {}, other: {} } },
-        session: { store: storePath },
-      },
-      ["other"],
-    );
+    const request = prepareSessionStoreTargetInventory({ agents, session: { store: storePath } }, [
+      "other",
+    ]);
     const siblingPath = `${fixture.storePath()}.family.other.sqlite`;
     openOpenClawAgentDatabase({ agentId: "other", path: siblingPath });
     const select = () =>
@@ -336,7 +311,7 @@ describe("transcript turn physical identity", () => {
           messages: [{ message }],
           updateMode: "none",
         }),
-      ).resolves.toMatchObject({ appendedCount: 1 });
+      ).resolves.toMatchObject({ messages: [{ appended: true }] });
       expect(keys()).toEqual([{ session_key: stored }]);
       expect(loadTranscriptEventsSync(scope(stored))).toContainEqual(
         expect.objectContaining({ type: "message", message }),
@@ -425,7 +400,7 @@ describe("transcript turn physical identity", () => {
       }
       await expect(pending).resolves.toMatchObject({
         rejectedReason: "session-rebound",
-        appendedCount: 0,
+        messages: [],
       });
       if (change === "revision") {
         expect(loadSessionEntryReadOnly(scope())?.lifecycleRevision).toBe("successor");

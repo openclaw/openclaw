@@ -1,3 +1,4 @@
+import type { Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
@@ -50,7 +51,11 @@ import { readStagedSessionTranscriptAuthority } from "./session-transcript-autho
 export type SessionWorkerDatabaseBinding = {
   database: EngineConnection;
   databasePath: string;
-  admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
+  admit(
+    stage: "prepare" | "transaction" | "commit",
+    restriction?: AgentDatabaseAdmissionRestriction,
+    transferList?: Transferable[],
+  ): void;
 };
 
 /** Private write domains borrow one canonical connection and its admission lifecycle. */
@@ -83,22 +88,24 @@ export function bindSessionWorkerBackend<Operations extends SqliteWorkerOperatio
 function createSessionWorkerOperationContext(
   database: OpenClawAgentDatabase,
   options: AgentWorkerOperationContext["options"],
-  bound: {
-    admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
-  },
+  bound: Pick<SessionWorkerDatabaseBinding, "admit">,
   domain: string,
 ): AgentWorkerOperationContext {
   const native = database.db;
   const context: AgentWorkerOperationContext = {
     options,
     open: () => database,
-    admit(stage, publication) {
-      bound.admit(stage, (request, dispatch) => {
-        if (!isRecord(request.facts)) {
-          throw new Error(`${domain} admission omitted its database identity`);
-        }
-        dispatch({ ...request, facts: { ...request.facts, publication } });
-      });
+    admit(stage, publication, transferList) {
+      bound.admit(
+        stage,
+        (request, dispatch) => {
+          if (!isRecord(request.facts)) {
+            throw new Error(`${domain} admission omitted its database identity`);
+          }
+          dispatch({ ...request, facts: { ...request.facts, publication } });
+        },
+        transferList,
+      );
     },
     writeTransaction(operationLabel, owner, write, diagnosticContext) {
       return runOpenClawAgentWriteTransaction(

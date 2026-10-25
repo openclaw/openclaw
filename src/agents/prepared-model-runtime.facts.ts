@@ -57,7 +57,6 @@ import {
   prepareWorkspacePluginRegistries,
   type PreparedInboundRegistryLoader,
 } from "./prepared-model-runtime.inbound-registry.js";
-import { hasSameOAuthProviderGeneration } from "./prepared-model-runtime.oauth-providers.js";
 import {
   prepareOwnedPluginLoadContext,
   prepareOwnedPluginMetadataSnapshotParams,
@@ -485,10 +484,17 @@ export function captureModelsJsonContents(agentDir: string): string | null {
 /** Record discovery scope before config projection or auth-owner publication can replace it. */
 export function preparedModelInventoryKey(input: PreparedModelRuntimeInput): string {
   const { models, auth, env } = input.config;
-  const plugins = normalizePluginsConfig(input.config.plugins);
-  for (const entry of Object.values(plugins.entries)) {
-    entry.config ??= {};
-  }
+  const normalized = normalizePluginsConfig(input.config.plugins);
+  // Normalized policy is shared and frozen; key absent plugin config as empty without mutating it.
+  const plugins = {
+    ...normalized,
+    entries: Object.fromEntries(
+      Object.entries(normalized.entries).map(([id, entry]) => [
+        id,
+        entry.config === undefined || entry.config === null ? { ...entry, config: {} } : entry,
+      ]),
+    ),
+  };
   return fingerprintPreparedRuntimeFacts({
     ...input,
     config: { models, auth, env, plugins },
@@ -553,8 +559,23 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
       staticProviderConfigs,
     });
     const candidates = registriesBySource.get(key) ?? [];
-    let prepared = candidates.find((candidate) =>
-      hasSameOAuthProviderGeneration(candidate.oauthProviders, oauthProviders),
+    // Match executable hooks by identity so distinct AuthStorage closure generations never merge.
+    let prepared = candidates.find(
+      ({ oauthProviders: cachedProviders }) =>
+        cachedProviders.length === oauthProviders.length &&
+        cachedProviders.every((provider, index) => {
+          const candidate = oauthProviders[index];
+          return (
+            candidate !== undefined &&
+            provider.id === candidate.id &&
+            provider.name === candidate.name &&
+            provider.usesCallbackServer === candidate.usesCallbackServer &&
+            provider.login === candidate.login &&
+            provider.refreshToken === candidate.refreshToken &&
+            provider.getApiKey === candidate.getApiKey &&
+            provider.modifyModels === candidate.modifyModels
+          );
+        }),
     );
     if (!prepared) {
       prepared = {

@@ -91,7 +91,6 @@ it.each(["recurring retry", "pacing"])(
     await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(state.deps.enqueueSessionEvent).toHaveBeenCalledOnce();
     expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
   },
 );
 

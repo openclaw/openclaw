@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import { ensureCodexManagedBundledMarketplace } from "./computer-use-marketplace.js";
@@ -24,6 +25,8 @@ import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-suppor
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => void mockServiceCopy());
+afterEach(() => vi.restoreAllMocks());
 const ensureService = service.ensureCodexComputerUseServiceApp;
 const resolveServiceSource = service.resolveCodexComputerUseServiceAppSourcePath;
 
@@ -53,7 +56,6 @@ describe("Codex Computer Use native service", () => {
         codexHome,
         platform: "darwin",
         sourceAppCandidates: [sourcePath],
-        copyServiceApp: copyServiceFixture,
         inspectServiceApp: inspectServiceFixture,
         ...overrides,
       });
@@ -80,14 +82,9 @@ describe("Codex Computer Use native service", () => {
       await fs.mkdir(path.dirname(linkedPath), { recursive: true });
       await fs.symlink(targetLink ? externalTarget : externalRoot, linkedPath);
       const externalInode = (await fs.lstat(externalTarget)).ino;
-      const copyServiceApp = vi.fn(copyServiceFixture);
+      const copyServiceApp = mockServiceCopy();
 
-      await expect(
-        install({
-          ...(boundary === "ownershipRoot" ? { ownershipRoot } : {}),
-          copyServiceApp,
-        }),
-      ).rejects.toThrow(
+      await expect(install(boundary === "ownershipRoot" ? { ownershipRoot } : {})).rejects.toThrow(
         targetLink
           ? /must not be a symbolic link/iu
           : /symlinked directory|real directory|symbolic link/iu,
@@ -120,23 +117,16 @@ describe("Codex Computer Use native service", () => {
       const externalInode = (await fs.lstat(externalTarget)).ino;
       let externalStagingSentinel = "";
 
-      await expect(
-        install({
-          copyServiceApp: async (source, stagedTarget) => {
-            await copyServiceFixture(source, stagedTarget);
-            const stagingName = path.basename(path.dirname(stagedTarget));
-            externalStagingSentinel = path.join(
-              externalParent,
-              stagingName,
-              "external-sentinel.txt",
-            );
-            await fs.mkdir(path.dirname(externalStagingSentinel), { recursive: true });
-            await fs.writeFile(externalStagingSentinel, "do-not-delete");
-            await fs.rename(targetParent, parkedParent);
-            await fs.symlink(externalParent, targetParent);
-          },
-        }),
-      ).rejects.toThrow(/service parent changed during refresh/iu);
+      mockServiceCopy(async (source, stagedTarget) => {
+        await copyServiceFixture(source, stagedTarget);
+        const stagingName = path.basename(path.dirname(stagedTarget));
+        externalStagingSentinel = path.join(externalParent, stagingName, "external-sentinel.txt");
+        await fs.mkdir(path.dirname(externalStagingSentinel), { recursive: true });
+        await fs.writeFile(externalStagingSentinel, "do-not-delete");
+        await fs.rename(targetParent, parkedParent);
+        await fs.symlink(externalParent, targetParent);
+      });
+      await expect(install()).rejects.toThrow(/service parent changed during refresh/iu);
 
       expect(externalStagingSentinel).not.toBe("");
       await expect(fs.readFile(externalStagingSentinel, "utf8")).resolves.toBe("do-not-delete");
@@ -156,13 +146,12 @@ describe("Codex Computer Use native service", () => {
 
   it("refreshes when the signed desktop service changes at the same source path", async () => {
     const { sourcePath, targetPath, install } = await setupService();
-    const copyServiceApp = vi.fn(copyServiceFixture);
-    const options = { copyServiceApp };
-    await install(options);
+    const copyServiceApp = mockServiceCopy();
+    await install();
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
     await writeServiceFixture(sourcePath, UNEXPECTED_IDENTITY);
 
-    await install(options);
+    await install();
     expect(copyServiceApp).toHaveBeenCalledTimes(2);
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(UNEXPECTED_IDENTITY);
     await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
@@ -175,13 +164,13 @@ describe("Codex Computer Use native service", () => {
     const inspectServiceApp = vi.fn(inspectServiceFixture);
 
     await install({ inspectServiceApp });
+    mockServiceCopy(async (source, target) => {
+      await copyServiceFixture(source, target);
+      await writeFixtureIdentity(target, STALE_IDENTITY);
+    });
     await expect(
       install({
         sourceAppCandidates: [failingSourcePath],
-        copyServiceApp: async (source, target) => {
-          await copyServiceFixture(source, target);
-          await writeFixtureIdentity(target, STALE_IDENTITY);
-        },
         inspectServiceApp,
       }),
     ).rejects.toThrow("does not match its selected signed source");
@@ -211,14 +200,14 @@ describe("Codex Computer Use native service", () => {
     const { targetPath, install } = await setupService();
     const copyStarted = createDeferred<void>();
     const releaseCopy = createDeferred<void>();
-    const copyServiceApp = vi.fn(async (source: string, target: string) => {
+    const copyServiceApp = mockServiceCopy(async (source: string, target: string) => {
       copyStarted.resolve();
       await releaseCopy.promise;
       await copyServiceFixture(source, target);
     });
-    const first = install({ copyServiceApp });
+    const first = install();
     await copyStarted.promise;
-    const second = install({ copyServiceApp });
+    const second = install();
     releaseCopy.resolve();
     await Promise.all([first, second]);
     expect(copyServiceApp).toHaveBeenCalledOnce();
@@ -309,6 +298,16 @@ async function inspectServiceFixture(appPath: string): Promise<ServiceIdentity |
   }
 }
 
+function mockServiceCopy(copy = copyServiceFixture) {
+  return vi.spyOn(processRuntime, "runExec").mockImplementation(async (command, args, options) => {
+    expect(command).toBe("/usr/bin/ditto");
+    expect(args[0]).toBe("--noqtn");
+    expect(options).toEqual({ logOutput: false, timeoutMs: 120_000 });
+    await copy(args[1]!, args[2]!);
+    return { stdout: "", stderr: "" };
+  });
+}
+
 async function copyServiceFixture(sourcePath: string, targetPath: string): Promise<void> {
   await fs.cp(sourcePath, targetPath, { recursive: true });
 }
@@ -350,11 +349,15 @@ it("selects the first installed desktop marketplace", async () => {
   await writeBundledComputerUsePlugin(chatGptMarketplacePath, "2.0.0");
   await writeBundledComputerUsePlugin(legacyCodexMarketplacePath, "1.0.0");
 
-  expect(
-    await reconcile({
-      bundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
-    }),
-  ).toBe(true);
+  const resolveMarketplace =
+    desktopPaths.resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath;
+  vi.spyOn(
+    desktopPaths,
+    "resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath",
+  ).mockImplementation(() =>
+    resolveMarketplace({ candidates: [chatGptMarketplacePath, legacyCodexMarketplacePath] }),
+  );
+  expect(await reconcile({})).toBe(true);
   expect(await fs.readdir(computerUseCachePath(codexHome))).toEqual(["2.0.0"]);
 });
 
@@ -444,10 +447,6 @@ function computerUseCachePath(codexHome: string, version = ""): string {
 }
 
 describe("managed Codex bundled marketplace", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   async function fixture() {
     const root = tempDirs.make("openclaw-codex-marketplace-");
     const candidate = await writeMarketplaceCandidate(root);
@@ -559,7 +558,6 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
       ensureService({
         ...params,
         ...inspection,
-        copyServiceApp: (source, target) => fs.cp(source, target, { recursive: true }),
       }),
     );
 

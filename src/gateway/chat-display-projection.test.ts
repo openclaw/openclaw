@@ -9,13 +9,11 @@ import {
 import { getMediaDir } from "../media/store.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
-import { createPreSessionStartAnnouncePairFilter } from "./chat-display-projection.history.js";
 import {
   projectChatDisplayMessage,
   projectChatDisplayMessages,
 } from "./chat-display-projection.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
-import { SessionHistorySseState } from "./session-history-state.js";
 
 const text = (value: string) => ({ type: "text", text: value });
 const phasedText = (value: string, phase: string) => ({
@@ -75,6 +73,45 @@ it("hides private yield inputs without changing canonical arguments", () => {
     },
   ]);
   expect(args.message).toBe("PRIVATE_YIELD_CONTEXT");
+});
+
+it.each(["<", "<tool_"])(
+  "hides a standalone %j before a native call in refreshed history",
+  (fragment) => {
+    const call = {
+      type: "toolCall",
+      id: "read-prelude",
+      name: "read",
+      arguments: { path: "literal-<tool_.txt" },
+    };
+    const message = assistant([text(fragment), call], { stopReason: "toolUse" });
+    const original = structuredClone(message);
+    const projected = sanitizeChatHistoryMessages([message]);
+    expect(projected).toEqual([
+      expect.objectContaining({
+        content: expect.arrayContaining([call]),
+      }),
+    ]);
+    expect(projected).toEqual([
+      expect.objectContaining({
+        content: expect.not.arrayContaining([expect.objectContaining(text(fragment))]),
+      }),
+    ]);
+    expect(message).toEqual(original);
+    expect(sanitizeChatHistoryMessages(projected)).toEqual(projected);
+  },
+);
+
+it("preserves literal, user, and text-only marker content in refreshed history", () => {
+  const call = { type: "toolCall", id: "read-controls", name: "read", arguments: {} };
+  const messages = [
+    assistant([text("<tool_")], {}),
+    assistant([text("a < b"), call], {}),
+    assistant([text("Use `<tool_` literally."), call], {}),
+    assistant([text("```xml\n"), text("<tool_"), text("\n```"), call], {}),
+    { role: "user", content: [text("<tool_"), call] },
+  ];
+  expect(sanitizeChatHistoryMessages(messages)).toEqual(messages);
 });
 
 it("strips attachment capabilities even after another field changed", () => {
@@ -676,43 +713,6 @@ it("repairs only matching attempts when run identities interleave", () => {
     other["__openclaw"],
     answer["__openclaw"],
   ]);
-});
-
-it("refreshes SSE history after an appended failure recovers", async () => {
-  const state = SessionHistorySseState.fromSnapshot({
-    target: { sessionId: "session", sessionKey: "agent:main:test" },
-    snapshot: {
-      history: { items: [user], messages: [user], hasMore: false },
-      rawTranscriptSeq: 1,
-      turnBoundaryPending: false,
-      assistantErrorPending: false,
-    },
-  });
-  expect(
-    (await state.prepareInlineMessage({ message: failed, messageSeq: 2 }))()?.message,
-  ).toBeUndefined();
-  expect((await state.prepareInlineMessage({ message: answer, messageSeq: 3 }))()).toEqual({
-    shouldRefresh: true,
-  });
-});
-
-it("drops only old announce pairs across adjacent chunks", () => {
-  const announce = {
-    role: "user",
-    timestamp: 10,
-    content: "Earlier child finished",
-    provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-  };
-  const oldReply = { role: "assistant", timestamp: 11, content: "Acknowledged" };
-  const newReply = { ...oldReply, timestamp: 30 };
-  const rows = [announce, oldReply, announce, newReply, user];
-  for (let split = 1; split < rows.length; split++) {
-    const filter = createPreSessionStartAnnouncePairFilter(20);
-    expect([...filter(rows.slice(0, split)), ...filter(rows.slice(split))]).toEqual([
-      newReply,
-      user,
-    ]);
-  }
 });
 
 const schemaError = "Invalid service_tier argument";

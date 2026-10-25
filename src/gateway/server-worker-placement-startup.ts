@@ -640,12 +640,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               isStopping,
             }),
           ),
-        async () => {
-          await reconcilePhase("startup.active", () => dispatchService.reconcile("startup"));
-          if (!isStopping()) {
-            await reconcilePhase("startup.publications", () => reconcilePublications(isStopping));
-          }
-        },
+        () => reconcilePhase("startup.active", () => dispatchService.reconcile("startup")),
       ]) {
         await trackOperation("reconcile", reconcile());
         if (isStopping() || hooks.isClosePreludeStarted()) {
@@ -664,6 +659,11 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         "reconcile",
         reconcilePhase("reconcile.session-retirement", () =>
           sessionRetirement.reconcile(optionalWorkSignal),
+        ).then(() =>
+          // Git/network recovery must drain on close, but cannot hold Gateway readiness.
+          reconcilePhase("startup.publications", () =>
+            reconcilePublications(isReconciliationPaused),
+          ),
         ),
         "Worker placement reconcile sweep failed",
       );

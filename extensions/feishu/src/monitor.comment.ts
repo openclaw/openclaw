@@ -131,33 +131,6 @@ function compareCommentTimelineEntries<T extends { createTime?: number }>(
   return (stableId(left) ?? "").localeCompare(stableId(right) ?? "");
 }
 
-function formatLinkedDocumentInline(link: ParsedCommentLinkedDocument): string {
-  const parts = [
-    `raw_url=${link.rawUrl}`,
-    `url_kind=${link.urlKind}`,
-    link.wikiNodeToken ? `wiki_node_token=${link.wikiNodeToken}` : null,
-    `resolved_type=${link.resolvedObjType ?? "UNKNOWN"}`,
-    `resolved_token=${link.resolvedObjToken ?? "UNKNOWN"}`,
-    `same_as_current_document=${link.isCurrentDocument === true ? "yes" : "no"}`,
-  ].filter((part): part is string => Boolean(part));
-  return parts.join(" ");
-}
-
-function formatLinkedDocumentsPromptLines(params: {
-  title: string;
-  linkedDocuments: ParsedCommentLinkedDocument[];
-}): string[] {
-  if (params.linkedDocuments.length === 0) {
-    return [];
-  }
-  return [
-    params.title,
-    ...params.linkedDocuments.map(
-      (link, index) => `- [${index + 1}] ${formatLinkedDocumentInline(link)}`,
-    ),
-  ];
-}
-
 function formatLinkedDocumentsInlineSummary(
   linkedDocuments: ParsedCommentLinkedDocument[],
 ): string {
@@ -354,19 +327,6 @@ async function requestFeishuOpenApi<T>(params: {
   return result;
 }
 
-function selectCommentThreadPromptReplies(
-  replies: ResolvedCommentReplyContext[],
-  targetReplyId?: string,
-): ResolvedCommentReplyContext[] {
-  if (replies.length <= FEISHU_COMMENT_THREAD_PROMPT_LIMIT) {
-    return replies;
-  }
-  const targetIndex = replies.findIndex((reply) => reply.replyId === targetReplyId);
-  const currentIndex = targetIndex >= 0 ? targetIndex : replies.length - 1;
-  const selected = new Set<number>([0, currentIndex, replies.length - 1]);
-  return selectNearbyEntries(replies, currentIndex, selected, FEISHU_COMMENT_THREAD_PROMPT_LIMIT);
-}
-
 function selectNearbyEntries<T>(
   entries: T[],
   currentIndex: number,
@@ -395,24 +355,6 @@ function selectNearbyEntries<T>(
     .filter((entry): entry is T => Boolean(entry));
 }
 
-function formatCommentThreadPromptLines(params: {
-  replies: ResolvedCommentReplyContext[];
-  targetReplyId?: string;
-}): string[] {
-  const promptReplies = selectCommentThreadPromptReplies(params.replies, params.targetReplyId);
-  return promptReplies.map((reply, index) => {
-    const text = reply.content.semanticText ?? reply.content.plainText;
-    return (
-      `- [${index + 1}] author=${reply.isBotAuthored ? "assistant" : "user"} ` +
-      `user_id=${reply.userId ?? "UNKNOWN"} ` +
-      `reply_id=${reply.replyId ?? "UNKNOWN"} ` +
-      `current_event=${reply.replyId === params.targetReplyId ? "yes" : "no"} ` +
-      `text=${formatPromptTextValue(text)} ` +
-      `referenced_docs=${formatLinkedDocumentsInlineSummary(reply.content.linkedDocuments)}`
-    );
-  });
-}
-
 function findNearestBotTimelineEntry(params: {
   entries: ResolvedWholeCommentTimelineEntry[];
   currentIndex: number;
@@ -430,58 +372,6 @@ function findNearestBotTimelineEntry(params: {
     }
   }
   return undefined;
-}
-
-function selectWholeCommentTimelineEntries(params: {
-  entries: ResolvedWholeCommentTimelineEntry[];
-  currentCommentId: string;
-}): ResolvedWholeCommentTimelineEntry[] {
-  if (params.entries.length <= FEISHU_WHOLE_COMMENT_PROMPT_LIMIT) {
-    return params.entries;
-  }
-  const currentIndex = params.entries.findIndex(
-    (entry) => entry.commentId === params.currentCommentId,
-  );
-  if (currentIndex < 0) {
-    return params.entries.slice(-FEISHU_WHOLE_COMMENT_PROMPT_LIMIT);
-  }
-  const selected = new Set<number>([currentIndex]);
-  const nearestBotAfter = params.entries.findIndex(
-    (entry, index) => index > currentIndex && entry.isBotAuthored,
-  );
-  if (nearestBotAfter >= 0) {
-    selected.add(nearestBotAfter);
-  }
-  for (let index = currentIndex - 1; index >= 0; index -= 1) {
-    if (params.entries[index]?.isBotAuthored) {
-      selected.add(index);
-      break;
-    }
-  }
-  return selectNearbyEntries(
-    params.entries,
-    currentIndex,
-    selected,
-    FEISHU_WHOLE_COMMENT_PROMPT_LIMIT,
-  );
-}
-
-function formatWholeCommentTimelinePromptLines(params: {
-  entries: ResolvedWholeCommentTimelineEntry[];
-  currentCommentId: string;
-}): string[] {
-  return selectWholeCommentTimelineEntries(params).map((entry, index) => {
-    const text = entry.content.semanticText ?? entry.content.plainText;
-    return (
-      `- [${index + 1}] create_time=${entry.createTime ?? "UNKNOWN"} ` +
-      `comment_id=${entry.commentId} ` +
-      `author=${entry.isBotAuthored ? "assistant" : "user"} ` +
-      `user_id=${entry.userId ?? "UNKNOWN"} ` +
-      `current_comment=${entry.commentId === params.currentCommentId ? "yes" : "no"} ` +
-      `text=${formatPromptTextValue(text)} ` +
-      `referenced_docs=${formatLinkedDocumentsInlineSummary(entry.content.linkedDocuments)}`
-    );
-  });
 }
 
 export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEventParams) {
@@ -799,29 +689,96 @@ export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEv
   if (nonBotMentions.length > 0) {
     lines.push(`Other mentioned users in current comment: ${nonBotMentions.join(", ")}`);
   }
-  lines.push(
-    ...formatLinkedDocumentsPromptLines({
-      title: "Referenced documents from current user comment:",
-      linkedDocuments: context.targetReplyContent?.linkedDocuments ?? [],
-    }),
-  );
+  const linkedDocuments = context.targetReplyContent?.linkedDocuments ?? [];
+  if (linkedDocuments.length > 0) {
+    lines.push(
+      "Referenced documents from current user comment:",
+      ...linkedDocuments.map((link, index) => {
+        const parts = [
+          `raw_url=${link.rawUrl}`,
+          `url_kind=${link.urlKind}`,
+          link.wikiNodeToken ? `wiki_node_token=${link.wikiNodeToken}` : null,
+          `resolved_type=${link.resolvedObjType ?? "UNKNOWN"}`,
+          `resolved_token=${link.resolvedObjToken ?? "UNKNOWN"}`,
+          `same_as_current_document=${link.isCurrentDocument === true ? "yes" : "no"}`,
+        ].filter((part): part is string => Boolean(part));
+        return `- [${index + 1}] ${parts.join(" ")}`;
+      }),
+    );
+  }
   if (!context.isWholeComment && context.currentCommentThreadReplies.length > 0) {
+    const replies = context.currentCommentThreadReplies;
+    let promptReplies = replies;
+    if (replies.length > FEISHU_COMMENT_THREAD_PROMPT_LIMIT) {
+      const targetIndex = replies.findIndex((reply) => reply.replyId === replyId);
+      const currentIndex = targetIndex >= 0 ? targetIndex : replies.length - 1;
+      const selected = new Set<number>([0, currentIndex, replies.length - 1]);
+      promptReplies = selectNearbyEntries(
+        replies,
+        currentIndex,
+        selected,
+        FEISHU_COMMENT_THREAD_PROMPT_LIMIT,
+      );
+    }
     lines.push(
       "Current comment card timeline (primary context for follow-ups on this comment card):",
-      ...formatCommentThreadPromptLines({
-        replies: context.currentCommentThreadReplies,
-        targetReplyId: replyId,
+      ...promptReplies.map((reply, index) => {
+        const text = reply.content.semanticText ?? reply.content.plainText;
+        return (
+          `- [${index + 1}] author=${reply.isBotAuthored ? "assistant" : "user"} ` +
+          `user_id=${reply.userId ?? "UNKNOWN"} ` +
+          `reply_id=${reply.replyId ?? "UNKNOWN"} ` +
+          `current_event=${reply.replyId === replyId ? "yes" : "no"} ` +
+          `text=${formatPromptTextValue(text)} ` +
+          `referenced_docs=${formatLinkedDocumentsInlineSummary(reply.content.linkedDocuments)}`
+        );
       }),
       "For this non-whole comment, use the current comment card timeline above as the primary source for phrases like 'above', 'previous result', 'that summary', or 'insert it'.",
       "Document-level session history is auxiliary background only. Do not use another comment card's recent output as the primary referent.",
     );
   }
   if (context.isWholeComment && context.wholeCommentTimeline.length > 0) {
+    const entries = context.wholeCommentTimeline;
+    let promptEntries = entries;
+    if (entries.length > FEISHU_WHOLE_COMMENT_PROMPT_LIMIT) {
+      const currentIndex = entries.findIndex((entry) => entry.commentId === commentId);
+      if (currentIndex < 0) {
+        promptEntries = entries.slice(-FEISHU_WHOLE_COMMENT_PROMPT_LIMIT);
+      } else {
+        const selected = new Set<number>([currentIndex]);
+        const nearestBotAfter = entries.findIndex(
+          (entry, index) => index > currentIndex && entry.isBotAuthored,
+        );
+        if (nearestBotAfter >= 0) {
+          selected.add(nearestBotAfter);
+        }
+        for (let index = currentIndex - 1; index >= 0; index -= 1) {
+          if (entries[index]?.isBotAuthored) {
+            selected.add(index);
+            break;
+          }
+        }
+        promptEntries = selectNearbyEntries(
+          entries,
+          currentIndex,
+          selected,
+          FEISHU_WHOLE_COMMENT_PROMPT_LIMIT,
+        );
+      }
+    }
     lines.push(
       "Whole-document comment timeline (primary context for whole-comment follow-ups):",
-      ...formatWholeCommentTimelinePromptLines({
-        entries: context.wholeCommentTimeline,
-        currentCommentId: commentId,
+      ...promptEntries.map((entry, index) => {
+        const text = entry.content.semanticText ?? entry.content.plainText;
+        return (
+          `- [${index + 1}] create_time=${entry.createTime ?? "UNKNOWN"} ` +
+          `comment_id=${entry.commentId} ` +
+          `author=${entry.isBotAuthored ? "assistant" : "user"} ` +
+          `user_id=${entry.userId ?? "UNKNOWN"} ` +
+          `current_comment=${entry.commentId === commentId ? "yes" : "no"} ` +
+          `text=${formatPromptTextValue(text)} ` +
+          `referenced_docs=${formatLinkedDocumentsInlineSummary(entry.content.linkedDocuments)}`
+        );
       }),
     );
     for (const [direction, entry] of [
@@ -901,7 +858,6 @@ export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEv
     messageId: `drive-comment:${eventId}`,
     commentId,
     replyId,
-    noticeType,
     fileToken,
     fileType,
     isWholeComment: context.isWholeComment,
