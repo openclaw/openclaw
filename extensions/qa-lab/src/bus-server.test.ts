@@ -51,9 +51,7 @@ async function postQaBusJson(baseUrl: string, path: string, body: unknown) {
 async function postQaBusRawJson(baseUrl: string, path: string, body: string) {
   return await fetch(`${baseUrl}${path}`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
+    headers: { "content-type": "application/json" },
     body,
   });
 }
@@ -97,9 +95,12 @@ describe("qa-bus server", () => {
   const stops: Array<() => Promise<void>> = [];
   async function fixture(state = createQaBusState()) {
     const bus = await startQaBusServer({ state });
-    stops.push(() => bus.stop());
+    let stopping: Promise<void> | undefined;
+    const stop = () => (stopping ??= bus.stop());
+    stops.push(stop);
     return {
       ...bus,
+      stop,
       state,
       post: (route: string, body: unknown) => postQaBusJson(bus.baseUrl, route, body),
       raw: (route: string, body: string) => postQaBusRawJson(bus.baseUrl, route, body),
@@ -169,14 +170,8 @@ describe("qa-bus server", () => {
   });
 
   it("wakes matching polls and fences late polls and writes during shutdown", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    let stopped = false;
-    stops.push(async () => {
-      if (!stopped) {
-        await bus.stop();
-      }
-    });
+    const bus = await fixture();
+    const { state, inbound } = bus;
 
     const pending = pollQaBus({
       baseUrl: bus.baseUrl,
@@ -185,12 +180,7 @@ describe("qa-bus server", () => {
       timeoutMs: 500,
     });
 
-    state.addInboundMessage({
-      accountId: "acct-a",
-      conversation: { id: "target", kind: "direct" },
-      senderId: "acct-a-user",
-      text: "fresh event",
-    });
+    inbound("fresh event");
 
     const result = await pending;
     expect(result.events).toHaveLength(1);
@@ -245,7 +235,6 @@ describe("qa-bus server", () => {
     });
     await sleep(10);
 
-    stopped = true;
     const startedAt = Date.now();
     const stopping = bus.stop();
     setTimeout(() => {
@@ -256,8 +245,7 @@ describe("qa-bus server", () => {
     await activePoll;
 
     expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(pollWaitersStarted).toBe(1);
-    expect(pollWaitersSettled).toBe(1);
+    expect([pollWaitersStarted, pollWaitersSettled]).toEqual([1, 1]);
     expect(state.getSnapshot()).toMatchObject({ events: [], messages: [] });
   });
 
@@ -405,9 +393,6 @@ describe("qa-bus server", () => {
       messages: [{ id: message.id }],
     });
   });
-});
-
-describe("handleQaBusRequest", () => {
   it.each([
     { pathname: "/v1/inbound/message", limit: 16 * 1024 * 1024 },
     { pathname: "/v1/outbound/message", limit: 16 * 1024 * 1024 },
@@ -415,23 +400,19 @@ describe("handleQaBusRequest", () => {
   ])(
     "delivers 413 over the wire and closes when the $pathname body exceeds its limit",
     async ({ pathname, limit }) => {
-      const bus = await startQaBusServer({ state: createQaBusState() });
-      try {
-        // Declared over-cap length: rejected from the header alone, while the sender is
-        // still mid-upload and can only learn the outcome from what reaches it.
-        const result = await postRawWebhook({
-          url: `${bus.baseUrl}${pathname}`,
-          body: "{}",
-          contentLength: limit + 1,
-          headers: { "content-type": "application/json" },
-        });
+      const bus = await fixture();
+      // Declared over-cap length: rejected from the header alone, while the sender is
+      // still mid-upload and can only learn the outcome from what reaches it.
+      const result = await postRawWebhook({
+        url: `${bus.baseUrl}${pathname}`,
+        body: "{}",
+        contentLength: limit + 1,
+        headers: { "content-type": "application/json" },
+      });
 
-        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-        expect(JSON.parse(result.body)).toEqual({ error: "Payload too large" });
-        expect(result.closedByServer).toBe(true);
-      } finally {
-        await bus.stop();
-      }
+      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(JSON.parse(result.body)).toEqual({ error: "Payload too large" });
+      expect(result.closedByServer).toBe(true);
     },
   );
 });
