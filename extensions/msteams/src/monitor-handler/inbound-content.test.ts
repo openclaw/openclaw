@@ -112,6 +112,7 @@ describe("Teams inbound content", () => {
   });
 
   it.each([
+    { graphMediaFallback: true, conversationType: "channel", recover: true },
     { graphMediaFallback: true, conversationType: "groupchat", recover: true },
     { graphMediaFallback: undefined, conversationType: "channel", recover: false },
     { graphMediaFallback: true, conversationType: "personal", recover: false },

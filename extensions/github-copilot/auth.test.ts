@@ -10,6 +10,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ensureAuthProfileStoreAsync: loadStore,
 }));
 
+// mock-isolation: Credential resolution uses fixture secrets, never the operator's secret providers.
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   resolveConfiguredSecretInputWithFallback: resolveDirectSecret,
   resolveRequiredConfiguredSecretRefInputString: resolveProfileSecret,

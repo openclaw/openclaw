@@ -34,8 +34,13 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-archive-byte-lim
 async function* buffers(...parts: string[]) {
   yield* parts.map((part) => Buffer.from(part));
 }
-const records = (source: AsyncIterable<Uint8Array>, limit?: number) =>
-  Array.fromAsync(readTranscriptArchiveRecords(source, limit), (record) => record.toString("utf8"));
+async function records(source: AsyncIterable<Uint8Array>, limit?: number) {
+  const collected: string[] = [];
+  for await (const record of readTranscriptArchiveRecords(source, limit)) {
+    collected.push(record.toString("utf8"));
+  }
+  return collected;
+}
 
 it.each([
   "aggregate blobs",

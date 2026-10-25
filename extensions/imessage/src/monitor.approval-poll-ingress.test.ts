@@ -7,7 +7,7 @@ import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import type { IMessagePayload } from "./monitor/types.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
-const waitUntilReady = vi.hoisted(() => vi.fn<WaitForReady>(async () => {}));
+const waitUntilReady = vi.hoisted(() => vi.fn<typeof WaitForReady>(async () => {}));
 const createClient = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
 const maybeResolveIMessageApprovalPollVoteMock = vi.hoisted(() => vi.fn());
 const runChannelInboundEventMock = vi.hoisted(() =>
@@ -20,6 +20,7 @@ const ingressHarness = vi.hoisted(() => ({
 }));
 type Dispatch = (...args: [unknown, unknown, number, object]) => Promise<unknown>;
 
+// mock-isolation: Readiness is fixture-controlled; no installed Messages transport is probed.
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
   waitForTransportReady: waitUntilReady,
 }));
@@ -52,12 +53,14 @@ vi.mock("./approval-reactions.js", async (importOriginal) => ({
   handleIMessageApprovalReaction: vi.fn(async () => ({ handled: false, stopPolling: false })),
 }));
 
+// mock-isolation: The monitor connects only to the fixture RPC client, never the user's Messages store.
 vi.mock("./client.js", () => ({ createIMessageRpcClient: createClient }));
 
 vi.mock("./monitor/abort-handler.js", () => ({
   attachIMessageMonitorAbortHandler: vi.fn(() => () => {}),
 }));
 
+// mock-isolation: This fixture owns ingress claims and records priority dispatch without a live queue.
 vi.mock("./monitor/ingress.js", () => ({
   createIMessageDurableIngress: vi.fn(
     (opts: { dispatchPriority?: Dispatch; dispatch: Dispatch }) => ({

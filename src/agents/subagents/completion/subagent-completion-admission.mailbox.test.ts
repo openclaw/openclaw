@@ -260,7 +260,7 @@ it.each([
       inputs.push(...restored);
       const human = reserve("new-human-input");
       const claim = tryClaimSessionControllerTask(human, "visible");
-      if (superseded || replaced || (!mixed && !yielded && scenario !== "owed")) {
+      if (superseded || replaced || (!mixed && !yielded)) {
         expect(restored).toEqual([]);
         expect(claim).toBeDefined();
         return;

@@ -209,7 +209,7 @@ it("does not observe a terminal aborted during creation", async () => {
 });
 
 it.each(["replacement", "external", "newer"] as const)(
-  "stages a hidden read-only replacement, preserving %s focus",
+  "publishes a measurable writable replacement, preserving %s focus",
   async (focusAfter) => {
     const { external, previousHost, root } = terminalRoot();
     const newer = root.appendChild(document.createElement("input"));
@@ -241,7 +241,15 @@ it.each(["replacement", "external", "newer"] as const)(
     );
 
     expect(replaced).toBe(true);
+    expect(target.controller).toBe(replacement);
+    expect(target.host).not.toBe(previousHost);
+    expect(new TextDecoder().decode(replacement.write.mock.calls[0]?.[0])).toBe(
+      "authoritative replay",
+    );
+    expect(replacement.setReadOnly).toHaveBeenCalledWith(false);
     expect(target.host).toMatchObject({ isConnected: true, inert: false });
+    expect(target.host.style).toMatchObject({ display: "none", visibility: "visible" });
+    expect(previous.dispose).toHaveBeenCalledOnce();
     expect(root.activeElement).toBe(
       focusAfter === "replacement" ? target.host : focusAfter === "external" ? external : newer,
     );

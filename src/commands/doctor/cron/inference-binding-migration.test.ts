@@ -5,7 +5,6 @@ import {
   persistAuthProfileBatch,
   upsertAuthProfileWithLockOrThrow,
 } from "../../../agents/auth-profiles/upsert-with-lock.js";
-import { createOperatorRecoveryAuthority } from "../../../agents/operator-recovery.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
@@ -119,7 +118,22 @@ async function repair(configPath: string) {
   });
 }
 
-it("preserves authored jobs, existing bindings, operator sources and grants during adoption", async () => {
+function legacyJob(id: string, model?: string): CronStoredJob {
+  const job = makeAccountJob(id, model);
+  return {
+    ...job,
+    enabled: true,
+    updatedAtMs: 2,
+    payload: {
+      ...job.payload,
+      message: "Synthetic scheduled work",
+      fallbacks: ["openai/gpt-5.4"],
+    },
+    state: { lastRunAtMs: 123, lastRunStatus: "ok", consecutiveErrors: 2 },
+  };
+}
+
+it("adopts canonical SQLite jobs during update Doctor without pinning inherited models or rewriting existing bindings", async () => {
   await withAccounts(async (state) => {
     const cfg = config(state, { systemAgent: { agentId: "main" }, model: "openai/gpt-5.5" });
     Object.assign(cfg, {
@@ -135,16 +149,7 @@ it("preserves authored jobs, existing bindings, operator sources and grants duri
     });
     expect(binding).toBeDefined();
     const pinned: CronStoredJob = {
-      ...makeAccountJob("pinned", "openai/gpt-5.5"),
-      enabled: true,
-      updatedAtMs: 2,
-      payload: {
-        kind: "agentTurn",
-        message: "Synthetic work",
-        model: "openai/gpt-5.5",
-        fallbacks: ["openai/gpt-5.4"],
-      },
-      state: { lastRunAtMs: 123, lastRunStatus: "ok", consecutiveErrors: 2 },
+      ...legacyJob("pinned", "openai/gpt-5.5"),
       sessionKey: "agent:main:upgrade",
       sessionTarget: "session:agent:main:upgrade",
       owner: { agentId: "main", sessionKey: "agent:main:upgrade", accountId: "default" },
@@ -165,10 +170,21 @@ it("preserves authored jobs, existing bindings, operator sources and grants duri
         lifecycleRevision: "upgrade-lifecycle",
         sourceRunId: "original-turn",
         snapshot: {
-          ...createOperatorRecoveryAuthority("synthetic-owner", "synthetic-generation")
-            .recoverySnapshot!,
+          profileId: "synthetic-owner",
           scopes: ["operator.admin"],
+          assignedRole: null,
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "synthetic-generation",
+            role: "operator",
+            authMethod: "token",
+          },
           controlUiAdmin: true,
+          localOperator: false,
+          sourceIngress: "control-ui",
         },
       },
     };
@@ -177,9 +193,17 @@ it("preserves authored jobs, existing bindings, operator sources and grants duri
       id: "stale-source",
       operatorSource: { ...pinned.operatorSource, executionRevision: "stale-revision" },
     };
-    const jobs = [pinned, stale, { ...makeAccountJob("bound"), inferenceBinding: binding }];
+    const jobs = [
+      pinned,
+      stale,
+      legacyJob("inherited"),
+      { ...legacyJob("bound"), inferenceBinding: binding },
+    ];
     const storePath = state.statePath("cron", "jobs.json");
+    const inactivePath = state.statePath("inactive-cron", "jobs.json");
+    const inactive = { ...legacyJob("disabled", "openai/gpt-5.5"), enabled: false };
     await saveJobs(storePath, ...jobs);
+    await saveJobs(inactivePath, inactive);
     const query = (sql: string) => stateDb.openOpenClawStateDatabase().db.prepare(sql).get();
     const backupsOnDisk = async () =>
       (await fs.readdir(state.statePath("state"))).filter(
@@ -215,27 +239,35 @@ it("preserves authored jobs, existing bindings, operator sources and grants duri
       profileId: "openai:default",
       authRequirement: "subscription",
     });
-    expect(repaired).toHaveLength(jobs.length);
-    for (const [index, original] of jobs.entries()) {
-      expect(repaired[index]).toEqual({
-        ...original,
-        inferenceBinding: original.inferenceBinding ?? adopted,
-        ...(original === pinned
-          ? {
-              operatorSource: {
-                source: pinned.operatorSource!.source,
-                executionRevision: resolveCronOperatorExecutionRevision(repaired[index]!),
-              },
-            }
-          : {}),
-      });
-    }
+    expect(repaired).toEqual(
+      jobs.map((job) =>
+        Object.assign({}, job, {
+          inferenceBinding: job.inferenceBinding ?? adopted,
+          ...(job === pinned
+            ? {
+                operatorSource: {
+                  source: pinned.operatorSource!.source,
+                  executionRevision: resolveCronOperatorExecutionRevision(repaired[0]!),
+                },
+              }
+            : {}),
+        }),
+      ),
+    );
     expect(repaired[0]!.operatorSource!.executionRevision).not.toBe(
       pinned.operatorSource.executionRevision,
     );
+    expect(repaired[0]!.operatorSource!.executionRevision).toBe(
+      resolveCronOperatorExecutionRevision(repaired[0]!),
+    );
+    expect(repaired[1]!.operatorSource).toEqual(stale.operatorSource);
     expect(repaired[1]!.operatorSource!.executionRevision).not.toBe(
       resolveCronOperatorExecutionRevision(repaired[1]!),
     );
+    expect((await readJobs(inactivePath))[0]).toMatchObject({
+      ...inactive,
+      inferenceBinding: { profileId: "openai:default" },
+    });
     const backups = await backupsOnDisk();
     expect(backups).toHaveLength(1);
     await repair(state.configPath);
@@ -382,11 +414,10 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
       contains(warnings, "malformed", "invalid cron sessionTarget session id");
       // Several eligible accounts: the run's first planned account is recorded, not refused.
       expect(warnings).not.toContain("More than one inference account");
-      contains(
-        result.changes.join("\n"),
+      expect(result.changes.join("\n")).toContain(
         "Automation ambiguous (ambiguous): retain openai:a for openai/gpt-5.5",
-        "Also eligible: openai:b",
       );
+      expect(result.changes.join("\n")).toContain("Also eligible: openai:b");
       // A provider-config key needs no adoption: the job keeps running on it unbound.
       expect(warnings).not.toContain("Automation direct (direct)");
       contains(
@@ -511,6 +542,7 @@ it.each(["job edit", "account replacement", "backup failure"] as const)(
       await doctor.withDoctorConfigMaintenance(async () => {
         const result = await migrate(cfg);
         expect(result.changes).toEqual([]);
+        expect(snapshots.createVerifiedSqliteSnapshot).toHaveBeenCalledOnce();
         expect(result.warnings.join("\n")).toContain("not committed");
         if (change === "backup failure") {
           expect(result.warnings.join("\n")).toContain("Synthetic backup unavailable");

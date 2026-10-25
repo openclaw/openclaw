@@ -12,10 +12,12 @@ const resolveToken = vi.hoisted(() => vi.fn());
 const authenticate = vi.hoisted(() => vi.fn());
 const guardFetch = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Embedding requests use fixture credentials instead of discovering operator accounts.
 vi.mock("./auth.js", () => ({
   resolveFirstGithubToken: resolveToken,
 }));
 
+// mock-isolation: Each case owns runtime credentials and the synthetic provider endpoint.
 vi.mock("./runtime-auth.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://example.test",
   resolveCopilotRuntimeAuth: authenticate,
@@ -432,7 +434,7 @@ describe("adapter real transport", () => {
                   "copilot-integration-id": "vscode-chat",
                   "X-Private-Header": "not-for-embeddings",
                 }
-              : {},
+              : undefined,
         }),
         auth === "profile" ? model : "",
       );

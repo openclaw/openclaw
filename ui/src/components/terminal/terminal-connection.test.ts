@@ -75,7 +75,9 @@ function expectRetired() {
 function testSink(overrides: Partial<TerminalSink> = {}): TerminalSink {
   return {
     onData: (chunk) => data.push(chunk),
-    onReplay: ({ data: snapshot }) => replays.push(snapshot),
+    onReplay: ({ data: snapshot }) => {
+      replays.push(snapshot);
+    },
     onExit: (info) => exits.push(info),
     ...overrides,
   };

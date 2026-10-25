@@ -383,7 +383,9 @@ describe("SDK terminal carriers", () => {
         terminalType,
         "raw",
       ]);
-      expect(observed.at(-2)?.data).toEqual(terminalData);
+      expect(observed.at(-2)?.data).toEqual(
+        duplicate && mode === "replay" ? { ...terminalData, status: "cancelled" } : terminalData,
+      );
     },
   );
 });

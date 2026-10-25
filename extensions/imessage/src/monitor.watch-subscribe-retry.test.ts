@@ -11,18 +11,21 @@ import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js
 import type { IMessagePayload, MonitorIMessageOpts } from "./monitor/types.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
-const waitUntilReady = vi.hoisted(() => vi.fn<WaitForReady>(async () => {}));
+const waitUntilReady = vi.hoisted(() => vi.fn<typeof WaitForReady>(async () => {}));
 const createClient = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
 const attachAbortHandler = vi.hoisted(() =>
   vi.fn<typeof attachIMessageMonitorAbortHandler>(() => () => {}),
 );
 
+// mock-isolation: Readiness is fixture-controlled; no installed Messages transport is probed.
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
   waitForTransportReady: waitUntilReady,
 }));
 
+// mock-isolation: Retry scenarios use fixture RPC notifications, never the user's Messages store.
 vi.mock("./client.js", () => ({ createIMessageRpcClient: createClient }));
 
+// mock-isolation: Abort cleanup is owned by each fixture client instead of a live transport listener.
 vi.mock("./monitor/abort-handler.js", () => ({
   attachIMessageMonitorAbortHandler: attachAbortHandler,
 }));
@@ -59,7 +62,8 @@ async function monitorMessages(messages: IMessagePayload[], config: MonitorIMess
     createRpcClient({
       waitForClose: async () => {
         for (const message of messages) {
-          await params?.onNotification?.({ method: "message", params: { message } });
+          params?.onNotification?.({ method: "message", params: { message } });
+          await Promise.resolve();
         }
         await Promise.resolve();
         await Promise.resolve();
@@ -166,11 +170,13 @@ it("publishes blocked for a non-retriable watch.subscribe failure", async () => 
 it.each(["from me", "no mention"])("logs one diagnostic per chat for %s drops", async (reason) => {
   vi.useRealTimers();
   installIMessageStateRuntimeForTest();
-  const messages = [
-    [43, 456],
-    [44, 456],
-    [45, 457],
-  ].map(([id, chat_id]) =>
+  const messages = (
+    [
+      [43, 456],
+      [44, 456],
+      [45, 457],
+    ] as const
+  ).map(([id, chat_id]) =>
     groupMessage(id, {
       chat_id,
       guid: `p:0/private-${reason}-${id}`,

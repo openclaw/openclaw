@@ -1,6 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   awaitGateBeforeSettlement,
   createZeroUsageFixture,
@@ -244,6 +245,13 @@ describe("lmstudio stream wrapper", () => {
       expectModelCall(baseStream, 1, { provider: "lmstudio", id: canonicalKey });
       expect(prepareModel).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("resolves native preload credentials when runtime auth is a non-secret marker", async () => {
+    resolveApiKey.mockResolvedValueOnce("synthetic-configured-key");
+    const { run } = harness();
+    expectDone(await run({}, { apiKey: NON_ENV_SECRETREF_MARKER }));
+    expectPreload({ apiKey: "synthetic-configured-key" });
   });
 
   it("dedupes concurrent preload requests for the same model and context", async ({ signal }) => {

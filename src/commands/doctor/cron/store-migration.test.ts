@@ -247,6 +247,17 @@ it.each(["blocked namespace", "unpersisted policy", "conflicting runtime"] as co
     };
     const payload = agentPayload({ model: "codex/gpt-5.6-sol", fallbacks: ["codex/gpt-5.3-mini"] });
     const jobs = [codexJob({ payload })];
+    if (reason === "blocked namespace") {
+      const repaired = repairCronCodexRuntimePolicies({
+        cfg,
+        targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
+        blockedModelIdentities: new Set([
+          expectDefined(legacyCodexProviderIdentityKey("codex"), "namespace"),
+        ]),
+      });
+      expect(repaired.config.agents?.list?.[0]?.models).toEqual({});
+      expect(repaired.config.agents?.defaults?.models).toBeUndefined();
+    }
     const plan = planCronCodexRefRewriteAgainstPersistedConfig({
       cfg,
       targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
