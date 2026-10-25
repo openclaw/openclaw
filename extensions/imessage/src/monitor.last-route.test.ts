@@ -2,7 +2,6 @@
 import path from "node:path";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   recordInboundSession,
   type ensureConfiguredBindingRouteReady,
@@ -26,14 +25,14 @@ import {
   createInboundMessage,
   DEFAULT_SENDER,
   EMPTY_DISPATCH_RESULT,
-  expireCachedPrivateApiStatus,
   insertChatDbMessage,
   readChatDbMessagesAfter,
   setAvailablePrivateApiMethods,
-  settleNotifications,
   withChatDb,
   createIMessageTestRequest,
-  type IMessageTestRequestResult,
+  settleNotifications,
+  type MonitorRunParams,
+  type WatchClientParams,
 } from "./monitor.last-route.test-support.js";
 import * as iMessageMediaStaging from "./monitor/media-staging.js";
 import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
@@ -42,33 +41,27 @@ import {
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./monitor/recovery-cursor.js";
-import type { IMessagePayload, MonitorIMessageOpts } from "./monitor/types.js";
-import { getCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+import type { IMessagePayload } from "./monitor/types.js";
+import {
+  getCachedIMessagePrivateApiStatus,
+  setCachedIMessagePrivateApiStatus,
+} from "./private-api-status.js";
 import type { probeIMessagePrivateApi } from "./probe.js";
 import { installIMessageConfiguredBindingRegistryForTest } from "./test-support/configured-binding.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const WATCH_SUBSCRIBE_PARAMS = { attachments: false, include_reactions: true } as const;
 const WATCH_SUBSCRIBE_OPTIONS = { timeoutMs: 10_000 } as const;
-type MonitorRunParams = {
-  accountId?: string;
-  imessage?: Record<string, unknown>;
-  session?: Record<string, unknown>;
-  messages?: Record<string, unknown>;
-  agents?: Record<string, unknown>;
-  bindings?: OpenClawConfig["bindings"];
-  runtime?: MonitorIMessageOpts["runtime"];
-  allowlist?: boolean;
-};
 type ReplyDispatchParams = Parameters<typeof dispatchReplyWithBufferedBlockDispatcher>[0];
-type WatchClientParams = {
-  requests?: Record<string, IMessageTestRequestResult>;
-  auxiliaryRequests?: Record<string, IMessageTestRequestResult>;
-  message?: IMessagePayload;
-  messages?: IMessagePayload[];
-  onClose?: (notify: (message: IMessagePayload) => void) => Promise<void>;
-  afterNotify?: () => Promise<void>;
-};
+
+function expireCachedPrivateApiStatus(): void {
+  setCachedIMessagePrivateApiStatus(
+    "imsg",
+    { available: false, v2Ready: false, selectors: {}, rpcMethods: [] },
+    1,
+  );
+  getCachedIMessagePrivateApiStatus("imsg");
+}
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
