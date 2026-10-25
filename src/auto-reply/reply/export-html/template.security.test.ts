@@ -60,8 +60,8 @@ function toolResult(toolCallId: string, content: string) {
   return { type: "message", message: { role: "toolResult", toolCallId, content } };
 }
 
-function element<T extends Element = HTMLElement>(root: ParentNode, selector: string): T {
-  return requireElement(root.querySelector<T>(selector), `missing ${selector}`);
+function element(root: ParentNode, selector: string): HTMLElement {
+  return requireElement(root.querySelector<HTMLElement>(selector), `missing ${selector}`);
 }
 
 function firstSelectorForDisplay(css: string, display: string, startAt: number): string | null {

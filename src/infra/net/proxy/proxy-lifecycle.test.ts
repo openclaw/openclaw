@@ -9,6 +9,7 @@ vi.mock("../proxyline-runtime.js", async (importOriginal) => ({
   loadProxyline: () => ({ installGlobalProxy: installGlobalProxyMock }),
 }));
 
+// mock-isolation: Lifecycle fixtures must not replace the worker's global HTTP dispatcher.
 vi.mock("../undici-global-dispatcher.js", () => ({
   forceResetGlobalDispatcher: vi.fn(),
 }));

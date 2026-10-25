@@ -1,5 +1,5 @@
 import { jsonResponse } from "openclaw/plugin-sdk/test-env";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import {
   cancelTrackedTextResponse,
   createStreamingResponse,
@@ -107,8 +107,9 @@ it.each(["outbound", "inbound"] as const)(
   "frames %s rules only as trusted instructions",
   async (direction) => {
     const fetch: FetchLike = async (_url, init) => {
+      assert(typeof init?.body === "string", "expected serialized guard request");
       const body: { instructions?: string; system?: string; input?: string; messages?: unknown } =
-        JSON.parse(String(init?.body));
+        JSON.parse(init.body);
       const instructions = direction === "outbound" ? body.instructions : body.system;
       expect(instructions).toContain("<operator-policy>");
       expect(instructions).toContain(rules[direction]);

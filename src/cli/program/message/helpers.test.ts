@@ -9,14 +9,17 @@ import {
 const messageCommandMock = vi.fn(
   async (_options: Record<string, unknown>): Promise<unknown> => undefined,
 );
+// mock-isolation: Parser fixtures capture dispatch without executing channel sends.
 vi.mock("../../../commands/message.js", () => ({ messageCommand: messageCommandMock }));
 
 const ensureConfigReadyMock = vi.fn(async () => {});
 vi.mock("../config-guard.js", () => ({ ensureConfigReady: ensureConfigReadyMock }));
 
 const getChannelPluginMock = vi.fn();
+// mock-isolation: Action support comes from synthetic plugins, not the runtime registry.
 vi.mock("../../../channels/plugins/index.js", () => ({ getChannelPlugin: getChannelPluginMock }));
 
+// mock-isolation: Terminal styling and verbose state must not affect parser output assertions.
 vi.mock("../../../globals.js", () => ({ danger: (s: string) => s, setVerbose: vi.fn() }));
 
 const pluginRegistry = createMockPluginRegistry([]);
@@ -40,6 +43,7 @@ const runGatewayStopMock = vi.fn(
   async (_eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
 const hookErrorMock = vi.hoisted(() => vi.fn());
+// mock-isolation: Hook failures are captured without configuring process-global log sinks.
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ debug: vi.fn(), warn: hookErrorMock, error: hookErrorMock }),
 }));
@@ -72,6 +76,7 @@ vi.mock("../../one-shot-exit.js", () => ({
   },
 }));
 
+// mock-isolation: Captured command dispatch does not need installed runtime providers.
 vi.mock("../../deps.js", () => ({ createDefaultDeps: () => ({}) }));
 
 const { registerMessageCommands } = await import("../register.message.js");
