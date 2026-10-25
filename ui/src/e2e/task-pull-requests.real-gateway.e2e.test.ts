@@ -33,6 +33,7 @@ import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-d
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 import { recordTaskPrDiagnostics } from "./task-pull-requests.diagnostics.test-support.ts";
 
@@ -203,14 +204,7 @@ suite.define(() => {
             GITHUB_TOKEN: undefined,
             OPENCLAW_GATEWAY_PASSWORD: undefined,
             OPENCLAW_GATEWAY_TOKEN: undefined,
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
+            ...deviceGatewayEnv,
           },
         });
         const port = await getFreePort();
@@ -631,14 +625,7 @@ suite.define(() => {
             GITHUB_TOKEN: undefined,
             OPENCLAW_GATEWAY_PASSWORD: undefined,
             OPENCLAW_GATEWAY_TOKEN: undefined,
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
+            ...deviceGatewayEnv,
           },
         });
         const ownerEmail = "task-authority-owner@example.test";

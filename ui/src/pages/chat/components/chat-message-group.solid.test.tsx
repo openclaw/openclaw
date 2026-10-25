@@ -2,13 +2,11 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ControlUiHost,
-  ControlUiReplacement,
-} from "../../../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
+import { createInertViewHost } from "../../../plugins/control-ui-view.test-support.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
@@ -309,14 +307,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const listeners = new Set<() => void>();
   const abort = new AbortController();
   // SAFETY: This mounted-view fixture supplies the service objects scoped by the host; it never calls their methods.
-  const pluginHost = {
-    signal: abort.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as ControlUiHost;
+  const pluginHost = createInertViewHost(abort.signal);
   let selected: ControlUiReplacement | undefined;
   const reportError = vi.fn();
   const plugins: ControlUiPluginCapability = {

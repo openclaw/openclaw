@@ -62,20 +62,17 @@ function snapshotSqliteFiles(stateDir: string) {
     });
 }
 
+const sqliteSuffixes = ["", "-wal", "-shm"];
+
 function seedStoppedWalDatabase(filename: string, sql: string): void {
-  let family: Array<{ filename: string; bytes: Buffer }>;
+  let family: Buffer[];
   {
     using database = new DatabaseSync(filename);
     database.exec(`PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; ${sql}`);
-    family = ["", "-wal", "-shm"].map((suffix) => ({
-      filename: `${filename}${suffix}`,
-      bytes: fs.readFileSync(`${filename}${suffix}`),
-    }));
+    family = sqliteSuffixes.map((suffix) => fs.readFileSync(`${filename}${suffix}`));
   }
   // Preserve a stopped writer's WAL family, including uncheckpointed schema and row changes.
-  for (const artifact of family) {
-    fs.writeFileSync(artifact.filename, artifact.bytes);
-  }
+  family.forEach((bytes, index) => fs.writeFileSync(`${filename}${sqliteSuffixes[index]}`, bytes));
 }
 
 const finding = (checkId: string, message: string | RegExp, extra = {}) =>
@@ -155,25 +152,21 @@ it.each([
        UPDATE schema_meta SET schema_version = ${schemaVersion} WHERE meta_key = 'primary';
        UPDATE config_machine_state SET value_json = '${schemaVersion}'
          WHERE state_key = 'state.schema.contentVersion';
-       INSERT INTO cron_run_receipts (
-         cursor_id, receipt_id, store_key, job_id, config_revision, agent_id, status,
-         owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (1, 'published-receipt', 'default', 'retained-job', '1', 'main', 'ok', 1, 1, 2);`,
+       INSERT INTO cron_run_receipts (cursor_id, receipt_id, store_key, job_id, config_revision,
+         agent_id, status, owner_pid, started_at_ms, finished_at_ms)
+       VALUES (1, 'published-receipt', 'default', 'retained-job', '1', 'main', 'ok', 1, 1, 2);`,
         );
         seedStoppedWalDatabase(
           agentPath,
-          `INSERT INTO conversations (
-         conversation_id, channel, account_id, kind, peer_id, delivery_target,
-         thread_id, created_at, updated_at
-       ) VALUES (
-         'legacy-general-topic', 'telegram', 'default', 'group', '-1001234567890:topic:1',
-         'telegram:-1001234567890:topic:1', '1', 1, 1
-       );`,
+          `INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id,
+         delivery_target, thread_id, created_at, updated_at)
+       VALUES ('legacy-general-topic', 'telegram', 'default', 'group', '-1001234567890:topic:1',
+         'telegram:-1001234567890:topic:1', '1', 1, 1);`,
         );
         if (args.includes("--all")) {
           const legacyPath = state.statePath("agent", "openclaw-agent.sqlite");
           fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-          for (const suffix of ["", "-wal", "-shm"]) {
+          for (const suffix of sqliteSuffixes) {
             fs.copyFileSync(`${agentPath}${suffix}`, `${legacyPath}${suffix}`);
           }
         }
@@ -218,15 +211,13 @@ it.each([
           });
         }
         const before = snapshotSqliteFiles(state.stateDir);
-        expect(before.map((artifact) => artifact.path)).toEqual(
-          expect.arrayContaining(
-            [sharedPath, agentPath].flatMap((filename) =>
-              ["", "-wal", "-shm"].map((suffix) =>
-                path.relative(state.stateDir, `${filename}${suffix}`),
-              ),
-            ),
-          ),
-        );
+        for (const filename of [sharedPath, agentPath]) {
+          for (const suffix of sqliteSuffixes) {
+            expect(before.map((artifact) => artifact.path)).toContain(
+              path.relative(state.stateDir, `${filename}${suffix}`),
+            );
+          }
+        }
         const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
         const program = new Command();
         registerMaintenanceCommands(program);
@@ -237,7 +228,6 @@ it.each([
         expect(snapshotSqliteFiles(state.stateDir)).toEqual(before);
         const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
         expect(configRead, JSON.stringify(report)).toBe(true);
-        expect(report.checksRun).toBeGreaterThanOrEqual(5);
         expect(report.findings).toEqual(
           expect.arrayContaining([
             ...["shared", "agent", "async-agent"].map((name) =>

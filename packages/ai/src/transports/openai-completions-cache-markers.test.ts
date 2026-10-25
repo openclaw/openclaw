@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { publishRuntimeToolInputSchema } from "../providers/tool-schema-json-projection.js";
 import type { Context } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
@@ -186,14 +187,7 @@ describe("Completions cache markers", () => {
           stopReason: "toolUse",
           timestamp: 2,
         },
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "alpha",
-          isError: false,
-          content: [{ type: "text", text: "Result" }],
-          timestamp: 3,
-        },
+        makeTextToolResult("call_1", "alpha", "Result", false, 3),
       ];
       for (const [messages, anchor] of [
         [context.messages, "Question"],

@@ -90,6 +90,14 @@ export function useMenuMachine(
     revision();
     return runtime;
   };
+  // Rows share one rendered snapshot; imperative navigation still reads the live machine.
+  const presentation = createMemo(
+    () => {
+      const loaded = current();
+      return loaded ? { runtime: loaded, api: loaded.read() } : undefined;
+    },
+    { lazy: true },
+  );
   const run = (intent: (loaded: MenuRuntime) => void) => {
     if (runtime) {
       intent(runtime);
@@ -149,6 +157,7 @@ export function useMenuMachine(
       loading = false;
       pending = [];
       setError(reason);
+      notify();
     }
   };
   onSettled(() => {
@@ -275,7 +284,7 @@ export function useMenuMachine(
     runtime: current,
     items,
     itemRef,
-    highlightedValue: () => current()?.read().highlightedValue ?? null,
+    highlightedValue: () => presentation()?.api.highlightedValue ?? null,
     highlightedValueNow: () => runtime?.service.context.get("highlightedValue") ?? null,
     setHighlightedValue,
     typeahead: (key) => run((loaded) => loaded.service.send({ type: "TYPEAHEAD", key })),
@@ -290,6 +299,7 @@ export function useMenuMachine(
       }
     },
     item(value, disabled, type, checked = false, label = value) {
+      const rendered = presentation();
       return {
         id: `${overlay.id}:${value}`,
         "data-scope": "menu",
@@ -300,7 +310,7 @@ export function useMenuMachine(
         "data-value": value,
         "data-valuetext": label,
         tabIndex: -1,
-        ...current()?.item(value, disabled, type, checked, label),
+        ...rendered?.runtime.item(rendered.api, value, disabled, type, checked, label),
         // Preserve cold entry focus without echoing machine-owned focus into its queue.
         onFocusIn: () => {
           if (runtime?.service.context.get("highlightedValue") !== value) {
