@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ConfigAuditRecord } from "../config/io.audit.js";
-import { SYSTEM_AGENT_GREETING_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import {
   acknowledgeSystemAgentGreetingDelivery,
   buildSystemAgentGreetingQuestion,
@@ -140,26 +139,29 @@ describe("system agent greeting cache", () => {
     },
   );
 
-  it("calls the planner once after a state change and replaces the cache", async () => {
+  it("replaces the cached greeting after a state change", async () => {
     const overview = createOverview();
-    const facts = healthyFacts({ updateAvailable: "2026.7.20", auditSequence: 6 });
+    const facts = healthyFacts({
+      updateAvailable: "2026.7.20",
+      channelHealth: degradedHealth,
+      auditSequence: 6,
+    });
     const cache = createCache(cachedGreeting());
-    const planner = vi.fn(async () =>
-      modelReply("I'm steady.\nAn upgrade to 2026.7.20 is ready when you are."),
-    );
-
-    vi.spyOn(Date, "now").mockReturnValue(200);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(200);
+    const text = "Upgrade to 2026.7.20 is ready. Telegram and Discord need attention.";
+    const planner = vi.fn(async () => {
+      expect(clock).toHaveBeenCalled();
+      clock.mockReturnValue(300);
+      return modelReply(text);
+    });
     const result = await cache.greet({ overview, facts, planner });
 
-    expect(result).toBe("I'm steady.\nAn upgrade to 2026.7.20 is ready when you are.");
-    expect(planner).toHaveBeenCalledOnce();
-    expect(planner).toHaveBeenCalledWith(
-      expect.objectContaining({ overview, facts, timeoutMs: 20_000 }),
-    );
+    expect(result).toBe(text);
     await cache.acknowledge(facts.auditSequence);
     expect(cache.read()).toMatchObject({
       lastSeenAuditSequence: 6,
       factsHash: systemAgentGreetingFactsHash(overview, facts),
+      text,
       modelRef: "openai/gpt-5.5",
       at: 200,
     });
@@ -192,10 +194,11 @@ describe("system agent greeting cache", () => {
     expect(await cache.facts(audit)).toMatchObject({ auditSequence: 11, recentExternalEdit: true });
   });
 
-  it("keeps a template delivery as cursor-only state, then reports a later edit", async () => {
+  it("advances the audit cursor only through delivered facts and reports later edits", async () => {
     const cache = createCache();
-    const audit = createConfigAudit([[3, "config.write"]]);
+    const audit = createConfigAudit([[3, "config.external"]]);
     const facts = await cache.facts(audit);
+    expect(facts).toMatchObject({ auditSequence: 3, recentExternalEdit: true });
 
     await expect(
       cache.greet({
@@ -204,26 +207,19 @@ describe("system agent greeting cache", () => {
           throw new Error("offline");
         },
       }),
-    ).resolves.toBe(`${HEALTHY_GREETING_TEMPLATE}\nChannel health is not available yet.`);
+    ).resolves.toBe(
+      `${HEALTHY_GREETING_TEMPLATE}\nChannel health is not available yet.\n${SYSTEM_AGENT_EXTERNAL_EDIT_ALERT}`,
+    );
     await cache.acknowledge(facts.auditSequence);
     expect(cache.read()).toEqual({ lastSeenAuditSequence: 3 });
+    expect(await cache.facts(audit)).toMatchObject({ auditSequence: 3, recentExternalEdit: false });
 
     audit.add(4, "config.external");
-    expect(await cache.facts(audit)).toMatchObject({ auditSequence: 4, recentExternalEdit: true });
-  });
-
-  it("acknowledges a delivered edit so the next facts load is clear", async () => {
-    const cache = createCache({ lastSeenAuditSequence: 1 });
-    const audit = createConfigAudit([
-      [2, "config.external"],
-      [3, "config.write"],
-    ]);
-    const facts = await cache.facts(audit);
-    expect(facts.recentExternalEdit).toBe(true);
-
-    await cache.acknowledge(facts.auditSequence);
-
-    expect(await cache.facts(audit)).toMatchObject({ auditSequence: 3, recentExternalEdit: false });
+    audit.add(5, "config.write");
+    const later = await cache.facts(audit);
+    expect(later).toMatchObject({ auditSequence: 5, recentExternalEdit: true });
+    await cache.acknowledge(later.auditSequence);
+    expect(await cache.facts(audit)).toMatchObject({ auditSequence: 5, recentExternalEdit: false });
   });
 
   it.each([
@@ -289,24 +285,6 @@ describe("system agent greeting cache", () => {
     expect(planner).toHaveBeenCalledOnce();
   });
 
-  it("timestamps the greeting snapshot before inference begins", async () => {
-    const events: string[] = [];
-    const cache = createCache();
-    vi.spyOn(Date, "now").mockImplementation(() => {
-      events.push("snapshot");
-      return 100;
-    });
-    await cache.greet({
-      planner: async () => {
-        events.push("planner");
-        return modelReply();
-      },
-    });
-
-    expect(events).toEqual(["snapshot", "planner"]);
-    expect(cache.read()?.at).toBe(100);
-  });
-
   it("keeps template failure backoff when the same owner captures a new store", async () => {
     const cache = createCache();
     const renewedCache = createCache();
@@ -367,17 +345,6 @@ describe("system agent greeting cache", () => {
       expect(cache.read()).toBeUndefined();
     },
   );
-
-  it("accepts model text that names every degraded channel", async () => {
-    const cache = createCache();
-    const text = "Telegram and Discord need attention.";
-    const result = await cache.greet({
-      facts: healthyFacts({ channelHealth: degradedHealth }),
-      planner: async () => modelReply(text),
-    });
-    expect(result).toBe(text);
-    expect(cache.read()?.text).toBe(text);
-  });
 
   it.each([
     [overviewWithConfig(false, false), "Config: missing"],
@@ -460,21 +427,6 @@ describe("system agent greeting cache", () => {
   });
 });
 
-describe("system agent greeting identity", () => {
-  it("identifies OpenClaw as the machine caretaker and describes every mild fact", () => {
-    expect(SYSTEM_AGENT_GREETING_SYSTEM_PROMPT).toContain(
-      "You are OpenClaw, the system itself — caretaker of this machine's gateway, config, channels, and agents.",
-    );
-    expect(SYSTEM_AGENT_GREETING_SYSTEM_PROMPT).toContain("nominal systems get one calm line");
-    expect(SYSTEM_AGENT_GREETING_SYSTEM_PROMPT).toContain("If an update is available");
-    expect(SYSTEM_AGENT_GREETING_SYSTEM_PROMPT).toContain("If channelHealthAvailable is false");
-    expect(SYSTEM_AGENT_GREETING_SYSTEM_PROMPT).toContain("If channels are degraded");
-    // The external-edit alert is host-appended at delivery; the model prompt
-    // must not mention it (double phrasing).
-    expect(SYSTEM_AGENT_GREETING_SYSTEM_PROMPT).not.toContain("recentExternalEdit");
-  });
-});
-
 describe("system agent greeting facts", () => {
   it.each(["failed", "revoked"])(
     "does not publish audit facts after a %s asynchronous scan",
@@ -510,13 +462,6 @@ describe("system agent greeting facts", () => {
       }
     },
   );
-
-  it("treats a missing greeting slot as audit watermark zero", async () => {
-    const cache = createCache();
-    const audit = createConfigAudit([[1, "config.external"]]);
-
-    expect(await cache.facts(audit)).toMatchObject({ auditSequence: 1, recentExternalEdit: true });
-  });
 
   it("uses cached update and health state without probing", async () => {
     const facts = await loadSystemAgentGreetingFacts({

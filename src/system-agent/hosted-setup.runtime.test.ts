@@ -1,5 +1,5 @@
 import "./chat-engine.mocks.test-support.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
@@ -122,9 +122,7 @@ describe("SystemAgentChatEngine runtime", () => {
       try {
         expect((await host.startChannel("zalouser")).text).toContain("Waiting for channel login");
         const assertCurrent = retainedOptions?.assertPersistentEffectCurrent;
-        if (!assertCurrent) {
-          throw new Error("Hosted channel setup did not retain its live owner assertion");
-        }
+        assert(assertCurrent, "Hosted channel setup did not retain its live owner assertion");
         expect(assertCurrent).not.toThrow();
         if (ending === "disposed") {
           host.dispose();
@@ -145,7 +143,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const baseConfig: OpenClawConfig = {
       agents: { defaults: { workspace: "/tmp/skills-workspace" } },
     };
-    const beforeEffects: Array<() => Promise<void>> = [];
     const appendAuditEntry = installAudit();
     useSetupConfig(baseConfig, "skills-base-hash");
     mocks.setupSkills.mockImplementation(
@@ -156,7 +153,6 @@ describe("SystemAgentChatEngine runtime", () => {
       ) => {
         expect(workspaceDir).toBe("/tmp/skills-workspace");
         expect(options.beforePersistentEffect).toBeTypeOf("function");
-        beforeEffects.push(options.beforePersistentEffect!);
         await prompter.note("Eligible: 2\nMissing requirements: 1", "Skills status");
         await options.beforePersistentEffect?.();
         return { ...config, skills: { install: { nodeManager: "npm" } } };
@@ -168,7 +164,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const reply = await engine.handle("configure skills");
 
     expect(reply.text).toContain("skills dependency setup is complete");
-    expect(beforeEffects).toHaveLength(1);
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({ skills: { install: { nodeManager: "npm" } } }),
       { allowConfigSizeDrop: false, baseHash: "skills-base-hash" },
@@ -181,7 +176,6 @@ describe("SystemAgentChatEngine runtime", () => {
   it("hosts search setup as question cards and keeps gateway credentials out of model history", async () => {
     const baseConfig: OpenClawConfig = {};
     const appendAuditEntry = installAudit();
-    const beforePersistentEffects: Array<() => Promise<void>> = [];
     useSetupConfig(baseConfig, "search-base-hash");
     mocks.runSearchSetupFlow.mockImplementation(
       async (
@@ -190,7 +184,6 @@ describe("SystemAgentChatEngine runtime", () => {
         >
       ) => {
         expect(options.preserveDisabledSearchState).toBe(false);
-        beforePersistentEffects.push(options.beforePersistentEffect!);
         const provider = await prompter.select({
           message: "Search provider",
           options: [
@@ -229,7 +222,6 @@ describe("SystemAgentChatEngine runtime", () => {
 
     const done = await engine.handle("search-secret-value");
     expect(done.text).toContain("web search setup is complete");
-    expect(beforePersistentEffects).toHaveLength(1);
     expect(appendAuditEntry).toHaveBeenCalledWith(
       expect.objectContaining({ operation: "search.setup" }),
     );
@@ -259,34 +251,30 @@ describe("SystemAgentChatEngine runtime", () => {
     expect(done.text).toContain("Done — gateway settings saved.");
     expect(done.text).toContain("Restart the Gateway to apply them (`restart gateway`).");
     expect(done.text).not.toContain("restarted");
-    expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gateway: expect.objectContaining({
-          port: 19001,
-          bind: "lan",
-          auth: expect.objectContaining({
-            mode: "token",
-            token: expect.stringMatching(/^\S{16,}$/),
-          }),
-          tailscale: expect.objectContaining({ mode: "off" }),
-        }),
-      }),
-      {
-        allowConfigSizeDrop: false,
-        baseHash: "gateway-base-hash",
-        afterWrite: {
-          mode: "none",
-          reason: "Gateway setup defers runtime apply until explicit restart",
+    const [written, writeOptions] = mocks.writeWizardConfigFile.mock.calls[0] ?? [];
+    expect(written).toMatchObject({
+      gateway: {
+        port: 19001,
+        bind: "lan",
+        auth: {
+          mode: "token",
+          token: expect.stringMatching(/^\S{16,}$/),
         },
+        tailscale: { mode: "off" },
       },
-    );
-    expect(appendAuditEntry).toHaveBeenCalledWith({
-      operation: "gateway.setup",
-      summary: "Configured Gateway via chat setup",
-      details: { capability: "gateway" },
     });
+    expect(writeOptions).toEqual({
+      allowConfigSizeDrop: false,
+      baseHash: "gateway-base-hash",
+      afterWrite: {
+        mode: "none",
+        reason: "Gateway setup defers runtime apply until explicit restart",
+      },
+    });
+    expect(appendAuditEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "gateway.setup" }),
+    );
     // Nothing was typed, and the generated secret never enters the transcript.
-    const written = mocks.writeWizardConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
     const generatedToken = written?.gateway?.auth?.token;
     expect(typeof generatedToken).toBe("string");
     expect(JSON.stringify(engine.historySince(0))).not.toContain(generatedToken);

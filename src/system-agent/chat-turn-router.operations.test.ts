@@ -23,7 +23,6 @@ import {
 } from "./chat-engine.test-support.js";
 import * as hostedSetup from "./hosted-setup.runtime.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
-import type { SystemAgentOperation } from "./operation-types.js";
 import { SystemAgentOperationExitError } from "./operations-execution-helpers.js";
 import { describeSystemAgentPersistentOperation } from "./operations.js";
 import * as operations from "./operations.js";
@@ -37,10 +36,6 @@ function mockApprovedOperation(execute: typeof nativeExecuteOperation) {
   vi.spyOn(operations, "executeSystemAgentOperation").mockImplementation((...args) =>
     args[2]?.approved === true ? execute(...args) : nativeExecuteOperation(...args),
   );
-}
-
-function repairRunner() {
-  return vi.fn<SystemAgentTurnRunner>(async () => ({ text: "Proposed correction." }));
 }
 
 describe("SystemAgentChatEngine operations", () => {
@@ -122,56 +117,39 @@ describe("SystemAgentChatEngine operations", () => {
   );
 
   it.each([
-    {
-      source: "typed",
-      command: "connect telegram",
-      directive: { kind: "channel-setup", channel: "telegram" },
-    },
-    { source: "typed", command: "model setup", directive: { kind: "model-setup" } },
-    {
-      source: "typed",
-      command: "open channel wizard",
-      directive: { kind: "open-setup", target: "channels" },
-    },
-    {
-      source: "tool",
-      command: "connect telegram",
-      directive: { kind: "channel-setup", channel: "telegram" },
-    },
-  ] satisfies Array<{
-    source: "typed" | "tool";
-    command: string;
-    directive: SystemAgentOperation;
-  }>)(
-    "keeps delegated $source $command with the operator",
-    async ({ source, command, directive }) => {
-      const startWizard = vi.fn(async () => "applied" as const);
-      const importMemory = vi.fn(async () => ({
-        status: "workspace-missing" as const,
-        providers: [] as [],
-        workspace: "/tmp/openclaw-no-workspace",
-      }));
-      vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(startWizard);
-      vi.spyOn(hostedSetup, "runHostedSkillsSetup").mockImplementationOnce(startWizard);
-      vi.spyOn(hostedSetup, "runHostedSearchSetup").mockImplementationOnce(startWizard);
-      vi.spyOn(hostedSetup, "runHostedGatewaySetup").mockImplementationOnce(startWizard);
-      vi.spyOn(hostedSetup, "runHostedMemoryImport").mockImplementationOnce(importMemory);
-      const engine = createEngine({
-        operatorApprovalOnly: true,
-        runAgentTurn: async () =>
-          source === "tool" ? { text: "Opening setup.", directive } : null,
-      });
+    ["typed", "connect telegram"],
+    ["typed", "model setup"],
+    ["typed", "open channel wizard"],
+    ["tool", "connect telegram"],
+  ] as const)("keeps delegated %s %s with the operator", async (source, command) => {
+    const startWizard = vi.fn(async () => "applied" as const);
+    const importMemory = vi.fn(async () => ({
+      status: "workspace-missing" as const,
+      providers: [] as [],
+      workspace: "/tmp/openclaw-no-workspace",
+    }));
+    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(startWizard);
+    vi.spyOn(hostedSetup, "runHostedSkillsSetup").mockImplementationOnce(startWizard);
+    vi.spyOn(hostedSetup, "runHostedSearchSetup").mockImplementationOnce(startWizard);
+    vi.spyOn(hostedSetup, "runHostedGatewaySetup").mockImplementationOnce(startWizard);
+    vi.spyOn(hostedSetup, "runHostedMemoryImport").mockImplementationOnce(importMemory);
+    const engine = createEngine({
+      operatorApprovalOnly: true,
+      runAgentTurn: async () =>
+        source === "tool"
+          ? { text: "Opening setup.", directive: { kind: "channel-setup", channel: "telegram" } }
+          : null,
+    });
 
-      const reply = await engine.handle(source === "typed" ? command : "help me set up");
+    const reply = await engine.handle(source === "typed" ? command : "help me set up");
 
-      expect(reply.action).toBe("none");
-      expect(reply.handoff).toBeUndefined();
-      expect(reply.step).toBeUndefined();
-      expect(reply.text).toContain("cannot run from a delegated agent request");
-      expect(startWizard).not.toHaveBeenCalled();
-      expect(importMemory).not.toHaveBeenCalled();
-    },
-  );
+    expect(reply.action).toBe("none");
+    expect(reply.handoff).toBeUndefined();
+    expect(reply.step).toBeUndefined();
+    expect(reply.text).toContain("cannot run from a delegated agent request");
+    expect(startWizard).not.toHaveBeenCalled();
+    expect(importMemory).not.toHaveBeenCalled();
+  });
 
   it("retires an agent proposal before a reusable Gateway handoff", async () => {
     const armed: boolean[] = [];
@@ -448,123 +426,107 @@ describe("SystemAgentChatEngine operations", () => {
     );
   });
 
-  it("returns a failed operator config unset to one repair turn", async () => {
-    useTempStateDir();
-    const runAgentTurn = repairRunner();
-    const runConfigUnset = operationMocks.runConfigUnset.mockImplementation(async () => {
-      throw new Error("fixture schema error");
-    });
-    const engine = createChatEngine({
-      operatorApprovalOnly: true,
-      runAgentTurn,
-    });
-    await engine.handle("config unset agents.defaults.fastModeDefault");
-    const reply = expectDefined(
-      await engine.resolveOperatorApproval(
-        "allow-once",
-        expectDefined(engine.getPendingOperatorProposal(), "config proposal").hash,
-      ),
-      "operator reply",
-    );
-    expect(reply.applied).toBe(false);
-    expect(reply.text).toContain("The config write failed");
-    expect(runConfigUnset).toHaveBeenCalledOnce();
-    expect(runAgentTurn).toHaveBeenCalledOnce();
-    expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain("fixture schema error");
-    expect(runAgentTurn.mock.calls[0]?.[0]?.approvalArmed).toBe(false);
-  });
-
-  it("preserves the captured CLI error while proposing a repair", async () => {
-    const validationError =
-      "Config validation failed: gateway.port: Invalid input: expected number, received string";
-    const runAgentTurn = repairRunner();
-    mockApprovedOperation(async (_operation, runtime) => {
-      runtime.error(validationError);
-      throw new SystemAgentOperationExitError(1);
-    });
-    const engine = createEngine({ yes: true, runAgentTurn });
-    const reply = await engine.handle("config set gateway.port banana");
-    expect(reply.text).toContain(validationError);
-    expect(reply.text).not.toContain("operation exited");
-    expect(runAgentTurn).toHaveBeenCalledOnce();
-    expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain(validationError);
-    expect(runAgentTurn.mock.calls[0]?.[0]?.approvalArmed).toBe(false);
-  });
-
-  it("reports a config write's post-publication failure without claiming no write occurred", async () => {
-    useTempStateDir();
-    const runAgentTurn = repairRunner();
-    const writerError = new ConfigWritePostCommitError({
-      configPath: "/tmp/fixture-openclaw.json",
-      rollbackStatus: "not-restored",
-      cause: new Error("fixture refresh failed"),
-    });
-    operationMocks.runConfigSet.mockImplementation(async () => {
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        ...configSnapshot({
-          ...structuredClone(sharedVerifiedInferenceConfig),
-          gateway: { port: 18789 },
-        }),
-        path: "/tmp/fixture-openclaw.json",
-        hash: "published",
+  it.each(["operator-unset", "cli-error", "published-error", "invalid-value"] as const)(
+    "returns %s to one unarmed repair turn",
+    async (failure) => {
+      useTempStateDir();
+      const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async (params) => {
+        const tool = createSystemAgentTool({
+          surface: params.surface,
+          approvalArmed: params.approvalArmed,
+          proposalRef: params.session.proposalRef,
+        });
+        const result = await tool.execute("repair-proposal", {
+          action: "config_set",
+          path: "gateway.port",
+          value: "18789",
+        });
+        return {
+          text: `That port was not a number — here is the fix.\n${extractToolResultText(result)}`,
+        };
       });
-      throw writerError;
-    });
-    const engine = createChatEngine({
-      yes: true,
-      runAgentTurn,
-    });
-    const reply = await engine.handle("config set gateway.port 18789");
-    expect(reply.applied).toBe(false);
-    expect(reply.text).toContain(writerError.message);
-    expect(reply.text).not.toContain("not applied");
-    expect(reply.text).not.toContain("No change");
-    expect(runAgentTurn).toHaveBeenCalledOnce();
-    expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain(writerError.message);
-    expect(runAgentTurn.mock.calls[0]?.[0]?.approvalArmed).toBe(false);
-  });
-
-  it("SystemAgentChatEngine.handle returns a rejected config write to the model for a repair proposal", async () => {
-    useTempStateDir();
-    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async (params) => {
-      const tool = createSystemAgentTool({
-        surface: params.surface,
-        approvalArmed: params.approvalArmed,
-        proposalRef: params.session.proposalRef,
+      const published = failure === "published-error";
+      const unset = failure === "operator-unset";
+      const error = published
+        ? new ConfigWritePostCommitError({
+            configPath: "/tmp/fixture-openclaw.json",
+            rollbackStatus: "not-restored",
+            cause: new Error("fixture refresh failed"),
+          })
+        : new Error(
+            unset ? "fixture schema error" : "gateway.port: Expected number, received string",
+          );
+      const command = unset
+        ? "config unset agents.defaults.fastModeDefault"
+        : `config set gateway.port ${published ? "18789" : "banana"}`;
+      if (failure === "cli-error") {
+        mockApprovedOperation(async (_operation, runtime) => {
+          runtime.error(error.message);
+          throw new SystemAgentOperationExitError(1);
+        });
+      } else {
+        (unset ? operationMocks.runConfigUnset : operationMocks.runConfigSet).mockImplementation(
+          async () => {
+            if (published) {
+              mocks.readConfigFileSnapshot.mockResolvedValue({
+                ...configSnapshot({
+                  ...structuredClone(sharedVerifiedInferenceConfig),
+                  gateway: { port: 18789 },
+                }),
+                path: "/tmp/fixture-openclaw.json",
+                hash: "published",
+              });
+            }
+            throw error;
+          },
+        );
+      }
+      const engine = createChatEngine({
+        runAgentTurn,
+        operatorApprovalOnly: unset,
+        yes: failure === "cli-error" || published,
       });
-      const result = await tool.execute("repair-proposal", {
-        action: "config_set",
+      let reply;
+      if (unset) {
+        await engine.handle(command);
+        reply = expectDefined(
+          await engine.resolveOperatorApproval(
+            "allow-once",
+            expectDefined(engine.getPendingOperatorProposal(), "config proposal").hash,
+          ),
+          "operator reply",
+        );
+        expect(operationMocks.runConfigUnset).toHaveBeenCalledOnce();
+      } else if (failure === "invalid-value") {
+        engine.propose({ kind: "config-set", path: "gateway.port", value: "banana" });
+        reply = await engine.handle("yes");
+      } else {
+        reply = await engine.handle(command);
+      }
+      expect(reply.text).toContain("The config write failed");
+      expect(reply.text).toContain(error.message);
+      expect(reply.text).toContain("That port was not a number");
+      if (unset || published) {
+        expect(reply.applied).toBe(false);
+      }
+      if (failure === "cli-error") {
+        expect(reply.text).not.toContain("operation exited");
+      }
+      if (published) {
+        expect(reply.text).not.toContain("not applied");
+        expect(reply.text).not.toContain("No change");
+      }
+      expect(engine.getPendingOperatorProposal()?.operation).toEqual({
+        kind: "config-set",
         path: "gateway.port",
         value: "18789",
       });
-      return {
-        text: `That port was not a number — here is the fix.\n${extractToolResultText(result)}`,
-      };
-    });
-    const validationError = "gateway.port: Expected number, received string";
-    operationMocks.runConfigSet.mockImplementation(async () => {
-      throw new Error(validationError);
-    });
-    const engine = createChatEngine({
-      runAgentTurn,
-    });
-    engine.propose({ kind: "config-set", path: "gateway.port", value: "banana" });
-
-    const reply = await engine.handle("yes");
-
-    expect(reply.text).toContain("The config write failed");
-    expect(reply.text).toContain(validationError);
-    expect(reply.text).toContain("That port was not a number");
-    // The corrective write is proposed, not auto-applied.
-    expect(engine.getPendingOperatorProposal()?.operation).toEqual({
-      kind: "config-set",
-      path: "gateway.port",
-      value: "18789",
-    });
-    expect(runAgentTurn).toHaveBeenCalledOnce();
-    expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain(validationError);
-    expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain("[config-verify]");
-  });
+      expect(runAgentTurn).toHaveBeenCalledOnce();
+      expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain(error.message);
+      expect(runAgentTurn.mock.calls[0]?.[0]?.approvalArmed).toBe(false);
+      expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain("[config-verify]");
+    },
+  );
 
   it.each(["invalid", "missing", "unreadable"] as const)(
     "warns when written config is %s",
