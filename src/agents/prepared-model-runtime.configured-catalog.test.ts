@@ -8,9 +8,8 @@ import {
 } from "../plugins/provider-discovery.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { resolveEmbeddedRuntimeModelPolicy } from "./embedded-agent-runner/run/setup.js";
-import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
-import { snapshot } from "./model-catalog-fixtures.test-support.js";
 import { orderModelCatalogForPicker } from "./model-catalog-order.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -20,31 +19,6 @@ import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured
 import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
-
-const endpoint = "https://fixture.invalid/v1";
-const model = (id: string, overrides: Parameters<typeof modelDefinition>[1] = {}) =>
-  modelDefinition(id, { contextWindow: 32_000, maxTokens: 4096, reasoning: false, ...overrides });
-const provider = (models: ReturnType<typeof model>[], baseUrl = endpoint) => ({
-  baseUrl,
-  api: "openai-responses" as const,
-  models,
-});
-const metadataFor = (modelCatalog: PluginMetadataSnapshot["plugins"][number]["modelCatalog"]) =>
-  createPluginMetadataSnapshotFixture({
-    plugins: [{ id: "fixture", providers: ["fixture"], modelCatalog }],
-  });
-function registryFor(
-  config: OpenClawConfig,
-  pluginMetadataSnapshot: PluginMetadataSnapshot,
-  options: Parameters<typeof ModelRegistry.create>[2] = {},
-) {
-  return ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
-    config,
-    pluginMetadataSnapshot,
-    includePluginCatalogs: false,
-    ...options,
-  });
-}
 
 function captureRegistry(
   registry: ModelRegistry,
@@ -63,16 +37,41 @@ describe("configured catalog registry composition", () => {
   it.each([true, false])(
     "keeps startup and refresh order consistent (manifest=%s)",
     async (manifest) => {
-      const models = ["z-strong", "m-current", "a-small"].map((id) => model(id));
-      const declaration = provider(models);
-      const config: OpenClawConfig = {
-        models: { providers: { fixture: { ...declaration, models: models.toReversed() } } },
+      const models = ["z-strong", "m-current", "a-small"].map((id) =>
+        Object.assign(
+          modelDefinition(id, { contextWindow: 32_000, maxTokens: 4096, reasoning: false }),
+          { input: ["text" as const] },
+        ),
+      );
+      const provider = {
+        api: "openai-responses" as const,
+        baseUrl: "https://fixture.invalid/v1",
+        models,
       };
-      const metadataSnapshot = manifest
-        ? metadataFor({ providers: { fixture: declaration }, discovery: { fixture: "runtime" } })
-        : createPluginMetadataSnapshotFixture();
-      const registry = registryFor(config, metadataSnapshot, {
-        modelsJsonContents: JSON.stringify({ providers: { fixture: declaration } }),
+      const config: OpenClawConfig = {
+        models: { providers: { fixture: { ...provider, models: models.toReversed() } } },
+      };
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: manifest
+          ? [
+              {
+                id: "fixture",
+                providers: ["fixture"],
+                modelCatalog: {
+                  providers: { fixture: provider },
+                  discovery: { fixture: "runtime" },
+                },
+              },
+            ]
+          : [],
+      });
+      const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+        config,
+        includePluginCatalogs: false,
+        pluginMetadataSnapshot: metadataSnapshot,
+        modelsJsonContents: JSON.stringify({
+          providers: { fixture: provider },
+        }),
       });
       const { modelCatalog } = captureRegistry(registry, config, metadataSnapshot);
       const refreshed = await buildPreparedModelCatalogSnapshot({
@@ -94,11 +93,33 @@ describe("configured catalog registry composition", () => {
   );
 
   it("publishes static rows answered under a declared catalog alias once on startup", async () => {
-    const declaration = provider([model("static-model", { name: "Static model" })]);
+    const provider = {
+      api: "openai-responses" as const,
+      baseUrl: "https://fixture.invalid/v1",
+      models: [
+        {
+          id: "static-model",
+          name: "Static model",
+          contextWindow: 32_000,
+          maxTokens: 4096,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          reasoning: false,
+          input: ["text" as const],
+        },
+      ],
+    };
     const config: OpenClawConfig = {};
-    const metadataSnapshot = metadataFor({
-      providers: { fixture: declaration },
-      aliases: { "fixture-alias": { provider: "fixture" } },
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "fixture",
+          providers: ["fixture"],
+          modelCatalog: {
+            providers: { fixture: provider },
+            aliases: { "fixture-alias": { provider: "fixture" } },
+          },
+        },
+      ],
     });
     const staticProviderConfigs = resolvePreparedProviderStaticConfigs(
       await prepareProviderStaticCatalog({
@@ -109,12 +130,17 @@ describe("configured catalog registry composition", () => {
             label: "Fixture",
             aliases: ["fixture-alias"],
             auth: [],
-            staticCatalog: { run: async () => ({ provider: declaration }) },
+            staticCatalog: { run: async () => ({ provider }) },
           },
         ],
       }),
     );
-    const registry = registryFor(config, metadataSnapshot, { staticProviderConfigs });
+    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+      config,
+      includePluginCatalogs: false,
+      pluginMetadataSnapshot: metadataSnapshot,
+      staticProviderConfigs,
+    });
     const { modelCatalog } = captureRegistry(registry, config, metadataSnapshot);
 
     // The producer answers the alias too; the startup publication folds it into the canonical row.
@@ -131,14 +157,26 @@ describe("configured catalog registry composition", () => {
       const capture = (rowCount: number, scope: "first" | "second") => {
         const config: OpenClawConfig = {};
         const metadataSnapshot = createPluginMetadataSnapshotFixture();
-        const registry = registryFor(config, metadataSnapshot, {
+        const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+          config,
+          includePluginCatalogs: false,
+          pluginMetadataSnapshot: metadataSnapshot,
           modelsJsonContents: JSON.stringify({
             providers: {
-              fixture: provider(
-                Array.from({ length: rowCount }, (_, index) =>
-                  ["legacy", "first", "second"].map((prefix) => model(`${prefix}-${index}`)),
+              fixture: {
+                api: "openai-responses",
+                baseUrl: "https://fixture.invalid/v1",
+                models: Array.from({ length: rowCount }, (_, index) =>
+                  ["legacy", "first", "second"].map((prefix) => ({
+                    id: `${prefix}-${index}`,
+                    name: `${prefix}-${index}`,
+                    contextWindow: 32_000,
+                    maxTokens: 4096,
+                    reasoning: false,
+                    input: ["text"],
+                  })),
                 ).flat(),
-              ),
+              },
             },
           }),
         });
@@ -172,89 +210,113 @@ describe("configured catalog registry composition", () => {
     modelBaseUrl?: string;
     expectedBaseUrl?: string;
     expectedIds?: string[];
-    inheritsChoices?: boolean;
+    inheritsChoices: boolean;
   }>([
     {
       name: "captured endpoint",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
       expectedBaseUrl: "http://127.0.0.1:9/v1",
+      inheritsChoices: false,
     },
     {
       name: "replace with a different captured endpoint",
       mode: "replace",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
       expectedIds: ["selected"],
+      inheritsChoices: false,
     },
     {
       name: "model endpoint pin",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
-      modelBaseUrl: endpoint,
+      modelBaseUrl: "https://fixture.invalid/v1",
       inheritsChoices: true,
     },
-    { name: "API override", modelApi: "openai-responses" },
+    {
+      name: "API override",
+      modelApi: "openai-responses",
+      inheritsChoices: false,
+    },
     {
       name: "endpoint override",
       modelBaseUrl: "https://proxy.invalid/v1",
       expectedBaseUrl: "https://proxy.invalid/v1",
+      inheritsChoices: false,
     },
     {
       name: "equivalent endpoint",
-      modelBaseUrl: `${endpoint}/`,
-      expectedBaseUrl: `${endpoint}/`,
+      modelBaseUrl: "https://fixture.invalid/v1/",
+      expectedBaseUrl: "https://fixture.invalid/v1/",
       inheritsChoices: true,
     },
   ])(
     "keeps configured rows and same-route choices: $name",
     ({
       mode = "merge",
-      capturedBaseUrl = endpoint,
+      capturedBaseUrl = "https://fixture.invalid/v1",
       modelApi,
       modelBaseUrl,
-      expectedBaseUrl = endpoint,
+      expectedBaseUrl = "https://fixture.invalid/v1",
       expectedIds = ["selected", "retained-only"],
-      inheritsChoices = false,
+      inheritsChoices,
     }) => {
       const configured: ModelCatalogEntry = {
         provider: "donor-fixture",
         id: "selected",
         name: "Configured selected",
         api: modelApi ?? "openai-completions",
-        baseUrl: endpoint,
+        baseUrl: "https://fixture.invalid/v1",
         contextWindow: 32_000,
         reasoning: true,
         configuredReasoning: true,
         input: ["text"],
       };
       const metadataSnapshot = createPluginMetadataSnapshotFixture();
-      const config: OpenClawConfig = configFor("donor-fixture", endpoint, {
-        api: "openai-completions",
-        models: [
-          model("selected", {
-            name: "Configured selected",
-            reasoning: true,
-            ...(modelApi ? { api: modelApi } : {}),
-            ...(modelBaseUrl ? { baseUrl: modelBaseUrl } : {}),
-          }),
-        ],
-      });
-      config.models = { ...config.models, mode };
-      const registry = registryFor(config, metadataSnapshot, {
+      const config: OpenClawConfig = {
+        models: {
+          mode,
+          providers: {
+            "donor-fixture": {
+              api: "openai-completions",
+              baseUrl: "https://fixture.invalid/v1",
+              models: [
+                modelDefinition("selected", {
+                  name: "Configured selected",
+                  contextWindow: 32_000,
+                  maxTokens: 4096,
+                  ...(modelApi ? { api: modelApi } : {}),
+                  ...(modelBaseUrl ? { baseUrl: modelBaseUrl } : {}),
+                }),
+              ],
+            },
+          },
+        },
+      };
+      const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+        config,
+        includePluginCatalogs: false,
+        pluginMetadataSnapshot: metadataSnapshot,
         modelsJsonContents: JSON.stringify({
           providers: {
             "donor-fixture": {
               api: "openai-completions",
               baseUrl: capturedBaseUrl,
               models: [
-                model("selected", {
+                {
+                  id: "selected",
                   name: "Earlier selected",
                   contextWindow: 64_000,
+                  maxTokens: 4096,
+                  reasoning: false,
                   input: ["text", "image"],
-                }),
-                model("retained-only", {
+                },
+                {
+                  id: "retained-only",
                   name: "Retained authored row",
                   contextWindow: 48_000,
+                  maxTokens: 4096,
+                  reasoning: false,
                   input: ["text", "image"],
-                }),
+                },
               ],
             },
           },
@@ -284,7 +346,7 @@ describe("configured catalog registry composition", () => {
             name: configured.name,
             provider: configured.provider,
             api: "openai-completions",
-            baseUrl: endpoint,
+            baseUrl: "https://fixture.invalid/v1",
             reasoning: true,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -307,6 +369,11 @@ describe("configured catalog registry composition", () => {
             }
           : {}),
       };
+      expect(modelCatalog.entries[0]).toMatchObject(expectedEntry);
+      expect(modelCatalog.entries[0]?.contextWindows).toEqual(expectedEntry.contextWindows);
+      expect(modelCatalog.entries[0]?.contextWindowDefault).toBe(
+        expectedEntry.contextWindowDefault,
+      );
       expect(modelCatalog.routeVariants).toEqual(modelCatalog.entries);
       const policy = createModelVisibilityPolicy({
         cfg: config,
@@ -315,11 +382,11 @@ describe("configured catalog registry composition", () => {
         defaultModel: configured.id,
         manifestPlugins: metadataSnapshot,
       });
-      for (const entry of [modelCatalog.entries[0], policy.configuredCatalog[0]]) {
-        expect(entry).toMatchObject(expectedEntry);
-        expect(entry?.contextWindows).toEqual(expectedEntry.contextWindows);
-        expect(entry?.contextWindowDefault).toBe(expectedEntry.contextWindowDefault);
-      }
+      expect(policy.configuredCatalog[0]).toMatchObject(expectedEntry);
+      expect(policy.configuredCatalog[0]?.contextWindows).toEqual(expectedEntry.contextWindows);
+      expect(policy.configuredCatalog[0]?.contextWindowDefault).toBe(
+        expectedEntry.contextWindowDefault,
+      );
     },
   );
 });
@@ -349,33 +416,27 @@ describe("synthetic configured context publication", () => {
     providerAuthLabels: new Map(),
     credentials: { fixture: { type: "api_key" as const, key: account } },
   });
-  const publication = (
-    catalog: Parameters<typeof prepareModelCatalogPublication>[0],
-    previous?: Parameters<typeof prepareModelCatalogPublication>[2],
-    account = "account-a",
-  ) => prepareModelCatalogPublication(catalog, new Map(), previous, auth(account), (id) => id);
-  const materialize = (
-    published: ReturnType<typeof publication>,
-    staticEntries: ModelCatalogEntry[] = [fallback],
-  ) =>
-    materializePreparedModelCatalog(
-      published.catalog,
-      [],
-      staticEntries,
-      new Set(published.discoveryOrigins.map(({ provider: id }) => id)),
-    );
   function budget(
     entries: ModelCatalogEntry[] = [discovered],
     staticEntry: ModelCatalogEntry = fallback,
     config: OpenClawConfig = {},
   ) {
-    const catalog = materialize(
-      publication(
-        snapshot(entries, {
-          providerOutcomes: [{ provider: "fixture", status: "ready" }],
-        }),
-      ),
+    const publication = prepareModelCatalogPublication(
+      {
+        entries,
+        routeVariants: entries,
+        providerOutcomes: [{ provider: "fixture", status: "ready" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+    );
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
       [staticEntry],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
     );
     const selected =
       catalog.staticEntries?.find(
@@ -413,7 +474,7 @@ describe("synthetic configured context publication", () => {
     (configuredReasoning) => {
       const accepted = { ...discovered, reasoning: true, input: ["text" as const] };
       const catalog = materializePreparedModelCatalog(
-        snapshot([accepted]),
+        { entries: [accepted], routeVariants: [accepted] },
         [
           {
             provider: "fixture",
@@ -461,14 +522,22 @@ describe("synthetic configured context publication", () => {
     ["different physical endpoint", { ...discovered, baseUrl: "https://other.example/v1" }, true],
   ] as const)("replaces only the %s synthetic fallback", (_name, physical, retained) => {
     const logical = { ...discovered, api: "openai-completions" as const };
-    const catalog = materialize(
-      publication(
-        snapshot([logical], {
-          routeVariants: [logical, physical],
-          providerOutcomes: [{ provider: "fixture", status: "ready" }],
-        }),
-      ),
+    const publication = prepareModelCatalogPublication(
+      {
+        entries: [logical],
+        routeVariants: [logical, physical],
+        providerOutcomes: [{ provider: "fixture", status: "ready" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+    );
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
       [{ ...fallback, baseUrl: discovered.baseUrl }],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
     );
     expect(catalog.entries[0]?.api).toBe("openai-completions");
     expect(catalog.routeVariants).toContainEqual(physical);
@@ -485,15 +554,24 @@ describe("synthetic configured context publication", () => {
   });
   it("preserves explicit authored prompt and native-window caps", () => {
     for (const limits of [{ contextTokens: 64_000 }, { contextWindow: 64_000 }]) {
-      const config = configFor("fixture", discovered.baseUrl, {
-        models: [
-          model("new-model", {
-            name: "New model",
-            contextWindow: discovered.contextWindow,
-            ...limits,
-          }),
-        ],
-      });
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: discovered.baseUrl,
+              models: [
+                modelDefinition("new-model", {
+                  name: "New model",
+                  reasoning: false,
+                  contextWindow: discovered.contextWindow,
+                  maxTokens: 4096,
+                  ...limits,
+                }),
+              ],
+            },
+          },
+        },
+      };
       expect(budget([discovered], fallback, config)).toBe(64_000);
     }
   });
@@ -502,34 +580,59 @@ describe("synthetic configured context publication", () => {
     expect(budget([{ ...discovered, provider: "other" }])).toBe(128_000);
   });
   it("does not promote a static starter after first-load discovery failure", () => {
-    const published = publication(
-      snapshot([], {
+    const publication = prepareModelCatalogPublication(
+      {
+        entries: [],
+        routeVariants: [],
         staticEntries: [discovered],
         providerOutcomes: [{ provider: "fixture", status: "unavailable" }],
-      }),
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
     );
-    const catalog = materialize(published);
-    expect(published.discoveryOrigins).toEqual([]);
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
+      [fallback],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+    );
+    expect(publication.discoveryOrigins).toEqual([]);
     expect(catalog.staticEntries).toContainEqual(fallback);
     expect(catalog.entries).toContainEqual(expect.objectContaining(discovered));
   });
 
   it("retains only same-account inventory after failure", () => {
-    const accepted = publication(
-      snapshot([discovered], {
+    const accepted = prepareModelCatalogPublication(
+      {
+        entries: [discovered],
         routeVariants: [],
         providerOutcomes: [{ provider: "fixture", status: "ready", profileId: "a" }],
-      }),
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
     );
     for (const account of ["account-a", "account-b"]) {
-      const failed = publication(
-        snapshot([], {
+      const failed = prepareModelCatalogPublication(
+        {
+          entries: [],
+          routeVariants: [],
           providerOutcomes: [{ provider: "fixture", status: "unavailable", profileId: "a" }],
-        }),
+        },
+        new Map(),
         { ...accepted, providers: new Map() },
-        account,
+        auth(account),
+        (provider) => provider,
       );
-      const catalog = materialize(failed);
+      const catalog = materializePreparedModelCatalog(
+        failed.catalog,
+        [],
+        [fallback],
+        new Set(failed.discoveryOrigins.map(({ provider }) => provider)),
+      );
       if (account === "account-a") {
         expect(catalog.entries).toContainEqual(discovered);
         expect(catalog.staticEntries).not.toContainEqual(fallback);
@@ -544,7 +647,7 @@ describe("synthetic configured context publication", () => {
 });
 
 it("carries typed-only manifest facts into static preparation without creating conversational registry rows", () => {
-  const typedModel = {
+  const model = {
     id: "typed",
     name: "Typed",
     inference: {
@@ -552,15 +655,27 @@ it("carries typed-only manifest facts into static preparation without creating c
       decision: { protocol: "fixture", input: ["text" as const] },
     },
   };
-  const metadata = metadataFor({ providers: { fixture: { models: [typedModel] } } });
+  const metadata = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "fixture",
+        providers: ["fixture"],
+        modelCatalog: { providers: { fixture: { models: [model] } } },
+      },
+    ],
+  });
   const config: OpenClawConfig = { agents: { defaults: { decisionModel: "fixture/typed" } } };
-  const registry = registryFor(config, metadata);
+  const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:typed-models", {
+    config,
+    includePluginCatalogs: false,
+    pluginMetadataSnapshot: metadata,
+  });
   const facts = captureRegistry(registry, config, metadata);
   expect(
     facts.modelCatalog.entries.find(
       (entry) => entry.provider === "fixture" && entry.id === "typed",
     ),
-  ).toMatchObject({ ...typedModel, provider: "fixture" });
+  ).toMatchObject({ ...model, provider: "fixture" });
   expect(registry.find("fixture", "typed")).toBeUndefined();
 });
 
@@ -574,27 +689,46 @@ it.each([
     chat,
     decision: { protocol: "fixture", input: ["text" as const] },
   };
-  const metadata = metadataFor({
-    providers: {
-      fixture: {
-        api: "openai-responses",
-        baseUrl: "https://catalog.fixture.invalid/v1",
-        models: [{ id: "typed", name: "Typed", inference }],
+  const metadata = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "fixture",
+        providers: ["fixture"],
+        modelCatalog: {
+          providers: {
+            fixture: {
+              api: "openai-responses",
+              baseUrl: "https://catalog.fixture.invalid/v1",
+              models: [{ id: "typed", name: "Typed", inference }],
+            },
+          },
+        },
       },
-    },
-  });
-  const config = configFor("fixture", "https://catalog.fixture.invalid/v1", {
-    api: "openai-responses",
-    models: [
-      modelDefinition("typed", {
-        name: "Configured",
-        reasoning: false,
-        maxTokens: 256,
-        ...(custom ? { baseUrl: "https://custom.fixture.invalid/v1" } : {}),
-      }),
     ],
   });
-  const registry = registryFor(config, metadata);
+  const config: OpenClawConfig = {
+    models: {
+      providers: {
+        fixture: {
+          api: "openai-responses",
+          baseUrl: "https://catalog.fixture.invalid/v1",
+          models: [
+            modelDefinition("typed", {
+              name: "Configured",
+              ...(custom ? { baseUrl: "https://custom.fixture.invalid/v1" } : {}),
+              reasoning: false,
+              maxTokens: 256,
+            }),
+          ],
+        },
+      },
+    },
+  };
+  const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:typed-configured", {
+    config,
+    includePluginCatalogs: false,
+    pluginMetadataSnapshot: metadata,
+  });
   const facts = captureRegistry(registry, config, metadata);
   const rows = facts.modelCatalog.entries.filter(
     (entry) => entry.provider === "fixture" && entry.id === "typed",
