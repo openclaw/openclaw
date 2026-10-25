@@ -13,6 +13,7 @@ import {
   markdownSessionLinkFromKeyboardEvent,
 } from "../../../components/markdown-session-links.ts";
 import { handleMarkdownTableInteraction } from "../../../components/markdown-tables.ts";
+import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
@@ -163,6 +164,8 @@ export function ChatThread(input: {
           {showLoadingSkeleton() ? (
             mobile() ? (
               <ChatConversationLoading route={false} />
+            ) : routeLoading() ? (
+              <LoadingState messagesOnly />
             ) : (
               <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
             )

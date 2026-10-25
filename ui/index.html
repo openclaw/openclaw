@@ -273,9 +273,8 @@
           env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
       }
 
-      /* Keep the connecting frame and the mounted chat route on one geometry. */
-      .connect-splash--skeleton,
-      .content--workbench .lazy-view-state--route {
+      /* Boot paint stays neutral; mounted routes use the active theme's skeleton paint. */
+      .connect-splash--skeleton {
         --boot-ink: var(--text, #bcbcc0);
         --boot-line: color-mix(in srgb, var(--boot-ink) 10%, transparent);
       }
@@ -301,8 +300,7 @@
         animation: none;
       }
 
-      html[data-theme-mode="light"]
-        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) {
+      html[data-theme-mode="light"] .connect-splash--skeleton {
         --boot-ink: var(--text, #3f3f46);
       }
 
@@ -352,7 +350,7 @@
         width: 65%;
       }
 
-      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) .skeleton {
+      .connect-splash--skeleton .skeleton {
         position: relative;
         overflow: hidden;
         border-radius: 6px;
@@ -360,7 +358,7 @@
       }
 
       /* Static placeholders do not animate or hold compositor layers during boot. */
-      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) .skeleton::after {
+      .connect-splash--skeleton .skeleton::after {
         content: none;
       }
 

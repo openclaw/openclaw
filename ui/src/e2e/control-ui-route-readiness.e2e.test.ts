@@ -50,9 +50,7 @@ suite.define(() => {
         const composer = pane.locator(".agent-chat__composer-combobox textarea");
         const transcript = pane.locator(".chat-thread");
         const historyLoading = transcript.locator(
-          ime
-            ? ".chat-conversation-loading"
-            : 'openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]',
+          ime ? ".chat-conversation-loading" : ".lazy-view-state--loading",
         );
         await composer.waitFor({ state: "visible" });
         await expect.poll(() => composer.isEnabled()).toBe(true);

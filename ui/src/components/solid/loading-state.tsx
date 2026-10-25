@@ -1,7 +1,7 @@
 import { t } from "../../lib/reactive/i18n.ts";
 import { LoadingSkeleton } from "./loading-skeleton.tsx";
 
-export function LoadingState(props: { route?: boolean } = {}) {
+export function LoadingState(props: { route?: boolean; messagesOnly?: boolean } = {}) {
   return (
     <section
       class={[
@@ -10,9 +10,10 @@ export function LoadingState(props: { route?: boolean } = {}) {
       ]}
       role="status"
       aria-live="polite"
+      aria-busy={props.messagesOnly ? "true" : undefined}
       aria-label={t("common.loading")}
     >
-      <LoadingSkeleton />
+      <LoadingSkeleton messagesOnly={props.messagesOnly} />
     </section>
   );
 }
