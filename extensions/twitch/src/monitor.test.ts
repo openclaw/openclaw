@@ -45,7 +45,6 @@ describe("Twitch monitor delivery", () => {
           lastRoutePolicy: "session",
           matchedBy: "default",
         });
-        core.channel.inbound.buildContext = vi.fn(() => ({}));
         vi.mocked(core.channel.inbound.run).mockImplementation(async (input) => {
           expect(input).toMatchObject({ channel: "twitch", accountId: "default" });
           const normalized = await input.adapter.ingest(input.raw);

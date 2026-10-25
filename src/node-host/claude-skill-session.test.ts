@@ -72,7 +72,17 @@ async function prepareWorkshop(sdk: string) {
     sdk === "v1"
       ? new Client(mcpIdentity)
       : new V2Client(mcpIdentity, { versionNegotiation: { mode: "legacy" } });
-  onTestFinished(() => client.close().finally(() => session.close().finally(session.cleanup)));
+  onTestFinished(async () => {
+    try {
+      await client.close();
+    } finally {
+      try {
+        await session.close();
+      } finally {
+        await session.cleanup();
+      }
+    }
+  });
   const configPath = session.argv[session.argv.indexOf("--mcp-config") + 1];
   assert(configPath);
   const config: unknown = JSON.parse(await fs.readFile(configPath, "utf8"));

@@ -54,7 +54,11 @@ function createStore(
 function createStoreForRequest(request: ReturnType<typeof createGatewayRequestMock>) {
   const fixture = createRosterFixture(createTestGatewayClient(request), ["main", "ember"]);
   cleanups.push(() => fixture.sessions.dispose());
-  return { ...fixture, request };
+  return {
+    ...fixture,
+    request,
+    emit: (...args: Parameters<typeof fixture.emit>) => fixture.emit(...args),
+  };
 }
 
 describe("roster activity lifecycle", () => {
@@ -262,9 +266,12 @@ describe("roster activity lifecycle", () => {
       store.setInvolvingMe(involvingMe);
       observe(store);
       await vi.waitFor(() => expect(store.snapshot.result?.sessions).toHaveLength(1));
-      expect(load).toHaveBeenCalledWith(
-        expect.objectContaining({ excludeDock: true, involvingMe }),
-      );
+      expect(load).toHaveBeenCalledWith(expect.objectContaining({ excludeDock: true }));
+      if (involvingMe) {
+        expect(load).toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
+      } else {
+        expect(load).not.toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
+      }
       const window = store.snapshot.result;
       emit(
         {

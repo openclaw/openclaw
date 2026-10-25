@@ -139,11 +139,15 @@ it("restores an undispatched grant after DNS failure at the real request guard",
     .mockRejectedValueOnce(
       Object.assign(new Error("synthetic DNS offline"), { code: "EAI_AGAIN" }),
     );
-  const fetch = vi.fn(globalThis.fetch);
-  vi.stubGlobal("fetch", fetch);
+  const originalFetch = globalThis.fetch;
+  let posts = 0;
+  vi.stubGlobal("fetch", (...args: Parameters<typeof fetch>) => {
+    posts++;
+    return originalFetch(...args);
+  });
   try {
     await expect(connect()).rejects.toThrow();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(posts).toBe(0);
     expect(lookup).toHaveBeenCalled();
   } finally {
     lookup.mockRestore();

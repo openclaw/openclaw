@@ -108,7 +108,11 @@ describe("resolveTrustedHttpOperatorScopes", () => {
     ).toStrictEqual(expected);
   });
 
-  it.each([{ roleScopes: ["operator.read"] }, { roleScopes: [] }])(
+  it.each<{
+    roleScopes: NonNullable<
+      Parameters<typeof resolveTrustedHttpOperatorScopes>[1]["operatorRolePolicy"]
+    >["scopes"];
+  }>([{ roleScopes: ["operator.read"] }, { roleScopes: [] }])(
     "caps trusted-proxy headers and defaults to the verified profile's $roleScopes scopes",
     ({ roleScopes }) => {
       const requestAuth = {

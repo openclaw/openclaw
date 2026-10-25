@@ -119,6 +119,7 @@ describe("WhatsApp group admission", () => {
       'channels.whatsapp.accounts.work.groups["mention-a@g.us"].requireMention',
     );
     expect(warn.mock.calls[0]?.[1]).toContain("false");
+    expect(warn.mock.calls.flat().join(" ")).not.toContain("What up");
     expect(warn.mock.calls.flat().join(" ")).not.toContain("+15550000002");
   });
 

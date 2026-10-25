@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { readSessionMessageIdentity as readBrowserSessionMessageIdentity } from "./browser.js";
+import { readSessionMessageIdentity as readNodeSessionMessageIdentity } from "./index.js";
 import {
   hasSessionProjectionAcceptedFinal as acceptedFinal,
   isLocallyOptimisticSessionMessage as isOptimistic,
@@ -29,6 +31,11 @@ const expectRows = (state: SessionProjectionState, ...messages: unknown[]) =>
 const segment = <T extends object>(message: T, runId?: string) => ({
   ...message,
   openclawStreamFallback: { itemId: "item-1", runId, source: "segment" },
+});
+it("reads the same canonical contract from both supported package barrels", () => {
+  const message = savedUser("hello", "persisted", 7);
+  expect(readBrowserSessionMessageIdentity(message)).toEqual(identity(message));
+  expect(readNodeSessionMessageIdentity(message)).toEqual(identity(message));
 });
 it("normalizes an empty user-suffixed run ID", () => {
   expect(normalizeSessionProjectionRunId(":user")).toBe(null);

@@ -58,7 +58,7 @@ export async function withTwitchMonitor<T>(
     },
   });
   mocks.createIngress.mockImplementation((options) => ({
-    accept: (message) => {
+    accept: async (message) => {
       const delivery = options.deliver(message, {
         admission: "exclusive",
         abortSignal: new AbortController().signal,
@@ -67,7 +67,8 @@ export async function withTwitchMonitor<T>(
         onAbandoned: async () => {},
       });
       pending.push(delivery);
-      return delivery;
+      await delivery;
+      return undefined;
     },
     start: () => {},
     stop: f.ingressStop.mockImplementation(async () => {

@@ -100,6 +100,12 @@ describe("legacy workspace reset cleanup", () => {
     ];
     await writeCandidates(candidates);
     await writeCandidates(reserved, "truncated marker\n");
+    const preview = await removeLegacyWorkspaceStateForReset(prepare(), { dryRun: true });
+    expect(preview.warnings).toEqual([]);
+    expect(new Set(preview.removedPaths)).toEqual(new Set(candidates));
+    for (const candidate of candidates) {
+      await expect(fs.lstat(candidate)).resolves.toBeDefined();
+    }
     const result = await removeLegacyWorkspaceStateForReset(prepare());
     expect(result.warnings).toEqual([]);
     expect(new Set(result.removedPaths)).toEqual(new Set(candidates));

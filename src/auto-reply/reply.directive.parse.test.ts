@@ -52,10 +52,6 @@ it.each([
   ],
   ["/fast ultr", { hasFastDirective: true, fastMode: undefined }],
   [
-    "/think about my deployment plan",
-    { rawThinkLevel: undefined, command: undefined, cleaned: "about my deployment plan" },
-  ],
-  [
     "/think:",
     { hasThinkDirective: true, thinkLevel: undefined, rawThinkLevel: undefined, cleaned: "" },
   ],
@@ -84,6 +80,12 @@ it.each([
   ],
 ])("parses directive arguments and leaves prose intact: %s", (body, expected) => {
   expect(parse(body)).toMatchObject(expected);
+});
+it("preserves prose after a thinking directive", () => {
+  const result = parse("/think about my deployment plan");
+  expect(result.rawThinkLevel).toBeUndefined();
+  expect(result.command).toBeUndefined();
+  expect(result.cleaned).toBe("about my deployment plan");
 });
 it.each([
   ["/fast ultrafast", "ultrafast", ""],

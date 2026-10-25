@@ -34,7 +34,8 @@ it("reconciles the manifest after watch attachment and on later changes", async 
   mocks.availabilityOnWatch = { caps: ["canvas"], commands: ["canvas.present"] };
   await withReadyNodeHost(async ({ client }) => {
     const check = (present: boolean) => {
-      const contains = present ? expect.arrayContaining : expect.not.arrayContaining;
+      const contains = (values: string[]) =>
+        present ? expect.arrayContaining(values) : expect.not.arrayContaining(values);
       expect(client.updateNodeManifest).toHaveBeenLastCalledWith(
         expect.objectContaining({
           caps: contains(["canvas"]),

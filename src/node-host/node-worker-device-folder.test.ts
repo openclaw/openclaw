@@ -79,8 +79,8 @@ it("accepts only absolute or home-relative configuration roots", () => {
 });
 
 it.each([
-  [() => "~/projects/project", "configured", () => folder],
-  [() => allowed, "configured", () => allowed],
+  [(): string => "~/projects/project", "configured", (): string => folder],
+  [(): string => allowed, "configured", (): string => allowed],
   [() => "projects/project", "configured", "absolute"],
   [() => path.join(allowed, "missing"), "configured", "existing"],
   [() => path.join(folder, "file.txt"), "configured", "directory"],

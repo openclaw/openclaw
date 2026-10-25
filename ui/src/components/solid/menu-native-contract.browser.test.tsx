@@ -839,7 +839,7 @@ const modalDialog = (host: OpenClawModalDialog) =>
 const makeElement = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
   props: Partial<HTMLElementTagNameMap[K]> = {},
-) => Object.assign(document.createElement(tag), props);
+): HTMLElementTagNameMap[K] => Object.assign(document.createElement(tag), props);
 
 async function tabCycle(order: HTMLElement[], active?: () => Element | null) {
   order[0]!.focus();

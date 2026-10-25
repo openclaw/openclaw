@@ -8,7 +8,9 @@ import { hermesCase, item } from "./test/hermes-case.js";
 import { useHermesFixture } from "./test/migration-fixture.js";
 import { writeFile } from "./test/provider-helpers.js";
 
-const fixture = useHermesFixture(() => vi.restoreAllMocks());
+const fixture = useHermesFixture(() => {
+  vi.restoreAllMocks();
+});
 let h: ReturnType<typeof hermesCase>;
 beforeEach(() => {
   h = hermesCase(fixture.paths.root);

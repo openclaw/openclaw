@@ -414,7 +414,7 @@ describe("WhatsApp reply delivery", () => {
     expect(one).toMatchObject({ status: "fulfilled", value: { visibleReplySent: true } });
     expect(two).toEqual({ status: "rejected", reason: error });
     expect(three).toMatchObject({ status: "rejected", reason: { cause: error } });
-    if (three.status === "rejected") {
+    if (three?.status === "rejected") {
       expect(three.reason).not.toHaveProperty("sentBeforeError");
       expect(three.reason).not.toHaveProperty("visibleReplySent");
     }

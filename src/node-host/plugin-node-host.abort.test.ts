@@ -51,7 +51,7 @@ it("passes the actual invocation signal into the non-duplex plugin context", asy
   };
   const { request, invocation } = startInvocation(
     { command: "ollama.chat", handle },
-    { signal: controller.signal, pluginCommandContext: {} },
+    { signal: controller.signal, pluginCommandContext: { sendNodeEvent: vi.fn(async () => {}) } },
   );
   try {
     await withinTest(

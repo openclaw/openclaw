@@ -133,7 +133,7 @@ describe("Twitch setup", () => {
   ] as const)("renders normalized status for %s", (accountId, isConfigured, expected) => {
     expect(
       wizard.status?.resolveStatusLines?.({
-        cfg: {},
+        cfg: isConfigured ? accounts({ [accountId]: account }) : {},
         accountId,
         configured: isConfigured,
       } as never),

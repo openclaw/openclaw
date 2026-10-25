@@ -117,10 +117,8 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
     },
   );
   it("retains revoked source authority at runtime admission", async () => {
-    const { followupRun, runAgent } = await prepareRuntime(
-      runtime,
-      "agent:main:dashboard:source-authority",
-    );
+    const sessionKey = "agent:main:dashboard:source-authority";
+    const { followupRun, runAgent } = await prepareRuntime(runtime, sessionKey);
     const isCli = runtime === "cli";
     let current = true;
     let sourceFailure: unknown;
@@ -146,11 +144,11 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
     const execute = await getExecuteAgentTurnForTest();
     const params = createMinimalRunAgentTurnParams({ followupRun, opts: {} });
     params.storePath = path.join(followupRun.run.workspaceDir, "sessions.json");
-    params.sessionKey = followupRun.run.sessionKey;
+    params.sessionKey = sessionKey;
     const target = {
       agentId: followupRun.run.agentId,
       sessionId: followupRun.run.sessionId,
-      sessionKey: params.sessionKey,
+      sessionKey,
       storePath: params.storePath,
     };
     const entry = await replaceSessionEntry(target, {
