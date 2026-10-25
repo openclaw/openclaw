@@ -590,9 +590,10 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
   });
 
-  it.each(["session", "worktree", "uncertain worktree"] as const)(
+  it.each(["session", "shared-store session", "worktree", "uncertain worktree"] as const)(
     "parks unavailable orphan work until a %s owner publication and the next sweep",
     async (source) => {
+      const sessionPublication = source.endsWith("session");
       const root = support.testState.root;
       await git(root, "init", "--quiet");
       const tree = await git(root, "write-tree");
@@ -607,10 +608,10 @@ describe("placement recovery session admission with persisted placements", () =>
       });
       const target = {
         ...REQUEST,
-        sessionKey: "agent:physical:canonical-orphan",
+        sessionKey: `agent:${source === "shared-store session" ? "logical" : "physical"}:canonical-orphan`,
         agentId: "physical",
         storePath: path.join(root, "sessions.sqlite"),
-        ...(source === "session" ? {} : { worktreeId: "parked-worktree" }),
+        ...(sessionPublication ? {} : { worktreeId: "parked-worktree" }),
       };
       let available = false;
       const resolveWorkspace = vi.fn(async () => {
@@ -626,10 +627,10 @@ describe("placement recovery session admission with persisted placements", () =>
       const subscribe = () => harness.service.subscribeOrphanWorkspaceChanges();
       let unsubscribe = () => {};
       const publish = (id: string) => {
-        if (source === "session") {
+        if (sessionPublication) {
           sessionChanges.emit({
             sessionKey: id,
-            agentId: target.agentId,
+            agentId: source === "shared-store session" ? "logical" : target.agentId,
             storePath: target.storePath,
             scope: "session-entry",
           });
@@ -657,7 +658,7 @@ describe("placement recovery session admission with persisted placements", () =>
         expect(resolveWorkspace).toHaveBeenCalledTimes(1);
         expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
 
-        const key = source === "session" ? target.sessionKey : target.worktreeId!;
+        const key = sessionPublication ? target.sessionKey : target.worktreeId!;
         unsubscribe();
         publish(key);
         await coordinated.reconcileActive();

@@ -71,11 +71,12 @@ export function subscribeWorkspaceResultOrphanChanges(
     const scope =
       "sessionKey" in change ? change : typeof change.scope === "object" ? change.scope : {};
     // A resolving item has not captured its physical store/canonical key yet.
+    // Keyed publications carry the logical agent, which may share another agent's store.
     wake(
       (target) =>
         !target ||
         ((!("sessionKey" in change) || change.sessionKey === target.sessionKey) &&
-          (!scope.agentId || scope.agentId === target.agentId) &&
+          ("sessionKey" in change || !scope.agentId || scope.agentId === target.agentId) &&
           (!scope.storePath || scope.storePath === target.storePath)),
     );
   });
