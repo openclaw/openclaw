@@ -105,13 +105,13 @@ afterEach(() => {
 async function seedKeyOnlyJob(
   cron: ReturnType<typeof createCronFixture>["context"]["cron"],
   parentSessionKey = SESSION,
-  options: { omitAgentId?: boolean } = {},
+  options: { omitAgentId?: boolean; agentId?: string } = {},
 ) {
   const created = await cron.add(
     {
       name: "Check the deploy",
       enabled: true,
-      ...(options.omitAgentId ? {} : { agentId: "main" }),
+      ...(options.omitAgentId ? {} : { agentId: options.agentId ?? "main" }),
       owner: { agentId: "main", sessionKey: parentSessionKey, accountId: "default" },
       schedule: { kind: "every", everyMs: 180_000 },
       sessionTarget: "isolated",
@@ -378,6 +378,7 @@ it.each([
   "a group member turn",
   "an owner turn without the management grant",
   "another conversation's job",
+  "a job that runs as another agent",
   "an already bound job",
   "a trusted operator job",
 ] as const)("refuses bind from %s and leaves the job unchanged", async (scenario) => {
@@ -388,22 +389,24 @@ it.each([
   const job =
     scenario === "another conversation's job"
       ? await seedKeyOnlyJob(context.cron, "agent:main:telegram:group:other")
-      : scenario === "a trusted operator job"
-        ? await context.cron.add(
-            {
-              name: "Operator job",
-              enabled: true,
-              agentId: "main",
-              owner: { agentId: "main", sessionKey: SESSION, accountId: "default" },
-              schedule: { kind: "every", everyMs: 180_000 },
-              sessionTarget: "isolated",
-              wakeMode: "now",
-              payload: { kind: "agentTurn", message: "Check", toolsAllow: ["read"] },
-              delivery: { mode: "none" },
-            },
-            { scheduledToolPolicy: { version: 1, mode: "trusted" } },
-          )
-        : await seedKeyOnlyJob(context.cron);
+      : scenario === "a job that runs as another agent"
+        ? await seedKeyOnlyJob(context.cron, SESSION, { agentId: "worker" })
+        : scenario === "a trusted operator job"
+          ? await context.cron.add(
+              {
+                name: "Operator job",
+                enabled: true,
+                agentId: "main",
+                owner: { agentId: "main", sessionKey: SESSION, accountId: "default" },
+                schedule: { kind: "every", everyMs: 180_000 },
+                sessionTarget: "isolated",
+                wakeMode: "now",
+                payload: { kind: "agentTurn", message: "Check", toolsAllow: ["read"] },
+                delivery: { mode: "none" },
+              },
+              { scheduledToolPolicy: { version: 1, mode: "trusted" } },
+            )
+          : await seedKeyOnlyJob(context.cron);
   const jobId = "job" in job ? job.job.id : job.id;
   if (scenario === "an already bound job") {
     await context.cron.update(
@@ -441,9 +444,11 @@ it.each([
           ? /authenticated owner turn/
           : scenario === "another conversation's job"
             ? /not its parent/
-            : scenario === "an already bound job"
-              ? /already bound/
-              : /session key alone/,
+            : scenario === "a job that runs as another agent"
+              ? /different agent/
+              : scenario === "an already bound job"
+                ? /already bound/
+                : /session key alone/,
       );
     }
   } finally {

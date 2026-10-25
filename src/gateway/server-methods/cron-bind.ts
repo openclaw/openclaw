@@ -1,4 +1,5 @@
 import { validateCronBindParams } from "../../../packages/gateway-protocol/src/index.js";
+import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronBindParent } from "../../cron/bind-parent.js";
 import {
   CronJobConfigRevisionConflictError,
@@ -33,6 +34,8 @@ const BIND_OWNER_TURN_REQUIRED =
   "cron bind requires an authenticated owner turn in the automation's parent conversation (a Control UI administrator or the configured channel owner).";
 const BIND_WRONG_CONVERSATION =
   "cron bind must run from this automation's parent conversation; this conversation is not its parent.";
+const BIND_OTHER_AGENT =
+  "cron bind: this automation runs as a different agent than this conversation, so it cannot use it as its parent.";
 
 /** The caller's own conversation, admitted only for an owner turn holding the management grant. */
 function resolveBindCaller(
@@ -65,6 +68,11 @@ function resolveBindTarget(
   }
   if (!cronJobMatchesCallerScope({ job, callerScope, defaultAgentId })) {
     return { refusal: BIND_WRONG_CONVERSATION };
+  }
+  // The caller scope matches on the stamped owner; occurrences run as the job's effective
+  // agent and look the parent up in that agent's sessions, so both must be this agent.
+  if (tryResolveCronJobEffectiveAgentId(job, defaultAgentId) !== callerScope.agentId) {
+    return { refusal: BIND_OTHER_AGENT };
   }
   return parent.parentSessionKey;
 }
