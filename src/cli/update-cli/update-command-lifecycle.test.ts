@@ -24,6 +24,7 @@ import {
   expectNoCalls,
   expectPartialCall,
 } from "../daemon-cli/lifecycle-assertions.test-support.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import {
   registerPrivateHandoffBindingTests,
   validConfigSnapshot,
@@ -280,11 +281,7 @@ function createRetainedCleanupFixture() {
   };
 }
 describe("update plugin lifecycle lease boundaries", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  });
+  afterEach(cleanupUpdateCommandTest);
 
   beforeEach(async () => {
     // Ordering-only fixtures own an absent private state root; never probe a

@@ -28,6 +28,7 @@ import {
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
 } from "../admitted-run-context.js";
+import { projectPersistedSenderContext } from "../embedded-agent-runner/run/attempt-history.js";
 import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
@@ -608,9 +609,12 @@ export async function loadCliSessionPromptContext(
     params.rawTranscriptReseedReason === "auth-epoch" ||
     params.rawTranscriptReseedReason === "auth-unknown";
   if (contentBlocked) {
-    cliBackendLog.warn(
-      `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason}`,
-    );
+    // Raw history only ever reseeds a fresh CLI session; a resumed one keeps its own context.
+    if (!params.nativeSessionId) {
+      cliBackendLog.warn(
+        `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason}`,
+      );
+    }
     if (!assertActive) {
       return {
         reseedMessages: [],
@@ -731,7 +735,7 @@ export async function loadCliSessionPromptContext(
       transcriptCursor,
     };
   }
-  const history = historyMessages.filter(
+  const history = projectPersistedSenderContext(historyMessages).filter(
     (message) =>
       message.role === "user" || message.role === "assistant" || message.role === "toolResult",
   );

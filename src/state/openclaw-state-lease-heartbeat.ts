@@ -4,6 +4,10 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import {
+  createPostgresPoolEndpoints,
+  postgresPoolTransferList,
+} from "../infra/postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
@@ -21,6 +25,7 @@ import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import {
   acquireLeaseHeartbeatCarrier,
   type LeaseHeartbeatCarrier,
@@ -237,11 +242,19 @@ export function startOpenClawStateLeaseHeartbeat(
   let workerLoss: LeaseHeartbeatLoss | undefined;
   const lossDetail = () =>
     workerLoss ? ` (lossPath=${workerLoss.path}, lossOutcome=${workerLoss.outcome})` : "";
-  const fail = (error: Error) => {
+  const fail = (cause: Error) => {
     if (lossReported || Atomics.load(shared, state.status) === state.closed) {
       return;
     }
     lossReported = true;
+    const error =
+      workerLoss?.leaseLoss && !(cause instanceof OpenClawStateLeaseError)
+        ? new OpenClawStateLeaseError(cause.message, {
+            code: "OPENCLAW_STATE_LEASE_LOST",
+            loss: workerLoss.leaseLoss,
+            cause,
+          })
+        : cause;
     Atomics.store(shared, state.status, state.lost);
     clearStartupTimers();
     cancelExpiry?.();
@@ -443,10 +456,12 @@ export function startOpenClawStateLeaseHeartbeat(
     // Keep the lease worker isolated from every other ambient environment setting.
     const sourceTsconfig = execArgv.length > 0 ? process.env.TSX_TSCONFIG_PATH : undefined;
     startupContext?.admission.assertCurrent();
+    const databaseEngineSelection =
+      startupContext?.databaseEngineSelection ?? getDatabaseEngineSelection();
     const data = {
-      databaseEngineSelection:
-        startupContext?.databaseEngineSelection ?? getDatabaseEngineSelection(),
+      databaseEngineSelection,
       databaseAdmissionPort: databaseAdmission.port,
+      postgresPool: createPostgresPoolEndpoints(databaseEngineSelection),
       path: databasePath,
       expectedIdentity,
       ...(startupContext ? { deferActivation: true as const } : {}),
@@ -470,7 +485,10 @@ export function startOpenClawStateLeaseHeartbeat(
           runInDetachedAsyncContext(() => {
             const native = createCpuTrackedWorker(url, {
               workerData: data,
-              transferList: [databaseAdmission.port],
+              transferList: [
+                databaseAdmission.port,
+                ...postgresPoolTransferList(data.postgresPool),
+              ],
               env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
               execArgv,
               stdout: true,

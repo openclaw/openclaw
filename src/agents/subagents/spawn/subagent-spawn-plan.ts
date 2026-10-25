@@ -39,7 +39,7 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
 }) {
   return resolveNonNegativeIntegerOption(
     params.runTimeoutSeconds,
-    resolveNonNegativeIntegerOption(params.cfg?.agents?.defaults?.subagents?.runTimeoutSeconds, 0),
+    resolveNonNegativeIntegerOption(params.cfg.agents?.defaults?.subagents?.runTimeoutSeconds, 0),
   );
 }
 

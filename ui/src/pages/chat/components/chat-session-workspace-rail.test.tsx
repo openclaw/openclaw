@@ -4,6 +4,7 @@ import { createSignal, flush, onSettled } from "solid-js";
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -518,21 +519,7 @@ describe("session workspace path actions", () => {
 function setupDesktopLayout() {
   // JSDOM has no layout observation or font loading. These tests exercise the
   // workspace owner; real-browser proof owns overflow and disclosure motion.
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      private readonly targets = new Set<Element>();
-      observe(target: Element) {
-        this.targets.add(target);
-      }
-      unobserve(target: Element) {
-        this.targets.delete(target);
-      }
-      disconnect() {
-        this.targets.clear();
-      }
-    },
-  );
+  stubTargetRetainingObserver("ResizeObserver");
   vi.stubGlobal("matchMedia", (media: string) => ({
     media,
     matches: false,

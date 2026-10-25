@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -75,10 +76,9 @@ console.log(JSON.stringify({ scratch, cache }));
     };
     expect(await fs.realpath(path.dirname(scratch))).toBe(tempRoot);
     expect(path.relative(tempRoot, await fs.realpath(cache.directory))).not.toMatch(/^\.\./u);
-    const cacheEntries = await fs.readdir(cache.directory, {
-      recursive: true,
-      withFileTypes: true,
-    });
+    const cacheEntries = (await listDirectoryTreeStrict(cache.directory)).map(
+      (walkEntry) => walkEntry.dirent,
+    );
     expect(cacheEntries.some((entry) => entry.isFile())).toBe(true);
     expect(await lifetime.stop()).toEqual({ process: "never-spawned", errors: [] });
     await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });

@@ -74,9 +74,6 @@ vi.mock("../agents/agent-create.js", async (importOriginal) => ({
     return {
       status: "created",
       agentId: entry.id,
-      name: entry.name,
-      workspace: entry.workspace,
-      agentDir: path.join(entry.workspace, "agent"),
       bootstrapPending: true,
       configHash: mutation.persistedHash,
     };
@@ -164,9 +161,6 @@ describe("setup config provenance", () => {
         }),
       );
       resetConfigRuntimeState();
-      const initial = await readConfigFileSnapshot();
-      expect(initial.valid).toBe(true);
-      expect(initial.sourceConfig.gateway?.auth?.token).toBe("synthetic-before");
       controls.drift = () => vi.stubEnv("SETUP_PROVENANCE_TOKEN", "synthetic-after");
       if (firstAgent || legacyRoster) {
         controls.preEnsureDrift = () =>

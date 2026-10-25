@@ -2699,9 +2699,18 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["readScratchStateFromDatabase", "readHeartbeatMonitorScratchFromDatabase"],
+        operations: ["readScratchStateFromDatabase"],
         evidence:
-          "Native maintenance reads: Doctor scratch migration, task scratch, and scratch preflight call readScratchStateFromDatabase, directly or through scratch-store.ts. Worker snapshots, including the private legacy-heartbeat selector, enter through src/cron/store/read-command.ts.",
+          "Native maintenance reads: Doctor scratch migration, task scratch, and scratch preflight call readScratchStateFromDatabase, directly or through scratch-store.ts.",
+      },
+      {
+        tier: "W",
+        operations: [
+          "readCronScratchSnapshotInDatabase",
+          "readHeartbeatMonitorScratchFromDatabase",
+        ],
+        evidence:
+          "Only cron/store/read-command.ts calls the snapshot through openclaw-state-read-handlers.ts in openclaw-state-read.worker.ts. The private heartbeat reader is called only by that snapshot; host callers dispatch cron.scratch through scratch-read.ts.",
       },
     ],
   ],
@@ -3509,6 +3518,7 @@ const workerModules = new Set([
 
   "extensions/memory-core/src/memory/manager-index-metadata.ts", // Only the SQLite/PostgreSQL publication worker adapters write metadata and promote legacy cache identities.
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
+  "extensions/memory-core/src/memory/manager-rebuild-embeddings.ts", // Only manager-index-read.ts calls this lookup, from manager-search.worker.ts, manager-publication.worker.ts, or its worker-bound manager-publication-postgres.ts adapter.
   "extensions/memory-core/src/memory/manager-chunk-writer.ts", // Only manager-source-index-kernel.ts calls this writer, from manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
@@ -3516,6 +3526,14 @@ const workerModules = new Set([
   "extensions/memory-core/src/memory/manager-search-postgres.ts", // Only manager-search.worker.ts calls this PostgreSQL query adapter with its admitted worker connection; conformance calls the same internal entry.
   "extensions/memory-core/src/memory/manager-vector-rebuild-state.ts", // Retrieval, source-index and database-publication kernels run in the search/publication workers; the host consumes published vector facts.
 
+  "extensions/knowledge/src/identity-store.ts", // Only StorageBase (storage-worker.ts via storage-host.ts) and StoreRegistry (registry-worker.ts via registry-host.ts) open this store.
+  "extensions/knowledge/src/recent-activity.ts", // recentActivity runs only in KnowledgeStorage inside storage-worker.ts.
+  "extensions/knowledge/src/registry-schema.ts", // Only StoreRegistry, constructed by registry-host.ts in registry-worker.ts, admits this schema.
+  "extensions/knowledge/src/retrieval.ts", // Index SQL runs only in KnowledgeStorage inside storage-worker.ts; other imports use the pure eligible/exactLookup helpers.
+  "extensions/knowledge/src/storage-base.ts", // Base of KnowledgeStorage, constructed only by storage-host.ts in storage-worker.ts.
+  "extensions/knowledge/src/storage-journal.ts", // Layer of KnowledgeStorage, constructed only by storage-host.ts in storage-worker.ts.
+  "extensions/knowledge/src/storage-schema.ts", // Called only by identity-store.ts and store-registry.ts schema admission inside the storage and registry workers.
+  "extensions/knowledge/src/store-registry.ts", // StoreRegistry is constructed only by registry-host.ts in registry-worker.ts; main-thread imports are types and bindingState.
   "extensions/team-reports/src/store-database.ts", // Only store.worker.ts and offline port workers admit this schema.
   "extensions/workboard/src/sqlite-store-kernel.ts", // Workboard SQLite worker backend factory only.
   "extensions/workboard/src/sqlite-store-sessions-board.ts", // Workboard worker kernel sessions-board store only.

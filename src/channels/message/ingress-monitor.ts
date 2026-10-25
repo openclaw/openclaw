@@ -678,7 +678,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           recoveryRequested = true;
           requestDrain();
         },
-        Math.max(60_000, options.pollIntervalMs),
+        Math.max(5 * 60_000, options.pollIntervalMs),
       );
       pollTimer.unref?.();
       requestDrain();

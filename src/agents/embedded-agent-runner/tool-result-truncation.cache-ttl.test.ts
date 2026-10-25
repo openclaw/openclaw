@@ -1,6 +1,8 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import * as cryptoDigest from "../../infra/crypto-digest.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { serializeCacheTtlToolResultProjections as snapshot } from "./cache-ttl-checkpoint.js";
 import { appendAttemptCacheTtlIfNeeded } from "./run/attempt-thread-helpers.js";
 import {
@@ -10,6 +12,7 @@ import {
 } from "./session-prompt-state.js";
 import { replayToolResultPromptProjections } from "./tool-result-projection-replay.js";
 import {
+  projectToolResultMessages,
   pruneExpiredCacheTtlToolResults,
   reconcileToolResultPromptProjectionState as reconcile,
   resolveCacheTtlPruningSettings,
@@ -111,6 +114,64 @@ function toolText(messages: AgentMessage[], id: string): string {
 }
 
 describe("cache-TTL tool-result projection", () => {
+  it("hashes each frozen source once across interleaved sessions and recreated attempt state", () => {
+    using digest = vi.spyOn(cryptoDigest, "sha256Base64Url");
+    const sessions = ["first", "second"].map((text) => ({
+      messages: [freezeJsonSnapshot(tool({ id: "shared-id", text }))],
+      state: newState(),
+    }));
+    for (const session of sessions) {
+      projectToolResultMessages({ messages: session.messages, projectionState: session.state });
+    }
+    expect(digest).toHaveBeenCalledTimes(2);
+    const hashes = sessions.flatMap(({ state }) => [...state.sourceHashByKey.values()]);
+    expect(new Set(hashes).size).toBe(2);
+    for (let turn = 0; turn < 3; turn++) {
+      for (const session of sessions) {
+        reconcile(session.messages, session.state);
+        const recreated = newState();
+        expect(
+          projectToolResultMessages({ messages: session.messages, projectionState: recreated })
+            .messages,
+        ).toEqual(session.messages);
+        expect(recreated.sourceHashByKey).toEqual(session.state.sourceHashByKey);
+      }
+    }
+    expect(digest).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["mutable", "shallow", "deep"])(
+    "invalidates rewritten %s sources without losing another session's projection",
+    (mode) => {
+      const block = { type: "text" as const, text: "original".repeat(1_000) };
+      let source = { ...tool({ id: "same" }), content: [block] };
+      if (mode === "shallow") {
+        Object.freeze(source.content);
+        Object.freeze(source);
+      } else if (mode === "deep") {
+        freezeJsonSnapshot(source);
+      }
+      const state = newState();
+      const other = newState();
+      const otherMessages = [freezeJsonSnapshot(tool({ id: "same", text: "other".repeat(1_000) }))];
+      const sent = truncate([source], 128_000, 500, 1_000, state).messages;
+      const otherSent = truncate(otherMessages, 128_000, 500, 1_000, other).messages;
+      reconcile([source], state);
+      expect(replayToolResultPromptProjections([source], state)).toEqual(sent);
+      if (mode === "deep") {
+        source = freezeJsonSnapshot({ ...source, content: [{ type: "text", text: "rewritten" }] });
+      } else {
+        block.text = "rewritten";
+      }
+      reconcile([source], state);
+      reconcile(otherMessages, other);
+      expect(state.sourceHashByKey.size).toBe(0);
+      expect(state.replacements.size).toBe(0);
+      expect(replayToolResultPromptProjections([source], state)).toEqual([source]);
+      expect(replayToolResultPromptProjections(otherMessages, other)).toEqual(otherSent);
+    },
+  );
+
   it.each(["cache-TTL", "aggregate"])(
     "replays %s bytes for a fork without pruning new results or changing parent state",
     (kind) => {
@@ -276,10 +337,13 @@ describe("cache-TTL tool-result projection", () => {
     const state = newState();
     restore(state, checkpoint({ prunedToolResults: [{ key: "tool:old:42", mode: "soft" }] }));
     // SAFETY: older malformed plugin content is handled by the existing replay guard.
-    const original = { ...tool({ id: "old" }), content: null } as unknown as AgentMessage;
+    const original = freezeJsonSnapshot({
+      ...tool({ id: "old" }),
+      content: null,
+    }) as unknown as AgentMessage;
     truncate([original], 128_000, 5_000, 20_000, state);
     const result = truncate(
-      [{ ...original, content: [] } as AgentMessage],
+      [freezeJsonSnapshot({ ...original, content: [] }) as AgentMessage],
       128_000,
       5_000,
       20_000,

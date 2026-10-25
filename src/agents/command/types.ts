@@ -160,6 +160,8 @@ export type AgentCommandOpts = {
   /** Startup awaits returned work; incidental synchronous return values are ignored. */
   onExecutionStarted?: () => unknown;
   extraSystemPrompt?: string;
+  /** Internal conversation-producer annotation, not accepted from public ingress. */
+  extraSystemPromptTurnContext?: { start: number; text: string };
   /** Conversation preparation owns silence guidance; required-reply enforcement is separate. */
   silentReplyPromptMode?: SilentReplyPromptMode;
   bootstrapContextMode?: "full" | "lightweight";
@@ -285,6 +287,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   operatorAuthority: undefined,
   requesterOrigin: undefined,
   privateCompletion: undefined,
+  extraSystemPromptTurnContext: undefined,
   replyExpectation: undefined,
   skillLibraryAuthoring: undefined,
   cronCreatorAuthorityCapability: undefined,

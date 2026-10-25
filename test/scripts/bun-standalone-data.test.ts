@@ -1,6 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { expect, it, vi } from "vitest";
 import {
+  standaloneDataExpression,
   standaloneEmbeddedPathsExpression,
   standaloneLookupExpression,
 } from "../../scripts/lib/bun-standalone-data.mjs";
@@ -60,4 +61,17 @@ it("admits every embedded alias and destination, including noncanonical targets"
     expect(lookup(target)).toBe(target);
   }
   expect(lookup("/$bunfs/root/runtime/not-in-image.js")).toBeUndefined();
+});
+
+it("preserves embedded lookup data and escaped source text", () => {
+  const expression = standaloneDataExpression({
+    'path/"quoted"\\file.js': { size: 42, aliases: ["line\nbreak", "separator\u2028text"] },
+    empty: {},
+  });
+  const lookup = runInNewContext(expression);
+  expect(lookup['path/"quoted"\\file.js']).toEqual({
+    size: 42,
+    aliases: ["line\nbreak", "separator\u2028text"],
+  });
+  expect(Object.keys(lookup.empty)).toEqual([]);
 });

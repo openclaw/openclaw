@@ -1,8 +1,8 @@
 import type { IndexHtmlTransformContext, Plugin } from "vite";
 import { collectControlUiStaticAssets } from "./control-ui-boot-preloads.ts";
 
-// Name the entries needed for the initial presentation; never walk optional
-// dynamic children such as editors, terminals, or individual board widgets.
+// Name each initial presentation or bounded next interaction explicitly; never
+// walk optional dynamic children such as editors, terminals, or board widgets.
 const entries = {
   "new-session": [
     "pages/new-session/route-loader.ts",

@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { worktreeRegistryPublication } from "../../agents/worktrees/registry-publication.js";
+import { insertRegistryWorktreeInDatabase } from "../../agents/worktrees/registry-run-end.worker.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
@@ -16,6 +21,7 @@ import {
   placementSource,
   placementTransition,
 } from "./placement-suite.test-support.js";
+import { WorkerPlacementWorkspaceUnavailableError } from "./placement-workspace-unavailable.js";
 import * as support from "./service.test-support.js";
 import {
   cleanupWorkerWorkspaceResultRef,
@@ -503,6 +509,176 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(await readCleanupRef(root)).toBe("");
   });
 
+  it.each(["session", "shared-store session", "worktree", "uncertain worktree"] as const)(
+    "parks unavailable orphan work until a %s owner publication and the next sweep",
+    async (source) => {
+      const sessionPublication = source.endsWith("session");
+      const root = support.testState.root;
+      await git(root, "init", "--quiet");
+      const tree = await git(root, "write-tree");
+      const orphanRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("parked-orphan"));
+      await git(root, "update-ref", orphanRef, tree);
+      const requested = await placements.startDispatch(REQUEST);
+      await placements.fail({
+        sessionId: requested.sessionId,
+        expectedGeneration: requested.generation,
+        recoveryError: "finished fixture",
+      });
+      const target = {
+        ...REQUEST,
+        sessionKey: `agent:${source === "shared-store session" ? "logical" : "physical"}:canonical-orphan`,
+        agentId: "physical",
+        storePath: path.join(root, "sessions.sqlite"),
+        ...(sessionPublication ? {} : { worktreeId: "parked-worktree" }),
+      };
+      let available = false;
+      const resolveWorkspace = vi.fn(async () => {
+        if (!available) {
+          throw new WorkerPlacementWorkspaceUnavailableError("placement source changed", target);
+        }
+        return { kind: "local" as const, path: root };
+      });
+      const harness = await createHarness(support.testState.stateDb, placements, {
+        resolveWorkspace,
+      });
+      const coordinated = coordinate(harness);
+      const subscribe = () => harness.service.subscribeOrphanWorkspaceChanges();
+      let unsubscribe = () => {};
+      const publish = (id: string) => {
+        if (sessionPublication) {
+          sessionChanges.emit({
+            sessionKey: id,
+            agentId: source === "shared-store session" ? "logical" : target.agentId,
+            storePath: target.storePath,
+            scope: "session-entry",
+          });
+        } else {
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              insertRegistryWorktreeInDatabase(db, {
+                record: makeWorktreeRecord(root, id, { ownerId: `agent:main:${id}` }),
+              });
+            },
+            { database: support.testState.stateDb },
+          );
+        }
+      };
+      try {
+        await coordinated.reconcile("startup");
+        await coordinated.reconcileActive();
+        expect(resolveWorkspace).toHaveBeenCalledTimes(1);
+        await coordinated.reconcileActive();
+        expect(resolveWorkspace).toHaveBeenCalledTimes(1);
+        unsubscribe = subscribe();
+        publish("unrelated");
+        await coordinated.reconcileActive();
+        await coordinated.reconcileActive();
+        expect(resolveWorkspace).toHaveBeenCalledTimes(1);
+        expect(await git(root, "for-each-ref", "--format=%(refname)", orphanRef)).toBe(orphanRef);
+
+        const key = sessionPublication ? target.sessionKey : target.worktreeId!;
+        unsubscribe();
+        publish(key);
+        await coordinated.reconcileActive();
+        expect(resolveWorkspace).toHaveBeenCalledTimes(1);
+        unsubscribe = subscribe();
+        available = true;
+        if (source === "uncertain worktree") {
+          let invalidated = false;
+          const stopFailure = worktreeRegistryPublication.subscribeFacts((change) => {
+            if (change.kind === "committed") {
+              throw new Error("fixture committed-fact installation failed");
+            }
+            invalidated ||= change.kind === "unknown";
+          });
+          try {
+            publish("uncertain-other-worktree");
+            expect(invalidated).toBe(true);
+          } finally {
+            stopFailure();
+          }
+        } else if (source === "worktree") {
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              insertRegistryWorktreeInDatabase(db, {
+                record: makeWorktreeRecord(root, "restored-worktree", {
+                  ownerId: target.sessionKey,
+                }),
+              });
+            },
+            { database: support.testState.stateDb },
+          );
+        } else {
+          publish(key);
+        }
+        expect(resolveWorkspace).toHaveBeenCalledTimes(1);
+        await coordinated.reconcileActive();
+        expect(resolveWorkspace).toHaveBeenCalledTimes(2);
+        expect(await git(root, "for-each-ref", "--format=%(refname)", orphanRef)).toBe("");
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
+  it("retains a restoring publication received while orphan resolution is in flight", async () => {
+    const root = support.testState.root;
+    await git(root, "init", "--quiet");
+    const tree = await git(root, "write-tree");
+    const orphanRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("inflight-orphan"));
+    await git(root, "update-ref", orphanRef, tree);
+    const requested = await placements.startDispatch(REQUEST);
+    await placements.fail({
+      sessionId: requested.sessionId,
+      expectedGeneration: requested.generation,
+      recoveryError: "finished fixture",
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const target = {
+      ...REQUEST,
+      sessionKey: "agent:physical:canonical-orphan",
+      agentId: "physical",
+      storePath: path.join(root, "sessions.sqlite"),
+    };
+    let attempts = 0;
+    const resolveWorkspace = vi.fn(async () => {
+      if (++attempts === 1) {
+        entered.resolve();
+        await release.promise;
+        throw new WorkerPlacementWorkspaceUnavailableError("placement source changed", target);
+      }
+      return { kind: "local" as const, path: root };
+    });
+    const harness = await createHarness(support.testState.stateDb, placements, {
+      resolveWorkspace,
+    });
+    const unsubscribe = harness.service.subscribeOrphanWorkspaceChanges();
+    const coordinated = coordinate(harness);
+    await coordinated.reconcile("startup");
+    const sweep = coordinated.reconcileActive();
+    try {
+      await entered.promise;
+      sessionChanges.emit({
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        storePath: target.storePath,
+        scope: "session-entry",
+      });
+      release.resolve();
+      await sweep;
+      expect(resolveWorkspace).toHaveBeenCalledTimes(1);
+      expect(await git(root, "for-each-ref", "--format=%(refname)", orphanRef)).toBe(orphanRef);
+      await coordinated.reconcileActive();
+      expect(resolveWorkspace).toHaveBeenCalledTimes(2);
+      expect(await git(root, "for-each-ref", "--format=%(refname)", orphanRef)).toBe("");
+    } finally {
+      release.resolve();
+      await sweep;
+      unsubscribe();
+    }
+  });
+
   it.each([1, 10])(
     "fairly retries %i unavailable startup workspaces without losing later recovery",
     async (count) => {
@@ -521,7 +697,7 @@ describe("placement recovery session admission with persisted placements", () =>
         resolveWorkspace: async ({ sessionId }) => {
           attempts.push(sessionId);
           if (!workspaceAvailable || sessionId !== recoveredSession) {
-            throw new Error("fixture transient workspace resolution failure");
+            throw new Error("placement source changed");
           }
           return { kind: "local", path: root };
         },

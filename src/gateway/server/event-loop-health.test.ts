@@ -160,7 +160,8 @@ describe("createGatewayEventLoopHealthMonitor", () => {
   it("detects a late idle wake with separate wall and elapsed clocks", async () => {
     // Isolate deadline detection from callback attribution of the synthetic clock jump.
     vi.spyOn(mainThreadStall, "createMainThreadStallMonitor").mockReturnValue({
-      drain: () => ({ stalls: [], dropped: 0, delayMaxMs: 0 }),
+      drain: () => ({ stalls: [], dropped: 0, unattributedDropped: 0, delayMaxMs: 0 }),
+      setEventLoopSampling: () => {},
       reset: () => {},
       stop: () => {},
     });

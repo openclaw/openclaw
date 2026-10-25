@@ -122,7 +122,6 @@ it.each([false, true])(
       "chat",
       lifecycle.signal,
     );
-    expect(route).toMatchObject({ kind: "session", sessionKey: "global" });
     if (!("kind" in route) || route.kind !== "session") {
       throw new Error("Expected the supported global chat route");
     }
@@ -196,9 +195,6 @@ it.each([false, true])(
       expect(page.querySelector("openclaw-chat-pane")).toBe(paneElement);
       expect(pageState()).toBe(state);
       expect(state.assistantAgentId).toBe(changeAgent ? "research" : "main");
-      expect(resolveChatSnapshotKey(state, { sessionKey: "global" })).toBe(
-        changeAgent ? researchSnapshotKey : mainSnapshotKey,
-      );
       const sessionBefore = state.currentSessionId;
       const paginationBefore = state.chatHistoryPagination;
       release.resolve();

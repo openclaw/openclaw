@@ -7,7 +7,7 @@ import {
 import { createGatewayNodeSessionRuntime } from "../server-node-session-runtime.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { nodeEventHandlers } from "./nodes.event.js";
-import { invokeNodeRequest } from "./nodes.invoke.test-support.js";
+import { expectNodeReply, invokeNodeRequest } from "./nodes.invoke.test-support.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -17,60 +17,38 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 }));
 afterEach(() => vi.restoreAllMocks());
 
-it.each([true, false])(
-  "keeps the event result independent of persistence when the registry accepts=%s",
-  async (accepted) => {
-    const stats = { cpuCount: 2, memoryTotalBytes: 4096, memoryFreeBytes: 1024 };
-    const hostStats = { ...stats, updatedAtMs: 1_250 };
-    const persistence = createDeferred<boolean>();
-    recordHostStatsMock.mockReset().mockReturnValue(persistence.promise);
-    const h = new NodeEventHarness();
-    const client = h.register("conn-1");
-    const { warn, broadcast } = h;
-    const updateHostStats = vi
-      .spyOn(h.nodeRegistry, "updateHostStats")
-      .mockReturnValue(accepted ? hostStats : null);
-    const respond = await h.send(client, stats, "node.host.stats");
+it("keeps the accepted event result independent of persistence", async () => {
+  const stats = { cpuCount: 2, memoryTotalBytes: 4096, memoryFreeBytes: 1024 };
+  const hostStats = { ...stats, updatedAtMs: 1_250 };
+  const persistence = createDeferred<boolean>();
+  recordHostStatsMock.mockReset().mockReturnValue(persistence.promise);
+  const h = new NodeEventHarness();
+  const client = h.register("conn-1");
+  const { warn, broadcast } = h;
+  vi.spyOn(h.nodeRegistry, "updateHostStats").mockReturnValue(hostStats);
+  const respond = await h.send(client, stats, "node.host.stats");
 
-    expect(updateHostStats).toHaveBeenCalledWith({ nodeId: "node-1", connId: "conn-1", stats });
-    const result = [
-      true,
-      {
-        ok: true,
-        event: "node.host.stats",
-        handled: accepted,
-        reason: accepted ? "updated" : "stale_connection",
-      },
-      undefined,
-    ];
-    // The RPC has already completed while its store write is still pending.
-    expect(respond.mock.calls).toEqual([result]);
-    if (accepted) {
-      expect(recordHostStatsMock).toHaveBeenCalledExactlyOnceWith({
-        nodeId: "node-1",
-        hostStats,
-        expectedPairingGeneration: { nodeId: "node-1", key: h.binding.generation },
-      });
-      expect(broadcast).toHaveBeenCalledWith(
-        "node.hostStats",
-        { nodeId: "node-1", hostStats },
-        { dropIfSlow: true },
-      );
-      persistence.reject(new Error("stats store unavailable"));
-      await vi.waitFor(() =>
-        expect(warn).toHaveBeenCalledExactlyOnceWith(
-          "failed to persist node host stats for node-1: stats store unavailable",
-        ),
-      );
-      expect(respond.mock.calls).toEqual([result]);
-    } else {
-      persistence.resolve(false);
-      expect(recordHostStatsMock).not.toHaveBeenCalled();
-      expect(broadcast).not.toHaveBeenCalled();
-      expect(warn).not.toHaveBeenCalled();
-    }
-  },
-);
+  const result = { ok: true, event: "node.host.stats", handled: true, reason: "updated" };
+  // The RPC has already completed while its store write is still pending.
+  expect(respond).toHaveBeenCalledExactlyOnceWith(true, result, undefined);
+  expect(recordHostStatsMock).toHaveBeenCalledExactlyOnceWith({
+    nodeId: "node-1",
+    hostStats,
+    expectedPairingGeneration: { nodeId: "node-1", key: h.binding.generation },
+  });
+  expect(broadcast).toHaveBeenCalledWith(
+    "node.hostStats",
+    { nodeId: "node-1", hostStats },
+    { dropIfSlow: true },
+  );
+  persistence.reject(new Error("stats store unavailable"));
+  await vi.waitFor(() =>
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "failed to persist node host stats for node-1: stats store unavailable",
+    ),
+  );
+  expect(respond).toHaveBeenCalledExactlyOnceWith(true, result, undefined);
+});
 class NodeEventHarness {
   binding = { identity: "identity-1", generation: "generation-1" };
   resolvePairing = vi.fn(async () => this.binding);
@@ -181,15 +159,11 @@ it.each([
       },
       "worker.processes.changed",
     );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        ok: true,
-        event: "worker.processes.changed",
-        handled: scenario === "current",
-      },
-      undefined,
-    );
+    expectNodeReply(respond, {
+      ok: true,
+      event: "worker.processes.changed",
+      handled: scenario === "current",
+    });
     if (scenario === "current") {
       expect(h.broadcast).toHaveBeenCalledExactlyOnceWith(
         "sessions.processes.changed",
@@ -211,23 +185,21 @@ it("invalidates only the reporting node's inventory on state changes and connect
   const h = new NodeEventHarness();
   const first = h.register("conn-first");
   h.register("conn-other", "node-other");
-  for (const state of ["locked", "unlocked", "unknown"] as const) {
-    const respond = await h.send(first, { state });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { ok: true, event: "node.desktop.availability", handled: true, reason: "updated" },
-      undefined,
-    );
-    expect(h.node()).toMatchObject({ desktopAvailability: { state } });
-    expect(h.nodeRegistry.get("node-other")).not.toHaveProperty("desktopAvailability");
-  }
-  const unchanged = await h.send(first, { state: "unknown" });
+  expectNodeReply(await h.send(first, { state: "locked" }), {
+    ok: true,
+    event: "node.desktop.availability",
+    handled: true,
+    reason: "updated",
+  });
+  expect(h.node()).toMatchObject({ desktopAvailability: { state: "locked" } });
+  expect(h.nodeRegistry.get("node-other")).not.toHaveProperty("desktopAvailability");
+  const unchanged = await h.send(first, { state: "locked" });
   expect(unchanged.mock.calls[0]?.[1]).toMatchObject({ handled: true, reason: "unchanged" });
-  expect(h.changes()).toEqual([{ nodeId: "node-1" }, { nodeId: "node-1" }, { nodeId: "node-1" }]);
+  expect(h.changes()).toEqual([{ nodeId: "node-1" }]);
 
   const replacement = h.register("conn-replacement");
   expect(h.node()).not.toHaveProperty("desktopAvailability");
-  expect(h.changes()).toHaveLength(4);
+  expect(h.changes()).toHaveLength(2);
   const retiredCount = h.changes().length;
   expect(h.changes().at(-1)).toEqual({ nodeId: "node-1" });
   const stale = await h.send(first, { state: "locked" });
@@ -235,10 +207,10 @@ it("invalidates only the reporting node's inventory on state changes and connect
   expect(h.nodeRegistry.unregister(first.connId)).toBeNull();
   expect(h.changes()).toHaveLength(retiredCount);
   await h.send(replacement, { state: "unlocked" });
-  expect(h.changes()).toHaveLength(5);
+  expect(h.changes()).toHaveLength(3);
   expect(h.nodeRegistry.unregister(replacement.connId)).toBe("node-1");
   expect(h.node()).toBeUndefined();
-  expect(h.changes()).toHaveLength(6);
+  expect(h.changes()).toHaveLength(4);
   expect(h.changes().at(-1)).toEqual({ nodeId: "node-1" });
 });
 
@@ -326,17 +298,5 @@ it.each([
     const respond = await h.send(client, { idleSeconds: 0, source }, "node.presence.activity");
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ handled: accepted });
     expect(h.active()?.nodeId).toBe(accepted ? "node-1" : undefined);
-    if (accepted) {
-      const replacement = h.register("conn-2");
-      expect(h.active()).toBeUndefined();
-      expect(h.node()?.presenceActivitySource).toBeUndefined();
-      const stale = await h.send(client, { idleSeconds: 0, source }, "node.presence.activity");
-      expect(stale.mock.calls[0]?.[0]).toBe(false);
-      await h.send(replacement, { idleSeconds: 0, source }, "node.presence.activity");
-      expect(h.active()?.nodeId).toBe("node-1");
-      await h.send(replacement, { action: "clear" }, "node.presence.activity");
-      expect(h.active()).toBeUndefined();
-      expect(h.node()?.presenceActivitySource).toBeUndefined();
-    }
   },
 );

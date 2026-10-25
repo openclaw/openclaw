@@ -1,5 +1,5 @@
 import { markdownContentHtml } from "../lib/markdown-content.ts";
-import { toStreamingMarkdownDomParts } from "./markdown.ts";
+import { toStreamingMarkdownDomParts } from "./markdown-live.ts";
 
 export function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");

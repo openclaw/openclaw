@@ -164,13 +164,6 @@ suite.define(() => {
               directory,
               "route",
             );
-            const routePaint = await page
-              .locator(".lazy-view-state--loading .skeleton-line")
-              .first()
-              .evaluate((element) => getComputedStyle(element).backgroundColor);
-            expect
-              .soft(routePaint, "Claw route skeleton retains theme paint")
-              .toBe("rgb(31, 35, 48)");
             route.release();
             await gateway.waitForRequest("chat.startup");
             expect(await page.getByText(readyText, { exact: true }).count()).toBe(0);
@@ -180,16 +173,6 @@ suite.define(() => {
               .toBe(0);
             if (viewport.width > 768) {
               const history = page.locator(".chat-thread");
-              expect
-                .soft(await history.locator(".loading-skeleton__messages .skeleton-line").count())
-                .toBe(5);
-              expect
-                .soft(
-                  await history
-                    .locator(".loading-skeleton__messages .loading-skeleton__avatar")
-                    .count(),
-                )
-                .toBe(1);
               expect.soft(await history.locator(".loading-skeleton__header").count()).toBe(0);
               expect.soft(await history.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
             }

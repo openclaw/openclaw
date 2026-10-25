@@ -12,6 +12,7 @@ import {
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import {
   createCodexCliSessionNodeHostCommands,
@@ -50,11 +51,9 @@ async function completeResume(argv: string[]) {
   }
   await fs.writeFile(outputPath, "final answer\n");
   return {
+    ...commandResult(),
     stdout: Buffer.alloc(0),
     stderr: Buffer.alloc(0),
-    code: 0,
-    signal: null,
-    killed: false,
     termination: "exit" as const,
   };
 }

@@ -42,6 +42,7 @@ import {
   readRunProjections,
   applyHistoryRun,
 } from "./chat-history-stream.ts";
+import { loadChatLiveTools } from "./chat-live-tools.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
@@ -176,6 +177,16 @@ export async function hydrateChatHistory(
         return undefined;
       }
     }
+    const inFlightEvents =
+      isHistoryCursor(response) && response.kind === "reset"
+        ? undefined
+        : response.inFlightRun?.events;
+    const replayAgentEvent = inFlightEvents?.length
+      ? (await loadChatLiveTools()).handleAgentEvent
+      : undefined;
+    if (!isCurrent()) {
+      return undefined;
+    }
     // Live history wins even if a pending IndexedDB read settles in the next microtask.
     retireInitialChatSnapshot(state);
     const previousMessages = state.chatMessages;
@@ -230,6 +241,7 @@ export async function hydrateChatHistory(
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
       applyHistoryRun({
+        replayAgentEvent,
         state,
         run: response.inFlightRun,
         sessionInfo: response.sessionInfo,
@@ -420,6 +432,7 @@ export async function hydrateChatHistory(
     }
 
     applyHistoryRun({
+      replayAgentEvent,
       state,
       run: res.inFlightRun,
       observedRunActivity,

@@ -40,6 +40,7 @@ import {
   LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
   withSqliteWritableSchema,
 } from "./openclaw-state-db-doctor-schema.js";
+import { stateIndexOrderingMigrations } from "./openclaw-state-db-index-ordering-migrations.js";
 import { migrateMeetingTranscriptStartTime } from "./openclaw-state-db-meeting-chronology-migration.js";
 import {
   classifySqliteTableReadError,
@@ -569,13 +570,7 @@ export function migrateBoundedStateSchema(
     stateClientCredentialMigration,
     stateAutomationPolicyMigration,
     stateLocalWorkspaceManifestMigration,
-    {
-      version: 32,
-      tables: [],
-      columns: [],
-      migrate: () => false,
-      applied: "Aligned PostgreSQL non-null index ordering (v32)",
-    },
+    ...stateIndexOrderingMigrations,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.

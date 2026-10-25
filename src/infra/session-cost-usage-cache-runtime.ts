@@ -525,7 +525,6 @@ async function runQueuedUsageCostRefresh(
             state.fullRefreshRequested = false;
           }
           state.runningSessionFiles = fullRefreshRequested ? "all" : new Set(sessionFiles);
-          const remainingRollupIds = new Set<string>();
           const result = await refreshCostUsageCacheForAgent({
             config: state.config,
             agentId: state.agentId,
@@ -535,7 +534,6 @@ async function runQueuedUsageCostRefresh(
             maxFiles: USAGE_COST_REFRESH_BATCH_SIZE,
             onRemaining: (files) => {
               for (const { sessionFile, rollupId } of files) {
-                remainingRollupIds.add(rollupId);
                 state.pendingSessionFiles.set(sessionFile, null);
                 if (state.pendingRebuildRows.has(rollupId)) {
                   state.pendingSessionFiles.set(rollupId, null);
@@ -566,7 +564,7 @@ async function runQueuedUsageCostRefresh(
           for (const row of rebuildRows) {
             if (
               (fullRefreshRequested || sessionFiles.includes(row.key)) &&
-              !remainingRollupIds.has(row.key) &&
+              !state.pendingSessionFiles.has(row.key) &&
               state.pendingRebuildRows.get(row.key) === row
             ) {
               state.pendingRebuildRows.delete(row.key);

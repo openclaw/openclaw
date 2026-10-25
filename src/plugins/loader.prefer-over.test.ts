@@ -1,22 +1,17 @@
 // Verifies plugin loader prefer-over selection behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.test-fixtures.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
+import { makeTrackedTempDir, mkdirSafeDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 function makePluginLoaderTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-prefer-over-"));
-  if (process.platform !== "win32") {
-    fs.chmodSync(dir, 0o755);
-  }
-  tempDirs.push(dir);
-  return dir;
+  return makeTrackedTempDir("openclaw-plugin-prefer-over", tempDirs);
 }
 
 function writeChannelToolPlugin(params: {
@@ -28,10 +23,7 @@ function writeChannelToolPlugin(params: {
   canonicalAliasesRequireOwnField?: string;
 }): string {
   const pluginDir = path.join(params.rootDir, params.id);
-  fs.mkdirSync(pluginDir, { recursive: true });
-  if (process.platform !== "win32") {
-    fs.chmodSync(pluginDir, 0o755);
-  }
+  mkdirSafeDir(pluginDir);
   fs.writeFileSync(
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify(

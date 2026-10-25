@@ -247,15 +247,15 @@ describe("installPackageDir rollback", () => {
         `retired-settlement-${action}`,
       );
       const original = await withPluginLifecycleLease(leaseOptions, async (lease) => ({
-        ...(await retain({}, lease.assertOwned.bind(lease))),
-        assertOwned: lease.assertOwned.bind(lease),
+        ...(await retain({}, lease.assertOwned)),
+        assertOwned: lease.assertOwned,
       }));
       expect(original.assertOwned).toThrow();
       const installedIdentity = await fs.lstat(targetDir, { bigint: true });
       const backupIdentity = await fs.lstat(original.backupDir, { bigint: true });
 
       await withPluginLifecycleLease(leaseOptions, async (lease) => {
-        await expect(original.transaction[action](lease.assertOwned.bind(lease))).rejects.toThrow();
+        await expect(original.transaction[action](lease.assertOwned)).rejects.toThrow();
         lease.assertOwned();
         await expectPackage(targetDir, "new", installedIdentity);
         await expectPackage(original.backupDir, "old", backupIdentity);
@@ -321,7 +321,7 @@ describe("installPackageDir rollback", () => {
     let rollback = Promise.resolve();
 
     const original = withPluginLifecycleLease(leaseOptions, async (lease) => {
-      const assertOwned = lease.assertOwned.bind(lease);
+      const assertOwned = lease.assertOwned;
       const { backupDir, transaction } = await retain({}, assertOwned);
       originalBackup = backupDir;
       const publishedIdentity = await fs.lstat(targetDir, { bigint: true });
@@ -359,7 +359,7 @@ describe("installPackageDir rollback", () => {
         const successor = await installPackageDir({
           ...installOptions,
           mode: "update",
-          beforePersistentApply: lease.assertOwned.bind(lease),
+          beforePersistentApply: lease.assertOwned,
         });
         expect(successor.ok).toBe(true);
         const successorIdentity = await fs.lstat(targetDir, { bigint: true });
@@ -559,9 +559,7 @@ describe("installPackageDir rollback", () => {
       if (replaced === "backup") {
         await run();
       } else {
-        await withPluginLifecycleLease(leaseOptions, async (lease) =>
-          run(lease.assertOwned.bind(lease)),
-        );
+        await withPluginLifecycleLease(leaseOptions, async (lease) => run(lease.assertOwned));
       }
     },
   );
@@ -755,7 +753,7 @@ describe("installPackageDir rollback", () => {
     });
 
     const lifecycle = withPluginLifecycleLease(leaseOptions, async (lease) => {
-      const assertOwned = lease.assertOwned.bind(lease);
+      const assertOwned = lease.assertOwned;
       pendingInstall = install(
         {
           sourceHardlinks: "reject",

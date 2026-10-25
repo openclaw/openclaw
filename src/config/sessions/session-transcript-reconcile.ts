@@ -595,29 +595,35 @@ export async function waitForSessionTranscriptProjection(
   }
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = prepareReconcileParams(toDatabaseOptions(resolved));
+  return waitForPreparedSessionTranscriptProjection(
+    resolved.sessionId,
+    databaseOptions,
+    abortSignal,
+  );
+}
+
+export async function waitForPreparedSessionTranscriptProjection(
+  sessionId: string,
+  databaseOptions: PreparedReconcileParams,
+  abortSignal?: AbortSignal,
+): Promise<void> {
   const key = resolveOpenClawAgentSqlitePath(databaseOptions);
   const running = runningReconciles.get(key);
   if (!running) {
     return;
   }
   // Subscribe before the initial read so a committed projection cannot be missed during it.
-  let projection = running.projections.get(resolved.sessionId);
+  let projection = running.projections.get(sessionId);
   if (!projection) {
     projection = createDeferredCore();
-    running.projections.set(resolved.sessionId, projection);
+    running.projections.set(sessionId, projection);
   }
   try {
     abortSignal?.throwIfAborted();
     // Revoked work retains its close fence until settlement; wait before admitting a reader.
     if (!running.signal?.aborted) {
       running.assertCurrent?.();
-      if (
-        !(await readSessionTranscriptProjectionStatus(
-          databaseOptions,
-          resolved.sessionId,
-          abortSignal,
-        ))
-      ) {
+      if (!(await readSessionTranscriptProjectionStatus(databaseOptions, sessionId, abortSignal))) {
         return;
       }
     }
