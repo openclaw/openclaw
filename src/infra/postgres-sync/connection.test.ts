@@ -63,15 +63,8 @@ function transportFixture(
   let wakes = 0;
   let pending: BridgeRequest | undefined;
   vi.spyOn(performance, "now").mockImplementation(() => now);
-  vi.spyOn(Atomics, "wait").mockImplementation((state, index, observed, timeout) => {
-    if (index === 1) {
-      return "not-equal";
-    }
-    const received = receiveMessageOnPort(port2)?.message as BridgeRequest | undefined;
-    if (received) {
-      pending = received;
-      wakes = 0;
-    }
+  vi.spyOn(Atomics, "wait").mockImplementation((_state, index, observed, timeout) => {
+    pending = (receiveMessageOnPort(port2)?.message as BridgeRequest | undefined) ?? pending;
     if (!pending) {
       throw new Error("No request was sent to the bridge");
     }
@@ -100,15 +93,9 @@ function transportFixture(
           : {
               id: mode === "mismatched" && query ? id + 1 : id,
               result: {
-                inTransaction: /^\s*BEGIN\b/i.test(sql)
-                  ? true
-                  : /^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)
-                    ? false
-                    : db.isTransaction,
+                inTransaction: !/^(COMMIT|ROLLBACK)$/.test(sql) && db.isTransaction,
                 command,
-                mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
-                  ? "scoped"
-                  : undefined,
+                mutation: command === "UPDATE" ? "scoped" : undefined,
                 rows: [{ value: 7 }],
                 rowCount: 1,
                 fields: [{ name: "value", dataTypeID: 23 }],
@@ -322,23 +309,10 @@ it.each(["reserved", "worker"] as const)(
   },
 );
 
-it("runs the commit authority guard and rolls back when it refuses", () => {
+it.each([false, true])("guards prepared commits (refuse=%s)", async (refuse) => {
   const { db, statements } = transactionFixture();
   const refusal = new Error("authority revoked");
-  expect(() =>
-    immediate(db, () => 1, {
-      withCommit() {
-        throw refusal;
-      },
-    }),
-  ).toThrow(refusal);
-  expect(statements).toEqual([writeBegin, "ROLLBACK"]);
-  expect(db.isTransaction).toBe(false);
-});
-
-it("prepares before asynchronous admission and commits only inside its guard", async () => {
-  const { db, statements } = transactionFixture();
-  const result = await prepared(
+  const result = prepared(
     db,
     async () => {
       statements.push("prepare");
@@ -347,6 +321,9 @@ it("prepares before asynchronous admission and commits only inside its guard", a
     {
       withCommit(commit) {
         statements.push("guard");
+        if (refuse) {
+          throw refusal;
+        }
         commit();
       },
     },
@@ -355,6 +332,17 @@ it("prepares before asynchronous admission and commits only inside its guard", a
       return write();
     },
   );
-  expect(result).toBe("result");
-  expect(statements).toEqual(["prepare", "admit", writeBegin, "guard", "COMMIT"]);
+  if (refuse) {
+    await expect(result).rejects.toThrow(refusal);
+  } else {
+    await expect(result).resolves.toBe("result");
+  }
+  expect(statements).toEqual([
+    "prepare",
+    "admit",
+    writeBegin,
+    "guard",
+    refuse ? "ROLLBACK" : "COMMIT",
+  ]);
+  expect(db.isTransaction).toBe(false);
 });

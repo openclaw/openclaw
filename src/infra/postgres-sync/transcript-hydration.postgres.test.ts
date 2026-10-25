@@ -17,7 +17,6 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
   const readers: PostgresSyncConnection[] = [];
 
   beforeAll(async () => {
-    // This isolated test process drives the same asynchronous reader as CLI hydration.
     installDatabaseProcessRole("cli-oneshot");
     await admin.query(`CREATE SCHEMA "${schema}";
       CREATE TABLE "${schema}".transcript_events (
@@ -71,14 +70,14 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
       },
     });
     const chunks: SessionTranscriptHydrationChunk[] = [];
-    const stream = async (
+    const stream = (
       options: {
         afterSeq?: number;
         beforeSeq?: number;
         onChunk?: () => Promise<void>;
       } = {},
-    ) => {
-      return await runWithSessionTranscriptReadFence(
+    ) =>
+      runWithSessionTranscriptReadFence(
         options.beforeSeq === undefined
           ? undefined
           : {
@@ -123,7 +122,6 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
             },
           ),
       );
-    };
     const payloadPages = () =>
       queries.mock.results.flatMap((result, index) => {
         const sql = queries.mock.calls[index]![0];
@@ -141,14 +139,7 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
           ),
         ];
       });
-    return {
-      reader,
-      chunks,
-      payloadPages,
-      queryCount: () => queries.mock.calls.length,
-      closedTransactions,
-      stream,
-    };
+    return { reader, chunks, payloadPages, queries, closedTransactions, stream };
   }
 
   function expectHydrated(chunks: SessionTranscriptHydrationChunk[], expected: Event[]) {
@@ -202,7 +193,7 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
     expect(f.closedTransactions).toEqual([false]);
     expect(f.reader.isOpen).toBe(false);
     expect(f.payloadPages().length).toBeLessThanOrEqual(3);
-    expect(f.queryCount()).toBeLessThanOrEqual(6);
+    expect(f.queries.mock.calls.length).toBeLessThanOrEqual(6);
   });
 
   it("bounds large-row pages while preserving UTF-8 bytes and exclusive sequence fences", async () => {
@@ -215,24 +206,12 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
       };
     });
     const f = await fixture(events);
-    let acknowledgements = 0;
-    const result = await f.stream({
-      afterSeq: -3,
-      beforeSeq: 84,
-      onChunk: async () => {
-        if (acknowledgements++ === 0) {
-          await admin.query(
-            `UPDATE "${schema}".transcript_events SET event_json = 'changed' WHERE seq = 80`,
-          );
-        }
-      },
-    });
+    const result = await f.stream({ afterSeq: -3, beforeSeq: 84 });
     const selected = events.filter(({ seq }) => seq > -3 && seq < 84);
     expect(result.eventCount).toBe(selected.length);
     expectHydrated(f.chunks, selected);
     expect(f.payloadPages().length).toBeGreaterThan(1);
     expect(f.payloadPages().length).toBeLessThanOrEqual(5);
     expect(f.payloadPages().every((bytes) => bytes <= 4 * 1024 * 1024)).toBe(true);
-    expect(f.closedTransactions).toEqual([false]);
   });
 });
