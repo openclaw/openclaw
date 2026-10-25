@@ -12,6 +12,7 @@ import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { validateWorkerComputerParams } from "../../packages/gateway-protocol/src/index.js";
+import { RequestFrameSchema } from "../../packages/gateway-protocol/src/schema/frames.js";
 import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -41,10 +42,7 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import {
-  type WorkerTurnAdmissionParams,
-  WorkerTurnAdmissionRequestFrameSchema,
-} from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import * as workerTurnAdmission from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -262,7 +260,7 @@ class FakeWorkerGateway extends WorkerExecApprovalFixture {
   readonly acceptedTranscriptRequests: WorkerTranscriptCommitParams[] = [];
   readonly liveEventRequests: WorkerLiveEventParams[] = [];
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
-  readonly turnAdmissionRequests: WorkerTurnAdmissionParams[] = [];
+  readonly turnAdmissionRequests: workerTurnAdmission.WorkerTurnAdmissionParams[] = [];
   readonly gatewayToolRequests: WorkerGatewayToolInvokeParams[] = [];
   readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
@@ -336,25 +334,28 @@ class FakeWorkerGateway extends WorkerExecApprovalFixture {
     if (Value.Check(WorkerLiveEventRequestFrameSchema, parsed)) {
       return this.handleLiveEvent(socket, parsed);
     }
-    if (Value.Check(WorkerTurnAdmissionRequestFrameSchema, parsed)) {
-      this.methods.push(parsed.method);
-      this.turnAdmissionRequests.push(structuredClone(parsed.params));
-      this.applicationOrder.push("admission");
-      const lastTranscript = this.acceptedTranscriptRequests.at(-1);
-      // This fixture starts with admitted input; only worker output advances its leaf.
-      this.reply(socket, parsed.id, {
-        outcome: "allow",
-        baseLeafId: lastTranscript ? `leaf-${lastTranscript.seq}` : "leaf-base",
-      });
-      return;
-    }
     if (Value.Check(WorkerInferenceStartRequestFrameSchema, parsed)) {
       return this.handleInference(socket, parsed);
     }
     if (Value.Check(WorkerInferenceCancelRequestFrameSchema, parsed)) {
       return this.handleInferenceCancel(socket, parsed);
     }
-    if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+    if (Value.Check(RequestFrameSchema, parsed)) {
+      if (
+        parsed.method === workerTurnAdmission.WORKER_TURN_ADMISSION_METHOD &&
+        workerTurnAdmission.validateWorkerTurnAdmissionParams(parsed.params)
+      ) {
+        this.methods.push(parsed.method);
+        this.turnAdmissionRequests.push(structuredClone(parsed.params));
+        this.applicationOrder.push("admission");
+        const lastTranscript = this.acceptedTranscriptRequests.at(-1);
+        // This fixture starts with admitted input; only worker output advances its leaf.
+        this.reply(socket, parsed.id, {
+          outcome: "allow",
+          baseLeafId: lastTranscript ? `leaf-${lastTranscript.seq}` : "leaf-base",
+        });
+        return;
+      }
       if (this.handleExecApproval(parsed, (id, payload) => this.reply(socket, id, payload))) {
         return;
       }
@@ -407,9 +408,8 @@ class FakeWorkerGateway extends WorkerExecApprovalFixture {
         return;
       }
     }
-    const unsupported: unknown = parsed;
-    if (isRecord(unsupported) && typeof unsupported.method === "string") {
-      this.methods.push(unsupported.method);
+    if (isRecord(parsed) && typeof parsed.method === "string") {
+      this.methods.push(parsed.method);
     }
     socket.close(1008, "invalid-frame");
   }
