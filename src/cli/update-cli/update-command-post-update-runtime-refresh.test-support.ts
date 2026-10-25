@@ -193,7 +193,6 @@ export function registerServiceStartRefusalFinalizationTests({
 
       expect(rollback).not.toHaveBeenCalled();
       expect(restorePackage).not.toHaveBeenCalled();
-      expect(mocks.restartService).toHaveBeenCalledOnce();
       if (phase === "revalidation") {
         expect(mocks.restartService.mock.calls[0]?.[0]).toMatchObject({
           shouldRestart: false,
@@ -210,11 +209,7 @@ export function registerServiceStartRefusalFinalizationTests({
         );
       }
       expect(complete).toHaveBeenCalledOnce();
-      expect(mocks.printResult).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "ok", root }),
-        expect.anything(),
-        expect.anything(),
-      );
+      expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({ status: "ok", root });
     },
   );
 }

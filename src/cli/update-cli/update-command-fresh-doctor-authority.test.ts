@@ -42,13 +42,9 @@ const source = (name: string) =>
     sourceWorkerName: name,
     distWorkerPath: `legacy-finalizer/src/${name.replace(/^\.\.\//, "").replace(/^\.\.\//, "")}.js`,
   });
-const doctor = source("../../commands/doctor");
 const worker = source("../../infra/update-migrated-finalize.worker");
 const temporary = source("../../infra/tmp-openclaw-dir");
 const packageRoot = source("../../infra/openclaw-root");
-const runtime = source("../../runtime");
-const database = source("../../state/openclaw-state-db");
-const doctorResult = source("../../infra/update-doctor-result");
 const readText = (file: string) => fs.readFileSync(file, "utf8");
 const readConfig = (file: string) => JSON.parse(readText(file));
 
@@ -103,10 +99,9 @@ it.for(["healthy", "original-owner-replaced"] as const)(
         const barrier = `
         import fs from "node:fs";
         import fsp from "node:fs/promises";
-        import {setTimeout} from "node:timers/promises";
         import {registerHooks} from "node:module";
         ${fixtureReceiptClientSource(receipts.endpoint)}
-        ${doctor.pathname.endsWith(".ts") ? `process.chdir(${JSON.stringify(path.resolve("."))});` : ""}
+        ${worker.pathname.endsWith(".ts") ? `process.chdir(${JSON.stringify(path.resolve("."))});` : ""}
         const overrides=new Map([
           [${JSON.stringify(temporary.href)}, ${JSON.stringify(`export function resolvePreferredOpenClawTmpDir(){return ${JSON.stringify(control)};}`)}],
           [${JSON.stringify(packageRoot.href)}, ${JSON.stringify(`export async function resolveOpenClawPackageRoot(){return ${JSON.stringify(root)};}`)}],
@@ -115,37 +110,23 @@ it.for(["healthy", "original-owner-replaced"] as const)(
           const replacement=overrides.get(url);
           return replacement===undefined?next(url,ctx):{format:"module",source:'export * from '+JSON.stringify(url+'?fixture-original')+';\\n'+replacement,shortCircuit:true};
         }});
-        ${doctor.pathname.endsWith(".ts") ? `process.env.TSX_TSCONFIG_PATH=${JSON.stringify(path.resolve("tsconfig.json"))}; await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
-        const {getUpdateDoctorConfigWriteAuthority}=await import(${JSON.stringify(doctorResult.href)});
+        ${worker.pathname.endsWith(".ts") ? `process.env.TSX_TSCONFIG_PATH=${JSON.stringify(path.resolve("tsconfig.json"))}; await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
         const open=fsp.open;
         let reached=false;
         fsp.open=async(...args)=>{
           const handle=await open(...args);
           if(!reached && String(args[0]).includes("openclaw-config-backup")) {
             reached=true;
-            fs.writeFileSync(${JSON.stringify(`${readyPath}.tmp`)},JSON.stringify({pid:process.pid,authority:!!getUpdateDoctorConfigWriteAuthority(process.env.OPENCLAW_CONFIG_PATH)}));
+            fs.writeFileSync(${JSON.stringify(`${readyPath}.tmp`)},JSON.stringify({pid:process.pid}));
             fs.renameSync(${JSON.stringify(`${readyPath}.tmp`)},${JSON.stringify(readyPath)});
             sendReceipt(${JSON.stringify(readyPath)},"config-backup");
-            while(!fs.existsSync(${JSON.stringify(proceed)})) await setTimeout(10);
+            await awaitRelease(${JSON.stringify(readyPath)},${JSON.stringify(proceed)});
           }
           return handle;
         };
       `;
         const entryPath = path.join(root, "dist", "index.js");
-        fs.writeFileSync(
-          entryPath,
-          `${barrier}
-        const {doctorCommand}=await import(${JSON.stringify(doctor.href)});
-        const {defaultRuntime}=await import(${JSON.stringify(runtime.href)});
-        try {
-          await doctorCommand({...defaultRuntime,exit:(code)=>{process.exitCode=code;}},
-            {repair:true,nonInteractive:true,yes:true,workspaceSuggestions:false});
-        } finally {
-          const {closeOpenClawStateDatabaseAsync}=await import(${JSON.stringify(database.href)});
-          await closeOpenClawStateDatabaseAsync();
-        }
-      `,
-        );
+        fs.writeFileSync(entryPath, 'throw new Error("unexpected legacy Doctor");');
         fs.writeFileSync(
           path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
           `${barrier}\nawait import(${JSON.stringify(worker.href)});`,
@@ -191,7 +172,7 @@ it.for(["healthy", "original-owner-replaced"] as const)(
             ]),
             signal,
           );
-          const binding: { pid: number; authority: boolean } = readConfig(readyPath);
+          const binding: { pid: number } = readConfig(readyPath);
           expect(binding.pid).not.toBe(process.pid);
           expect(readText(state.configPath)).toBe(original);
           if (fault === "original-owner-replaced") {
@@ -203,7 +184,7 @@ it.for(["healthy", "original-owner-replaced"] as const)(
             ).toBe(1);
           }
         } finally {
-          fs.writeFileSync(proceed, "go");
+          receipts.release(readyPath, proceed);
           await pending;
         }
         const outcome = await pending;
