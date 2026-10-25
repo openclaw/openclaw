@@ -19,6 +19,73 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+it("shares closed tooltip observation across light and shadow DOM and releases retired targets", async () => {
+  const NativeObserver = MutationObserver;
+  const observers = new Set<{ targets: Map<Node, MutationObserverInit | undefined> }>();
+  vi.stubGlobal(
+    "MutationObserver",
+    class extends NativeObserver {
+      readonly targets = new Map<Node, MutationObserverInit | undefined>();
+      constructor(callback: MutationCallback) {
+        super(callback);
+        observers.add(this);
+      }
+      override observe(target: Node, options?: MutationObserverInit) {
+        super.observe(target, options);
+        this.targets.set(target, options);
+      }
+      override disconnect() {
+        super.disconnect();
+        this.targets.clear();
+      }
+    },
+  );
+  const fixtures = Array.from({ length: 100 }, (_, index) => createTooltip(`Hint ${index}`));
+  const shadowHost = document.createElement("div");
+  const shadow = shadowHost.attachShadow({ mode: "open" });
+  document.body.append(shadowHost, ...fixtures.slice(0, 50).map(({ tooltip }) => tooltip));
+  shadow.append(...fixtures.slice(50).map(({ tooltip }) => tooltip));
+  await Promise.all(fixtures.map(({ tooltip }) => settleTooltip(tooltip)));
+  expect(observers.size).toBe(1);
+  expect([...observers].filter((observer) => observer.targets.size > 0)).toHaveLength(1);
+  const observer = [...observers][0]!;
+  for (const [index, { tooltip, trigger }] of fixtures.entries()) {
+    expect(observer.targets.get(tooltip)).toEqual({
+      childList: true,
+      characterData: false,
+      subtree: false,
+    });
+    expect(observer.targets.get(trigger)).toEqual({
+      childList: true,
+      characterData: false,
+      subtree: true,
+    });
+    const root = trigger.getRootNode();
+    const id = trigger.getAttribute("aria-describedby")!;
+    expect((root instanceof ShadowRoot ? root : document).getElementById(id)?.textContent).toBe(
+      `Hint ${index}`,
+    );
+  }
+
+  const first = fixtures[0]!;
+  const replacement = element("button", { textContent: "Replacement" });
+  first.tooltip.replaceChildren(replacement);
+  first.trigger.textContent = "Retired trigger changed in the same commit";
+  await settleTooltip(first.tooltip);
+  expect(first.trigger.hasAttribute("aria-describedby")).toBe(false);
+  expect(description(replacement)).toBe("Hint 0");
+  first.tooltip.remove();
+  await Promise.resolve();
+  expect(replacement.hasAttribute("aria-describedby")).toBe(false);
+  expect([...observers].filter((observer) => observer.targets.size > 0)).toHaveLength(1);
+  expect(observers.size).toBe(1);
+
+  document.body.replaceChildren();
+  await Promise.resolve();
+  expect([...observers].every((observer) => observer.targets.size === 0)).toBe(true);
 });
 
 it("materializes content on first hover intent and reuses the native surface", async () => {
