@@ -13,6 +13,13 @@ import { renderComposerFixture, resetComposerFixture } from "./chat-composer.tes
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 const createIdleImport = idleImport.createIdleImport;
+const inputEvent = (data: string | undefined, type = "input") =>
+  new InputEvent(type, {
+    bubbles: true,
+    cancelable: type === "beforeinput",
+    inputType: "insertText",
+    data,
+  });
 async function settleImports() {
   await vi.dynamicImportSettled();
   flush();
@@ -44,9 +51,7 @@ beforeEach(() => {
         throw new Error("Expected focused composer");
       }
       textarea.setRangeText(text, textarea.selectionStart, textarea.selectionEnd, "end");
-      textarea.dispatchEvent(
-        new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }),
-      );
+      textarea.dispatchEvent(inputEvent(text));
       return true;
     }),
   });
@@ -100,23 +105,13 @@ async function fixture(
   const input = (value: string, caret = value.length) => {
     textarea.value = value;
     textarea.setSelectionRange(caret, caret);
-    dispatch(
-      new InputEvent("input", { bubbles: true, inputType: "insertText", data: value.at(-1) }),
-    );
+    dispatch(inputEvent(value.at(-1)));
   };
   const key = (keyName: string, extra: KeyboardEventInit = {}) =>
     dispatch(
       new KeyboardEvent("keydown", { key: keyName, bubbles: true, cancelable: true, ...extra }),
     );
-  const colon = () =>
-    dispatch(
-      new InputEvent("beforeinput", {
-        bubbles: true,
-        cancelable: true,
-        inputType: "insertText",
-        data: ":",
-      }),
-    );
+  const colon = () => dispatch(inputEvent(":", "beforeinput"));
   if (initial && !restored) {
     input(initial);
     await settleImports();
