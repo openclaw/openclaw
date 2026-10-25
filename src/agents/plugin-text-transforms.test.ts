@@ -78,67 +78,63 @@ it("merges registered transform groups in order", () => {
   );
 });
 
-it("rewrites system prompt and message text content before transport", async () => {
-  const fixture = transformFixture({
-    input: [
-      { from: /orchid mailbox/g, to: "pine mailbox" },
-      { from: /red basket/g, to: "blue basket" },
-    ],
-  });
-  await fixture.run({
-    systemPrompt: "Use orchid mailbox inside north tower",
-    messages: [
+it.each([undefined, false])(
+  "transforms transport text with system prompt option %s",
+  async (transformSystemPrompt) => {
+    const fixture = transformFixture(
+      {
+        input: [{ from: /red basket/g, to: "blue basket" }],
+        output: [
+          { from: /blue basket/g, to: "red basket" },
+          { from: /right shelf/g, to: "left shelf" },
+        ],
+        transformSystemPrompt,
+      },
+      {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "blue basket on the right shelf",
+        partial: makeAssistantMessage("blue basket on the right shelf"),
+      },
+      {
+        type: "done",
+        reason: "stop",
+        message: makeAssistantMessage("final blue basket on the right shelf"),
+      },
+    );
+    const stream = await fixture.run({
+      systemPrompt: "Use red basket",
+      messages: [
+        { role: "user", content: "Use red basket" },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Use red basket" },
+            { type: "image", url: "data:image/png;base64,abc" },
+          ],
+        },
+      ],
+    } as Context);
+    const events = await collectEvents(stream);
+    const result = await stream.result();
+
+    expect(fixture.getInput()?.systemPrompt).toBe(
+      transformSystemPrompt === false ? "Use red basket" : "Use blue basket",
+    );
+    expect(fixture.getInput()?.messages).toEqual([
+      { role: "user", content: "Use blue basket" },
       {
         role: "user",
         content: [
-          { type: "text", text: "Please use the red basket" },
+          { type: "text", text: "Use blue basket" },
           { type: "image", url: "data:image/png;base64,abc" },
         ],
       },
-    ],
-  } as Context);
-
-  expect(fixture.getInput()?.systemPrompt).toBe("Use pine mailbox inside north tower");
-  expect(fixture.getInput()?.messages[0]?.content).toEqual([
-    { type: "text", text: "Please use the blue basket" },
-    { type: "image", url: "data:image/png;base64,abc" },
-  ]);
-});
-
-it("wraps stream functions with inbound and outbound replacements", async () => {
-  const fixture = transformFixture(
-    {
-      input: [{ from: /red basket/g, to: "blue basket" }],
-      output: [
-        { from: /blue basket/g, to: "red basket" },
-        { from: /right shelf/g, to: "left shelf" },
-      ],
-      transformSystemPrompt: false,
-    },
-    {
-      type: "text_delta",
-      contentIndex: 0,
-      delta: "blue basket on the right shelf",
-      partial: makeAssistantMessage("blue basket on the right shelf"),
-    },
-    {
-      type: "done",
-      reason: "stop",
-      message: makeAssistantMessage("final blue basket on the right shelf"),
-    },
-  );
-  const stream = await fixture.run({
-    systemPrompt: "Keep red basket untouched here",
-    messages: [{ role: "user", content: "Use red basket" }],
-  } as Context);
-  const events = await collectEvents(stream);
-  const result = await stream.result();
-
-  expect(fixture.getInput()?.systemPrompt).toBe("Keep red basket untouched here");
-  expect(fixture.getInput()?.messages).toEqual([{ role: "user", content: "Use blue basket" }]);
-  expect(events[0]).toMatchObject({ type: "text_delta", delta: "red basket on the left shelf" });
-  expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
-});
+    ]);
+    expect(events[0]).toMatchObject({ type: "text_delta", delta: "red basket on the left shelf" });
+    expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
+  },
+);
 
 it("applies output replacements to structured tool-call arguments", async () => {
   const partialToolCall: ToolCall = {

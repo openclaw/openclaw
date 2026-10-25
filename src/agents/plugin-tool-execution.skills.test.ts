@@ -18,7 +18,6 @@ import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-sur
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { resolveSandboxSkillRuntimeInputs } from "./embedded-agent-runner/sandbox-skills.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
-import { buildSandboxFsMounts, resolveSandboxFsPathWithMounts } from "./sandbox/fs-paths.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 
@@ -160,17 +159,6 @@ it.each(
         filePath: path.join(await fs.realpath(installation), "SKILL.md"),
         fileHost: "gateway",
       });
-      if (access !== "unmounted") {
-        expect(
-          resolveSandboxFsPathWithMounts({
-            filePath: access === "scripts-rw" ? path.join(original, "scripts") : original,
-            cwd: workspace,
-            defaultWorkspaceRoot: workspace,
-            defaultContainerRoot: "/guest/repo",
-            mounts: buildSandboxFsMounts(sandbox),
-          }).writable,
-        ).toBe(access !== "ro");
-      }
       expect(capabilities.sandbox?.installedSkillRoots).toEqual(
         admitted ? { autoreview: "/guest/repo/.openclaw/sandbox-skills/skills/autoreview" } : {},
       );

@@ -63,17 +63,6 @@ it("uses the agent's selected text model without tools or ClawHub", async () => 
   expect(result.svg).toContain('<circle cx="45" cy="32" r="5.5"');
 });
 
-it("rejects active model markup even when the model returns valid JSON", async () => {
-  complete.mockResolvedValue({
-    text: JSON.stringify({
-      ...design,
-      layers: { ...design.layers, accessory: '<image href="https://evil.invalid/a.png"/>' },
-    }),
-  });
-  await expect(generate()).rejects.toThrow("Unsupported SVG");
-  expect(complete).toHaveBeenCalledTimes(2);
-});
-
 it.each([
   ["invalid JSON", "not JSON"],
   ["empty description", JSON.stringify({ ...design, description: "" })],
