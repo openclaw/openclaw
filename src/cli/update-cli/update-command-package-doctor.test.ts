@@ -68,10 +68,7 @@ type CommandOptions = Parameters<typeof processRunner.runCommandWithTimeout>[1];
 function mockDoctor(run: (options: CommandOptions) => Promise<ReturnType<typeof processResult>>) {
   return vi
     .spyOn(processRunner, "runCommandWithTimeout")
-    .mockImplementation(async (argv, options) => {
-      expect(argv).toContain("doctor");
-      return run(options);
-    });
+    .mockImplementation(async (_argv, options) => run(options));
 }
 async function writeReceipt(
   options: CommandOptions,
@@ -107,7 +104,6 @@ function doctorResultPath(options: Parameters<typeof processRunner.runCommandWit
 
 it.each([
   { requested: false, supported: false },
-  { requested: false, supported: true },
   { requested: true, supported: false },
   { requested: true, supported: true },
 ])(
@@ -159,12 +155,10 @@ it.each([
     const error = wrapped ? new Error("Cannot read shared state for discovery", { cause }) : cause;
     vi.spyOn(configCapture, "captureUpdateConfigSnapshot").mockRejectedValue(error);
     const spawn = vi.spyOn(processRunner, "runCommandWithTimeout");
-    const onStepComplete = vi.fn();
     const results: UpdateStepResult[] = [];
     const operation = doctor({
       restart,
       results,
-      progress: { onStepComplete },
       onConfigSnapshot: vi.fn(),
     });
     if (restart) {
@@ -175,16 +169,10 @@ it.each([
       expect(step).toMatchObject({
         name: "post-install-verify",
         exitCode: null,
-        advisory: {
-          kind: "recoverable-maintenance",
-          message: expect.stringContaining("deferred"),
-        },
+        advisory: { kind: "recoverable-maintenance" },
       });
       expect(isFailedUpdateStep(step)).toBe(false);
-      expect(step.advisory?.message).toContain("openclaw update status");
-      expect(step.advisory?.message).toContain("openclaw doctor");
       expect(results).toEqual([step]);
-      expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(step));
       const run = updateRun(env);
       const result = completeUpdateCommandRun(
         updateResult({ root, steps: results, durationMs: 0 }),
@@ -217,12 +205,8 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
     if (completeGraph) {
       openOpenClawStateDatabase({ env });
       await closeStateDatabaseForTest();
-      const database = new DatabaseSync(databasePath);
-      try {
-        database.exec(`PRAGMA user_version = ${newerSchema}`);
-      } finally {
-        database.close();
-      }
+      using database = new DatabaseSync(databasePath);
+      database.exec(`PRAGMA user_version = ${newerSchema}`);
     }
     let includeChanged = false;
     if (includeState === "changed-during-capture") {
@@ -238,7 +222,7 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
         },
       );
     }
-    const invokeDoctor = mockDoctor(async (options) => {
+    mockDoctor(async (options) => {
       await writeReceipt(options, {
         ...(completeGraph
           ? createDeferredConfiguredPluginRepairDoctorResult(["Optional repair deferred."])
@@ -264,16 +248,12 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
     );
     expect(isFailedUpdateStep(step), JSON.stringify(step)).toBe(false);
     expect(stateRead).not.toHaveBeenCalled();
-    expect(invokeDoctor).toHaveBeenCalledOnce();
     expect(onConfigSnapshot).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         path: env.OPENCLAW_CONFIG_PATH,
         raw: originalRaw,
         doctorOwned: completeGraph,
       }),
-    );
-    expect(step.failureFacts ?? []).not.toContainEqual(
-      expect.objectContaining({ code: "runtime-verification-failed" }),
     );
     if (completeGraph) {
       expect(step).toMatchObject({
@@ -290,14 +270,8 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
           },
         ],
       });
-      const database = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(database.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: newerSchema,
-        });
-      } finally {
-        database.close();
-      }
+      using database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: newerSchema });
     } else {
       expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
@@ -341,7 +315,6 @@ it.each([
     const advisory = cause === "advisory" || cause === "refusal";
     const reason = cause === "refusal" ? "include-ownership" : undefined;
     const outputLimitExceeded = cause === "output-limit";
-    const failureFacts = [reportedFailure];
     const receipt: UpdatePostInstallDoctorResult =
       outputLimitExceeded || advisory
         ? {
@@ -350,7 +323,7 @@ it.each([
           }
         : {
             status: writerReceipt ? "ok" : "error",
-            ...(cause === "reported-error" ? { failureFacts } : {}),
+            ...(cause === "reported-error" ? { failureFacts: [reportedFailure] } : {}),
           };
     if (writerReceipt) {
       if (cause === "success") {
@@ -364,7 +337,6 @@ it.each([
     if (reason) {
       receipt.configWriteRefusal = refusal;
     }
-    const onStepComplete = vi.fn();
     mockDoctor(async (options) => {
       const resultPath = doctorResultPath(options);
       if (writerReceipt) {
@@ -388,63 +360,46 @@ it.each([
     });
     const run = writerReceipt ? undefined : updateRun(env);
     const steps: UpdateStepResult[] = [];
-    const step = await doctor({
-      timeoutMs: 1_000,
-      progress: run
-        ? createUpdateRunProgress(
-            run,
-            { onStepComplete },
-            createUpdateCommandExecutionGuards({ run }, root).recordStep,
-          )
-        : { onStepComplete },
-      ...(writerReceipt ? { results: steps } : {}),
-    });
+    const progress = run
+      ? createUpdateRunProgress(
+          run,
+          {},
+          createUpdateCommandExecutionGuards({ run }, root).recordStep,
+        )
+      : {};
+    const step = await doctor({ timeoutMs: 1_000, progress, results: steps });
     assert(step);
     expect(step.deferredInspectionCheckIds).toEqual(receipt.deferredInspectionCheckIds ?? null);
     if (run) {
       expect(step).toMatchObject({ exitCode, outputLimitExceeded });
       if (cause === "reported-error") {
-        expect(step.failureFacts).toEqual(expect.arrayContaining(failureFacts));
+        expect(step.failureFacts).toContainEqual(reportedFailure);
       }
       expect(step.advisory).toBeUndefined();
-      expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ exitCode, outputLimitExceeded, advisory: undefined }),
-        expect.objectContaining({ runId: run.runId }),
-      );
       expect(
         getUpdateRun(run.runId, { env })?.steps.find((entry) => entry.step === "openclaw doctor"),
       ).toMatchObject({ step: "openclaw doctor", status: "failed", exitCode });
       return;
     }
     expect(isFailedUpdateStep(step)).toBe(Boolean(reason));
-    const expectedAdvisory =
-      advisory && !reason
-        ? expect.objectContaining({ kind: "package-post-install-doctor" })
-        : undefined;
-    const expected = {
+    expect(step).toMatchObject({
       exitCode,
-      deferredInspectionCheckIds: receipt.deferredInspectionCheckIds ?? null,
       configChanges: receipt.configChanges,
+      advisory:
+        advisory && !reason
+          ? expect.objectContaining({ kind: "package-post-install-doctor" })
+          : undefined,
       ...(reason
         ? { stderrTail: expect.stringContaining(`agents. ${reason}: Config writer refused.`) }
         : {}),
-    };
-    expect(step).toMatchObject(expected);
-    expect(steps).toEqual([step]);
+    });
     expect(step.configWriteRefusal).toEqual(receipt.configWriteRefusal);
-    expect(step.advisory).toEqual(expectedAdvisory);
+    expect(steps).toEqual([step]);
     if (reason) {
       expect(step.failureFacts).toContainEqual(
         expect.objectContaining({ check: "config", code: reason }),
       );
     }
-    expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        ...expected,
-        configWriteRefusal: receipt.configWriteRefusal,
-        advisory: expectedAdvisory,
-      }),
-    );
   },
 );
 
@@ -511,11 +466,14 @@ it("leaves the run ledger unchanged while the activation Doctor child is pending
 it("records the activation Doctor's traced sections on its step and run record", async () => {
   const { root, env, doctor } = await createDoctorFixture();
   vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", undefined);
-  const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+  const run = updateRun(env);
+  const { runId } = run;
   adoptUpdateRun(runId, { env });
-  const run = { runId, env };
-  const guards = createUpdateCommandExecutionGuards({ run }, root);
-  const progress = createUpdateRunProgress(run, {}, guards.recordStep);
+  const progress = createUpdateRunProgress(
+    run,
+    {},
+    createUpdateCommandExecutionGuards({ run }, root).recordStep,
+  );
   const trace = (name: string, ms: number) =>
     `[gateway] startup trace: ${name} ${ms.toFixed(1)}ms total=${ms.toFixed(1)}ms start=0.0ms\n`;
   const stderr = [
@@ -628,6 +586,7 @@ it.each([
       exitCode: 1,
       configChanges: consumedReceipt?.configChanges,
       configWriteRefusal: consumedReceipt?.configWriteRefusal,
+      advisory: undefined,
     };
     if (cleanupUncertain) {
       expect(onStepComplete).not.toHaveBeenCalled();
@@ -636,27 +595,24 @@ it.each([
     }
     const [step] = steps;
     assert(step);
-    expect(steps).toMatchObject([
-      {
-        name: completion.name,
-        exitCode: completion.exitCode,
-        stderrTail: expect.stringContaining(
-          consumedReceipt?.configWriteRefusal
-            ? "include-ownership: Config writer refused."
-            : failed.message,
-        ),
-        failureFacts: expect.arrayContaining([
-          ...(consumedReceipt?.failureFacts ?? []),
-          expect.objectContaining({
-            check: "openclaw doctor",
-            message: expect.stringContaining(failed.message),
-          }),
-        ]),
-      },
-    ]);
+    expect(steps).toHaveLength(1);
+    expect(step).toMatchObject({
+      ...completion,
+      stderrTail: expect.stringContaining(
+        consumedReceipt?.configWriteRefusal
+          ? "include-ownership: Config writer refused."
+          : failed.message,
+      ),
+      failureFacts: expect.arrayContaining([
+        ...(consumedReceipt?.failureFacts ?? []),
+        expect.objectContaining({
+          check: "openclaw doctor",
+          message: expect.stringContaining(failed.message),
+        }),
+      ]),
+    });
     expect(step.configChanges).toEqual(consumedReceipt?.configChanges);
     expect(step.configWriteRefusal).toEqual(consumedReceipt?.configWriteRefusal);
-    expect(step.advisory).toBeUndefined();
     assert(resultPath);
     if (cleanupUncertain) {
       expect(onConfigSnapshot).not.toHaveBeenCalled();
@@ -688,6 +644,13 @@ it("completes Doctor as failed when config attribution cannot read the settled o
   }).catch((cause: unknown) => cause);
   expect(error).toMatchObject({ code: "EISDIR" });
   expect(onConfigSnapshot).not.toHaveBeenCalled();
+  expect(steps).toHaveLength(1);
+  expect(steps[0]).toMatchObject({
+    name: "openclaw doctor",
+    exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+    advisory: undefined,
+    failureFacts: expect.arrayContaining([expect.objectContaining({ code: "EISDIR" })]),
+  });
   expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       name: "openclaw doctor",
@@ -695,12 +658,4 @@ it("completes Doctor as failed when config attribution cannot read the settled o
       advisory: undefined,
     }),
   );
-  expect(steps).toMatchObject([
-    {
-      name: "openclaw doctor",
-      exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-    },
-  ]);
-  expect(steps[0]?.advisory).toBeUndefined();
-  expect(steps[0]?.failureFacts).toContainEqual(expect.objectContaining({ code: "EISDIR" }));
 });

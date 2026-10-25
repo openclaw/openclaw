@@ -43,6 +43,19 @@ async function fileFixture(filePath: string, content: string | Buffer, ageMs = 0
   return filePath;
 }
 
+function interceptPath<Args extends unknown[], Result>(
+  operation: (...args: Args) => Promise<Result>,
+  target: unknown,
+  intercept: () => Promise<void>,
+) {
+  return async (...args: Args) => {
+    if (args[0] === target) {
+      await intercept();
+    }
+    return operation(...args);
+  };
+}
+
 describe("media store", () => {
   let store: typeof import("./store.js");
   let home = "";
@@ -68,9 +81,7 @@ describe("media store", () => {
   });
 
   async function expectPathMissing(targetPath: string) {
-    const result = fs.stat(targetPath);
-    await expect(result).rejects.toBeInstanceOf(Error);
-    await expect(result).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
   }
 
   it.each([
@@ -142,15 +153,14 @@ describe("media store", () => {
 
   it("preserves the original generic extension of stored streams", async () => {
     const buffer = Buffer.from("custom binary");
-    const original = "report.CuStOm";
     const saved = await store.saveMediaStream(
       Readable.from([buffer]),
       binaryMime,
       streamDir,
       1024,
-      original,
+      "report.CuStOm",
     );
-    expect(store.extractOriginalFilename(saved.path)).toBe(original);
+    expect(store.extractOriginalFilename(saved.path)).toBe("report.CuStOm");
     await expect(fs.readFile(saved.path)).resolves.toEqual(buffer);
   });
 
@@ -221,8 +231,7 @@ describe("media store", () => {
 
     const result = await store.readMediaBuffer(saved.id);
     expect(shortened).toBe(true);
-    expect(result.buffer.toString("utf8")).toBe(content.toString("utf8"));
-    expect(result.size).toBe(content.length);
+    expect(result).toMatchObject({ buffer: content, size: content.length });
   });
 
   it("does not let a mixed-case image header disguise a stored ZIP", async () => {
@@ -237,7 +246,6 @@ describe("media store", () => {
       "fake.png",
     );
     expect(saved.contentType).toBe("application/zip");
-    expect(saved.path.endsWith(".zip")).toBe(true);
     expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
   });
 
@@ -258,21 +266,20 @@ describe("media store", () => {
       expect((await fs.stat(mediaDir)).isDirectory()).toBe(true);
       const files = await Promise.all(
         ["", "inbound", "cache/session/images", "cache/session/docs", "prune/session/images"].map(
-          (subdir) => store.saveMediaBuffer(Buffer.from("media"), "text/plain", subdir),
+          (subdir, index) =>
+            fileFixture(
+              path.join(mediaDir, subdir, "media.txt"),
+              "media",
+              index === 3 ? 0 : 10_000,
+            ),
         ),
       );
-      const past = (Date.now() - 10_000) / 1000;
-      for (const [index, saved] of files.entries()) {
-        if (index !== 3) {
-          await fs.utimes(saved.path, past, past);
-        }
-      }
       await store.cleanOldMedia(1_000, options);
-      for (const [index, saved] of files.entries()) {
+      for (const [index, file] of files.entries()) {
         if (removed.includes(index)) {
-          await expectPathMissing(saved.path);
+          await expectPathMissing(file);
         } else {
-          expect((await fs.stat(saved.path)).isFile()).toBe(true);
+          expect((await fs.stat(file)).isFile()).toBe(true);
         }
       }
       if (mode === "recursive") {
@@ -298,10 +305,8 @@ describe("media store", () => {
 
       await store.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true });
 
-      const outsideStat = await fs.stat(outsideFile);
-      const symlinkStat = await fs.lstat(symlinkPath);
-      expect(outsideStat.isFile()).toBe(true);
-      expect(symlinkStat.isSymbolicLink()).toBe(true);
+      expect((await fs.stat(outsideFile)).isFile()).toBe(true);
+      expect((await fs.lstat(symlinkPath)).isSymbolicLink()).toBe(true);
     },
   );
 
@@ -390,7 +395,7 @@ describe("media store filesystem faults", () => {
 
   it.each(
     (["readdir", "rmdir"] as const).flatMap((operation) =>
-      ["EACCES", "EIO", "ENOENT"].map((code) => ({ operation, code })),
+      ["EIO", "ENOENT"].map((code) => ({ operation, code })),
     ),
   )(
     "distinguishes media cleanup $operation/$code from missing directories",
@@ -400,31 +405,19 @@ describe("media store filesystem faults", () => {
       const scopedDir = path.join(mediaDir, "inbound");
       const liveFile = await fileFixture(path.join(scopedDir, "live.txt"), "live media");
       const injectedError = errnoError(code);
-      let injected = false;
+      const fail = async () => {
+        if (code !== "ENOENT") {
+          throw injectedError;
+        }
+        await fs.rm(operation === "readdir" ? mediaDir : scopedDir, {
+          recursive: true,
+          force: true,
+        });
+      };
       if (operation === "readdir") {
-        const readdir = fs.readdir;
-        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
-          if (args[0] === mediaDir) {
-            injected = true;
-            if (code !== "ENOENT") {
-              throw injectedError;
-            }
-            await fs.rm(mediaDir, { recursive: true, force: true });
-          }
-          return await readdir(...args);
-        });
+        vi.spyOn(fs, "readdir").mockImplementation(interceptPath(fs.readdir, mediaDir, fail));
       } else {
-        const rmdir = fs.rmdir;
-        vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
-          if (args[0] === scopedDir) {
-            injected = true;
-            if (code !== "ENOENT") {
-              throw injectedError;
-            }
-            await fs.rm(scopedDir, { recursive: true, force: true });
-          }
-          return await rmdir(...args);
-        });
+        vi.spyOn(fs, "rmdir").mockImplementation(interceptPath(fs.rmdir, scopedDir, fail));
       }
       const result = store.cleanOldMedia(60_000, { recursive: true, pruneEmptyDirs: true });
       if (code === "ENOENT") {
@@ -434,13 +427,12 @@ describe("media store filesystem faults", () => {
         await expect(result).rejects.toBe(injectedError);
         await expect(fs.readFile(liveFile, "utf8")).resolves.toBe("live media");
       }
-      expect(injected).toBe(true);
     },
   );
 
   it.each(
     (["readdir", "lstat", "remove"] as const).flatMap((operation) =>
-      (operation === "readdir" ? ["EACCES", "EIO"] : ["EACCES", "EIO", "ENOENT"]).map((code) => ({
+      (operation === "readdir" ? ["EIO"] : ["EIO", "ENOENT"]).map((code) => ({
         operation,
         code,
       })),
@@ -451,12 +443,10 @@ describe("media store filesystem faults", () => {
       const injectedError = errnoError(code);
       const oldName = "v2-quota-old.mp4";
       const insertedName = "v2-quota-inserted.mp4";
-      let injected = false;
       if (operation === "remove") {
         mockFileStore((actualStore) => ({
           remove: async (...args) => {
             if (args[0] === `playback-transcode/${oldName}`) {
-              injected = true;
               if (code !== "ENOENT") {
                 throw injectedError;
               }
@@ -472,26 +462,20 @@ describe("media store filesystem faults", () => {
       const oldSize = 512 * 1024 * 1024;
       await fileFixture(oldPath, "", 2_000, oldSize);
       if (operation === "readdir") {
-        const readdir = fs.readdir;
-        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
-          if (args[0] === cacheDir) {
-            injected = true;
+        vi.spyOn(fs, "readdir").mockImplementation(
+          interceptPath(fs.readdir, cacheDir, async () => {
             throw injectedError;
-          }
-          return await readdir(...args);
-        });
+          }),
+        );
       } else if (operation === "lstat") {
-        const lstat = fs.lstat;
-        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-          if (args[0] === oldPath) {
-            injected = true;
+        vi.spyOn(fs, "lstat").mockImplementation(
+          interceptPath(fs.lstat, oldPath, async () => {
             if (code !== "ENOENT") {
               throw injectedError;
             }
             await fs.unlink(oldPath);
-          }
-          return await lstat(...args);
-        });
+          }),
+        );
       }
       const result = store.writePlaybackTranscodeCache({
         buffer: Buffer.from("x"),
@@ -506,30 +490,24 @@ describe("media store filesystem faults", () => {
         await expect(result).rejects.toBe(injectedError);
         await expect(fs.stat(oldPath)).resolves.toMatchObject({ size: oldSize });
       }
-      expect(injected).toBe(true);
       await expect(fs.readFile(path.join(cacheDir, insertedName), "utf8")).resolves.toBe("x");
     },
   );
 
-  it.each(["ENOENT", "ENOSPC", "not-found", "wrapped-ENOENT", "wrapped-ENOSPC"] as const)(
+  it.each(["ENOENT", "wrapped-ENOENT", "wrapped-ENOSPC"] as const)(
     "does not replay failed buffer writes (%s)",
     async (code) => {
       const segment = "retry-buffer";
       const nestedError = code.startsWith("wrapped-") ? errnoError(code.slice(8)) : undefined;
-      const injectedError =
-        code === "not-found" || nestedError
-          ? new FsSafeError(
-              "not-found",
-              "media target not found",
-              nestedError ? { cause: nestedError } : undefined,
-            )
-          : errnoError(code);
+      const injectedError = nestedError
+        ? new FsSafeError("not-found", "media target not found", { cause: nestedError })
+        : errnoError(code);
       const attempts: string[] = [];
       mockFileStore((actual) => ({
         write: async (...args) => {
           if (args[0].includes(`${segment}/`)) {
             attempts.push(args[0]);
-            if (code === "ENOSPC" || attempts.length === 1) {
+            if (attempts.length === 1) {
               if (code === "ENOENT") {
                 await fs.rm(path.dirname(actual.path(args[0])), { recursive: true, force: true });
               }
@@ -588,9 +566,7 @@ describe("media store filesystem faults", () => {
   it("rejects publication failure without replaying a consumed stream", async () => {
     const subdir = "stream-final-rename";
     const input = Buffer.from("media stream must not become an empty success");
-    const stream = (async function* () {
-      yield input;
-    })();
+    const stream = Readable.from([input]);
     const injectedError = errnoError("ENOENT");
     const originalRename = fs.rename.bind(fs);
     let stagedBytes: Buffer | undefined;

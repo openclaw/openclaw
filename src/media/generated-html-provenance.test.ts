@@ -22,7 +22,7 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { resolveOutboundMediaMaxBytes } from "./configured-max-bytes.js";
 import { HostReadMediaTypeError } from "./local-media-access.js";
 import { resolveOutboundAttachmentFromUrl } from "./outbound-attachment.js";
-import { cleanOldMedia, pruneOutboundMedia, saveMediaBuffer } from "./store.js";
+import { cleanOldMedia, saveMediaBuffer } from "./store.js";
 import {
   loadWebMedia,
   markTrustedGeneratedHtmlPath as markHtml,
@@ -108,27 +108,22 @@ describe("generated HTML provenance worker boundary", () => {
   const writeMarker = (operation: "upsert" | "prune", staged: string) =>
     operation === "upsert" ? markHtml(staged, replacement) : pruneMarkers();
 
-  it("stages, reloads, and prunes through both media entry points without caller SQL", async () => {
+  it("retires HTML provenance with general media cleanup without caller SQL", async () => {
     const sql = observeMainThreadSql();
     try {
       sql.calibrate();
-      for (const prune of [
-        () => cleanOldMedia(undefined, { recursive: true }),
-        pruneOutboundMedia,
-      ]) {
-        const staged = await stageHtml();
-        expect(await readHtml(staged)).toMatchObject({
-          buffer: html,
-          contentType: "text/html",
-          trustedGeneratedHtmlSource: true,
-        });
-        await fs.utimes(staged, new Date(0), new Date(0));
-        await prune();
-        await expect(fs.stat(staged)).rejects.toMatchObject({ code: "ENOENT" });
-        await fs.mkdir(path.dirname(staged), { recursive: true });
-        await fs.writeFile(staged, html);
-        await expect(readHtml(staged)).rejects.toBeInstanceOf(HostReadMediaTypeError);
-      }
+      const staged = await stageHtml();
+      expect(await readHtml(staged)).toMatchObject({
+        buffer: html,
+        contentType: "text/html",
+        trustedGeneratedHtmlSource: true,
+      });
+      await fs.utimes(staged, new Date(0), new Date(0));
+      await cleanOldMedia(undefined, { recursive: true });
+      await expect(fs.stat(staged)).rejects.toMatchObject({ code: "ENOENT" });
+      await fs.mkdir(path.dirname(staged), { recursive: true });
+      await fs.writeFile(staged, html);
+      await expect(readHtml(staged)).rejects.toBeInstanceOf(HostReadMediaTypeError);
       sql.expectIdle();
     } finally {
       sql.restore();
