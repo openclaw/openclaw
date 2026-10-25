@@ -20,9 +20,19 @@ vi.mock("./code-regions.js", async (importOriginal) => {
       markdownOwnershipWork.scannedCharacters += text.length;
       return actual.findCodeOwnership(text, options);
     },
-    findCodeRegions(text: Parameters<typeof actual.findCodeRegions>[0]) {
+  };
+});
+
+vi.mock("../../../packages/markdown-core/src/markdown-code-regions.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../packages/markdown-core/src/markdown-code-regions.js")
+    >();
+  return {
+    ...actual,
+    findMarkdownCodeRegions(text: string) {
       markdownOwnershipWork.scannedCharacters += text.length;
-      return actual.findCodeRegions(text);
+      return actual.findMarkdownCodeRegions(text);
     },
   };
 });

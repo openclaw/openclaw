@@ -27,13 +27,7 @@ type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unk
 type SlackProviderMonitor = typeof import("./monitor/provider.js").monitorSlackProvider;
 type SlackStartupAuthClientFactory = typeof import("./client.js").createSlackStartupAuthClient;
 
-const createSlackTestEvent = vi.hoisted(() => () => {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-});
+const createSlackTestEvent = vi.hoisted(() => () => Promise.withResolvers<void>());
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
 

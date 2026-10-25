@@ -30,10 +30,11 @@ function dynamicImportMemberNames(source, specifier) {
   return [
     ...new Set(
       [
+        // Also matches a memoized load: `(await (module ??= import("..."))).name`.
         ...source.matchAll(
-          /\(\s*await\s+import\(\s*["']([^"'\r\n]+)["']\s*\)\s*\)\s*\.\s*([A-Za-z_$][\w$]*)/gu,
+          /\(\s*await\s+(?:import\(\s*["']([^"'\r\n]+)["']\s*\)|\(\s*[A-Za-z_$][\w$]*\s*\?\?=\s*import\(\s*["']([^"'\r\n]+)["']\s*\)\s*\))\s*\)\s*\.\s*([A-Za-z_$][\w$]*)/gu,
         ),
-      ].flatMap(([, importedFrom, name]) => (importedFrom === specifier ? [name] : [])),
+      ].flatMap(([, direct, memoized, name]) => ((direct ?? memoized) === specifier ? [name] : [])),
     ),
   ];
 }

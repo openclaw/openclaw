@@ -1,9 +1,9 @@
-import { once } from "node:events";
 import http, { createServer, type ClientRequest, type RequestOptions } from "node:http";
 import https from "node:https";
-import type { AddressInfo, Socket } from "node:net";
+import type { Socket } from "node:net";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
@@ -133,8 +133,7 @@ async function startRefusingProxy() {
     connects.push(request.url ?? "");
     client.end("HTTP/1.1 403 Forbidden\r\n\r\n");
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  const port = await listenOnLoopback(server);
   closers.push(
     () =>
       new Promise<void>((resolve) => {
@@ -142,5 +141,5 @@ async function startRefusingProxy() {
         server.close(() => resolve());
       }),
   );
-  return { connects, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+  return { connects, url: `http://127.0.0.1:${port}` };
 }

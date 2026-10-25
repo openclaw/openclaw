@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import { cancelTrackedTextResponse as createTrackedResponse } from "../../test-support/streaming-error-response.js";
 
 const realGlobalFetch = globalThis.fetch.bind(globalThis);
 
@@ -114,19 +115,6 @@ const video = {
   previewUrl: "https://e.example/preview.jpg",
   altContent: { type: "image", url: "https://e.example/preview.jpg", size: "full" },
 };
-
-function createTrackedResponse(body: string, init: ResponseInit) {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(body));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return { response: new Response(stream, init), wasCanceled: () => canceled };
-}
 
 describe("LINE send helpers", () => {
   const fixedSentAt = 1_800_000_000_000;

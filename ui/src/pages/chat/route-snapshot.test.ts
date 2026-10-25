@@ -34,7 +34,7 @@ async function setup(key = sessionRouteKey, storedPrefix = prefix) {
   const store = new SessionSnapshotStore();
   store.write(storedPrefix + key, snapshot);
   await store.flush();
-  prewarmChatSnapshot(storedPrefix + key);
+  void prewarmChatSnapshot(storedPrefix + key);
   const fixture = createSessionRouteContext();
   Object.defineProperty(fixture.context.gateway, "connection", {
     value: { gatewayUrl: "ws://snapshot.example" },

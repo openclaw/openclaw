@@ -19,6 +19,7 @@ import {
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
 import { recordPluginInstall } from "./installs.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { preparePluginUpdateCapabilityConsent } from "./update-capability-consent.js";
 
@@ -27,11 +28,7 @@ afterEach(() => cleanupTrackedTempDirs(tempDirs));
 
 function createArtifactFixture(files: Record<string, object | string>): string {
   const rootDir = makeTrackedTempDir("openclaw-plugin-capability-consent", tempDirs);
-  for (const [relativePath, contents] of Object.entries(files)) {
-    const filePath = path.join(rootDir, relativePath);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, typeof contents === "string" ? contents : JSON.stringify(contents));
-  }
+  writeArtifacts(rootDir, files);
   return rootDir;
 }
 

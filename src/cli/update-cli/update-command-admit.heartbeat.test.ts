@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as terminalNote from "../../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { retireHeartbeatWithDoctor } from "../../commands/doctor-heartbeat-retirement.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   type UpdateAdmissionContext,
@@ -131,8 +132,8 @@ function fixture(scenario: Scenario, withDatabase = true) {
     }
   }
   const snapshot = () =>
-    fs
-      .readdirSync(home, { recursive: true, withFileTypes: true })
+    listDirectoryTreeStrictSync(home)
+      .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => {
         const filename = path.join(entry.parentPath, entry.name);

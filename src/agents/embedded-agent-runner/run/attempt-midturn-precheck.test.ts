@@ -30,185 +30,74 @@ const { installEmbeddedAttemptStreamGuards } =
 
 registerAgentSessionLoopTestLifecycle();
 
+type AdmissionOptions = Partial<{
+  growSystem: boolean;
+  tweakSystem: boolean;
+  tweakTools: boolean;
+  opaque: boolean;
+  completionTokens: number;
+  assistantChars: number;
+  asyncFragments: boolean;
+  syntheticAssistant: boolean;
+  ownsCompaction: boolean;
+  oversizedAssembly: boolean;
+  compatibleBudget: boolean;
+  responseSchema: boolean;
+}>;
+
 describe("provider request admission", () => {
-  it.each([
-    {
-      name: "measured compatible reasoning output budget",
-      usage: 1_500,
-      chars: 15_500,
-      cap: 16_000,
-      fits: true,
-      compatibleBudget: true,
-    },
-    {
-      name: "unchanged response schema is not charged twice on a tool continuation",
-      usage: 24_000,
-      chars: 100,
-      cap: 16_000,
-      fits: true,
-      compatibleBudget: true,
-      responseSchema: true,
-    },
-    {
-      name: "owning engine cannot submit oversized assembled history on its first request",
-      usage: 15_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-      ownsCompaction: true,
-      oversizedAssembly: true,
-    },
-    {
-      name: "owning engine admits fitting requests despite an exaggerated engine estimate",
-      usage: 15_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: true,
-      ownsCompaction: true,
-    },
-    {
-      name: "owning engine blocks an oversized measured continuation without opt-in",
-      usage: 23_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-      ownsCompaction: true,
-    },
-    { name: "measured unchanged prefix", usage: 15_000, chars: 12_000, cap: 16_000, fits: true },
-    {
-      name: "counts measured visible completion once",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 6_000,
-      assistantChars: 24_000,
-    },
-    {
-      name: "counts visible completion once after a small system change",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 5_000,
-      assistantChars: 20_000,
-      tweakSystem: true,
-    },
-    {
-      name: "counts visible completion once after tool definitions change",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 5_000,
-      assistantChars: 20_000,
-      tweakTools: true,
-    },
-    {
-      name: "counts split visible completion once after a small system change",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 5_000,
-      assistantChars: 20_000,
-      asyncFragments: true,
-      tweakSystem: true,
-    },
-    {
-      name: "counts async completion fragments once when the provider identity arrives late",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 6_000,
-      assistantChars: 24_000,
-      asyncFragments: true,
-    },
-    {
-      name: "counts an unrelated synthetic assistant appended after the measured prefix",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: false,
-      syntheticAssistant: true,
-    },
-    {
-      name: "retains opaque reasoning occupancy",
-      usage: 15_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-      opaque: true,
-      completionTokens: 16_000,
-    },
-    {
-      name: "retains opaque reasoning after a small system change",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: false,
-      opaque: true,
-      completionTokens: 16_000,
-      tweakSystem: true,
-    },
-    {
-      name: "measured oversized tail after projection",
-      usage: 14_000,
-      chars: 100_000,
-      cap: 16_000,
-      fits: true,
-    },
-    {
-      name: "unavailable usage after projection",
-      usage: 0,
-      chars: 100_000,
-      cap: 2_000,
-      fits: true,
-    },
-    {
-      name: "genuinely oversized measured tail",
-      usage: 23_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-    },
-    {
-      name: "unavailable usage with oversized prompt",
-      usage: 0,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-      growSystem: true,
-    },
-    {
-      name: "changed system invalidates measured prefix",
-      usage: 1_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-      growSystem: true,
-    },
-  ])(
-    "$name",
+  const visible = { completionTokens: 5_000, assistantChars: 20_000 };
+  const largerVisible = { completionTokens: 6_000, assistantChars: 24_000 };
+  type AdmissionCase = {
+    usage: number;
+    chars: number;
+    cap: number;
+    fits: boolean;
+    options: AdmissionOptions;
+  };
+  it.each`
+    name                                   | usage     | chars      | cap       | fits     | options
+    ${"compatible reasoning budget"}       | ${1_500}  | ${15_500}  | ${16_000} | ${true}  | ${{ compatibleBudget: true }}
+    ${"unchanged schema"}                  | ${24_000} | ${100}     | ${16_000} | ${true}  | ${{ compatibleBudget: true, responseSchema: true }}
+    ${"oversized engine assembly"}         | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true, oversizedAssembly: true }}
+    ${"exaggerated engine estimate"}       | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{ ownsCompaction: true }}
+    ${"oversized engine continuation"}     | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true }}
+    ${"unchanged measured prefix"}         | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{}}
+    ${"visible completion"}                | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${largerVisible}
+    ${"system tweak"}                      | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakSystem: true }}
+    ${"tool definitions tweak"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakTools: true }}
+    ${"split completion + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, asyncFragments: true, tweakSystem: true }}
+    ${"late response identity"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...largerVisible, asyncFragments: true }}
+    ${"synthetic assistant tail"}          | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ syntheticAssistant: true }}
+    ${"opaque reasoning"}                  | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000 }}
+    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true }}
+    ${"projected measured tail"}           | ${14_000} | ${100_000} | ${16_000} | ${true}  | ${{}}
+    ${"projected unavailable usage"}       | ${0}      | ${100_000} | ${2_000}  | ${true}  | ${{}}
+    ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{}}
+    ${"oversized prompt without usage"}    | ${0}      | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
+    ${"changed system invalidates prefix"} | ${1_000}  | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
+  `(
+    "admits only fitting provider requests: $name",
     async ({
       usage,
       chars,
       cap,
       fits,
-      growSystem,
-      tweakSystem,
-      tweakTools,
-      opaque,
-      completionTokens,
-      assistantChars,
-      asyncFragments,
-      syntheticAssistant,
-      ownsCompaction,
-      oversizedAssembly,
-      compatibleBudget,
-      responseSchema,
-    }) => {
+      options: {
+        growSystem,
+        tweakSystem,
+        tweakTools,
+        opaque,
+        completionTokens,
+        assistantChars,
+        asyncFragments,
+        syntheticAssistant,
+        ownsCompaction,
+        oversizedAssembly,
+        compatibleBudget,
+        responseSchema,
+      },
+    }: AdmissionCase) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
       const model = {
         ...testModel,
