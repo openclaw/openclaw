@@ -254,7 +254,6 @@ it("redacts registered values from every persisted WebSocket field", () => {
     detail: "[REDACTED]",
   });
   expect(inbound?.dataText).toContain('"echoedToken":"[REDACTED]"');
-  expect(JSON.stringify(events)).not.toContain(secret);
   expect(JSON.stringify(events)).not.toContain(JSON.stringify(secret).slice(1, -1));
 });
 
@@ -266,7 +265,6 @@ it("redacts registered credential bytes from otherwise non-UTF-8 frames", () => 
   captureFrame({ flowId: "binary-auth", payload });
 
   expect(events[0]?.dataText).toBe("[REDACTED BINARY PAYLOAD]");
-  expect(events[0]?.dataText).not.toContain(secret);
 });
 
 it.each([

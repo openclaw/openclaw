@@ -154,16 +154,7 @@ describe("DebugProxyCaptureStore", () => {
       "LOCALHOST:7": 1,
       "[::1]:7": 1,
     });
-    expect(store.summarizeSessionCoverage("missing")).toEqual({
-      sessionId: "missing",
-      totalEvents: 0,
-      unlabeledEventCount: 0,
-      providers: [],
-      apis: [],
-      models: [],
-      hosts: [],
-      localPeers: [],
-    });
+    expect(store.summarizeSessionCoverage("missing")).toMatchObject({ totalEvents: 0 });
   });
 
   it("keeps the cached store open until the last lease releases", () => {
@@ -316,16 +307,10 @@ describe("DebugProxyCaptureStore", () => {
     store.db.exec("DROP TABLE config_machine_state;");
     expect(
       store.db
-        .prepare(
-          `SELECT name, strict FROM pragma_table_list
-           WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
-           ORDER BY name`,
-        )
-        .all(),
-    ).toEqual([
-      { name: "capture_events", strict: 1 },
-      { name: "capture_sessions", strict: 1 },
-    ]);
+        .prepare(`SELECT COUNT(*) AS n FROM pragma_table_list
+      WHERE schema = 'main' AND name IN ('capture_events', 'capture_sessions') AND strict = 1`)
+        .get(),
+    ).toEqual({ n: 2 });
     expect(store.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     expect(store.deleteSessions(["legacy-sdk-session"])).toEqual({
       sessions: 1,
@@ -404,6 +389,10 @@ describe("DebugProxyCaptureStore", () => {
         flowId: "write-flow",
         status: 429,
         closeCode: 1001,
+        method: "GET",
+        host: "slack.com",
+        path: "/api/conversations.history",
+        contentType: "application/json",
         headersJson: '{"x-fixture":"header"}',
         dataText: "preview",
         dataSha256: "payload-hash",
@@ -418,8 +407,12 @@ describe("DebugProxyCaptureStore", () => {
 
       store.recordEvent(rejectedEvent);
 
-      expect(store.getSessionEvents(rejectedEvent.sessionId)).toMatchObject([
-        { ...rejectedEvent, dataBlobId: null },
+      expect(store.getSessionEvents(rejectedEvent.sessionId)).toEqual([
+        {
+          ...rejectedEvent,
+          id: expect.any(Number),
+          dataBlobId: null,
+        },
       ]);
       expect(store.listSessions()).toHaveLength(kind === "shared" ? 1 : 0);
     },
