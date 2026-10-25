@@ -282,6 +282,7 @@ it.each(["reaction removal", "replacement", "suffix", "incremental suffix"] as c
     expect(await set()).toEqual({ ...atLimit, changed: false });
     const nextReaction = { messageId: "retained", emoji: "👀" };
     await expect(set(nextReaction)).rejects.toThrow(SessionReactionLimitError);
+    await expect(set({ messageId: "missing" })).rejects.toThrow(SessionReactionLimitError);
 
     const retained = events.slice(0, 2);
     if (mutation === "reaction removal") {
