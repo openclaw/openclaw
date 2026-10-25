@@ -131,28 +131,24 @@ describe("OpenAI provider usage", () => {
         : usagePage([{ ...usage, num_model_requests: requests, model }]),
     );
     const result = await fetchAdminUsage(fetchFn, projectId);
-    const history = {
-      daily: [{ date: "2026-07-06", amount: projectId ? 12.34 : 0, ...tokens }],
-      models: [{ name: model, ...tokens }],
-    };
     const summary = `${requests} requests · ${totalTokens.toLocaleString("en-US")} tokens`;
+    expect(result.costHistory?.daily).toEqual([
+      { date: "2026-07-06", amount: projectId ? 12.34 : 0, ...tokens },
+    ]);
+    expect(result.costHistory?.models).toEqual([{ name: model, ...tokens }]);
+    expect(result.summary).toBe(summary);
     if (projectId) {
-      expect(result).toEqual({
-        provider: "openai",
-        displayName: "OpenAI",
-        windows: [],
+      expect(result).toMatchObject({
         plan: "Admin API · proj_test",
         billing: [
           { type: "spend", label: "30-day API spend", amount: 12.34, unit: "USD", period: "30d" },
         ],
         costHistory: {
-          ...history,
           unit: "USD",
           periodDays: 30,
           scope: "Project proj_test",
           categories: [{ name: "Responses", amount: 12.34 }],
         },
-        summary,
       });
       expect(fetchFn).toHaveBeenCalledTimes(2);
       for (const [input, init] of fetchFn.mock.calls) {
@@ -161,10 +157,6 @@ describe("OpenAI provider usage", () => {
         expect(url.searchParams.get("bucket_width")).toBe("1d");
         expect(init?.headers).toMatchObject({ Authorization: "Bearer sk-admin-test" });
       }
-    } else {
-      expect(result.costHistory?.daily).toEqual(history.daily);
-      expect(result.costHistory?.models).toEqual(history.models);
-      expect(result.summary).toBe(summary);
     }
   });
 

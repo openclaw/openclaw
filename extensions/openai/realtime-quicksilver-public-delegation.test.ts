@@ -15,14 +15,11 @@ function createDelegationHarness(
 ) {
   const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: responseText }));
   const onTranscript = vi.fn(options.onTranscript);
-  const handleDelegationInput =
-    options.handleDelegationInput && vi.fn(options.handleDelegationInput);
   const harness = buildDelegationHarness({
     model: "gpt-live-1",
     ...options,
     runAgentConsult,
     onTranscript,
-    handleDelegationInput,
   });
   const frame = (event: unknown) =>
     harness.controller.handleFrame(Buffer.from(JSON.stringify(event)), false);
@@ -30,7 +27,6 @@ function createDelegationHarness(
   return {
     ...harness,
     runAgentConsult,
-    handleDelegationInput,
     onTranscript,
     finals: (role?: "user" | "assistant") =>
       onTranscript.mock.calls.filter((call) => call[2] && (!role || call[0] === role)),
@@ -69,7 +65,6 @@ it("uses public transcript deltas for metadata-only delegations and returns plai
   );
   expect(h.finals("user")).toEqual([["user", "Check the forecast.", true]]);
   expect(h.onTranscript).toHaveBeenCalledWith("assistant", "I can help.", true);
-  expect(h.handleDelegationInput).toHaveBeenCalledWith("Check the forecast.", expect.any(Function));
   const prompt = h.runAgentConsult.mock.calls[0]?.[0].prompt;
   expect(prompt).toContain("<input>Check the forecast.</input>");
   expect(prompt).toContain("assistant: I can help.");

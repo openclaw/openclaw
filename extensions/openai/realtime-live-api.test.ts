@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { publicDelegation } from "./realtime-quicksilver-events.test-support.js";
 import {
   createBroker,
   emitSideband,
@@ -25,14 +26,6 @@ function transcript(
   end_ms: number,
 ) {
   emitSideband(socket, { type: `session.${role}_transcript.delta`, delta, start_ms, end_ms });
-}
-
-function delegate(socket: FakeSocket, id: string, offset_ms: number) {
-  emitSideband(socket, {
-    type: "session.delegation.created",
-    delegation: { type: "delegation", target: "client", id },
-    offset_ms,
-  });
 }
 
 function liveBroker(params: Parameters<typeof createBroker>[0], beforeCleanup = () => {}) {
@@ -169,7 +162,7 @@ it("accepts an audio and application offer and drains final text before closing"
   expect(parseSent(socket)).toContainEqual({ type: "session.close" });
   transcript(socket, "input", "Late request.", 900, 1_000);
   transcript(socket, "output", "Final spoken text.", 1_000, 1_500);
-  delegate(socket, "late", 1_500);
+  emitSideband(socket, publicDelegation("late", 1_500));
   expect(runAgentConsult).not.toHaveBeenCalled();
   emitSideband(socket, { type: "session.closed", reason: "close_requested" });
   await closing;
