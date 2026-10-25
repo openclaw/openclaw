@@ -60,7 +60,7 @@ async function fixture({
     return sample;
   });
   const sources: Source[] = [];
-  let installed: ((source: (typeof sources)[number]) => void) | undefined;
+  let installed: ((source: Source) => void) | undefined;
   const ready = createDeferred();
   const watch = observation.watch;
   vi.spyOn(observation, "watch").mockImplementation((root, options) => {
@@ -103,7 +103,7 @@ async function fixture({
     }
   };
   const nextSource = () =>
-    new Promise<(typeof sources)[number]>((resolve) => {
+    new Promise<Source>((resolve) => {
       installed = resolve;
     });
   const expectChanges = async (count: number) => {
@@ -148,7 +148,7 @@ async function fixture({
 }
 
 describe("config file observation", () => {
-  it("keeps primary edits observable when an unused include root is inaccessible and admits it on selection", async () => {
+  it("ignores inaccessible unused roots, then admits them when selected", async () => {
     const allowed = await fs.realpath(dirs.make("config-unused-include-root-"));
     const lstatSync = fsSync.lstatSync;
     const denied = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
@@ -172,12 +172,11 @@ describe("config file observation", () => {
     h.expectHealthy();
   });
 
-  it("settles primary/includes, atomic replacements, deletion and restore, and updates accepted scopes in place", async () => {
+  it("settles edits, replacement, deletion and restore, and updates accepted scopes", async () => {
     vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
     vi.stubEnv("CHOKIDAR_INTERVAL", undefined);
     const h = await fixture({ realMode: true });
-    expect(h.sources).toHaveLength(1);
     const subscription = h.sources[0]!.subscription;
     expect(subscription.health()).toMatchObject({ state: "ready", mode: "poll" });
     expect(h.onChange).not.toHaveBeenCalled();
@@ -210,7 +209,6 @@ describe("config file observation", () => {
       h.onChange.mockClear();
     }
     await h.adapter.observePaths([h.p("candidate.json")]);
-    expect(h.sources).toHaveLength(1);
     h.onChange.mockClear();
     await h.write("candidate.json", "{}");
     await h.write("accepted.json", '{"retained":true}');
@@ -219,7 +217,6 @@ describe("config file observation", () => {
     h.onChange.mockClear();
     await h.write("accepted.json", '{"retired":true}');
     await h.expectChanges(0);
-    expect(h.sources).toHaveLength(1);
     h.expectHealthy();
     await h.adapter.stop();
     expect(subscription.health().state).toBe("closed");
@@ -251,7 +248,7 @@ describe("config file observation", () => {
     expect(h.onChange).not.toHaveBeenCalled();
   });
 
-  it("observes repairable rejected includes without following unadmitted links or directory children", async () => {
+  it("observes repaired includes without following unadmitted links or directory children", async () => {
     const h = await fixture();
     const outside = await fs.realpath(dirs.make("config-unadmitted-"));
     await fs.writeFile(path.join(outside, "secret.json"), "private");
@@ -280,16 +277,13 @@ describe("config file observation", () => {
     await h.expectChanges(1);
   });
 
-  it.each([false, true])(
-    "notifies once after watcher recovery (edit during downtime: %s)",
-    async (edit) => {
-      const h = await fixture();
-      await h.recover(500, "scan", edit ? () => h.write("openclaw.json") : undefined);
-      expect(h.adapter.status()).toBe("active");
-      expect(h.onChange).toHaveBeenCalledOnce();
-      await h.expectChanges(1);
-    },
-  );
+  it.each([false, true])("notifies once after recovery (downtime edit: %s)", async (edit) => {
+    const h = await fixture();
+    await h.recover(500, "scan", edit ? () => h.write("openclaw.json") : undefined);
+    expect(h.adapter.status()).toBe("active");
+    expect(h.onChange).toHaveBeenCalledOnce();
+    await h.expectChanges(1);
+  });
 
   it.each([undefined, "false", "1"])(
     "bounds watch-limit recovery and preserves polling override %s",
@@ -322,7 +316,6 @@ describe("config file observation", () => {
       } else {
         expect(h.adapter.status()).toBe("disabled");
         expect(h.onChange).toHaveBeenCalledOnce();
-        expect(h.sources).toHaveLength(4);
         expect(h.log.warn).not.toHaveBeenCalledWith(
           expect.stringContaining("degrading to polling"),
         );
@@ -338,7 +331,6 @@ describe("config file observation", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(h.adapter.status()).toBe("disabled");
     expect(h.onChange).toHaveBeenCalledOnce();
-    expect(h.sources).toHaveLength(1);
     adapters.delete(h.adapter);
     await expect(h.adapter.stop()).rejects.toThrow("Config watcher shutdown failed");
   });

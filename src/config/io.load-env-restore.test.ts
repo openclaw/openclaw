@@ -9,17 +9,23 @@ import {
   captureConfigReadEnvMutation,
   cloneEnvWithPlatformSemantics,
   createConfigRuntimeEnvBase,
+  restoreEnvChangesIfUnchanged,
   snapshotEnv,
   withConfigReadEnvChanges,
 } from "./config-env-vars.js";
-import { createConfigIO, restoreEnvChangesIfUnchanged } from "./io.js";
+import { createConfigIO } from "./io.js";
 import type { ConfigIoFactoryOptions } from "./io.types.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { withTempHome, writeOpenClawConfig, writeStateDirDotEnv } from "./test-helpers.js";
 import { withConfigWriteLock } from "./write-lock.js";
 
-function configIO(home: string, env: NodeJS.ProcessEnv) {
-  return createConfigIO({ env, homedir: () => home, logger: { warn: () => {}, error: () => {} } });
+function configIO(home: string, env: NodeJS.ProcessEnv, lowerPrecedenceEnv?: NodeJS.ProcessEnv) {
+  return createConfigIO({
+    env,
+    lowerPrecedenceEnv,
+    homedir: () => home,
+    logger: { warn: () => {}, error: () => {} },
+  });
 }
 
 function snapshotIO(options: ConfigIoFactoryOptions) {
@@ -44,45 +50,18 @@ function expectedOwned(change: string, unchanged: string) {
       : undefined;
 }
 
-describe("restoreEnvChangesIfUnchanged", () => {
-  it.each([
-    ["equal-byte", "same", "same", "same", "same"],
-    ["later-owner", undefined, "value", "value", undefined],
-    ["previous-config", undefined, "new", "old", undefined],
-  ] as const)(
-    "restores a rejected replacement without taking %s ownership",
-    (kind, initial, candidate, expected, base) => {
-      const env: NodeJS.ProcessEnv = initial === undefined ? {} : { KEY: initial };
-      const cfg = configEnv(kind === "previous-config" ? "old" : "same");
-      if (kind === "previous-config") {
-        applyConfigEnvVars(cfg, env);
-      }
-      const before = snapshotEnv(env);
-      applyConfigEnvVars(
-        configEnv(candidate),
-        env,
-        kind === "later-owner" ? {} : { lowerPrecedenceEnv: { KEY: env.KEY ?? "" } },
-      );
-      const after = snapshotEnv(env);
-      if (kind === "equal-byte") {
-        expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBeUndefined();
-      }
-      if (kind === "later-owner") {
-        applyConfigEnvVars({}, env);
-      }
-      restoreEnvChangesIfUnchanged({ env, before, after });
-      expect(env.KEY).toBe(expected);
-      if (kind !== "later-owner") {
-        expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBe(base);
-      }
-    },
-  );
-
-  it("preserves an externally modified value", () => {
-    const env = { KEY: "external-change" };
-    restoreEnvChangesIfUnchanged({ env, before: {}, after: { KEY: "config-set" } });
-    expect(env.KEY).toBe("external-change");
-  });
+it.each(["ownership", "value"])("preserves later %s during snapshot compensation", (change) => {
+  const env: NodeJS.ProcessEnv = {};
+  const before = snapshotEnv(env);
+  applyConfigEnvVars(configEnv("candidate"), env);
+  const after = snapshotEnv(env);
+  if (change === "ownership") {
+    applyConfigEnvVars({}, env);
+  } else {
+    env.KEY = "foreign";
+  }
+  restoreEnvChangesIfUnchanged({ env, before, after });
+  expect(env.KEY).toBe(change === "ownership" ? "candidate" : "foreign");
 });
 
 describe("loadConfig env restoration", () => {
@@ -97,27 +76,39 @@ describe("loadConfig env restoration", () => {
     });
   });
 
-  it("restores env changes after non-INVALID_CONFIG error (DuplicateAgentDirError)", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        env: { vars: { DUP_DIR_TEST_VAR: "injected-value" } },
-        agents: {
-          ownership: "explicit",
-          entries: {
-            "agent-a": { agentDir: "/tmp/dup-agent-dir" },
-            "agent-b": { agentDir: "/tmp/dup-agent-dir" },
+  it.each(["ambient", "config", "absent"])(
+    "restores synchronous env changes after DuplicateAgentDirError (%s)",
+    async (ownership) => {
+      await withTempHome(async (home) => {
+        const owned = ownership === "config";
+        await writeOpenClawConfig(home, {
+          env: { vars: { KEY: owned ? "replacement" : "same" } },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              "agent-a": { agentDir: "/tmp/dup-agent-dir" },
+              "agent-b": { agentDir: "/tmp/dup-agent-dir" },
+            },
           },
-        },
+        });
+
+        const env: NodeJS.ProcessEnv = {
+          HOME: home,
+          ...(ownership === "ambient" && { KEY: "same" }),
+        };
+        const previous = configEnv("same");
+        if (owned) {
+          applyConfigEnvVars(previous, env);
+        }
+        const io = configIO(home, env, { KEY: "same" });
+        expect(() => io.loadConfig()).toThrow(DuplicateAgentDirError);
+        expect(env.KEY).toBe(ownership === "absent" ? undefined : "same");
+        expect(createConfigRuntimeEnvBase(previous, env).KEY).toBe(
+          ownership === "ambient" ? "same" : undefined,
+        );
       });
-
-      const env = { HOME: home } as NodeJS.ProcessEnv;
-      const io = configIO(home, env);
-
-      expect(env.DUP_DIR_TEST_VAR).toBeUndefined();
-      expect(() => io.loadConfig()).toThrow(DuplicateAgentDirError);
-      expect(env.DUP_DIR_TEST_VAR).toBeUndefined();
-    });
-  });
+    },
+  );
 });
 
 async function rejectedReader(change: string, native: boolean) {
@@ -200,21 +191,30 @@ describe("config read producer receipts", () => {
     },
   );
 
-  it("restores equal-byte lower-precedence ownership after a rejected real snapshot", async () => {
-    await withTempHome(async (home) => {
-      const cfg = { env: { vars: { KEY: "same" } }, gateway: { port: "invalid" } };
-      const configPath = await writeOpenClawConfig(home, cfg);
-      const env = { HOME: home, KEY: "same" };
-      const io = snapshotIO({
-        configPath,
-        env,
-        lowerPrecedenceEnv: { KEY: "same" },
+  it.each([false, true])(
+    "restores rejected snapshot ownership (previous config=%s)",
+    async (owned) => {
+      await withTempHome(async (home) => {
+        const previous = configEnv("same");
+        const cfg = { ...configEnv(owned ? "replacement" : "same"), gateway: { port: "invalid" } };
+        const configPath = await writeOpenClawConfig(home, cfg);
+        const env: NodeJS.ProcessEnv = { HOME: home };
+        if (owned) {
+          applyConfigEnvVars(previous, env);
+        } else {
+          env.KEY = "same";
+        }
+        const io = snapshotIO({
+          configPath,
+          env,
+          lowerPrecedenceEnv: { KEY: "same" },
+        });
+        expect((await io.readConfigFileSnapshot()).valid).toBe(false);
+        expect(env.KEY).toBe("same");
+        expect(createConfigRuntimeEnvBase(previous, env).KEY).toBe(owned ? undefined : "same");
       });
-      expect((await io.readConfigFileSnapshot()).valid).toBe(false);
-      expect(env.KEY).toBe("same");
-      expect(createConfigRuntimeEnvBase({ env: cfg.env }, env).KEY).toBe("same");
-    });
-  });
+    },
+  );
 
   it("preserves a later ownership change with unchanged bytes", async () => {
     const env: NodeJS.ProcessEnv = {};
@@ -349,21 +349,16 @@ describe("snapshot source authority", () => {
     await withTempHome(async (home) => {
       const dotenv = boundary === "dotenv";
       const envKey = `OPENCLAW_TEST_SNAPSHOT_${dotenv ? "DOTENV" : "ENV"}`;
-      const configPath = await writeOpenClawConfig(
-        home,
-        dotenv
-          ? { gateway: { mode: "local" } }
-          : {
-              env: { vars: { [envKey]: "config-value" } },
-              gateway: { mode: "local", port: boundary === "env" ? 18789 : "invalid" },
-            },
-      );
+      const configPath = await writeOpenClawConfig(home, {
+        ...(!dotenv && { env: { vars: { [envKey]: "config-value" } } }),
+        gateway: { mode: "local", ...(boundary === "invalid-restore" && { port: "invalid" }) },
+      });
       const checkEnv = async (env: NodeJS.ProcessEnv) => {
         const refusal = dotenv
           ? new Error("snapshot source owner changed")
           : { reason: "snapshot-source-changed" };
         let current = true;
-        let produced: { value: string | undefined } | undefined;
+        const produced: Array<string | undefined> = [];
         const io = snapshotIO({
           configPath,
           env,
@@ -372,7 +367,7 @@ describe("snapshot source authority", () => {
             : async (name, run) => {
                 if (boundary === "env" && name === "config.snapshot.read.env") {
                   await Promise.resolve();
-                  produced = { value: env[envKey] };
+                  produced.push(env[envKey]);
                   current = !revoked;
                   try {
                     return await run();
@@ -387,7 +382,7 @@ describe("snapshot source authority", () => {
                   boundary === "invalid-restore" &&
                   name === "config.snapshot.read.legacy-issues"
                 ) {
-                  produced = { value: env[envKey] };
+                  produced.push(env[envKey]);
                   if (revoked) {
                     env[envKey] = "replacement-owner";
                     current = false;
@@ -396,20 +391,12 @@ describe("snapshot source authority", () => {
                 return result;
               },
         });
-        const checkRead = async (read: Promise<unknown>) => {
-          if (revoked) {
-            await expect(read).rejects.toBe(refusal);
-          } else {
-            await expect(read).resolves.toMatchObject({ valid: boundary !== "invalid-restore" });
-          }
-        };
         const read = withConfigWriteLock(
           configPath,
           async () => {
             if (dotenv) {
               current = !revoked;
-              await checkRead(io.readConfigFileSnapshot());
-              return undefined;
+              return io.readConfigFileSnapshot();
             }
             return (await io.readConfigFileSnapshotForWrite()).snapshot;
           },
@@ -421,14 +408,12 @@ describe("snapshot source authority", () => {
             }
           },
         );
-        if (dotenv) {
-          await read;
+        if (revoked) {
+          await expect(read).rejects.toBe(refusal);
         } else {
-          await checkRead(read);
+          await expect(read).resolves.toMatchObject({ valid: boundary !== "invalid-restore" });
         }
-        if (!dotenv) {
-          expect(produced).toEqual({ value: boundary === "env" ? undefined : "config-value" });
-        }
+        expect(produced).toEqual(dotenv ? [] : [boundary === "env" ? undefined : "config-value"]);
         const accepted = dotenv ? "dotenv-value" : boundary === "env" ? "config-value" : undefined;
         const rejected = boundary === "invalid-restore" ? "replacement-owner" : undefined;
         expect(env[envKey]).toBe(revoked ? rejected : accepted);

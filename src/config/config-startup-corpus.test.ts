@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
@@ -8,42 +7,34 @@ import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-ru
 import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
-import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
 import { resolveProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { listConfigCorpusFixtureNames } from "./config-corpus.test-support.js";
+import { getConfigValueAtPath } from "./config-paths.js";
 import { createConfigIO } from "./io.js";
-import { migrateConfigCorpus, prepareConfigCorpus } from "./startup-corpus-fixture.test-support.js";
-import type { OpenClawConfig } from "./types.js";
+import {
+  corpusEnv,
+  migrateConfigCorpus,
+  prepareConfigCorpus,
+  readCorpusStartup,
+} from "./startup-corpus-fixture.test-support.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
-
-const bundledPluginsDir = resolveBundledDirFromPackageRoot(
-  fileURLToPath(new URL("../../", import.meta.url)),
-);
-if (!bundledPluginsDir) {
-  throw new Error("Missing bundled plugin fixtures for startup corpus");
-}
 
 const fixtureNames = listConfigCorpusFixtureNames();
 const expectations: Record<
   string,
-  { providers: string[]; model?: string; sourceConfig?: OpenClawConfig }
+  { providers: string[]; model?: string; sourceConfig?: Record<string, Record<string, unknown>> }
 > = {
   "agent-override.json": { providers: ["openai", "fixture-provider"] },
   "api-key-no-models.json": { providers: ["openai"] },
   "coach-lassi.json": {
     providers: ["openai"],
     sourceConfig: {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.4": {
-              agentRuntime: { id: "openclaw" },
-              params: { responsesServerCompaction: true, responsesCompactEndpoint: true },
-            },
-          },
+      "agents.defaults.models": {
+        "openai/gpt-5.4": {
+          agentRuntime: { id: "openclaw" },
+          params: { responsesServerCompaction: true, responsesCompactEndpoint: true },
         },
       },
     },
@@ -51,8 +42,8 @@ const expectations: Record<
   "crossclaw.json": {
     providers: ["openai"],
     sourceConfig: {
-      agents: { defaults: { modelPolicy: { allow: ["openai/gpt-5.4"] } } },
-      models: { providers: { openai: { baseUrl: "", models: [] } } },
+      "agents.defaults.modelPolicy": { allow: ["openai/gpt-5.4"] },
+      "models.providers.openai": { baseUrl: "", models: [] },
     },
   },
   "custom-models.json": { providers: ["openai"], model: "fixture-model" },
@@ -62,22 +53,18 @@ const expectations: Record<
   "falc0n.json": {
     providers: ["openai"],
     sourceConfig: {
-      agents: {
-        defaults: { modelPolicy: { allow: [] } },
-        entries: { main: { model: "openai/gpt-5.4", models: {} } },
-      },
+      "agents.defaults.modelPolicy": { allow: [] },
+      "agents.entries.main": { model: "openai/gpt-5.4", models: {} },
     },
   },
   "hamverbot.json": {
     providers: ["openai", "xai"],
     model: "grok-4.3",
     sourceConfig: {
-      agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } },
-      auth: {
-        profiles: {
-          "openai:fixture3@example.invalid": { provider: "openai", mode: "oauth" },
-          "openai:fixture4@example.invalid": { provider: "openai", mode: "oauth" },
-        },
+      "agents.defaults.modelPolicy": { allow: ["openai/*"] },
+      "auth.profiles": {
+        "openai:fixture3@example.invalid": { provider: "openai", mode: "oauth" },
+        "openai:fixture4@example.invalid": { provider: "openai", mode: "oauth" },
       },
     },
   },
@@ -173,8 +160,7 @@ describe("operator config startup corpus", () => {
     stubEnv(env, {
       OPENCLAW_STATE_DIR: home,
       DISCORD_BOT_TOKEN: "synthetic-token",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+      ...corpusEnv(home, configPath),
     });
     const snapshot = await createIO().readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
@@ -227,27 +213,14 @@ describe("operator config startup corpus", () => {
         "openclaw-config-corpus-",
         true,
       );
-      stubEnv(env, {
-        HOME: home,
-        USERPROFILE: home,
-        OPENCLAW_TEST_HOME: home,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-      });
+      stubEnv(env, corpusEnv(home, configPath));
       prepareConfigCorpus(home, configPath, name);
       const io = createIO();
       const snapshot = await io.readConfigFileSnapshot();
       const { migrated, normalized } = migrateConfigCorpus(snapshot);
       const retired = await retireHeartbeatWithDoctor(normalized.config, env);
       writeJson(configPath, retired);
-      const startup = await loadGatewayStartupConfigSnapshot({
-        initialSnapshotRead: await io.readConfigFileSnapshotWithPluginMetadata(),
-        minimalTestGateway: false,
-        ambientEnvTriggers: "suppress",
-        log: console,
-      });
+      const startup = await readCorpusStartup(io);
       const config = startup.snapshot.config;
       if (normalized.config.agents?.defaults?.heartbeat) {
         const cron = await loadCronJobsStore(resolveCronJobsStorePathFromConfig(config, env));
@@ -288,8 +261,10 @@ describe("operator config startup corpus", () => {
           "FAKE_CONFIG_CORPUS_CREDENTIAL",
         );
       }
-      if (expected.sourceConfig) {
-        expect(startup.snapshot.sourceConfig).toMatchObject(expected.sourceConfig);
+      for (const [key, value] of Object.entries(expected.sourceConfig ?? {})) {
+        expect(
+          getConfigValueAtPath({ ...startup.snapshot.sourceConfig }, key.split(".")),
+        ).toMatchObject(value);
       }
       const agentIds = listAgentIds(config);
       expect(agentIds.length).toBeGreaterThan(0);
@@ -301,59 +276,48 @@ describe("operator config startup corpus", () => {
 
       for (const agentId of agentIds) {
         const workspaceDir = path.join(home, "workspaces", agentId);
+        const input = {
+          config,
+          agentId,
+          agentDir: path.join(stateDir, "agents", agentId, "agent"),
+          workspaceDir,
+          env,
+          readOnly: true,
+          skipCredentials: true,
+        };
         if (name === "generic-github-token.json") {
-          await using staticLease = await acquireReadOnlyPreparedModelRuntime(
-            {
-              config,
-              agentId,
-              agentDir: path.join(stateDir, "agents", agentId, "agent"),
-              workspaceDir,
-              env,
-              readOnly: true,
-              skipCredentials: true,
-            },
-            { catalogMode: "static", pluginMetadataSnapshot: startup.pluginMetadataSnapshot },
-          );
+          await using staticLease = await acquireReadOnlyPreparedModelRuntime(input, {
+            catalogMode: "static",
+            pluginMetadataSnapshot: startup.pluginMetadataSnapshot,
+          });
           expect(staticLease.snapshot.modelCatalog.entries).toEqual([]);
         }
-        const lease = await acquireReadOnlyPreparedModelRuntime(
-          {
-            config,
-            agentId,
-            agentDir: path.join(stateDir, "agents", agentId, "agent"),
-            workspaceDir,
-            env,
-            readOnly: true,
-            skipCredentials: name !== "generic-github-token.json",
-          },
+        await using lease = await acquireReadOnlyPreparedModelRuntime(
+          { ...input, skipCredentials: name !== "generic-github-token.json" },
           { catalogMode: name === "generic-github-token.json" ? "live" : "static" },
         );
-        try {
-          const catalog =
-            name === "generic-github-token.json"
-              ? await lease.snapshot.loadFullModelCatalog!({ refresh: true })
-              : lease.snapshot.modelCatalog;
-          if (name === "generic-github-token.json") {
-            expect(catalog.providerOutcomes ?? []).not.toContainEqual(
-              expect.objectContaining({ provider: "github-copilot" }),
-            );
-            expect(catalog.refreshFailed).toBeUndefined();
-          }
-          for (const provider of expected.providers) {
-            expect(catalog.entries, `${name}: ${agentId} must expose ${provider}`).toContainEqual(
-              expect.objectContaining({ provider }),
-            );
-          }
-          if (expected.model) {
-            expect(catalog.entries).toContainEqual(expect.objectContaining({ id: expected.model }));
-          }
-          const login = resolveProviderChannelLoginChoice(undefined, { config, env, workspaceDir });
-          expect(login.status).toBe("providers");
-          if (login.status === "providers") {
-            expect(login.providers.length).toBeGreaterThan(0);
-          }
-        } finally {
-          await lease[Symbol.asyncDispose]();
+        const catalog =
+          name === "generic-github-token.json"
+            ? await lease.snapshot.loadFullModelCatalog!({ refresh: true })
+            : lease.snapshot.modelCatalog;
+        if (name === "generic-github-token.json") {
+          expect(catalog.providerOutcomes ?? []).not.toContainEqual(
+            expect.objectContaining({ provider: "github-copilot" }),
+          );
+          expect(catalog.refreshFailed).toBeUndefined();
+        }
+        for (const provider of expected.providers) {
+          expect(catalog.entries, `${name}: ${agentId} must expose ${provider}`).toContainEqual(
+            expect.objectContaining({ provider }),
+          );
+        }
+        if (expected.model) {
+          expect(catalog.entries).toContainEqual(expect.objectContaining({ id: expected.model }));
+        }
+        const login = resolveProviderChannelLoginChoice(undefined, { config, env, workspaceDir });
+        expect(login.status).toBe("providers");
+        if (login.status === "providers") {
+          expect(login.providers.length).toBeGreaterThan(0);
         }
       }
     },

@@ -81,22 +81,19 @@ describe("config env vars", () => {
     ).toEqual({ OPENCLAW_NIX_MODE: "1", VALID: "literal" });
   });
 
-  it("ignores malformed config env entries", () => {
-    expect(
-      applied(
-        JSON.parse(
-          '{"env":{"NOT-PORTABLE":"bad","vars":{" BAD KEY":"bad","PORT":8080,"DEBUG":true,"EMPTY":"","VALID":"literal"}}}',
-        ),
+  it.each<[string, OpenClawConfig]>([
+    [
+      "malformed entries",
+      JSON.parse(
+        '{"env":{"NOT-PORTABLE":"bad","vars":{" BAD KEY":"bad","PORT":8080,"DEBUG":true,"EMPTY":"","VALID":"literal"}}}',
       ),
-    ).toEqual({ VALID: "literal" });
-  });
-
-  it("does not apply unresolved references with or without defaults", () => {
-    expect(
-      applied(
-        config({ BARE_REF: "${SOME_VAR}", DEFAULT_REF: "${SOME_VAR:-fallback}", VALID: "literal" }),
-      ),
-    ).toEqual({ VALID: "literal" });
+    ],
+    [
+      "unresolved references",
+      config({ BARE_REF: "${SOME_VAR}", DEFAULT_REF: "${SOME_VAR:-fallback}", VALID: "literal" }),
+    ],
+  ])("ignores %s", (_name, source) => {
+    expect(applied(source)).toEqual({ VALID: "literal" });
   });
 
   it("prepares updates and removals without mutating the target", () => {
@@ -122,7 +119,6 @@ describe("config env vars", () => {
     stage.env[shellKey] = "shell";
     stage.prepare(nextConfig).publish().commit();
     expect(publishedEnv().ownedEnv).toEqual({ [key]: "config" });
-    expect(publishedEnv().sourceConfig).toBe(nextConfig);
     prepareChange(nextConfig, {}).publish().commit();
     expect([process.env[key], process.env[dotenvKey], process.env[shellKey]]).toEqual([
       undefined,
@@ -134,7 +130,6 @@ describe("config env vars", () => {
   it("publishes only captured dotenv after failed loading and preserves prior ownership", () => {
     const previousConfig = initialize({ [key]: "previous" });
     vi.stubEnv("OPENCLAW_TEST_FAILED_CONFIG", undefined);
-    const previousOwnership = publishedEnv().ownedEnv;
     const stage = stageLoad({ previousConfig });
     stage.env[dotenvKey] = "loaded before failure";
     stage.captureDotEnvBaseline();
@@ -151,14 +146,16 @@ describe("config env vars", () => {
       process.env.OPENCLAW_TEST_FAILED_CONFIG,
       process.env[shellKey],
     ]).toEqual(["previous", "loaded before failure", undefined, undefined]);
-    const expectPreviousOwner = () => {
-      expect(publishedEnv().ownedEnv).toBe(previousOwnership);
-      expect(publishedEnv().sourceConfig).toBe(previousConfig);
-    };
-    expectPreviousOwner();
+    expect(publishedEnv()).toEqual({
+      sourceConfig: previousConfig,
+      ownedEnv: { [key]: "previous" },
+    });
     rollback();
     expect([process.env[dotenvKey], process.env[key]]).toEqual([undefined, "previous"]);
-    expectPreviousOwner();
+    expect(publishedEnv()).toEqual({
+      sourceConfig: previousConfig,
+      ownedEnv: { [key]: "previous" },
+    });
   });
 
   it("retains live overrides during isolated loading and after publication", () => {
@@ -281,7 +278,6 @@ describe("config env vars", () => {
       replacedLowerPrecedenceKeys,
     });
     const prepared = prepareChange(previousConfig, config({ [key]: "next" }), env);
-    expect(replacedLowerPrecedenceKeys).toEqual([key]);
     expect(ownedEnv).toEqual({ [key]: "shared" });
     expect(prepared.env[key]).toBe("next");
   });

@@ -89,6 +89,28 @@ function cached<T>(run: () => T) {
   return withPluginCache(createPluginCache(), run);
 }
 
+async function pendingFixture() {
+  const source = { gateway: { mode: "local" }, session: { store: "/srv/synthetic-sessions.json" } };
+  const raw = JSON.stringify(source);
+  const options = fixture(raw);
+  const pending = {
+    pluginId: "fixture-plugin",
+    reason: "Synthetic pending migration",
+    command: "openclaw plugins install @example/fixture-plugin",
+    configPaths: [["session", "store"]],
+    validationExcludedPaths: [["session", "store"]],
+  };
+  await recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
+  await closeOpenClawStateDatabaseAsync();
+  return {
+    options,
+    source,
+    raw,
+    pending,
+    databasePath: resolveOpenClawStateSqlitePath(options.env),
+  };
+}
+
 async function withoutMainSql<T>(run: () => Promise<T>) {
   const sql = observeMainThreadSql();
   try {
@@ -161,21 +183,7 @@ function observeWith(
 it.each(["load", "metadata", "policy"] as const)(
   "offline %s consumes canonical config without reading pending migrations or changing artifacts",
   async (method) => {
-    const raw = JSON.stringify({
-      gateway: { mode: "local" },
-      session: { store: "/srv/synthetic-session-state/sessions.json" },
-    });
-    const options = fixture(raw);
-    const pending = {
-      pluginId: "fixture-plugin",
-      reason: "The configured plugin is not installed.",
-      command: "openclaw plugins install @example/fixture-plugin",
-      configPaths: [["session", "store"]],
-      validationExcludedPaths: [["session", "store"]],
-    };
-    await recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
-    await closeOpenClawStateDatabaseAsync();
-    const databasePath = resolveOpenClawStateSqlitePath(options.env);
+    const { options, source, raw, pending, databasePath } = await pendingFixture();
     const family = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
     const familyBefore = family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null));
     const synchronousSnapshot = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
@@ -197,10 +205,7 @@ it.each(["load", "metadata", "policy"] as const)(
       const config = await (method === "load" || method === "policy"
         ? withArtifactPreservingStateReads(read)
         : read());
-      expect(config).toMatchObject({
-        gateway: { mode: "local" },
-        session: { store: "/srv/synthetic-session-state/sessions.json" },
-      });
+      expect(config).toMatchObject(source);
       expect(synchronousSnapshot).not.toHaveBeenCalled();
     });
     expect(fs.readFileSync(options.configPath, "utf8")).toBe(raw);
@@ -212,25 +217,7 @@ it.each(["load", "metadata", "policy"] as const)(
 );
 
 it("validates config and update ownership snapshots while a verified live writer checkpoints", async () => {
-  const raw = JSON.stringify({
-    gateway: { mode: "local" },
-    session: { store: "/srv/synthetic-sessions.json" },
-  });
-  const options = fixture(raw);
-  await recordDeferredPluginMigrations({
-    env: options.env,
-    pending: [
-      {
-        pluginId: "fixture-plugin",
-        reason: "Synthetic pending migration",
-        command: "openclaw plugins install @example/fixture-plugin",
-        configPaths: [["session", "store"]],
-        validationExcludedPaths: [["session", "store"]],
-      },
-    ],
-  });
-  await closeOpenClawStateDatabaseAsync();
-  const databasePath = resolveOpenClawStateSqlitePath(options.env);
+  const { options, raw, databasePath } = await pendingFixture();
   const writer = await startSqliteCheckpointWriter(databasePath);
   const owner = acquireGatewayStateOwner({
     databasePath,
