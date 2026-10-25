@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { WORKBOARD_STATUSES, type WorkboardLink } from "@openclaw/workboard-contract";
 import { chromium, expect, type CDPSession, type Page } from "playwright/test";
 import { controlUiPluginAssetPrefix } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { readPluginControlUiAssets } from "../src/plugins/control-ui-assets.js";
@@ -38,6 +39,9 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "10" },
     "pair-offset": { type: "string", default: "0" },
     cards: { type: "string", default: "300" },
+    columns: { type: "string", default: "6" },
+    "windowed-variants": { type: "string", default: "" },
+    "linked-dependencies": { type: "boolean", default: false },
     output: { type: "string", default: ".artifacts/plugin-views/measure" },
     trace: { type: "boolean", default: false },
     coverage: { type: "boolean", default: false },
@@ -48,6 +52,10 @@ const { values } = parseArgs({
 const pairs = Number(values.pairs);
 const pairOffset = Number(values["pair-offset"]);
 const cardCount = Number(values.cards);
+const columnCount = Number(values.columns);
+const windowedVariants = new Set(
+  values["windowed-variants"].split(",").filter(Boolean).map(Number),
+);
 const pluginIds = values.plugins.split(",");
 const profiles = values.profiles.split(",");
 if (
@@ -57,11 +65,13 @@ if (
   pairOffset < 0 ||
   !Number.isInteger(cardCount) ||
   cardCount < 6 ||
+  ![6, 9].includes(columnCount) ||
+  [...windowedVariants].some((variant) => !Number.isInteger(variant) || variant < 0) ||
   pluginIds.some((id) => !["workboard", "memory-core", "nostr"].includes(id)) ||
   profiles.some((id) => !["local", "remote"].includes(id))
 ) {
   throw new Error(
-    "Use positive --pairs, nonnegative --pair-offset, --cards >= 6, known --plugins and --profiles local,remote",
+    "Use positive --pairs, nonnegative --pair-offset, --cards >= 6, --columns 6|9, nonnegative --windowed-variants, known --plugins and --profiles local,remote",
   );
 }
 const output = path.resolve(values.output);
@@ -79,6 +89,9 @@ type Step = {
   nodes: number;
   elements: number;
   menuElements: number;
+  comments: number;
+  workboardCards: number;
+  workboardSlots: number;
 };
 type Sample = {
   plugin: string;
@@ -95,53 +108,145 @@ type Sample = {
   coverage?: unknown;
   warmCoverage?: unknown;
   menuReturnFocusAfterRowsChange?: boolean;
+  dependencyChildRetainedAfterParentUpdate?: boolean;
+  windowChecks?: {
+    middleCard: string;
+    bottomCard: string;
+    tabFrom: string;
+    tabTo: string;
+    detailReturnFocus: boolean;
+  };
   hostPrefetch?: unknown;
-  postGcMemory?: { heapBytes: number; nodes: number; elements: number; menuElements: number };
+  workboardFixture?: {
+    generatedAt: number;
+    createdAt: number;
+    updatedAt: number;
+    initialAgeMs: number;
+    expectedUpdatedText: string;
+    coldObservedAt?: number;
+    warmObservedAt?: number;
+  };
+  postGcMemory?: { heapBytes: number; nodes: number } & ReturnType<typeof domCounts>;
 };
 const results: Sample[] = [];
 const roots = [values["plugin-root"], values["compare-plugin-root"]].filter(
   (root): root is string => Boolean(root),
 );
-const statuses = ["todo", "ready", "running", "review", "blocked", "done"];
-const fixtureTime = Date.now();
-const seed = buildWorkboardMocks(fixtureTime, { id: "benchmark", label: "Benchmark" });
-seed.cards = Array.from({ length: cardCount }, (_, index) => ({
-  ...seed.cards[0]!,
-  id: `bench-${index}`,
-  title: `Benchmark card ${String(index).padStart(3, "0")}`,
-  status: statuses[index % statuses.length]!,
-  position: (Math.floor(index / statuses.length) + 1) * 1000,
-  sessionKey: undefined,
-  createdAt: fixtureTime - 60_000,
-  updatedAt: fixtureTime,
-  priority: index % 2 ? "high" : "normal",
-  labels: [index % 2 ? "review" : "engineering"],
-  metadata: { automation: { boardId: "benchmark" } },
-}));
-seed.boards = [
-  {
-    ...seed.board,
-    id: "benchmark",
-    name: "Benchmark board",
-    total: cardCount,
-    active: cardCount,
-    archived: 0,
-    byStatus: Object.fromEntries(
-      statuses.map((status) => [
-        status,
-        seed.cards.filter((card) => card.status === status).length,
-      ]),
-    ),
-  },
-];
-seed.methodResponses["workboard.cards.list"].cards = seed.cards;
-seed.methodResponses["workboard.cards.list"].boards = seed.boards;
-seed.methodResponses["workboard.boards.list"].boards = seed.boards;
+if ([...windowedVariants].some((variant) => variant >= roots.length)) {
+  throw new Error("--windowed-variants must name supplied plugin-root variant indexes");
+}
+const statuses =
+  columnCount === 9
+    ? [...WORKBOARD_STATUSES]
+    : ["todo", "ready", "running", "review", "blocked", "done"];
+const linkedDependencies = values["linked-dependencies"];
+const rootCount = linkedDependencies ? Math.max(2, Math.ceil(cardCount / 10)) : 0;
+const workboardInitialAgeMs = (2 * 24 + 3) * 60 * 60 * 1000;
+function createWorkboardFixture(fixtureTime: number) {
+  const seed = buildWorkboardMocks(fixtureTime, { id: "benchmark", label: "Benchmark" });
+  const updatedAt = fixtureTime - workboardInitialAgeMs;
+  const createdAt = updatedAt - 24 * 60 * 60 * 1000;
+  const cardStatuses = Array.from(
+    { length: cardCount },
+    (_, index) => statuses[index % statuses.length]!,
+  );
+  const links: (WorkboardLink & { targetCardId: string })[][] = Array.from(
+    { length: cardCount },
+    () => [],
+  );
+  if (linkedDependencies) {
+    // Its child with root zero clears when root zero finishes.
+    cardStatuses[rootCount - 1] = "done";
+    for (let child = rootCount; child < cardCount; child++) {
+      const ordinal = child - rootCount;
+      const parents = [ordinal % rootCount, (ordinal + 1) % rootCount];
+      cardStatuses[child] = parents.every((parent) => cardStatuses[parent] === "done")
+        ? "ready"
+        : "todo";
+      for (const parent of parents) {
+        links[child]!.push({
+          id: `dep-${child}-${parent}-parent`,
+          type: "parent",
+          targetCardId: `bench-${parent}`,
+          createdAt: updatedAt,
+        });
+        links[parent]!.push({
+          id: `dep-${child}-${parent}-child`,
+          type: "child",
+          targetCardId: `bench-${child}`,
+          createdAt: updatedAt,
+        });
+      }
+    }
+  }
+  const positions = new Map<string, number>();
+  const cards = Array.from({ length: cardCount }, (_, index) => {
+    const status = cardStatuses[index]!;
+    const position = (positions.get(status) ?? 0) + 1000;
+    positions.set(status, position);
+    return {
+      ...seed.cards[0]!,
+      id: `bench-${index}`,
+      title: `Benchmark card ${String(index).padStart(3, "0")}`,
+      status,
+      position,
+      sessionKey: undefined,
+      createdAt,
+      updatedAt,
+      priority: index % 2 ? "high" : "normal",
+      labels: [index % 2 ? "review" : "engineering"],
+      metadata: {
+        automation: { boardId: "benchmark" },
+        ...(linkedDependencies ? { links: links[index] } : {}),
+      },
+    };
+  });
+  if (linkedDependencies) {
+    const cardsById = new Map(cards.map((card) => [card.id, card]));
+    for (const card of cards.slice(rootCount)) {
+      const parents = card.metadata.links!.filter((link) => link.type === "parent");
+      expect(parents).toHaveLength(2);
+      expect(card.status).toBe(
+        parents.every((parent) => cardsById.get(parent.targetCardId)?.status === "done")
+          ? "ready"
+          : "todo",
+      );
+    }
+  }
+  seed.cards = cards;
+  seed.boards = [
+    {
+      ...seed.board,
+      id: "benchmark",
+      name: "Benchmark board",
+      total: cardCount,
+      active: cardCount,
+      archived: 0,
+      byStatus: Object.fromEntries(
+        statuses.map((status) => [
+          status,
+          seed.cards.filter((card) => card.status === status).length,
+        ]),
+      ),
+    },
+  ];
+  seed.methodResponses["workboard.cards.list"].cards = seed.cards;
+  seed.methodResponses["workboard.cards.list"].statuses = statuses;
+  seed.methodResponses["workboard.cards.list"].boards = seed.boards;
+  seed.methodResponses["workboard.boards.list"].boards = seed.boards;
+  return seed;
+}
 
 async function metrics(cdp: CDPSession): Promise<Metrics> {
   const result: { metrics: Array<{ name: string; value: number }> } =
     await cdp.send("Performance.getMetrics");
-  return Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  const snapshot = Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  for (const name of ["TaskOtherDuration", "V8CompileDuration", "DevToolsCommandDuration"]) {
+    if (!Number.isFinite(snapshot[name])) {
+      throw new Error(`Chromium Performance.getMetrics is missing a finite ${name}`);
+    }
+  }
+  return snapshot;
 }
 async function frames(page: Page) {
   await page.evaluate(
@@ -150,6 +255,20 @@ async function frames(page: Page) {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       }),
   );
+}
+function domCounts() {
+  const comments = document.createTreeWalker(document, NodeFilter.SHOW_COMMENT);
+  let commentCount = 0;
+  while (comments.nextNode()) {
+    commentCount++;
+  }
+  return {
+    elements: document.getElementsByTagName("*").length,
+    comments: commentCount,
+    menuElements: document.querySelectorAll(".workboard-card__action-menu-panel *").length,
+    workboardCards: document.querySelectorAll(".workboard-card").length,
+    workboardSlots: document.querySelectorAll(".workboard-column__slot").length,
+  };
 }
 function distribution(numbers: number[]) {
   const sorted = numbers.toSorted((a, b) => a - b);
@@ -198,6 +317,7 @@ function scenario(
   plugin: string,
   descriptor: Awaited<ReturnType<typeof loadPlugin>>["descriptor"],
   build: { buildId: string; version: string },
+  seed: ReturnType<typeof createWorkboardFixture>,
 ): ControlUiMockGatewayScenario {
   const common: ControlUiMockGatewayScenario = {
     serverBuildId: build.buildId,
@@ -332,6 +452,8 @@ try {
           const page = await context.newPage();
           page.setDefaultTimeout(30_000);
           const cdp = await context.newCDPSession(page);
+          const fixtureTime = Date.now();
+          const seed = createWorkboardFixture(fixtureTime);
           const sample: Sample = {
             plugin,
             profile,
@@ -343,6 +465,17 @@ try {
             status: "failed",
             steps: [],
             errors: [],
+            ...(plugin === "workboard"
+              ? {
+                  workboardFixture: {
+                    generatedAt: fixtureTime,
+                    createdAt: seed.cards[0]!.createdAt,
+                    updatedAt: seed.cards[0]!.updatedAt,
+                    initialAgeMs: workboardInitialAgeMs,
+                    expectedUpdatedText: "2d ago",
+                  },
+                }
+              : {}),
           };
           page.on("pageerror", (error) => sample.errors.push(error.message));
           let navigationManifest:
@@ -402,7 +535,7 @@ try {
             });
             const gateway = await installMockGateway(
               page,
-              scenario(plugin, asset.descriptor, build),
+              scenario(plugin, asset.descriptor, build, seed),
             );
             if (plugin === "workboard") {
               await page.addInitScript(installWorkboardBoardMock, seed);
@@ -514,6 +647,9 @@ try {
                   [
                     "TaskDuration",
                     "ScriptDuration",
+                    "TaskOtherDuration",
+                    "V8CompileDuration",
+                    "DevToolsCommandDuration",
                     "LayoutDuration",
                     "RecalcStyleDuration",
                     "LayoutCount",
@@ -533,11 +669,7 @@ try {
                 assets: assets.slice(assetsBefore),
                 heapBytes: after.JSHeapUsedSize ?? 0,
                 nodes: after.Nodes ?? 0,
-                ...(await page.evaluate(() => ({
-                  elements: document.getElementsByTagName("*").length,
-                  menuElements: document.querySelectorAll(".workboard-card__action-menu-panel *")
-                    .length,
-                }))),
+                ...(await page.evaluate(domCounts)),
               };
               sample.steps.push(measured);
               if (!navigation) {
@@ -553,12 +685,41 @@ try {
                 : plugin === "memory-core"
                   ? "settings/memory/memories"
                   : "settings/channels";
+            const assertWorkboardCards = async (cards: (typeof seed.cards)[number][]) => {
+              const counts = statuses.map((status) => ({
+                status,
+                count: cards.filter((card) => card.status === status).length,
+              }));
+              await page.waitForFunction(
+                ({ counts: columnCounts, windowed }) =>
+                  columnCounts.every(({ status, count }) => {
+                    const column = document.querySelector(`.workboard-column--${status}`);
+                    if (!column?.getAttribute("aria-label")?.endsWith(`, ${count}`)) {
+                      return false;
+                    }
+                    const rendered = column.querySelectorAll(".workboard-card").length;
+                    if (
+                      column.querySelectorAll(".workboard-card__menu-trigger").length !== rendered
+                    ) {
+                      return false;
+                    }
+                    return windowed && count > 24
+                      ? Boolean(column.querySelector(".workboard-column__window--active")) &&
+                          rendered > 0 &&
+                          rendered <= 24
+                      : rendered === count;
+                  }),
+                { counts, windowed: windowedVariants.has(variant) },
+              );
+            };
             const ready = async () => {
               if (plugin === "workboard") {
-                await expect(page.locator(".workboard-card")).toHaveCount(cardCount);
+                await assertWorkboardCards(seed.cards);
                 await expect(page.locator(".workboard-create")).toBeEnabled();
-                await expect(page.locator(".workboard-card__menu-trigger")).toHaveCount(cardCount);
                 await expect(page.locator(".workboard-card__menu-trigger").nth(1)).toBeVisible();
+                await expect(
+                  page.locator('[data-card-id="bench-0"] .workboard-card__updated'),
+                ).toHaveText("2d ago");
               } else if (plugin === "memory-core") {
                 await expect(
                   page.getByRole("searchbox", { name: "Search memories" }),
@@ -573,6 +734,37 @@ try {
                   page.getByRole("button", { name: "Edit Profile", exact: true }),
                 ).toBeVisible();
               }
+            };
+            const revealCard = async (id: string) => {
+              const card = seed.cards.find((entry) => entry.id === id);
+              if (!card) {
+                throw new Error(`Unknown fixture card ${id}`);
+              }
+              const viewport = page.locator(
+                `.workboard-column--${card.status} .workboard-column__cards`,
+              );
+              const target = page.locator(
+                `.workboard-column__item[data-card-id="${id}"] .workboard-card`,
+              );
+              await viewport.evaluate((element) => {
+                element.scrollTop = 0;
+              });
+              await frames(page);
+              for (let attempt = 0; attempt < cardCount && !(await target.count()); attempt++) {
+                const moved = await viewport.evaluate((element) => {
+                  const before = element.scrollTop;
+                  element.scrollTop += element.clientHeight * 0.8;
+                  return element.scrollTop > before;
+                });
+                await frames(page);
+                if (!moved) {
+                  break;
+                }
+              }
+              await expect(target).toHaveCount(1);
+              await target.scrollIntoViewIfNeeded();
+              await expect(target).toBeInViewport();
+              return target;
             };
             const stopCoverage = async (phase: "cold" | "warm") => {
               const entries = await page.coverage.stopJSCoverage();
@@ -611,6 +803,9 @@ try {
               },
               true,
             );
+            if (sample.workboardFixture) {
+              sample.workboardFixture.coldObservedAt = Date.now();
+            }
             if (values.coverage) {
               sample.coverage = await stopCoverage("cold");
             }
@@ -704,6 +899,9 @@ try {
               await navigate(`/${route}`);
               await ready();
             });
+            if (sample.workboardFixture) {
+              sample.workboardFixture.warmObservedAt = Date.now();
+            }
             if (values.coverage) {
               sample.warmCoverage = await stopCoverage("warm");
             }
@@ -725,11 +923,11 @@ try {
                 await page
                   .getByRole("searchbox", { name: "Search cards" })
                   .fill("Benchmark card 000");
-                await expect(page.locator(".workboard-card")).toHaveCount(1);
+                await assertWorkboardCards(seed.cards.filter((card) => card.id === "bench-0"));
               });
               await step("clear-search", async () => {
                 await page.getByRole("searchbox", { name: "Search cards" }).fill("");
-                await expect(page.locator(".workboard-card")).toHaveCount(cardCount);
+                await assertWorkboardCards(seed.cards);
               });
               await page.getByRole("button", { name: "Filters", exact: true }).click();
               await step("filter-priority", async () => {
@@ -738,12 +936,10 @@ try {
                     '.workboard-filter-section__options[aria-label="Priority"] label[title="High"] input',
                   )
                   .check();
-                await expect(page.locator(".workboard-card")).toHaveCount(
-                  Math.floor(cardCount / 2),
-                );
+                await assertWorkboardCards(seed.cards.filter((card) => card.priority === "high"));
               });
               await page.getByRole("button", { name: "Clear filters", exact: true }).click();
-              await expect(page.locator(".workboard-card")).toHaveCount(cardCount);
+              await assertWorkboardCards(seed.cards);
               await page.keyboard.press("Escape");
               await step("select", async () => {
                 await page
@@ -762,9 +958,18 @@ try {
                   .poll(() => cards.evaluate((element) => element.scrollTop))
                   .toBeGreaterThan(before);
               });
+              const cardToOpen = linkedDependencies
+                ? await revealCard(`bench-${rootCount}`)
+                : page.locator(".workboard-card").first();
               await step("open-card", async () => {
-                await page.locator(".workboard-card").first().click();
+                await cardToOpen.click();
                 await expect(page.locator(".workboard-detail")).toBeVisible();
+                if (linkedDependencies) {
+                  const dependencies = page.locator(".workboard-detail__dependencies li");
+                  await expect(dependencies).toHaveCount(2);
+                  await expect(dependencies.nth(0)).toContainText("Benchmark card 000");
+                  await expect(dependencies.nth(1)).toContainText("Benchmark card 001");
+                }
               });
               await page.keyboard.press("Escape");
               const source = page
@@ -773,26 +978,91 @@ try {
                 .locator(".workboard-card")
                 .first();
               const target = page.locator(".workboard-column").nth(1);
+              const targetViewport = target.locator(".workboard-column__cards");
+              const targetFirst = target.locator(".workboard-card").first();
+              let gapPoint: { x: number; y: number } | undefined;
+              if (await targetFirst.count()) {
+                await targetFirst.scrollIntoViewIfNeeded();
+                gapPoint = await targetFirst.evaluate((card) => {
+                  const viewport = card.closest(".workboard-column__cards")!;
+                  const bounds = card.getBoundingClientRect();
+                  const container = viewport.getBoundingClientRect();
+                  return { x: container.width / 2, y: bounds.bottom - container.top + 6 };
+                });
+              }
               const sourceTitle = await source.locator("h3").textContent();
               if (!sourceTitle) {
                 throw new Error("Benchmark card is missing its unique title");
               }
+              let acknowledgedMove:
+                | Pick<(typeof seed.cards)[number], "id" | "status" | "position">
+                | undefined;
               await step("drag-reorder", async () => {
                 const before = (await gateway.getRequests("workboard.cards.move")).length;
-                await source.dragTo(target);
-                await gateway.waitForRequest("workboard.cards.move", { after: before });
+                await source.dragTo(gapPoint ? targetViewport : target, {
+                  targetPosition: gapPoint,
+                });
+                const request = await gateway.waitForRequest("workboard.cards.move", {
+                  after: before,
+                });
+                const { id, status, position } = request.params as NonNullable<
+                  typeof acknowledgedMove
+                >;
+                acknowledgedMove = { id, status, position };
                 await expect(
                   target
                     .locator(".workboard-card")
                     .getByRole("heading", { name: sourceTitle, exact: true }),
                 ).toHaveCount(1);
               });
+              expect(acknowledgedMove).toMatchObject({
+                id: "bench-0",
+                status: statuses[1],
+                position: expect.any(Number),
+              });
+              if (gapPoint) {
+                const positions = seed.cards
+                  .filter((card) => card.status === statuses[1])
+                  .map((card) => card.position)
+                  .toSorted((a, b) => a - b);
+                expect(acknowledgedMove!.position).toBeGreaterThan(positions[0]!);
+                if (positions.length > 1) {
+                  expect(acknowledgedMove!.position).toBeLessThan(positions[1]!);
+                }
+              }
+              const dependencyChild = linkedDependencies
+                ? page.locator(
+                    `.workboard-column__item[data-card-id="bench-${rootCount * 2 - 1}"] .workboard-card`,
+                  )
+                : undefined;
+              if (dependencyChild) {
+                await revealCard(`bench-${rootCount * 2 - 1}`);
+                await expect(dependencyChild.locator(".workboard-card__alert")).toHaveText(
+                  "1 blocked",
+                );
+              }
+              const retainedChild = await dependencyChild?.elementHandle();
               await step("live-update", async () => {
+                const updatedAt = Date.now() + 10_000;
                 const card = {
                   ...seed.cards[0]!,
+                  ...acknowledgedMove,
                   title: "Live benchmark update",
-                  updatedAt: fixtureTime + 10_000,
+                  updatedAt,
+                  ...(linkedDependencies ? { status: "done", completedAt: updatedAt } : {}),
                 };
+                const cards = [card, ...seed.cards.slice(1)];
+                const boards = seed.boards.map((board) =>
+                  Object.assign({}, board, {
+                    byStatus: Object.fromEntries(
+                      statuses.map((status) => [
+                        status,
+                        cards.filter((entry) => entry.status === status).length,
+                      ]),
+                    ),
+                    updatedAt,
+                  }),
+                );
                 await page.evaluate(
                   (payload) => {
                     const browserGateway = (
@@ -805,16 +1075,29 @@ try {
                       respond(payload),
                     );
                   },
-                  { statuses, cards: [card, ...seed.cards.slice(1)], boards: seed.boards },
+                  { statuses, cards, boards },
                 );
                 await gateway.emitGatewayEvent("plugin.workboard.changed", {
                   epoch: "benchmark-live",
                   revision: 1,
                 });
                 await expect(
-                  page.locator(".workboard-card", { hasText: "Live benchmark update" }),
-                ).toBeVisible();
+                  page.locator('.workboard-column__item[data-card-id="bench-0"] h3'),
+                ).toHaveText("Live benchmark update");
+                if (dependencyChild) {
+                  await expect(dependencyChild.locator(".workboard-card__alert")).toHaveCount(0);
+                }
               });
+              if (dependencyChild) {
+                expect(retainedChild).not.toBeNull();
+                expect(
+                  await dependencyChild.evaluate(
+                    (element, retained) => element === retained,
+                    retainedChild,
+                  ),
+                ).toBe(true);
+                sample.dependencyChildRetainedAfterParentUpdate = true;
+              }
             } else if (plugin === "memory-core" && !values["loads-only"]) {
               await step("search-20", async () => {
                 await page.getByRole("searchbox", { name: "Search memories" }).fill("Benchmark");
@@ -863,6 +1146,90 @@ try {
               await page.keyboard.press("Escape");
               await expect(updatedTrigger).toBeFocused();
               sample.menuReturnFocusAfterRowsChange = true;
+              const columnCards = seed.cards
+                .filter((card) => card.status === statuses[0] && card.id !== "bench-0")
+                .toSorted((a, b) => a.position - b.position);
+              if (columnCards.length > 24) {
+                const middle = columnCards[Math.floor(columnCards.length / 2)]!;
+                await revealCard(middle.id);
+                const mounted = new Set(
+                  await page
+                    .locator(`.workboard-column--${statuses[0]} .workboard-column__item`)
+                    .evaluateAll((elements) =>
+                      elements.map((element) => element.getAttribute("data-card-id")),
+                    ),
+                );
+                const boundary = columnCards.findLastIndex(
+                  (card, index) =>
+                    index + 1 < columnCards.length &&
+                    mounted.has(card.id) &&
+                    !mounted.has(columnCards[index + 1]!.id),
+                );
+                // Full-render baselines have no window edge; exercise their middle adjacent pair.
+                const from =
+                  columnCards[boundary < 0 ? Math.floor(columnCards.length / 2) : boundary]!;
+                const next = columnCards[columnCards.indexOf(from) + 1]!;
+                const fromRow = page.locator(
+                  `.workboard-column__item[data-card-id="${from.id}"] .workboard-card`,
+                );
+                const nextRow = page.locator(
+                  `.workboard-column__item[data-card-id="${next.id}"] .workboard-card`,
+                );
+                if (windowedVariants.has(variant)) {
+                  expect(boundary).toBeGreaterThanOrEqual(0);
+                  await expect(nextRow).toHaveCount(0);
+                }
+                await fromRow.focus();
+                for (let keypress = 0; keypress < 16; keypress++) {
+                  await page.keyboard.press("Tab");
+                  if (
+                    (await nextRow.count()) &&
+                    (await nextRow.evaluate((element) => document.activeElement === element))
+                  ) {
+                    break;
+                  }
+                }
+                await expect(nextRow).toBeFocused();
+                for (let keypress = 0; keypress < 16; keypress++) {
+                  await page.keyboard.press("Shift+Tab");
+                  if (await fromRow.evaluate((element) => document.activeElement === element)) {
+                    break;
+                  }
+                }
+                await expect(fromRow).toBeFocused();
+                const bottom = columnCards.at(-1)!;
+                await revealCard(bottom.id);
+                const returnCard = await revealCard(middle.id);
+                const retained = await returnCard.elementHandle();
+                if (!retained) {
+                  throw new Error("Missing detail return-focus card");
+                }
+                await returnCard.focus();
+                await returnCard.press("Enter");
+                await expect(page.locator(".workboard-detail")).toBeVisible();
+                const viewport = page.locator(
+                  `.workboard-column--${middle.status} .workboard-column__cards`,
+                );
+                // The modal makes the board inert; move its scrollport to exercise deferred return.
+                await viewport.evaluate((element) => {
+                  element.scrollTop = element.scrollHeight;
+                });
+                await frames(page);
+                await expect(returnCard).not.toBeInViewport();
+                await page.keyboard.press("Escape");
+                await expect(page.locator(".workboard-detail")).toHaveCount(0);
+                await expect(returnCard).toBeFocused();
+                expect(
+                  await returnCard.evaluate((element, original) => element === original, retained),
+                ).toBe(true);
+                sample.windowChecks = {
+                  middleCard: middle.id,
+                  bottomCard: bottom.id,
+                  tabFrom: from.id,
+                  tabTo: next.id,
+                  detailReturnFocus: true,
+                };
+              }
             }
             if (sample.errors.length) {
               throw new Error(sample.errors.join("\n"));
@@ -967,11 +1334,7 @@ try {
                 sample.postGcMemory = {
                   heapBytes: afterGc.JSHeapUsedSize ?? 0,
                   nodes: afterGc.Nodes ?? 0,
-                  ...(await page.evaluate(() => ({
-                    elements: document.getElementsByTagName("*").length,
-                    menuElements: document.querySelectorAll(".workboard-card__action-menu-panel *")
-                      .length,
-                  }))),
+                  ...(await page.evaluate(domCounts)),
                 };
               }
             } catch (error) {
@@ -1006,12 +1369,35 @@ try {
   await server.close();
 }
 const summary = [];
+const comparisonPairs = [];
 for (const plugin of pluginIds) {
   for (const profile of profiles) {
+    const cellSamples = results.filter(
+      (sample) => sample.plugin === plugin && sample.profile === profile,
+    );
+    const pairOutcomes = Array.from({ length: pairs }, (_, index) => {
+      const pair = pairOffset + index + 1;
+      const missingVariants = [...bundles.keys()].filter(
+        (variant) =>
+          !cellSamples.some((sample) => sample.pair === pair && sample.variant === variant),
+      );
+      const failedVariants = cellSamples
+        .filter((sample) => sample.pair === pair && sample.status !== "passed")
+        .map((sample) => sample.variant);
+      return {
+        pair,
+        included: missingVariants.length === 0 && failedVariants.length === 0,
+        missingVariants,
+        failedVariants,
+      };
+    });
+    comparisonPairs.push({ plugin, profile, pairs: pairOutcomes });
+    const includedPairs = new Set(
+      pairOutcomes.filter((pair) => pair.included).map((pair) => pair.pair),
+    );
     for (const variant of bundles.keys()) {
-      const samples = results.filter(
-        (sample) =>
-          sample.plugin === plugin && sample.profile === profile && sample.variant === variant,
+      const samples = cellSamples.filter(
+        (sample) => sample.variant === variant && includedPairs.has(sample.pair),
       );
       for (const id of new Set(samples.flatMap((sample) => sample.steps.map((step) => step.id)))) {
         const steps = samples.flatMap((sample) => sample.steps.filter((step) => step.id === id));
@@ -1033,6 +1419,9 @@ for (const plugin of pluginIds) {
           nodes: distribution(steps.map((step) => step.nodes)),
           elements: distribution(steps.map((step) => step.elements)),
           menuElements: distribution(steps.map((step) => step.menuElements)),
+          comments: distribution(steps.map((step) => step.comments)),
+          workboardCards: distribution(steps.map((step) => step.workboardCards)),
+          workboardSlots: distribution(steps.map((step) => step.workboardSlots)),
           assetRequests: distribution(steps.map((step) => step.assets.length)),
         });
       }
@@ -1045,6 +1434,14 @@ await writeFile(
     {
       workload: {
         cards: cardCount,
+        columns: columnCount,
+        statuses,
+        windowedVariants: [...windowedVariants],
+        linkedDependencies,
+        dependencyRoots: rootCount,
+        dependencyChildren: linkedDependencies ? cardCount - rootCount : 0,
+        dependencyParentLinks: linkedDependencies ? (cardCount - rootCount) * 2 : 0,
+        dependencyChildLinks: linkedDependencies ? (cardCount - rootCount) * 2 : 0,
         memoryResults: 20,
         nostr: "settings/profile; no feed renderer exists",
       },
@@ -1075,6 +1472,7 @@ await writeFile(
         remote: "100ms delay per HTTP request and synthetic WebSocket response/event delivery",
         warm: "In-document route remount with resident modules; request routing disables HTTP cache",
       },
+      comparisonPairs,
       summary,
     },
     null,
