@@ -478,54 +478,28 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     expectChoice("belongs to a macOS desktop app");
   });
 
-  it.each(["available", "missing"])(
-    "starts the selected installed binary when %s, otherwise the package",
-    async (availability) => {
-      const packaged = await writePackageLauncher(root);
-      const selected = selectInstalled("/opt/codex/launcher", "/opt/codex/native");
-      const missing = availability === "missing";
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-      const pathExists = async (command: string) => !missing || command !== selected.nativeCommand;
-      vi.spyOn(pathExistence, "canAccess").mockImplementation(pathExists);
-      await expect(resolveStart()).resolves.toMatchObject(
-        missing
-          ? { command: packaged }
-          : {
-              command: selected.command,
-              commandSource: "resolved-managed",
-              managedFallbackCommandPaths: [packaged],
-            },
-      );
-      if (missing) {
-        await expect(resolveVersion("package-first")).resolves.toBe(VERSION);
-        expect(warn).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining(
-            `installed ${selected.command} ${NEWER} failed to start (executable`,
-          ),
-        );
-      } else {
-        expect(nativeCommand(selected.command)).toBe(selected.nativeCommand);
-        await expect(resolveStart({ preferInstalled: false })).resolves.toMatchObject({
-          command: packaged,
-        });
-      }
-    },
-  );
+  it("starts the selected installed binary unless the caller pins the package", async () => {
+    const packaged = await writePackageLauncher(root);
+    const selected = selectInstalled("/opt/codex/launcher", "/opt/codex/native");
+    vi.spyOn(pathExistence, "canAccess").mockResolvedValue(true);
+    await expect(resolveStart()).resolves.toMatchObject({
+      command: selected.command,
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [packaged],
+    });
+    expect(nativeCommand(selected.command)).toBe(selected.nativeCommand);
+    await expect(resolveStart({ preferInstalled: false })).resolves.toMatchObject({
+      command: packaged,
+    });
+  });
 
   it("starts and reports the desktop app for desktop-first without probing PATH", async () => {
     const packaged = await writePackageLauncher(root);
-    const desktopInstalled = async (command: string) =>
-      command.includes("Codex.app") || command === packaged;
-    const accessPath = vi.spyOn(pathExistence, "canAccess").mockImplementation(desktopInstalled);
+    const accessPath = vi
+      .spyOn(pathExistence, "canAccess")
+      .mockImplementation(async (command) => command.includes("Codex.app") || command === packaged);
 
-    await expect(
-      resolveStart(
-        {
-          platform: "darwin",
-        },
-        "desktop-first",
-      ),
-    ).resolves.toMatchObject({
+    await expect(resolveStart({ platform: "darwin" }, "desktop-first")).resolves.toMatchObject({
       command: expect.stringContaining("Codex.app"),
       managedFallbackCommandPaths: expect.arrayContaining([packaged]),
     });
@@ -552,25 +526,16 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
   it.each(["launcher", "native executable"])(
     "drops an installed Codex whose %s disappeared after selection",
     async (missing) => {
-      const pluginRoot = path.join(root, "plugin");
-      const packaged = await writePackageLauncher(pluginRoot);
-      const selected = {
-        command: "/opt/codex/lib/node_modules/@openai/codex/bin/codex.js",
-        nativeCommand: "/opt/codex/lib/node_modules/@openai/codex-linux-x64/vendor/codex",
-        version: NEWER,
-      };
-      installedState.selection = Promise.resolve(selected);
-      installedState.selected = selected;
+      const packaged = await writePackageLauncher(root);
+      const selected = selectInstalled(
+        "/opt/codex/lib/node_modules/@openai/codex/bin/codex.js",
+        "/opt/codex/lib/node_modules/@openai/codex-linux-x64/vendor/codex",
+      );
       const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
       const gone = missing === "launcher" ? selected.command : selected.nativeCommand;
       vi.spyOn(pathExistence, "canAccess").mockImplementation(async (command) => command !== gone);
 
-      await expect(
-        resolveOptions(startOptions(), {
-          platform: "linux",
-          pluginRoot,
-        }),
-      ).resolves.toMatchObject({ command: packaged });
+      await expect(resolveStart()).resolves.toMatchObject({ command: packaged });
       await expect(resolveVersion("package-first")).resolves.toBe(VERSION);
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining(
