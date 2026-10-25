@@ -86,25 +86,6 @@ describe("session discussion panel", () => {
     expect(loadInfo).toHaveBeenCalledTimes(1);
   });
 
-  it("refetches on session switch and reports a hidden discussion", async () => {
-    const loadInfo = vi
-      .fn<SessionDiscussionInfoLoader>()
-      .mockResolvedValueOnce({ state: "available" })
-      .mockResolvedValueOnce({ state: "none" });
-    const onStateChange = vi.fn<SessionDiscussionStateListener>();
-    const panel = mount({ loadInfo, openDiscussion: vi.fn(), onStateChange });
-    await vi.waitFor(() => expect(loadInfo).toHaveBeenCalledTimes(1));
-
-    panel.sessionKey = "agent:main:second";
-
-    await vi.waitFor(() => {
-      expect(loadInfo).toHaveBeenNthCalledWith(2, "agent:main:second");
-      expect(onStateChange).toHaveBeenLastCalledWith("agent:main:second", "none", null);
-    });
-    expect(panel.querySelector("button")).toBeNull();
-    expect(panel.querySelector("iframe")).toBeNull();
-  });
-
   it("replaces source-owned content when the gateway generation changes", async () => {
     const loadInfo = vi
       .fn<SessionDiscussionInfoLoader>()
@@ -126,7 +107,8 @@ describe("session discussion panel", () => {
       .mockResolvedValueOnce({ state: "available" })
       .mockResolvedValueOnce({ state: "none" });
     const openDiscussion = vi.fn<SessionDiscussionOpener>().mockReturnValueOnce(firstOpen.promise);
-    const panel = mount({ loadInfo, openDiscussion });
+    const onStateChange = vi.fn<SessionDiscussionStateListener>();
+    const panel = mount({ loadInfo, openDiscussion, onStateChange });
     await vi.waitFor(() => expect(openDiscussion).toHaveBeenCalledTimes(1));
     await vi.waitFor(() =>
       expect(skeleton(panel)?.getAttribute("aria-label")).toBe("Opening discussion…"),
@@ -134,12 +116,14 @@ describe("session discussion panel", () => {
     panel.sessionKey = "agent:main:second";
 
     await vi.waitFor(() => {
-      expect(loadInfo).toHaveBeenCalledTimes(2);
+      expect(loadInfo).toHaveBeenNthCalledWith(2, "agent:main:second");
+      expect(onStateChange).toHaveBeenLastCalledWith("agent:main:second", "none", null);
     });
     firstOpen.resolve(openInfo("https://discussion.example/stale"));
     await panel.updateComplete;
 
     expect(openDiscussion).toHaveBeenCalledTimes(1);
+    expect(panel.querySelector("button")).toBeNull();
     expect(panel.querySelector("iframe")).toBeNull();
     expect(skeleton(panel)).toBeNull();
   });

@@ -67,102 +67,94 @@ describe("session workspace file reference resolution", () => {
   });
 
   it.each([
-    {
-      label: "resolves a bare filename to the nested workspace file that search finds once",
-      inputPath: "ORGANIZATION_REPORT.md",
-      returnedPath: "labs/file-organizer/output/sorted-copy-001/ORGANIZATION_REPORT.md",
-      search: true,
-      content: "# Sorted",
-    },
-    {
-      label:
-        "keeps the successful root path for actions when the Gateway responds with a cwd-relative path",
-      inputPath: "/workspace/src/readme.md",
-      returnedPath: "src/readme.md",
-      search: false,
-      content: "# Readme",
-    },
-  ])("$label", async ({ inputPath, returnedPath, search, content }) => {
-    const requestPath = `/workspace/${returnedPath}`;
-    const name = returnedPath.split("/").at(-1)!;
-    const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey, path) => {
-      if (path !== requestPath) {
-        throw fileError();
+    ["REPORT.md", "nested/REPORT.md", true],
+    ["/workspace/src/readme.md", "src/readme.md", false],
+  ] as const)(
+    "resolves %s and keeps its root-qualified action path",
+    async (inputPath, returnedPath, search) => {
+      const requestPath = `/workspace/${returnedPath}`;
+      const name = returnedPath.split("/").at(-1)!;
+      const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(
+        async (sessionKey, path) => {
+          if (path !== requestPath) {
+            throw fileError();
+          }
+          return {
+            sessionKey,
+            root: "/workspace",
+            file: {
+              path: returnedPath,
+              workspacePath: returnedPath,
+              name,
+              kind: "read",
+              missing: false,
+              previewKind: "text",
+              contentEncoding: "utf8",
+              content: "# Readme",
+              hash: "hash",
+            },
+          };
+        },
+      );
+      const listFiles = listing([entry(returnedPath)], name);
+      const setFile = vi.fn<SessionWorkspaceHost["sessions"]["setFile"]>(
+        async (sessionKey, path) => ({
+          sessionKey,
+          file: {
+            path,
+            workspacePath: path,
+            name: path.split("/").at(-1) ?? path,
+            kind: "modified",
+            missing: false,
+            hash: "saved-hash",
+          },
+        }),
+      );
+      const state = createReferenceState(
+        createSessionCapabilityFixture({ getFile, listFiles, setFile }),
+      );
+
+      void openSessionWorkspaceFile(state, { path: inputPath });
+
+      const sidebarContent = await loadedSidebarContent(state);
+      if (search) {
+        expect(listFiles).toHaveBeenCalledExactlyOnceWith("agent:main:current", {
+          agentId: "main",
+          path: "",
+          search: name,
+        });
+      } else {
+        expect(listFiles).not.toHaveBeenCalled();
       }
-      return {
-        sessionKey,
-        root: "/workspace",
-        file: {
-          path: returnedPath,
-          workspacePath: returnedPath,
-          name,
-          kind: "read",
-          missing: false,
-          previewKind: "text",
-          contentEncoding: "utf8",
-          content,
-          hash: "hash",
-        },
-      };
-    });
-    const listFiles = listing([entry(returnedPath)], name);
-    const setFile = vi.fn<SessionWorkspaceHost["sessions"]["setFile"]>(
-      async (sessionKey, path) => ({
-        sessionKey,
-        file: {
-          path,
-          workspacePath: path,
-          name: path.split("/").at(-1) ?? path,
-          kind: "modified",
-          missing: false,
-          hash: "saved-hash",
-        },
-      }),
-    );
-    const state = createReferenceState(
-      createSessionCapabilityFixture({ getFile, listFiles, setFile }),
-    );
-
-    void openSessionWorkspaceFile(state, { path: inputPath });
-
-    const sidebarContent = await loadedSidebarContent(state);
-    if (search) {
-      expect(listFiles).toHaveBeenCalledExactlyOnceWith("agent:main:current", {
+      expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
         agentId: "main",
-        path: "",
-        search: name,
       });
-    } else {
-      expect(listFiles).not.toHaveBeenCalled();
-    }
-    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
-      agentId: "main",
-    });
-    if (sidebarContent.kind !== "file" || !sidebarContent.edit) {
-      throw new Error("expected editable resolved file content");
-    }
-    expect(sidebarContent.path).toBe(returnedPath);
-    expect(sidebarContent.sessionFileSource).toEqual({
-      sessionKey: currentSession,
-      agentId: "main",
-      path: requestPath,
-    });
-    await sidebarContent.edit.save({ content: "# Updated", expectedHash: "hash" });
-    expect(setFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, "# Updated", {
-      agentId: "main",
-      expectedHash: "hash",
-    });
-    await sidebarContent.download?.(new AbortController().signal);
-    expect(downloadSessionFile).toHaveBeenLastCalledWith(
-      state,
-      { sessionKey: "agent:main:current", agentId: "main", path: requestPath },
-      expect.any(AbortSignal),
-    );
-    await sidebarContent.edit.fetchLatest();
-    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
-      agentId: "main",
-    });
-  });
+      if (sidebarContent.kind !== "file" || !sidebarContent.edit) {
+        throw new Error("expected editable resolved file content");
+      }
+      expect(sidebarContent.path).toBe(returnedPath);
+      expect(sidebarContent.sessionFileSource).toEqual({
+        sessionKey: currentSession,
+        agentId: "main",
+        path: requestPath,
+      });
+      await sidebarContent.edit.save({ content: "# Updated", expectedHash: "hash" });
+      expect(setFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, "# Updated", {
+        agentId: "main",
+        expectedHash: "hash",
+      });
+      await sidebarContent.download?.(new AbortController().signal);
+      expect(downloadSessionFile).toHaveBeenLastCalledWith(
+        state,
+        { sessionKey: "agent:main:current", agentId: "main", path: requestPath },
+        expect.any(AbortSignal),
+      );
+      await sidebarContent.edit.fetchLatest();
+      expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
+        agentId: "main",
+      });
+    },
+  );
 
   it("uses the resolved nested path for oversized-file metadata", async () => {
     const nestedPath = "labs/output/REPORT.md";

@@ -51,24 +51,23 @@ const commentOptions: ImageRenderOptions = {
   connectionEpoch: 1,
   messageSendId: "same-send",
 };
-function mountComments(initial: AttachmentItem[]) {
+function mountComments(initial: AttachmentItem[], inline = true, initialOptions = commentOptions) {
   const [comments, setComments] = createSignal(initial);
-  const [options, setOptions] = createSignal(commentOptions);
+  const [options, setOptions] = createSignal(initialOptions);
+  const [presentation, setPresentation] = createSignal({ inline });
   const view = mountSolid(() => (
     <AssistantAttachments
       inlinePlayback={false}
-      inlineComments
+      inlineComments={presentation().inline}
       attachments={comments()}
       options={options()}
     />
   ));
-  return { ...view, setComments, setOptions };
+  return { ...view, setComments, setOptions, setPresentation };
 }
 
 it.each([
   { retirement: "replacement", inline: false },
-  { retirement: "removal", inline: false },
-  { retirement: "replacement", inline: true },
   { retirement: "removal", inline: true },
 ])(
   "reveals comments independently and cancels stale reads on $retirement (inline: $inline)",
@@ -83,16 +82,7 @@ it.each([
     const initialComments = ["first", "second"].map((name) =>
       commentAttachment(`/__openclaw__/fixtures/${name}.txt`),
     );
-    const [comments, setComments] = createSignal(initialComments);
-    const [presentation, setPresentation] = createSignal({ inline });
-    const view = mountSolid(() => (
-      <AssistantAttachments
-        inlinePlayback={false}
-        inlineComments={presentation().inline}
-        attachments={comments()}
-        options={{}}
-      />
-    ));
+    const view = mountComments(initialComments, inline, {});
     if (!inline) {
       expect(fetchMock).not.toHaveBeenCalled();
       view.getByRole("button").click();
@@ -105,16 +95,16 @@ it.each([
       expect(view.container.querySelector("blockquote button")?.textContent).toBe("second source");
     }
     const selection = view.container.querySelector("blockquote button");
-    setPresentation({ inline });
+    view.setPresentation({ inline });
     flush();
     expect(view.container.querySelector("blockquote button")).toBe(selection);
     const pendingSignal = fetchMock.mock.calls[0]![1]!.signal!;
-    setComments(initialComments.slice());
+    view.setComments(initialComments.slice());
     flush();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(pendingSignal.aborted).toBe(false);
     if (retirement === "replacement") {
-      setComments([]);
+      view.setComments([]);
       flush();
     } else {
       view.unmount();

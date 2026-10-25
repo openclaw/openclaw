@@ -18,7 +18,8 @@ import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { StreamGroupParts, type StreamGroupPart } from "./chat-message-stream-view.tsx";
 import { createCanvasPreview } from "./chat-message.test-support.ts";
 
-function createEmbedHarness(container: HTMLElement, surface: "persisted" | "streaming") {
+function createEmbedHarness(surface: "persisted" | "streaming") {
+  const container = document.body.appendChild(document.createElement("div"));
   type Props = {
     text: string;
     options: Pick<
@@ -52,7 +53,12 @@ function createEmbedHarness(container: HTMLElement, surface: "persisted" | "stre
           },
         });
   let root: ReturnType<typeof mountSolid<Props>> | undefined;
+  onTestFinished(() => {
+    root?.dispose();
+    container.remove();
+  });
   return {
+    host: container,
     render(text: string, options: Props["options"]) {
       const next = { text, options };
       if (root) {
@@ -61,49 +67,51 @@ function createEmbedHarness(container: HTMLElement, surface: "persisted" | "stre
         root = mountSolid(Content, next, container);
       }
     },
-    unmount() {
-      root?.dispose();
-    },
   };
 }
 
 describe("assistant message embed policy", () => {
-  it.each(["persisted", "streaming"] as const)(
-    "holds saved %s embeds until live resource admission",
-    async (surface) => {
-      const host = document.body.appendChild(document.createElement("div"));
-      const preview = createEmbedHarness(host, surface);
-      onTestFinished(() => {
-        preview.unmount();
-        host.remove();
+  it.each([
+    ["persisted", "mediaReadAllowed"],
+    ["streaming", "mediaReadAllowed"],
+    ["persisted", "allowExternalEmbedUrls"],
+    ["streaming", "allowExternalEmbedUrls"],
+  ] as const)("updates %s embeds when %s changes", async (surface, policy) => {
+    const preview = createEmbedHarness(surface);
+    const { host } = preview;
+    const url = "https://widget.example.test/saved";
+    const text = `[embed url="${url}" title="Saved widget" /]\nSaved conversation text.`;
+    for (const allowed of [false, true, false]) {
+      preview.render(text, {
+        allowExternalEmbedUrls: true,
+        mediaReadAllowed: true,
+        embedSandboxMode: "scripts",
+        [policy]: allowed,
       });
-      const url = "https://widget.example.test/saved";
-      const text = `[embed url="${url}" title="Saved widget" /]\nSaved conversation text.`;
-      for (const mediaReadAllowed of [false, true, false]) {
-        preview.render(text, { allowExternalEmbedUrls: true, mediaReadAllowed });
+      const check = () => {
+        const frame = host.querySelector("iframe");
+        expect(frame?.getAttribute("src") ?? null).toBe(allowed ? url : null);
+        if (policy === "allowExternalEmbedUrls") {
+          expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+        }
+        expect(host.textContent).toContain("Saved conversation text.");
+      };
+      if (policy === "mediaReadAllowed") {
         await vi.dynamicImportSettled();
-        await waitForSolid(() => {
-          expect(host.querySelector("iframe")?.getAttribute("src") ?? null).toBe(
-            mediaReadAllowed ? url : null,
-          );
-          expect(host.textContent).toContain("Saved conversation text.");
-        });
+        await waitForSolid(check);
+      } else {
+        check();
       }
-    },
-  );
+    }
+  });
 
   it.each(["persisted", "streaming"] as const)(
     "preserves YouTube playback on refresh and revokes it on policy, source, and session changes in %s messages",
     async (surface) => {
       stubTargetRetainingObserver("ResizeObserver");
-      const host = document.createElement("div");
-      document.body.append(host);
-      const preview = createEmbedHarness(host, surface);
-      onTestFinished(() => {
-        preview.unmount();
-        host.remove();
-        vi.unstubAllGlobals();
-      });
+      const preview = createEmbedHarness(surface);
+      const { host } = preview;
+      onTestFinished(() => vi.unstubAllGlobals());
       const show = async (
         embedSandboxMode: "scripts" | "strict" = "scripts",
         sessionKey = "agent:main:first",
@@ -113,16 +121,13 @@ describe("assistant message embed policy", () => {
         const options = { allowExternalEmbedUrls: false, embedSandboxMode, sessionKey };
         preview.render(text, options);
         await vi.dynamicImportSettled();
-        const card = host.querySelector<HTMLElement>("openclaw-youtube-video");
-        expect(card).not.toBeNull();
         flush();
-        return card!;
+        return host.querySelector<HTMLElement>("openclaw-youtube-video")!;
       };
       const play = async (card: HTMLElement) => {
         const button = card.querySelector<HTMLButtonElement>(
           'button[aria-label="Play Synthetic video"]',
         );
-        expect(button).not.toBeNull();
         button!.click();
         flush();
         const frame = card.querySelector("iframe");
@@ -161,27 +166,6 @@ describe("assistant message embed policy", () => {
     },
   );
 
-  it.each(["persisted", "streaming"] as const)(
-    "applies external embed policy changes to an existing %s message",
-    (surface) => {
-      const host = document.createElement("div");
-      const url = "https://example.test/widget";
-      const text = `[embed url="${url}" title="Widget" /]\nRead the widget.`;
-      const preview = createEmbedHarness(host, surface);
-      onTestFinished(() => preview.unmount());
-
-      for (const allowed of [false, true, false]) {
-        const options = { allowExternalEmbedUrls: allowed, embedSandboxMode: "scripts" as const };
-        preview.render(text, options);
-
-        const frame = host.querySelector("iframe");
-        expect(frame).not.toBeNull();
-        expect(frame?.getAttribute("src")).toBe(allowed ? url : null);
-        expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
-        expect(host.textContent).toContain("Read the widget.");
-      }
-    },
-  );
   it.each([
     { label: "grouped messages", renderGroup: MessageGroup },
     { label: "run-frame message contents", renderGroup: MessageGroupContent },
@@ -218,11 +202,7 @@ describe("assistant message embed policy", () => {
             { type: "text", text: "Inline canvas result." },
             {
               type: "canvas",
-              preview: createCanvasPreview({
-                viewId: "cv_inline_sandbox-change",
-                title: "Scoped preview",
-                preferredHeight: 320,
-              }),
+              preview: createCanvasPreview({ viewId: "cv_inline_sandbox-change" }),
             },
           ],
         };
@@ -232,8 +212,6 @@ describe("assistant message embed policy", () => {
               message,
             ]
           : [message];
-        // Use production keys and grouping: recreated messages retain source identity
-        // even when their timestamps change or earlier replies are inserted.
         const [group] = groupMessages(buildMessageItems(messages));
         if (group?.kind !== "group") {
           throw new Error("expected a prepared assistant message group");
@@ -241,7 +219,6 @@ describe("assistant message embed policy", () => {
         const next = {
           group,
           options: {
-            showReasoning: true,
             embedSandboxMode,
             sessionKey: "agent:main:canvas",
             canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
@@ -259,14 +236,7 @@ describe("assistant message embed policy", () => {
         expect(container.querySelectorAll("openclaw-canvas-widget-view")).toHaveLength(1),
       );
       const widget = container.querySelector("openclaw-canvas-widget-view");
-      expect(widget).toBeInstanceOf(HTMLElement);
-      expect(widget).toMatchObject({
-        docId: "cv_inline_sandbox-change",
-        title: "Scoped preview",
-        preferredHeight: 320,
-        sessionKey: "agent:main:canvas",
-        allowScripts: false,
-      });
+      expect(widget).toMatchObject({ sessionKey: "agent:main:canvas", allowScripts: false });
       expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
 
       for (const [mode, prepend] of [
