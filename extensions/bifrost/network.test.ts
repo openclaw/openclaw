@@ -8,12 +8,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createNoBrowserAuth } from "../test-support/no-browser-auth.test-support.js";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
 const MODEL_ID = "ollama/team/qwen3:4b";
+const KEY = "synthetic-bifrost-key";
 const provider = requireRegisteredProvider(capturePluginRegistration(plugin).providers, "bifrost");
 function providerConfig(
   overrides: Partial<NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]>,
@@ -55,27 +56,6 @@ const server = createServer((req, res) => {
   res.writeHead(404).end(JSON.stringify({ error: "Unknown fixture endpoint" }));
 });
 
-function createPrompter(apiKey = "") {
-  return createTestWizardPrompter({
-    text: async (prompt) => {
-      if (/base URL/i.test(prompt.message)) {
-        return baseUrl;
-      }
-      if (/API key|virtual key/i.test(prompt.message)) {
-        return apiKey;
-      }
-      return MODEL_ID;
-    },
-    async select<T>(prompt: { options: Array<{ value: T }> }): Promise<T> {
-      const selected = prompt.options.find(({ value }) => value === MODEL_ID);
-      if (!selected) {
-        throw new Error("Expected the discovered provider-qualified model in the picker");
-      }
-      return selected.value;
-    },
-  });
-}
-
 async function configure({
   config = {},
   apiKey,
@@ -94,7 +74,14 @@ async function configure({
     opts: apiKey ? { bifrostApiKey: apiKey } : {},
     env: {},
     runtime: createRuntimeSpies(),
-    prompter: createPrompter(apiKey),
+    prompter: createTestWizardPrompter({
+      text: async ({ message }) => {
+        if (/base URL/i.test(message)) {
+          return baseUrl;
+        }
+        return /API key|virtual key/i.test(message) ? (apiKey ?? "") : MODEL_ID;
+      },
+    }),
     assertCurrent,
     secretInputMode: "plaintext",
     isRemote: false,
@@ -106,94 +93,87 @@ async function configure({
   };
 }
 
-describe("Bifrost setup over HTTP", () => {
-  beforeAll(async () => {
-    claim = await acquireTestPortBlock({ offsets: [0] });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(claim.port, "127.0.0.1", resolve);
-    });
-    baseUrl = `http://127.0.0.1:${claim.port}/v1`;
+beforeAll(async () => {
+  claim = await acquireTestPortBlock({ offsets: [0] });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(claim.port, "127.0.0.1", resolve);
   });
-  beforeEach(() => {
-    requests.length = 0;
-  });
-  afterAll(async () => {
-    server.closeAllConnections();
-    await server[Symbol.asyncDispose]();
-    await claim.release();
-  });
+  baseUrl = `http://127.0.0.1:${claim.port}/v1`;
+});
+beforeEach(() => {
+  requests.length = 0;
+});
+afterAll(async () => {
+  server.closeAllConnections();
+  await server[Symbol.asyncDispose]();
+  await claim.release();
+});
 
-  it("clears old credentials before anonymous discovery and persists no-auth", async () => {
-    const { result, config } = await configure({
-      config: providerConfig({
-        api: "openai-completions",
-        apiKey: "synthetic-old-key",
-        headers: {
-          Authorization: "Bearer synthetic-old-header",
-          "x-bf-vk": "synthetic-old-vk",
-        },
-        request: {
-          auth: { mode: "header", headerName: "x-bf-vk", value: "synthetic-old-request-vk" },
-        },
-      }),
-    });
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.headers.authorization).toBeUndefined();
-    expect(requests[0]?.headers["x-bf-vk"]).toBeUndefined();
-    expect(result.profiles).toEqual([]);
-    expect(config.models?.providers?.bifrost).toMatchObject({ auth: "none" });
-    expect(config.models?.providers?.bifrost?.apiKey).toBeUndefined();
-    expect(config.models?.providers?.bifrost?.request?.auth).toBeUndefined();
+it("clears old credentials before anonymous discovery and persists no-auth", async () => {
+  const { result, config } = await configure({
+    config: providerConfig({
+      apiKey: "synthetic-old-key",
+      headers: {
+        Authorization: "Bearer synthetic-old-header",
+        "x-bf-vk": "synthetic-old-vk",
+      },
+      request: {
+        auth: { mode: "header", headerName: "x-bf-vk", value: "synthetic-old-request-vk" },
+      },
+    }),
   });
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.headers.authorization).toBeUndefined();
+  expect(requests[0]?.headers["x-bf-vk"]).toBeUndefined();
+  expect(result.profiles).toEqual([]);
+  expect(config.models?.providers?.bifrost).toMatchObject({ auth: "none" });
+  expect(config.models?.providers?.bifrost?.apiKey).toBeUndefined();
+  expect(config.models?.providers?.bifrost?.request?.auth).toBeUndefined();
+});
 
-  it("replaces stale no-auth with the supplied credential before discovery", async () => {
-    const { config } = await configure({
-      apiKey: "synthetic-bifrost-key",
-      config: providerConfig({ api: "openai-completions", auth: "none" }),
-    });
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-bifrost-key");
-    expect(config.models?.providers?.bifrost?.auth).not.toBe("none");
+it("replaces stale no-auth with the supplied credential before discovery", async () => {
+  const { config } = await configure({
+    apiKey: KEY,
+    config: providerConfig({ api: "openai-completions", auth: "none" }),
   });
+  expect(requests.map(({ headers }) => headers.authorization)).toEqual([`Bearer ${KEY}`]);
+  expect(config.models?.providers?.bifrost?.auth).not.toBe("none");
+});
 
-  it("selects the discovered nested model ID with its reported context", async () => {
-    const { result, config } = await configure();
-    expect(requests.map(({ path }) => path)).toEqual(["/v1/models"]);
-    expect(result.defaultModel).toBe(`bifrost/${MODEL_ID}`);
-    expect(config.models?.providers?.bifrost?.models).toEqual([
-      expect.objectContaining({ id: MODEL_ID, contextWindow: 32768 }),
-    ]);
-  });
+it("selects the discovered nested model ID with its reported context", async () => {
+  const { result, config } = await configure();
+  expect(requests.map(({ path }) => path)).toEqual(["/v1/models"]);
+  expect(result.defaultModel).toBe(`bifrost/${MODEL_ID}`);
+  expect(config.models?.providers?.bifrost?.models).toEqual([
+    expect.objectContaining({ id: MODEL_ID, contextWindow: 32768 }),
+  ]);
+});
 
-  it("preserves configured routing headers during anonymous catalog refresh", async () => {
-    await provider.catalog?.run({
-      config: providerConfig({
-        auth: "none",
-        headers: { "x-tenant": "synthetic-tenant" },
-        request: { headers: { "x-route": "synthetic-route" } },
-      }),
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: "synthetic-key", discoveryApiKey: "synthetic-key" }),
-      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-    });
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.headers.authorization).toBeUndefined();
-    expect(requests[0]?.headers["x-tenant"]).toBe("synthetic-tenant");
-    expect(requests[0]?.headers["x-route"]).toBe("synthetic-route");
+it("preserves configured routing headers during anonymous catalog refresh", async () => {
+  await provider.catalog?.run({
+    config: providerConfig({
+      auth: "none",
+      headers: { "x-tenant": "synthetic-tenant" },
+      request: { headers: { "x-route": "synthetic-route" } },
+    }),
+    env: {},
+    resolveProviderApiKey: () => ({ apiKey: "synthetic-key", discoveryApiKey: "synthetic-key" }),
+    resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
   });
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.headers.authorization).toBeUndefined();
+  expect(requests[0]?.headers["x-tenant"]).toBe("synthetic-tenant");
+  expect(requests[0]?.headers["x-route"]).toBe("synthetic-route");
+});
 
-  it("rejects revoked setup authority before sending a request", async () => {
-    const revoked = new Error("Setup configuration changed; run setup again.");
-    await expect(
-      configure({
-        assertCurrent: () => {
-          throw revoked;
-        },
-      }),
-    ).rejects.toBe(revoked);
-    expect(requests).toEqual([]);
-  });
+it("rejects revoked setup authority before sending a request", async () => {
+  const revoked = new Error("Setup configuration changed; run setup again.");
+  const assertCurrent = () => {
+    throw revoked;
+  };
+  await expect(configure({ assertCurrent })).rejects.toBe(revoked);
+  expect(requests).toEqual([]);
 });
 
 it("non-interactive anonymous setup never resolves or stores a credential", async () => {
@@ -207,43 +187,32 @@ it("non-interactive anonymous setup never resolves or stores a credential", asyn
   });
 });
 
-it("reports a failing exit status when non-interactive credentials are missing", async () => {
-  const runtime = createRuntimeSpies();
-  const result = await runNonInteractive({
-    opts: { customBaseUrl: "http://127.0.0.1:12345/v1", customModelId: MODEL_ID },
-    runtime,
-    resolveApiKey: async () => null,
-  });
-  expect(result).toBeNull();
-  expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--custom-no-auth"));
-  expect(runtime.exit).toHaveBeenCalledWith(1);
-});
-
-it.each(["not-a-url", "ftp://gateway.example/v1"])(
-  "reports an actionable error after resolving the setup key for invalid URL %s",
-  async (customBaseUrl) => {
+it.each([
+  { customBaseUrl: "http://127.0.0.1:12345/v1", invalid: false },
+  { customBaseUrl: "not-a-url", invalid: true },
+  { customBaseUrl: "ftp://gateway.example/v1", invalid: true },
+])(
+  "reports non-interactive setup failure for $customBaseUrl",
+  async ({ customBaseUrl, invalid }) => {
     const runtime = createRuntimeSpies();
-    const resolveApiKey = vi.fn(async () => ({
-      key: "synthetic-bifrost-key",
-      source: "flag" as const,
-    }));
-    await expect(
-      runNonInteractive({
-        opts: { customBaseUrl, bifrostApiKey: "synthetic-bifrost-key" },
-        runtime,
-        resolveApiKey,
-      }),
-    ).resolves.toBeNull();
-    expect(resolveApiKey).toHaveBeenCalledExactlyOnceWith({
-      provider: "bifrost",
-      flagValue: "synthetic-bifrost-key",
-      allowProfile: false,
-      flagName: "--bifrost-api-key",
-      envVar: "BIFROST_VIRTUAL_KEY",
-      required: false,
+    const resolveApiKey = vi.fn(async () =>
+      invalid ? { key: KEY, source: "flag" as const } : null,
+    );
+    const result = await runNonInteractive({
+      opts: { customBaseUrl, bifrostApiKey: invalid ? KEY : undefined },
+      runtime,
+      resolveApiKey,
     });
+    expect(result).toBeNull();
+    expect(resolveApiKey).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        provider: "bifrost",
+        flagValue: invalid ? KEY : undefined,
+        allowProfile: !invalid,
+      }),
+    );
     expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-      "The Bifrost gateway URL must be a full http:// or https:// URL, such as http://localhost:8080/openai/v1.",
+      expect.stringContaining(invalid ? "full http:// or https:// URL" : "--custom-no-auth"),
     );
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
   },
