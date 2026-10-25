@@ -39,8 +39,21 @@ function fixture(sessionKey = "agent:main:target") {
     put: (entry: SessionEntry, key = sessionKey) =>
       writeEntry({ ...scope, sessionKey: key }, entry),
     snapshot: (label?: string, key = sessionKey) => readSnapshot(database(), key, label),
+    addMembers() {
+      assignSessionOwner(scope, {
+        owner: { type: "human", id: "owner" },
+        assignedBy: { type: "system", id: "fixture" },
+        assignedAt: 1,
+      });
+      recordSessionParticipant(scope, { identity: { type: "agent", id: "peer" }, promptedAt: 1 });
+    },
   };
 }
+const members = {
+  owner: { actor: { type: "human", id: "owner" } },
+  participants: [{ identity: { type: "agent", id: "peer" } }],
+  participantCount: 1,
+};
 const savedEntry = (prompt: string): SessionEntry => ({
   sessionId: "target",
   updatedAt: 1,
@@ -60,19 +73,14 @@ afterEach(async () => {
 it.each([false, true])(
   "reuses retained creation facts after discovery (resident=%s)",
   async (resident) => {
-    const { scope, put, database } = fixture();
+    const { scope, put, database, addMembers } = fixture();
     const target = {
       ...savedEntry("retained prompt"),
       systemPromptReport: promptReport(1, 1, 0),
     };
     if (resident) {
       put(target);
-      assignSessionOwner(scope, {
-        owner: { type: "human", id: "owner" },
-        assignedBy: { type: "system", id: "fixture" },
-        assignedAt: 1,
-      });
-      recordSessionParticipant(scope, { identity: { type: "agent", id: "peer" }, promptedAt: 1 });
+      addMembers();
     }
     const storePath = database().path;
     await readSessionEntriesFromStoreInWorker({
@@ -83,18 +91,11 @@ it.each([false, true])(
     const requests = vi.spyOn(historyLane.pool, "run");
     await createSession({ ...scope, storePath }, ({ existingEntry, targetEntry, labelInUse }) => {
       if (resident) {
-        const expected = {
-          ...target,
-          owner: { actor: { type: "human", id: "owner" } },
-          participants: [{ identity: { type: "agent", id: "peer" } }],
-          participantCount: 1,
-        };
-        expect(existingEntry).toMatchObject(expected);
-        expect(targetEntry).toMatchObject(expected);
+        const expected = { ...target, ...members };
+        expect([existingEntry, targetEntry]).toMatchObject([expected, expected]);
         expect(existingEntry).not.toBe(targetEntry);
       } else {
-        expect(existingEntry).toBeUndefined();
-        expect(targetEntry).toBeUndefined();
+        expect([existingEntry, targetEntry]).toEqual([undefined, undefined]);
       }
       expect(labelInUse).toBe(false);
       return inspectOnly();
@@ -104,8 +105,7 @@ it.each([false, true])(
     const updated = { ...target, sessionId: "updated", updatedAt: 2 };
     put(updated);
     await createSession({ ...scope, storePath }, ({ existingEntry, targetEntry }) => {
-      expect(existingEntry).toMatchObject(updated);
-      expect(targetEntry).toMatchObject(updated);
+      expect([existingEntry, targetEntry]).toMatchObject([updated, updated]);
       return inspectOnly();
     });
   },
@@ -148,7 +148,7 @@ it("preserves adopted history without selecting a new projection", async () => {
 });
 
 it("prepares and adopts a complete target without decoding sibling entries", async () => {
-  const { scope, put, snapshot } = fixture();
+  const { scope, put, snapshot, addMembers } = fixture();
   const target = {
     ...savedEntry("target-saved-prompt"),
     systemPromptReport: promptReport(1, 1, 0),
@@ -163,12 +163,7 @@ it("prepares and adopts a complete target without decoding sibling entries", asy
     },
     "agent:main:sibling",
   );
-  assignSessionOwner(scope, {
-    owner: { type: "human", id: "owner" },
-    assignedBy: { type: "system", id: "fixture" },
-    assignedAt: 1,
-  });
-  recordSessionParticipant(scope, { identity: { type: "agent", id: "peer" }, promptedAt: 1 });
+  addMembers();
   snapshot();
   const parse = vi.spyOn(JSON, "parse");
   const prepared = snapshot();
@@ -186,9 +181,7 @@ it("prepares and adopts a complete target without decoding sibling entries", asy
   expect(loadSessionEntry(scope)).toMatchObject({
     ...target,
     label: "adopted",
-    owner: { actor: { type: "human", id: "owner" } },
-    participants: [{ identity: { type: "agent", id: "peer" } }],
-    participantCount: 1,
+    ...members,
   });
 });
 it("preserves normalized and opaque target identities after reopening", async () => {
