@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
 import { contract } from "./contract.js";
@@ -71,13 +72,9 @@ it("packaged skills have discoverable metadata and self-contained readable refer
 // Bundled builds copy the manifest-declared skills directory recursively into
 // dist (scripts/copy-bundled-plugin-metadata.mts), so its tree is the payload.
 it("bundled skill payload includes all skill entrypoints, references and upstream attribution", async () => {
-  const skillFiles = (
-    await readdir(path.join(root, "skills"), { recursive: true, withFileTypes: true })
-  )
-    .filter((entry) => entry.isFile())
-    .map((entry) =>
-      path.relative(root, path.join(entry.parentPath, entry.name)).replaceAll(path.sep, "/"),
-    );
+  const skillFiles = (await listDirectoryTreeStrict(path.join(root, "skills")))
+    .filter((entry) => entry.dirent.isFile())
+    .map((entry) => path.join("skills", entry.relativePath).replaceAll(path.sep, "/"));
   const files = new Set(skillFiles);
   for (const name of names) {
     expect(files.has(`skills/${name}/SKILL.md`)).toBeTruthy();

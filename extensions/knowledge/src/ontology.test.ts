@@ -1,5 +1,6 @@
-import { cp, mkdir, readFile, writeFile, readdir, symlink } from "node:fs/promises";
+import { cp, mkdir, readFile, writeFile, symlink } from "node:fs/promises";
 import path from "node:path";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
@@ -58,10 +59,9 @@ async function fixture() {
 }
 async function hashes(root: any) {
   const out: Record<string, string> = {};
-  for (const e of await readdir(root, { recursive: true, withFileTypes: true })) {
-    if (e.isFile()) {
-      const p = path.join(e.parentPath, e.name);
-      out[path.relative(root, p)] = digest(await readFile(p, "utf8"));
+  for (const e of await listDirectoryTreeStrict(root)) {
+    if (e.dirent.isFile()) {
+      out[e.relativePath] = digest(await readFile(path.join(root, e.relativePath), "utf8"));
     }
   }
   return out;

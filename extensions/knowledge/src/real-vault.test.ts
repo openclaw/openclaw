@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import type { FeatureOperation } from "openclaw/plugin-sdk/feature-contract";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { contract } from "./contract.js";
@@ -49,8 +50,7 @@ async function fixture() {
     const target = path.join(root, relative);
     await mkdir(target, { recursive: true });
     await cp(sampleVaultRoot(), target, { recursive: true });
-    const { readdir } = await import("node:fs/promises");
-    for (const file of await readdir(target, { recursive: true })) {
+    for (const { relativePath: file } of await listDirectoryTreeStrict(target)) {
       if (file.endsWith(".md")) {
         const full = path.join(target, file),
           raw = await readFile(full, "utf8");
