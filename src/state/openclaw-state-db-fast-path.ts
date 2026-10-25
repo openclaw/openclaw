@@ -121,13 +121,13 @@ export function isOpenClawStateSchemaFastPathEligible(
         assertCurrentStateRuntimeSchema(database, pathname, readTable);
         assertNoLegacyStateRuntimeRepair(database, pathname);
         const owner = readGatewayOwnerLeaseFromDatabase(database);
-        const peerAdmitted =
+        const liveGatewayOwner =
           owner?.state === "live" &&
           owner.pid !== process.pid &&
-          Boolean(owner.stateIntegrityProvenance) &&
-          owner.stateIntegrityProvenance === readAgentDatabaseLeaseProvenance(pathname);
-        // Borrowers record no verification: closing last must leave the next opener to verify.
-        if (!peerAdmitted) {
+          Boolean(owner.stateDatabaseProvenance) &&
+          owner.stateDatabaseProvenance === readAgentDatabaseLeaseProvenance(pathname);
+        // Trust the live Gateway's exact-file ownership; borrowers record no verification or seal.
+        if (!liveGatewayOwner) {
           publishIntegrity = assertOpenClawStateRuntimeIntegrity(
             database,
             pathname,

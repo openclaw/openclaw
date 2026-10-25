@@ -14,5 +14,5 @@ export type GatewayOwnerLeaseIdentity = StateLeaseProcessOwner & {
   expired: boolean;
   heartbeatAt?: number;
   listeningAt?: number;
-  stateIntegrityProvenance?: string;
+  stateDatabaseProvenance?: string;
 };

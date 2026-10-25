@@ -79,8 +79,8 @@ export function decodeGatewayOwnerLease(
     mode: payload.mode,
     supervisor,
     ...(typeof payload.listeningAt === "number" ? { listeningAt: payload.listeningAt } : {}),
-    ...(typeof payload.stateIntegrityProvenance === "string"
-      ? { stateIntegrityProvenance: payload.stateIntegrityProvenance }
+    ...(typeof payload.stateDatabaseProvenance === "string"
+      ? { stateDatabaseProvenance: payload.stateDatabaseProvenance }
       : {}),
     // Expiry cannot revoke the separate physical Gateway coordinator.
     state: readStateLeaseProcessOwnerStatus(processOwner, row.heartbeatAt ?? row.createdAt),

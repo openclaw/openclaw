@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
+import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import * as provenance from "../state/openclaw-agent-db-lease-provenance.js";
 import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
@@ -19,6 +20,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as leaseHeartbeat from "../state/openclaw-state-lease-heartbeat.js";
 import { renewOpenClawStateLeaseInTransaction } from "../state/openclaw-state-lease-store.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { mockLinuxNamespace } from "./gateway-lock-namespace.test-support.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
@@ -523,20 +525,35 @@ describe("Gateway owner lease", () => {
     expect(readGatewayOwnerLease({ env })?.state).toBe("live");
   });
 
-  it("publishes completed shared-state integrity through its listening payload", async () => {
-    await using owner = fixture();
-    const lease = owner.acquire();
-    await lease.ready;
-    const pathname = resolveOpenClawStateSqlitePath(owner.env);
-    expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeDefined();
-    expect(readGatewayOwnerLease({ env: owner.env })?.stateIntegrityProvenance).toBeUndefined();
-    vi.spyOn(provenance, "readAgentDatabaseLeaseProvenance").mockReturnValue("fixture:state-file");
+  it("publishes its state file provenance after Gateway startup admission and listening", async () => {
+    const state = await createOpenClawTestState({ label: "gateway-owner-provenance" });
+    try {
+      await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
+      const pathname = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeOpenClawStateDatabaseAsync();
+      // Existing-file startup inspects a private snapshot rather than certifying the live file.
+      renameSync(pathname, `${pathname}.seed`);
+      fs.copyFileSync(`${pathname}.seed`, pathname);
+      await runStartupConfigPreflight({ gateway: true });
+      const lock = await acquireLock(state.env);
+      try {
+        expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
+        vi.spyOn(provenance, "readAgentDatabaseLeaseProvenance").mockReturnValue(
+          "fixture:state-file",
+        );
 
-    lease.markListening();
+        lock?.markListening?.();
 
-    expect(readGatewayOwnerLease({ env: owner.env })?.stateIntegrityProvenance).toBe(
-      "fixture:state-file",
-    );
+        expect(readGatewayOwnerLease({ env: state.env, current: true })).toMatchObject({
+          listeningAt: expect.any(Number),
+          stateDatabaseProvenance: "fixture:state-file",
+        });
+      } finally {
+        await lock?.release();
+      }
+    } finally {
+      await state.cleanup();
+    }
   });
 
   it("repairs a missing publication identity on heartbeat and becomes live", async () => {

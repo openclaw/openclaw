@@ -50,12 +50,14 @@ provenance still run the full check. The borrowing process never checked the fil
 itself, so if it closes last it leaves the next opener to verify instead of writing
 a seal.
 
-Shared-state fast-path admission on Linux likewise reuses the live Gateway's
-completed integrity admission. The Gateway publishes file provenance in its
-owner lease only after it holds a full-verification receipt, including seal
-reuse. A different process must match that provenance and the owner's live PID
-and start time. Schema shape, version, and legacy-repair checks still run; the
-borrower records no full verification and cannot publish a clean-close seal.
+Shared-state fast-path admission on Linux trusts a live Gateway that owns the
+exact file: after startup admission and listening, its owner lease publishes
+provenance binding the host, boot, PID namespace, build, and inode. A different
+process with matching provenance and a live owner PID/start time skips only its
+whole-file integrity scan; schema, version, and legacy-repair checks still run,
+and the borrower records no verification or clean-close seal. Corruption can
+still surface through normal SQLite access, Doctor, explicit verification, and
+the next startup without a reusable seal.
 
 Independent read-only subprocesses do not share the Gateway's writer invalidations.
 Their local admission facts retire at final native close, even while the pooled
@@ -220,7 +222,7 @@ Rollback releases the fence and restores ordinary expiry handling.
 | Startup without a reusable seal                            | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                                                                                                                       |
 | Same-process reopen or new worker                          | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                                                                                                                       |
 | Another live process already admitted the same file        | On Linux, reuse that admission instead of a full scan when the peer's PID, start time, and lease provenance (including inode) still match; schema and index checks still run, and the borrower cannot publish a clean-close seal |
-| Shared-state fast path while a live Gateway holds the file | On Linux, reuse the Gateway owner lease's completed integrity admission when PID, start time, and file provenance match; retain schema, version, and legacy-repair checks, and never seal borrowed verification                  |
+| Shared-state fast path while a live Gateway holds the file | On Linux, trust the live Gateway owner when PID, start time, and exact-file provenance match; skip only the integrity scan, retain schema, version, and legacy-repair checks, and never publish a clean-close seal               |
 | Before a migration or ordinary same-version repair         | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity                                       |
 | After a migration or repair                                | Verify changes and publish committed facts through the existing owner                                                                                                                                                            |
 | Explicit verification, Doctor recovery, and compaction     | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                                                         |

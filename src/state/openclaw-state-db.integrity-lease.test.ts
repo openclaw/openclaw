@@ -33,7 +33,7 @@ it.each([
   { name: "a changed start time", scans: 1 },
   { name: "a different inode", scans: 1 },
   { name: "this process", scans: 1 },
-  { name: "unfinished admission", scans: 1 },
+  { name: "missing provenance", scans: 1 },
   { name: "unavailable provenance", scans: 1 },
 ])("admits shared state with $name", ({ name, scans }) => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("state-integrity-peer-") };
@@ -66,10 +66,10 @@ it.each([
         port: 19483,
         mode: "foreground",
         supervisor: null,
-        ...(name === "unfinished admission"
+        ...(name === "missing provenance"
           ? {}
           : {
-              stateIntegrityProvenance:
+              stateDatabaseProvenance:
                 name === "a different inode" ? `${fileProvenance}:replaced` : fileProvenance,
             }),
       }),
