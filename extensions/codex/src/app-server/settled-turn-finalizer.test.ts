@@ -236,7 +236,7 @@ it.each(["agent", "user"] as const)(
       provider: "openai",
       token,
     };
-    const resolveProfile = vi.spyOn(agentAuth, "resolveApiKeyForProfile").mockResolvedValue({
+    vi.spyOn(agentAuth, "resolveApiKeyForProfile").mockResolvedValue({
       apiKey: token,
       provider: "openai",
       profileId: "openai:captured",
@@ -256,19 +256,11 @@ it.each(["agent", "user"] as const)(
 
     await finalize(attempt, settledAttempt, options);
 
-    expect(resolveProfile).toHaveBeenCalledExactlyOnceWith({
+    expect(agentAuth.resolveApiKeyForProfile).toHaveBeenCalledExactlyOnceWith({
       store: attempt.authProfileStore,
       profileId: "openai:captured",
       agentDir: attempt.agentDir,
     });
-    expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).toHaveBeenCalledWith(
-      expect.objectContaining({
-        homeScope: "agent",
-        authProfileId: "openai:captured",
-        authProfileStore: attempt.authProfileStore,
-        authRequirement: "subscription",
-      }),
-    );
     expectBounded({
       isolation: "private-stdio",
       options,

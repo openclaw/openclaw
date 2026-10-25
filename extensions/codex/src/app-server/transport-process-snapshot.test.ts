@@ -140,27 +140,6 @@ it.skipIf(process.platform !== "linux")(
   },
 );
 
-it.for([
-  { kind: "snapshot", code: "EACCES" },
-  { kind: "snapshot", code: "EPERM" },
-  { kind: "command", code: "EACCES" },
-  { kind: "command", code: "EPERM" },
-])("normalizes procfs permission denial for $kind: $code", async ({ kind, code }, ctx) => {
-  useProcfs(ctx);
-  procfs.readFile.mockImplementation(() => {
-    throw Object.assign(new Error("procfs read denied"), { code });
-  });
-  const inspected =
-    kind === "snapshot"
-      ? readCodexAppServerProcessSnapshot()
-      : readCodexAppServerProcessCommand(observedProcess, performance.now() + 1_000);
-  await expect(inspected).rejects.toMatchObject({
-    name: "ProcessInspectionError",
-    reason: "permission",
-    message: expect.stringContaining("Check process inspection permissions"),
-  });
-});
-
 describe("Codex procfs command inspector", () => {
   it.for([
     "ready",
@@ -234,6 +213,7 @@ describe("Codex procfs command inspector", () => {
   it.for([
     { input: "\0", reason: "unavailable" },
     { code: "EACCES", reason: "permission" },
+    { code: "EPERM", reason: "permission" },
     { code: "ABORT_ERR", reason: "deadline" },
   ])(
     "reads command identity without authorizing absent or unreadable processes: %j",
@@ -251,8 +231,13 @@ describe("Codex procfs command inspector", () => {
         observedProcess,
         performance.now() + 1_000,
       );
-      await expect(inspected).rejects.toMatchObject({ reason: fixture.reason });
-      if (fixture.reason !== "permission") {
+      await expect(inspected).rejects.toMatchObject({
+        name: "ProcessInspectionError",
+        reason: fixture.reason,
+      });
+      if (fixture.reason === "permission") {
+        await expect(inspected).rejects.toThrow("Check process inspection permissions");
+      } else {
         await expect(inspected).rejects.not.toThrow("permissions");
       }
       if (fixture.reason === "deadline") {
@@ -343,7 +328,11 @@ describe("Codex procfs process inspector", () => {
       });
       const snapshot = readCodexAppServerProcessSnapshot();
       if (code === "EACCES") {
-        await expect(snapshot).rejects.toMatchObject({ reason: "permission" });
+        await expect(snapshot).rejects.toMatchObject({
+          name: "ProcessInspectionError",
+          reason: "permission",
+          message: expect.stringContaining("Check process inspection permissions"),
+        });
       } else {
         await expect(snapshot).resolves.toEqual([observedProcess]);
       }
