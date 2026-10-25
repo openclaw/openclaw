@@ -17,9 +17,9 @@ function createInputPolicy() {
     }
   });
   // A lifecycle assertion is not a SQL-safe input-policy capability.
-  const assertInvocationCurrent = vi.fn(() => {
+  const assertInvocationCurrent = () => {
     throw new Error("lifecycle authority must not be borrowed by SQLite");
-  });
+  };
   return {
     denied,
     enabled: () => enabled,
@@ -104,7 +104,6 @@ describe("Workboard tool input commit policy", () => {
       expect.soft(await uploading).toBe(policy.denied);
       expect.soft((await store.listAttachments(card.id)).attachments).toEqual([]);
       expect.soft(physicalBlobs(db)).toEqual([]);
-      expect(policy.context.assertInvocationCurrent).not.toHaveBeenCalled();
       await expect(store.get(card.id)).resolves.toMatchObject({ notes: "Unrelated admitted edit" });
     } finally {
       release.resolve();
@@ -182,7 +181,6 @@ describe("Workboard tool input commit policy", () => {
     expect.soft((await store.listAttachments(card.id)).attachments).toEqual([]);
     // Attachment-store reads join metadata and would hide orphaned physical blobs.
     expect.soft(physicalBlobs(db)).toEqual([]);
-    expect(policy.context.assertInvocationCurrent).not.toHaveBeenCalled();
   });
 
   // Verifies the physical blob count through a native SQLite file handle.
@@ -202,6 +200,5 @@ describe("Workboard tool input commit policy", () => {
       count: 1,
     });
     expect(policy.context.assertInputCommitAllowed).toHaveBeenCalled();
-    expect(policy.context.assertInvocationCurrent).not.toHaveBeenCalled();
   });
 });

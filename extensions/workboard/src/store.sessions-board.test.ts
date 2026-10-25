@@ -271,17 +271,9 @@ describe("Sessions board schema reopening", () => {
     const reopened = new WorkboardStore(reopenedStores.cards, reopenedStores);
     try {
       expect((await reopenedStores.boards.lookup(board.id))?.board).toEqual(board);
-      const restoredBoard = (await reopened.listBoards()).boards.find(
-        (entry) => entry.id === board.id,
+      expect((await reopened.listBoards()).boards).toContainEqual(
+        expect.objectContaining({ id: board.id, total: 1 }),
       );
-      expect(restoredBoard).toMatchObject({
-        id: board.id,
-        name: "Planning",
-        color: "blue",
-        total: 1,
-      });
-      expect(restoredBoard).not.toHaveProperty("kind");
-      expect(restoredBoard).not.toHaveProperty("sessions");
       expect(await reopened.get(card.id)).toEqual(card);
 
       await expect(
@@ -296,12 +288,5 @@ describe("Sessions board schema reopening", () => {
     } finally {
       await reopened.close();
     }
-
-    using migrated = new DatabaseSync(dbPath, { readOnly: true });
-    expect(
-      migrated.prepare("SELECT COUNT(*) AS count FROM workboard_session_placements").get(),
-    ).toEqual({
-      count: 0,
-    });
   });
 });

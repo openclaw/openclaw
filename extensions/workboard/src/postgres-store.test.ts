@@ -295,50 +295,33 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     expect(await indexRows()).toEqual(after);
   });
 
-  it("refuses a PostgreSQL schema version mismatch without migrating it", async () => {
-    const dbPath = databasePath();
-    const opened = await openDatabase(dbPath);
-    const schema = opened.schema;
-    await opened.close();
-    await observer.query(
-      `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET version = ${SCHEMA_VERSION + 1} WHERE store = 'workboard'`,
-    );
-    replaceAnchorForFreshAdmission(dbPath);
-    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
-      new RegExp(`expected.*${SCHEMA_VERSION}`, "i"),
-    );
-    expect(
-      await rows<{ version: number }>(
-        `SELECT version::integer FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
-      ),
-    ).toEqual([{ version: SCHEMA_VERSION + 1 }]);
-  });
-
-  it("refuses PostgreSQL metadata belonging to a different anchor", async () => {
-    const dbPath = databasePath();
-    const opened = await openDatabase(dbPath);
-    const schema = opened.schema;
-    await opened.close();
-    const metadata = await observer.query<{ store_id: string }>(
-      `SELECT store_id FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
-    );
-    expect(metadata.rows).toHaveLength(1);
-    const originalId = metadata.rows[0]!.store_id;
-    const otherId = "00000000-0000-4000-8000-000000000001";
-    await observer.query(
-      `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET store_id = $1 WHERE store = 'workboard'`,
-      [otherId],
-    );
-    replaceAnchorForFreshAdmission(dbPath);
-    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
-      new RegExp(`${originalId}.*${otherId}|${otherId}.*${originalId}`),
-    );
-    expect(
-      await rows<{ store_id: string }>(
-        `SELECT store_id FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
-      ),
-    ).toEqual([{ store_id: otherId }]);
-  });
+  it.each(["version", "store_id"] as const)(
+    "refuses mismatched PostgreSQL %s without changing metadata",
+    async (field) => {
+      const dbPath = databasePath();
+      const { schema, close } = await openDatabase(dbPath);
+      await close();
+      const table = `${quoteIdentifier(schema)}.openclaw_schema_meta`;
+      const read = () =>
+        rows<{ value: string }>(
+          `SELECT ${field}::text AS value FROM ${table} WHERE store = 'workboard'`,
+        );
+      const before = await read();
+      expect(before).toHaveLength(1);
+      const replacement =
+        field === "version" ? String(SCHEMA_VERSION + 1) : "00000000-0000-4000-8000-000000000001";
+      await observer.query(`UPDATE ${table} SET ${field} = $1 WHERE store = 'workboard'`, [
+        replacement,
+      ]);
+      replaceAnchorForFreshAdmission(dbPath);
+      expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
+        field === "version"
+          ? new RegExp(`expected.*${SCHEMA_VERSION}`, "i")
+          : new RegExp(`${before[0]!.value}.*${replacement}|${replacement}.*${before[0]!.value}`),
+      );
+      expect(await read()).toEqual([{ value: replacement }]);
+    },
+  );
 
   it("refuses an existing SQLite workboard without replacing its data", () => {
     const dbPath = databasePath();

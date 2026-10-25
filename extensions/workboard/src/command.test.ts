@@ -31,6 +31,16 @@ type CommandContext = {
   sessionKey?: string;
 };
 
+const workspaceAccess = { unrestricted: false, roots: ["/workspace"], writable: true };
+function workspaceConfig(...agents: string[]) {
+  return {
+    tools: { fs: { workspaceOnly: true } },
+    agents: {
+      entries: Object.fromEntries(agents.map((agent) => [agent, { workspace: "/workspace" }])),
+    },
+  };
+}
+
 function createCommandFixture(
   run = vi.fn().mockResolvedValue({ runId: "run-1" }),
   options: Parameters<typeof createWorkboardSqliteTestStore>[0] = {},
@@ -70,14 +80,11 @@ async function expectReply(
 describe("handleWorkboardCommand", () => {
   it("requires an explicit agent workspace for multi-agent local commands", () => {
     const config = {
-      tools: { fs: { workspaceOnly: true } },
+      ...workspaceConfig(),
       agents: {
         entries: {
-          first: {
-            workspace: "/first",
-            tools: { fs: { workspaceOnly: false } },
-          },
-          chosen: { workspace: "/chosen" },
+          first: { workspace: "/first", tools: { fs: { workspaceOnly: false } } },
+          chosen: { workspace: "/workspace" },
         },
       },
     };
@@ -85,12 +92,9 @@ describe("handleWorkboardCommand", () => {
     expect(() => resolveCommandWorkboardWorkspaceAccess({ config })).toThrow(
       "Multiple agents are configured",
     );
-    expect(
-      resolveCommandWorkboardWorkspaceAccess({
-        config,
-        agentId: "chosen",
-      }),
-    ).toEqual({ unrestricted: false, roots: ["/chosen"], writable: true });
+    expect(resolveCommandWorkboardWorkspaceAccess({ config, agentId: "chosen" })).toEqual(
+      workspaceAccess,
+    );
   });
 
   it("inherits slash-session sandbox roots and write mode", () => {
@@ -121,7 +125,7 @@ describe("handleWorkboardCommand", () => {
       title: "Assigned slash card",
       status: "ready",
       agentId: "main",
-      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+      workspaceAccess,
     });
     api.runtime.sandbox = createSandboxRuntime(true);
     const prepareWorkspaceAuthority = vi.mocked(api.runtime.sandbox.prepareWorkspaceAuthority);
@@ -130,10 +134,7 @@ describe("handleWorkboardCommand", () => {
       config: {
         agents: {
           defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } },
-          entries: {
-            main: { workspace: "/workspace" },
-            secondary: { workspace: "/workspace" },
-          },
+          entries: workspaceConfig("main", "secondary").agents.entries,
         },
       },
       agentId: "secondary",
@@ -359,15 +360,7 @@ describe("handleWorkboardCommand", () => {
         agentId: admin ? "admin" : "main",
         config: admin
           ? { agents: { entries: { admin: { workspace: path } } } }
-          : {
-              tools: { fs: { workspaceOnly: true } },
-              agents: {
-                entries: {
-                  main: { workspace: "/workspace" },
-                  restricted: { workspace: "/workspace" },
-                },
-              },
-            },
+          : workspaceConfig("main", "restricted"),
       });
       if (path === "/repo-denied") {
         await expectReply(result, "outside the caller");

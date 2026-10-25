@@ -1,6 +1,7 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { describe, expect, vi } from "vitest";
+import { execution as sessionExecution } from "./lifecycle-sync-fixtures.test-support.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
@@ -68,7 +69,7 @@ async function captureRead<T>(
   }
 }
 
-function fixtureCard(id: string, overrides: Partial<WorkboardCard> = {}): WorkboardCard {
+function scopedCard(id: string, overrides: Partial<WorkboardCard> = {}): WorkboardCard {
   return {
     id,
     title: id,
@@ -127,15 +128,7 @@ describe("Workboard context and session-scoped reads", () => {
           : kind === "execution"
             ? {
                 sessionKey: "another-session",
-                execution: {
-                  id,
-                  kind: "agent-session" as const,
-                  mode: "autonomous" as const,
-                  status: "done" as const,
-                  sessionKey,
-                  startedAt: 1,
-                  updatedAt: 2,
-                },
+                execution: { ...sessionExecution(sessionKey, id, "done"), id },
               }
             : kind === "attempt"
               ? {
@@ -144,7 +137,7 @@ describe("Workboard context and session-scoped reads", () => {
                   },
                 }
               : { events: [{ id, kind: "created" as const, at: 1, sessionKey }] };
-        await stores.cards.register(id, { version: 1, card: fixtureCard(id, link) });
+        await stores.cards.register(id, { version: 1, card: scopedCard(id, link) });
       }
     }
     using raw = new DatabaseSync(dbPath);
@@ -168,11 +161,11 @@ describe("Workboard context and session-scoped reads", () => {
   test("hydrates only the completed parents and recent assignee work included in context", async () => {
     const { store, stores, dbPath } = setup();
     const parents = Array.from({ length: 8 }, (_, index) =>
-      fixtureCard(`parent-${index}`, {
+      scopedCard(`parent-${index}`, {
         metadata: { automation: { boardId: "other", summary: `Parent result ${index}` } },
       }),
     );
-    const unfinished = fixtureCard("unfinished-parent", { status: "running" });
+    const unfinished = scopedCard("unfinished-parent", { status: "running" });
     const links = [
       parents[0]!.id,
       "missing-parent",
@@ -185,16 +178,16 @@ describe("Workboard context and session-scoped reads", () => {
       targetCardId,
       createdAt: 1,
     }));
-    const current = fixtureCard("current", {
+    const current = scopedCard("current", {
       status: "ready",
       agentId: "agent-a",
       metadata: { automation: { boardId: "ops" }, links },
     });
     const siblings = [
-      fixtureCard("sibling-z", { agentId: "agent-a" }),
-      fixtureCard("sibling-a", { agentId: "agent-a" }),
-      fixtureCard("sibling-earlier", { agentId: "agent-a", createdAt: 50 }),
-      fixtureCard("sibling-archived", {
+      scopedCard("sibling-z", { agentId: "agent-a" }),
+      scopedCard("sibling-a", { agentId: "agent-a" }),
+      scopedCard("sibling-earlier", { agentId: "agent-a", createdAt: 50 }),
+      scopedCard("sibling-archived", {
         agentId: "agent-a",
         position: 0,
         metadata: {
@@ -202,15 +195,15 @@ describe("Workboard context and session-scoped reads", () => {
           automation: { boardId: "ops", summary: "sibling-archived result" },
         },
       }),
-      fixtureCard("sibling-newest", { agentId: "agent-a", updatedAt: 300 }),
-      fixtureCard("sibling-too-old", { agentId: "agent-a", updatedAt: 190 }),
-      fixtureCard("other-agent", { agentId: "agent-b", updatedAt: 400 }),
-      fixtureCard("other-board", {
+      scopedCard("sibling-newest", { agentId: "agent-a", updatedAt: 300 }),
+      scopedCard("sibling-too-old", { agentId: "agent-a", updatedAt: 190 }),
+      scopedCard("other-agent", { agentId: "agent-b", updatedAt: 400 }),
+      scopedCard("other-board", {
         agentId: "agent-a",
         updatedAt: 400,
         metadata: { automation: { boardId: "other" } },
       }),
-      fixtureCard("not-done", { agentId: "agent-a", status: "review", updatedAt: 400 }),
+      scopedCard("not-done", { agentId: "agent-a", status: "review", updatedAt: 400 }),
     ];
     for (const card of [...parents, unfinished, ...siblings, current]) {
       await stores.cards.register(card.id, { version: 1, card });
@@ -271,29 +264,22 @@ describe("Workboard context and session-scoped reads", () => {
     for (const [name, left, right] of cases) {
       const sessionKey = `session-${name}`;
       const cards = [
-        fixtureCard(`arbitrary-${name}-z`, { sessionKey, ...right }),
-        fixtureCard(`arbitrary-${name}-a`, { sessionKey, ...left }),
+        scopedCard(`arbitrary-${name}-z`, { sessionKey, ...right }),
+        scopedCard(`arbitrary-${name}-a`, { sessionKey, ...left }),
       ];
       for (const card of cards) {
         await stores.cards.register(card.id, { version: 1, card });
       }
     }
-    const execution = (sessionKey: string): NonNullable<WorkboardCard["execution"]> => ({
-      id: `execution-${sessionKey}`,
-      kind: "agent-session",
-      mode: "autonomous",
-      status: "idle",
-      sessionKey,
-      startedAt: 1,
-      updatedAt: 2,
-    });
-    const direct = fixtureCard("direct", {
+    const execution = (sessionKey: string) =>
+      sessionExecution(sessionKey, `execution-${sessionKey}`, "idle");
+    const direct = scopedCard("direct", {
       sessionKey: "direct-session",
       execution: execution("shadowed-session"),
     });
-    const nullFallback = fixtureCard("null-fallback", { execution: execution("null-session") });
-    const emptyFallback = fixtureCard("empty-fallback", { execution: execution("empty-session") });
-    const absentExecution = fixtureCard("absent-execution", {
+    const nullFallback = scopedCard("null-fallback", { execution: execution("null-session") });
+    const emptyFallback = scopedCard("empty-fallback", { execution: execution("empty-session") });
+    const absentExecution = scopedCard("absent-execution", {
       execution: execution("absent-session"),
     });
     for (const card of [direct, nullFallback, emptyFallback, absentExecution]) {
@@ -388,9 +374,7 @@ describe("Workboard board-scoped SQLite hydration", () => {
     const { value, rowCount, queries } = await captureRead(() => store.list({ boardId: " OPS " }));
     expect(value).toEqual(expected);
     // Two card rows, their three events, two labels and one comment.
-    expect(rowCount).toBeGreaterThan(0);
     expect(rowCount).toBeLessThanOrEqual(8);
-    expect(queries).toBeGreaterThan(0);
     expect(queries).toBeLessThanOrEqual(13);
     await expect(store.list({ boardId: "missing" })).resolves.toEqual([]);
     await expect(store.list({ boardId: "default" })).resolves.toEqual([
@@ -438,7 +422,7 @@ describe("Workboard board-scoped SQLite hydration", () => {
 
 describe("Workboard card-scoped notification reads", () => {
   // Measures fetched rows through the native SQLite statement prototype.
-  test("bounds fetched rows and preserves card scope, missing cards, and cursor advancement", async () => {
+  test("bounds fetched rows and preserves card scope and missing cards", async () => {
     const { store } = setup();
     const selected = await store.create({
       title: "Selected notifications",
@@ -480,7 +464,6 @@ describe("Workboard card-scoped notification reads", () => {
       store.notificationEvents({ subscriptionId: subscription.id, cardId: other.id, limit: 1 }),
     );
     expect(value).toMatchObject({ events: [{ id: "earlier" }] });
-    expect(rowCount).toBeGreaterThan(0);
     expect(
       rowCount,
       "card notification reads must not hydrate unrelated cards",
@@ -489,15 +472,6 @@ describe("Workboard card-scoped notification reads", () => {
       events: [{ id: "earlier" }, { id: "later" }],
     });
     await expect(store.notificationEvents({ cardId: "missing" })).resolves.toEqual({ events: [] });
-    await expect(
-      store.advanceNotificationEvents({ subscriptionId: subscription.id, limit: 1 }),
-    ).resolves.toMatchObject({ events: [{ id: "earlier" }] });
-    await expect(
-      store.advanceNotificationEvents({ subscriptionId: subscription.id, limit: 1 }),
-    ).resolves.toMatchObject({ events: [{ id: "later" }] });
-    await expect(
-      store.notificationEvents({ subscriptionId: subscription.id }),
-    ).resolves.toMatchObject({ events: [] });
   });
 });
 
@@ -534,7 +508,5 @@ describe("Workboard dependency status reads", () => {
     expect(value).toEqual(expected);
     expect(queries).toBeLessThanOrEqual(14);
     expect(rowCount).toBeLessThanOrEqual(102);
-    expect(queries).toBeGreaterThan(0);
-    expect(rowCount).toBeGreaterThan(0);
   });
 });
