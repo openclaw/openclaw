@@ -34,47 +34,36 @@ type DiscussionTestPane = TestChatPane & {
 
 const SESSION_KEY = "agent:main:current";
 
-function createDiscussionPanelHarness(
-  fixture: ReturnType<typeof createDiscussionPane>,
-  savedSlot = false,
-) {
-  const { pane, state } = fixture;
-  const container = document.body.appendChild(document.createElement("div"));
+function createDiscussionPanelHarness({ pane, state }: ReturnType<typeof createDiscussionPane>) {
   const [frame, setFrame] = createSignal<{
     config: SessionDiscussionPanelConfig | null;
     sourceGeneration: number;
   }>({ config: null, sourceGeneration: 0 });
-  const panel = () => (
-    <Show when={frame().config}>
-      {(config) => (
-        <SessionDiscussionPanel
-          sessionKey={config().sessionKey}
-          canOpen={config().canOpen}
-          sourceGeneration={frame().sourceGeneration}
-          loadInfo={config().loadInfo}
-          openDiscussion={config().openDiscussion}
-          onStateChange={config().onStateChange}
-        />
-      )}
-    </Show>
-  );
-  const view = mountSolid(
-    () => (savedSlot ? <section data-panel-slot="discussion">{panel()}</section> : panel()),
-    { container },
-  );
+  const view = mountSolid(() => (
+    <section data-panel-slot="discussion">
+      <Show when={frame().config}>
+        {(config) => (
+          <SessionDiscussionPanel
+            sessionKey={config().sessionKey}
+            canOpen={config().canOpen}
+            sourceGeneration={frame().sourceGeneration}
+            loadInfo={config().loadInfo}
+            openDiscussion={config().openDiscussion}
+            onStateChange={config().onStateChange}
+          />
+        )}
+      </Show>
+    </section>
+  ));
   return {
-    container,
+    ...view,
     async render() {
       setFrame({
         config: pane.buildSessionDiscussionPanel(state, SESSION_KEY),
         sourceGeneration: pane.connectionGeneration,
       });
       flush();
-      await container.querySelector("openclaw-session-discussion")?.updateComplete;
-    },
-    unmount() {
-      view.unmount();
-      container.remove();
+      await view.container.querySelector("openclaw-session-discussion")?.updateComplete;
     },
   };
 }
@@ -195,7 +184,7 @@ describe("chat pane session discussion", () => {
     const { pane, state, request } = fixture;
     const initialHello = pane.context.gateway.snapshot.hello!;
     state.sidebarLayout = openSlot({ columns: [] }, "discussion");
-    const view = createDiscussionPanelHarness(fixture, true);
+    const view = createDiscussionPanelHarness(fixture);
     const { container } = view;
     const disconnect = () =>
       pane.applyGatewaySnapshot({
@@ -214,13 +203,16 @@ describe("chat pane session discussion", () => {
     };
     const discussionRequests = () =>
       request.mock.calls.filter(([method]) => method === "session.discussion.info");
+    const expectLoaded = async (requests: number) => {
+      await vi.waitFor(() => expect(discussionRequests()).toHaveLength(requests));
+      await vi.waitFor(() =>
+        expect(container.querySelector<HTMLAnchorElement>("a.session-link")?.href).toBe(openUrl),
+      );
+    };
 
     const previousConfig = pane.buildSessionDiscussionPanel(state, SESSION_KEY)!;
     await view.render();
-    await vi.waitFor(() => expect(discussionRequests()).toHaveLength(1));
-    await vi.waitFor(() =>
-      expect(container.querySelector<HTMLAnchorElement>("a.session-link")?.href).toBe(openUrl),
-    );
+    await expectLoaded(1);
     await view.render();
     expect(discussionRequests()).toHaveLength(1);
 
@@ -235,18 +227,15 @@ describe("chat pane session discussion", () => {
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
     expect(container.querySelector('[data-panel-slot="discussion"]')).not.toBeNull();
     expect(discussionRequests()).toHaveLength(1);
-    expect(container.querySelector("openclaw-session-discussion")).toBeNull();
-    expect(container.querySelector("a.session-link")).toBeNull();
-    expect(container.querySelector(".callout.danger")).toBeNull();
+    expect(
+      container.querySelector("openclaw-session-discussion,a.session-link,.callout.danger"),
+    ).toBeNull();
     expect(pane.resolveSessionDiscussionAction()).toBeNull();
 
     disconnect();
     connect(["operator.read"]);
     await view.render();
-    await vi.waitFor(() => expect(discussionRequests()).toHaveLength(2));
-    await vi.waitFor(() =>
-      expect(container.querySelector<HTMLAnchorElement>("a.session-link")?.href).toBe(openUrl),
-    );
+    await expectLoaded(2);
 
     view.unmount();
   });
