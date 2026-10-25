@@ -279,10 +279,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       cached: cachedSession?.unarchiveAllowed === true,
     });
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
-    const presence = this.presence.snapshot;
-    const composerSessionKey = state.sessionKey;
-    const catalogCanContinue = this.history.catalogSession?.canContinue === true;
-    const composerPendingReason = state.connected ? null : pendingReason;
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
     const composerAccess = hasWriteScope || (!catalog && mutationAccess.composeScope.allowed);
@@ -305,7 +301,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       !selectedSession?.providerReview &&
       sessionDisabledBanner?.kind !== "composer-replacement" &&
       (catalog
-        ? catalogCanContinue
+        ? this.history.catalogSession?.canContinue === true
         : !disabledReason && !(selectedSessionArchived || placementComposer.blocksSend));
     const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
     const typingEnabled =
@@ -315,10 +311,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       !catalog &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
       hasSessionPresenceViewers(
-        presence,
+        this.presence.snapshot,
         gatewaySnapshot.selfUser,
         gatewaySnapshot.client?.instanceId,
-        composerSessionKey,
+        state.sessionKey,
       );
     const composerAvailability = {
       canCompose: composerAccess && available,
@@ -333,7 +329,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           ? placementComposer.failedUnavailableMessage
           : null) ??
         // Offline sending stays available for the outbox; this band explains pending recovery.
-        composerPendingReason,
+        (state.connected ? null : pendingReason),
       disabledReasonTone:
         !composerAccess ||
         disabledReason ||
