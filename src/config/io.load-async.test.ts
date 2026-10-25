@@ -211,7 +211,10 @@ it("offline reads consume canonical config without reading pending migrations or
     for (const [index, before] of familyBefore.entries()) {
       const file = family[index]!;
       const after = fs.existsSync(file) ? fs.readFileSync(file) : null;
-      expect(before === null ? after === null : after?.equals(before)).toBe(true);
+      expect(
+        before === null ? after === null : after?.equals(before),
+        `${file}: before=${before?.length ?? "absent"}, after=${after?.length ?? "absent"}`,
+      ).toBe(true);
     }
     await closeOpenClawStateDatabaseAsync();
     clearBundledDiscoveryModeMemo();
