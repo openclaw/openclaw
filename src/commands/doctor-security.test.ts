@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/io.factory.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
 import { runAuthProfileMigration } from "../flows/doctor-auth-health.js";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
@@ -125,10 +124,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
       const findings = await collectSecurityWarnings({ approvals: { exec: { enabled: false } } });
 
-      expect(findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ checkId: "doctor.approval_forwarding_disabled" }),
-        ]),
+      expect(findings).toContainEqual(
+        expect.objectContaining({ checkId: "doctor.approval_forwarding_disabled" }),
       );
     });
   });
@@ -150,28 +147,6 @@ describe("noteSecurityWarnings gateway exposure", () => {
         execApprovalsStoreTesting.reset();
       }
     });
-  }
-
-  async function expectAgentExecHostPolicyWarning(agentKey: "*" | "runner") {
-    await withExecApprovalsFile(
-      {
-        version: 1,
-        defaults: agentKey === "*" ? { security: "full", ask: "off" } : undefined,
-        agents: { [agentKey]: { security: "allowlist", ask: "always" } },
-      },
-      async () => {
-        await noteSecurityWarnings({
-          agents: { entries: { runner: { tools: { exec: { mode: "full" } } } } },
-        });
-      },
-    );
-
-    const message = lastMessage();
-    expect(message).toContain(
-      "agents.entries.runner.tools.exec is broader than the host exec policy",
-    );
-    expect(message).toContain(`agents.${agentKey}.security="allowlist"`);
-    expect(message).toContain(`agents.${agentKey}.ask="always"`);
   }
 
   it("retains rendered security warnings for update finalization", async () => {
@@ -246,13 +221,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("also deny exec/process");
   });
 
-  it.each<{ name: string; provider: Partial<ModelProviderConfig>; paths: string[] }>([
-    {
-      name: "sensitive header",
-      provider: { headers: { Authorization: "Bearer synthetic-key" } },
-      paths: ["models.providers.ollama.headers.Authorization"],
-    },
-  ])("agrees with secrets audit for $name", async ({ provider, paths }) => {
+  it("agrees with secrets audit for a sensitive header", async () => {
     await withExecApprovalsFile({ version: 1 }, async () => {
       const cfg: OpenClawConfig = {
         models: {
@@ -261,7 +230,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
               api: "ollama",
               baseUrl: "http://127.0.0.1:11434",
               models: [],
-              ...provider,
+              headers: { Authorization: "Bearer synthetic-key" },
             },
           },
         },
@@ -278,8 +247,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
         const auditPaths = residueSpy.mock.calls.flatMap(([{ assignments }]) =>
           assignments.map((assignment) => assignment.path),
         );
-        expect(auditPaths).toEqual(paths);
-        expect(report.summary.plaintextCount).toBe(paths.length);
+        expect(auditPaths).toEqual(["models.providers.ollama.headers.Authorization"]);
+        expect(report.summary.plaintextCount).toBe(1);
         const findings = await collectSecurityWarnings(cfg, env);
         const doctorPaths = findings
           .filter((finding) => finding.checkId === "config.plaintext_secrets")
@@ -330,29 +299,30 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("plaintext secret-bearing config fields");
   });
 
-  it("warns when a per-agent exec policy is broader than the matching host agent policy", async () => {
-    await expectAgentExecHostPolicyWarning("runner");
-  });
+  it.each([false, true])(
+    "warns about broader agent exec policy (inherited=%s)",
+    async (inherited) => {
+      await withExecApprovalsFile(
+        { version: 1, agents: { runner: { security: "allowlist", ask: "always" } } },
+        async () => {
+          await noteSecurityWarnings({
+            ...(inherited ? { tools: { exec: { mode: "full" as const } } } : {}),
+            agents: { entries: { runner: inherited ? {} : { tools: { exec: { mode: "full" } } } } },
+          });
+        },
+      );
 
-  it("warns when an agent inherits broader global tools.exec policy than the matching host agent policy", async () => {
-    await withExecApprovalsFile(
-      { version: 1, agents: { runner: { security: "allowlist", ask: "always" } } },
-      async () => {
-        await noteSecurityWarnings({
-          tools: { exec: { mode: "full" } },
-          agents: { entries: { runner: {} } },
-        });
-      },
-    );
-
-    const message = lastMessage();
-    expect(message).toContain(
-      "agents.entries.runner.tools.exec is broader than the host exec policy",
-    );
-    expect(message).toContain('tools.exec.mode="full"');
-    expect(message).toContain('agents.runner.security="allowlist"');
-    expect(message).toContain('agents.runner.ask="always"');
-  });
+      const message = lastMessage();
+      expect(message).toContain(
+        "agents.entries.runner.tools.exec is broader than the host exec policy",
+      );
+      if (inherited) {
+        expect(message).toContain('tools.exec.mode="full"');
+      }
+      expect(message).toContain('agents.runner.security="allowlist"');
+      expect(message).toContain('agents.runner.ask="always"');
+    },
+  );
 
   it("warns when heartbeat delivery relies on implicit directPolicy defaults", async () => {
     const cfg = {

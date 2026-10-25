@@ -99,6 +99,31 @@ function withGatewayServiceHome(run: (home: string) => Promise<void>, env: NodeJ
   });
 }
 
+const readText = (file: string) => fs.readFile(file, "utf8");
+const readFiles = (files: string[]) => Promise.all(files.map(readText));
+function planService(home: string, environment: Record<string, string> = {}) {
+  const programArguments = [process.execPath, path.join(home, "openclaw.mjs"), "gateway"];
+  service.readCommand.mockResolvedValue({ programArguments, environment });
+  service.buildPlan.mockResolvedValue({ programArguments, environment: {} });
+}
+function expectNoServiceChanges() {
+  for (const effect of [service.install, service.stage, service.restart]) {
+    expect(effect).not.toHaveBeenCalled();
+  }
+}
+function expectPersistenceFinding(ctx: Awaited<ReturnType<typeof prepareWriterContext>>) {
+  expect(ctx.healthFindings).toContainEqual(
+    expect.objectContaining({
+      category: "fix-now",
+      severity: "error",
+      message: expect.stringContaining(
+        "Failed to persist gateway.auth.token before service repair",
+      ),
+      fixHint: expect.stringContaining("gateway status --deep"),
+    }),
+  );
+}
+
 describe("Doctor gateway config writer ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -131,9 +156,7 @@ describe("Doctor gateway config writer ordering", () => {
         const entriesBefore = await listSecretStoreEntries({ scope });
         const originalBytes = await fs.readFile(configPath, "utf8");
         const ctx = await prepareWriterContext(configPath);
-        const programArguments = [process.execPath, path.join(home, "openclaw.mjs"), "gateway"];
-        service.readCommand.mockResolvedValue({ programArguments, environment: {} });
-        service.buildPlan.mockResolvedValue({ programArguments, environment: {} });
+        planService(home);
         service.install.mockResolvedValue(undefined);
         ctx.prompter.confirmRuntimeRepair = async () => true;
         await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: token }, () => runGatewayServicesHealth(ctx));
@@ -179,12 +202,7 @@ describe("Doctor gateway config writer ordering", () => {
           const initialBackup = await fs.readFile(`${configPath}.bak`, "utf8");
           const persistedBeforeService = ctx.cfgForPersistence;
 
-          const programArguments = [process.execPath, path.join(home, "openclaw.mjs"), "gateway"];
-          service.readCommand.mockResolvedValue({
-            programArguments,
-            environment: { OPENCLAW_GATEWAY_TOKEN: "recovered-fixture-token" },
-          });
-          service.buildPlan.mockResolvedValue({ programArguments, environment: {} });
+          planService(home, { OPENCLAW_GATEWAY_TOKEN: "recovered-fixture-token" });
           let installedSnapshot: ConfigFileSnapshot | undefined;
           let installedBaseline: typeof ctx.cfg | undefined;
           service.install.mockImplementation(async () => {
@@ -215,9 +233,7 @@ describe("Doctor gateway config writer ordering", () => {
             );
             await expect(runGatewayServicesHealth(ctx)).rejects.toBe(failure);
             expect(ctx.configWriteError).toBe(failure);
-            expect(service.install).not.toHaveBeenCalled();
-            expect(service.stage).not.toHaveBeenCalled();
-            expect(service.restart).not.toHaveBeenCalled();
+            expectNoServiceChanges();
             const committed = await fs.readFile(configPath, "utf8");
             const backup = await fs.readFile(`${configPath}.bak`, "utf8");
             expect(JSON.parse(committed).gateway.auth.token).toMatchObject({ source: "store" });
@@ -244,16 +260,7 @@ describe("Doctor gateway config writer ordering", () => {
             expect(ctx.updateWarnings).toContainEqual(
               expect.stringContaining("Failed to persist gateway.auth.token before service repair"),
             );
-            expect(ctx.healthFindings).toContainEqual(
-              expect.objectContaining({
-                category: "fix-now",
-                severity: "error",
-                message: expect.stringContaining(
-                  "Failed to persist gateway.auth.token before service repair",
-                ),
-                fixHint: expect.stringContaining("gateway status --deep"),
-              }),
-            );
+            expectPersistenceFinding(ctx);
             expect(await fs.readFile(configPath, "utf8")).toBe(initialBytes);
             expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(initialBackup);
           } else {
@@ -390,18 +397,11 @@ describe("Doctor gateway config writer ordering", () => {
       expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(originalBytes);
       const persistedBaseline = ctx.cfgForPersistence;
       const retainedPaths = [configPath, `${configPath}.bak`, includePath, `${includePath}.bak`];
-      const retainedBytes = await Promise.all(
-        retainedPaths.map((file) => fs.readFile(file, "utf8")),
-      );
+      const retainedBytes = await readFiles(retainedPaths);
 
       ctx.cfg = { ...ctx.cfg, browser: { ...ctx.cfg.browser, enabled: false } };
       const candidateBeforeService = ctx.cfg;
-      const programArguments = [process.execPath, path.join(home, "openclaw.mjs"), "gateway"];
-      service.readCommand.mockResolvedValue({
-        programArguments,
-        environment: { OPENCLAW_GATEWAY_TOKEN: "recovered-fixture-token" },
-      });
-      service.buildPlan.mockResolvedValue({ programArguments, environment: {} });
+      planService(home, { OPENCLAW_GATEWAY_TOKEN: "recovered-fixture-token" });
       ctx.prompter.confirmRuntimeRepair = async () => true;
 
       await runGatewayServicesHealth(ctx);
@@ -410,31 +410,17 @@ describe("Doctor gateway config writer ordering", () => {
       expect(ctx.cfg).toBe(candidateBeforeService);
       expect(ctx.cfgForPersistence).toBe(persistedBaseline);
       expect(ctx.cfg.gateway?.auth?.token).toBeUndefined();
-      expect(service.install).not.toHaveBeenCalled();
-      expect(service.stage).not.toHaveBeenCalled();
-      expect(service.restart).not.toHaveBeenCalled();
-      expect(ctx.healthFindings).toContainEqual(
-        expect.objectContaining({
-          category: "fix-now",
-          severity: "error",
-          message: expect.stringContaining(
-            "Failed to persist gateway.auth.token before service repair",
-          ),
-          fixHint: expect.stringContaining("gateway status --deep"),
-        }),
-      );
+      expectNoServiceChanges();
+      expectPersistenceFinding(ctx);
       const snapshot = await readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
-      expect(snapshot.sourceConfig.gateway?.port).toBe(19090);
+      expect(snapshot).toMatchObject({
+        valid: true,
+        sourceConfig: { gateway: { port: 19090 }, browser: { enabled: true } },
+      });
       expect(snapshot.sourceConfig.gateway?.auth?.token).toBeUndefined();
-      expect(snapshot.sourceConfig.browser?.enabled).toBe(true);
-      expect(await Promise.all(retainedPaths.map((file) => fs.readFile(file, "utf8")))).toEqual(
-        retainedBytes,
-      );
+      expect(await readFiles(retainedPaths)).toEqual(retainedBytes);
       expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(false);
-      expect(await Promise.all(retainedPaths.map((file) => fs.readFile(file, "utf8")))).toEqual(
-        retainedBytes,
-      );
+      expect(await readFiles(retainedPaths)).toEqual(retainedBytes);
     });
   });
 });

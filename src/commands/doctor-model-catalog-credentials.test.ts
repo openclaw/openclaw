@@ -86,6 +86,28 @@ function migrationParams(state: ReturnType<typeof createState>, cfg: OpenClawCon
   };
 }
 
+const credential = (key: string) => createApiKeyCredential("custom", key);
+const migrationResult = (detected = 0, migrated = 0, removed = 0) => ({
+  detected,
+  migrated,
+  removed,
+  warnings: [],
+  findings: [],
+});
+function writeCatalog(agentDir: string, key: string) {
+  fs.writeFileSync(
+    path.join(agentDir, "models.json"),
+    `${JSON.stringify({ providers: { custom: provider(key) } })}\n`,
+  );
+}
+function agentConfig(state: ReturnType<typeof createState>, agentId: string, agentDir: string) {
+  return {
+    ownership: "explicit" as const,
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: { agentDir: state.agentDir }, [agentId]: { agentDir } },
+  };
+}
+
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
@@ -154,9 +176,7 @@ describe("doctor model catalog credential migration", () => {
 
     const first = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
 
-    expect(first.detected).toBe(3);
-    expect(first.migrated).toBe(3);
-    expect(first.warnings).toEqual([]);
+    expect(first).toMatchObject({ detected: 3, migrated: 3, warnings: [] });
     expect(cfg.models?.providers?.configured?.apiKey).toBe("configured-secret");
     const migratedProfiles = loadPersistedSharedAuthProfileStore(state.env)?.profiles ?? {};
     expect(migratedProfiles).toMatchObject({
@@ -181,36 +201,19 @@ describe("doctor model catalog credential migration", () => {
     const cfg: OpenClawConfig = {
       models: { providers: { custom: provider("${CUSTOM_PROVIDER_KEY}") } },
     };
-    fs.writeFileSync(
-      path.join(state.agentDir, "models.json"),
-      `${JSON.stringify({ providers: { custom: provider("CUSTOM_PROVIDER_KEY") } }, null, 2)}\n`,
-    );
+    writeCatalog(state.agentDir, "CUSTOM_PROVIDER_KEY");
 
     const first = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
 
-    expect(first).toEqual({
-      detected: 0,
-      migrated: 0,
-      removed: 0,
-      warnings: [],
-      findings: [],
-    });
+    expect(first).toEqual(migrationResult());
     expect(loadPersistedSharedAuthProfileStore(state.env)).toBeNull();
 
     saveAuthProfileStore(
       {
         version: 1,
         profiles: {
-          "custom:default": {
-            type: "api_key",
-            provider: "custom",
-            key: "${CUSTOM_PROVIDER_KEY}",
-          },
-          "custom:models-json": {
-            type: "api_key",
-            provider: "custom",
-            key: "CUSTOM_PROVIDER_KEY",
-          },
+          "custom:default": credential("${CUSTOM_PROVIDER_KEY}"),
+          "custom:models-json": credential("CUSTOM_PROVIDER_KEY"),
         },
         order: { custom: ["custom:default", "custom:models-json"] },
         lastGood: { custom: "custom:default" },
@@ -220,7 +223,7 @@ describe("doctor model catalog credential migration", () => {
 
     const repaired = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
 
-    expect(repaired).toEqual({ detected: 0, migrated: 0, removed: 2, warnings: [], findings: [] });
+    expect(repaired).toEqual(migrationResult(0, 0, 2));
     expect(loadPersistedSharedAuthProfileStore(state.env)).toEqual({ version: 1, profiles: {} });
   });
 
@@ -231,22 +234,14 @@ describe("doctor model catalog credential migration", () => {
       const agentDir = path.join(state.stateDir, "agents", agentId, "agent");
       fs.mkdirSync(agentDir, { recursive: true });
       const cfg: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: { agentDir: state.agentDir }, [agentId]: { agentDir } },
-        },
+        agents: agentConfig(state, agentId, agentDir),
         models: { providers: { custom: provider("${CUSTOM_PROVIDER_KEY}") } },
       };
       const store: AuthProfileStore = {
         version: 1,
         profiles: {
-          "custom:default": { type: "api_key", provider: "custom", key: "CUSTOM_PROVIDER_KEY" },
-          "custom:models-json": {
-            type: "api_key",
-            provider: "custom",
-            key: "$CUSTOM_PROVIDER_KEY",
-          },
+          "custom:default": credential("CUSTOM_PROVIDER_KEY"),
+          "custom:models-json": credential("$CUSTOM_PROVIDER_KEY"),
         },
         order: { custom: ["custom:default", "custom:models-json"] },
         lastGood: { custom: "custom:default" },
@@ -265,7 +260,7 @@ describe("doctor model catalog credential migration", () => {
 
       const result = await maybeMigrateModelCatalogCredentials(params);
 
-      expect(result).toEqual({ detected: 0, migrated: 0, removed: 1, warnings: [], findings: [] });
+      expect(result).toEqual(migrationResult(0, 0, 1));
       expect(loadPersistedAuthProfileStore(agentDir)).toEqual({
         version: 1,
         profiles: { "custom:default": store.profiles["custom:default"] },
@@ -281,13 +276,10 @@ describe("doctor model catalog credential migration", () => {
     const cfg: OpenClawConfig = {
       models: { providers: { custom: provider("${CUSTOM_PROVIDER_KEY}") } },
     };
-    fs.writeFileSync(
-      path.join(state.agentDir, "models.json"),
-      `${JSON.stringify({ providers: { custom: provider("stale-provider-key") } }, null, 2)}\n`,
-    );
+    writeCatalog(state.agentDir, "stale-provider-key");
 
     await expect(maybeMigrateModelCatalogCredentials(migrationParams(state, cfg))).resolves.toEqual(
-      { detected: 0, migrated: 0, removed: 0, warnings: [], findings: [] },
+      migrationResult(),
     );
     expect(loadPersistedSharedAuthProfileStore(state.env)).toBeNull();
   });
@@ -314,16 +306,9 @@ describe("doctor model catalog credential migration", () => {
       if (!duringPrompt) {
         installReference();
       }
-      fs.writeFileSync(
-        path.join(agentDir, "models.json"),
-        JSON.stringify({ providers: { custom: provider("stale-catalog-key") } }),
-      );
+      writeCatalog(agentDir, "stale-catalog-key");
       const params = migrationParams(state, {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: { agentDir: state.agentDir }, [agentId]: { agentDir } },
-        },
+        agents: agentConfig(state, agentId, agentDir),
       });
       if (duringPrompt) {
         params.prompter = {
@@ -335,13 +320,9 @@ describe("doctor model catalog credential migration", () => {
         };
       }
 
-      expect(await maybeMigrateModelCatalogCredentials(params)).toEqual({
-        detected: duringPrompt ? 1 : 0,
-        migrated: 0,
-        removed: 0,
-        warnings: [],
-        findings: [],
-      });
+      expect(await maybeMigrateModelCatalogCredentials(params)).toEqual(
+        migrationResult(duringPrompt ? 1 : 0),
+      );
       if (local) {
         expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toEqual(store.profiles);
         expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles ?? {}).toEqual({});
@@ -366,16 +347,13 @@ describe("doctor model catalog credential migration", () => {
       createAuthProfileStoreFixture({ "custom:old": canonical }),
       state.agentDir,
     );
-    fs.writeFileSync(
-      path.join(state.agentDir, "models.json"),
-      JSON.stringify({ providers: { custom: provider("stale-catalog-key") } }),
-    );
+    writeCatalog(state.agentDir, "stale-catalog-key");
 
     expect(
       await maybeMigrateModelCatalogCredentials(
         migrationParams(state, { models: { providers: { custom: provider("fresh-config-key") } } }),
       ),
-    ).toEqual({ detected: 1, migrated: 1, removed: 0, warnings: [], findings: [] });
+    ).toEqual(migrationResult(1, 1));
     expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toEqual({
       "custom:old": canonical,
       "custom:default": { type: "api_key", provider: "custom", key: "fresh-config-key" },
@@ -404,13 +382,13 @@ describe("doctor model catalog credential migration", () => {
     fs.mkdirSync(childAgentDir, { recursive: true });
     saveAuthProfileStore(
       createAuthProfileStoreFixture({
-        "custom:default": { type: "api_key", provider: "custom", key: "configured-secret" },
+        "custom:default": credential("configured-secret"),
       }),
       state.agentDir,
     );
     saveAuthProfileStore(
       createAuthProfileStoreFixture({
-        "custom:default": { type: "api_key", provider: "custom", key: "child-secret" },
+        "custom:default": credential("child-secret"),
       }),
       childAgentDir,
     );
