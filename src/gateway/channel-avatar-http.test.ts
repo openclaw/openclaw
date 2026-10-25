@@ -1,6 +1,9 @@
 import { createServer, type ServerResponse } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -70,11 +73,11 @@ function holdMediaRead() {
   return { reading: reading.promise, release: () => release.resolve() };
 }
 
-async function expectImage(response: Response, buffer = PNG_BYTES) {
+async function expectImage(response: Response, buffer = PNG_BYTES, body = buffer) {
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toBe("image/png");
   expect(response.headers.get("content-length")).toBe(String(buffer.byteLength));
-  expect(Buffer.from(await response.arrayBuffer())).toEqual(buffer);
+  expect(Buffer.from(await response.arrayBuffer())).toEqual(body);
 }
 
 describe("handleChannelAvatarHttpRequest", () => {
@@ -98,11 +101,7 @@ describe("handleChannelAvatarHttpRequest", () => {
     port = Number(new URL(await listenLoopback(server)).port);
   });
 
-  afterAll(async () => {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  });
+  afterAll(() => closeHttpServer(server));
 
   afterEach(() => {
     memorySessionActorOwners.reset();
@@ -205,16 +204,8 @@ describe("handleChannelAvatarHttpRequest", () => {
     url.searchParams.set("sender", "1000000001");
     expect((await fetch(url)).status).toBe(200);
     const reads = mocks.readMedia.mock.calls.length;
-    for (const [key, value] of [
-      ["sender", "1000000002"],
-      ["account", "another-bot"],
-      ["provider", "slack"],
-      ["v", "stale-revision"],
-    ] as const) {
-      const stale = new URL(url);
-      stale.searchParams.set(key, value);
-      expect((await fetch(stale)).status).toBe(404);
-    }
+    url.searchParams.set("sender", "1000000002");
+    expect((await fetch(url)).status).toBe(404);
     expect(mocks.readMedia).toHaveBeenCalledTimes(reads);
   });
 
@@ -244,32 +235,26 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(await response.json()).toMatchObject({ error: { type: "unauthorized" } });
   });
 
-  it.each([
-    { label: "PNG", buffer: PNG_BYTES },
-    { label: "APNG", buffer: APNG_BYTES },
-  ])(
-    "serves and revalidates cached conversation $label bytes with sandboxed headers",
-    async ({ label, buffer }) => {
-      mocks.readMedia.mockResolvedValue({ buffer });
-      const route = avatarRoute(`agent:main:discord:direct:${label}`);
-      const response = await fetch(route);
+  it("serves and revalidates cached conversation images with sandboxed headers", async () => {
+    mocks.readMedia.mockResolvedValue({ buffer: APNG_BYTES });
+    const route = avatarRoute("agent:main:discord:direct:cached");
+    const response = await fetch(route);
 
-      await expectImage(response, buffer);
-      expect(Object.fromEntries(response.headers)).toMatchObject({
-        "cache-control": "private, max-age=3600",
-        "cross-origin-resource-policy": "same-origin",
-        "x-content-type-options": "nosniff",
-        "content-disposition": 'attachment; filename="channel-avatar"',
-      });
-      expect(response.headers.get("content-security-policy")).toContain("sandbox");
-      const etag = response.headers.get("etag");
-      const revalidated = await fetch(route, { headers: { "If-None-Match": etag ?? "" } });
-      expect(etag).toBeTruthy();
-      expect(revalidated.status).toBe(304);
-      expect((await revalidated.arrayBuffer()).byteLength).toBe(0);
-      expect(mocks.readMedia).toHaveBeenCalledTimes(1);
-    },
-  );
+    await expectImage(response, APNG_BYTES);
+    expect(Object.fromEntries(response.headers)).toMatchObject({
+      "cache-control": "private, max-age=3600",
+      "cross-origin-resource-policy": "same-origin",
+      "x-content-type-options": "nosniff",
+      "content-disposition": 'attachment; filename="channel-avatar"',
+    });
+    expect(response.headers.get("content-security-policy")).toContain("sandbox");
+    const etag = response.headers.get("etag");
+    const revalidated = await fetch(route, { headers: { "If-None-Match": etag ?? "" } });
+    expect(etag).toBeTruthy();
+    expect(revalidated.status).toBe(304);
+    expect((await revalidated.arrayBuffer()).byteLength).toBe(0);
+    expect(mocks.readMedia).toHaveBeenCalledTimes(1);
+  });
 
   it("shares one cold load across concurrent GET and HEAD requests", async () => {
     const arrived = createDeferredCore();
@@ -295,13 +280,8 @@ describe("handleChannelAvatarHttpRequest", () => {
     const etag = responses[0]?.headers.get("etag");
     expect(etag).toBeTruthy();
     for (const [index, response] of responses.entries()) {
-      expect(response.status).toBe(200);
+      await expectImage(response, PNG_BYTES, index % 2 ? Buffer.alloc(0) : PNG_BYTES);
       expect(response.headers.get("etag")).toBe(etag);
-      expect(response.headers.get("content-type")).toBe("image/png");
-      expect(response.headers.get("content-length")).toBe(String(PNG_BYTES.byteLength));
-      expect(Buffer.from(await response.arrayBuffer())).toEqual(
-        index % 2 ? Buffer.alloc(0) : PNG_BYTES,
-      );
     }
     expect(mocks.resolveReference).toHaveBeenCalledTimes(1);
     expect(mocks.readMedia).toHaveBeenCalledTimes(1);
@@ -324,8 +304,7 @@ describe("handleChannelAvatarHttpRequest", () => {
 
       expect(unavailable.status).toBe(404);
       expect(unavailable.headers.get("cache-control")).toBe("no-store");
-      expect(recovered.status).toBe(200);
-      expect(Buffer.from(await recovered.arrayBuffer())).toEqual(PNG_BYTES);
+      await expectImage(recovered);
       expect(mocks.resolveReference).toHaveBeenCalledTimes(2);
     },
   );

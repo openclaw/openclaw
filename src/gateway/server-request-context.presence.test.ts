@@ -85,21 +85,23 @@ function makeStoredProfileClient(name: string) {
 }
 
 describe("createGatewayRequestContext presence", () => {
-  it.each(["email", "owner", "tailscale"] as const)(
-    "refreshes every live profile connection with %s identity",
-    async (identity) => {
+  it.each([
+    {
+      identity: "email",
+      emails: ["ada@example.test", "ada@work.test"],
+      revisions: ["avatar-new-png", "avatar-newer-png"],
+    },
+    { identity: "owner", emails: [undefined, undefined], revisions: ["2"] },
+    { identity: "tailscale", emails: ["ada@github"], revisions: ["avatar-tailscale-new-png"] },
+  ])(
+    "refreshes every live profile connection with $identity identity",
+    async ({ identity, emails, revisions }) => {
       let now = Date.now();
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now++);
       onTestFinished(() => {
         clock.mockRestore();
       });
       const profileId = `profile-${identity}`;
-      const emails =
-        identity === "email"
-          ? ["ada@example.test", "ada@work.test"]
-          : identity === "owner"
-            ? [undefined, undefined]
-            : ["ada@github"];
       const clients = emails.map((email, index) => ({
         ...makeProfileClient(`${identity}-${index}`, email, { profileId }),
         ...(identity === "owner" ? { personPresence: { onlineSince: 1_000 } } : {}),
@@ -117,12 +119,6 @@ describe("createGatewayRequestContext presence", () => {
       const context = createGatewayRequestContext(params);
       const first = clients[0]!;
       const capturedProfile = first.authenticatedUserProfile;
-      const revisions =
-        identity === "email"
-          ? ["avatar-new-png", "avatar-newer-png"]
-          : identity === "owner"
-            ? ["2"]
-            : ["avatar-tailscale-new-png"];
       const expectedUser = (email: string | undefined, avatarRevision: string) => ({
         id: profileId,
         identity: { type: "profile", id: profileId },
@@ -203,10 +199,7 @@ describe("createGatewayRequestContext presence", () => {
       );
       expect(readResidentUserProfileId(sourceId)).toBe(target.profileId);
       const display = getUserProfileDisplay(linked.id);
-      context.refreshConnectedUserProfile?.({
-        ...display,
-        updatedAt: linked.updatedAt,
-      });
+      context.refreshConnectedUserProfile?.({ ...display, updatedAt: linked.updatedAt });
       await params.presenceClock.advanceBy(200);
 
       expect(sourceClient.authenticatedUserProfile).toBe(capturedProfile);
@@ -225,11 +218,11 @@ describe("createGatewayRequestContext presence", () => {
           lastActivityAt: 3_000,
         });
       }
-      const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
-        presence?: Array<{ user?: { id?: string; email?: string; avatarUrl?: string } }>;
+      const { presence } = vi.mocked(params.runtime.broadcast).mock.calls[0]![1] as {
+        presence: ReturnType<typeof listSystemPresence>;
       };
       expect(
-        presence.presence?.find((entry) => entry.user?.email === "merge-source@example.test")?.user,
+        presence.find((entry) => entry.user?.email === "merge-source@example.test")?.user,
       ).toEqual({
         id: target.profileId,
         identity: { type: "profile", id: target.profileId },
@@ -237,7 +230,7 @@ describe("createGatewayRequestContext presence", () => {
         name: target.displayName,
         avatarUrl: `/api/users/${target.profileId}/avatar?v=${display.avatarRevision}`,
       });
-      expect(presence.presence?.some((entry) => entry.user?.id === unrelatedId)).toBe(false);
+      expect(presence.some((entry) => entry.user?.id === unrelatedId)).toBe(false);
     });
   });
 
