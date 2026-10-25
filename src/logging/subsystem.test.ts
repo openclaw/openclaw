@@ -55,12 +55,8 @@ function expectText(text: string, included: string[], excluded: string[] = []) {
 
 function installConsoleMethodSpy(method: "log" | "warn" | "error") {
   const spy = vi.fn();
-  loggingState.rawConsole = {
-    log: method === "log" ? spy : vi.fn(),
-    info: vi.fn(),
-    warn: method === "warn" ? spy : vi.fn(),
-    error: method === "error" ? spy : vi.fn(),
-  };
+  loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  loggingState.rawConsole[method] = spy;
   return spy;
 }
 
@@ -106,13 +102,9 @@ it.each(["pretty", "compact", "json"] as const)(
 
     expect(consoleLog).not.toHaveBeenCalled();
     const records = await readRecords(file);
-    expect(records.map((record) => record.message)).toEqual([
-      "phase observation",
-      "timing observation",
-    ]);
-    expect(records.map((record) => record["1"])).toEqual([
-      { phase: "selected" },
-      { elapsedMs: 12 },
+    expect(records.map((record) => [record.message, record["1"]])).toEqual([
+      ["phase observation", { phase: "selected" }],
+      ["timing observation", { elapsedMs: 12 }],
     ]);
     log.debug("readable diagnostic remains visible");
     expect(consoleLog).toHaveBeenCalledOnce();
@@ -144,15 +136,15 @@ describe("createSubsystemLogger().isEnabled", () => {
       code: `${marker}-code`,
       stack: `${marker}-stack`,
     };
+    const failure = (error: Error) => Object.assign(error, privateFields);
+    const causedBy = (error: Error) => new Error(marker, { cause: failure(error) });
     const failures = [
       {
-        error: Object.assign(new TypeError(`${marker} timed out`), privateFields),
+        error: failure(new TypeError(`${marker} timed out`)),
         expected: { errorCategory: "TypeError", failureKind: "timeout" },
       },
       {
-        error: new Error(marker, {
-          cause: Object.assign(new RangeError(`${marker} connection reset`), privateFields),
-        }),
+        error: causedBy(new RangeError(`${marker} connection reset`)),
         expected: { errorCategory: "RangeError", failureKind: "connection_reset" },
       },
       {
@@ -161,9 +153,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       },
       {
         error: new Error(marker, {
-          cause: Object.assign(new Error(marker), privateFields, {
-            code: "ERR_WORKER_OUT_OF_MEMORY",
-          }),
+          cause: Object.assign(failure(new Error(marker)), { code: "ERR_WORKER_OUT_OF_MEMORY" }),
         }),
         expected: { errorCategory: "Error", errorCode: "ERR_WORKER_OUT_OF_MEMORY" },
       },
@@ -248,21 +238,15 @@ describe("createSubsystemLogger().isEnabled", () => {
       false,
       false,
     ]);
-    expect(listener.mock.calls.map(([event]) => event)).toEqual([
-      expect.objectContaining({
-        type: "log.record",
-        message: "log listener",
-      }),
-      expect.objectContaining({
-        type: "log.record",
-        message: "warning with listener",
-        code: { line: expect.any(Number), functionName: expect.any(String) },
-      }),
-      expect.objectContaining({
-        type: "log.record",
-        message: "enabled diagnostics",
-      }),
+    expect(listener.mock.calls.map(([event]) => [event.type, event.message])).toEqual([
+      ["log.record", "log listener"],
+      ["log.record", "warning with listener"],
+      ["log.record", "enabled diagnostics"],
     ]);
+    expect(listener.mock.calls[1]?.[0].code).toEqual({
+      line: expect.any(Number),
+      functionName: expect.any(String),
+    });
     for (const [event] of listener.mock.calls) {
       if (event.level === "INFO") {
         expect(event).not.toHaveProperty("code");
@@ -403,10 +387,9 @@ describe("createSubsystemLogger().isEnabled", () => {
     },
   );
   it("appends warn/error structured fields as compact key=value pairs in plain console styles", () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "pretty" });
-    const warn = vi.fn();
+    const warn = consoleLogging();
     const error = vi.fn();
-    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error };
+    loggingState.rawConsole!.error = error;
     const log = createSubsystemLogger("session-catalog");
     log.warn("slow Codex catalog list phases", {
       elapsedMs: 12345,

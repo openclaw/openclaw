@@ -23,6 +23,12 @@ import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recove
 import { logSessionStateChange, startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
+const classification = {
+  eventType: "session.stalled",
+  classification: "stalled_agent_run",
+  reason: "active_work_without_progress",
+} as const;
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(6_000);
@@ -37,42 +43,67 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function activeOperation(ref: { sessionKey: string; sessionId: string; runId?: string }) {
+  const operation = createReplyOperation({ ...ref, resetTriggered: false });
+  operation.setPhase("running");
+  const cancel = vi.fn(() => operation.complete());
+  operation.attachBackend({ kind: "embedded", runId: ref.runId, cancel });
+  return { operation, cancel };
+}
+
+function observedOperation(ref: { sessionKey: string; sessionId: string; runId: string }) {
+  const fixture = activeOperation(ref);
+  const attempt = fixture.operation.watchdog.attachAttempt({ assertCurrent() {} });
+  const owner = createDiagnosticEmbeddedRunOwner({ ...ref, watchdogAttempt: attempt });
+  markDiagnosticEmbeddedRunStarted({ ...ref, owner });
+  logSessionStateChange({ ...ref, state: "processing" });
+  const events: DiagnosticEventPayload[] = [];
+  onDiagnosticEvent((event) => events.push(event));
+  return { ...fixture, attempt, events };
+}
+
+function heartbeat(now: number, shortTimings = true) {
+  vi.setSystemTime(now);
+  const clock = createGatewaySchedulerClock(now);
+  const recover = vi.fn(recoverStuckDiagnosticSession);
+  startGatewayDiagnosticHeartbeat(
+    createTestGatewayScheduler(clock.clock),
+    { diagnostics: { enabled: true } },
+    {
+      ...(shortTimings && {
+        testTimings: { stuckSessionWarnMs: 15_000, stuckSessionAbortMs: 30_000 },
+      }),
+      recoverStuckSession: recover,
+      sampleLiveness: () => null,
+    },
+  );
+  return {
+    recover,
+    async advance(atMs: number, drain = true) {
+      vi.setSystemTime(atMs);
+      await clock.advanceTo(atMs);
+      await vi.advanceTimersByTimeAsync(0);
+      if (drain) {
+        await waitForDiagnosticEventsDrained();
+      }
+    },
+  };
+}
+
 it("reports a 54-second stall without requesting recovery from an observing controller", async () => {
   const ref = {
     sessionKey: "agent:main:provider-deadline-heartbeat",
     sessionId: "deadline-session",
     runId: "deadline-run",
   };
-  const operation = createReplyOperation({ ...ref, resetTriggered: false });
-  operation.setPhase("running");
-  const cancel = vi.fn(() => operation.complete());
-  operation.attachBackend({ kind: "embedded", runId: ref.runId, cancel });
-  const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
-  const owner = createDiagnosticEmbeddedRunOwner({ ...ref, watchdogAttempt: attempt });
-  markDiagnosticEmbeddedRunStarted({ ...ref, owner });
-  logSessionStateChange({ ...ref, state: "processing" });
-  const events: DiagnosticEventPayload[] = [];
-  onDiagnosticEvent((event) => events.push(event));
-  const recover = vi.fn(recoverStuckDiagnosticSession);
-  vi.setSystemTime(30_000);
-  const clock = createGatewaySchedulerClock(30_000);
-  startGatewayDiagnosticHeartbeat(
-    createTestGatewayScheduler(clock.clock),
-    { diagnostics: { enabled: true } },
-    {
-      testTimings: { stuckSessionWarnMs: 15_000, stuckSessionAbortMs: 30_000 },
-      recoverStuckSession: recover,
-      sampleLiveness: () => null,
-    },
-  );
+  const { operation, cancel, attempt, events } = observedOperation(ref);
+  const { recover, advance } = heartbeat(30_000);
   vi.setSystemTime(45_000);
   attempt.beginRequest({ requestTimeoutMs: 45_000, deadlineAtMs: 90_000 });
   vi.setSystemTime(60_000);
   expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(6_000);
   expect(operation.watchdog.decide().action).toBe("observe");
-  await clock.advanceTo(60_000);
-  await vi.advanceTimersByTimeAsync(0);
-  await waitForDiagnosticEventsDrained();
+  await advance(60_000);
   expect(events).toContainEqual(
     expect.objectContaining({ type: "session.stalled", ageMs: 54_000 }),
   );
@@ -95,28 +126,8 @@ it.each([
       sessionId: "allowance-session",
       runId: "allowance-run",
     };
-    const operation = createReplyOperation({ ...ref, resetTriggered: false });
-    operation.setPhase("running");
-    const cancel = vi.fn(() => operation.complete());
-    operation.attachBackend({ kind: "embedded", runId: ref.runId, cancel });
-    const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
-    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, watchdogAttempt: attempt });
-    markDiagnosticEmbeddedRunStarted({ ...ref, owner });
-    logSessionStateChange({ ...ref, state: "processing" });
-    const events: DiagnosticEventPayload[] = [];
-    onDiagnosticEvent((event) => events.push(event));
-    const recover = vi.fn(recoverStuckDiagnosticSession);
-    vi.setSystemTime(306_000);
-    const clock = createGatewaySchedulerClock(306_000);
-    startGatewayDiagnosticHeartbeat(
-      createTestGatewayScheduler(clock.clock),
-      { diagnostics: { enabled: true } },
-      {
-        testTimings: { stuckSessionWarnMs: 15_000, stuckSessionAbortMs: 30_000 },
-        recoverStuckSession: recover,
-        sampleLiveness: () => null,
-      },
-    );
+    const { operation, cancel, attempt, events } = observedOperation(ref);
+    const { recover, advance } = heartbeat(306_000);
     vi.setSystemTime(330_000);
     if (kind === "request") {
       attempt.beginRequest({ requestTimeoutMs: 66_000, deadlineAtMs });
@@ -132,10 +143,7 @@ it.each([
       });
     }
     for (let now = 336_000; now <= deadlineAtMs; now += 30_000) {
-      vi.setSystemTime(now);
-      await clock.advanceTo(now);
-      await vi.advanceTimersByTimeAsync(0);
-      await waitForDiagnosticEventsDrained();
+      await advance(now);
       if (now < deadlineAtMs) {
         expect(recover).not.toHaveBeenCalled();
         expect(cancel).not.toHaveBeenCalled();
@@ -171,11 +179,7 @@ it.each(["missing", "retired"] as const)(
     vi.setSystemTime(1_000_000);
     const recover = vi.fn(recoverStuckDiagnosticSession);
     requestStuckSessionRecovery({
-      classification: {
-        eventType: "session.stalled",
-        classification: "stalled_agent_run",
-        reason: "active_work_without_progress",
-      },
+      classification,
       request: { ...ref, operation: original, ageMs: 1_000_000 },
       recover,
     });
@@ -189,20 +193,12 @@ it("retains the finite local request ceiling without a diagnostic timeout policy
     sessionKey: "agent:main:heartbeat-local-ceiling",
     sessionId: "local-ceiling-session",
   };
-  const operation = createReplyOperation({ ...ref, resetTriggered: false });
-  operation.setPhase("running");
-  const cancel = vi.fn(() => operation.complete());
-  operation.attachBackend({ kind: "embedded", cancel });
+  const { operation, cancel } = activeOperation(ref);
   const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
   const deadlineAtMs = 6_000 + DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
   attempt.beginRequest({ requestTimeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS, deadlineAtMs });
   const recover = vi.fn(recoverStuckDiagnosticSession);
   const request = { ...ref, operation, ageMs: 1_000_000 };
-  const classification = {
-    eventType: "session.stalled",
-    classification: "stalled_agent_run",
-    reason: "active_work_without_progress",
-  } as const;
   vi.setSystemTime(deadlineAtMs - 1);
   requestStuckSessionRecovery({ classification, request, recover });
   expect(recover).not.toHaveBeenCalled();
@@ -218,28 +214,15 @@ it("retains the finite local request ceiling without a diagnostic timeout policy
 
 it("defers an overdue heartbeat even when the captured controller is eligible", async () => {
   const ref = { sessionKey: "agent:main:overdue-recovery", sessionId: "overdue-session" };
-  const operation = createReplyOperation({ ...ref, resetTriggered: false });
-  operation.setPhase("running");
-  const cancel = vi.fn(() => operation.complete());
-  operation.attachBackend({ kind: "embedded", cancel });
+  const { operation, cancel } = activeOperation(ref);
   logSessionStateChange({ ...ref, state: "processing" });
-  const recover = vi.fn(recoverStuckDiagnosticSession);
-  vi.setSystemTime(306_000);
-  const clock = createGatewaySchedulerClock(306_000);
-  startGatewayDiagnosticHeartbeat(
-    createTestGatewayScheduler(clock.clock),
-    { diagnostics: { enabled: true } },
-    { recoverStuckSession: recover, sampleLiveness: () => null },
-  );
+  const { recover, advance } = heartbeat(306_000, false);
   vi.setSystemTime(371_000);
   expect(operation.watchdog.decide().action).toBe("stop");
-  await clock.advanceTo(371_000);
-  await vi.advanceTimersByTimeAsync(0);
+  await advance(371_000, false);
   expect(recover).not.toHaveBeenCalled();
   expect(cancel).not.toHaveBeenCalled();
-  vi.setSystemTime(401_000);
-  await clock.advanceTo(401_000);
-  await vi.advanceTimersByTimeAsync(0);
+  await advance(401_000, false);
   expect(recover).toHaveBeenCalledOnce();
   await recover.mock.results[0]?.value;
   await waitForDiagnosticEventsDrained();
@@ -262,11 +245,6 @@ it("projects cleanup eligibility without releasing queued work before its writer
   const recover = vi.fn(recoverStuckDiagnosticSession);
   const events: DiagnosticEventPayload[] = [];
   onDiagnosticEvent((event) => events.push(event));
-  const classification = {
-    eventType: "session.stalled",
-    classification: "stalled_agent_run",
-    reason: "active_work_without_progress",
-  } as const;
   const request = { ...ref, operation, ageMs: 60_000 };
   vi.setSystemTime(65_999);
   requestStuckSessionRecovery({ request, classification, recover });

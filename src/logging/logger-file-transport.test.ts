@@ -16,8 +16,8 @@ const failedLogPaths = new Set<string>();
 let logPath: string;
 const read = (file: string) => fs.readFileSync(file, "utf8");
 const captureStderr = () => vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-const warningLines = (spy: ReturnType<typeof captureStderr>) =>
-  spy.mock.calls.map(([line]) => String(line));
+const warningLines = (spy: ReturnType<typeof captureStderr>, text = "") =>
+  spy.mock.calls.map(([line]) => String(line)).filter((line) => line.includes(text));
 function entry(file: string, payload: string, maxFileBytes = 1024 * 1024) {
   return { file, hostname: "transport-test-host", maxFileBytes, payload };
 }
@@ -225,9 +225,7 @@ for (const kind of ["symlink", "hardlink"]) {
       await fileLogTransport.flush();
 
       expect(read(target)).toBe("untouched");
-      expect(
-        warningLines(stderr).filter((line) => line.includes("log file append failed")),
-      ).toHaveLength(1);
+      expect(warningLines(stderr, "log file append failed")).toHaveLength(1);
     },
   );
 }
@@ -253,7 +251,7 @@ it("warns once per append failure streak and continues with later batches", asyn
     "written-companion-after-failure",
   ]);
   const warnings = warningLines(stderrSpy);
-  expect(warnings.filter((line) => line.includes("log file append failed"))).toHaveLength(2);
+  expect(warningLines(stderrSpy, "log file append failed")).toHaveLength(2);
   expect(warnings[0]).toContain("records dropped; check that the path is a writable regular file");
   expect(warnings.join("\n")).not.toContain(secret);
 });
@@ -276,9 +274,8 @@ it("keeps failure streaks independent by file", async () => {
   logTo(firstPath, "first-file-repeated-failure");
   await fileLogTransport.flush();
 
-  const warnings = warningLines(stderrSpy);
-  expect(warnings.filter((line) => line.includes(`file=${firstPath}`))).toHaveLength(1);
-  expect(warnings.filter((line) => line.includes(`file=${secondPath}`))).toHaveLength(1);
+  expect(warningLines(stderrSpy, `file=${firstPath}`)).toHaveLength(1);
+  expect(warningLines(stderrSpy, `file=${secondPath}`)).toHaveLength(1);
   expect(read(secondPath)).toContain("second-file-recovery");
 });
 
@@ -298,8 +295,7 @@ it.skipIf(process.platform !== "linux")(
       logTo(logPath, "only-record-after-deletion");
       await fileLogTransport.flush();
 
-      const warnings = warningLines(stderrSpy);
-      expect(warnings.some((line) => line.includes(`file=${logPath}`))).toBe(true);
+      expect(warningLines(stderrSpy, `file=${logPath}`)).not.toHaveLength(0);
     } finally {
       fs.closeSync(fd);
     }
@@ -367,16 +363,13 @@ it("releases saturated failure tracking after a tracked file recovers", async ()
   }
   await fileLogTransport.flush();
 
-  const warnings = warningLines(stderrSpy);
-  expect(warnings.filter((line) => line.includes("diagnostics saturated"))).toHaveLength(1);
-  expect(warnings.some((line) => line.includes(`file=${lastPath}`))).toBe(false);
+  expect(warningLines(stderrSpy, "diagnostics saturated")).toHaveLength(1);
+  expect(warningLines(stderrSpy, `file=${lastPath}`)).toHaveLength(0);
 
   recoveringFirstPath = true;
   logTo(firstPath, "tracked-file-recovery");
   logTo(lastPath, "newly-tracked-failure");
   await fileLogTransport.flush();
 
-  expect(stderrSpy.mock.calls.some(([line]) => String(line).includes(`file=${lastPath}`))).toBe(
-    true,
-  );
+  expect(warningLines(stderrSpy, `file=${lastPath}`)).not.toHaveLength(0);
 });
