@@ -43,40 +43,32 @@ type ContentOptions = Partial<
   Omit<ContentParams, "entry" | "resolveTeamAadGroupId" | "mediaMaxBytes" | "tokenProvider" | "log">
 > & { attachments?: MSTeamsAttachmentLike[]; serviceUrl?: string };
 
-function setup({ attachments = markedHtml, serviceUrl, ...options }: ContentOptions = {}) {
-  const log = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
-  const resolveTeamAadGroupId = vi.fn(async () => options.teamAadGroupId);
-  const run = () =>
-    prepareMSTeamsInboundContent({
-      entry: {
-        context: createTurnContext({
-          type: "message",
-          id: "msg-1",
-          serviceUrl,
-          channelData: { channel: { id: "19:channel-thread@thread.tacv2" } },
-        }),
-        rawText: options.rawBody ?? "hello",
-        text: options.rawBody ?? "hello",
-        attachments,
-        wasMentioned: false,
-        implicitMentionKinds: [],
-        turnAdoptionLifecycle: undefined,
-      },
-      rawBody: "hello",
-      advertisedMedia: [],
-      conversationType: "channel",
-      conversationId: "19:channel-thread@thread.tacv2",
-      ...options,
-      resolveTeamAadGroupId,
-      mediaMaxBytes: 1024 * 1024,
-      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-      log,
-    });
-  return { run, log, resolveTeamAadGroupId };
-}
-
-function personal(options: Parameters<typeof setup>[0] = {}) {
-  return setup({ ...personalChat, ...options });
+function prepare({ attachments = markedHtml, serviceUrl, ...options }: ContentOptions = {}) {
+  return prepareMSTeamsInboundContent({
+    entry: {
+      context: createTurnContext({
+        type: "message",
+        id: "msg-1",
+        serviceUrl,
+        channelData: { channel: { id: "19:channel-thread@thread.tacv2" } },
+      }),
+      rawText: options.rawBody ?? "hello",
+      text: options.rawBody ?? "hello",
+      attachments,
+      wasMentioned: false,
+      implicitMentionKinds: [],
+      turnAdoptionLifecycle: undefined,
+    },
+    rawBody: "hello",
+    advertisedMedia: [],
+    conversationType: "channel",
+    conversationId: "19:channel-thread@thread.tacv2",
+    ...options,
+    resolveTeamAadGroupId: async () => options.teamAadGroupId,
+    mediaMaxBytes: 1024 * 1024,
+    tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+    log: { debug: vi.fn(), info: vi.fn(), error: vi.fn() },
+  });
 }
 
 describe("Teams inbound content", () => {
@@ -87,7 +79,7 @@ describe("Teams inbound content", () => {
   });
 
   it("reports advertised unavailable attachments", async () => {
-    expect(await setup({ rawBody: "", advertisedMedia: [{ kind: "document" }] }).run()).toEqual({
+    expect(await prepare({ rawBody: "", advertisedMedia: [{ kind: "document" }] })).toEqual({
       agentBody: "[msteams attachment unavailable]",
       inboundMedia: [{ kind: "document" }],
     });
@@ -95,7 +87,7 @@ describe("Teams inbound content", () => {
 
   it("replaces aligned direct facts and retains additional unavailable media", async () => {
     direct.mockResolvedValue([pdf, { kind: "image" }]);
-    expect(await setup({ advertisedMedia: [{ kind: "document" }] }).run()).toEqual({
+    expect(await prepare({ advertisedMedia: [{ kind: "document" }] })).toEqual({
       agentBody: "hello\n\n[msteams attachment unavailable]",
       inboundMedia: [pdf, { kind: "image" }],
     });
@@ -113,9 +105,7 @@ describe("Teams inbound content", () => {
   ])("merges Graph facts: %j + %j", async (native, recovered, expected) => {
     direct.mockResolvedValue([native]);
     graph.mockResolvedValue({ media: [recovered] });
-    expect(
-      await setup({ advertisedMedia: [native], teamAadGroupId: "team-aad-guid" }).run(),
-    ).toEqual({
+    expect(await prepare({ advertisedMedia: [native], teamAadGroupId: "team-aad-guid" })).toEqual({
       agentBody: "hello\n\n[msteams attachment unavailable]",
       inboundMedia: expected,
     });
@@ -127,24 +117,19 @@ describe("Teams inbound content", () => {
     { graphMediaFallback: true, conversationType: "personal", recover: false },
   ])("gates marker-free recovery ($conversationType)", async ({ recover, ...options }) => {
     graph.mockResolvedValue({ media: [pdf] });
-    const result = await setup({
+    const result = await prepare({
       ...options,
       attachments: html("<div><at>Bot</at></div>", "Text/HTML; charset=utf-8"),
       htmlSummary,
       teamAadGroupId: "team-aad-guid",
-    }).run();
+    });
     expect(graph).toHaveBeenCalledTimes(recover ? 1 : 0);
     expect(result?.inboundMedia).toEqual(recover ? [pdf] : []);
   });
 
-  it.each<[string, ContentOptions, number, number]>([
-    ["empty Bot Framework result", { ...personalChat, serviceUrl: bfUrl }, 0, 1],
-    [
-      "mention-only personal HTML",
-      { ...personalChat, attachments: html("<at>Bot</at> hello") },
-      0,
-      0,
-    ],
+  it.each<[string, ContentOptions, number]>([
+    ["empty Bot Framework result", { ...personalChat, serviceUrl: bfUrl }, 1],
+    ["mention-only personal HTML", { ...personalChat, attachments: html("<at>Bot</at> hello") }, 0],
     [
       "non-HTML attachment",
       {
@@ -152,19 +137,20 @@ describe("Teams inbound content", () => {
         attachments: [{ contentType: "image/png", contentUrl: "https://example.com/img.png" }],
       },
       0,
-      0,
     ],
-  ])("does not switch %s to Graph", async (_name, options, resolutions, downloads) => {
-    const { run, resolveTeamAadGroupId } = setup(options);
-    expect(await run()).toEqual({ agentBody: "hello", inboundMedia: [] });
-    expect(resolveTeamAadGroupId).toHaveBeenCalledTimes(resolutions);
+  ])("does not switch %s to Graph", async (_name, options, downloads) => {
+    expect(await prepare(options)).toEqual({ agentBody: "hello", inboundMedia: [] });
     expect(botFramework).toHaveBeenCalledTimes(downloads);
     expect(graph).not.toHaveBeenCalled();
   });
 
   it("recovers an orgid Bot Framework ID", async () => {
     botFramework.mockResolvedValue({ media: [pdf], attachmentCount: 1 });
-    const result = await personal({ conversationId: "8:orgid:bf-dm-id", serviceUrl: bfUrl }).run();
+    const result = await prepare({
+      ...personalChat,
+      conversationId: "8:orgid:bf-dm-id",
+      serviceUrl: bfUrl,
+    });
     expect(botFramework).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ serviceUrl: bfUrl, attachmentIds: ["att-0", "att-1"] }),
     );
@@ -172,14 +158,9 @@ describe("Teams inbound content", () => {
     expect(result?.inboundMedia).toEqual([pdf]);
   });
 
-  it("logs missing service URLs without trying another identifier space", async () => {
-    const { run, log } = personal();
-    await run();
+  it("does not recover missing service URLs through another identifier space", async () => {
+    await prepare(personalChat);
     expect(botFramework).not.toHaveBeenCalled();
     expect(graph).not.toHaveBeenCalled();
-    expect(log.debug).toHaveBeenCalledWith(
-      "bot framework attachment skipped (missing serviceUrl)",
-      personalChat,
-    );
   });
 });

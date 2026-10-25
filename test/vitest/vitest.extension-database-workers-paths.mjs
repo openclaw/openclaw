@@ -28,7 +28,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/line/src/bot-message-context.test.ts",
   "extensions/line/src/inbound-image-set.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.authz.test.ts",
-  "extensions/msteams/src/monitor-handler/message-handler.bot-threads.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.media.test.ts",
   "extensions/nextcloud-talk/src/inbound.authz.test.ts",
   "extensions/nextcloud-talk/src/inbound.behavior.test.ts",
