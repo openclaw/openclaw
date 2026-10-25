@@ -121,7 +121,7 @@ if (isMainThread) {
         const source =
           typeof loaded.source === "string"
             ? loaded.source
-            : Buffer.from(loaded.source).toString("utf8");
+            : new TextDecoder().decode(loaded.source);
         const instrumented = instrumentTrajectoryFlushSource(source);
         targets.push({ path: filename, sha256: createHash("sha256").update(source).digest("hex") });
         return { ...loaded, source: instrumented };
