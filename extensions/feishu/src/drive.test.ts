@@ -38,31 +38,12 @@ function fileInfo(file_token = "doc_1", type = "docx") {
   return buildDriveTool().execute("info", { action: "info", file_token, type });
 }
 
-type FeishuDriveRequest = {
-  data?: unknown;
-  method?: string;
-  params?: unknown;
-  url?: string;
-};
-
 function driveResponse<T>(data: T): { code: 0; data: T } {
   return { code: 0, data };
 }
 
 function commentMetadataResponse(isWhole = false, commentId = "c1") {
   return driveResponse({ items: [{ comment_id: commentId, is_whole: isWhole }] });
-}
-
-function commentReply(
-  replyId: string,
-  userId: string,
-  textRun: { text?: string; content?: string },
-) {
-  return {
-    reply_id: replyId,
-    user_id: userId,
-    content: { elements: [{ type: "text_run", text_run: textRun }] },
-  };
 }
 
 function replyCommentInput(content: string, options: { omitFileType?: boolean } = {}) {
@@ -75,44 +56,11 @@ function replyCommentInput(content: string, options: { omitFileType?: boolean } 
   };
 }
 
-function replyHttpError(code: number, message: string, logId: string) {
+function replyHttpError(code: number, message: string) {
   return {
     message: "Request failed with status code 400",
-    code: "ERR_BAD_REQUEST",
-    config: {
-      method: "post",
-      url: "https://open.feishu.cn/open-apis/drive/v1/files/doc_1/comments/c1/replies",
-      params: { file_type: "docx" },
-    },
-    response: { status: 400, data: { code, msg: message, log_id: logId } },
+    response: { status: 400, data: { code, msg: message } },
   };
-}
-
-function expectRequestCall(
-  mock: { mock: { calls: unknown[][] } },
-  callIndex: number,
-  expected: FeishuDriveRequest,
-): void {
-  expect(mock.mock.calls.at(callIndex)?.[0]).toMatchObject(expected);
-}
-
-function schemaForAction(
-  schema: unknown,
-  action: string,
-): { properties?: Record<string, unknown> } {
-  const variants =
-    (schema as { anyOf?: unknown[]; oneOf?: unknown[] }).anyOf ??
-    (schema as { anyOf?: unknown[]; oneOf?: unknown[] }).oneOf ??
-    [];
-  const variant = variants.find((entry) => {
-    const actionSchema = (entry as { properties?: { action?: { const?: unknown } } }).properties
-      ?.action;
-    return actionSchema?.const === action;
-  });
-  if (!variant) {
-    throw new Error(`Missing schema variant for action ${action}`);
-  }
-  return variant as { properties?: Record<string, unknown> };
 }
 
 describe("registerFeishuDriveTools", () => {
@@ -188,7 +136,12 @@ describe("registerFeishuDriveTools", () => {
   it("reads the alternate text content field in comment replies", async () => {
     requestMock.mockResolvedValueOnce(
       driveResponse({
-        items: [commentReply("r3", "ou_reply_2", { content: "reply from api" })],
+        items: [
+          {
+            reply_id: "r3",
+            content: { elements: [{ type: "text_run", text_run: { content: "reply from api" } }] },
+          },
+        ],
       }),
     );
     const repliesResult = await buildDriveTool().execute("call-2", {
@@ -211,7 +164,7 @@ describe("registerFeishuDriveTools", () => {
       block_id: "blk_1",
       content: "please update this section",
     });
-    expectRequestCall(requestMock, 0, {
+    expect(requestMock.mock.calls[0]?.[0]).toMatchObject({
       url: "/open-apis/drive/v1/files/doc_1/new_comments",
       data: {
         file_type: "docx",
@@ -227,12 +180,16 @@ describe("registerFeishuDriveTools", () => {
     listFiles.mockResolvedValue(driveResponse({ files: [listedFile], next_page_token: "page-3" }));
     setDriveClient({ file: { list: listFiles } });
     const tool = buildDriveTool();
-    const listSchema = schemaForAction(tool.parameters, "list");
-    expect(listSchema.properties?.page_token).toMatchObject({ type: "string" });
-    expect(listSchema.properties?.page_size).toMatchObject({
-      type: "integer",
-      minimum: 1,
-      maximum: 200,
+    expect(tool.parameters).toMatchObject({
+      anyOf: expect.arrayContaining([
+        expect.objectContaining({
+          properties: expect.objectContaining({
+            action: expect.objectContaining({ const: "list" }),
+            page_token: expect.objectContaining({ type: "string" }),
+            page_size: expect.objectContaining({ type: "integer", minimum: 1, maximum: 200 }),
+          }),
+        }),
+      ]),
     });
 
     const result = await tool.execute("call-list-page-2", {
@@ -370,7 +327,7 @@ describe("registerFeishuDriveTools", () => {
 
     requestMock
       .mockResolvedValueOnce(commentMetadataResponse())
-      .mockRejectedValueOnce(replyHttpError(99992402, "field validation failed", "log_legacy_400"));
+      .mockRejectedValueOnce(replyHttpError(99992402, "field validation failed"));
 
     const replyCommentResult = await tool.execute(
       "call-throw",
@@ -398,9 +355,7 @@ describe("registerFeishuDriveTools", () => {
       );
     }
     if (mode === "compatibility code 1069302") {
-      requestMock.mockRejectedValueOnce(
-        replyHttpError(1069302, "param error", "log_reply_forbidden"),
-      );
+      requestMock.mockRejectedValueOnce(replyHttpError(1069302, "param error"));
     }
     const receipt = addComment ? { comment_id: "c2" } : { reply_id: "r4" };
     requestMock.mockResolvedValueOnce(driveResponse(receipt));

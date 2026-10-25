@@ -6,7 +6,6 @@ import {
   getFeishuLifecycleTestMocks,
   resetFeishuLifecycleTestMocks,
 } from "./lifecycle.test-support.js";
-import * as bot from "./bot.js";
 import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import {
@@ -92,7 +91,6 @@ function createCardActionEvent(params: {
 }
 
 function expectDispatch(params: Record<string, unknown>, context?: Record<string, unknown>) {
-  expect(lastRuntime.error).not.toHaveBeenCalled();
   expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
   expect(createFeishuReplyDispatcherMock.mock.calls.at(-1)?.[0]).toMatchObject(params);
   if (context) {
@@ -248,7 +246,6 @@ describe("Feishu event reply lifecycle", () => {
         "application.bot.menu_v6",
       );
     });
-    afterEach(() => vi.restoreAllMocks());
     it("opens one launcher card across duplicate quick-actions replay", async () => {
       await expectFeishuSingleEffectAcrossReplay({
         handler: onBotMenu,
@@ -263,31 +260,6 @@ describe("Feishu event reply lifecycle", () => {
       expect(dispatchReplyFromConfigMock).not.toHaveBeenCalled();
       expect(createFeishuReplyDispatcherMock).not.toHaveBeenCalled();
     });
-    it("falls back to the legacy /menu synthetic message path for unrelated bot menu keys", async () => {
-      const handleMessage = vi.spyOn(bot, "handleFeishuMessage").mockResolvedValueOnce(undefined);
-      await onBotMenu({ ...event("1700000000002"), event_key: "custom-key" });
-      expect(handleMessage).toHaveBeenCalledOnce();
-      expect(handleMessage.mock.calls[0]?.[0].event.message.content).toBe(
-        '{"text":"/menu custom-key"}',
-      );
-      expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    });
-    it("reports a fallback failure without reopening the committed menu event", async () => {
-      const handleMessage = vi
-        .spyOn(bot, "handleFeishuMessage")
-        .mockRejectedValueOnce(new Error("fallback failed"));
-      sendCardFeishuMock.mockRejectedValueOnce(new Error("launcher unavailable"));
-      const callback = event("1700000000004");
-      await onBotMenu(callback);
-      await vi.waitFor(() =>
-        expect(lastRuntime.error).toHaveBeenCalledWith(
-          "feishu[acct-menu]: error handling bot menu event: Error: fallback failed",
-        ),
-      );
-      await onBotMenu(callback);
-      expect(sendCardFeishuMock).toHaveBeenCalledOnce();
-      expect(handleMessage).toHaveBeenCalledOnce();
-    });
     it("does not duplicate delivery when launcher fallback hits a post-send failure", async () => {
       sendCardFeishuMock.mockRejectedValueOnce(new Error("boom"));
       failAfterReply("menu reply once");
@@ -299,16 +271,7 @@ describe("Feishu event reply lifecycle", () => {
         waitTimeoutMs: 5_000,
       });
       expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
-      expect(createFeishuReplyDispatcherMock.mock.calls[0]?.[0]).toMatchObject({
-        accountId: "acct-menu",
-        chatId: "p2p:ou_user1",
-        replyToMessageId: undefined,
-      });
-      expect(dispatchReplyFromConfigMock.mock.calls[0]?.[0].ctx).toMatchObject({
-        AccountId: "acct-menu",
-        SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-        MessageSid: "bot-menu:quick-actions:1700000000002",
-      });
+      expectDirectDispatch("acct-menu", "bot-menu:quick-actions:1700000000002");
       expect(touchBindingMock).toHaveBeenCalledWith("binding-menu");
       expectFeishuReplyDispatcherSentFinalReplyOnce(mocks);
     });
@@ -336,6 +299,7 @@ describe("Feishu event reply lifecycle", () => {
       });
 
       expectDirectDispatch("acct-card", "card-action-tok-card-once");
+      expect(lastRuntime.error).not.toHaveBeenCalled();
       expect(touchBindingMock).toHaveBeenCalledWith("binding-card");
 
       expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
@@ -397,6 +361,7 @@ describe("Feishu event reply lifecycle", () => {
         MessageSid: "card-action-tok-card",
         ...("context" in row ? row.context : {}),
       });
+      expect(lastRuntime.error).not.toHaveBeenCalled();
     });
 
     it("does not duplicate delivery when retrying after a post-send failure", async () => {

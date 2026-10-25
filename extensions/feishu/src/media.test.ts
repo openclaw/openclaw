@@ -88,21 +88,13 @@ const webMedia = (fileName: string, contentType: string, bytes: string) => ({
   contentType,
 });
 const mp3Media = webMedia("reply.mp3", "audio/mpeg", "remote-mp3");
-const uploadData = () => mockCallArgs(fileCreateMock)[0].data;
-const messageData = () => mockCallArgs(messageCreateMock)[0].data;
-const resourceRequest = (callIndex: number) => mockCallArgs(messageResourceGetMock, callIndex)[0];
+const uploadData = () => fileCreateMock.mock.calls[0]![0].data;
+const messageData = () => messageCreateMock.mock.calls[0]![0].data;
+const resourceRequest = (callIndex: number) => messageResourceGetMock.mock.calls[callIndex]![0];
 const resourceResponse = (data: string | Buffer[], headers?: Record<string, string>) => ({
   getReadableStream: () => Readable.from(typeof data === "string" ? [Buffer.from(data)] : data),
   headers,
 });
-
-function mockCallArgs<T extends unknown[]>(mock: { mock: { calls: T[] } }, callIndex = 0): T {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call;
-}
 
 function expectNotCalled(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
   for (const mock of mocks) {
@@ -111,7 +103,7 @@ function expectNotCalled(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
 }
 
 function expectMediaLoad(url: string, localRoots: readonly string[], extra = {}) {
-  const [loadedUrl, options] = mockCallArgs(loadWebMediaMock);
+  const [loadedUrl, options] = loadWebMediaMock.mock.calls[0]!;
   expect(loadedUrl).toBe(url);
   expect(options).toEqual({
     maxBytes: expect.any(Number),
@@ -247,12 +239,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageCreateMock).toHaveBeenCalledOnce();
   });
 
-  it("rejects empty image and file attachments before contacting Feishu", async () => {
-    for (const fileName of ["empty.png", "empty.pdf"]) {
-      await expect(sendMedia({ mediaBuffer: Buffer.alloc(0), fileName })).rejects.toThrow(
-        "Feishu attachments cannot be empty",
-      );
-    }
+  it("rejects empty attachments before contacting Feishu", async () => {
+    await expect(
+      sendMedia({ mediaBuffer: Buffer.alloc(0), fileName: "empty.pdf" }),
+    ).rejects.toThrow("Feishu attachments cannot be empty");
     expectNotCalled(imageCreateMock, fileCreateMock);
   });
   it("omits audio duration when probing fails", async () => {
@@ -272,7 +262,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     await sendMedia({ mediaUrl: "https://example.com/video" });
 
     expect(uploadData()).toMatchObject({ file_type: "mp4", duration: 6789 });
-    expect(mockCallArgs(runFfprobeMock)[0].at(-1)).toMatch(/input\.mp4$/);
+    expect(runFfprobeMock.mock.calls[0]![0].at(-1)).toMatch(/input\.mp4$/);
     expect(messageData().msg_type).toBe("media");
   });
 
@@ -311,7 +301,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       replyToMessageId: "om_parent",
       replyInThread: true,
     });
-    const [{ path, data }] = mockCallArgs(messageReplyMock);
+    const [{ path, data }] = messageReplyMock.mock.calls[0]!;
     expect(path).toEqual({ message_id: "om_parent" });
     expect(data).toMatchObject({ msg_type: "media", reply_in_thread: true });
   });

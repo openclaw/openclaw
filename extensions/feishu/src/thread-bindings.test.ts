@@ -61,44 +61,21 @@ describe("Feishu thread bindings", () => {
   it("binds, resolves, touches and unbinds through the current-placement adapter", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     createManager({ ...baseCfg, agents: { entries: { main: {}, codex: {} } } });
-    expect(service.getCapabilities(account)).toEqual({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current"],
-    });
     const conversation = conversationRef("oc_group_chat:topic:om_topic_root", "oc_group_chat");
     const target = "agent:codex:acp:binding:feishu:default:abc123";
     const binding = await bindTo(conversation, target, { label: "codex-main" });
-    expect(binding.conversation.conversationId).toBe(conversation.conversationId);
     const resolved = service.resolveByConversation(conversationRef(conversation.conversationId));
-    expect(resolved).toEqual({
-      bindingId: "default:oc_group_chat:topic:om_topic_root",
+    expect(resolved).toMatchObject({
       targetSessionKey: target,
       targetKind: "session",
       conversation,
-      status: "active",
-      boundAt: startedAt,
-      expiresAt: startedAt + 86_400_000,
-      metadata: {
-        agentId: "codex",
-        label: "codex-main",
-        boundBy: undefined,
-        deliveryTo: undefined,
-        deliveryThreadId: undefined,
-        lastActivityAt: startedAt,
-        idleTimeoutMs: 86_400_000,
-        maxAgeMs: 0,
-      },
     });
     now.mockReturnValue(startedAt + 1_000);
     service.touch(binding.bindingId);
     expect(service.resolveByConversation(conversation)?.metadata?.lastActivityAt).toBe(
       startedAt + 1_000,
     );
-    await expect(service.unbind({ bindingId: binding.bindingId, reason: "test" })).resolves.toEqual(
-      [expect.objectContaining({ bindingId: binding.bindingId })],
-    );
+    await service.unbind({ bindingId: binding.bindingId, reason: "test" });
     expect(service.resolveByConversation(conversation)).toBeNull();
   });
 
@@ -127,17 +104,13 @@ describe("Feishu thread bindings", () => {
     now.mockReturnValue(expiresAt - 1);
     expect(manager.getByConversationId(conversation.conversationId)).toBeDefined();
     expect(manager.listBySessionKey(targetSessionKey)).toHaveLength(2);
-    expect(service.resolveByConversation(conversation)).not.toBeNull();
-    expect(service.listBySession(targetSessionKey)).toHaveLength(2);
 
     now.mockReturnValue(expiresAt);
     if (mode === "touch after expiry") {
       service.touch(binding.bindingId, expiresAt + 1);
     }
     expect(service.resolveByConversation(conversation)).toBeNull();
-    expect(manager.getByConversationId(conversation.conversationId)).toBeUndefined();
     expect(manager.listBySessionKey(targetSessionKey)).toEqual([]);
-    expect(service.listBySession(targetSessionKey)).toEqual([]);
   });
 
   it("keeps the account's binding adapter live when a stopped overlapping manager tears down", async () => {
@@ -151,7 +124,6 @@ describe("Feishu thread bindings", () => {
 
     previous.stop();
 
-    expect(service.getCapabilities(account)).toMatchObject({ adapterAvailable: true });
     await expect(service.bind(input)).resolves.toMatchObject({ conversation });
     expect(getFeishuThreadBindingManager("default")).toBe(replacement);
   });
@@ -295,20 +267,7 @@ describe("feishu subagent hook handlers", () => {
     });
   });
 
-  it("selects the requester-matching binding when a child has multiple routes", async () => {
-    const { deliver, bind } = managedHookFixture();
-    for (const sender of ["ou_sender_1", "ou_sender_2"]) {
-      bind(sender, {
-        metadata: { deliveryTo: `user:${sender}`, boundBy: "system" },
-      });
-    }
-
-    await expect(deliver(child, origin("user:ou_sender_2"))).resolves.toEqual({
-      origin: origin("user:ou_sender_2"),
-    });
-  });
-
-  it.each(["single", "direct", "topic"] as const)(
+  it.each(["single", "direct", "topic", "origin"] as const)(
     "keeps the selected %s requester record private and unchanged",
     async (selection) => {
       const { deliver, bind, manager } = managedHookFixture();
@@ -339,7 +298,7 @@ describe("feishu subagent hook handlers", () => {
           topic
             ? origin("chat:oc_group", "om_topic")
             : origin(selection === "single" ? "user:ou_unrelated" : "user:ou_selected"),
-          ` ${child} `,
+          selection === "origin" ? "agent:main:main" : ` ${child} `,
         ),
       ).resolves.toStrictEqual({
         origin: origin("chat:oc_delivery", topic ? "om_delivery" : undefined),

@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import type { FeishuDriveCommentReply as Reply } from "./comment-shared.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
 import {
@@ -56,32 +57,19 @@ function makeDriveCommentEvent(
   };
 }
 
-type Reply = {
-  reply_id: string;
-  user_id?: string;
-  create_time?: number;
-  content: {
-    elements: Array<{
-      type: string;
-      text_run?: { text?: string; content?: string };
-      person?: { user_id: string };
-      docs_link?: { url: string };
-    }>;
-  };
-};
 function textElement(text: string, encoding: "content" | "text" = "text") {
   return { type: "text_run", text_run: { [encoding]: text } };
 }
 function reply(
   id: string,
-  text: string,
+  text: string | unknown[],
   fields: Pick<Reply, "user_id" | "create_time"> = {},
   encoding: "content" | "text" = "content",
 ): Reply {
   return {
     reply_id: id,
     ...fields,
-    content: { elements: [textElement(text, encoding)] },
+    content: { elements: typeof text === "string" ? [textElement(text, encoding)] : text },
   };
 }
 const rootReply = reply(ROOT_REPLY_ID, ROOT_TEXT);
@@ -102,7 +90,6 @@ function makeOpenApiClient(
   params: {
     isWholeComment?: boolean;
     batchCommentId?: string;
-    includeTargetReplyInBatch?: boolean;
     repliesSequence?: Reply[][];
     batchReplies?: Reply[];
     wholeComments?: ReturnType<typeof wholeComment>[];
@@ -119,17 +106,13 @@ function makeOpenApiClient(
           ],
         };
       } else if (request.url.includes("/comments/batch_query")) {
-        const replies = params.batchReplies ?? [
-          rootReply,
-          ...(params.includeTargetReplyInBatch ? [targetReply] : []),
-        ];
         data = {
           items: [
             {
               comment_id: params.batchCommentId ?? COMMENT_ID,
               is_whole: params.isWholeComment,
               quote: "im.message.receive_v1 message trigger implementation",
-              reply_list: { replies },
+              reply_list: { replies: params.batchReplies ?? [rootReply] },
             },
           ],
         };
@@ -202,19 +185,18 @@ describe("resolveDriveCommentEventTurn", () => {
     const client = makeOpenApiClient({
       isWholeComment: false,
       batchReplies: [
-        {
-          ...reply(ROOT_REPLY_ID, "", { user_id: USER_ID }),
-          content: {
-            elements: [
-              textElement("请 "),
-              { type: "person", person: { user_id: "ou_bot" } },
-              textElement(" 总结下 "),
-              { type: "docs_link", docs_link: { url: docUrl } },
-              textElement(" 和 "),
-              { type: "docs_link", docs_link: { url: wikiUrl } },
-            ],
-          },
-        },
+        reply(
+          ROOT_REPLY_ID,
+          [
+            textElement("请 "),
+            { type: "person", person: { user_id: "ou_bot" } },
+            textElement(" 总结下 "),
+            { type: "docs_link", docs_link: { url: docUrl } },
+            textElement(" 和 "),
+            { type: "docs_link", docs_link: { url: wikiUrl } },
+          ],
+          { user_id: USER_ID },
+        ),
       ],
     });
     const wikiGetNode = client.wiki.space.getNode;
@@ -328,7 +310,7 @@ describe("resolveDriveCommentEventTurn", () => {
   it("does not trust whole-comment metadata from a mismatched batch_query item", async () => {
     const turn = await resolveCommentTurn({
       client: makeOpenApiClient({
-        includeTargetReplyInBatch: true,
+        batchReplies: [rootReply, targetReply],
         isWholeComment: true,
         batchCommentId: "different_comment_id",
       }),
@@ -410,56 +392,54 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     vi.restoreAllMocks();
   });
 
-  it("serializes same-document comment notices before invoking handleFeishuCommentEvent", async () => {
-    const controller = new AbortController();
-    const onComment = commentHandler({ abortSignal: controller.signal });
-    const first = blockFirstComment();
-    const second = createDeferred<void>();
-    handleComment.mockImplementationOnce(async () => {
-      second.resolve();
-    });
-    await onComment(makeDriveCommentEvent({ event_id: "evt_1", reply_id: "reply_1" }));
-    await first.started;
-    expect(handleComment).toHaveBeenCalledTimes(1);
-    await onComment(makeDriveCommentEvent({ event_id: "evt_2", reply_id: "reply_2" }));
-    expect(handleComment).toHaveBeenCalledTimes(1);
-    first.release();
-    await second.promise;
-    expect(handleComment).toHaveBeenCalledTimes(2);
-    expect(handleComment.mock.calls.map(([params]) => params)).toMatchObject([
-      {
-        accountId: "default",
-        botOpenId: "ou_bot",
+  it.each([false, true])(
+    "serializes same-document notices (queued claim aborted=%s)",
+    async (aborted) => {
+      const controller = new AbortController();
+      const abandoned = vi.fn(async () => {});
+      const lifecycle: FeishuIngressLifecycle = {
         abortSignal: controller.signal,
-        event: { event_id: "evt_1", comment_id: COMMENT_ID },
-      },
-      { event: { event_id: "evt_2" } },
-    ]);
-  });
-
-  it("does not execute a queued durable comment after its claim aborts", async () => {
-    const first = blockFirstComment();
-    const controller = new AbortController();
-    const abandoned = vi.fn(async () => {});
-    const lifecycle: FeishuIngressLifecycle = {
-      abortSignal: controller.signal,
-      onAdopted: vi.fn(async () => {}),
-      onDeferred: vi.fn(),
-      onAdoptionFinalizing: vi.fn(),
-      onAbandoned: abandoned,
-    };
-    const onComment = commentHandler({
-      resolveIngressLifecycle: (data) =>
-        (data as { event_id?: string }).event_id === "evt_queued" ? lifecycle : undefined,
-    });
-    await onComment(makeDriveCommentEvent({ event_id: "evt_blocking" }));
-    await first.started;
-    expect(handleComment).toHaveBeenCalledTimes(1);
-    const queued = onComment(makeDriveCommentEvent({ event_id: "evt_queued" }));
-    controller.abort(new Error("adoption timeout"));
-    first.release();
-    await queued;
-    expect(handleComment).toHaveBeenCalledTimes(1);
-    expect(abandoned).toHaveBeenCalledTimes(1);
-  });
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: abandoned,
+      };
+      const onComment = commentHandler({
+        ...(aborted ? {} : { abortSignal: controller.signal }),
+        resolveIngressLifecycle: (data) =>
+          aborted && (data as { event_id?: string }).event_id === "evt_2" ? lifecycle : undefined,
+      });
+      const first = blockFirstComment();
+      const second = createDeferred<void>();
+      if (!aborted) {
+        handleComment.mockImplementationOnce(async () => {
+          second.resolve();
+        });
+      }
+      await onComment(makeDriveCommentEvent({ event_id: "evt_1", reply_id: "reply_1" }));
+      await first.started;
+      expect(handleComment).toHaveBeenCalledTimes(1);
+      const queued = onComment(makeDriveCommentEvent({ event_id: "evt_2", reply_id: "reply_2" }));
+      expect(handleComment).toHaveBeenCalledTimes(1);
+      if (aborted) {
+        controller.abort(new Error("adoption timeout"));
+      }
+      first.release();
+      await queued;
+      if (!aborted) {
+        await second.promise;
+        expect(handleComment.mock.calls.map(([params]) => params)).toMatchObject([
+          {
+            accountId: "default",
+            botOpenId: "ou_bot",
+            abortSignal: controller.signal,
+            event: { event_id: "evt_1", comment_id: COMMENT_ID },
+          },
+          { event: { event_id: "evt_2" } },
+        ]);
+      }
+      expect(handleComment).toHaveBeenCalledTimes(aborted ? 1 : 2);
+      expect(abandoned).toHaveBeenCalledTimes(aborted ? 1 : 0);
+    },
+  );
 });
