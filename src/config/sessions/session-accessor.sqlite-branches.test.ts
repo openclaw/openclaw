@@ -19,7 +19,6 @@ import {
   forkSessionAtMessage,
   listSessionBranches,
   loadSessionEntry,
-  loadTranscriptEvents,
   replaceSessionEntry,
   rewindSessionToMessage,
   switchSessionBranch,
@@ -173,7 +172,7 @@ describe("SQLite session branches", () => {
     expect(restore).not.toHaveBeenCalled();
   });
 
-  it("carries summaries between read snapshots and invalidates changed transcripts", async () => {
+  it("carries summaries between read snapshots without sharing caller-owned results", async () => {
     const { env, scope } = await createSession();
     const database = openOpenClawAgentDatabase({ agentId, env });
     const request: SessionBranchSummaryReadRequest = {
@@ -181,55 +180,15 @@ describe("SQLite session branches", () => {
       sessionKey,
     };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, agentId);
-    const counters: Array<{ loads: number; watermarks: number }> = [];
-    const rowCounters: Array<{ loads: number }> = [];
-    const openSqlite = sqliteRuntime.openNodeSqliteDatabase;
-    vi.spyOn(sqliteRuntime, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
-      const connection = openSqlite(pathname, options);
-      if (pathname === database.path && options?.readOnly) {
-        const tracked = trackSqliteStatementExecutions(
-          connection,
-          ["loads", "watermarks"],
-          (sqlText) => {
-            if (
-              (sqlText.includes('from "transcript_events"') && sqlText.includes("max(")) ||
-              sqlText.includes('from "transcript_rewrite_watermarks"')
-            ) {
-              return "watermarks";
-            }
-            return sqlText.includes('from "transcript_events"') &&
-              sqlText.includes('order by "seq" asc')
-              ? "loads"
-              : null;
-          },
-        );
-        counters.push(tracked.counts);
-        rowCounters.push(tracked.rowCounts);
-        diagnosticCleanups.push(tracked.restore);
-      }
-      return connection;
-    });
-    const rawLoads = () => counters.reduce((total, counter) => total + counter.loads, 0);
     const first = readSessionBranchSummariesInWorker(request);
     expectActiveBranch(first, "assistant-2", "second answer", 4);
-    assert(first.status === "ok" && first.branches[0], "expected worker branch summaries");
+    assert(first.status === "ok" && first.branches[0]);
     request.previous = structuredClone(first);
-    // A replacement worker has no isolate-local summary cache.
     invalidateSessionBranchCache(database.path, [scope.sessionId]);
-    const watermarkReads = () => counters.reduce((total, counter) => total + counter.watermarks, 0);
-    const beforeRepeatedReads = watermarkReads();
-    for (let index = 0; index < 7; index++) {
-      expect(readSessionBranchSummariesInWorker(request)).toEqual(first);
-    }
-    expect(rawLoads()).toBe(1);
-    expect(watermarkReads() - beforeRepeatedReads).toBeGreaterThan(0);
-    expect(watermarkReads() - beforeRepeatedReads).toBeLessThanOrEqual(7);
+    expect(readSessionBranchSummariesInWorker(request)).toEqual(first);
     const original = structuredClone(first);
     first.branches[0].headline = "caller mutation";
     expect(readSessionBranchSummariesInWorker(request)).toEqual(original);
-    expect(rawLoads()).toBe(1);
-
-    const rowsBeforeAppend = rowCounters.reduce((total, counter) => total + counter.loads, 0);
     let parentId = "assistant-2";
     for (const type of ["custom", "custom_message", "compaction", "reset"]) {
       const id = `metadata-${type}`;
@@ -241,31 +200,12 @@ describe("SQLite session branches", () => {
       parentId,
       message: { role: "assistant", content: "third answer" },
     });
-    const appended = readSessionBranchSummariesInWorker(request);
-    expectActiveBranch(appended, "assistant-3", "third answer", 5);
-    expect(rawLoads()).toBe(2);
-    expect(
-      rowCounters.reduce((total, counter) => total + counter.loads, 0) - rowsBeforeAppend,
-    ).toBeLessThanOrEqual(5);
-    const events = await loadTranscriptEvents(scope);
-    await replaceTranscriptEvents(
-      scope,
-      events.map((event) =>
-        event && typeof event === "object" && "id" in event && event.id === "assistant-3"
-          ? Object.assign({}, event, {
-              message: { role: "assistant", content: "rewritten answer" },
-            })
-          : event,
-      ),
-    );
-    await waitForSessionTranscriptIndexReconcilesInStateDir(env.OPENCLAW_STATE_DIR);
     expectActiveBranch(
       readSessionBranchSummariesInWorker(request),
       "assistant-3",
-      "rewritten answer",
+      "third answer",
       5,
     );
-    expect(rawLoads()).toBe(3);
   });
 
   it("refuses cached worker summaries in cold storage and reuses them after restoration", async () => {

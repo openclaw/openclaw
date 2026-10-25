@@ -16,7 +16,6 @@ import {
 } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
-  historyMessage,
   historyActivity,
   clearHistoryNavigation,
   persistHistory,

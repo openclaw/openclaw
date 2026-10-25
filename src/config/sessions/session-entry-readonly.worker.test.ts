@@ -53,11 +53,16 @@ import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 const sqliteError = (message: string, errcode = 26) =>
   Object.assign(new Error(message), { code: "ERR_SQLITE_ERROR", errcode });
+const databaseTarget = ({ agentId, path }: { agentId: string; path: string }) => ({
+  agentId,
+  path,
+});
+const sessionEntry = (sessionId = "original") => ({ sessionId, updatedAt: 1 });
 
 function createEntryFixture(env: NodeJS.ProcessEnv) {
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
   const sessionKey = "agent:main:readonly-entry";
-  writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+  writeSessionEntry(database, sessionKey, sessionEntry());
   const scope = {
     agentId: "main",
     databaseAgentId: "main",
@@ -78,7 +83,7 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
       updatedAt: 1,
       category: "Team",
     });
-    const target = { agentId: database.agentId, path: database.path };
+    const target = databaseTarget(database);
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
     const peer = nodeSqlite.openNodeSqliteDatabase(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
@@ -159,18 +164,18 @@ it("resolves runtime targets through an admitted reader without freshness probes
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionId = "runtime-target-session";
     const sessionKey = "agent:main:persisted-target";
-    replaceSessionEntrySync({ agentId: "main", env, sessionKey }, { sessionId, updatedAt: 1 });
-    const read = () =>
+    replaceSessionEntrySync({ agentId: "main", env, sessionKey }, sessionEntry(sessionId));
+    const read = (
+      agentId = "main",
+      selectedId = sessionId,
+      key = "agent:main:fallback",
+      keyFormat?: "agent-qualified",
+    ) =>
       readSessionEntryWorkerRequest({
         kind: "session-runtime-target",
-        database: { agentId: database.agentId, path: database.path },
-        scope: {
-          agentId: "main",
-          env,
-          sessionId,
-          sessionKey: "agent:main:fallback",
-          storePath: database.path,
-        },
+        database: databaseTarget(database),
+        scope: { agentId, env, sessionId: selectedId, sessionKey: key, storePath: database.path },
+        keyFormat,
       });
     await read();
     const queries = trackSqliteStatementExecutions(
@@ -199,18 +204,7 @@ it("resolves runtime targets through an admitted reader without freshness probes
       updatedAt: 1,
     });
     expect(
-      await readSessionEntryWorkerRequest({
-        kind: "session-runtime-target",
-        database: { agentId: database.agentId, path: database.path },
-        scope: {
-          agentId: "helper",
-          env,
-          sessionId: "missing-window",
-          sessionKey: "runtime-fallback",
-          storePath: database.path,
-        },
-        keyFormat: "agent-qualified",
-      }),
+      await read("helper", "missing-window", "runtime-fallback", "agent-qualified"),
     ).toMatchObject({
       target: {
         agentId: "helper",
@@ -451,9 +445,9 @@ it.runIf(process.platform !== "win32").each([
     await withOpenClawTestState({ label: "readonly-store-alias" }, async ({ env, path }) => {
       const original = openOpenClawAgentDatabase({ agentId: "main", env });
       const sessionKey = `agent:${logicalAgentId}:alias`;
-      writeSessionEntry(original, sessionKey, { sessionId: "original", updatedAt: 1 });
+      writeSessionEntry(original, sessionKey, sessionEntry());
       if (logicalAgentId !== "main") {
-        writeSessionEntry(original, "agent:main:alias", { sessionId: "other-agent", updatedAt: 1 });
+        writeSessionEntry(original, "agent:main:alias", sessionEntry("other-agent"));
       }
       const replacement = retarget
         ? openOpenClawAgentDatabase({ agentId: "main", path: path("replacement.sqlite"), env })
