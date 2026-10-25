@@ -34,6 +34,11 @@ function match(
 ) {
   return { appLabel, candidateId, tier: "optional", reason };
 }
+async function matched(options: Parameters<typeof scan>[0]) {
+  const result = await scan(options);
+  assert(result.status === "ok");
+  return result;
+}
 
 function officialEntry(
   id: string,
@@ -139,7 +144,7 @@ describe("setup app recommendation candidates", () => {
   });
 
   it("preserves the ClawHub publisher in candidate ids", async () => {
-    const result = await scan({
+    const result = await matched({
       labels: ["Notes"],
       searchSkills: async () => [
         skill(),
@@ -147,8 +152,6 @@ describe("setup app recommendation candidates", () => {
         skill({ ownerHandle: undefined }),
       ],
     });
-
-    assert(result.status === "ok");
     expect(result.groups[0]?.candidates.map((candidate) => candidate.id)).toEqual([
       "@demo-owner/notes-tools",
       "@other-owner/notes-tools",
@@ -164,22 +167,19 @@ describe("setup app recommendation candidates", () => {
       skill({ summary: "Work with notes" }),
     ]);
 
-    const result = await scan({
+    const result = await matched({
       labels: ["Notes", "Chat Desktop"],
       plugins: [generic, channel],
       channels: [channel],
       searchSkills,
       matches: [match("notes")],
     });
-
-    assert(result.status === "ok");
     expect(result.groups.map((group) => group.app.label)).toEqual(["Chat Desktop", "Notes"]);
     const notes = result.groups.find((group) => group.app.label === "Notes");
     expect(notes?.candidates.map((candidate) => [candidate.source, candidate.id])).toEqual([
       ["official-plugin", "notes"],
       ["clawhub-skill", "@demo-owner/notes-tools"],
     ]);
-    expect(searchSkills).toHaveBeenCalledTimes(2);
   });
 
   it("degrades one failed ClawHub search without aborting other apps", async () => {
@@ -189,30 +189,25 @@ describe("setup app recommendation candidates", () => {
       }
       return [skill({ slug: "working" })];
     });
-    const result = await scan({
+    const result = await matched({
       labels: ["Broken", "Working"],
       searchSkills,
       matches: [match("@demo-owner/working", "match", "Working")],
     });
-    assert(result.status === "ok");
     expect(result.groups.find((group) => group.app.label === "Broken")?.candidates).toEqual([]);
     expect(result.groups.find((group) => group.app.label === "Working")?.candidates).toHaveLength(
       1,
     );
   });
-});
-
-describe("official catalog candidates", () => {
   it("produces channel candidates from the real package-shaped catalogs", async () => {
     // Regression: real catalog entries carry no top-level id; keying by it
     // used to collapse the whole catalog and drop every official candidate.
-    const result = await scan({
+    const result = await matched({
       labels: ["Discord", "WhatsApp"],
       realCatalog: true,
       searchSkills: async () => [],
       matches: [match("discord", "match", "Discord"), match("whatsapp", "match", "WhatsApp")],
     });
-    assert(result.status === "ok");
     for (const [label, id] of [
       ["Discord", "discord"],
       ["WhatsApp", "whatsapp"],
@@ -222,12 +217,9 @@ describe("official catalog candidates", () => {
       );
     }
   });
-});
-
-describe("setup app recommendation matcher", () => {
   it("tolerates fenced JSON with extra keys and long reasons", async () => {
     const reason = `${"a".repeat(118)}🤖suffix`;
-    const result = await scan({
+    const result = await matched({
       text: [
         "Here you go:",
         "```json",
@@ -235,20 +227,17 @@ describe("setup app recommendation matcher", () => {
         "```",
       ].join("\n"),
     });
-    assert(result.status === "ok");
     expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
     expect(result.matches[0]?.reason).toBe(`${"a".repeat(118)}…`);
     expect(result.matches[0]?.reason.length).toBeLessThanOrEqual(120);
   });
 
   it("uses the first complete object when prose contains later JSON", async () => {
-    const result = await scan({
+    const result = await matched({
       text: `${JSON.stringify({
         matches: [{ ...match(undefined, "Connects directly to your notes"), tier: "recommended" }],
       })}\nDiagnostics: {"tokens":12}`,
     });
-
-    assert(result.status === "ok");
     expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
   });
 

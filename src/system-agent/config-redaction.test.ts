@@ -7,10 +7,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
-  isSystemAgentSensitiveConfigPathEmbedding as isSystemAgentSensitiveConfigPathEmbeddingImpl,
-  isSystemAgentSensitiveConfigValue as isSystemAgentSensitiveConfigValueImpl,
-  redactSystemAgentConfigPath as redactSystemAgentConfigPathImpl,
-  redactSystemAgentConfig as redactSystemAgentConfigImpl,
+  isSystemAgentSensitiveConfigPathEmbedding as pathEmbeddingImpl,
+  isSystemAgentSensitiveConfigValue as sensitiveValueImpl,
+  redactSystemAgentConfigPath as redactPathImpl,
+  redactSystemAgentConfig as redactConfigImpl,
 } from "./config-redaction.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
@@ -19,17 +19,19 @@ import {
 
 let pluginMetadata: SystemAgentPluginMetadataTestSnapshot | undefined;
 
-const isSystemAgentSensitiveConfigPathEmbedding: typeof isSystemAgentSensitiveConfigPathEmbeddingImpl =
-  (...args) => pluginMetadata!.run(() => isSystemAgentSensitiveConfigPathEmbeddingImpl(...args));
+const pathEmbedding: typeof pathEmbeddingImpl = (...args) =>
+  pluginMetadata!.run(() => pathEmbeddingImpl(...args));
 
-const isSystemAgentSensitiveConfigValue: typeof isSystemAgentSensitiveConfigValueImpl = (...args) =>
-  pluginMetadata!.run(() => isSystemAgentSensitiveConfigValueImpl(...args));
+const sensitiveValue: typeof sensitiveValueImpl = (...args) =>
+  pluginMetadata!.run(() => sensitiveValueImpl(...args));
 
-const redactSystemAgentConfigPath: typeof redactSystemAgentConfigPathImpl = (...args) =>
-  pluginMetadata!.run(() => redactSystemAgentConfigPathImpl(...args));
+const redactPath: typeof redactPathImpl = (...args) =>
+  pluginMetadata!.run(() => redactPathImpl(...args));
 
-const redactSystemAgentConfig: typeof redactSystemAgentConfigImpl = (...args) =>
-  pluginMetadata!.run(() => redactSystemAgentConfigImpl(...args));
+const redactConfig: typeof redactConfigImpl = (...args) =>
+  pluginMetadata!.run(() => redactConfigImpl(...args));
+
+const redactInvalid = (value: unknown) => redactConfig(value, { valid: false });
 
 beforeEach(() => {
   const config = {};
@@ -49,50 +51,31 @@ describe("isSystemAgentSensitiveConfigValue", () => {
     ["https://example.test/v1?token=synthetic", true],
   ])("classifies URL value %s without exposing appended path data", (value, sensitive) => {
     const path = "models.providers.synthetic.baseUrl";
-    expect(isSystemAgentSensitiveConfigValue(path, value)).toBe(sensitive);
-    expect(redactSystemAgentConfigPath(`${path}.appended`)).toBe("<redacted path>");
+    expect(sensitiveValue(path, value)).toBe(sensitive);
+    expect(redactPath(`${path}.appended`)).toBe("<redacted path>");
   });
 
-  it("detects sensitive descendants in structured parent writes", () => {
-    expect(
-      isSystemAgentSensitiveConfigValue(
-        "channels.synology-chat",
-        '{ accounts: { work: { webhookUrl: "https://gateway.invalid/webhook?token=synthetic" } } }',
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps structured parent writes visible when no descendant is sensitive", () => {
-    expect(
-      isSystemAgentSensitiveConfigValue(
-        "channels.synology-chat",
-        '{ enabled: true, webhookPath: "/synology" }',
-      ),
-    ).toBe(false);
-  });
-
-  it("preserves escaped path segments while matching wildcard descendant hints", () => {
-    expect(
-      isSystemAgentSensitiveConfigValue(
-        'channels.synology-chat.accounts["prod.guild"]',
-        '{ webhookUrl: "https://gateway.invalid/webhook?token=synthetic" }',
-      ),
-    ).toBe(true);
+  it.each([
+    [
+      "channels.synology-chat",
+      '{ accounts: { work: { webhookUrl: "https://gateway.invalid/webhook?token=synthetic" } } }',
+      true,
+    ],
+    ["channels.synology-chat", '{ enabled: true, webhookPath: "/synology" }', false],
+    [
+      'channels.synology-chat.accounts["prod.guild"]',
+      '{ webhookUrl: "https://gateway.invalid/webhook?token=synthetic" }',
+      true,
+    ],
+  ] as const)("classifies structured writes at %s", (path, value, sensitive) => {
+    expect(sensitiveValue(path, value)).toBe(sensitive);
   });
 
   it("fails closed when a dynamic config owner has no current metadata", () => {
-    expect(
-      isSystemAgentSensitiveConfigValue("plugins.entries.missing.config.opaque", "plugin-secret"),
-    ).toBe(true);
-    expect(isSystemAgentSensitiveConfigValue("channels.missing.opaque", "channel-secret")).toBe(
-      true,
-    );
-    expect(
-      isSystemAgentSensitiveConfigValue('channels["defaults.foo"].opaque', "channel-secret"),
-    ).toBe(true);
-    expect(
-      isSystemAgentSensitiveConfigValue('channels["modelByChannel.evil"].opaque', "channel-secret"),
-    ).toBe(true);
+    expect(sensitiveValue("plugins.entries.missing.config.opaque", "plugin-secret")).toBe(true);
+    expect(sensitiveValue("channels.missing.opaque", "channel-secret")).toBe(true);
+    expect(sensitiveValue('channels["defaults.foo"].opaque', "channel-secret")).toBe(true);
+    expect(sensitiveValue('channels["modelByChannel.evil"].opaque', "channel-secret")).toBe(true);
   });
 
   it.each([
@@ -100,17 +83,13 @@ describe("isSystemAgentSensitiveConfigValue", () => {
     ["channels.modelByChannel.telegram.chat", '"openai/gpt-5.5"'],
     ['channels.modelByChannel["token=prod"].chat', '"openai/gpt-5.5"'],
   ])("keeps kernel-owned channel config %s visible", (path, value) => {
-    expect(isSystemAgentSensitiveConfigValue(path, value)).toBe(false);
+    expect(sensitiveValue(path, value)).toBe(false);
   });
 });
 
 describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
   it("detects sensitive data appended to a plugin-owned hint", () => {
-    expect(
-      isSystemAgentSensitiveConfigPathEmbedding(
-        "plugins.entries.codex.config.appServer.headersabcDEF123",
-      ),
-    ).toBe(true);
+    expect(pathEmbedding("plugins.entries.codex.config.appServer.headersabcDEF123")).toBe(true);
   });
 
   it.each([
@@ -123,7 +102,7 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
     'talk.providers.openai["token=prod"]',
     "hooks.mappings[0].agentId",
   ])("preserves schema-valid dynamic path %s", (path) => {
-    expect(isSystemAgentSensitiveConfigPathEmbedding(path)).toBe(false);
+    expect(pathEmbedding(path)).toBe(false);
   });
 
   it.each([
@@ -135,7 +114,7 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
     'hooks.mappings["token=abcDEF123"].agentId',
     'channels.buzz.groups["gateway.auth.token=ACTUAL_GATEWAY_TOKEN"].enabled',
   ])("redacts unknown-owner or secret-bearing path %s", (path) => {
-    expect(redactSystemAgentConfigPath(path)).toBe("<redacted path>");
+    expect(redactPath(path)).toBe("<redacted path>");
   });
 
   it.each([
@@ -148,7 +127,7 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
     'channels.modelByChannel["token=prod"].chat',
     'channels.telegram.groups["prod.guild"].topics["token=prod"].groupPolicy',
   ])("preserves schema-valid path %s", (path) => {
-    expect(redactSystemAgentConfigPath(path)).toBe(path);
+    expect(redactPath(path)).toBe(path);
   });
 });
 
@@ -188,14 +167,12 @@ describe("redactSystemAgentConfig", () => {
             first === "plus" ? ([preferred, fallback] as const) : ([fallback, preferred] as const);
           for (const config of [...configs, configs[0]]) {
             setRuntimeConfigSnapshot(config, config);
-            expect(redactSystemAgentConfigImpl(config, { config })).toMatchObject({
+            expect(redactConfigImpl(config, { config })).toMatchObject({
               channels: { proofchat: { plus: "<redacted>", core: "<redacted>" } },
             });
             for (const owner of ["core", "plus"]) {
-              expect(
-                isSystemAgentSensitiveConfigValueImpl(`channels.proofchat.${owner}`, "synthetic"),
-              ).toBe(true);
-              expect(redactSystemAgentConfigPathImpl(`channels.proofchat.${owner}.synthetic`)).toBe(
+              expect(sensitiveValueImpl(`channels.proofchat.${owner}`, "synthetic")).toBe(true);
+              expect(redactPathImpl(`channels.proofchat.${owner}.synthetic`)).toBe(
                 "<redacted path>",
               );
             }
@@ -208,13 +185,10 @@ describe("redactSystemAgentConfig", () => {
 
   it("fails closed for dynamic owner secrets when the exact config is invalid", () => {
     expect(
-      redactSystemAgentConfig(
-        {
-          plugins: { entries: { "custom.plugin": { config: { opaque: "plugin-secret" } } } },
-          channels: { "custom.channel": { opaque: "channel-secret" } },
-        },
-        { valid: false },
-      ),
+      redactInvalid({
+        plugins: { entries: { "custom.plugin": { config: { opaque: "plugin-secret" } } } },
+        channels: { "custom.channel": { opaque: "channel-secret" } },
+      }),
     ).toEqual({
       plugins: { entries: { "custom.plugin": { config: "<redacted>" } } },
       channels: { "custom.channel": "<redacted>" },
@@ -223,27 +197,21 @@ describe("redactSystemAgentConfig", () => {
 
   it("does not trust known owner metadata for an invalid config snapshot", () => {
     expect(
-      redactSystemAgentConfig(
-        { channels: { "synology-chat": { opaque: "invalid-channel-secret" } } },
-        { valid: false },
-      ),
+      redactInvalid({ channels: { "synology-chat": { opaque: "invalid-channel-secret" } } }),
     ).toEqual({ channels: { "synology-chat": "<redacted>" } });
   });
 
   it("preserves kernel-owned channel namespaces while unknown owners fail closed", () => {
     expect(
-      redactSystemAgentConfig(
-        {
-          channels: {
-            defaults: { groupPolicy: "open" },
-            modelByChannel: { telegram: { chat: "openai/gpt-5.5" } },
-            missing: { opaque: "channel-secret" },
-            "defaults.foo": { opaque: "dotted-channel-secret" },
-            "modelByChannel.evil": { opaque: "dotted-model-secret" },
-          },
+      redactInvalid({
+        channels: {
+          defaults: { groupPolicy: "open" },
+          modelByChannel: { telegram: { chat: "openai/gpt-5.5" } },
+          missing: { opaque: "channel-secret" },
+          "defaults.foo": { opaque: "dotted-channel-secret" },
+          "modelByChannel.evil": { opaque: "dotted-model-secret" },
         },
-        { valid: false },
-      ),
+      }),
     ).toEqual({
       channels: {
         defaults: { groupPolicy: "open" },
@@ -257,15 +225,12 @@ describe("redactSystemAgentConfig", () => {
 
   it("redacts invalid descendants inside core channel namespaces", () => {
     expect(
-      redactSystemAgentConfig(
-        {
-          channels: {
-            defaults: { groupPolicy: "open", opaque: "kernel-secret" },
-            modelByChannel: { telegram: { chat: 42 } },
-          },
+      redactInvalid({
+        channels: {
+          defaults: { groupPolicy: "open", opaque: "kernel-secret" },
+          modelByChannel: { telegram: { chat: 42 } },
         },
-        { valid: false },
-      ),
+      }),
     ).toEqual({
       channels: {
         defaults: { groupPolicy: "open", opaque: "<redacted>" },
@@ -276,13 +241,10 @@ describe("redactSystemAgentConfig", () => {
 
   it("fails closed for malformed invalid-config owner containers", () => {
     expect(
-      redactSystemAgentConfig(
-        {
-          channels: [{ opaque: "channel-secret" }],
-          plugins: { entries: { broken: "plugin-secret" } },
-        },
-        { valid: false },
-      ),
+      redactInvalid({
+        channels: [{ opaque: "channel-secret" }],
+        plugins: { entries: { broken: "plugin-secret" } },
+      }),
     ).toEqual({
       channels: "<redacted>",
       plugins: { entries: { broken: "<redacted>" } },

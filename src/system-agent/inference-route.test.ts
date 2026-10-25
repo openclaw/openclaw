@@ -18,6 +18,8 @@ import {
 } from "./inference-route.js";
 
 const model = (id: string) => buildCatalogModel(id, { contextWindow: 8192, maxTokens: 2048 });
+const workspaceAgent = (config: OpenClawConfig, agentId: string, workspaceDir?: string) =>
+  resolveRunWorkspaceDir({ config, agentId, workspaceDir }).agentId;
 
 async function expectSameProjection(
   before: OpenClawConfig,
@@ -195,16 +197,9 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     const withoutRoster: OpenClawConfig = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
     };
-    const withFirstAgent: OpenClawConfig = {
-      agents: {
-        defaults: withoutRoster.agents?.defaults,
-        entries: {
-          main: {
-            workspace: "/tmp/openclaw-main",
-            agentDir: resolveAgentDir(withoutRoster, "main"),
-          },
-        },
-      },
+    const withFirstAgent = structuredClone(withoutRoster);
+    withFirstAgent.agents!.entries = {
+      main: { workspace: "/tmp/openclaw-main", agentDir: resolveAgentDir(withoutRoster, "main") },
     };
 
     await expectSameProjection(withoutRoster, withFirstAgent, true);
@@ -221,13 +216,7 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
 
     expect(route?.agentId).toBe(owner);
     for (const agentId of [owner, SYSTEM_AGENT_ID]) {
-      expect(
-        resolveRunWorkspaceDir({
-          workspaceDir: "/tmp/x",
-          agentId,
-          config: route!.runConfig,
-        }).agentId,
-      ).toBe(agentId);
+      expect(workspaceAgent(route!.runConfig, agentId, "/tmp/x")).toBe(agentId);
     }
   });
 
@@ -236,17 +225,12 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     const before = structuredClone(config);
     const agentId = "bot-uncreated";
     const ordinary = await resolveRoute(config, agentId);
-    const candidate = await resolveRoute(config, agentId, {
-      modelTarget: "primary",
-    });
+    const candidate = await resolveRoute(config, agentId, { modelTarget: "primary" });
     assert(ordinary && candidate);
-    expect(() =>
-      resolveRunWorkspaceDir({ workspaceDir: undefined, agentId, config: ordinary.runConfig }),
-    ).toThrow("not present in the configured roster");
-    expect(
-      resolveRunWorkspaceDir({ workspaceDir: undefined, agentId, config: candidate.runConfig })
-        .agentId,
-    ).toBe(agentId);
+    expect(() => workspaceAgent(ordinary.runConfig, agentId)).toThrow(
+      "not present in the configured roster",
+    );
+    expect(workspaceAgent(candidate.runConfig, agentId)).toBe(agentId);
     expect(candidate.sourceConfig).toBe(config);
     expect(config).toEqual(before);
   });

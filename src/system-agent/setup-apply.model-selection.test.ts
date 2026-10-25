@@ -13,7 +13,7 @@ type Agents = NonNullable<OpenClawConfig["agents"]>;
 function select(config: OpenClawConfig, options: Partial<Omit<Selection, "config">> = {}) {
   return applySystemAgentModelSelection({ config, model: "openai/gpt-5.5", ...options });
 }
-function agentConfig(defaults: Agents["defaults"], entries: Agents["entries"]): OpenClawConfig {
+function agentConfig(defaults: Agents["defaults"], entries?: Agents["entries"]): OpenClawConfig {
   return { agents: { defaults, entries } };
 }
 type Credential = Extract<AuthProfileCredential, { type: "api_key" | "token" }>;
@@ -87,20 +87,21 @@ describe("projectSetupInferenceConfig", () => {
 describe("applySystemAgentModelSelection", () => {
   it("keeps provider-added first-run model metadata unrestricted", async () => {
     const previousConfig: OpenClawConfig = { gateway: { mode: "local" } };
-    const cfg = await applySystemAgentModelSelection({
-      config: {
+    const cfg = await select(
+      {
         ...previousConfig,
-        agents: { defaults: { models: { "openai/gpt-6-astra": { alias: "GPT" } } } },
+        ...agentConfig({ models: { [model]: { alias: "GPT" } } }),
       },
-      previousConfig,
-      model: "openai/gpt-6-astra",
-      agentRuntimeId: "openclaw",
-      runtimeInDefaults: true,
-    });
+      {
+        previousConfig,
+        agentRuntimeId: "openclaw",
+        runtimeInDefaults: true,
+      },
+    );
     const allowed = buildAllowedModelSet({ cfg, catalog: [], defaultProvider: "openai" });
     expect(allowed.allows({ provider: "openai", model: "gpt-5.4-mini" })).toBe(true);
     expect(cfg.agents?.defaults?.modelPolicy).toBeUndefined();
-    expect(cfg.agents?.defaults?.models?.["openai/gpt-6-astra"]).toEqual({
+    expect(cfg.agents?.defaults?.models?.[model]).toEqual({
       alias: "GPT",
       agentRuntime: { id: "openclaw" },
     });
@@ -108,8 +109,8 @@ describe("applySystemAgentModelSelection", () => {
 
   it("adds a utility without changing other bindings", async () => {
     const config: OpenClawConfig = {
-      agents: {
-        defaults: {
+      ...agentConfig(
+        {
           systemAgent: { agentId: "main" },
           model: {
             primary: "openai/gpt-5.5@openai:primary",
@@ -117,11 +118,11 @@ describe("applySystemAgentModelSelection", () => {
           },
           models: { [model]: { agentRuntime: { id: "codex" } } },
         },
-        entries: {
+        {
           main: { agentDir: "/tmp/main-auth" },
           ops: { model: "openai/gpt-5.4" },
         },
-      },
+      ),
       auth: {
         profiles: {
           "openai:primary": { provider: "openai", mode: "api_key" },
@@ -191,17 +192,11 @@ describe("applySystemAgentModelSelection", () => {
   );
 
   it("keeps a newly approved model allowed when migrating a first-run legacy model map", async () => {
-    const previousConfig: OpenClawConfig = {
-      agents: { defaults: { models: { "fixture/old": {} } } },
-    };
+    const previousConfig = agentConfig({ models: { "fixture/old": {} } });
     const cfg = await select(
-      {
-        agents: {
-          defaults: {
-            models: { "fixture/old": {}, "fixture/unapproved": { alias: "Provider default" } },
-          },
-        },
-      },
+      agentConfig({
+        models: { "fixture/old": {}, "fixture/unapproved": { alias: "Provider default" } },
+      }),
       { previousConfig, model: "fixture/new", agentRuntimeId: "openclaw", runtimeInDefaults: true },
     );
     const allowed = buildAllowedModelSet({ cfg, catalog: [], defaultProvider: "fixture" });

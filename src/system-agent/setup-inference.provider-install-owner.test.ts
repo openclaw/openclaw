@@ -50,12 +50,9 @@ afterEach(() => {
 
 it.each([false, true])(
   "binds a newly installed provider to its real artifact (replace during probe: %s)",
-  async (replaceDuringProbe) => {
-    await withOpenClawTestState(
-      {
-        label: "provider-install-owner",
-        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-      },
+  (replaceDuringProbe) =>
+    withOpenClawTestState(
+      { label: "provider-install-owner", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
         await state.writeConfig({
           gateway: { mode: "local" },
@@ -117,19 +114,14 @@ it.each([false, true])(
             configSchema: { type: "object", properties: {}, additionalProperties: false },
           });
           await fs.writeFile(pluginEntry, pluginSource);
-          const config: OpenClawConfig = {
-            ...params.config,
-            plugins: {
-              ...params.config.plugins,
-              entries: { ...params.config.plugins?.entries, [providerId]: { enabled: true } },
-            },
-            models: {
-              providers: {
-                [providerId]: {
-                  baseUrl: "https://provider.example/v1",
-                  api: "openai-completions",
-                  models: [],
-                },
+          const config: OpenClawConfig = structuredClone(params.config);
+          ((config.plugins ??= {}).entries ??= {})[providerId] = { enabled: true };
+          config.models = {
+            providers: {
+              [providerId]: {
+                baseUrl: "https://provider.example/v1",
+                api: "openai-completions",
+                models: [],
               },
             },
           };
@@ -236,10 +228,7 @@ it.each([false, true])(
               });
               expect(await fs.readFile(state.configPath, "utf8")).toBe(originalBytes);
             } else {
-              expect(result).toMatchObject({
-                ok: true,
-                modelRef,
-              });
+              expect(result).toMatchObject({ ok: true, modelRef });
               // The running generation intentionally retains its pre-install cache.
               const records = await withPluginLifecycleLease(
                 {},
@@ -261,6 +250,5 @@ it.each([false, true])(
           },
         );
       },
-    );
-  },
+    ),
 );
