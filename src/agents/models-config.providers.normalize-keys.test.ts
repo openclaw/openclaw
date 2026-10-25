@@ -63,23 +63,11 @@ describe("provider normalization through catalog planning", () => {
     apiKey: "CUSTOM_OPENAI_API_KEY", // pragma: allowlist secret
     models: [modelDefinition("gpt-4.1-mini")],
   });
-  it.each<{ label: string; providers: Providers; expected: Providers[string] }>([
-    {
-      label: "canonical spelling before an alias",
-      providers: { openai: canonical, " openai ": alias },
-      expected: canonical,
-    },
-    {
-      label: "canonical spelling after an alias",
-      providers: { " openai ": alias, openai: canonical },
-      expected: canonical,
-    },
-    {
-      label: "latest alias when there is no canonical spelling",
-      providers: { " openai": canonical, "openai ": alias },
-      expected: alias,
-    },
-  ])("publishes one provider for $label", async ({ providers, expected }) => {
+  it.each<[string, Providers, Providers[string]]>([
+    ["canonical before alias", { openai: canonical, " openai ": alias }, canonical],
+    ["canonical after alias", { " openai ": alias, openai: canonical }, canonical],
+    ["latest alias without canonical", { " openai": canonical, "openai ": alias }, alias],
+  ])("publishes one provider for %s", async (_label, providers, expected) => {
     const published = await publish(providers);
     expect(Object.keys(published.providers ?? {})).toEqual(["openai"]);
     expect(published.providers?.openai).toEqual(expected);
@@ -132,9 +120,7 @@ describe("provider normalization through catalog planning", () => {
     expect(repeated).toEqual({ action: "noop", pluginCatalogWrites: {} });
 
     const existing = {
-      providers: {
-        google: { ...providers.google, apiKey: "stale-inline-google-key" },
-      },
+      providers: { google: { ...providers.google, apiKey: "stale-inline-google-key" } },
     };
     const refreshed = await publish(providers, {
       agentDir,
@@ -177,10 +163,10 @@ describe("provider normalization through catalog planning", () => {
     };
     const published = await publish(providers);
     // Env refs persist the env-name marker; non-env refs collapse to a non-secret sentinel.
-    expect(published.providers?.openai?.headers?.Authorization).toBe(
-      "secretref-env:OPENAI_HEADER_TOKEN",
-    );
-    expect(published.providers?.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(published.providers?.openai?.headers).toEqual({
+      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+      "X-Tenant-Token": NON_ENV_SECRETREF_MARKER,
+    });
   });
 
   it.each([
