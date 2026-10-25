@@ -1,8 +1,5 @@
 import { request as httpRequest } from "node:http";
-import {
-  createPluginRuntimeMediaMock,
-  createPluginRuntimeMock,
-} from "openclaw/plugin-sdk/channel-test-helpers";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -99,49 +96,6 @@ export function createImageUpdate(params?: {
 }
 
 export function createImageLifecycleCore() {
-  const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const buildChannelInboundEventContextMock = vi.fn(
-    (params: Parameters<Channel["inbound"]["buildContext"]>[0]) =>
-      finalizeInboundContextMock({
-        Body: params.message.body ?? params.message.rawBody,
-        BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
-        RawBody: params.message.rawBody,
-        CommandBody: params.message.commandBody ?? params.message.rawBody,
-        From: params.from,
-        To: params.reply.to,
-        SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
-        AccountId: params.route.accountId ?? params.accountId,
-        ChatType: params.conversation.kind,
-        ConversationLabel: params.conversation.label,
-        SenderName: params.sender.name,
-        SenderId: params.sender.id,
-        Provider: params.channel,
-        Surface: params.channel,
-        MessageSid: params.messageId,
-        Timestamp: params.timestamp,
-        media: params.media,
-        OriginatingChannel: params.channel,
-        OriginatingTo: params.reply.originatingTo,
-        ...params.extra,
-      }),
-  );
-  const recordInboundSessionMock = vi.fn(async () => undefined);
-  const readRemoteMediaBufferMock = vi.fn(async () => ({
-    buffer: Buffer.from("image-bytes"),
-    contentType: "image/jpeg",
-  }));
-  // Preserve the timeout-inspecting mockImplementation signature.
-  const saveRemoteMediaMock = vi.fn<Channel["media"]["saveRemoteMedia"]>(async (_params) => ({
-    id: "zalo-photo.jpg",
-    path: "/tmp/zalo-photo.jpg",
-    size: Buffer.byteLength("image-bytes"),
-    contentType: "image/jpeg",
-  }));
-  const saveMediaBufferMock = vi.fn(async () => ({
-    path: "/tmp/zalo-photo.jpg",
-    contentType: "image/jpeg",
-  }));
-  const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn(async () => undefined);
   const core = createPluginRuntimeMock({
     channel: {
       pairing: {
@@ -150,27 +104,28 @@ export function createImageLifecycleCore() {
       },
       session: {
         resolveStorePath: vi.fn(() => "/tmp/zalo-sessions.json"),
-        readSessionUpdatedAtAsync: vi.fn(async () => undefined),
-        recordInboundSession: recordInboundSessionMock,
+        recordInboundSession: vi.fn(async () => undefined),
       },
-      text: {
-        resolveMarkdownTableMode: vi.fn(() => "code" as const),
+      media: {
+        readRemoteMediaBuffer: vi.fn(async () => ({
+          buffer: Buffer.from("image-bytes"),
+          contentType: "image/jpeg",
+        })),
+        saveRemoteMedia: vi.fn<Channel["media"]["saveRemoteMedia"]>(async (_params) => ({
+          id: "zalo-photo.jpg",
+          path: "/tmp/zalo-photo.jpg",
+          size: Buffer.byteLength("image-bytes"),
+          contentType: "image/jpeg",
+        })),
+        saveMediaBuffer: vi.fn(async () => ({
+          path: "/tmp/zalo-photo.jpg",
+          contentType: "image/jpeg",
+        })) as Channel["media"]["saveMediaBuffer"],
       },
-      media: createPluginRuntimeMediaMock({
-        readRemoteMediaBuffer:
-          readRemoteMediaBufferMock as unknown as Channel["media"]["readRemoteMediaBuffer"],
-        saveRemoteMedia: saveRemoteMediaMock,
-        saveMediaBuffer: saveMediaBufferMock as unknown as Channel["media"]["saveMediaBuffer"],
-      }),
       reply: {
-        finalizeInboundContext:
-          finalizeInboundContextMock as unknown as Channel["reply"]["finalizeInboundContext"],
-        dispatchReplyWithBufferedBlockDispatcher:
-          dispatchReplyWithBufferedBlockDispatcherMock as unknown as Channel["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-      },
-      inbound: {
-        buildContext:
-          buildChannelInboundEventContextMock as unknown as Channel["inbound"]["buildContext"],
+        dispatchReplyWithBufferedBlockDispatcher: vi.fn(
+          async () => undefined,
+        ) as unknown as Channel["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => false),
@@ -178,23 +133,22 @@ export function createImageLifecycleCore() {
       },
     },
   });
+  const buildContext = vi.mocked(core.channel.inbound.buildContext).getMockImplementation()!;
+  const finalizeInboundContextMock = vi.mocked(core.channel.reply.finalizeInboundContext);
+  vi.mocked(core.channel.inbound.buildContext).mockImplementation(((
+    params: Parameters<Channel["inbound"]["buildContext"]>[0],
+  ) => finalizeInboundContextMock(buildContext(params))) as Channel["inbound"]["buildContext"]);
   return {
     core,
     finalizeInboundContextMock,
-    recordInboundSessionMock,
-    readRemoteMediaBufferMock,
-    saveRemoteMediaMock,
-    saveMediaBufferMock,
+    recordInboundSessionMock: vi.mocked(core.channel.session.recordInboundSession),
+    readRemoteMediaBufferMock: vi.mocked(core.channel.media.readRemoteMediaBuffer),
+    saveRemoteMediaMock: vi.mocked(core.channel.media.saveRemoteMedia),
+    saveMediaBufferMock: vi.mocked(core.channel.media.saveMediaBuffer),
   };
 }
 
-export function expectImageLifecycleDelivery(params: {
-  readRemoteMediaBufferMock: ReturnType<typeof vi.fn>;
-  saveRemoteMediaMock: ReturnType<typeof vi.fn>;
-  saveMediaBufferMock: ReturnType<typeof vi.fn>;
-  finalizeInboundContextMock: ReturnType<typeof vi.fn>;
-  recordInboundSessionMock: ReturnType<typeof vi.fn>;
-}) {
+export function expectImageLifecycleDelivery(params: ReturnType<typeof createImageLifecycleCore>) {
   const context = expect.objectContaining({
     SenderName: "Test User",
     media: [expect.objectContaining({ path: "/tmp/zalo-photo.jpg", contentType: "image/jpeg" })],
@@ -229,7 +183,7 @@ async function postWebhookUpdate(params: {
 }) {
   const url = new URL(params.path, params.baseUrl);
   const body = JSON.stringify(params.payload);
-  return await new Promise<{ status: number; body: string }>((resolve, reject) => {
+  return await new Promise<number>((resolve, reject) => {
     const req = httpRequest(
       url,
       {
@@ -241,30 +195,13 @@ async function postWebhookUpdate(params: {
         },
       },
       (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        res.on("end", () => {
-          resolve({
-            status: res.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString("utf8"),
-          });
-        });
+        res.resume();
+        res.on("end", () => resolve(res.statusCode ?? 0));
       },
     );
     req.on("error", reject);
     req.end(body);
   });
-}
-
-export async function postWebhookReplay(
-  params: Parameters<typeof postWebhookUpdate>[0] & { beforeReplay?: () => Promise<void> },
-) {
-  const first = await postWebhookUpdate(params);
-  await params.beforeReplay?.();
-  const replay = await postWebhookUpdate(params);
-  return { first, replay };
 }
 
 export async function replayLifecycleWebhook(
@@ -281,14 +218,17 @@ export async function replayLifecycleWebhook(
       monitor.route.handler(req, res);
     },
     async (baseUrl) => {
-      const { first, replay } = await postWebhookReplay({
+      const params = {
         baseUrl,
         path: "/hooks/zalo",
         secret: "supersecret",
         payload,
-        beforeReplay: waitBeforeReplay ? monitor.waitForIdle : undefined,
-      });
-      expect([first.status, replay.status]).toEqual([200, 200]);
+      };
+      const first = await postWebhookUpdate(params);
+      if (waitBeforeReplay) {
+        await monitor.waitForIdle();
+      }
+      expect([first, await postWebhookUpdate(params)]).toEqual([200, 200]);
       await settle();
     },
   );
