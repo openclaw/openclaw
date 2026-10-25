@@ -235,15 +235,7 @@ async function fixture(phase: string, mode: string) {
           .map((line) => JSON.parse(line))
       : [];
   const pidAlive = (pid: number) => {
-    try {
-      realKill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-        return false;
-      }
-      throw error;
-    }
-    // ps handles both zombie orphans and exit between the independent probes.
+    // Inspect independently of the production group probe, excluding zombie orphans.
     const state = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
     if (state.error) {
       throw state.error;
