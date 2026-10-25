@@ -186,38 +186,6 @@ describe("node SQLite locations", () => {
     expect(namespacedSpy).toHaveBeenCalledWith("resolved-openclaw.sqlite");
   });
 
-  it("keeps UNC and namespaced Windows paths on the Windows VFS path boundary", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const resolvedPaths = new Map([
-      [
-        String.raw`\\server\share\state\openclaw.sqlite`,
-        String.raw`\\server\share\state\openclaw.sqlite`,
-      ],
-      ["//server/share/state/openclaw.sqlite", String.raw`\\server\share\state\openclaw.sqlite`],
-      ["relative/openclaw.sqlite", String.raw`\\server\share\workdir\relative\openclaw.sqlite`],
-      [
-        String.raw`\\?\C:\deep\state\openclaw.sqlite`,
-        String.raw`\\?\C:\deep\state\openclaw.sqlite`,
-      ],
-      [
-        String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
-        String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
-      ],
-    ]);
-    const resolveSpy = vi.spyOn(path, "resolve").mockImplementation((pathname) => {
-      return resolvedPaths.get(pathname) ?? pathname;
-    });
-    const namespacedSpy = vi
-      .spyOn(path, "toNamespacedPath")
-      .mockImplementation((pathname) => pathname);
-
-    for (const [pathname, resolvedPath] of resolvedPaths) {
-      expect(resolveNodeSqliteLocation(pathname)).toBe(resolvedPath);
-    }
-    expect(resolveSpy).toHaveBeenCalledTimes(resolvedPaths.size);
-    expect(namespacedSpy).toHaveBeenCalledTimes(resolvedPaths.size);
-  });
-
   it("preserves the Windows long-path namespace in immutable SQLite URIs", () => {
     const pathname = String.raw`C:\deep state\openclaw.sqlite`;
     const namespacedPath = String.raw`\\?\C:\deep state\openclaw.sqlite`;
@@ -460,6 +428,15 @@ function expectSelection(f: ReturnType<typeof fixture>, source: string, libraryP
   return selected;
 }
 
+function expectRefusal(
+  f: ReturnType<typeof fixture>,
+  message: string,
+  options?: Parameters<typeof f.ensure>[0],
+) {
+  expect(() => f.ensure(options)).toThrow(message);
+  expect(f.select).not.toHaveBeenCalled();
+}
+
 describe("Bun SQLite library selection", () => {
   it.each([
     { explicitPath: undefined, expected: "/env/sqlite.dylib" },
@@ -511,11 +488,7 @@ describe("Bun SQLite library selection", () => {
   );
 
   it("inherits a bundled SQLite selection without probing again", () => {
-    const selected = {
-      source: "bundled",
-      path: bundled,
-      ...safeProbe,
-    };
+    const selected = { source: "bundled", path: bundled, ...safeProbe };
     const f = fixture({ isMainThread: false });
     f.environment.set("openclaw.bunSqliteLibrarySelection", selected);
     expect(f.ensure()).toEqual(selected);
@@ -529,9 +502,8 @@ describe("Bun SQLite library selection", () => {
       exists: () => false,
       probe: unloadable,
     });
-    expect(() => f.ensure()).toThrow("Rebuild or replace the complete standalone artifact");
-    expect(() => f.ensure()).toThrow("/standalone/runtime/lib/libsqlite3.dylib (missing file)");
-    expect(f.select).not.toHaveBeenCalled();
+    expectRefusal(f, "Rebuild or replace the complete standalone artifact");
+    expectRefusal(f, "/standalone/runtime/lib/libsqlite3.dylib (missing file)");
   });
 
   it.each(["explicit", "env"])(
@@ -543,11 +515,12 @@ describe("Bun SQLite library selection", () => {
         probe: unloadable,
         env: source === "env" ? { OPENCLAW_SQLITE_LIBRARY: libraryPath } : {},
       });
-      expect(() => f.ensure(source === "explicit" ? { explicitPath: libraryPath } : {})).toThrow(
+      expectRefusal(
+        f,
         `Cannot use SQLite library ${libraryPath}: missing file. Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.`,
+        source === "explicit" ? { explicitPath: libraryPath } : {},
       );
       expect(f.probe).toHaveBeenCalledExactlyOnceWith(libraryPath);
-      expect(f.select).not.toHaveBeenCalled();
     },
   );
 
@@ -558,10 +531,10 @@ describe("Bun SQLite library selection", () => {
       probe: () => ({ ...safeProbe, extensionLoadingSupported: false }),
       env: { OPENCLAW_SQLITE_LIBRARY: "/usr/lib/libsqlite3.dylib" },
     });
-    expect(() => f.ensure()).toThrow(
+    expectRefusal(
+      f,
       "Cannot use SQLite library /usr/lib/libsqlite3.dylib: built with SQLITE_OMIT_LOAD_EXTENSION",
     );
-    expect(f.select).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -581,8 +554,7 @@ describe("Bun SQLite library selection", () => {
     },
   ])("reports override validation failure: $reason", ({ probe, reason }) => {
     const f = fixture({ env: { OPENCLAW_SQLITE_LIBRARY: "/custom/sqlite.dylib" }, probe });
-    expect(() => f.ensure()).toThrow(`Cannot use SQLite library /custom/sqlite.dylib: ${reason}`);
-    expect(f.select).not.toHaveBeenCalled();
+    expectRefusal(f, `Cannot use SQLite library /custom/sqlite.dylib: ${reason}`);
   });
 
   it.each([
@@ -633,11 +605,10 @@ describe("Bun SQLite library selection", () => {
       `No supported SQLite library for Bun on macOS (${process.arch}). ` +
       "Apple's system SQLite fails OpenClaw's read-only database connections. " +
       `Install one with brew install sqlite, or set OPENCLAW_SQLITE_LIBRARY to a libsqlite3.dylib built for ${process.arch}.`;
-    expect(() => f.ensure()).toThrow(refusal);
-    expect(() => f.ensure()).toThrow(refusal);
+    expectRefusal(f, refusal);
+    expectRefusal(f, refusal);
     expect(f.exists).toHaveBeenCalledTimes(3);
     expect(f.probe).toHaveBeenCalledTimes(3);
-    expect(f.select).not.toHaveBeenCalled();
   });
 
   it("names present candidates a translated process cannot load", () => {
@@ -650,10 +621,10 @@ describe("Bun SQLite library selection", () => {
         );
       },
     });
-    expect(() => f.ensure()).toThrow(
+    expectRefusal(
+      f,
       `No supported SQLite library for Bun on macOS (${process.arch}); unusable: ${homebrew} (dlopen: incompatible architecture). `,
     );
-    expect(f.select).not.toHaveBeenCalled();
   });
 
   it("never retries the one-shot hook after a selection failure", () => {

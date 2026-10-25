@@ -214,10 +214,8 @@ it.each(["absent", "replacement-empty", "replacement-pending"])(
     }
     const replay = vi.fn();
     await finish(replay);
-    expect({ markerBeforeReplay, dispatches: replay.mock.calls.length }).toEqual({
-      markerBeforeReplay: null,
-      dispatches: 0,
-    });
+    expect(markerBeforeReplay).toBeNull();
+    expect(replay).not.toHaveBeenCalled();
   },
 );
 
@@ -584,8 +582,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
   });
   try {
     await dispose(async () => {
-      await expect(fs.access(pending)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(legacy)).rejects.toMatchObject({ code: "ENOENT" });
+      await missing(pending, legacy);
       // A recursive remover may unlink the in-tree lock before other files.
       await rm(lock, { force: true });
       expect(runScript).not.toHaveBeenCalled();
@@ -600,7 +597,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
       expect(result).toEqual({ completed: true });
     }
     expect(runScript).not.toHaveBeenCalled();
-    await expect(fs.access(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await missing(packageRoot);
   } finally {
     vi.restoreAllMocks();
     await rm(lock, { force: true });
