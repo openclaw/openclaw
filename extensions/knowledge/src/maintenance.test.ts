@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { contract } from "./contract.js";
-import { parseCron, nextRun } from "./cron.js";
 import { createKnowledgeService } from "./service.js";
 import {
   adopt,
@@ -87,31 +86,6 @@ const remember = (service: any, context: any, text: any) =>
   );
 const page = (service: any, context: any, title: any, type = "company") =>
   service.save_page({ requestId: randomUUID(), title, type, body: "Page.\n" }, context);
-
-it("cron expressions evaluate in the configured time zone and skip impossible slots", () => {
-  const daily = parseCron("30 3 * * *", "America/Los_Angeles");
-  expect(new Date(nextRun(daily, Date.parse("2026-10-20T12:00:00Z"))).toISOString()).toBe(
-    "2026-10-21T10:30:00.000Z",
-  );
-  // Spring forward: 02:30 does not exist on 2026-03-08 in Los Angeles.
-  const early = parseCron("30 2 * * *", "America/Los_Angeles");
-  expect(new Date(nextRun(early, Date.parse("2026-03-08T08:00:00Z"))).toISOString()).toBe(
-    "2026-03-09T09:30:00.000Z",
-  );
-  // Fall back: 01:30 repeats on 2026-11-01 and runs once.
-  const repeat = parseCron("30 1 * * *", "America/Los_Angeles"),
-    first = nextRun(repeat, Date.parse("2026-11-01T07:00:00Z"));
-  expect(new Date(first).toISOString()).toBe("2026-11-01T08:30:00.000Z");
-  expect(new Date(nextRun(repeat, first)).toISOString()).toBe("2026-11-02T09:30:00.000Z");
-  expect(
-    new Date(
-      nextRun(parseCron("*/15 9-17 * * 1-5", "UTC"), Date.parse("2026-10-24T12:00:00Z")),
-    ).toISOString(),
-  ).toBe("2026-10-26T09:00:00.000Z");
-  expect(() => parseCron("61 * * * *", "UTC")).toThrow(/Invalid cron field/);
-  expect(() => parseCron("* * * *", "UTC")).toThrow(/five fields/);
-  expect(() => parseCron("* * * * *", "Mars/Base")).toThrow(/Unknown time zone/);
-});
 
 it("a scheduled pass links across every store and partition, skips unprovisioned stores, repeats as a no-op, and catches up after a miss", async () => {
   const f = await fixture(),

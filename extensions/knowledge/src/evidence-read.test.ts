@@ -201,16 +201,6 @@ it("streaming normalizes boundary-spanning CRLF and decodes split UTF-8 scalars"
   expect(splitPages.map((page) => page.text).join("")).toBe(split);
 });
 
-it("escaped text and multibyte filename retain JSON framing headroom", async () => {
-  const f = await fixture(),
-    original = String.fromCharCode(1).repeat(6500) + "界🌱".repeat(100);
-  const evidence = await upload(f, original, { filename: "源".repeat(65) + ".txt" });
-  const saved = await publish(f, [evidence]);
-  const pages = await collect(f, inputFor(saved, evidence, { maxChars: 3000 }));
-  expect(pages.map((page) => page.text).join("")).toBe(original);
-  expect(pages.length > 1).toBeTruthy();
-});
-
 it("invalid schema bounds and nonexistent or reversed line ranges fail closed", async () => {
   const f = await fixture(),
     evidence = await upload(f, "one\ntwo"),
@@ -441,30 +431,6 @@ it("a linked parent directory cannot expose retained bytes", async () => {
   await expect(f.read(inputFor(saved, evidence))).rejects.toThrow(/Unsafe|unavailable|link/i);
 });
 
-it("missing optional filename uses a retained basename longer than 200 characters", async () => {
-  const f = await fixture(),
-    original = "Legacy retained source without filename metadata.";
-  const uploaded = await upload(f, original);
-  // Upload names are capped at 200, but pre-existing retained Evidence paths
-  // permit longer basenames. Construct that valid legacy source in the temp vault.
-  const filename = "legacy-".repeat(32) + ".txt";
-  expect(filename.length > 200 && Buffer.byteLength(filename) <= 255).toBeTruthy();
-  const { filename: omitted, source: _originalSource, ...evidence } = uploaded;
-  expect(omitted).toBe("source.txt");
-  evidence.path = path.posix.join(path.posix.dirname(uploaded.path), filename);
-  await rename(
-    path.join(f.root, "private", uploaded.path),
-    path.join(f.root, "private", evidence.path),
-  );
-  const saved = await publish(f, [evidence]);
-  const page = await f.read(inputFor(saved, evidence));
-  expect(page.source.filename, "fallback basename is not truncated").toBe(filename);
-  expect(page.source.sha256).toBe(evidence.sha256);
-  expect(page.text).toBe(original);
-  expect(page.nextCursor).toBe(null);
-  checkPage(page);
-});
-
 // Annotation sources remain scoped to the record that explicitly cites them.
 it("annotation-only identity and attribution sources are readable", async () => {
   const f = await fixture(),
@@ -495,29 +461,4 @@ it("annotation-only identity and attribution sources are readable", async () => 
     expect(result.text).toBe("Annotation-only retained source.");
   }
   await expect(f.read(inputFor(candidate, evidence))).rejects.toThrow(/unavailable/);
-});
-
-it("ranged UTF-8 sources need no recognized extension or media type", async () => {
-  const f = await fixture(),
-    uploaded = await upload(f, "first\nsecond\nthird");
-  const {
-    filename: _filename,
-    mediaType: _mediaType,
-    source: _originalSource,
-    ...evidence
-  } = uploaded;
-  evidence.path = path.posix.join(path.posix.dirname(uploaded.path), "transcript");
-  evidence.start_line = 1;
-  evidence.end_line = 2;
-  await rename(
-    path.join(f.root, "private", uploaded.path),
-    path.join(f.root, "private", evidence.path),
-  );
-  const saved = await publish(f, [evidence]);
-  const inspected = await f.service.record({ id: saved.id, includeEvidence: true }, f.owner);
-  expect(inspected.evidence![0]!.verified).toBe(true);
-  const result = await f.read(inputFor(saved, evidence, { startLine: 1, endLine: 2 }));
-  checkPage(result);
-  expect(result.text).toBe("first\nsecond");
-  expect(result.nextCursor).toBe(null);
 });

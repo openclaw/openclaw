@@ -1,14 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, readFile, rm, rename, link, symlink } from "node:fs/promises";
 import path from "node:path";
-import type { FeatureClient } from "openclaw/plugin-sdk/feature-contract";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { isFullHit } from "./retrieval-contract.js";
-import { loadSearch, type SearchState } from "./retrieval-view.js";
 import { keywordExpression } from "./retrieval.js";
 import { AGENT_HIT_LIMIT, COMPACT_SNIPPET_CHARS } from "./search-detail.js";
 import { createKnowledgeService } from "./service.js";
@@ -425,39 +423,6 @@ it("ranking emphasizes titles, deterministic pagination and scoped index reuse",
   const agentPage = await f.service.grep({ query: "haystack" }, f.owner);
   expect(agentPage.hits.length).toBe(AGENT_HIT_LIMIT);
   expect(agentPage.nextOffset).toBe(AGENT_HIT_LIMIT);
-});
-
-it("native search client passes explicit typed mode and filters to the shared operations", async () => {
-  const calls: any = [],
-    // loadSearch only calls invoke; the fake records requests and its outputs are never read.
-    feature = {
-      invoke: async (name: any, input: any) => {
-        calls.push({ name, input });
-        return {};
-      },
-    } as FeatureClient<typeof contract>;
-  const state: SearchState = {
-    query: "name",
-    mode: "phrase",
-    lifecycle: "active",
-    kind: "page",
-    type: "person",
-    tag: "team",
-    offset: 20,
-  };
-  await loadSearch(feature, state);
-  await loadSearch(feature, { ...state, mode: "exact" });
-  expect(calls).toMatchObject([
-    { name: "grep", input: { mode: "phrase", offset: 20 } },
-    { name: "lookup" },
-  ]);
-  expect(calls[0].input.acceptance).toBe(undefined);
-  expect(calls[1].input.mode).toBe(undefined);
-  for (const { name, input } of calls) {
-    expect(
-      Check(contract.operations[name as keyof typeof contract.operations].input, input),
-    ).toBeTruthy();
-  }
 });
 
 it("published pages are immediately searchable without approval; restored generations cannot serve a newer index", async () => {

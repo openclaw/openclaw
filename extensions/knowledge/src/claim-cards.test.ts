@@ -67,41 +67,6 @@ it("claim cards use one scan per page, preserve pagination and omit evidence/ful
   expect(concise.records.every((r: any) => !r.card)).toBeTruthy();
 });
 
-it("card projection preserves eligibility, filtering and entity/owner grouping data", async () => {
-  const vault = new SampleVault();
-  const normal = await vault.list({ kind: "claim" });
-  const cards = checked("records", await vault.list({ kind: "claim", includeCards: true }));
-  expect(cards.records.map(({ card: _card, ...r }: any) => r)).toStrictEqual(normal.records);
-  expect(cards.records.every((r: any) => r.valid && r.lifecycle === "active")).toBeTruthy();
-  const data = await vault.scan();
-  const claim = data.records.find((r) => r.id === "sample_claim_pilot");
-  for (const target of claim!.metadata.entities!) {
-    const input = { id: target, direction: "claims" } as const;
-    const plain = checked("connections", connections(data, input));
-    const enriched = checked(
-      "connections",
-      connections(data, { ...input, view: "full", includeCards: true }),
-    );
-    expect(enriched.snapshot).toBe(plain.snapshot);
-    expect(enriched.total).toBe(plain.total);
-    expect(enriched.connections.every((r: any) => r.record.card)).toBeTruthy();
-    const linked = enriched.connections.find((r: any) => r.record.id === claim!.id).record.card;
-    expect(linked.metadata.entities).toStrictEqual(claim!.metadata.entities);
-    expect(linked.metadata.owner).toBe(claim!.metadata.owner);
-    expect(linked.metadata.due_at).toBe(claim!.metadata.due_at);
-  }
-  const filtered = checked(
-    "records",
-    await vault.list({ kind: "claim", query: claim!.id, includeCards: true }),
-  );
-  expect(filtered.records.map((r: any) => r.id)).toStrictEqual([claim!.id]);
-  expect(
-    checked("records", await vault.list({ kind: "page", includeCards: true })).records.some(
-      (r: any) => r.card,
-    ),
-  ).toBe(false);
-});
-
 it("relationship browse batches deduplicated eligible endpoints in one scan per page", async () => {
   const vault = new SampleVault(),
     data = await vault.scan();

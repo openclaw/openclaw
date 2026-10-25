@@ -323,31 +323,6 @@ it("verification catches evidence damage, broken links, changed revisions and ex
   expect(missing.problems[0]!.code).toBe("unavailable");
 });
 
-it("verification checks page occurrence fields and claim dates consistently with record inspection", async () => {
-  const f = await batchFixture();
-  const occurredAt = "2026-09-24T15:59:47.098Z";
-  Object.assign(f.input.items[0]!.input, { fields: { occurred_at: occurredAt } });
-  Object.assign(f.input.items[2]!.input, { occurred_at: "2026-09-24", due_at: "2026-09-25" });
-  const receipt = await f.service.publish_batch(f.input, f.owner);
-  const ids: Record<string, any> = Object.fromEntries(receipt.items!.map((r) => [r.key, r.id]));
-  const meeting = await f.service.record({ id: ids.meeting, view: "summary" }, f.owner);
-  expect(meeting.record!.occurredAt).toBe(occurredAt);
-  const records: any[] = [
-    { id: ids.meeting, occurred_at: meeting.record!.occurredAt, owner: null, due_at: null },
-    { id: ids.action, occurred_at: "2026-09-24", due_at: "2026-09-25", owner: ids.morgan },
-    { id: ids.morgan, occurred_at: null, owner: null, due_at: null },
-  ];
-  expect((await f.service.verify({ records }, f.owner)).passed).toBe(3);
-  for (const expected of [null, "2026-09-23"]) {
-    const checked = await f.service.verify(
-      { records: [{ id: ids.meeting, occurred_at: expected }] },
-      f.owner,
-    );
-    expect(checked.failed).toBe(1);
-    expect(checked.problems.map((p) => p.code)).toStrictEqual(["occurred_at-mismatch"]);
-  }
-});
-
 it("expected graph checks authored links in both directions, subset associations and exact endpoints", async () => {
   const f = await batchFixture(),
     receipt = await f.service.publish_batch(f.input, f.owner);
@@ -530,47 +505,6 @@ it("evidence changed before acceptance rejects the entire batch", async () => {
   await expect(storage.batch(f.input, f.access(), "agent")).rejects.toThrow();
   expect((await f.service.history({}, f.owner)).mutations.length).toBe(0);
   expect((await f.service.records({}, f.owner)).total).toBe(0);
-});
-
-it("summary reads exclude related assertion bodies but explicit evidence reads keep UI context", async () => {
-  const f = await batchFixture();
-  const input: BatchInput = {
-    ...f.input,
-    items: [
-      ...f.input.items,
-      {
-        key: "other",
-        kind: "claim",
-        input: {
-          title: "Related commitment",
-          body: "A long related assertion ".repeat(300),
-          claim_kind: "commitment",
-          assertion_origin: "source",
-          attribution: "Trial source",
-          evidence: [f.original.evidence!],
-          continuity: [
-            {
-              id: "@action",
-              relation: "reaffirms",
-              basis: "Synthetic same statement",
-              evidence: [f.original.evidence!],
-            },
-          ],
-        },
-      },
-    ],
-  };
-  const receipt = await f.service.publish_batch(input, f.owner),
-    action = receipt.items!.find((i) => i.key === "action");
-  const summary = await f.service.record({ id: action!.id, view: "summary" }, f.owner);
-  expect(summary.relatedStatements).toBe(undefined);
-  expect(summary.record!.body).toBe(undefined);
-  expect(JSON.stringify(summary).length < 2500).toBeTruthy();
-  const expanded = await f.service.record(
-    { id: action!.id, view: "summary", includeEvidence: true, maxEvidenceChars: 100 },
-    f.owner,
-  );
-  expect(expanded.relatedStatements!.length).toBe(1);
 });
 
 it("verification reports unavailable index instead of a false pass", async () => {

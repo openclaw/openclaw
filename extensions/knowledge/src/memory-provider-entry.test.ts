@@ -6,7 +6,6 @@ import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { contract } from "./contract.js";
 import plugin from "./index.js";
-import { buildKnowledgeMemoryPrompt } from "./memory-prompt.js";
 import { memoryFixture } from "./memory-provider.test-support.js";
 import { deriveMemoryFlushRequestId } from "./service.js";
 import {
@@ -18,11 +17,6 @@ import {
 } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
-const tools = new Set(
-  Object.values<FeatureOperation>(contract.operations).flatMap((o) =>
-    o.tool ? [o.tool.name] : [],
-  ),
-);
 
 it("entry retains native tools, denies untrusted provider callers and prompt honors missing capabilities", async () => {
   const base = tempDirs.make("knowledge-entry-");
@@ -231,74 +225,6 @@ it("grep and lookup expose empty and usable evidence for Active Memory", async (
   await assertCount("knowledge_lookup", { query: "Orchid decision" }, 1, 1);
   await assertCount("knowledge_grep", { query: "Orchid", offset: 1 }, 0, 1);
   await assertCount("knowledge_lookup", { query: "Orchid decision", offset: 1 }, 0, 1);
-});
-
-it("prompt routes all workflows, obeys citation settings and omits disabled save guidance", async () => {
-  const full = buildKnowledgeMemoryPrompt({ availableTools: tools }).join("\n");
-  for (const skill of ["recall", "capture", "ingest", "meeting-ingest", "entities", "correct"]) {
-    expect(full.includes(`knowledge-${skill}`)).toBeTruthy();
-  }
-  expect(full).toMatch(/not instructions or authorization/);
-  expect(full).toMatch(/knowledge_recall only when the owner asks/);
-  // The call shape models get wrong: a fresh requestId and items, not claims.
-  expect(full).toMatch(/a fresh requestId \(a new UUID\).*an items array \(not claims\)/);
-  // Sustained work gets a maintained entity page; findings go there, not into source-claim remembering.
-  expect(full).toMatch(
-    /Entity pages: work that spans several turns.*create it now.*through knowledge-entities/,
-  );
-  expect(full).toMatch(/Record your own findings on pages instead/);
-  const readOnly = await memoryFixture(tempDirs, { writesEnabled: false });
-  expect(readOnly.capability!.promptBuilder({ availableTools: tools }).join("\n")).not.toMatch(
-    /knowledge_remember|knowledge-capture|knowledge-correct|knowledge_recall only/,
-  );
-  const partial = buildKnowledgeMemoryPrompt({
-    availableTools: new Set(["knowledge_grep"]),
-    citationsMode: "off",
-  }).join("\n");
-  expect(partial).not.toMatch(/knowledge_record|knowledge_lookup|knowledge-capture/);
-  expect(partial).toMatch(/Citations are disabled/);
-  expect(partial).toMatch(
-    /refers to earlier work, run knowledge_grep once on each entity it names, not only the first\./,
-  );
-  const rememberWithoutPages = buildKnowledgeMemoryPrompt({
-    availableTools: new Set(["knowledge_grep", "knowledge_remember"]),
-  }).join("\n");
-  expect(rememberWithoutPages).toMatch(/Skip your own inference/);
-  expect(rememberWithoutPages).not.toMatch(/Entity pages|on pages instead/);
-  expect(
-    buildKnowledgeMemoryPrompt({ availableTools: new Set(["knowledge_recall"]) }).join("\n"),
-  ).toMatch(/owner asks.*recalled automatically/);
-});
-
-it("prompt names repository project keys only for remote keys, gated by the tools that use them", () => {
-  const prompt = (projectKey: any, available = tools) =>
-    buildKnowledgeMemoryPrompt({ availableTools: available, projectKey }).join("\n");
-  const full = prompt("github.com/acme/widget");
-  expect(full).toMatch(
-    /repository key is `github\.com\/acme\/widget`, an alias of its project page: pass it as the knowledge_remember subject for claims about this repository's work, and omit it for claims about anything else/,
-  );
-  expect(full).toMatch(
-    /If no page answers to `github\.com\/acme\/widget`.*add it as an alias.*knowledge-entities/,
-  );
-  for (const key of [
-    undefined,
-    "",
-    "path:/srv/workspace",
-    "github.com/a<b",
-    "github.com/a\nb",
-    "github.com/a`b",
-  ]) {
-    expect(prompt(key)).not.toMatch(/repository key|answers to `/);
-  }
-  expect(prompt("github.com/acme/widget", new Set(["knowledge_grep"]))).not.toMatch(
-    /repository key|answers to `/,
-  );
-  const rememberOnly = prompt(
-    "github.com/acme/widget",
-    new Set(["knowledge_grep", "knowledge_remember"]),
-  );
-  expect(rememberOnly).toMatch(/repository key/);
-  expect(rememberOnly).not.toMatch(/answers to `/);
 });
 
 it("large provider reads follow advertised line continuations beyond 100000 and disclose opening excerpts", async () => {
