@@ -31,8 +31,7 @@ export async function launchControlUiObservationBrowser(options: {
   const close = async () => {
     let closeError: Error | undefined;
     try {
-      // Avoid the context-reuse boundary of the retained macOS Chromium crashes.
-      // Retire this sample's browser directly, outside the measurement interval.
+      // Retire this sample's browser outside the measurement interval.
       await server.close();
     } catch (error) {
       closeError = toErrorObject(error, "Failed to close observation Chromium");
