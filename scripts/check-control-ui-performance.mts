@@ -66,8 +66,8 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Lazy component CSS saves 8,923 B startup / 17,200 B Chat gzip at equal request counts.
-  // Splitting loses catalog compression: measured 305,732 B + prior 354 B headroom.
+  // Lazy component CSS reduces startup/Chat payload without adding critical requests.
+  // Keep room for compression lost across the optional component stylesheets.
   totalCssGzipBytes: 306_086,
   // Vyctor approved the restored mobile topbar in #182599 (2026-10-24).
   // Base measures 1,595,655 B. Keep main's 64 B build variance.
