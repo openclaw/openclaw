@@ -72,7 +72,7 @@ function prepareTranscriptInstanceEntries(
   return { get: (sessionKey) => readRow(sessionKey)?.entry };
 }
 
-export function listTranscriptInstancesFromDatabase(params: {
+function listTranscriptInstancesFromDatabase(params: {
   currentEntries?: Pick<ReadonlyMap<string, SessionEntry>, "get">;
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">;
   options: SessionTranscriptInstanceListOptions;
