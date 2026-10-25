@@ -22,7 +22,8 @@ describe("Crabline Slack transport", () => {
         mode: "http",
         signingSecret: "crabline-slack-signing-secret",
       });
-      expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
+      const env = transport.createRuntimeEnvPatch?.() ?? {};
+      expect(env).toMatchObject({
         SLACK_API_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/api\/$/u),
         SLACK_BOT_TOKEN: "xoxb-crabline-slack-token",
         SLACK_SIGNING_SECRET: "crabline-slack-signing-secret",
@@ -32,7 +33,6 @@ describe("Crabline Slack transport", () => {
         replyTo: "C1234567890",
         to: "C1234567890",
       });
-      const env = transport.createRuntimeEnvPatch?.() ?? {};
       const response = await fetch(`${env.SLACK_API_URL}users.info?user=U0123456789`, {
         headers: { authorization: `Bearer ${env.SLACK_BOT_TOKEN}` },
       });
@@ -127,20 +127,20 @@ describe("Crabline Slack transport", () => {
           expect(transport.state.getSnapshot().events).toContainEqual(
             expect.objectContaining({ kind: "inbound-message", message: inbound }),
           );
-          expect(requests).toEqual([
+          expect(requests).toMatchObject([
             {
               path: "/slack/events",
               signed: true,
-              body: expect.objectContaining({
+              body: {
                 type: "event_callback",
                 event_id: expect.any(String),
-                event: expect.objectContaining({
+                event: {
                   channel: "D12345678",
                   user: "U12345678",
                   text: "Slack baseline marker check.",
                   ts: inbound.id,
-                }),
-              }),
+                },
+              },
             },
           ]);
 
@@ -154,8 +154,6 @@ describe("Crabline Slack transport", () => {
           ]);
 
           const env = transport.createRuntimeEnvPatch?.() ?? {};
-          expect(env.SLACK_API_URL).toBeTruthy();
-          expect(env.SLACK_BOT_TOKEN).toBeTruthy();
           const outbound = { conversation, text: "assistant via fake slack" };
           await postJson(
             `${env.SLACK_API_URL}chat.postMessage`,

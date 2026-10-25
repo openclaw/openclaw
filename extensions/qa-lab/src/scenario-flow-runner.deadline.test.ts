@@ -11,6 +11,18 @@ const delayedSideEffectCases: Array<[name: string, action: QaFlowAction]> = [
   ["sendInbound", { sendInbound: { expr: "await resolveInput()" } }],
 ];
 
+function scenario(id: string) {
+  return {
+    id,
+    title: id,
+    sourcePath: `qa/scenarios/${id}.yaml`,
+    surface: "test",
+    objective: "test",
+    successCriteria: ["test"],
+    execution: { kind: "flow" as const },
+  };
+}
+
 describe("scenario flow deadline", () => {
   it.each(delayedSideEffectCases)(
     "does not invoke %s after aborting during async input resolution",
@@ -25,15 +37,7 @@ describe("scenario flow deadline", () => {
         api: {
           signal: controller.signal,
           state: createQaBusState(),
-          scenario: {
-            id: "flow-post-resolution-abort-fence",
-            title: "flow-post-resolution-abort-fence",
-            sourcePath: "qa/scenarios/flow-post-resolution-abort-fence.yaml",
-            surface: "test",
-            objective: "test",
-            successCriteria: ["test"],
-            execution: { kind: "flow" },
-          },
+          scenario: scenario("flow-post-resolution-abort-fence"),
           config: {},
           resolveInput: async () => {
             markInputStarted();
@@ -100,15 +104,7 @@ describe("scenario flow deadline", () => {
       api: {
         signal: controller.signal,
         state: createQaBusState(),
-        scenario: {
-          id: "flow-abort-fence",
-          title: "flow-abort-fence",
-          sourcePath: "qa/scenarios/flow-abort-fence.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
+        scenario: scenario("flow-abort-fence"),
         config: {},
         delayedAction: async () => {
           markActionStarted();
