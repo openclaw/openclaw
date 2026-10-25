@@ -8,13 +8,19 @@ import type { SidebarToolActivity } from "../components/app-sidebar-session-type
 import { runningRow } from "./app-sidebar-session-narration.ts";
 
 const narrations: SidebarNarration[] = [];
+const sessionKey = "agent:main:run";
 function gatewayEvent(event: string, payload: unknown): GatewayEventFrame {
   return { type: "event", event, payload };
 }
-function chatDelta(text?: string, deltaText?: string, replace?: boolean): GatewayEventFrame {
+function chatDelta(
+  text?: string,
+  deltaText?: string,
+  replace?: boolean,
+  runId = "run-1",
+): GatewayEventFrame {
   return gatewayEvent("chat", {
-    sessionKey: "agent:main:run",
-    runId: "run-1",
+    sessionKey,
+    runId,
     state: "delta",
     deltaText,
     replace,
@@ -33,7 +39,7 @@ const toolItem = (data: Record<string, unknown>): Record<string, unknown> => ({
 function createToolNarration(defaultRunId = "run-1") {
   const tools: Array<ReadonlyMap<string, SidebarToolActivity>> = [];
   const source = {
-    subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
+    subscribeMessages: vi.fn(() => Promise.resolve({ key: sessionKey, agentId: null })),
     unsubscribeMessages: vi.fn(() => Promise.resolve()),
   };
   const narration = createSidebarNarration();
@@ -50,13 +56,11 @@ function createToolNarration(defaultRunId = "run-1") {
     connectionIdentity: {},
     source,
     openSessionKey: "",
-    rows: [runningRow("agent:main:run")],
+    rows: [runningRow(sessionKey)],
     agentId: "main",
   });
   const emit = (stream: string, data: Record<string, unknown>, runId = defaultRunId) =>
-    narration.handleEvent(
-      gatewayEvent("session.tool", { sessionKey: "agent:main:run", runId, stream, data }),
-    );
+    narration.handleEvent(gatewayEvent("session.tool", { sessionKey, runId, stream, data }));
   const emitItem = (
     itemId: string,
     data: Record<string, unknown>,
@@ -83,21 +87,14 @@ it("keeps tool identity separate from commentary and clears it with its run", as
   expect(narration.read().lines.size).toBe(0);
   expect(narration.read().tools.get("agent:main:run")?.name).toBe("read");
 
-  narration.handleEvent(
-    gatewayEvent("chat", {
-      sessionKey: "agent:main:run",
-      runId: "run-2",
-      state: "delta",
-      message: { role: "assistant", content: "A new run" },
-    }),
-  );
+  narration.handleEvent(chatDelta("A new run", undefined, undefined, "run-2"));
   expect(narration.read().tools.size).toBe(0);
   emit("tool", { name: "plugin.custom_tool" }, "run-2");
   expect(narration.read().tools.get("agent:main:run")?.name).toBe("plugin.custom_tool");
 
   narration.disconnect();
   expect(source.unsubscribeMessages).toHaveBeenCalledWith({
-    key: "agent:main:run",
+    key: sessionKey,
     agentId: null,
   });
   expect(narration.read().lines.size).toBe(0);
@@ -119,36 +116,28 @@ it("projects public tool progress without exposing raw output or unrelated items
   const { narration, tools, emit, emitItem } = createToolNarration();
   const call = { name: "exec", toolCallId: "call-1" };
   const item = { ...call, kind: "tool", itemId: "tool:call-1" };
-  emit("tool", {
-    ...call,
-    phase: "start",
-    args: { command: "private input" },
-  });
+  const emitCall = (data: Record<string, unknown>) => emit("tool", { ...call, ...data });
+  const emitProgress = (data: Record<string, unknown>) => emit("item", { ...item, ...data });
+  emitCall({ phase: "start", args: { command: "private input" } });
   expect(tools.at(-1)?.get("agent:main:run")).toEqual({
     name: "exec",
     toolCallId: "call-1",
     text: undefined,
   });
-  emit("item", {
-    ...item,
+  emitProgress({
     phase: "start",
     title: "Exec printf fixture-private-output",
     meta: "printf fixture-private-output",
   });
   expect(tools.at(-1)?.get("agent:main:run")?.text).toBeUndefined();
-  emit("item", {
-    ...item,
+  emitProgress({
     phase: "update",
     title: "Exec",
     meta: "Run focused tests",
     progressText: "Checking **3 files**",
   });
   expect(tools.at(-1)?.get("agent:main:run")?.text).toBe("Checking 3 files");
-  emit("tool", {
-    ...call,
-    phase: "update",
-    partialResult: { text: "private output" },
-  });
+  emitCall({ phase: "update", partialResult: { text: "private output" } });
   expect(tools.at(-1)?.get("agent:main:run")?.text).toBe("Checking 3 files");
   const count = tools.length;
   emit("item", {
