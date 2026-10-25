@@ -83,7 +83,7 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
             gateway.client &&
             (gateway.phase === "connecting" || gateway.phase === "reconnecting")
           ) {
-            await gateway.client.initialConnectSent;
+            await gateway.client.connectSent;
           }
           // Let the initial composer commit before the saved rows do their layout work.
           if (!hydration.connected && storedSnapshot && !storedSnapshot.board) {

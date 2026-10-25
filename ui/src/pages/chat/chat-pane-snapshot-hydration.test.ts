@@ -124,9 +124,9 @@ describe("stored chat snapshot hydration", () => {
   }
 
   it("holds ready cached rows until connect dispatch and adopts them once", async () => {
-    const connect = createDeferred();
+    const connect = createDeferred<boolean>();
     const client = createGatewayBrowserClientFixture();
-    Object.defineProperty(client, "initialConnectSent", { get: () => connect.promise });
+    Object.defineProperty(client, "connectSent", { get: () => connect.promise });
     const pane = createMountedPane("agent:main:connecting", new Map(), client);
     pane.context.gateway.snapshot.phase = "connecting";
     const snapshot = {
@@ -145,7 +145,7 @@ describe("stored chat snapshot hydration", () => {
       await Promise.resolve();
       expect(state.chatMessages).toEqual([]);
       expect(hydration.adoptReadySnapshot).toBeTypeOf("function");
-      connect.resolve();
+      connect.resolve(true);
       // The subscription reads its cursor synchronously after this adoption.
       hydration.adoptReadySnapshot?.();
       expect(state.chatMessages).toEqual(snapshot.messages);
