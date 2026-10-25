@@ -66,7 +66,7 @@ function stubAppResizeObservers() {
 }
 
 describe("mcp-app-view localization", () => {
-  it("joins app initialization with its early size without requiring another report", async () => {
+  it("reserves early sizes until a real report after app initialization", async () => {
     const cache: ChatMessageCache = new Map();
     const host = { assistantAgentId: "main" };
     const target = { sessionKey: "agent:main:main" };
@@ -81,7 +81,7 @@ describe("mcp-app-view localization", () => {
     const reports: unknown[] = [];
     bridgeMocks.earlyHeight = 160;
     try {
-      const { frame, unmount } = await mountBridge(
+      const { bridge, frame, unmount } = await mountBridge(
         "view-reservation",
         true,
         true,
@@ -94,10 +94,11 @@ describe("mcp-app-view localization", () => {
           },
         },
       );
-      expect(reports).toEqual([
-        [160, false, 600, 700],
-        [160, true, 160, undefined],
-      ]);
+      expect(reports).toEqual([[160, false, 600, 700]]);
+      expect(frame.style.height).toBe("600px");
+      expect(layout.read(row)).toBe(700);
+      bridge.onsizechange?.({ height: 160 });
+      expect(reports.at(-1)).toEqual([160, true, 160, undefined]);
       expect(frame.style.height).toBe("160px");
       expect(layout.read(row)).toBeUndefined();
       unmount();

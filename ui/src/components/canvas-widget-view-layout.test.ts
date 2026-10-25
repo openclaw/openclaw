@@ -39,7 +39,7 @@ function reserveRow(view: OpenClawCanvasWidgetView) {
 }
 
 describe("Canvas widget layout settlement", () => {
-  it("reserves early iframe sizes until document rendering acknowledges the reported size", async () => {
+  it("reserves early iframe sizes until a real report after document rendering", async () => {
     const { view, frame } = await loaded();
     const { layout, row } = reserveRow(view);
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
@@ -53,6 +53,10 @@ describe("Canvas widget layout settlement", () => {
     expect(frame.style.height).toBe("600px");
     expect(layout.read(row)).toBe(700);
     message(frame, { method: "ui/notifications/sandbox-resource-loaded", params: { renderId } });
+    await settle(view);
+    expect(frame.style.height).toBe("600px");
+    expect(layout.read(row)).toBe(700);
+    message(frame, { type: "openclaw:widget-size", height: 200 });
     await settle(view);
     expect(frame.style.height).toBe("200px");
     expect(layout.read(row)).toBeUndefined();

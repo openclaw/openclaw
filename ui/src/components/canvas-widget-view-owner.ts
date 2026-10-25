@@ -518,14 +518,7 @@ export function createCanvasWidget(
         postHostState();
         notify();
       },
-      onRendered: () => {
-        // Join document readiness with its size even when the size arrived first.
-        if (reportedHeight !== undefined) {
-          reportHeight(reportedHeight);
-          notify();
-        }
-        postHostState();
-      },
+      onRendered: postHostState,
       onError: (error) => {
         clearSandbox();
         state.error = formatUiError(error);
@@ -554,7 +547,8 @@ export function createCanvasWidget(
       return;
     }
     postWidgetTheme(frame, sandboxOrigin);
-    frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, sandboxOrigin);
+    const hostState = { type: "openclaw:widget-chat-host", measure: reportedHeight !== undefined };
+    frame.contentWindow?.postMessage(hostState, sandboxOrigin);
     // Saved widget documents use this bridge for unconsumed wheel input.
     frame.contentWindow?.postMessage(
       { type: "openclaw:widget-board-host", nonce: scrollNonce },

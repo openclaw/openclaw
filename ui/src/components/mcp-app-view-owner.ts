@@ -466,7 +466,6 @@ export function createMcpAppView(
       }
 
       let appReady = false;
-      let reportedHeight: number | undefined;
       let modes = negotiateMcpAppDisplayModes(payload.displayModes);
       const initialDisplayMode = () =>
         payload.displayMode && modes.available.includes(payload.displayMode)
@@ -651,7 +650,7 @@ export function createMcpAppView(
           !host.fillContainer &&
           host.displayMode !== "fullscreen"
         ) {
-          const measured = (reportedHeight = Math.min(1200, Math.max(160, Math.round(height))));
+          const measured = Math.min(1200, Math.max(160, Math.round(height)));
           const nextHeight = host.onHeightChange?.(measured, appReady) ?? measured;
           createdResources.frameHeight = nextHeight;
           iframe.style.height = `${nextHeight}px`;
@@ -662,7 +661,6 @@ export function createMcpAppView(
       const initialized = new Promise<void>((resolve) => {
         bridge.oninitialized = () => {
           appReady = true;
-          bridge.onsizechange?.({ height: reportedHeight });
           modes = negotiateMcpAppDisplayModes(
             payload.displayModes,
             bridge.getAppCapabilities()?.availableDisplayModes,
