@@ -1,6 +1,11 @@
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { profileDirectory } from "../profile-directory.ts";
+import type { SessionPullRequestSnapshotStore } from "../session-pull-requests.ts";
 import { createSharedOwnerProjection } from "./shared-owner-projection.ts";
+
+export const sharedThemeProjection = createSharedOwnerProjection(
+  (theme: ApplicationContext["theme"]) => theme,
+);
 
 export const sharedRuntimeConfigProjection = createSharedOwnerProjection(
   (config: ApplicationContext["runtimeConfig"]) => ({
@@ -23,4 +28,14 @@ export const sharedAgentIdentityProjection = createSharedOwnerProjection(
 
 export const sharedProfileDirectoryProjection = createSharedOwnerProjection(
   (directory: ReturnType<typeof profileDirectory>) => directory,
+);
+
+// Only the revision is projected; consumers keep their own session lookup and navigation intent.
+export const sharedSessionsRevision = createSharedOwnerProjection(
+  (_sessions: ApplicationContext["sessions"]) => undefined,
+);
+
+// Per-target watch custody stays with each consumer; this shares only publication of accepted facts.
+export const sharedSessionPullRequestsProjection = createSharedOwnerProjection(
+  (store: SessionPullRequestSnapshotStore) => store,
 );
