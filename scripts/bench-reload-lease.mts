@@ -199,11 +199,8 @@ try {
           ? "plugin-enable"
           : "plugin-disable";
     setPhase(actionPhase);
-    const observed: Awaited<ReturnType<typeof client.request>> = await client.request(
-      "config.get",
-      {},
-      120_000,
-    );
+    const observed: Awaited<ReturnType<ReturnType<typeof createGatewayWsClient>["request"]>> =
+      await client.request("config.get", {}, 120_000);
     assert.ok(observed.ok, "Config observation failed");
     result.observations++;
     const payload = observed.payload as { hash: string };
