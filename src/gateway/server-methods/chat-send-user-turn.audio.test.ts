@@ -40,6 +40,27 @@ function voiceRef(id = "voice.ogg") {
     sourceIndex: 0,
   };
 }
+function voiceAttachments(id = "voice.ogg") {
+  return {
+    mediaPathOffloads: [
+      { path: `/state/media/inbound/${id}`, contentType: "audio/ogg", fileName: id },
+    ],
+    offloadedRefs: [voiceRef(id)],
+  };
+}
+const echoAudio = {
+  echoTranscript: true,
+  echoFormat: "Heard: {transcript}",
+  scope: { default: "allow" as const },
+};
+function expectCommandText(prepared: ReturnType<typeof prepareVoice>, text: string) {
+  expect(prepared.ctx).toMatchObject({
+    CommandBody: text,
+    BodyForCommands: text,
+    RawBody: text,
+    CommandTurn: { body: text },
+  });
+}
 function mockTranscript(text: string) {
   transcribeAudioAttachments.mockImplementationOnce(async ({ ctx }) => {
     if (ctx.media?.[0]) {
@@ -56,6 +77,15 @@ function mockPersistence(
   return vi
     .spyOn(chatAttachments, "persistInboundImagesForTranscript")
     .mockResolvedValueOnce({ entries: [], omission });
+}
+function prepareTranscript(
+  transcript: string,
+  options?: Parameters<typeof prepareVoice>[0],
+  omission?: Parameters<typeof mockPersistence>[0],
+) {
+  mockPersistence(omission);
+  mockTranscript(transcript);
+  return prepareVoice(options);
 }
 
 describe("prepareChatSendUserTurn audio", () => {
@@ -81,37 +111,25 @@ describe("prepareChatSendUserTurn audio", () => {
     "persists a configured %s voice transcript in its canonical user turn",
     async (_name, id, mode) => {
       const clientInfo = createClientInfo({ id, mode });
-      mockPersistence();
-      mockTranscript("transcribed voice");
       setRuntimeConfigSnapshot({});
       const scope = {
         default: "allow" as const,
         rules: [{ match: { channel: "webchat" }, action: "allow" as const }],
       };
-      const prepared = prepareVoice({
+      const prepared = prepareTranscript("transcribed voice", {
         text: "raw message",
         clientInfo,
         cfg: {
           tools: {
             media: {
               audio: {
-                echoTranscript: true,
-                echoFormat: "Heard: {transcript}",
+                ...echoAudio,
                 scope,
               },
             },
           },
         },
-        attachments: {
-          mediaPathOffloads: [
-            {
-              path: "/state/media/inbound/voice.ogg",
-              contentType: "audio/ogg",
-              fileName: "voice.ogg",
-            },
-          ],
-          offloadedRefs: [voiceRef()],
-        },
+        attachments: voiceAttachments(),
       });
       const input = await prepared.readInput();
       expect(input.text).toBe("raw message\nHeard: transcribed voice");
@@ -164,26 +182,9 @@ describe("prepareChatSendUserTurn audio", () => {
             },
           },
         },
-        tools: {
-          media: {
-            audio: {
-              echoTranscript: true,
-              echoFormat: "Heard: {transcript}",
-              scope: { default: "allow" },
-            },
-          },
-        },
+        tools: { media: { audio: echoAudio } },
       },
-      attachments: {
-        mediaPathOffloads: [
-          {
-            path: "/state/media/inbound/support-voice.ogg",
-            contentType: "audio/ogg",
-            fileName: "support-voice.ogg",
-          },
-        ],
-        offloadedRefs: [voiceRef("support-voice.ogg")],
-      },
+      attachments: voiceAttachments("support-voice.ogg"),
     });
 
     const input = await prepared.readInput();
@@ -196,44 +197,41 @@ describe("prepareChatSendUserTurn audio", () => {
   });
 
   it("does not reintroduce a transcript removed by the approval hook", async () => {
-    mockPersistence();
-    mockTranscript("private transcript");
-    const prepared = prepareVoice();
+    const prepared = prepareTranscript("private transcript");
 
     await expect(prepared.readInput()).resolves.toMatchObject({
       text: "caption\nHeard: private transcript",
     });
     prepared.applyApprovedText("caption");
     expect(prepared.ctx.BodyForAgent).toBe("caption");
-    expect(prepared.ctx.BodyForAgent).not.toContain("private transcript");
     expect(prepared.ctx.Transcript).toBeUndefined();
 
     prepared.applyApprovedText("caption\nHeard: [redacted]");
     expect(prepared.ctx.BodyForAgent).toBe("caption\nHeard: [redacted]");
-    expect(prepared.ctx.BodyForAgent).not.toContain("private transcript");
     expect(prepared.ctx.Transcript).toBeUndefined();
   });
 
   it.each(["none", "inline-image-save-failed"] as const)(
     "preserves approved caption and untrusted speech with media omission %s",
     async (omission) => {
-      mockPersistence(omission);
-      mockTranscript("approved transcript");
-      const prepared = prepareVoice({
-        text: "a longer caption",
-        attachments: {
-          imageOrder: ["inline"],
-          parsedImages: [
-            { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
-          ],
+      const prepared = prepareTranscript(
+        "approved transcript",
+        {
+          text: "a longer caption",
+          attachments: {
+            imageOrder: ["inline"],
+            parsedImages: [
+              { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
+            ],
+          },
         },
-      });
+        omission,
+      );
 
       const input = await prepared.readInput();
       expect(prepared.replyOptionImages).toEqual([
         { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
       ]);
-      expect(input.text).toContain("a longer caption\nHeard: approved transcript");
       const omissionSuffix =
         omission === "inline-image-save-failed"
           ? "\n[image attachment omitted: durable managed media claim unavailable]"
@@ -245,21 +243,16 @@ describe("prepareChatSendUserTurn audio", () => {
           omissionSuffix,
       );
       expect(prepared.ctx.BodyForAgent).not.toContain("Heard:");
-      expect(prepared.ctx.CommandBody).toBe("x");
-      expect(prepared.ctx.BodyForCommands).toBe("x");
-      expect(prepared.ctx.RawBody).toBe("x");
-      expect(prepared.ctx.CommandTurn?.body).toBe("x");
+      expectCommandText(prepared, "x");
     },
   );
 
   it.each(["", null, undefined])(
     "keeps transcript echo out of command parsing after approval with base text %s",
     async (baseText) => {
-      mockPersistence();
-      mockTranscript("/reset");
       const inputController = createUserTurnInputController("");
       inputController.controller.baseInput.text = baseText;
-      const prepared = prepareVoice({
+      const prepared = prepareTranscript("/reset", {
         input: inputController,
         text: "",
         attachments: { offloadedRefs: [voiceRef()] },
@@ -272,9 +265,7 @@ describe("prepareChatSendUserTurn audio", () => {
         '[Audio transcript (machine-generated, untrusted)]: "/reset"',
       );
       expect(prepared.ctx.CommandTurn).toMatchObject({ kind: "normal", body: "" });
-      expect(prepared.ctx.CommandBody).toBe("");
-      expect(prepared.ctx.BodyForCommands).toBe("");
-      expect(prepared.ctx.RawBody).toBe("");
+      expectCommandText(prepared, "");
       expect(prepared.ctx.CommandSource).toBeUndefined();
       expect(prepared.isInternalTextSlashCommandTurn).toBe(false);
       expect(prepared.ctx.media?.[0]?.transcribed).toBe(true);
@@ -282,10 +273,8 @@ describe("prepareChatSendUserTurn audio", () => {
   );
 
   it("does not dispatch a raw slash command from a transcript-only echo", async () => {
-    mockPersistence();
-    mockTranscript("/reset");
     const sessionEntry = { sessionId: "voice-session", updatedAt: 1 };
-    const prepared = prepareVoice({
+    const prepared = prepareTranscript("/reset", {
       text: "",
       cfg: {
         commands: { text: true },
@@ -302,9 +291,7 @@ describe("prepareChatSendUserTurn audio", () => {
       '[Audio transcript (machine-generated, untrusted)]: "/reset"',
     );
     expect(prepared.ctx.CommandTurn).toMatchObject({ kind: "normal", body: "" });
-    expect(prepared.ctx.CommandBody).toBe("");
-    expect(prepared.ctx.BodyForCommands).toBe("");
-    expect(prepared.ctx.RawBody).toBe("");
+    expectCommandText(prepared, "");
 
     const commandParams = buildCommandTestParams(
       prepared.ctx.CommandBody ?? "",

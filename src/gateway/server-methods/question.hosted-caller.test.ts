@@ -31,12 +31,14 @@ import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.j
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const sessionKey = "agent:main:hosted-question";
+const destination = { header: "Destination", question: "Where next?" };
+const answers = { answers: { destination: ["Home"] } };
+const answered = { status: "answered", answers: { answers: { destination: ["Home"] } } };
 const toolArgs = {
   questions: [
     {
       id: "destination",
-      header: "Destination",
-      question: "Where next?",
+      ...destination,
       options: [{ label: "Home" }, { label: "Elsewhere" }],
     },
   ],
@@ -204,11 +206,7 @@ async function withHostedQuestion(
         waiting: waiting.promise,
         manager,
         request,
-        answer: (id) =>
-          browserRequest("question.resolve", {
-            id,
-            answers: { answers: { destination: ["Home"] } },
-          }),
+        answer: (id) => browserRequest("question.resolve", { id, answers }),
         read: (id) => browserRequest("question.get", { id }),
         hosted: (method, params) =>
           withGatewayToolCallerIdentity(caller, () =>
@@ -252,15 +250,8 @@ it("runs hosted ask_user through the real router with its original narrow operat
         runId: "hosted-question-run",
         status: "pending",
       });
-      expect(await fixture.answer(record.id)).toMatchObject([
-        true,
-        { status: "answered", answers: { answers: { destination: ["Home"] } } },
-        undefined,
-      ]);
-      expect((await result).details).toMatchObject({
-        status: "answered",
-        answers: { answers: { destination: ["Home"] } },
-      });
+      expect(await fixture.answer(record.id)).toMatchObject([true, answered, undefined]);
+      expect((await result).details).toMatchObject(answered);
       fixture.closeParent();
       expect(await fixture.read(record.id)).toMatchObject([
         true,
@@ -308,8 +299,7 @@ it.each(["write", "view", "none"] as const)(
           questions: [
             {
               questionId: "destination",
-              header: "Destination",
-              question: "Where next?",
+              ...destination,
               options: [],
               isOther: true,
             },
@@ -325,10 +315,7 @@ it.each(["write", "view", "none"] as const)(
           } else {
             expect(read.payload).toMatchObject({ question: { id: request.id, status: "pending" } });
           }
-          const answer = await fixture.hosted("question.resolve", {
-            id: request.id,
-            answers: { answers: { destination: ["Home"] } },
-          });
+          const answer = await fixture.hosted("question.resolve", { id: request.id, answers });
           expect(answer.ok).toBe(role === "write");
           if (role !== "write") {
             expect(answer.error?.details).toMatchObject(
