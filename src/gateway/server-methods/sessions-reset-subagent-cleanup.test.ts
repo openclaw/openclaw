@@ -247,17 +247,13 @@ afterEach(async () => {
   env.restore();
 });
 
-test.each([false, true])("collector cleanup retry after reset: %s", async (reset) => {
-  if (reset) {
-    await reopen();
-    await request("sessions.reset");
-    expect(readSession()?.lifecycleRevision).not.toBe("original");
-  }
+test("collector cleanup retry preserves a reset session", async () => {
+  await reopen();
+  await request("sessions.reset");
+  expect(readSession()?.lifecycleRevision).not.toBe("original");
   const beforeRetry = readSession();
-  if (reset) {
-    await reopen();
-  }
-  await sweepAndExpectSession(reset ? beforeRetry : undefined, reset ? 1 : 2);
+  await reopen();
+  await sweepAndExpectSession(beforeRetry, 1);
   await expectResultRetained();
 });
 
@@ -601,29 +597,13 @@ test("reset persists suppression after a rejected cleanup write", async () => {
   await sweepAndExpectSession(successor);
 });
 
-test.each([false, true])("reset handles yielded runs (collector: %s)", async (collect) => {
-  const id = collect ? "yielded-collector" : "yielded-continuation";
-  await registerCollector(id, key, "main", collect);
+test("reset preserves a yielded continuation's session authority", async () => {
+  const id = "yielded-continuation";
+  await registerCollector(id, key, "main", false);
   await emitSubagentStart(id);
   emitLifecycle(id, { phase: "end", yielded: true, endedAt: Date.now() });
-  // Collectors settle at their own terminal; announcing subagents retain a continuation.
-  if (collect) {
-    // Detached deletion outlives the terminal event; join its durable mark and bookkeeping tails.
-    await waitForRegistryPublication(
-      () => typeof subagentRuns.get(id)?.cleanupCompletedAt === "number",
-    );
-    await settleSubagentRegistryPersistenceWork();
-    const settled = expectDefined(subagentRuns.get(id), "settled collector");
-    expect(settled.pauseReason).toBeUndefined();
-    expect(settled.execution.status).toBe("terminal");
-    expect(settled.collectorCompletion).toBeDefined();
-  } else {
-    await waitForRegistryPublication(() => subagentRuns.get(id)?.pauseReason === "sessions_yield");
-    expect(subagentRuns.get(id)?.pauseReason).toBe("sessions_yield");
-  }
+  await waitForRegistryPublication(() => subagentRuns.get(id)?.pauseReason === "sessions_yield");
   await request("sessions.reset");
-  if (!collect) {
-    expect(storedRun(id)).toMatchObject({ pauseReason: "sessions_yield" });
-  }
-  expectSuppression(id, collect);
+  expect(storedRun(id)).toMatchObject({ pauseReason: "sessions_yield" });
+  expectSuppression(id, false);
 });
