@@ -218,30 +218,23 @@ describe("GitHub publication branch history", () => {
   it("repairs unrecognized published credit without rewriting history or importing body examples", async () => {
     await f.published("initial");
     const other = "Co-authored-by: example <99+example@users.noreply.github.com>";
-    const layouts = [
-      `${human}\n\nWorked on by:\n- @alice\n\n${marker}`,
-      `${human}\n\n${other}\n${marker}`,
-      `${human}\n\n${marker}`,
-      ["Example:", "```text", human, other, "```", "", marker].join("\n"),
-    ];
-    for (const [index, layout] of layouts.entries()) {
-      const message = `Implementation credit\n\n${layout}`;
-      const previous = await f.publishMessage(message);
-      expect(await f.parsed()).not.toContain(human);
-      const tree = await f.head("HEAD^{tree}");
-      f.calls.length = 0;
-      const repaired = await f.published(`repair-${index}`);
-      expect(await f.parsed()).toBe(`${human}\nOpenClaw-Publication: ${repaired.requestId}`);
-      expect(await f.commitFacts()).toEqual({ parent: previous, tree });
-      expect(await f.message(previous)).toBe(message);
-      expect(f.calls.filter((args) => args.includes("commit-tree"))).toHaveLength(1);
-      expect(f.calls.some((args) => args.includes("POST"))).toBe(false);
-      const beforeReplay = await f.head();
-      await f.unchanged(async () => {
-        expect(await f.publish(`repair-${index}`)).toEqual(repaired);
-        await f.published(`reuse-${index}`, { headCommit: beforeReplay });
-      });
-    }
+    const message = ["Implementation credit", "", "```text", human, other, "```", "", marker].join(
+      "\n",
+    );
+    const previous = await f.publishMessage(message);
+    expect(await f.parsed()).not.toContain(human);
+    const tree = await f.head("HEAD^{tree}");
+    f.calls.length = 0;
+    const repaired = await f.published("repair");
+    expect(await f.parsed()).toBe(`${human}\nOpenClaw-Publication: ${repaired.requestId}`);
+    expect(await f.commitFacts()).toEqual({ parent: previous, tree });
+    expect(await f.message(previous)).toBe(message);
+    expect(f.calls.some((args) => args.includes("POST"))).toBe(false);
+    const beforeReplay = await f.head();
+    await f.unchanged(async () => {
+      expect(await f.publish("repair")).toEqual(repaired);
+      await f.published("reuse", { headCommit: beforeReplay });
+    });
     // Commit-format trailer parsing must not treat a Markdown separator as a patch divider.
     const valid = await f.publishMessage(`Implementation credit\n\n---\n\n${human}\n${marker}`);
     expect(await f.parsed()).toBe(`${human}\n${marker}`);

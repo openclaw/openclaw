@@ -73,6 +73,12 @@ function report(
   );
 }
 
+function withSession(run: (identity: Awaited<ReturnType<typeof createSession>>) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await run(await createSession("publication-transcript"));
+  });
+}
+
 function reportMessages(events: unknown[], requestId: string, assistantOnly = false) {
   return events.filter(
     (event) =>
@@ -159,16 +165,14 @@ describe("GitHub publication transcript reporting", () => {
       const markReportedAsync = vi.fn().mockResolvedValue(undefined);
       const sql = observeHostDataSql();
       try {
-        await reportGitHubPublicationTranscript(
-          loadRuntime,
-          { markReportedAsync },
-          { ...session, result },
-        );
-        await reportGitHubPublicationTranscript(
-          loadRuntime,
-          { markReportedAsync },
-          { ...session, result },
-        );
+        const publish = () =>
+          reportGitHubPublicationTranscript(
+            loadRuntime,
+            { markReportedAsync },
+            { ...session, result },
+          );
+        await publish();
+        await publish();
         const events = await loadTranscriptEvents({
           ...session,
           storePath: location.path,
@@ -196,8 +200,7 @@ describe("GitHub publication transcript reporting", () => {
   )(
     "preserves canonical report visibility after $label ($encoding)",
     async ({ tail, count, encoding, beforeTail = [] }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const identity = await createSession("publication-codec");
+      await withSession(async (identity) => {
         const result = failedResult("codec-publication");
         const events = [
           { type: "session", id: identity.sessionId, version: CURRENT_SESSION_VERSION },
@@ -229,8 +232,7 @@ describe("GitHub publication transcript reporting", () => {
   it.each(["missing", "legacy"])(
     "keeps the %s header migration boundary before reporting",
     async (header) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const identity = await createSession("publication-header");
+      await withSession(async (identity) => {
         const events = [
           ...(header === "legacy" ? [{ type: "session", id: identity.sessionId, version: 1 }] : []),
           { type: "provider_event", id: "opaque", parentId: null },
@@ -238,11 +240,7 @@ describe("GitHub publication transcript reporting", () => {
         await replaceTranscriptEvents(identity, events);
         const markReportedAsync = vi.fn().mockResolvedValue(undefined);
         await expect(
-          report(
-            identity,
-            failedResult("header-publication", "Failed", "Retry"),
-            markReportedAsync,
-          ),
+          report(identity, failedResult("header-publication"), markReportedAsync),
         ).rejects.toThrow("doctor/import migration");
         expect(markReportedAsync).not.toHaveBeenCalled();
         expect(await loadTranscriptEvents(identity)).toEqual(events);
@@ -250,8 +248,7 @@ describe("GitHub publication transcript reporting", () => {
     },
   );
   it("marks a publication reported only after the transcript commits and allows retry after failure", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const identity = await createSession("publication-failure");
+    await withSession(async (identity) => {
       const result = failedResult("retry-publication");
       const database = openOpenClawAgentDatabase({ agentId: identity.agentId });
       const markReportedAsync = vi.fn(async () => {
@@ -281,8 +278,7 @@ describe("GitHub publication transcript reporting", () => {
     });
   });
   it("reports on the active branch while preserving large unrelated evidence", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const identity = await createSession("publication-branch");
+    await withSession(async (identity) => {
       const result = failedResult("inactive-publication");
       await replaceTranscriptEvents(identity, [
         { type: "session", id: identity.sessionId, version: CURRENT_SESSION_VERSION },
@@ -336,8 +332,7 @@ describe("GitHub publication transcript reporting", () => {
   ])(
     "appends one projected assistant message for a $label result",
     async ({ result, visibleText }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const identity = await createSession("publication-transcript");
+      await withSession(async (identity) => {
         const markReportedAsync = vi.fn().mockResolvedValue(undefined);
         await report(identity, result, markReportedAsync);
         await report(identity, result, markReportedAsync);
