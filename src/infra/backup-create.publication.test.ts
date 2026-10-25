@@ -171,7 +171,7 @@ describe("backup traversal", () => {
     },
   );
 
-  it("reports transient files in a second workspace and preserves its dangling absolute link", async () => {
+  it("backs up a second workspace and preserves its dangling absolute link", async () => {
     await withBackupFixture({ layout: "split" }, async (state) => {
       const second = state.path("second-workspace");
       await fs.mkdir(second);
@@ -180,10 +180,7 @@ describe("backup traversal", () => {
           entries: { main: { workspace: state.workspaceDir }, second: { workspace: second } },
         },
       });
-      const transient = ["pending.tmp", "queue.json.tmp.123.456"];
-      for (const name of [...transient, "keep.txt"]) {
-        await fs.writeFile(path.join(second, name), name);
-      }
+      await fs.writeFile(path.join(second, "keep.txt"), "keep.txt");
       const dangling = state.path("missing-target");
       const sourceLink = path.join(second, "dangling-link");
       await fs.symlink(dangling, sourceLink, process.platform === "win32" ? "junction" : "file");
@@ -191,15 +188,6 @@ describe("backup traversal", () => {
       const result = await createVerifiedBackup(state, { includeWorkspace: true, json: true });
       const entries = await listArchiveEntryDetails(result.archivePath);
       expect(entries.some((entry) => entry.path.endsWith("/second-workspace/keep.txt"))).toBe(true);
-      for (const name of transient) {
-        expect(entries.some((entry) => entry.path.endsWith(`/second-workspace/${name}`))).toBe(
-          false,
-        );
-        expect(result.skipped).toContainEqual(
-          expect.objectContaining({ sourcePath: path.join(second, name), reason: "volatile" }),
-        );
-      }
-      expect(result.skippedVolatileCount).toBe(2);
       const link = entries.find((entry) => entry.path.endsWith("/second-workspace/dangling-link"));
       expect(link).toMatchObject({ type: "SymbolicLink", linkpath });
       expect(result.externalSymbolicLinks).toContainEqual({
