@@ -484,12 +484,9 @@ openclaw-chat-detail-panel,
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--muted);
-  font-family: var(--font-shortcut);
   font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 500;
   line-height: 1.4;
-  letter-spacing: 0;
   white-space: nowrap;
 }
 
