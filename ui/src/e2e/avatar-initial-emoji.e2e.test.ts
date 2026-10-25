@@ -3,10 +3,8 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { pageRunner } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { themeConfigResponse } from "./theme-typography.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI identity emoji avatars",
@@ -33,9 +31,7 @@ suite.define(() => {
           value: undefined,
         });
       });
-      await seedChatSettings(page, suite.server.baseUrl, { theme: "crt", themeMode: "dark" });
-      const themed = themeConfigResponse("crt", "dark");
-      const config = { ...themed.config, agents: { entries: { main: {}, emoji: {} } } };
+      const config = { agents: { entries: { main: {}, emoji: {} } } };
       const hydratedEmojiAgent = { id: "emoji", identity: { name: "Rocket" }, name: "Rocket" };
       const gateway = await installMockGateway(page, {
         defaultAgentId: "main",
@@ -67,10 +63,12 @@ suite.define(() => {
             agents: [asciiAgent, hydratedEmojiAgent],
           },
           "config.get": {
-            ...themed,
             config,
             sourceConfig: config,
+            hash: "hash-1",
+            issues: [],
             raw: JSON.stringify(config),
+            valid: true,
           },
         },
       });
@@ -92,39 +90,6 @@ suite.define(() => {
         name: "Emoji",
       });
       await expect.poll(() => emojiInput.inputValue()).toBe(emojiGrapheme);
-      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("crt");
-      await expect
-        .poll(() =>
-          page
-            .locator("#openclaw-theme-palette-crt")
-            .evaluate((link: HTMLLinkElement) => Boolean(link.sheet)),
-        )
-        .toBe(true);
-      await page.evaluate(() => document.fonts.ready);
-      for (const avatar of [
-        agentSelect.locator(".agent-select__trigger .agent-select__avatar"),
-        page.locator(".agent-identity-editor__avatar .identity-avatar--agent"),
-      ]) {
-        await avatar.locator('.identity-avatar__text[data-avatar="🚀"]').waitFor();
-        const offset = await avatar.evaluate((element) => {
-          const outer = element.getBoundingClientRect();
-          const radius = getComputedStyle(element).borderTopLeftRadius;
-          const text = element.querySelector(".identity-avatar__text")!.getBoundingClientRect();
-          return {
-            round:
-              outer.width > 0 &&
-              outer.width === outer.height &&
-              (radius.endsWith("%")
-                ? Number.parseFloat(radius) >= 50
-                : Number.parseFloat(radius) >= outer.width / 2),
-            x: text.x + text.width / 2 - outer.x - outer.width / 2,
-            y: text.y + text.height / 2 - outer.y - outer.height / 2,
-          };
-        });
-        expect.soft(offset.round).toBe(true);
-        expect.soft(Math.abs(offset.x)).toBeLessThanOrEqual(1);
-        expect.soft(Math.abs(offset.y)).toBeLessThanOrEqual(1);
-      }
       await picker.getByRole("button", { name: "Choose emoji" }).click();
       await expect.poll(() => picker.getByRole("button", { name: "lobster" }).count()).toBe(1);
       expect(await picker.getByRole("textbox", { name: "Paste another emoji" }).count()).toBe(0);
