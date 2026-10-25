@@ -16,6 +16,19 @@ const directoryUrl = `${repoUrl}/tree/main/.agents/skills/test-audit`;
 const itemLabel = "openclaw/openclaw#3434";
 const render = (input: string, options?: MarkdownRenderOptions) =>
   htmlFragment(toSanitizedMarkdownHtml(input, options));
+const renderStreaming = (input: string, options?: MarkdownRenderOptions, id?: string) =>
+  htmlFragment(toStreamingMarkdownParts(input, options, id).join(""));
+const renderBoth = (input: string) => [render(input), renderStreaming(input)];
+
+function onChatPage(assert: () => void) {
+  const previous = location.href;
+  history.replaceState(null, "", "/chat/main/d0effac9");
+  try {
+    assert();
+  } finally {
+    history.replaceState(null, "", previous);
+  }
+}
 
 function expectWwwLink(input: string, label: string, prefix = "", suffix = "", path = label) {
   expect(toSanitizedMarkdownHtml(input)).toBe(
@@ -149,12 +162,10 @@ describe("toSanitizedMarkdownHtml links", () => {
     const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
 
     it("links structural keys only when enabled", () => {
-      const disabled = htmlFragment(toSanitizedMarkdownHtml(`Open ${sessionKey}`));
+      const disabled = render(`Open ${sessionKey}`);
       expect(disabled.querySelector("a[data-session-key]")).toBeNull();
 
-      const enabled = htmlFragment(
-        toSanitizedMarkdownHtml(`Open ${sessionKey}`, { sessionLinks: true }),
-      );
+      const enabled = render(`Open ${sessionKey}`, { sessionLinks: true });
       const link = enabled.querySelector<HTMLAnchorElement>("a.markdown-session-link");
       expect(link?.dataset.sessionKey).toBe(sessionKey);
       expect(link?.textContent).toBe(sessionKey);
@@ -165,9 +176,7 @@ describe("toSanitizedMarkdownHtml links", () => {
 
     it("linkifies keys in streamed inline code", () => {
       const input = `Open \`${sessionKey}\``;
-      const fragment = htmlFragment(
-        toStreamingMarkdownParts(input, { sessionLinks: true }).join(""),
-      );
+      const fragment = renderStreaming(input, { sessionLinks: true });
       const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
       expect(link?.dataset.sessionKey).toBe(sessionKey);
       expect(link?.textContent).toBe(sessionKey);
@@ -180,7 +189,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       ["a URL query value", `https://example.test/?session=${sessionKey}`],
       ["a fenced code block", `\`\`\`text\n${sessionKey}\n\`\`\``],
     ])("does not link %s", (_kind, input) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      const fragment = render(input, { sessionLinks: true });
       expect(fragment.querySelector("a[data-session-key]")).toBeNull();
     });
 
@@ -188,9 +197,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       ["absolute href", `[Open session](${location.origin}/chat/roboclaw/d0effac9)`],
       ["literal with a file extension", "[Open session](/chat/roboclaw/d0effac9.md)"],
     ])("decorates host-local session URLs in %s", (_kind, input) => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(input, { sessionLinks: true, fileLinks: true }),
-      );
+      const fragment = render(input, { sessionLinks: true, fileLinks: true });
       const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
       expect(link?.getAttribute("href")).toContain("/chat/roboclaw/d0effac9");
       expect(link?.hasAttribute("target")).toBe(false);
@@ -211,9 +218,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       ["absolute session", `${location.origin}/chat/main/cafebabe`, "session"],
       ["relative route", "chat/main/x", "plain"],
     ])("classifies %s independently of the current chat route", (label, href, kind) => {
-      const previous = location.href;
-      history.replaceState(null, "", "/chat/main/d0effac9");
-      try {
+      onChatPage(() => {
         const fragment = render(`[${label}](${href})`, { sessionLinks: true, fileLinks: true });
         const link = fragment.querySelector<HTMLAnchorElement>("a")!;
         expect(link.classList.contains("markdown-session-link")).toBe(kind === "session");
@@ -221,25 +226,17 @@ describe("toSanitizedMarkdownHtml links", () => {
         expect(link.classList.contains("markdown-file-link")).toBe(kind === "file");
         expect(link.dataset.filePath).toBe(kind === "file" ? href : undefined);
         expect(link.getAttribute("href")).toBe(kind === "file" ? null : href);
-      } finally {
-        history.replaceState(null, "", previous);
-      }
+      });
     });
 
     it("keeps ordinary inline code out of session routes on a chat page", () => {
-      const previous = location.href;
-      history.replaceState(null, "", "/chat/main/d0effac9");
-      try {
-        const fragment = htmlFragment(
-          toSanitizedMarkdownHtml("`README.md` `src/chat.ts` `ordinary text`", {
-            sessionLinks: true,
-          }),
-        );
+      onChatPage(() => {
+        const fragment = render("`README.md` `src/chat.ts` `ordinary text`", {
+          sessionLinks: true,
+        });
         expect(fragment.querySelector("a")).toBeNull();
         expect(fragment.querySelectorAll("code")).toHaveLength(3);
-      } finally {
-        history.replaceState(null, "", previous);
-      }
+      });
     });
 
     it("keeps punctuation outside the link and rejects embedded word matches", () => {
@@ -318,11 +315,8 @@ describe("toSanitizedMarkdownHtml links", () => {
       ],
     ])("preserves the destination when shortening %s", (href, label) => {
       for (const source of [href, `<${href}>`, "`" + href + "`"]) {
-        for (const html of [
-          toSanitizedMarkdownHtml(source),
-          toStreamingMarkdownParts(source).join(""),
-        ]) {
-          const link = htmlFragment(html).querySelector<HTMLAnchorElement>("a");
+        for (const fragment of renderBoth(source)) {
+          const link = fragment.querySelector<HTMLAnchorElement>("a");
           expect(link?.classList.contains("markdown-github-link")).toBe(true);
           expect(link?.textContent).toBe(label);
           expect(link?.getAttribute("href")).toBe(href);
@@ -386,7 +380,7 @@ describe("toSanitizedMarkdownHtml links", () => {
         "[`https://github.com/o/r/pull/3434`](https://example.com)",
       ],
     ])("keeps %s as code", (_kind, input) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      const fragment = render(input);
       expect(fragment.querySelector("code")).not.toBeNull();
       expect(fragment.querySelector("a.markdown-github-link")).toBeNull();
     });
@@ -394,10 +388,6 @@ describe("toSanitizedMarkdownHtml links", () => {
 });
 
 describe("github item references", () => {
-  function renderBoth(source: string) {
-    return [render(source), htmlFragment(toStreamingMarkdownParts(source).join(""))];
-  }
-
   it.each([
     ["openclaw/clawsweeper#1576", "issues", "1576"],
     ["PR openclaw/clawsweeper#42", "pull", "42"],
@@ -444,9 +434,7 @@ describe("github item references", () => {
     ]) {
       for (const fragment of [
         render(source + suffix),
-        htmlFragment(
-          toStreamingMarkdownParts(source + suffix, {}, "github-explicit-stream").join(""),
-        ),
+        renderStreaming(source + suffix, {}, "github-explicit-stream"),
       ]) {
         const anchors = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-github-item")];
         expect(anchors[0]?.href).toBe("https://github.com/acme/research/pull/126");
@@ -647,8 +635,7 @@ describe("session navigation", () => {
       const sessionKey = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
       const pathname = "/chat/main/d0effac9";
       const href = `${location.origin}${pathname}${suffix}`;
-      const host = document.createElement("div");
-      host.innerHTML = toSanitizedMarkdownHtml(`${href}重新解读`, { sessionLinks: true });
+      const host = render(`${href}重新解读`, { sessionLinks: true });
       const anchor = host.querySelector<HTMLAnchorElement>("a")!;
       const titler = new SessionLinkTitler();
       titler.context = makeContext([{ key: sessionKey, agentId: "main", displayName: "Research" }]);
