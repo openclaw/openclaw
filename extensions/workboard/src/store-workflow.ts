@@ -258,7 +258,9 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     const summary = normalizeBoundedString(input.summary, undefined, 2000, "summary");
     const proofInput = isRecord(input.proof) ? input.proof : undefined;
     const proofId = normalizeBoundedString(input.proofId, undefined, 120, "proof id");
-    if (input.proofId !== undefined && !proofId) {
+    // OpenAI strict tool schemas send omitted optional strings as "". Treat blank
+    // proofId as absent so workers can complete via the inline `proof` path.
+    if (input.proofId !== undefined && input.proofId !== "" && !proofId) {
       throw new Error("proofId must be a non-empty string.");
     }
     const proof = proofInput ? normalizeProofInput(proofInput, now) : undefined;
