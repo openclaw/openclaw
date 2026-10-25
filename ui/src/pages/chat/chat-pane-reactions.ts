@@ -76,7 +76,13 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       this.reactionTarget = target;
       this.reactionOwner = owner;
     }
-    if (!available || !scope || this.reactionReadGeneration === scope.generation) {
+    // Baseline reads wait for the transcript; live events and writes still apply immediately.
+    if (
+      !available ||
+      !scope ||
+      !this.transcriptReady ||
+      this.reactionReadGeneration === scope.generation
+    ) {
       return;
     }
     this.reactionReadGeneration = scope.generation;

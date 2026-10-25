@@ -716,7 +716,7 @@ describe("memory manager reindex recovery", () => {
     }
   });
 
-  it("leaves even an oversized published cache untouched when a full rebuild fails", async () => {
+  it("preserves the cache when a full rebuild fails without writing embeddings", async () => {
     const { memoryManager, harness, before } = await createOversizedPublishedCache();
     vi.spyOn(MemoryIndexDatabase.prototype, "writeMetadata").mockImplementation(() => {
       throw new Error("failed shadow metadata");

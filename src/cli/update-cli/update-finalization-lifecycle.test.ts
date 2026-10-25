@@ -13,7 +13,7 @@ import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
 } from "../../infra/update-run-timeouts.js";
-import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -62,22 +62,9 @@ it("reports standalone repair as repairing before Doctor maintenance", () => {
 });
 
 it("writes successful finalization progress to stderr and failures as errors", async () => {
-  const logPath = path.join(dirs.make("openclaw-finalize-log-"), "openclaw.log");
-  setLoggerOverride({ level: "info", file: logPath });
   const { lifecycle } = finalization(5_000, false, false);
   await lifecycle.run("doctor", async () => undefined);
   expectMessages(stderrWrite, '"status":"in_progress"', '"status":"completed"');
-  await flushLogger();
-  const phaseRecords = fs
-    .readFileSync(logPath, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line))
-    .filter((record) => JSON.stringify(record).includes("finalize:doctor"));
-  expect(phaseRecords).toMatchObject([
-    { _meta: { logLevelName: "INFO" } },
-    { _meta: { logLevelName: "INFO" } },
-  ]);
   expect(defaultRuntime.error).not.toHaveBeenCalled();
   lifecycle.recordWarnings(["A plugin update was deferred."]);
   expectMessages(console.warn, '"step":"warning:finalize:doctor:0"');

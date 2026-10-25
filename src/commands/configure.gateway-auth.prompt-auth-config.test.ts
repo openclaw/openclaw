@@ -5,6 +5,7 @@ import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginSetupRegistry } from "../plugins/setup-registry.test-support.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTestWizardPrompter } from "../test-utils/plugin-setup-wizard.js";
@@ -66,6 +67,7 @@ vi.mock("./models/list.manifest-catalog.js", () => ({
 }));
 
 import { promptAuthConfig } from "./configure.gateway-auth.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const { applyAuthChoice: applyProviderAuthChoice } =
   await vi.importActual<typeof import("./auth-choice.apply.js")>("./auth-choice.apply.js");
@@ -77,13 +79,7 @@ beforeEach(() => {
   // These provider fixtures expose no CLI backends; policy checks need no plugin discovery.
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [],
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
+    resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
   });
   mocks.catalog.mockReturnValue([]);
 });
@@ -100,17 +96,7 @@ function providerModels(id: string) {
   return {
     baseUrl: "https://provider.example/v1",
     api: "openai-completions" as const,
-    models: [
-      {
-        id,
-        name: id,
-        reasoning: false,
-        input: ["text"] as Array<"text" | "image" | "video" | "audio">,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      },
-    ],
+    models: [createTestModelDefinition(id, { contextWindow: 128_000 })],
   };
 }
 

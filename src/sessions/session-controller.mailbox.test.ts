@@ -130,6 +130,24 @@ function revocableAuthority(message: string, beforeThrow?: () => void) {
 }
 
 describe("controller mailbox scheduling", () => {
+  it.each([-90_000, 90_000])(
+    "preserves the debounce window after a %d ms wall-clock step",
+    async (step) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const run = source("debounced follow-up");
+      const dispatch = vi.fn(async () => {});
+      enqueueFollowupRun(key, run, { mode: "followup", debounceMs: 500 }, "none", dispatch, false);
+      ownedInputs.push(run.controllerInput!);
+
+      vi.setSystemTime(Date.now() + step);
+      scheduleFollowupDrain(key, dispatch);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(dispatch).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(dispatch).toHaveBeenCalledOnce();
+    },
+  );
+
   it("drains a re-enqueued incognito followup from its original owner", async () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:dashboard:incognito-recovery-mailbox";

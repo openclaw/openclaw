@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -21,7 +20,7 @@ import {
 } from "./import-runs-state.js";
 import { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
-import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { createMemoryWikiTestHarness, observeKeyedQueueEnqueue } from "./test-helpers.js";
 
 const compileControl = vi.hoisted(() => ({ calls: 0 }));
 
@@ -324,17 +323,7 @@ describe("ChatGPT import rollback recovery", () => {
     await lockEntered.promise;
 
     const rollbackQueued = deferred();
-    const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
-      ?.value as KeyedAsyncQueue["enqueue"];
-    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue").mockImplementation(function (
-      this: KeyedAsyncQueue,
-      key,
-      task,
-      hooks,
-    ) {
-      rollbackQueued.resolve();
-      return originalEnqueue.call(this, key, task, hooks);
-    });
+    const enqueueSpy = observeKeyedQueueEnqueue(() => rollbackQueued.resolve());
     let pendingRollback: ReturnType<typeof rollbackChatGptImportRun> | undefined;
     try {
       pendingRollback = rollback();

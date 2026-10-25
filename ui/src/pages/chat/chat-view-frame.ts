@@ -1,4 +1,4 @@
-import { merge } from "solid-js";
+import { createMemo, merge } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -13,6 +13,7 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
 } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -98,7 +99,7 @@ export type ChatProps = Omit<
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
-    readProviderReview?: () => ChatProviderReviewOwner;
+    readProviderReview?: () => ChatProviderReviewOwner | undefined;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
@@ -163,43 +164,58 @@ export function createChatViewFrame(
   const resolveCommentSource = (selection: ChatSelectionSource) =>
     resolveChatCommentAnchor(props.transcript.messageElements?.elements.values() ?? [], selection)
       ?.range;
-  const openSelectionComment = (
+  const openSelectionComment = async (
     selection: ChatSelectionSource,
     anchorRect: DOMRect,
     stage: (attachment: ChatAttachment) => boolean,
     onCancel?: () => void,
     selectionContextOnly = false,
   ) => {
-    showChatAnnotationEditor({
-      paneId: props.paneId,
-      anchorRect,
-      sourceRange: resolveCommentSource(selection),
-      comment: "",
-      readSignal: props.readSignal,
-      onCancel,
-      onSave: (comment): boolean => {
-        if (props.readSignal?.aborted) {
-          return true;
-        }
-        if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
-          showToast({ message: uploadsDisabledMessage() });
-          return false;
-        }
-        const attachment = createChatSelectionAttachment(
-          { ...selection, comment, sessionKey: props.sessionKey },
-          { attachmentLimits: props.attachmentLimits, selectionContextOnly },
-          stagedAttachmentBytes(props),
-        );
-        if (!attachment) {
-          return false;
-        }
-        if (!stage(attachment)) {
-          releaseChatAttachmentPayloads([attachment]);
-          return false;
-        }
-        return true;
-      },
-    });
+    const readSignal = props.readSignal;
+    const sessionKey = props.sessionKey;
+    const paneId = props.paneId;
+    const sourceRange = resolveCommentSource(selection);
+    const current = () =>
+      !readSignal?.aborted && props.readSignal === readSignal && props.sessionKey === sessionKey;
+    try {
+      await showChatAnnotationEditor(
+        {
+          paneId,
+          anchorRect,
+          sourceRange,
+          comment: "",
+          readSignal,
+          onCancel,
+          onSave: (comment): boolean => {
+            if (props.readSignal?.aborted) {
+              return true;
+            }
+            if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
+              showToast({ message: uploadsDisabledMessage() });
+              return false;
+            }
+            const attachment = createChatSelectionAttachment(
+              { ...selection, comment, sessionKey: props.sessionKey },
+              { attachmentLimits: props.attachmentLimits, selectionContextOnly },
+              stagedAttachmentBytes(props),
+            );
+            if (!attachment) {
+              return false;
+            }
+            if (!stage(attachment)) {
+              releaseChatAttachmentPayloads([attachment]);
+              return false;
+            }
+            return true;
+          },
+        },
+        current,
+      );
+    } catch (error) {
+      if (current()) {
+        showToast({ message: formatUiError(error) });
+      }
+    }
   };
   const canCompose = props.canSend;
   const questionState = getTranscriptState(props.paneId);
@@ -227,6 +243,18 @@ export function createChatViewFrame(
   }
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
+  // Stream text changes whether a label is needed, not the label on every delta.
+  const startupLabel = createMemo(() =>
+    chatStartupStatusLabel(
+      props.startupStatus,
+      placementStartup,
+      props.environmentStartStatus,
+      (runWorking || props.stream !== null) &&
+        props.awaitingActivity !== false &&
+        !props.stream?.trim() &&
+        props.toolMessages.length === 0,
+    ),
+  );
   const threadProps: ChatThreadProps = merge(props, {
     asyncQuestions,
     loading: props.loading && !placementStartup,
@@ -238,15 +266,7 @@ export function createChatViewFrame(
     runWorking,
     runFinalizing: !isSessionRunVisuallyActive(true, props.startupStatus?.phase),
     get startupLabel() {
-      return chatStartupStatusLabel(
-        props.startupStatus,
-        placementStartup,
-        props.environmentStartStatus,
-        (runWorking || props.stream !== null) &&
-          props.awaitingActivity !== false &&
-          !props.stream?.trim() &&
-          props.toolMessages.length === 0,
-      );
+      return startupLabel();
     },
     retryAt: props.startupStatus?.phase === "retrying" ? props.startupStatus.retryAt : undefined,
     failureActionsRunId: chatFailureRunId(props.runError, props.selectedSession),
@@ -265,7 +285,7 @@ export function createChatViewFrame(
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment
         ? (selection, anchorRect) =>
-            openSelectionComment(
+            void openSelectionComment(
               selection,
               anchorRect,
               (attachment) =>
@@ -279,7 +299,7 @@ export function createChatViewFrame(
     onAddToChat:
       props.canSend && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
         ? (selection, anchorRect) =>
-            openSelectionComment(
+            void openSelectionComment(
               selection,
               anchorRect,
               (attachment) => {

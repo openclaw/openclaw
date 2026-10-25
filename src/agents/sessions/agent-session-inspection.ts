@@ -5,11 +5,11 @@ import {
 } from "@openclaw/ai/internal/runtime";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import type { Model, AssistantMessage } from "../../llm/types.js";
 import { assertionSucceeds } from "../../shared/assertion.js";

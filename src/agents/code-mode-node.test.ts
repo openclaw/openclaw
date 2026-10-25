@@ -161,20 +161,10 @@ async function runNodeProbe(
 }
 
 it.each([
-  { source: "await yield_control()", phase: "host", code: "internal_error", calls: 1 },
-  {
-    source: 'throw new Error("invalid code mode continuation timeout")',
-    phase: "guest",
-    code: "internal_error",
-    calls: 0,
-  },
-  {
-    source: "await new Promise(() => {})",
-    phase: "input",
-    code: "invalid_input",
-    calls: 0,
-  },
-])("preserves $phase failure provenance without replay", async ({ source, phase, code, calls }) => {
+  ["await yield_control()", "host", "internal_error", 1],
+  ['throw new Error("invalid code mode continuation timeout")', "guest", "internal_error", 0],
+  ["await new Promise(() => {})", "input", "invalid_input", 0],
+] as const)("preserves failure provenance for %s", async (source, phase, code, calls) => {
   const onFailure = vi.fn();
   const onBoundary = vi.fn(async () => ({
     kind: "continue" as const,
@@ -226,11 +216,7 @@ it("reports heap exhaustion, recovers, and bounds captured output below the heap
         const result = await run(
           'await yield_control(); text("before allocation"); const data = []; for (let i = 0; i < 2_000_000; i++) data.push({ i, value: String(i) }); return data.length;',
           {}, { inlineHost: {
-          onBoundary: async (boundary, context) => {
-            boundaries++;
-            return { kind: "continue", timeoutMs: Math.min(1000, context.maxTimeoutMs), pendingRequests: [],
-              settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })) };
-          },
+          onBoundary: (...args) => { boundaries++; return onBoundary(...args); },
           onFailure: (error, phase, workerId) => {
             failure = { code: error.cause?.code, phase, workerId };
           },
@@ -360,21 +346,12 @@ it("retains lexical state through one-shot waits and disposes only its owned con
   );
   const first = result.continuation;
   expect(first.retainedBytes).toBe(config.memoryLimitBytes);
-  result = waiting(
-    await resume(result, {
-      settledRequests: [{ id: result.pendingRequests[0]!.id, ok: true, json: "null" }],
-      pendingRequests: [],
-    }),
-  );
+  result = waiting(await resume(result, { pendingRequests: [] }));
   await first.dispose();
   expect(
     await first.resume({ kind: "resume", config, settledRequests: [] }, { timeoutMs: 7_000 }),
   ).toMatchObject({ status: "failed", code: "runtime_unavailable" });
-  const completed = await resume(result, {
-    settledRequests: [{ id: result.pendingRequests[0]!.id, ok: true, json: "null" }],
-    pendingRequests: [],
-  });
-  expectComplete(completed, '{"value":3}');
+  expectComplete(await resume(result, { pendingRequests: [] }), '{"value":3}');
 });
 
 it("interrupts guest execution after an async yield and recovers the worker", async () => {

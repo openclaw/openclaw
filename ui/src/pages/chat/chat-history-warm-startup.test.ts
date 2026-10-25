@@ -19,6 +19,7 @@ import {
   resetChatHistoryProjection,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
@@ -39,6 +40,7 @@ import {
   observeChatCache,
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
+  setChatHistoryCursor,
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
@@ -393,24 +395,102 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.state.chatMessages[0]).not.toBe(cachedMessage);
   });
 
-  it("requests history without waiting for storage and ignores a late snapshot", async () => {
+  it.each([false, true])(
+    "requests history without waiting for storage and ignores a late snapshot (subscription=%s)",
+    async (subscribe) => {
+      const h = mountPane();
+      const network = h.pendingResponse();
+      if (subscribe) {
+        connectSessionOwner(h);
+      } else {
+        h.connect();
+      }
+      const subscription = subscribe
+        ? syncSelectedSessionMessageSubscription(h.state, { initialHistory: true })
+        : undefined;
+      const loading = h.start();
+      await vi.waitFor(() =>
+        expect(h.request).toHaveBeenCalledExactlyOnceWith(
+          subscribe ? "sessions.messages.subscribe" : "chat.startup",
+          subscribe
+            ? expect.objectContaining({
+                initialHistory: expect.not.objectContaining({ cursor: expect.anything() }),
+              })
+            : expect.not.objectContaining({ cursor: expect.anything() }),
+          expect.anything(),
+        ),
+      );
+      network.resolve(
+        subscribe
+          ? { key: sessionKey, initialHistory: { ok: true, payload: h.liveResult } }
+          : h.liveResult,
+      );
+      await subscription;
+      await loading;
+      expect(h.state.chatMessages).toEqual(liveMessages);
+      h.read.resolve(stored);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.state.chatMessages).toEqual(liveMessages);
+      expect(h.request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("uses the subscribed full page when storage restores a cursor while it is pending", async () => {
     const h = mountPane();
     const network = h.pendingResponse();
-    h.connect();
+    connectSessionOwner(h);
+    const subscription = syncSelectedSessionMessageSubscription(h.state, { initialHistory: true });
     const loading = h.start();
-    await Promise.resolve();
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
+    await vi.waitFor(() =>
+      expect(h.request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.messages.subscribe",
+        expect.objectContaining({
+          initialHistory: expect.not.objectContaining({ cursor: expect.anything() }),
+        }),
+        expect.anything(),
+      ),
+    );
+    const historyState = {
+      stateRevision: startupRevision(),
+      pendingInputs: emptyPendingInputs(),
+      commands: startupCommands(),
+      sessionInfo: h.liveResult.sessionInfo,
+    };
+    await h.hydrate({ ...stored, historyState });
+    network.resolve({ key: sessionKey, initialHistory: { ok: true, payload: h.liveResult } });
+    await subscription;
+    await loading;
+    expect(h.request).toHaveBeenCalledOnce();
+    expect(h.state.chatMessages).toEqual(liveMessages);
+  });
+
+  it("requests the current cursor when a subscribed delta's cached cursor changes", async () => {
+    const h = mountPane();
+    await h.hydrate();
+    const network = h.pendingResponse();
+    connectSessionOwner(h);
+    const subscription = syncSelectedSessionMessageSubscription(h.state, { initialHistory: true });
+    const loading = h.start();
+    await vi.waitFor(() =>
+      expect(h.request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.messages.subscribe",
+        expect.objectContaining({
+          initialHistory: expect.objectContaining({ cursor: stored.deltaCursor }),
+        }),
+        expect.anything(),
+      ),
+    );
+    setChatHistoryCursor(h.state, "newer-cache-cursor");
+    network.resolve({ key: sessionKey, initialHistory: { ok: true, payload: h.liveResult } });
+    await subscription;
+    await loading;
+    expect(h.request).toHaveBeenCalledTimes(2);
+    expect(h.request).toHaveBeenLastCalledWith(
       "chat.startup",
-      expect.not.objectContaining({ cursor: expect.anything() }),
+      expect.objectContaining({ cursor: "newer-cache-cursor" }),
       expect.anything(),
     );
-    network.resolve(h.liveResult);
-    await loading;
     expect(h.state.chatMessages).toEqual(liveMessages);
-    h.read.resolve(stored);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(h.state.chatMessages).toEqual(liveMessages);
-    expect(h.request).toHaveBeenCalledOnce();
   });
 
   it.each(["unchanged", "changed", "empty", "replacement"] as const)(
@@ -668,7 +748,7 @@ describe("first chat startup snapshot ordering", () => {
   it("sends the retained cursor and receipts once storage has settled", async () => {
     const record = createDeferred<unknown>();
     vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(record.promise);
-    prewarmChatSnapshot(
+    void prewarmChatSnapshot(
       resolveChatSnapshotKey(
         { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
         { sessionKey },

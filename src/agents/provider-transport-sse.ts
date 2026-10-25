@@ -163,14 +163,16 @@ export function prepareOpenAISdkSseResponse(
           // Observe complete comment lines even without event separators. Keep only
           // line state, so an unbounded comment cannot grow observer memory.
           if (isSse && options.onSseComment) {
-            for (const char of text) {
-              if (char === "\n" || char === "\r") {
+            // Only ASCII delimiters matter; avoid allocating code-point strings.
+            for (let index = 0; index < text.length; index++) {
+              const code = text.charCodeAt(index);
+              if (code === 10 || code === 13) {
                 if (commentLine) {
                   options.onSseComment();
                 }
                 commentLine = undefined;
               } else {
-                commentLine ??= char === ":";
+                commentLine ??= code === 58;
               }
             }
           }

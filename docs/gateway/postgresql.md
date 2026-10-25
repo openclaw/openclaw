@@ -715,6 +715,18 @@ migrations, newer schemas, and drift refuse admission; use a compatible binary
 or restore a matched backup. Never edit version/fingerprint metadata. Doctor's
 state migrations take their own exact backup before mutation.
 
+PostgreSQL schema upgrades run through `openclaw doctor --fix` or the normal
+update flow with writers stopped. A direct Gateway start on an older schema
+refuses and directs you to Doctor. For example, [state schema 32](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-state-db-engine.ts)
+and [agent schema 34](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-db-engine.ts)
+([#183015](https://github.com/openclaw/openclaw/pull/183015)) add nullability-aware
+index ordering by [recreating changed indexes](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/postgres-index-ordering.ts).
+The affected indexes rebuild in seconds: the three-index group on a 500,000-row
+table took about 1.1 seconds in the measured fixture, not including the rest of
+the upgrade. [Doctor's migration owner](https://github.com/openclaw/openclaw/blob/main/src/commands/doctor-schema-migrations.ts)
+and the [agent maintenance gate](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-db-maintenance-authority.ts)
+enforce stopped-writer maintenance.
+
 First boot, ports, rebuilds, and migrations can take longer on slow disks or a
 remote server. Connection waits allow 60 seconds. On runtime store connections,
 OpenClaw sets session-level `lock_timeout` to 60 seconds and `statement_timeout`

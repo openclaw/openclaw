@@ -12,6 +12,7 @@ import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
 import aiBuildConfig from "../tsdown.ai.config.ts";
+import { compileDynamicConsumerEdges } from "./knip-dynamic-consumers.mjs";
 import { compileViteConfigConsumers } from "./knip-vite-consumers.mjs";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
@@ -27,6 +28,9 @@ const repositoryScriptEntries = [
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
+  // Package scripts execute these maintained generators, whose inputs are production contracts.
+  "scripts/generate-runtime-script-assets.mjs!",
+  "scripts/generate-static-validators.mts!",
   // src/daemon/systemd-directives.ts documents this node regeneration command.
   "scripts/generate-systemd-directives.mjs!",
   // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
@@ -82,13 +86,15 @@ const repositoryScriptEntries = [
   // scripts/README.md invokes these exact memory-search benchmarks by path.
   "scripts/bench-memory-search.mjs!",
   "scripts/bench-memory-search-sqlite.mjs!",
+  // scripts/perf/README.md invokes this Gateway search-count workload and its worker preload.
+  "scripts/perf/memory-search-status-measure.ts!",
+  "scripts/perf/memory-search-status-observer.cjs!",
   // #180983 invokes this isolated plugin-registration benchmark CLI by path.
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
-  "scripts/control-ui-retention/vitest.config.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
   "scripts/bench-control-ui-dev-loop.mts!",
   // #179449 documents this document-handler benchmark CLI by path.
@@ -103,6 +109,8 @@ const repositoryScriptEntries = [
   "scripts/perf/fsync-scratch-measure.ts!",
   // scripts/perf/README.md invokes this database page-cache benchmark by path.
   "scripts/perf/database-page-cache-measure.ts!",
+  // The ACP eviction PR invokes this isolated stdio/Gateway workload by path.
+  "scripts/perf/acp-ledger-eviction-measure.ts!",
   // The source header documents this GitHub reader benchmark's Node command.
   "scripts/perf/github-reader-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
@@ -123,6 +131,8 @@ const repositoryScriptEntries = [
   // #181150 invokes this reproducible session-row owner probe by path.
   "scripts/perf/session-actor-row-facts-measure.ts!",
   "scripts/perf/session-catalog-selection-measure.ts!",
+  // The offline health-cron measurement invokes this synthetic fixture by path.
+  "scripts/perf/health-cron-fixture.ts!",
   // #183020 invokes this synthetic category-registration workload by path.
   "scripts/perf/session-group-registration-measure.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
@@ -151,6 +161,14 @@ const repositoryScriptEntries = [
   "scripts/perf/mention-inbox-measure.ts!",
   // scripts/perf/README.md invokes this main-thread stall measurement CLI by path.
   "scripts/perf/main-thread-stall-measure.mjs!",
+  // scripts/perf/README.md invokes these measurement commands by path.
+  "scripts/perf/cron-delivery-gateway-entry.ts!",
+  "scripts/perf/plugin-policy-read-measure.mjs!",
+  "scripts/perf/prompt-cache-observation-measure.ts!",
+  "scripts/perf/reconnect-read-wave-measure.ts!",
+  "scripts/perf/session-actor-retention-measure.ts!",
+  // The row-churn instrumenter injects this probe from its compiled source path.
+  "scripts/perf/session-row-churn-probe.ts!",
   // scripts/perf/README.md invokes this synthetic reload fixture by path.
   "scripts/perf/control-ui-reload-fixture.ts!",
   // docs/ci/checkout.md invokes this checkout materialization benchmark by path.
@@ -252,6 +270,25 @@ const repositoryScriptEntries = [
   "scripts/perf/session-polling-fixture.ts!",
   "scripts/perf/sqlite-reply-census-preload.mjs!",
   "scripts/perf/worker-retained-heap-preload.ts!",
+  // These retained proof commands are invoked by
+  // their source headers, scripts/perf/README.md, and native-allocation-profile.md.
+  "scripts/perf/archive-worker-retention-measure.ts!",
+  "scripts/perf/codex-catalog-preview-retention.ts!",
+  "scripts/perf/config-validate-measure.mjs!",
+  "scripts/perf/native-allocation-profile.mjs!",
+  "scripts/perf/session-initial-context-fixture.ts!",
+  "scripts/perf/session-initial-context-measure.ts!",
+  "scripts/perf/sql-probe-measure.ts!",
+  "scripts/perf/workspace-manifest-retention.ts!",
+  // Merged benchmark PRs and source headers invoke these retained workloads by exact path.
+  // The transcript broadcast benchmark loads the stall recorder through --gateway-preload.
+  "scripts/bench-filesystem-preconditions.mts!",
+  "scripts/perf/github-tool-selection-measure.ts!",
+  "scripts/perf/session-transcript-code-measure.mjs!",
+  "scripts/perf/stall-recorder-cost-preload.mjs!",
+  "scripts/perf/trajectory-preparation-retention.ts!",
+  "scripts/perf/transcript-session-list-measure.ts!",
+  "scripts/perf/transport-pull-allocation-measure.mjs!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.
@@ -664,6 +701,9 @@ const rootEntries = [
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
   "config/knip.scripts-exports.config.ts!",
+  "config/knip-dynamic-consumers.mjs!",
+  // tsdown consumes the runtime-process manifests while constructing portable worker builds.
+  "tsdown.config.ts!",
   // OpenGrep rule tests read these as static source inputs; they are never executed.
   "security/opengrep/rules/*/*.{js,ts}!",
   "{openclaw,docker-entrypoint}.mjs!",
@@ -903,6 +943,9 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
 }
 
 function compileDynamicMjsConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve("config/knip-dynamic-consumers.mjs")) {
+    return compileDynamicConsumerEdges(source, filePath);
+  }
   // A custom TS compiler disables Knip's declaration-to-source mapping.
   if (path.resolve(filePath) === path.resolve("config/knip-vite-consumers.mjs")) {
     return compileViteConfigConsumers(source, filePath);
@@ -1214,6 +1257,8 @@ const config = {
         "solid-js",
         "playwright-core",
         "partial-json",
+        // The bundled AI runtime loads Bun proxy support through a computed import.
+        "proxy-from-env",
         // The native Canvas bundle falls back without optional Markdown support.
         "sqlite-vec",
         "tree-sitter-bash",
@@ -1222,6 +1267,7 @@ const config = {
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
       ignoreBinaries: [
+        "ffmpeg",
         "lsattr",
         "mint",
         // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).
@@ -1235,10 +1281,21 @@ const config = {
       ],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
+      // Maintained package commands select these opt-in Vitest configs outside
+      // the default root patterns. Config ownership keeps their defaults live.
+      vitest: {
+        config: [
+          "vitest.config.{js,mjs,ts,cjs,mts,cts}",
+          "vitest.{workspace,projects}.{js,mjs,ts,cjs,mts,cts,json}",
+          "scripts/control-ui-parity/vitest.config.ts",
+          "scripts/control-ui-retention/vitest.config.ts",
+        ],
+      },
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "config/**/*.{ts,mts,cts}!",
+        "config/knip-dynamic-consumers.mjs!",
         "config/knip-vite-consumers.mjs!",
         "docs/**/*.js!",
         "security/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -1292,6 +1349,8 @@ const config = {
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/ai": {
+      // Computed to preserve the browser build boundary.
+      ignoreDependencies: ["proxy-from-env"],
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
         // The JSON compiler models the shared build's external runtime consumers.

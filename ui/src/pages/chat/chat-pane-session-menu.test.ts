@@ -774,8 +774,11 @@ describe("chat pane session menu boundary", () => {
     const patch = vi.fn(async () => ({}));
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture({
-        request: async (method) => {
+        request: async (method, params) => {
           switch (method) {
+            case "agent.identity.get":
+              expect(params).toEqual({ agentId: "research" });
+              return { agentId: "research", name: "Research" };
             case "agents.list":
               return makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] });
             case "sessions.describe":

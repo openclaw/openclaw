@@ -1,3 +1,4 @@
+import type { GatewaySessionInitialHistoryResult } from "@openclaw/gateway-client/browser";
 import type { SessionApprovalEvent } from "../../../../packages/gateway-protocol/src/index.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -6,11 +7,25 @@ import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
-import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
+import type {
+  ChatHistoryObservation,
+  ChatHistoryResult,
+  ObservedChatHistoryResult,
+} from "./chat-history-snapshot.ts";
 import { clearChatPendingInputs } from "./chat-pending-inputs.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
+
+export type InitialChatHistoryReceipt = {
+  paramsKey: string;
+  result: GatewaySessionInitialHistoryResult;
+  observation: Omit<ChatHistoryObservation, "run">;
+  owner: object;
+  run?: ChatHistoryRunObservation;
+  isCurrent: () => boolean;
+};
 
 export type ChatBranchesQueryState =
   | { readonly status: "idle" }
@@ -64,8 +79,10 @@ type ChatHistoryPaneRequests = {
   subscriptionGeneration: number;
   pendingApprovalReplay?: { generation: number; events: Map<string, SessionApprovalEvent> };
   subscriptionReady?: Promise<boolean>;
+  openingSubscription?: { isCurrent: () => boolean; admit: () => void };
   subscriptionError?: string;
   subscriptionRetry?: AbortController;
+  initialHistory?: InitialChatHistoryReceipt;
   syncRetries: Map<
     "subscription" | "history",
     {
@@ -85,6 +102,7 @@ export type InitialChatSnapshotHydration = {
   titlePending?: boolean;
   sessionKey: string;
   connected: boolean;
+  adoptReadySnapshot?: () => void;
   promise: Promise<void>;
 };
 
@@ -322,6 +340,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
+  delete requests.initialHistory;
   // Keep the presentation accessor installed when clearing accepted history.
   requests.acceptedHistory = undefined;
   setChatHistoryLoad(state, { phase: "idle" });

@@ -23,7 +23,7 @@ type RecordFingerprint =
   | {
       digest: string;
       fields: Map<string, string>;
-      primitives: Map<string, unknown>;
+      primitives: Record<string, unknown>;
       immutable: false;
     }
   | { digest: string; layout: string; packed: string; immutable: true };
@@ -63,14 +63,19 @@ function fingerprintRecord(
   }
   const immutable = immutableParent || isOwnedTranscriptPayload(record);
   let fields = previous ? undefined : new Map<string, string>();
-  const primitives = immutable ? undefined : (previous?.primitives ?? new Map<string, unknown>());
+  const primitives: Record<string, unknown> | undefined = immutable
+    ? undefined
+    : (previous?.primitives ?? {});
   for (const [key, value] of Object.entries(record)) {
     if (omit?.has(key)) {
       continue;
     }
     const primitive = value === null || typeof value !== "object";
     const digest =
-      primitive && previous?.primitives.has(key) && Object.is(previous.primitives.get(key), value)
+      primitive &&
+      previous &&
+      Object.hasOwn(previous.primitives, key) &&
+      Object.is(previous.primitives[key], value)
         ? previous.fields.get(key)!
         : typeof value === "string"
           ? fingerprintText(value)
@@ -78,16 +83,23 @@ function fingerprintRecord(
     if (!previous || previous.fields.get(key) !== digest) {
       (fields ??= new Map(previous?.fields)).set(key, digest);
     }
-    if (primitive) {
-      primitives?.set(key, value);
-    } else {
-      primitives?.delete(key);
+    if (primitives) {
+      if (!primitive) {
+        delete primitives[key];
+      } else if (key === "__proto__") {
+        // Revision keys are data, including the legacy prototype setter name.
+        Object.defineProperty(primitives, key, { value, writable: true, configurable: true });
+      } else {
+        primitives[key] = value;
+      }
     }
   }
   for (const key of previous?.fields.keys() ?? []) {
     if (!Object.hasOwn(record, key)) {
       (fields ??= new Map(previous?.fields)).delete(key);
-      primitives?.delete(key);
+      if (primitives) {
+        delete primitives[key];
+      }
     }
   }
   if (!fields && previous && !immutable) {

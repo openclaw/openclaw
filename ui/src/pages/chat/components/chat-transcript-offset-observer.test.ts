@@ -69,8 +69,8 @@ it("delivers native offsets without checking end geometry when no end command is
       {
         state: new TranscriptOffsetState(),
         getScrollElement: () => element,
-        endAnchor: new TranscriptEndAnchor(),
-        prependAnchor: new TranscriptPrependAnchor(new Map()),
+        endAnchor: new TranscriptEndAnchor(() => {}),
+        prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
         canFollowEnd: () => false,
         isProgrammaticScroll: () => false,
         cancelScroll: vi.fn(),

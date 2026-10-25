@@ -1,6 +1,6 @@
 import type { SessionAdmissionTransition } from "../../../config/sessions/session-admission-transition.types.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import {
-  runWithoutOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
   type SessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
@@ -189,6 +189,17 @@ export async function createEmbeddedRunSessionPromptState(input: {
       });
     recorder.markRuntimePersistencePending(observedPersistence);
   };
+  // Only a persisted operator turn with an idempotency key is replayed in place;
+  // anything else would append a second copy of the original request.
+  const canReplayCurrentUserTurn = () => {
+    const recorder = params.userTurnTranscriptRecorder;
+    return (
+      !activePrompt.internal &&
+      activePrompt.persisted &&
+      recorder?.hasPersisted() === true &&
+      Boolean((recorder.getPersistedMessage?.() ?? recorder.message)?.idempotencyKey)
+    );
+  };
   const waitForCurrentUserMessagePersistence = async () => {
     if (params.userTurnTranscriptRecorder?.hasRuntimePersistencePending() === true) {
       await params.userTurnTranscriptRecorder.waitForRuntimePersistence();
@@ -322,6 +333,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
     continueFromCurrentTranscript: (options?: {
       includeToolFailureInstruction?: boolean;
       messages?: NonNullable<EmbeddedRunAttemptParams["continuation"]>["messages"];
+      replayCurrentUserTurn?: boolean;
     }) => {
       // Raw model runs load no transcript history; the original prompt is their only task context.
       if (params.modelRun === true || params.promptMode === "none") {
@@ -334,6 +346,12 @@ export async function createEmbeddedRunSessionPromptState(input: {
           prompt: params.prompt,
           messages,
         };
+      }
+      // A request rejected before any output left the transcript unchanged. Replaying
+      // the persisted keyed user turn resends that exact request; a hidden prompt
+      // would add a user turn and shift the prompt prefix on every retry.
+      if (options?.replayCurrentUserTurn && canReplayCurrentUserTurn()) {
+        return;
       }
       const prompt = options?.includeToolFailureInstruction
         ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`

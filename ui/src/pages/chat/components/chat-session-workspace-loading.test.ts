@@ -26,6 +26,28 @@ import {
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 
+type WorkspaceFile = SessionWorkspaceListResult["files"][number];
+type ArtifactResult = { artifacts: NonNullable<SessionWorkspaceListResult["artifacts"]> };
+const artifact = (id: string, title = id) => ({
+  id,
+  title,
+  type: "file",
+  download: { mode: "bytes" as const },
+});
+function workspaceFile(
+  path: string,
+  kind: WorkspaceFile["kind"],
+  overrides: Partial<WorkspaceFile> = {},
+): WorkspaceFile {
+  return { path, name: path.split("/").at(-1)!, kind, missing: false, ...overrides };
+}
+function catalogListing(
+  files: WorkspaceFile[],
+  extra: Partial<SessionWorkspaceListResult> = {},
+): SessionWorkspaceListResult {
+  return { sessionKey: "agent:main:catalog", root: "/workspace", files, ...extra };
+}
+
 async function fixture({ loadInitialListing = true } = {}) {
   const { promise: pending, resolve, reject } = createDeferred<SessionWorkspaceListResult>();
   const listing: SessionWorkspaceListResult = {
@@ -179,12 +201,8 @@ describe("workspace catalog demand", () => {
 
   it("reloads invalidated in-flight artifacts for Files without retained demand", async () => {
     const { state } = await fixture({ loadInitialListing: false });
-    const oldResponse = createDeferred<{
-      artifacts: NonNullable<SessionWorkspaceListResult["artifacts"]>;
-    }>();
-    const freshResponse = createDeferred<{
-      artifacts: NonNullable<SessionWorkspaceListResult["artifacts"]>;
-    }>();
+    const oldResponse = createDeferred<ArtifactResult>();
+    const freshResponse = createDeferred<ArtifactResult>();
     const request = vi
       .fn()
       .mockReturnValueOnce(oldResponse.promise)
@@ -194,7 +212,7 @@ describe("workspace catalog demand", () => {
     const oldLoad = loadSessionWorkspaceArtifacts(state);
     refreshSessionWorkspaceState(state, true);
     oldResponse.resolve({
-      artifacts: [{ id: "old", title: "old.txt", type: "file", download: { mode: "bytes" } }],
+      artifacts: [artifact("old", "old.txt")],
     });
     await oldLoad;
     expect(request).toHaveBeenCalledTimes(2);
@@ -202,7 +220,7 @@ describe("workspace catalog demand", () => {
     expect(getSessionWorkspace(state).artifacts?.items).toEqual([]);
     const freshLoad = loadSessionWorkspaceArtifacts(state);
     freshResponse.resolve({
-      artifacts: [{ id: "fresh", title: "fresh.txt", type: "file", download: { mode: "bytes" } }],
+      artifacts: [artifact("fresh", "fresh.txt")],
     });
     await freshLoad;
     expect(getSessionWorkspace(state).artifacts?.items.map((item) => item.id)).toEqual(["fresh"]);
@@ -211,12 +229,6 @@ describe("workspace catalog demand", () => {
 
   it("keeps assistant Outputs separate from Files and retains resolved data during refresh errors", async () => {
     const { state, listFiles } = await fixture({ loadInitialListing: false });
-    const artifact = (id: string) => ({
-      id,
-      title: id,
-      type: "file",
-      download: { mode: "bytes" as const },
-    });
     const request = vi
       .fn()
       .mockResolvedValueOnce({ artifacts: [artifact("delivered")] })
@@ -225,23 +237,16 @@ describe("workspace catalog demand", () => {
     const release = retainSessionWorkspaceArtifacts(state, "assistant");
     await loadSessionWorkspaceArtifacts(state, false, "assistant");
     await loadSessionWorkspaceArtifacts(state);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "artifacts.list", {
-      sessionKey: state.sessionKey,
-      agentId: "main",
-      messageRole: "assistant",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "artifacts.list", {
-      sessionKey: state.sessionKey,
-      agentId: "main",
-    });
-    expect(getSessionWorkspace(state).assistantArtifacts?.items.map((item) => item.id)).toEqual([
-      "delivered",
+    expect(request.mock.calls.map(([, params]) => params)).toEqual([
+      { sessionKey: state.sessionKey, agentId: "main", messageRole: "assistant" },
+      { sessionKey: state.sessionKey, agentId: "main" },
     ]);
-    expect(getSessionWorkspace(state).artifacts?.items.map((item) => item.id)).toEqual([
-      "upload",
-      "delivered",
-    ]);
+    const workspace = getSessionWorkspace(state);
+    expect(
+      [workspace.assistantArtifacts, workspace.artifacts].map((list) =>
+        list?.items.map((item) => item.id),
+      ),
+    ).toEqual([["delivered"], ["upload", "delivered"]]);
     expect(listFiles).not.toHaveBeenCalled();
     request.mockRejectedValueOnce(new Error("refresh unavailable"));
     refreshSessionWorkspaceState(state, false);
@@ -261,13 +266,9 @@ describe("workspace catalog demand", () => {
     const listFiles = vi.fn(async (_key: string, options?: { path?: string }) => ({
       ...listing,
       files: [
-        {
-          path: "src/nested/changed.ts",
+        workspaceFile("src/nested/changed.ts", "modified", {
           workspacePath: "src/nested/changed.ts",
-          name: "changed.ts",
-          kind: "modified" as const,
-          missing: false,
-        },
+        }),
       ],
       browser: {
         path: options?.path ?? "",
@@ -297,9 +298,7 @@ describe("workspace catalog demand", () => {
 
   it("shares Outputs and Files artifact demand without loading a tree for Outputs", async () => {
     const { state, listFiles } = await fixture({ loadInitialListing: false });
-    const response = createDeferred<{
-      artifacts: NonNullable<SessionWorkspaceListResult["artifacts"]>;
-    }>();
+    const response = createDeferred<ArtifactResult>();
     const request = vi.fn(() => response.promise);
     state.client = createGatewayBrowserClientFixture({ request });
     const release = retainSessionWorkspaceArtifacts(state);
@@ -308,9 +307,7 @@ describe("workspace catalog demand", () => {
     createSessionWorkspaceProps(state, { expanded: true });
     expect(request).toHaveBeenCalledTimes(1);
     response.resolve({
-      artifacts: [
-        { id: "assistant-result", title: "report.md", type: "file", download: { mode: "bytes" } },
-      ],
+      artifacts: [artifact("assistant-result", "report.md")],
     });
     await joined;
     await vi.waitFor(() => expect(getSessionWorkspace(state).loading).toBe(false));
@@ -325,9 +322,7 @@ describe("workspace catalog demand", () => {
 
   it("keeps artifact results scoped when the session changes during a request", async () => {
     const { state } = await fixture({ loadInitialListing: false });
-    const oldResponse = createDeferred<{
-      artifacts: NonNullable<SessionWorkspaceListResult["artifacts"]>;
-    }>();
+    const oldResponse = createDeferred<ArtifactResult>();
     const request = vi
       .fn()
       .mockReturnValueOnce(oldResponse.promise)
@@ -337,9 +332,7 @@ describe("workspace catalog demand", () => {
     state.sessionKey = "agent:main:other";
     await loadSessionWorkspaceArtifacts(state);
     oldResponse.resolve({
-      artifacts: [
-        { id: "old-file", title: "private.md", type: "file", download: { mode: "bytes" } },
-      ],
+      artifacts: [artifact("old-file", "private.md")],
     });
     await old;
     expect(getSessionWorkspace(state).artifacts?.items).toEqual([]);
@@ -375,47 +368,41 @@ describe("workspace catalog demand", () => {
   });
 });
 
-it("keeps project, external and artifact homonyms distinct while search ignores activity", () => {
-  const listing: SessionWorkspaceListResult = {
-    sessionKey: "agent:main:catalog",
-    root: "/workspace",
-    files: [
-      {
-        path: "report.md",
-        workspacePath: "docs/report.md",
-        name: "report.md",
-        kind: "read",
-        missing: false,
-      },
-      {
-        path: "/outside/report.md",
-        workspacePath: "/outside/report.md",
-        name: "report.md",
-        kind: "modified",
-        missing: false,
-      },
+it("keeps unresolved, project, external and artifact homonyms distinct", () => {
+  const listing = catalogListing(
+    [
+      workspaceFile("docs/report.md", "modified", { missing: true }),
+      workspaceFile("../docs/report.md", "read", { workspacePath: "docs/report.md" }),
+      workspaceFile("/outside/report.md", "modified", { workspacePath: "/outside/report.md" }),
     ],
-    artifacts: [{ id: "opaque-id", title: "report.md", type: "file", download: { mode: "bytes" } }],
-    browser: { path: "", entries: [{ path: "docs", name: "docs", kind: "directory" }] },
-  };
+    {
+      artifacts: [artifact("opaque-id", "report.md")],
+      browser: {
+        path: "docs",
+        entries: [{ path: "docs/report.md", name: "report.md", kind: "file" }],
+      },
+    },
+  );
   const catalog = projectWorkspaceCatalog(listing);
-  expect(catalog.session.map((file) => file.artifactId ?? file.path)).toEqual([
+  expect(catalog.session).toMatchObject([
+    { key: "file:docs/report.md", path: "docs/report.md", origin: "session", activity: "modified" },
+    { path: "/outside/report.md" },
+    { artifactId: "opaque-id" },
+  ]);
+  expect(catalog.session.map((entry) => entry.artifactId ?? entry.path)).toEqual([
+    "docs/report.md",
     "/outside/report.md",
     "opaque-id",
   ]);
-  expect(
-    workspaceCatalogChildren(catalog, "read")
-      .get("")
-      ?.map((file) => file.name),
-  ).toEqual(["docs"]);
-  expect(
-    workspaceCatalogChildren(catalog, "read")
-      .get("docs")
-      ?.map((file) => file.name),
-  ).toEqual(["report.md"]);
+  expect(catalog.project.get("docs/report.md")?.activity).toBe("read");
+  expect(catalog.session[0]?.key).not.toBe(catalog.project.get("docs/report.md")?.key);
+  expect([...workspaceCatalogChildren(catalog, "changed").values()].flat()).toEqual([]);
+  const children = workspaceCatalogChildren(catalog, "read");
+  expect(children.get("")?.map((entry) => entry.name)).toEqual(["docs"]);
+  expect(children.get("docs")?.map((entry) => entry.name)).toEqual(["report.md"]);
   const results = workspaceCatalogSearch(listing, "report");
-  expect(results).toHaveLength(3);
-  expect(new Set(results.map((file) => file.key)).size).toBe(3);
+  expect(results).toHaveLength(4);
+  expect(new Set(results.map((entry) => entry.key)).size).toBe(4);
   expect(workspaceCatalogSearch(listing, "opaque-id")).toEqual([]);
   expect(workspaceCatalogSearch(listing, "")).toEqual([]);
 });
@@ -432,26 +419,10 @@ it.each([false, true])(
   "unions activity for canonical aliases regardless of order (reverse: %s)",
   (reverse) => {
     const files: SessionWorkspaceListResult["files"] = [
-      {
-        path: "report.md",
-        workspacePath: "docs/report.md",
-        name: "report.md",
-        kind: "modified",
-        missing: false,
-      },
-      {
-        path: "../docs/report.md",
-        workspacePath: "docs/report.md",
-        name: "report.md",
-        kind: "read",
-        missing: false,
-      },
+      workspaceFile("report.md", "modified", { workspacePath: "docs/report.md" }),
+      workspaceFile("../docs/report.md", "read", { workspacePath: "docs/report.md" }),
     ];
-    const listing: SessionWorkspaceListResult = {
-      sessionKey: "agent:main:aliases",
-      root: "/workspace",
-      files: reverse ? files.toReversed() : files,
-    };
+    const listing = catalogListing(reverse ? files.toReversed() : files);
     const catalog = projectWorkspaceCatalog(listing);
     expect(catalog.project.get("docs/report.md")?.activity).toBe("mixed");
     expect(catalog.filters).toEqual(["all", "changed", "read"]);
@@ -468,60 +439,19 @@ it.each([false, true])(
   },
 );
 
-it("keeps unresolved session paths separate from authoritative project paths", () => {
-  const listing: SessionWorkspaceListResult = {
-    sessionKey: "agent:main:paths",
-    root: "/workspace",
-    files: [
-      { path: "docs/report.md", name: "report.md", kind: "modified", missing: true },
-      {
-        path: "../docs/report.md",
-        workspacePath: "docs/report.md",
-        name: "report.md",
-        kind: "read",
-        missing: false,
-      },
-    ],
-    browser: {
-      path: "docs",
-      entries: [{ path: "docs/report.md", name: "report.md", kind: "file" }],
-    },
-  };
-  const catalog = projectWorkspaceCatalog(listing);
-  expect(catalog.session).toMatchObject([
-    { key: "file:docs/report.md", path: "docs/report.md", origin: "session", activity: "modified" },
-  ]);
-  expect(catalog.project.get("docs/report.md")?.activity).toBe("read");
-  expect(catalog.session[0]?.key).not.toBe(catalog.project.get("docs/report.md")?.key);
-  expect([...workspaceCatalogChildren(catalog, "changed").values()].flat()).toEqual([]);
-  const results = workspaceCatalogSearch(listing, "report");
-  expect(results).toHaveLength(2);
-  expect(new Set(results.map((file) => file.key)).size).toBe(2);
-});
-
 it("offers folder filters only for project files inside that path boundary", () => {
-  const catalog = projectWorkspaceCatalog({
-    sessionKey: "agent:main:folder-filters",
-    root: "/workspace",
-    files: [
+  const catalog = projectWorkspaceCatalog(
+    catalogListing(
+      [
+        workspaceFile("ui/change.ts", "modified", { workspacePath: "ui/change.ts" }),
+        workspaceFile("ui-other/read.md", "read", { workspacePath: "ui-other/read.md" }),
+        workspaceFile("/outside/notes.md", "read"),
+      ],
       {
-        path: "ui/change.ts",
-        workspacePath: "ui/change.ts",
-        name: "change.ts",
-        kind: "modified",
-        missing: false,
+        artifacts: [artifact("report", "report.md")],
       },
-      {
-        path: "ui-other/read.md",
-        workspacePath: "ui-other/read.md",
-        name: "read.md",
-        kind: "read",
-        missing: false,
-      },
-      { path: "/outside/notes.md", name: "notes.md", kind: "read", missing: false },
-    ],
-    artifacts: [{ id: "report", title: "report.md", type: "file", download: { mode: "bytes" } }],
-  });
+    ),
+  );
   expect(catalog.filters).toEqual(["all", "changed", "read", "artifacts"]);
   expect(workspaceCatalogFilters(catalog, "")).toEqual(["all", "changed", "read"]);
   expect(workspaceCatalogFilters(catalog, "ui")).toEqual(["all", "changed"]);

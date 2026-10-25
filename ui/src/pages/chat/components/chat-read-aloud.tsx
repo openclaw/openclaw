@@ -68,7 +68,7 @@ function ReadAloudControl(props: ReadAloudProps) {
     const runtime = currentDisplaySpeechConfig(context.runtimeConfig.state);
     // Missing keys identify older or unavailable bootstrap projections; null is authoritative.
     if (!runtime || !Object.hasOwn(runtime, "tts")) {
-      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+      void context.runtimeConfig.ensureDisplayLoaded().catch(() => undefined);
     }
   });
   onSettled(() => stop);

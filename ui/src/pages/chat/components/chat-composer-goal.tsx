@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { For, Show, createSignal } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -267,22 +266,16 @@ export function ChatGoal(props: ChatGoalProps) {
   );
 }
 
-export function renderChatGoalRecoverySolid(
-  recovery: ChatGoalRecovery | undefined,
-  connected: boolean,
-): JSX.Element {
-  if (!recovery) {
-    return null;
-  }
+export function ChatGoalRecoveryNotice(props: { recovery: ChatGoalRecovery; connected: boolean }) {
   return (
     <div class="chat-composer-neighbor-card chat-composer-neighbor-card--warn" role="status">
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
         <Icon name="alertTriangle" />
       </span>
       <div class="chat-composer-neighbor-card__copy">
-        <ChatGoalRecoveryMessage recovery={recovery} />
+        <ChatGoalRecoveryMessage recovery={props.recovery} />
       </div>
-      <ChatGoalRecoveryAction recovery={recovery} connected={connected} />
+      <ChatGoalRecoveryAction recovery={props.recovery} connected={props.connected} />
     </div>
   );
 }

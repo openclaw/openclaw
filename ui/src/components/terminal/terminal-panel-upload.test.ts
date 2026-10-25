@@ -11,9 +11,11 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import { mountPanel as mount } from "./terminal-panel-lifecycle.test-support.ts";
 import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import {
   createTerminalController,
+  createTerminalGatewayClient,
   createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
@@ -39,10 +41,7 @@ function terminalUploadFile(name: string, content: string): File {
 }
 
 async function mountReadyPanel(client: TerminalGatewayClient) {
-  const panel = createUploadPanel();
-  panel.client = client;
-  panel.available = true;
-  document.body.append(panel);
+  const panel = mount(panelTag, { client, available: true }, false);
   panel.toggle();
   await panel.updateComplete;
   await vi.dynamicImportSettled();
@@ -180,13 +179,8 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       const requests: Array<{ method: string; params: unknown; signal?: AbortSignal }> = [];
       const failedUpload = createDeferred<{ path: string; size: number }>();
       let notesAttempts = 0;
-      const client: TerminalGatewayClient = {
-        forceReconnect: () => {},
-        request: async <T>(
-          method: string,
-          params?: unknown,
-          options?: { signal?: AbortSignal },
-        ) => {
+      const client: TerminalGatewayClient = createTerminalGatewayClient(
+        async <T>(method: string, params?: unknown, options?: { signal?: AbortSignal }) => {
           requests.push({ method, params, signal: options?.signal });
           if (method === "terminal.open") {
             return terminalOpenResult("session-1") as T;
@@ -204,8 +198,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
           }
           return { ok: true } as T;
         },
-        addEventListener: () => () => {},
-      };
+      );
       const panel = await mountReadyPanel(client);
       dropFiles(panel, [
         terminalUploadFile("scan final.pdf", "pdf"),
@@ -288,13 +281,8 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       createGhosttyTerminalMock.mockResolvedValue(controller);
       const pendingUpload = createDeferred<{ path: string; size: number }>();
       let uploadSignal: AbortSignal | undefined;
-      const client: TerminalGatewayClient = {
-        forceReconnect: () => {},
-        request: async <T>(
-          method: string,
-          _params?: unknown,
-          options?: { signal?: AbortSignal },
-        ) => {
+      const client: TerminalGatewayClient = createTerminalGatewayClient(
+        async <T>(method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
           if (method === "terminal.open") {
             return terminalOpenResult("session-1") as T;
           }
@@ -304,8 +292,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
           }
           return { ok: true } as T;
         },
-        addEventListener: () => () => {},
-      };
+      );
       const panel = await mountReadyPanel(client);
       dropFiles(panel, [terminalUploadFile("archive.zip", "zip")]);
       await waitForFast(() => {

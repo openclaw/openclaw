@@ -282,7 +282,7 @@ describe("MCP manager creation ownership", () => {
     }
   });
 
-  it("bounds capacity cleanup waiting across consecutive idle owners", async () => {
+  it("bounds consecutive capacity cleanup waits when the wall clock rewinds", async () => {
     const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
     const manager = createManager(factory);
     const cfg = { mcp: { servers: { fixture: { command: "true" } } } };
@@ -298,12 +298,13 @@ describe("MCP manager creation ownership", () => {
       leases.push(await manager.acquire({ ...params, sessionId: `busy-${index}`, cfg }));
     }
     let fallback: SessionMcpRuntimeLease | undefined;
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const admission = manager.acquire({ ...params, sessionId: "overflow", cfg }).then((lease) => {
       fallback = lease;
     });
     try {
       await firstClosing.started;
+      vi.setSystemTime(Date.now() - 60_000);
       setTimeout(firstClosing.release, 3_000);
       await vi.advanceTimersByTimeAsync(3_000);
       await secondClosing.started;
@@ -340,7 +341,7 @@ describe("MCP manager creation ownership", () => {
     for (let index = 0; index < 254; index++) {
       leases.push(await manager.acquire(input(`busy-${index}`)));
     }
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     let reacquiring: Promise<SessionMcpRuntimeLease> | undefined;
     try {
       const overflow = manager.acquire(input("overflow"));

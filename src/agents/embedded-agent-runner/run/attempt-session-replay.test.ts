@@ -34,6 +34,7 @@ import {
 import type { AgentSession } from "../../sessions/agent-session.js";
 import { sessionManagerPrepareCurrentTurnReplay } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   appendCompletedToolWork,
   appendOversizedCacheSnapshot,
@@ -456,6 +457,53 @@ describe("interrupted canonical user replay", () => {
       );
       expect(observedWalks).toBeGreaterThan(0);
       expect(nativeReadFailures).toEqual([]);
+    },
+  );
+
+  it.each([false, true])(
+    "resends a rate-limited request without output unchanged after completed tools (carrier=%s)",
+    async (appendOnly) => {
+      await withInterruptedTurn(
+        appendOnly,
+        async (fixture) => {
+          const requests: Array<Array<{ role: string }>> = [];
+          streamMocks.streamSimple.mockImplementation((model, context) => {
+            requests.push(structuredClone(context.messages));
+            return createAssistantResultStream(
+              requests.length === 1
+                ? {
+                    ...createAssistant(model, [], "error"),
+                    usage: createZeroUsageFixture(),
+                    errorMessage: "Rate limit reached on tokens per min (TPM).",
+                  }
+                : createAssistant(model, [{ type: "text", text: "Continued from completed work" }]),
+            );
+          });
+          // The provider rejects the first request; the retry builds a fresh session boundary.
+          await withReplaySession(fixture, appendOnly, async (_session, submit) => {
+            await submit();
+          });
+          await withReplaySession(fixture, appendOnly, async (session, submit) => {
+            await submit();
+            expect(session.getLastAssistantText()).toBe("Continued from completed work");
+          });
+
+          const [rejected, retried] = requests;
+          // Only the regenerated tail runtime context may differ; the cached prefix stays put.
+          const prefixLength = appendOnly ? rejected!.length : rejected!.length - 1;
+          expect(retried).toHaveLength(rejected!.length);
+          expect(retried!.slice(0, prefixLength)).toEqual(rejected!.slice(0, prefixLength));
+          expect(retried!.at(-1)).toMatchObject(
+            appendOnly ? { role: "toolResult" } : { role: "user", runtimeContextCarrier: true },
+          );
+          expect(
+            loadTranscriptEventsSync(fixture.target).filter(
+              (entry) => (entry as { message?: { role?: string } }).message?.role === "user",
+            ),
+          ).toHaveLength(1);
+        },
+        { interruptedTurn: false, toolProgress: true },
+      );
     },
   );
 

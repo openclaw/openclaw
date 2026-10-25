@@ -281,18 +281,16 @@ the existing cache cap.
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
-published index; a failed rebuild leaves that index intact. During a full rebuild,
-the embedding cache can temporarily exceed its row cap by the newly generated
-vectors. This preserves cached vectors that later rebuild batches still need,
-including after a database-engine port. The cache returns to its cap after
-publication or when the rebuild is abandoned; a suspended background rebuild
-retains its vectors until it resumes or is discarded. A process interruption can
-leave temporary excess entries until the next synchronization prunes them.
-Incremental writes reserve capacity before inserting. When new entries would
-take the cache past its row cap, or it
-is already over the cap, it removes exactly as many entries as before, but first
-takes entries for the active embedding provider that no published chunk
-references and that were written before the oldest published chunk, oldest
+published index; a failed rebuild leaves that index intact. The embedding cache
+may temporarily hold up to twice its configured row cap during a full rebuild,
+so new embeddings do not evict cached vectors that later batches still need.
+It is pruned to the configured cap after publication or abort. A suspended
+background rebuild keeps that temporary budget until it resumes or is discarded.
+A process crash
+can leave the temporary excess until the next cache write enforces its capacity
+budget. Incremental writes keep their normal pre-insertion cap. When entries
+must be evicted, the cache first takes entries for the active embedding provider
+that no published chunk references and that were written before the oldest published chunk, oldest
 first. A full reindex rewrites every chunk, so these entries predate the index
 that dropped them. Incremental syncs keep unchanged chunks, so the oldest
 published chunk can be much older and fewer entries qualify. Newer unreferenced

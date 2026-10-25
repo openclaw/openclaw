@@ -7,6 +7,7 @@ import * as pluginEnable from "../../../plugins/enable.js";
 import type { ProviderAuthMethod } from "../../../plugins/types.js";
 import "../../../system-agent/setup-inference-credentials.js";
 import { migrateLegacyConfig } from "../../doctor/shared/legacy-config-migrate.js";
+import { createTestModelDefinition } from "../../test-runtime-config-helpers.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ModelSelectionRuntimePluginsResult =
@@ -83,17 +84,7 @@ const target = { agentId: "main", agentDir: "/tmp/main-agent", workspaceDir: "/t
 function utilityFixtureProvider(id = "small"): ModelProviderConfig {
   return {
     baseUrl: "http://127.0.0.1:9/v1",
-    models: [
-      {
-        id,
-        name: "Local fixture",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
-      },
-    ],
+    models: [createTestModelDefinition(id, { name: "Local fixture", maxTokens: 1024 })],
   };
 }
 

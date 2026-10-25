@@ -17,11 +17,11 @@ import { createTestChatPane } from "./chat-pane.test-support.ts";
 const agentsList: AgentsListResult = makeBootRoster();
 
 function createCanonicalRoutePane(
-  handlers: Record<string, () => unknown> = {},
+  handlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
   fallback: () => unknown = () => ({}),
 ) {
-  const request = vi.fn((method: string) =>
-    Promise.resolve(method === "agents.list" ? agentsList : (handlers[method] ?? fallback)()),
+  const request = vi.fn((method: string, params: Record<string, unknown>) =>
+    Promise.resolve(method === "agents.list" ? agentsList : (handlers[method] ?? fallback)(params)),
   );
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
@@ -54,6 +54,27 @@ function createCanonicalRoutePane(
 function assistantHistory(text: string) {
   return { messages: [{ role: "assistant", content: [{ type: "text", text }] }] };
 }
+
+it("shows the subscribed initial transcript without another history round trip", async () => {
+  const { pane, state, snapshot, request } = createCanonicalRoutePane({
+    "sessions.messages.subscribe": () => ({
+      key: "agent:main:current",
+      initialHistory: { ok: true, payload: assistantHistory("Initial subscription transcript") },
+    }),
+  });
+  pane.sessionKey = state.sessionKey;
+  pane.applyGatewaySnapshot(snapshot);
+  await vi.waitFor(() =>
+    expect(state.chatMessages).toEqual(
+      assistantHistory("Initial subscription transcript").messages,
+    ),
+  );
+  expect(getChatHistoryLoadState(state).phase).toBe("committed");
+  expect(requestCalls(request, "chat.startup")).toHaveLength(0);
+  expect(requestCalls(request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject({
+    initialHistory: { limit: 80, maxBytes: 256 * 1024, knownState: {} },
+  });
+});
 
 async function expectRecoveredHistory(
   state: ReturnType<typeof createCanonicalRoutePane>["state"],

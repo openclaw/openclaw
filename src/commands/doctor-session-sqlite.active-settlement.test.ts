@@ -6,7 +6,6 @@ import { importSqliteSessionRowsBatch } from "../config/sessions/session-accesso
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
-import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   listSessionSqliteMigrationManifestPaths,
@@ -15,7 +14,6 @@ import {
   recordPlannedMigrationMoves,
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationManifest,
-  type SessionSqliteMigrationMove,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   createTranscriptEventReader,
@@ -29,6 +27,7 @@ import {
   runDoctorSessionSqlite,
   settleRetainedDoctorSessionSources,
 } from "./doctor-session-sqlite.js";
+import { retainedHistoryMove } from "./doctor-session-sqlite.recovery-fixtures.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 const pluginId = "session-fixture";
@@ -208,18 +207,10 @@ it.each([
           const archivePath = path.join(archiveDir, `unrelated-history.jsonl.imported-${copy}`);
           fs.writeFileSync(archivePath, duplicateBytes);
           duplicateArchives.push(archivePath);
-          const move: SessionSqliteMigrationMove = {
-            kind: "unreferenced-jsonl",
-            sourcePath: path.join(state.sessionsDir(), "unrelated-history.jsonl"),
+          const move = retainedHistoryMove(
+            path.join(state.sessionsDir(), "unrelated-history.jsonl"),
             archivePath,
-            artifact: {
-              identity: readMigrationArtifactIdentity(archivePath),
-              classification: "protected",
-              reason: "unreferenced-history",
-              dependencies: [],
-              disposal: { state: "retained" },
-            },
-          };
+          );
           recordPlannedMigrationMoves(old, target, [move]);
           recordCompletedMigrationMoves(old, target, [move]);
         }

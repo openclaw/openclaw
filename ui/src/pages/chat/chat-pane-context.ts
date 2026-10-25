@@ -62,8 +62,8 @@ import { currentInlineSessionApproval } from "./session-approval-projection.ts";
 import { retireCachedPairingQr } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-snapshot.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private registeredHumanMentionAccess?: HumanMentionAccess;
@@ -417,11 +417,16 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const routeSessionKey = this.sessionKey.trim();
     const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
     if (
-      state.connected &&
+      snapshot.client &&
+      (state.connected || snapshot.phase === "connecting" || snapshot.phase === "reconnecting") &&
       !catalogRouteKey &&
       (sourceChanged || this.connectedClient !== snapshot.client)
     ) {
-      void syncSelectedSessionMessageSubscription(state, { force: true });
+      void syncSelectedSessionMessageSubscription(state, {
+        force: true,
+        initialHistory: true,
+        beforeHello: !state.connected,
+      });
     }
     this.reconcileTaskSuggestionConnection(sourceChanged);
     this.synchronizeSessionObservation();

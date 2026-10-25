@@ -23,9 +23,14 @@ import { NodeWorkerJournalWorker } from "../../node-host/node-worker-journal-wor
 import { NodeWorkerLaunchStore } from "../../node-host/node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "../../node-host/node-worker-process-identity.js";
 import { NodeWorkerTurnStore } from "../../node-host/node-worker-turn-store.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
@@ -96,6 +101,57 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         expect(await turns.get(claim.launchId)).toMatchObject({
           state: "completed",
           resultJson: '{"marker":"pgfacts-turn"}',
+        });
+        const next = { ...claim, launchId: "pgfacts-next-turn", runId: "pgfacts-next-run" };
+        const now = Date.now();
+        await turns.claim({
+          claim: next,
+          ownerLaunchId: claim.launchId,
+          supervisor,
+          worker: supervisor,
+          nowMs: now + 2,
+        });
+        // A predecessor only knows the physical journal; the next read settles its turn.
+        admit(() =>
+          runOpenClawStateWriteTransaction(({ db }) =>
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<StateDatabase>(db)
+                .updateTable("node_worker_launches")
+                .set({
+                  state: "failed",
+                  error_text: "synthetic predecessor",
+                  completed_at_ms: now + 1,
+                  updated_at_ms: now + 1,
+                })
+                .where("launch_id", "=", claim.launchId),
+            ),
+          ),
+        );
+        const recovered = await turns.get(next.launchId);
+        expect(recovered).toMatchObject({
+          state: "failed",
+          resultJson: null,
+          errorText: "synthetic predecessor",
+          completedAtMs: now + 2,
+          updatedAtMs: now + 2,
+        });
+        expect(await turns.get(next.launchId)).toEqual(recovered);
+        expect(await turns.get(claim.launchId)).toMatchObject({
+          state: "completed",
+          resultJson: '{"marker":"pgfacts-turn"}',
+        });
+        // Ordinary settlement may update zero rows after all turns are recorded.
+        await launches.finish({ ...claim, supervisor, worker: supervisor, state: "failed" });
+        expect(await turns.get(next.launchId)).toEqual(recovered);
+
+        const cancelled = { ...claim, launchId: "pgfacts-cancelled", runId: "pgfacts-cancel-run" };
+        await launches.claim(cancelled, supervisor, 1);
+        await turns.claim({ claim: cancelled, ownerLaunchId: cancelled.launchId, supervisor });
+        await launches.finishCancelled({ expected: cancelled, supervisor, worker: null });
+        expect(await turns.get(cancelled.launchId)).toMatchObject({
+          state: "cancelled",
+          errorText: "node worker launch cancelled",
         });
       } finally {
         await journal.drain();

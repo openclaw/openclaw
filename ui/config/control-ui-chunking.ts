@@ -18,6 +18,24 @@ const controlUiBootModules = JSON.parse(
   entries: Record<"shared" | "new" | "chat", string[]>;
 };
 
+const chatVisibleModules = new Set([
+  "ui/src/pages/chat/components/chat-tool-card-chrome.tsx",
+  "ui/src/pages/chat/components/chat-tool-outcome-summary.solid.tsx",
+  "ui/src/pages/chat/components/chat-tool-render-model.ts",
+  "ui/src/pages/chat/components/chat-message-bubble-tools.tsx",
+  "ui/src/pages/chat/components/chat-permission-card.tsx",
+  "ui/src/pages/chat/components/chat-tool-content.solid.tsx",
+  "ui/src/pages/chat/components/chat-tool-cards.solid.tsx",
+  "ui/src/pages/chat/components/chat-message-activity-operation.tsx",
+  "ui/src/pages/chat/components/chat-diff-stat.solid.tsx",
+  "ui/src/pages/chat/components/chat-tool-row-presentation.ts",
+  "ui/src/lib/chat/tool-display-identity.ts",
+  "ui/src/lib/chat/tool-call-input.ts",
+  "src/agents/tool-display-name.ts",
+  "ui/src/i18n/locales/en-chat-details.ts",
+  "ui/src/pages/chat/components/chat-environment-content.tsx",
+]);
+
 const bootEntryRoutes = new Map(
   (["shared", "new", "chat"] as const).flatMap((route) =>
     controlUiBootModules.entries[route].map((id) => [id, route] as const),
@@ -59,14 +77,80 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/chat/components/chat-details-people.css":
+    case "ui/src/pages/chat/components/chat-outputs.css":
+    case "ui/src/pages/chat/components/chat-details-environment-desktop.css":
+      // Share styles without making Outputs import the Details renderer.
+      return "chat-details-styles";
+    case "ui/src/components/session-git-diff.tsx":
+    case "ui/src/lib/sessions/usage.ts":
+    case "src/shared/weak-owner-map.ts":
+    case "src/shared/assistant-display-content.ts":
+    case "src/shared/agent-run-status.ts":
+    case "ui/src/app/assistant-media.ts":
+    case "src/shared/dedupe-by-key.ts":
+    case "ui/src/lib/image-download.ts":
+    case "ui/src/lib/download.ts":
+    case "src/shared/markdown-code.ts":
+      return "deferred-ui-support";
+    case "ui/src/pages/chat/components/chat-image-preview-size.ts":
+    case "ui/src/pages/chat/components/chat-image-rendition.ts":
+    case "ui/src/pages/chat/components/chat-message-image-open.ts":
+    case "ui/src/pages/chat/components/chat-message-images-solid.tsx":
+    case "ui/src/pages/chat/components/chat-image-actions.tsx":
+    case "ui/src/pages/chat/components/chat-message-local-media.ts":
+    case "ui/src/pages/chat/components/chat-message-attachment-availability.ts":
+    case "ui/src/pages/chat/components/chat-media-playback.ts":
+    case "ui/src/pages/chat/components/chat-message-image-loading.ts":
+      return "chat-message-media-runtime";
+    case "ui/src/pages/chat/chat-provider-review-controller.tsx":
+      return "chat-provider-review";
+    // Keep optional compression groups separate from code evaluated by text-only Chat.
+    case "ui/src/pages/chat/chat-send-delivery.runtime.ts":
+    case "ui/src/pages/chat/chat-send-queue-runtime.ts":
+    case "ui/src/pages/chat/chat-model-recovery.runtime.ts":
+    case "ui/src/pages/chat/chat-command-dispatch.runtime.ts":
+    case "ui/src/pages/chat/chat-pane-session-metadata-patch.ts":
+    case "ui/src/pages/chat/chat-pane-session-operations.ts":
+    case "ui/src/pages/chat/chat-pane-session-operations.runtime.ts":
+      return "chat-interaction-runtime";
+    case "ui/src/pages/chat/components/chat-context-breakdown.tsx":
+    case "ui/src/pages/chat/components/chat-context-breakdown-model.ts":
+    case "ui/src/pages/chat/components/chat-context-report.tsx":
+    case "ui/src/pages/chat/components/chat-details-environment-body.tsx":
+    case "ui/src/lib/session-context-report.ts":
+      return "chat-interaction-runtime";
     case "node_modules/@solidjs/signals/dist/prod/deferred.js":
       // Route readers share this hook below without adding it to eager Solid code.
       return undefined;
+    case "ui/src/pages/chat/components/chat-outputs.tsx":
+      return "chat-outputs";
+    case "ui/src/pages/chat/components/chat-details-people-list.tsx":
+      return "chat-details-people-list";
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
+    case "ui/src/pages/chat/chat-live-events.runtime.ts":
+    case "ui/src/pages/chat/chat-gateway.ts":
+    case "ui/src/pages/chat/tool-stream.ts":
+    case "ui/src/pages/chat/tool-stream-status.ts":
+    case "ui/src/pages/chat/tool-stream-preamble.ts":
+      return "chat-live-events-runtime";
+    case "ui/src/pages/chat/chat-mobile-host.runtime.tsx":
+    case "ui/src/pages/chat/chat-mobile-scroll-fades.runtime.ts":
+    case "ui/src/pages/chat/components/chat-mobile-people-grid.tsx":
+    case "ui/src/pages/chat/components/chat-mobile-people-grid.css":
+      // Keep gesture and People implementations separate from retained header chrome.
+      return "chat-mobile-runtime";
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";
+    case "ui/src/pages/chat/talk/conversation.ts":
+      return "talk-conversation-runtime";
+    case "ui/src/pages/chat/chat-goal-operations.runtime.ts":
+      return "chat-goal-operations-runtime";
+    case "ui/src/pages/chat/chat-export.runtime.ts":
+    case "ui/src/pages/chat/export.ts":
+      return "chat-export-runtime";
     case "ui/src/lib/sessions/session-mutation-operations.runtime.ts":
     case "ui/src/lib/sessions/session-mutation-refresh.ts":
     case "ui/src/lib/sessions/create.ts":
@@ -86,9 +170,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/styles/emoji-search-panel.css":
       return "emoji-search-panel";
     case "ui/src/pages/chat/components/chat-composer-emoji-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-emoji.tsx":
     case "ui/src/pages/chat/components/chat-composer-mention-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-mention-menu.tsx":
+    case "ui/src/pages/chat/components/chat-composer-menu.tsx":
     case "ui/src/pages/chat/components/chat-composer-skill-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-skill-menu.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-dom.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu.tsx":
       // Share interaction-only rows without four separate preload-map entries.
       return "composer-invocation-menus";
     case "ui/src/app/app-root-focus.ts":
@@ -128,6 +218,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "sidebar-update-runtime";
     case "ui/src/components/markdown-parser.ts":
       return "markdown-runtime";
+    case "ui/src/components/markdown-live.ts":
+    case "ui/src/components/markdown-streaming.ts":
+    case "ui/src/components/markdown-tokens.ts":
+      return "markdown-streaming-runtime";
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
       return "session-snapshot-database";
@@ -153,6 +247,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   // not share the parser/sanitizer chunk used by ordinary transcript prose.
   if (moduleIdIncludesPackage(id, "highlight.js")) {
     return "markdown-highlight-runtime";
+  }
+  if (moduleIdIncludesPackage(id, "remend")) {
+    return "markdown-streaming-runtime";
   }
   if (
     moduleIdIncludesPackage(id, "dompurify") ||
@@ -223,6 +320,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
+                // Placement and delivery share retries without importing either route's bundle.
+                modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
               }
               return {
                 name: `control-ui-boot-${route}`,
@@ -243,10 +342,25 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               const styles = new Set(
                 controlUiBootModules[route].filter((id) => id.endsWith(".css")),
               );
+              if (route === "shared") {
+                styles.add("ui/src/components/solid/text-overflow.css");
+              }
+              if (route === "chat") {
+                styles.delete("ui/src/components/solid/text-overflow.css");
+                // These optional views share the route's preloaded stylesheet.
+                styles.add("ui/src/pages/chat/components/chat-pane-mobile-header.css");
+                styles.add("ui/src/pages/chat/components/chat-pane-mobile-composition.css");
+                styles.add("ui/src/styles/chat/context-breakdown.css");
+                styles.add("ui/src/pages/chat/components/chat-session-activity.css");
+              }
               return {
                 name: `control-ui-boot-${route}-styles`,
                 test: (id: string) =>
-                  !/[?&]inline(?:[=&]|$)/u.test(id) && styles.has(controlUiBootManifestKey(id)),
+                  !/[?&]inline(?:[=&]|$)/u.test(id) &&
+                  (styles.has(controlUiBootManifestKey(id)) ||
+                    (route === "chat" && chatVisibleModules.has(controlUiBootManifestKey(id))) ||
+                    (route === "shared" &&
+                      controlUiBootManifestKey(id) === "ui/src/components/solid/text-overflow.ts")),
                 // One stylesheet per measured route set, without per-page JS facades.
                 // Keep it separate from core CSS to preserve its existing size ceiling.
                 priority: 9,

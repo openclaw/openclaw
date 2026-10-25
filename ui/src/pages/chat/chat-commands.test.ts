@@ -249,7 +249,7 @@ describe("local command loading", () => {
     const host = makeChatHost({ requestHandlers: {} });
     const pending = dispatchChatSlashCommand(host, "model", "example/model");
     host.connectionEpoch += 1;
-    await expect(pending).resolves.toBe("failed");
+    await expect(pending).resolves.toBe("cancelled");
     expect(host.request).not.toHaveBeenCalled();
     expect(host.chatMessages).toEqual([]);
   });
@@ -327,6 +327,7 @@ describe("conversation reset confirmation", () => {
       const host = resetHost(() => promise);
       host.hello = gatewayHelloForMethods(["sessions.reset"]);
       const pending = dispatchChatSlashCommand(host as never, "clear", "");
+      await vi.waitFor(() => expect(host.confirmConversationReset).toHaveBeenCalledOnce());
       if (change === "run") {
         host.chatRunId = "new-run";
       } else {

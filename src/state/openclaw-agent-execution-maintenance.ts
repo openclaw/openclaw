@@ -131,7 +131,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
         },
         selected?.prepared,
       );
-      return value.kind === "maintenance-plan-stale"
+      return value.kind === "maintenance-plan-stale" || selected?.prepared.requiresWrite === false
         ? { kind: "not-committed" as const, workerThreadId: threadId, value }
         : {
             kind: "committed" as const,

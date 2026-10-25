@@ -419,6 +419,9 @@ importers:
       playwright-core:
         specifier: 1.64.1
         version: 1.64.1(patch_hash=eedf680682a6840d82c6ad530a60875857aa8c0372785acf8e8e5df9c2e3ac16)
+      proxy-from-env:
+        specifier: 2.1.0
+        version: 2.1.0
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
@@ -2808,6 +2811,9 @@ importers:
       partial-json:
         specifier: 0.1.7
         version: 0.1.7
+      proxy-from-env:
+        specifier: 2.1.0
+        version: 2.1.0
       typebox:
         specifier: 1.4.1
         version: 1.4.1
@@ -2883,6 +2889,9 @@ importers:
       mdast-util-gfm-table:
         specifier: 2.0.0
         version: 2.0.0(supports-color@10.2.2)
+      micromark:
+        specifier: 4.0.3
+        version: 4.0.3(supports-color@10.2.2)
       micromark-extension-gfm-table:
         specifier: 2.1.2
         version: 2.1.2

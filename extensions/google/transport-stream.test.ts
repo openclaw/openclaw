@@ -1726,10 +1726,7 @@ describe("google transport stream", () => {
         onCancel: cancel,
       }),
     );
-    let markHookStarted!: () => void;
-    const hookStarted = new Promise<void>((resolve) => {
-      markHookStarted = resolve;
-    });
+    const { promise: hookStarted, resolve: markHookStarted } = Promise.withResolvers<void>();
     const onResponse = vi.fn(() => {
       markHookStarted();
       return new Promise<void>(() => {});
@@ -1771,10 +1768,7 @@ describe("google transport stream", () => {
       }),
     );
     mockGoogleTextResponse("recovered");
-    let markHookStarted!: () => void;
-    const hookStarted = new Promise<void>((resolve) => {
-      markHookStarted = resolve;
-    });
+    const { promise: hookStarted, resolve: markHookStarted } = Promise.withResolvers<void>();
     const onResponse = vi.fn<() => void | Promise<void>>().mockImplementationOnce(() => {
       markHookStarted();
       return new Promise<void>(() => {});
@@ -1841,10 +1835,7 @@ describe("google transport stream", () => {
   it("does not retry when an external abort interrupts a stalled Gemini 3 response body", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
     const controller = new AbortController();
-    let resolveBodyRead!: () => void;
-    const bodyRead = new Promise<void>((resolve) => {
-      resolveBodyRead = resolve;
-    });
+    const { promise: bodyRead, resolve: resolveBodyRead } = Promise.withResolvers<void>();
     const cancel = vi.fn();
     guardedFetchMock.mockResolvedValueOnce(
       new Response(

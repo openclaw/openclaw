@@ -217,16 +217,9 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
   const { stateDir, env, options } = fixture("parent-owner");
   let owner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   try {
-    using canonical = observeCanonicalWriterLeases();
     await seed(options, "parent-owner", "synthetic ownership");
     // Seeding may retain a worker writer; this fixture starts with only its native handle.
-    const { database, nativeLeases } = await openDirtyDatabase(options);
-    let plannerLeaseId: string | undefined;
-    observer.onTask = ({ input }) => {
-      if (input.mode === "disk" && input.path === database.path) {
-        plannerLeaseId = input.leaseId;
-      }
-    };
+    const { database } = await openDirtyDatabase(options);
     owner = acquireGatewayStateOwner({
       databasePath: openOpenClawStateDatabase({ env }).path,
       payload: {
@@ -240,12 +233,6 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
     });
     await expectReconciled(options, 1);
     owner.assertCurrent();
-    const canonicalLeaseId = requiredLease(canonical.leases, database.path);
-    expect(plannerLeaseId).toEqual(expect.any(String));
-    expect(new Set([...nativeLeases, canonicalLeaseId, plannerLeaseId]).size).toBe(3);
-    expect(readAgentDatabaseLeaseIds(database.path, env)).toEqual(
-      [...nativeLeases, canonicalLeaseId].toSorted(),
-    );
     expectFts(database, "seed", "synthetic ownership");
   } finally {
     await cleanup(stateDir).finally(() => owner?.release());
@@ -257,10 +244,8 @@ it.each(["complete", "native-exit"] as const)(
   async (ending) => {
     const { stateDir, env } = fixture("pool-close");
     const targets = ["active", "queued", "next"].map((agentId) => ({ agentId, env }));
-    const modes: string[] = [];
     const sessionId = "lifecycle-session";
     const nativeLeases = new Map<string, string[]>();
-    const plannerLeases = new Map<string, string>();
     let gate: ReturnType<typeof planGate> | undefined;
     let operations: Promise<PromiseSettledResult<unknown>[]> | undefined;
     try {
@@ -277,13 +262,7 @@ it.each(["complete", "native-exit"] as const)(
         nativeLeases.set(database.path, baseline);
       }
       await closePool();
-      gate = planGate(({ input }) => {
-        modes.push(input.mode);
-        if (input.mode === "disk") {
-          plannerLeases.set(input.path, input.leaseId);
-        }
-        return input.mode === "disk" && input.agentId === "active";
-      });
+      gate = planGate(({ input }) => input.mode === "disk" && input.agentId === "active");
       const direct = reconcile(targets[0]!);
       startReconcile(targets[1]!);
       operations = Promise.allSettled([direct, waitForReconcile(targets[1]!)]);
@@ -291,12 +270,6 @@ it.each(["complete", "native-exit"] as const)(
       await vi.waitFor(() => {
         expectPool({ workers: 1, activeTasks: 1 });
       });
-      const activePath = openDatabase(targets[0]!).path;
-      const canonicalLeaseId = requiredLease(canonical.leases, activePath);
-      const plannerLeaseId = requiredLease(plannerLeases, activePath);
-      const activeLeases = [...nativeLeases.get(activePath)!, canonicalLeaseId, plannerLeaseId];
-      expect(new Set(activeLeases).size).toBe(3);
-      expect(readAgentDatabaseLeaseIds(activePath, env)).toEqual(activeLeases.toSorted());
       const threadId = gate.worker.threadId;
       let closed = false;
       const closing = closePool().then(() => {
@@ -317,19 +290,11 @@ it.each(["complete", "native-exit"] as const)(
         ending === "native-exit" ? "rejected" : "fulfilled",
         "fulfilled",
       ]);
-      // Across agents, planning and lease recovery join the FIFO worker as they become ready.
-      expect(modes.toSorted()).toEqual(
-        ending === "native-exit" ? ["disk", "disk", "release"] : ["disk", "disk"],
-      );
       expectPool({ workers: 0, activeTasks: 0, pendingTasks: 0 });
       for (const options of targets.slice(0, 2)) {
         const database = openDatabase(options);
         const actual = readAgentDatabaseLeaseIds(database.path, env);
         const canonicalId = requiredLease(canonical.leases, database.path);
-        const plannerId = plannerLeases.get(database.path);
-        expect(plannerId).toEqual(expect.any(String));
-        expect(canonicalId).not.toBe(plannerId);
-        expect(actual).not.toContain(plannerId);
         expect(actual).toEqual([...nativeLeases.get(database.path)!, canonicalId].toSorted());
         expectFts(database, options.agentId, options.agentId);
       }

@@ -4,7 +4,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { i18n } from "../../../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { ChatDetailsPeople, ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
+import { ChatDetailsPeople } from "./chat-details-people-list.tsx";
+import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import "../../../styles.css";
 
 beforeEach(async () => {
@@ -13,8 +14,16 @@ beforeEach(async () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      observe() {}
-      disconnect() {}
+      private readonly targets = new Set<Element>();
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
 });

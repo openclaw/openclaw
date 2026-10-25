@@ -2,9 +2,10 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { MarkdownDomReconciler } from "../lib/markdown-dom-reconciler.ts";
 import { prepareMessageMarkdown } from "../pages/chat/components/chat-message-text-preparation.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { toStreamingMarkdownDomParts } from "./markdown-live.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import transcriptCorpus from "./markdown-transcript-corpus.json" with { type: "json" };
-import { toSanitizedMarkdownHtml, toStreamingMarkdownDomParts } from "./markdown.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 type SecurityCase = { name: string; source: string; options?: MarkdownRenderOptions };
 
@@ -278,8 +279,8 @@ describe("streaming Markdown sanitization at the live DOM boundary", () => {
         { role: "assistant", isStreaming: false },
         sample.options ?? {},
       );
-      expect(settled.parts.every((part) => typeof part === "string")).toBe(true);
-      staticReconciler.update(settled.messageKey, settled.source, settled.parts);
+      expect(settled.parts().every((part) => typeof part === "string")).toBe(true);
+      staticReconciler.update(settled.messageKey, settled.source, settled.parts());
       expect(unsafeDom(staticContainer), `${sample.name}, static`).toEqual([]);
       expect(serializedContent(staticContainer), `${sample.name}, static`).toBe(expected);
     } finally {
@@ -296,6 +297,10 @@ describe("streaming Markdown sanitization at the live DOM boundary", () => {
       try {
         for (const end of schedule.ends) {
           const source = sample.source.slice(0, end);
+          if (reconciler.canPreview(key, source)) {
+            reconciler.preview(source);
+            expect(unsafeDom(container), `${key}, plain preview ${end}`).toEqual([]);
+          }
           reconciler.update(key, source, toStreamingMarkdownDomParts(source, sample.options, key));
           expect(unsafeDom(container), `${key}, offset ${end}`).toEqual([]);
         }
@@ -307,7 +312,7 @@ describe("streaming Markdown sanitization at the live DOM boundary", () => {
           { role: "assistant", isStreaming: false },
           sample.options ?? {},
         );
-        reconciler.update(completed.messageKey, completed.source, completed.parts);
+        reconciler.update(completed.messageKey, completed.source, completed.parts());
         expect(unsafeDom(container), `${key}, completion`).toEqual([]);
         expect(serializedContent(container), `${key}, completion`).toBe(expected);
       } finally {

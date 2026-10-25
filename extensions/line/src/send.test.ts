@@ -703,18 +703,14 @@ describe("LINE send helpers", () => {
   });
 
   it("coalesces concurrent group-name cache misses", async () => {
-    let resolveSummary: (summary: { groupId: string; groupName: string }) => void = () => {};
-    getGroupSummaryMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveSummary = resolve;
-      }),
-    );
+    const summary = Promise.withResolvers<{ groupId: string; groupName: string }>();
+    getGroupSummaryMock.mockReturnValueOnce(summary.promise);
 
     const first = sendModule.getLineGroupName("Cconcurrent", options);
     const second = sendModule.getLineGroupName("Cconcurrent", options);
     expect(getGroupSummaryMock).toHaveBeenCalledTimes(1);
 
-    resolveSummary({ groupId: "Cconcurrent", groupName: "Release Squad" });
+    summary.resolve({ groupId: "Cconcurrent", groupName: "Release Squad" });
     await expect(Promise.all([first, second])).resolves.toEqual(["Release Squad", "Release Squad"]);
     await expect(sendModule.getLineGroupName("Cconcurrent", options)).resolves.toBe(
       "Release Squad",

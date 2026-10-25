@@ -36,6 +36,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/components/tooltip-loading.test.ts",
   "ui/src/components/viewer-facepile.test.ts",
   "ui/src/pages/agents/memory/memory-panel.test.ts",
+  // Holds the live dispatcher import before another chat suite can preload it.
+  "ui/src/pages/chat/chat-live-events.test.ts",
   "ui/src/pages/chat/chat-outbox-recovery-owner.test.ts",
   "ui/src/pages/chat/chat-outbox-recovery.test.ts",
   "ui/src/pages/chat/chat-page-attachment-handoff.test.ts",
@@ -59,6 +61,10 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
   "ui/src/pages/chat/chat-pane.test.ts",
   "ui/src/pages/chat/chat-pane-tool-icons.test.tsx",
+  // Holds the editor import before first use; other comment suites load it eagerly.
+  "ui/src/pages/chat/components/chat-annotation-lazy.test.ts",
+  // Holds the rich-message import before first use by any other transcript suite.
+  "ui/src/pages/chat/components/chat-rich-message-lazy.test.tsx",
   "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
   "ui/src/pages/chat/components/chat-transcript-geometry.test.ts",
   "ui/src/pages/chat/components/chat-transcript-invalidation.test.ts",
