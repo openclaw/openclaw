@@ -47,9 +47,8 @@ afterEach(() => {
 it("keeps required-root native environments disabled on warm native turns", async () => {
   const params = paramsForTurn(undefined, { requireWorkspaceOnly: true });
   const turn = await buildTurnStartParams(params, {
-    ...turnOptions(),
+    ...turnOptions({ preserveNativeTurnSettings: true }),
     cwd: "/repo/subdirectory",
-    preserveNativeTurnSettings: true,
     environmentSelection: [{ environmentId: "ambient", cwd: "/outside" }],
   });
   expect(turn.environments).toEqual([]);
@@ -62,16 +61,10 @@ it("refreshes and clears presence without rewriting native turn input", async ()
     activeComputerContext: () => currentPresence,
   };
   const options = turnOptions({ preserveNativeTurnSettings: true });
-  const contexts = [
-    "active_node=mac-a",
-    "active_node=mac-a",
-    "active_node=mac-b",
-    "active_node=unknown",
-  ];
-  for (const text of contexts) {
-    currentPresence = text;
+  for (const node of ["mac-a", "mac-a", "mac-b", "unknown"]) {
+    currentPresence = `active_node=${node}`;
     const turn = await buildTurnStartParams(params, options);
-    expect(turn.additionalContext?.openclaw_active_computer).toEqual(application(text));
+    expect(turn.additionalContext?.openclaw_active_computer).toEqual(application(currentPresence));
     expect(turn.input).toEqual(textInput(params.prompt));
   }
 });
@@ -150,6 +143,8 @@ it("carries explicit current policy without changing native turn input", async (
     messageToolAvailable: true,
     requireExplicitMessageTarget: false,
     preserveNativeTurnSettings: true,
+    model: "native-model",
+    modelProvider: "native-provider",
   });
   const build = (overrides: Partial<TurnParams>, settings: Partial<TurnOptions> = {}) =>
     buildTurnStartParams({ ...params, ...overrides }, { ...options, ...settings });
@@ -173,15 +168,18 @@ it("carries explicit current policy without changing native turn input", async (
   expect(values[0]).not.toContain("A send ends this turn only");
   for (const turn of turns) {
     expect(turn.input).toEqual(textInput(params.prompt));
-    expect(turn.additionalContext?.openclaw_temporal_context).toBeDefined();
-    expect(turn.additionalContext?.openclaw_permission_change).toEqual(
-      application("Permission changed."),
-    );
-    expect(turn.additionalContext?.openclaw_source_delivery?.kind).toBe("application");
+    expect(turn.additionalContext).toEqual({
+      openclaw_active_computer: activeComputer,
+      openclaw_temporal_context: application(expect.stringContaining("## Temporal Context")),
+      openclaw_permission_change: application("Permission changed."),
+      openclaw_source_delivery: application(expect.any(String)),
+    });
     expect(
       Buffer.byteLength(turn.additionalContext!.openclaw_source_delivery!.value, "utf8"),
     ).toBeLessThan(1_000);
-    expect(turn).not.toHaveProperty("collaborationMode");
+    for (const key of ["model", "effort", "collaborationMode", "personality"]) {
+      expect(turn).not.toHaveProperty(key);
+    }
   }
   const required = await build(
     { sourceReplyDeliveryMode: "message_tool_only" },
@@ -225,26 +223,4 @@ it("replaces channel delivery guidance on a routeless operator turn", async () =
   expect(deliveryValue(operatorTurn)).not.toContain("current source");
   expect(deliveryValue(operatorTurn)).not.toContain("final=false");
   expect(operatorTurn.input).toEqual(textInput(paramsForTurn().prompt));
-});
-it("adds a permission notice without overwriting native supervised settings", async () => {
-  const notice = "Permission change. Continue with updated permissions.";
-  const params = paramsForTurn(undefined, {
-    permissionChange: permissionChange(notice),
-  });
-  const request = await buildTurnStartParams(params, {
-    ...turnOptions(),
-    model: "native-model",
-    modelProvider: "native-provider",
-    preserveNativeTurnSettings: true,
-  });
-
-  for (const key of ["model", "effort", "collaborationMode", "personality"]) {
-    expect(request).not.toHaveProperty(key);
-  }
-  expect(request.additionalContext).toEqual({
-    openclaw_active_computer: activeComputer,
-    openclaw_source_delivery: sourceDelivery,
-    openclaw_temporal_context: application(expect.stringContaining("## Temporal Context")),
-    openclaw_permission_change: application(notice),
-  });
 });

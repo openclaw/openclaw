@@ -18,6 +18,26 @@ import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
 setupRunAttemptTestHooks();
 
+async function observationFixture() {
+  const f = await fixture();
+  const client = createClient();
+  const parent = await f.register(client);
+  await parent.ready;
+  const request = {
+    client: client.client,
+    agentId: f.identity.agentId,
+    sessionKey: f.identity.sessionKey,
+    sessionId: f.identity.sessionId,
+    lifecycleRevision: f.historyOwner().lifecycleRevision,
+    storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
+    parentThreadId: "parent-thread",
+    historyOwner: f.historyOwner(),
+    assertCurrent: vi.fn(),
+  };
+  const read = () => codexNativeSubagentMonitorRuntime.readNativeSubagents(request);
+  return { f, client, parent, request, read };
+}
+
 function observeAssignment(
   store: Awaited<ReturnType<typeof fixture>>["store"],
   nativeTurnId: string,
@@ -160,23 +180,8 @@ it("settles delayed close writes without consuming a replacement monitor's resum
 });
 
 it("reads direct and nested native observations only for the registered physical requester", async () => {
-  const f = await fixture();
-  const client = createClient();
-  const parent = await f.register(client);
-  await parent.ready;
+  const { f, client, parent, request, read } = await observationFixture();
   parent.bindTurn("parent-turn");
-  const request = {
-    client: client.client,
-    agentId: f.identity.agentId,
-    sessionKey: f.identity.sessionKey,
-    sessionId: f.identity.sessionId,
-    lifecycleRevision: f.historyOwner().lifecycleRevision,
-    storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
-    parentThreadId: "parent-thread",
-    historyOwner: f.historyOwner(),
-    assertCurrent: vi.fn(),
-  };
-  const read = () => codexNativeSubagentMonitorRuntime.readNativeSubagents(request);
   expect(read()).toEqual({ coverage: "live", children: [], truncated: false });
   await client.notify(itemNotification(directSpawnItem("v2", "parent-thread", "child-thread")));
   await client.notify(turnStartedNotification("child-turn"));
@@ -232,23 +237,9 @@ it("reads direct and nested native observations only for the registered physical
 });
 
 it("does not create an observation owner after an idle parent is pruned", async () => {
-  const f = await fixture();
-  const client = createClient();
-  const parent = await f.register(client);
-  await parent.ready;
-  const request = {
-    client: client.client,
-    agentId: f.identity.agentId,
-    sessionKey: f.identity.sessionKey,
-    sessionId: f.identity.sessionId,
-    lifecycleRevision: f.historyOwner().lifecycleRevision,
-    storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
-    parentThreadId: "parent-thread",
-    historyOwner: f.historyOwner(),
-    assertCurrent() {},
-  };
-  expect(codexNativeSubagentMonitorRuntime.readNativeSubagents(request)?.coverage).toBe("live");
+  const { client, parent, read } = await observationFixture();
+  expect(read()?.coverage).toBe("live");
   await parent.unregister();
-  expect(codexNativeSubagentMonitorRuntime.readNativeSubagents(request)).toBeUndefined();
+  expect(read()).toBeUndefined();
   client.close();
 });
