@@ -11,7 +11,6 @@ import { sendMessageSignal } from "./send.js";
 import {
   signalJsonServer,
   listenSignalServer,
-  closeSignalServer,
   type SignalRpcEnvelope,
 } from "./signal-rpc.test-support.js";
 
@@ -88,7 +87,7 @@ describe("Signal host-owned outbound media access", () => {
   afterEach(async () => {
     try {
       if (server?.listening) {
-        await closeSignalServer(server);
+        await server[Symbol.asyncDispose]();
       }
     } finally {
       reactionStores.clearSignalApprovalReactionStoresForTest();

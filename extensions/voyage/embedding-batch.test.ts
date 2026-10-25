@@ -96,12 +96,7 @@ async function serve(replies: Record<string, unknown>) {
       })
       .catch(() => response.destroy());
   });
-  onTestFinished(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  );
+  onTestFinished(() => server[Symbol.asyncDispose]());
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
