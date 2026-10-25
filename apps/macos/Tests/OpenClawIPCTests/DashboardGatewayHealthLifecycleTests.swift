@@ -121,7 +121,8 @@ extension DashboardGatewayHealthTests {
                 window.webkit.messageHandlers.openclawGateways.postMessage({type: 'connection-state-changed'});
                 """,
                 arguments: ["gatewayUrl": server.websocketURL("/control/").absoluteString],
-                in: nil, contentWorld: .page)
+                in: nil,
+                contentWorld: .page)
             _ = try await controller.webView.evaluateJavaScript("document.readyState")
             #expect(controller.gatewayHealth == nil)
             #expect(self.health(target, in: manager) == .unknown)
