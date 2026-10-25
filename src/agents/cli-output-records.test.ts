@@ -33,6 +33,47 @@ function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], pr
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
 
+function claudeStream(raw: string, explicitDialect = false) {
+  return parseCliJsonl(
+    raw,
+    {
+      command: "claude",
+      output: "jsonl",
+      sessionIdFields: ["session_id"],
+      ...(explicitDialect ? { jsonlDialect: "claude-stream-json" as const } : {}),
+    },
+    "claude-cli",
+  );
+}
+
+function jsonRecord(input: object, command = "claude", providerId = `${command}-cli`) {
+  return parseCliJson(
+    JSON.stringify(input),
+    { command, output: "json", sessionIdFields: ["session_id"] },
+    providerId,
+  );
+}
+
+const jsonAnswer = (text = "", sessionId: string | undefined = undefined) => ({
+  text,
+  sessionId,
+  usage: undefined,
+});
+const stoppedResult = (terminal_reason = "hook_stopped", stop_reason = "tool_use") => ({
+  type: "result",
+  subtype: "success",
+  is_error: false,
+  session_id: "stopped-session",
+  terminal_reason,
+  stop_reason,
+  result: "",
+});
+const stoppedAnswer = (terminalReason = "hook_stopped", stopReason = "tool_use") => ({
+  ...jsonAnswer("", "stopped-session"),
+  errorText: `Claude CLI ended the turn without a reply (terminal_reason: ${terminalReason}, stop_reason: ${stopReason}).`,
+  terminalFailure: { reason: "turn_stopped", terminalReason, stopReason },
+});
+
 describe("parseCliJson", () => {
   it.each([
     {
@@ -77,116 +118,31 @@ describe("parseCliJson", () => {
         terminal_reason: "max_turns",
         errors: ["Reached maximum number of turns (3)"],
       },
-      command: "claude",
-      sessionIdFields: ["session_id"],
-      providerId: "claude-cli",
       expected: {
-        text: "",
-        sessionId: "session-json-max-turns",
-        usage: undefined,
+        ...jsonAnswer("", "session-json-max-turns"),
         errorText: "Reached maximum number of turns (3)",
         terminalFailure: { reason: "max_turns", limit: 3 },
       },
     },
     {
       name: "records a Claude hook-stopped terminal result in JSON mode",
-      input: {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        session_id: "session-json-hook-stopped",
-        stop_reason: "tool_use",
-        terminal_reason: "hook_stopped",
-        result: "",
-        num_turns: 4,
-        permission_denials: [],
-      },
-      command: "claude",
-      sessionIdFields: ["session_id"],
-      providerId: "claude-cli",
-      expected: {
-        text: "",
-        sessionId: "session-json-hook-stopped",
-        usage: undefined,
-        errorText:
-          "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
-        terminalFailure: {
-          reason: "turn_stopped",
-          terminalReason: "hook_stopped",
-          stopReason: "tool_use",
-        },
-      },
+      input: { ...stoppedResult(), num_turns: 4, permission_denials: [] },
+      expected: stoppedAnswer(),
     },
     {
       name: "bounds and flattens the CLI-controlled terminal reason it repeats back",
-      input: {
-        type: "result",
-        subtype: "success",
-        session_id: "session-json-long-reason",
-        terminal_reason: "hook_stopped",
-        stop_reason: "y".repeat(200),
-        result: "",
-      },
-      command: "claude",
-      sessionIdFields: ["session_id"],
-      providerId: "claude-cli",
-      expected: {
-        text: "",
-        sessionId: "session-json-long-reason",
-        usage: undefined,
-        errorText: `Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: ${"y".repeat(64)}).`,
-        terminalFailure: {
-          reason: "turn_stopped",
-          terminalReason: "hook_stopped",
-          stopReason: "y".repeat(64),
-        },
-      },
+      input: stoppedResult("hook_stopped", "y".repeat(200)),
+      expected: stoppedAnswer("hook_stopped", "y".repeat(64)),
     },
     {
       name: "records an aborted-tools terminal result as a turn stop",
-      input: {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        session_id: "session-json-aborted-tools",
-        stop_reason: "tool_use",
-        terminal_reason: "aborted_tools",
-        result: "",
-      },
-      command: "claude",
-      sessionIdFields: ["session_id"],
-      providerId: "claude-cli",
-      expected: {
-        text: "",
-        sessionId: "session-json-aborted-tools",
-        usage: undefined,
-        errorText:
-          "Claude CLI ended the turn without a reply (terminal_reason: aborted_tools, stop_reason: tool_use).",
-        terminalFailure: {
-          reason: "turn_stopped",
-          terminalReason: "aborted_tools",
-          stopReason: "tool_use",
-        },
-      },
+      input: stoppedResult("aborted_tools"),
+      expected: stoppedAnswer("aborted_tools"),
     },
     {
       name: "keeps a stopped Claude turn that still delivered result text",
-      input: {
-        type: "result",
-        subtype: "success",
-        session_id: "session-json-hook-text",
-        stop_reason: "tool_use",
-        terminal_reason: "hook_stopped",
-        result: "partial answer",
-      },
-      command: "claude",
-      sessionIdFields: ["session_id"],
-      providerId: "claude-cli",
-      expected: {
-        text: "partial answer",
-        sessionId: "session-json-hook-text",
-        usage: undefined,
-      },
+      input: { ...stoppedResult(), result: "partial answer" },
+      expected: jsonAnswer("partial answer", "stopped-session"),
     },
     {
       name: "surfaces Claude error_during_execution errors[] and skips ede_diagnostic telemetry",
@@ -197,13 +153,8 @@ describe("parseCliJson", () => {
         session_id: "session-json-ede",
         errors: ["[ede_diagnostic] tool_use_ids=[toolu_1]", "API Error: 529 Overloaded"],
       },
-      command: "claude",
-      sessionIdFields: ["session_id"],
-      providerId: "claude-cli",
       expected: {
-        text: "",
-        sessionId: "session-json-ede",
-        usage: undefined,
+        ...jsonAnswer("", "session-json-ede"),
         errorText: "API Error: 529 Overloaded",
       },
     },
@@ -215,13 +166,8 @@ describe("parseCliJson", () => {
         is_error: true,
         result: 'API Error: 400 {"error":{"message":"Bad request"}}',
       },
-      command: "claude",
-      sessionIdFields: ["session_id"],
-      providerId: "claude-cli",
       expected: {
-        text: "",
-        sessionId: undefined,
-        usage: undefined,
+        ...jsonAnswer(),
         errorText: "Bad request",
       },
     },
@@ -229,12 +175,8 @@ describe("parseCliJson", () => {
       name: "classifies generic is_error JSON results as provider errors",
       input: { is_error: true, result: "429 rate limit exceeded" },
       command: "custom",
-      sessionIdFields: undefined,
-      providerId: "custom-cli",
       expected: {
-        text: "",
-        sessionId: undefined,
-        usage: undefined,
+        ...jsonAnswer(),
         errorText: "429 rate limit exceeded",
       },
     },
@@ -242,39 +184,25 @@ describe("parseCliJson", () => {
       name: "keeps successful JSON result message payloads as assistant text",
       input: { type: "result", message: "done" },
       command: "custom",
-      sessionIdFields: undefined,
-      providerId: "custom-cli",
-      expected: { text: "done", sessionId: undefined, usage: undefined },
+      expected: jsonAnswer("done"),
     },
     {
       name: "does not classify null JSON result error fields as provider errors",
       input: { type: "result", error: null, message: "done" },
       command: "custom",
-      sessionIdFields: undefined,
-      providerId: "custom-cli",
-      expected: { text: "done", sessionId: undefined, usage: undefined },
+      expected: jsonAnswer("done"),
     },
     {
       name: "classifies JSON status error result payloads as provider errors",
       input: { type: "result", status: "error", result: "rate limit" },
       command: "custom",
-      sessionIdFields: undefined,
-      providerId: "custom-cli",
       expected: {
-        text: "",
-        sessionId: undefined,
-        usage: undefined,
+        ...jsonAnswer(),
         errorText: "rate limit",
       },
     },
-  ])("$name", ({ input, command, sessionIdFields, providerId, expected }) => {
-    const result = parseCliJson(
-      JSON.stringify(input),
-      { command, output: "json", ...(sessionIdFields ? { sessionIdFields } : {}) },
-      providerId,
-    );
-
-    expect(result).toEqual(expected);
+  ])("$name", ({ input, command, expected }) => {
+    expect(jsonRecord(input, command)).toEqual(expected);
   });
 
   it("keeps earlier assistant text when a later terminal result is reply-less", () => {
@@ -284,24 +212,13 @@ describe("parseCliJson", () => {
           type: "assistant",
           message: { content: [{ type: "text", text: "partial answer" }] },
         },
-        {
-          type: "result",
-          subtype: "success",
-          session_id: "session-json-earlier-text",
-          stop_reason: "tool_use",
-          terminal_reason: "hook_stopped",
-          result: "",
-        },
+        stoppedResult(),
       ),
       { command: "claude", output: "json", sessionIdFields: ["session_id"] },
       "claude-cli",
     );
 
-    expect(result).toEqual({
-      text: "partial answer",
-      sessionId: "session-json-earlier-text",
-      usage: undefined,
-    });
+    expect(result).toEqual(jsonAnswer("partial answer", "stopped-session"));
   });
 
   it.each([
@@ -361,59 +278,27 @@ describe("parseCliJson", () => {
     });
   });
 
-  it.each([
-    {
-      name: "parses Gemini CLI response text and stats payloads",
-      input: {
-        session_id: "gemini-session-123",
+  it.each([undefined, {}])("reads Gemini stats with usage=%j", (usage) => {
+    const result = jsonRecord(
+      {
+        session_id: "gemini-session",
         response: "Gemini says hello",
-        stats: {
-          total_tokens: 21,
-          input_tokens: 13,
-          output_tokens: 5,
-          cached: 8,
-          input: 5,
-        },
+        usage,
+        stats: { total_tokens: 21, input_tokens: 13, output_tokens: 5, cached: 8, input: 5 },
       },
-      expected: {
-        text: "Gemini says hello",
-        sessionId: "gemini-session-123",
-        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
-      },
-    },
-    {
-      name: "falls back to Gemini stats when usage exists without token fields",
-      input: {
-        session_id: "gemini-session-789",
-        response: "Gemini says hello",
-        usage: {},
-        stats: {
-          total_tokens: 21,
-          input_tokens: 13,
-          output_tokens: 5,
-          cached: 8,
-          input: 5,
-        },
-      },
-      expected: {
-        text: "Gemini says hello",
-        sessionId: "gemini-session-789",
-        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
-      },
-    },
-  ])("$name", ({ input, expected }) => {
-    const result = parseCliJson(JSON.stringify(input), {
-      command: "gemini",
-      output: "json",
-      sessionIdFields: ["session_id"],
+      "gemini",
+      "",
+    );
+    expect(result).toEqual({
+      text: "Gemini says hello",
+      sessionId: "gemini-session",
+      usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
     });
-
-    expect(result).toEqual(expected);
   });
 
   it("falls back to input_tokens minus cached when Gemini stats omit input", () => {
-    const result = parseCliJson(
-      JSON.stringify({
+    const result = jsonRecord(
+      {
         session_id: "gemini-session-456",
         response: "Hello",
         stats: {
@@ -422,12 +307,9 @@ describe("parseCliJson", () => {
           output_tokens: 5,
           cached: 8,
         },
-      }),
-      {
-        command: "gemini",
-        output: "json",
-        sessionIdFields: ["session_id"],
       },
+      "gemini",
+      "",
     );
 
     expect(result?.usage?.input).toBe(5);
@@ -435,31 +317,19 @@ describe("parseCliJson", () => {
   });
 
   it("unwraps nested Claude result JSON from JSON output", () => {
-    const result = parseCliJson(
-      JSON.stringify({
-        session_id: "session-nested-json",
+    const result = jsonRecord({
+      session_id: "session-nested-json",
+      result: JSON.stringify({
+        type: "result",
         result: JSON.stringify({
           type: "result",
-          result: JSON.stringify({
-            type: "result",
-            subtype: "success",
-            result: "actual response text",
-          }),
+          subtype: "success",
+          result: "actual response text",
         }),
       }),
-      {
-        command: "claude",
-        output: "json",
-        sessionIdFields: ["session_id"],
-      },
-      "claude-cli",
-    );
-
-    expect(result).toEqual({
-      text: "actual response text",
-      sessionId: "session-nested-json",
-      usage: undefined,
     });
+
+    expect(result).toEqual(jsonAnswer("actual response text", "session-nested-json"));
   });
 
   it("does not unwrap nested result-shaped JSON for non-claude json backends", () => {
@@ -470,29 +340,21 @@ describe("parseCliJson", () => {
         result: "actual response text",
       }),
     });
-    const result = parseCliJson(
-      JSON.stringify({
+    const result = jsonRecord(
+      {
         session_id: "gemini-session-nested-json",
         result: nestedResult,
-      }),
-      {
-        command: "gemini",
-        output: "json",
-        sessionIdFields: ["session_id"],
       },
+      "gemini",
       "gemini",
     );
 
-    expect(result).toEqual({
-      text: nestedResult,
-      sessionId: "gemini-session-nested-json",
-      usage: undefined,
-    });
+    expect(result).toEqual(jsonAnswer(nestedResult, "gemini-session-nested-json"));
   });
 
   it("parses nested OpenAI-style cached token details from CLI json payloads", () => {
-    const result = parseCliJson(
-      JSON.stringify({
+    const result = jsonRecord(
+      {
         session_id: "openai-session-123",
         response: "OpenAI says hello",
         usage: {
@@ -502,12 +364,9 @@ describe("parseCliJson", () => {
             cached_tokens: 6,
           },
         },
-      }),
-      {
-        command: "codex",
-        output: "json",
-        sessionIdFields: ["session_id"],
       },
+      "codex",
+      "",
     );
 
     expect(result).toEqual({
@@ -526,17 +385,13 @@ describe("parseCliJson", () => {
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name from CLI JSON output",
     ({ raw, normalized }) => {
-      const result = parseCliJson(
-        JSON.stringify({
+      const result = jsonRecord(
+        {
           session_id: "openai-compatible-session",
           response: "OpenAI-compatible response",
           usage: raw,
-        }),
-        {
-          command: "openai-compatible",
-          output: "json",
-          sessionIdFields: ["session_id"],
         },
+        "openai-compatible",
         "openai-compatible-cli",
       );
 
@@ -565,20 +420,8 @@ describe("parseCliJsonl", () => {
       expected: [undefined, undefined],
     },
   ])("$name", ({ backend, expected }) => {
-    // The dialect, not the provider id, owns Claude Code's terminal semantics:
-    // a plugin backend that declares `claude-stream-json` gets the same stop
-    // classification as the bundled `claude-cli`, and one that does not stays
-    // on the generic result path.
     const result = parseCliJsonl(
-      JSON.stringify({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        session_id: "acme-hook-stopped",
-        stop_reason: "tool_use",
-        terminal_reason: "hook_stopped",
-        result: "",
-      }),
+      JSON.stringify(stoppedResult()),
       { ...backend, output: "jsonl", sessionIdFields: ["session_id"] },
       "acme-cli",
     );
@@ -612,32 +455,14 @@ describe("parseCliOutput", () => {
       },
     },
   ])("$name", ({ raw, expected }) => {
-    const result = parseCliOutput({
-      raw,
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      outputMode: "jsonl",
-    });
-
-    expect(result).toEqual(expected);
+    expect(claudeStream(raw)).toEqual(expected);
   });
 
   it("keeps the missing-result failure after compaction-only metadata", () => {
-    const result = parseCliOutput({
-      raw: JSON.stringify({ type: "system", subtype: "status", status: "compacting" }),
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      outputMode: "jsonl",
-    });
+    const result = claudeStream(
+      JSON.stringify({ type: "system", subtype: "status", status: "compacting" }),
+      true,
+    );
 
     expect(result).toEqual({
       text: "",
