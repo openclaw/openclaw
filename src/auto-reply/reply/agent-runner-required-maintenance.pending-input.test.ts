@@ -2,9 +2,12 @@ import { readFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
-import { promisify } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../../test/helpers/gateway-integration-fixtures.js";
 import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -175,13 +178,7 @@ it.each([
             );
           });
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing model fixture address");
-      }
+      const baseUrl = await listenLoopback(server);
       const sessionKey = "agent:main:main";
       const sessionId = "required-maintenance-session";
       const runId = "approved-foreground";
@@ -204,7 +201,7 @@ it.each([
             "test-provider": {
               api: "openai-completions",
               apiKey: "synthetic-test-key",
-              baseUrl: `http://127.0.0.1:${address.port}/v1`,
+              baseUrl: `${baseUrl}/v1`,
               models: [
                 {
                   id: "test-model",
@@ -410,8 +407,7 @@ it.each([
         await scheduler.stop();
         clearMemoryPluginState();
         clearRuntimeConfigSnapshot();
-        server.closeAllConnections();
-        await promisify(server.close.bind(server))();
+        await closeHttpServer(server);
       }
     }),
   60_000,

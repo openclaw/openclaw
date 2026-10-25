@@ -8,6 +8,7 @@ import {
   createHarness,
   type ModelProvidersPageTestElement,
   startSelectedLogin,
+  waitForProviders,
 } from "./model-providers-page.test-support.tsx";
 
 export function museCodeCapability(): NonNullable<
@@ -112,7 +113,7 @@ async function clickEnabled(page: ModelProvidersPageTestElement, selector: strin
 }
 
 export async function openPicker(page: ModelProvidersPageTestElement) {
-  await waitForSolid(() => expect(page.view.props.updatedAt).toEqual(expect.any(Number)));
+  await waitForProviders(page);
   await clickEnabled(page, "[data-models-connect]");
 }
 

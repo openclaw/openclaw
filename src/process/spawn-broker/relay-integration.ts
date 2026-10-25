@@ -1,7 +1,10 @@
 import type { ChildProcess, Serializable, SpawnOptions } from "node:child_process";
 import type { Duplex } from "node:stream";
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
-import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerEnv,
+} from "../../infra/runtime-worker-url.js";
 import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withChildProcessOperation } from "../spawn-diagnostics.js";
@@ -135,7 +138,7 @@ export function spawnServiceChildRelay(params: {
         stdio: params.stdio,
         detached: params.detached,
         windowsHide: true,
-        env: params.env,
+        env: resolveRuntimeWorkerEnv(params.workerUrl, params.env),
       }),
     "default",
   );

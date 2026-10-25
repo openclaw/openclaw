@@ -21,7 +21,10 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
-import { discardSessionPendingInput } from "./session-pending-input-withdrawal.js";
+import {
+  discardSessionPendingInput,
+  dismissRetiredSessionPendingInputs,
+} from "./session-pending-input-withdrawal.js";
 
 type WithdrawalScope = Parameters<typeof discardSessionPendingInput>[0];
 
@@ -201,64 +204,86 @@ it("rolls back withdrawal when current authority is revoked at commit", async ()
   });
 });
 
-it("recovers the committed withdrawal when delivery of the worker result fails", async () => {
-  await withInputs(async ({ stage, read, discard }) => {
-    const receipt = await stage("lost-result");
-    const before = read(receipt.inputId);
-    const lostResult = new Error("Withdrawal committed but its result was lost");
-    let verifiedCommits = 0;
-    const original = workerStore.runSqliteWorkerStoreOperation;
-    const observer = vi
-      .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-      .mockImplementation((store, operation, context, current, admit) => {
-        let withdrawing = false;
-        let grant: admission.SqliteWorkerOperationAdmission | undefined;
-        let retention: RetainedWorkerTransactionAdmission | undefined;
-        return original(
-          store,
-          (worker) =>
-            operation({
-              execute: async (command, options) => {
-                withdrawing = command.type === "session.pendingInputs.withdraw";
-                const result = await worker.execute(command, options);
-                if (!withdrawing) {
-                  return result;
+it.each(["queued", "retired"] as const)(
+  "recovers the committed %s withdrawal when delivery of the worker result fails",
+  async (kind) => {
+    await withInputs(async ({ scope, stage, read, discard }) => {
+      const receipt = await stage("lost-result");
+      if (kind === "retired") {
+        receipt.finish("interrupted");
+        await receipt.settled?.();
+      }
+      const outcome =
+        kind === "queued"
+          ? true
+          : {
+              kind: "dismissed",
+              inputIds: [receipt.inputId],
+              runIds: ["lost-result"],
+              missingIds: [],
+            };
+      const selection =
+        kind === "queued" ? { runId: "lost-result" } : { inputIds: [receipt.inputId] };
+      const remove = () =>
+        kind === "queued"
+          ? discard("lost-result")
+          : dismissRetiredSessionPendingInputs(scope, [receipt.inputId], assertCurrent);
+      const before = read(receipt.inputId);
+      const lostResult = new Error("Withdrawal committed but its result was lost");
+      let verifiedCommits = 0;
+      const original = workerStore.runSqliteWorkerStoreOperation;
+      const observer = vi
+        .spyOn(workerStore, "runSqliteWorkerStoreOperation")
+        .mockImplementation((store, operation, context, current, admit) => {
+          let withdrawing = false;
+          let grant: admission.SqliteWorkerOperationAdmission | undefined;
+          let retention: RetainedWorkerTransactionAdmission | undefined;
+          return original(
+            store,
+            (worker) =>
+              operation({
+                execute: async (command, options) => {
+                  withdrawing = command.type === "session.pendingInputs.withdraw";
+                  const result = await worker.execute(command, options);
+                  if (!withdrawing) {
+                    return result;
+                  }
+                  expect(grant?.committed).toEqual({
+                    facts: {
+                      kind: "session-pending-input-withdrawal",
+                      sessionKey: target.sessionKey,
+                      sessionId: target.sessionId,
+                      ...selection,
+                      outcome,
+                    },
+                  });
+                  expect(grant?.settlement).toMatchObject({ kind: "completed" });
+                  expect(await retention?.settled).toEqual({ kind: "completed" });
+                  expectWithdrawn(before, read(receipt.inputId));
+                  verifiedCommits++;
+                  throw lostResult;
+                },
+              }),
+            context,
+            current,
+            admit &&
+              ((retained) => {
+                const owned = admit(retained);
+                if (withdrawing) {
+                  grant = owned.admission;
+                  retention = retained;
                 }
-                expect(grant?.committed).toEqual({
-                  facts: {
-                    kind: "session-pending-input-withdrawal",
-                    sessionKey: target.sessionKey,
-                    sessionId: target.sessionId,
-                    runId: "lost-result",
-                    withdrawn: true,
-                  },
-                });
-                expect(grant?.settlement).toMatchObject({ kind: "completed" });
-                expect(await retention?.settled).toEqual({ kind: "completed" });
-                expectWithdrawn(before, read(receipt.inputId));
-                verifiedCommits++;
-                throw lostResult;
-              },
-            }),
-          context,
-          current,
-          admit &&
-            ((retained) => {
-              const owned = admit(retained);
-              if (withdrawing) {
-                grant = owned.admission;
-                retention = retained;
-              }
-              return owned;
-            }),
-        );
-      });
-    try {
-      await expect(discard("lost-result")).resolves.toBe(true);
-      expect(verifiedCommits).toBe(1);
-      expectWithdrawn(before, read(receipt.inputId));
-    } finally {
-      observer.mockRestore();
-    }
-  });
-});
+                return owned;
+              }),
+          );
+        });
+      try {
+        await expect(remove()).resolves.toEqual(outcome);
+        expect(verifiedCommits).toBe(1);
+        expectWithdrawn(before, read(receipt.inputId));
+      } finally {
+        observer.mockRestore();
+      }
+    });
+  },
+);

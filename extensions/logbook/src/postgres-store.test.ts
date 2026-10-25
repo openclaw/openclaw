@@ -10,7 +10,8 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createLogbookDatabase, logbookEngineSchema } from "./store-schema-admission.js";
+import { logbookEngineSchema } from "./store-engine-schema.js";
+import { createLogbookDatabase } from "./store-schema-admission.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
 import type { LogbookCardDraft } from "./types.js";
 

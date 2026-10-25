@@ -24,6 +24,7 @@ const labels = new Set([
   "session-actor-committed-transfer",
   "session-actor-outcome",
   "session-turn",
+  "session-entry-patch",
   "command",
   "result",
   "outcome",

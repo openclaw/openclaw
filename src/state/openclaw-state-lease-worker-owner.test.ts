@@ -30,6 +30,7 @@ function fixture(uncertain = false) {
   const databasePath = "/synthetic-state/lease.sqlite";
   const lease: OpenClawStateLeaseContext = {
     signal: new AbortController().signal,
+    assertCurrent() {},
     assertOwned() {},
     assertOwnedInTransaction() {},
   };

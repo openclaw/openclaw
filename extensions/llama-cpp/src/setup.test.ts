@@ -6,6 +6,7 @@ import path from "node:path";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
+import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
@@ -126,16 +127,7 @@ describe("llama.cpp managed setup", () => {
           throw new Error("Selected setup download has no progress callback");
         }
         mocks.downloadFetch.mockResolvedValueOnce({
-          response: new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                for (const chunk of chunks) {
-                  controller.enqueue(chunk);
-                }
-                controller.close();
-              },
-            }),
-          ),
+          response: new Response(createClosedChunkStream(chunks)),
           release,
         });
         const clock = vi.spyOn(Date, "now").mockReturnValue(1000);

@@ -15,7 +15,8 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReviewRequest } from "../protocol/index.js";
-import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { openReefAuditStore } from "./audit-state.js";
 import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
@@ -115,7 +116,7 @@ function activateReviewStore(reviews: ReviewApprovalStore) {
       trust,
       reviews,
       delivered: new ReefDeliveredStore(stateRuntime),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(1)),
+      audit: openReefAuditStore(stateRuntime, new Uint8Array(32).fill(1)),
       replay: new MemoryReplayStore(),
       guard: {
         providerId: "test",

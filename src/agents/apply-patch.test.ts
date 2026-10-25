@@ -163,9 +163,10 @@ describe("applyPatch", () => {
       const moving = operation === "move";
       const memory = createMemoryPatchSandbox(moving ? { "source.txt": "foo\nbar\n" } : {});
       const target = moving ? "dest.txt" : "notes.txt";
-      memory.mkdirp.mockImplementation(async () => {
+      memory.bridge.createFileExclusive = async (params) => {
         memory.files.set(`/sandbox/${target}`, "written by another writer\n");
-      });
+        return memory.createFileExclusive(params);
+      };
       const patch = moving
         ? buildUpdatePatch("source.txt", " foo\n-bar\n+baz", target)
         : buildAddFilePatch(target, "replacement");

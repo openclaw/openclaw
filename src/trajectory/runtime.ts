@@ -91,6 +91,7 @@ const OVERSIZE_PRESERVED_DATA_KEYS = [
 function truncateOversizedTrajectoryEvent(
   event: TrajectoryEvent,
   line: string,
+  stringify: (event: TrajectoryEvent) => string | null | undefined,
 ): string | undefined {
   const bytes = Buffer.byteLength(line, "utf8");
   if (bytes <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
@@ -114,7 +115,7 @@ function truncateOversizedTrajectoryEvent(
     }
     delete reducedData[key];
     reducedDroppedFields.push(key);
-    const reduced = safeJsonStringify({
+    const reduced = stringify({
       ...event,
       data: {
         ...reducedData,
@@ -140,7 +141,7 @@ function truncateOversizedTrajectoryEvent(
         data.droppedFields = droppedFields;
       }
     }
-    const truncated = safeJsonStringify({ ...event, data });
+    const truncated = stringify({ ...event, data });
     if (truncated && Buffer.byteLength(truncated, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
       return truncated;
     }
@@ -175,6 +176,7 @@ function limitTrajectoryPayloadValue(
   value: unknown,
   depth = 0,
   seen: WeakSet<object> = new WeakSet(),
+  serialization?: { needsSafeJson: boolean },
 ): unknown {
   if (typeof value === "string") {
     if (value.length > TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS) {
@@ -186,6 +188,9 @@ function limitTrajectoryPayloadValue(
     return value;
   }
   if (typeof value !== "object" || value === null) {
+    if (serialization && (typeof value === "bigint" || typeof value === "function")) {
+      serialization.needsSafeJson = true;
+    }
     return value;
   }
   if (seen.has(value)) {
@@ -201,7 +206,7 @@ function limitTrajectoryPayloadValue(
     const limited: unknown[] = [];
     const count = Math.min(value.length, TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS);
     for (let index = 0; index < count; index += 1) {
-      limited.push(limitTrajectoryPayloadValue(value[index], depth + 1, seen));
+      limited.push(limitTrajectoryPayloadValue(value[index], depth + 1, seen, serialization));
     }
     if (value.length > TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS) {
       limited.push(
@@ -218,7 +223,7 @@ function limitTrajectoryPayloadValue(
   const keys = Object.keys(record);
   const limited: Record<string, unknown> = {};
   for (const key of keys.slice(0, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS)) {
-    limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen);
+    limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen, serialization);
   }
   if (keys.length > TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS) {
     limited["_truncated"] = truncatedTrajectoryValue("trajectory-object-size-limit", {
@@ -230,7 +235,10 @@ function limitTrajectoryPayloadValue(
   return limited;
 }
 
-function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
+function sanitizeTrajectoryPayload(
+  data: Record<string, unknown>,
+  serialization: { needsSafeJson: boolean },
+): Record<string, unknown> {
   const finalPromptText = data.finalPromptText;
   let boundedData = data;
   if (typeof finalPromptText === "string") {
@@ -244,7 +252,7 @@ function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string
     }
   }
   return projectPreparedDiagnosticValue(
-    limitTrajectoryPayloadValue(boundedData),
+    limitTrajectoryPayloadValue(boundedData, 0, new WeakSet(), serialization),
     TRAJECTORY_PAYLOAD_PROJECTION,
   ) as Record<string, unknown>;
 }
@@ -372,6 +380,7 @@ export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeIn
     enabled: true as const,
     recordEvent: (type: string, data?: Record<string, unknown>) => {
       const nextSeq = seq + 1;
+      const serialization = { needsSafeJson: false };
       const event: TrajectoryEvent = {
         traceSchema: "openclaw-trajectory",
         schemaVersion: 1,
@@ -388,13 +397,16 @@ export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeIn
         provider: params.provider,
         modelId: params.modelId,
         modelApi: params.modelApi,
-        data: data ? sanitizeTrajectoryPayload(data) : undefined,
+        data: data ? sanitizeTrajectoryPayload(data, serialization) : undefined,
       };
-      const line = safeJsonStringify(event);
+      // Limiting already creates plain records. Only bigint/function leaves need
+      // the replacer; functions include toJSON hooks that can return arbitrary values.
+      const stringify = serialization.needsSafeJson ? safeJsonStringify : JSON.stringify;
+      const line = stringify(event);
       if (!line) {
         return;
       }
-      const boundedLine = truncateOversizedTrajectoryEvent(event, line);
+      const boundedLine = truncateOversizedTrajectoryEvent(event, line, stringify);
       if (!boundedLine) {
         return;
       }

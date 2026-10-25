@@ -5,7 +5,7 @@ import { normalizeBuildCommit } from "../write-build-info.ts";
 
 export const STANDALONE_USAGE =
   "Usage: bun scripts/build-bun-standalone.mjs <fresh-output-directory> [--bytecode|--compile-aot|--aot-source] [--plugins <id,id,...>] [--support-output <fresh-directory>]\n" +
-  "AOT options: --aot-log-type-mismatches, --trim, --trim-locales <locale,...>, --explain[=<report>], " +
+  "AOT options: --aot-log-type-mismatches, --trim, --trim-allow <run[,jit]>, --trim-locales <locale,...>, --explain[=<report>], " +
   "--no-compile-function-source, --disallow-code-generation-from-strings[=strict]\n" +
   "Default: JIT. AOT is EXPERIMENTAL and requires an AOT-capable Bun.";
 
@@ -13,7 +13,7 @@ export const STANDALONE_USAGE =
  * @typedef {{
  *   aotLogTypeMismatches?: true,
  *   aotExplain?: string[],
- *   trim?: true | { locales: string[] },
+ *   trim?: true | { allow?: ("run" | "jit")[], locales?: string[] },
  *   functionSource?: false,
  *   disallowCodeGenerationFromStrings?: true | "strict"
  * }} StandaloneAotCompileOptions
@@ -45,6 +45,8 @@ export function parseStandaloneArguments(args) {
   const aotCompileOptions = {};
   const aotFlags = [];
   const locales = [];
+  /** @type {Set<"run" | "jit">} */
+  const trimAllow = new Set();
   let pluginIds;
   let supportOutputDirectory;
   let source = false;
@@ -86,6 +88,18 @@ export function parseStandaloneArguments(args) {
       }
       (aotCompileOptions.aotExplain ??= []).push(report);
       aotFlags.push(flag);
+    } else if (flag === "--trim-allow" || flag.startsWith("--trim-allow=")) {
+      const value = flag === "--trim-allow" ? flags[++index] : flag.slice("--trim-allow=".length);
+      const selected = value?.split(",").map((feature) => feature.trim());
+      if (!selected?.length) {
+        throw new Error(`--trim-allow requires run, jit, or run,jit.\n${STANDALONE_USAGE}`);
+      }
+      for (const feature of selected) {
+        if (feature !== "run" && feature !== "jit") {
+          throw new Error(`--trim-allow requires run, jit, or run,jit.\n${STANDALONE_USAGE}`);
+        }
+        trimAllow.add(feature);
+      }
     } else if (flag === "--trim-locales" || flag.startsWith("--trim-locales=")) {
       const value =
         flag === "--trim-locales" ? flags[++index] : flag.slice("--trim-locales=".length);
@@ -128,6 +142,13 @@ export function parseStandaloneArguments(args) {
   }
   const mode =
     compileFlags[0] === "--aot" ? "aot" : compileFlags[0] === "--bytecode" ? "bytecode" : "jit";
+  if (trimAllow.size) {
+    /** @type {("run" | "jit")[]} */
+    const features = ["run", "jit"];
+    const allow = features.filter((feature) => trimAllow.has(feature));
+    aotCompileOptions.trim = { allow };
+    aotFlags.push(`--trim-allow=${allow.join(",")}`);
+  }
   if (aotFlags.length) {
     if (mode !== "aot") {
       throw new Error(
@@ -136,9 +157,12 @@ export function parseStandaloneArguments(args) {
     }
     if (locales.length) {
       if (!aotCompileOptions.trim) {
-        throw new Error(`--trim-locales requires --trim.\n${STANDALONE_USAGE}`);
+        throw new Error(`--trim-locales requires --trim or --trim-allow.\n${STANDALONE_USAGE}`);
       }
-      aotCompileOptions.trim = { locales: [...new Set(locales)] };
+      aotCompileOptions.trim = {
+        ...(typeof aotCompileOptions.trim === "object" ? aotCompileOptions.trim : {}),
+        locales: [...new Set(locales)],
+      };
     }
     compileFlags.push(...aotFlags);
   }

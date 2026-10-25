@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { stubResizeObserver } from "../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
   showSessionPlacementTargetDialog,
@@ -42,14 +43,7 @@ async function openDialog({
 }
 
 beforeEach(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
+  stubResizeObserver();
   vi.stubGlobal("matchMedia", () => ({ matches: false }));
   restoreDialogPolyfill = installDialogPolyfill();
 });

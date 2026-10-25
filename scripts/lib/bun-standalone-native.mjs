@@ -852,14 +852,12 @@ export function createStandaloneNativeAdapter({
         }
         const nativeFilename = (value) =>
           NATIVE_ADDON.test(value) || NATIVE_LIBRARY.test(value) || RESOURCE.test(value);
-        if (nativeFilename(argument.value)) {
-          return true;
-        }
         try {
+          // A .node request can resolve to JavaScript, such as grammY's platform.node.js.
           return nativeFilename(moduleRequire.resolve(argument.value));
         } catch {
           // Optional packages for other platforms still use their original resolution path.
-          return false;
+          return nativeFilename(argument.value);
         }
       };
       const destination = `${owner.destination}/${slash(path.relative(owner.directory, filename))}`;

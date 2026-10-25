@@ -320,6 +320,10 @@ test("propagates the exported model span across two OTLP services with one roote
     expect(new Set(spans.map((span) => span.traceId)).size).toBe(1);
     expect(roots.map((span) => span.name)).toEqual(["peer.request"]);
     expect(spans.every((span) => !span.parentSpanId || spanIds.has(span.parentSpanId))).toBe(true);
+    expect(modelSpan?.attributes).toMatchObject({
+      "gen_ai.request.model": runBase.model,
+      "gen_ai.response.model": "synthetic-routed-model",
+    });
     const { traceId, spanId } = modelSpan ?? {};
     expect(outboundContext).toMatchObject({ traceId, spanId });
     expect(spans.find((span) => span.name === "peer.callback")?.parentSpanId).toBe(spanId);
