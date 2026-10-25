@@ -4,6 +4,7 @@ import { useSubagentControlFixture } from "../../agents/subagents/registry/subag
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
 import {
+  controlMetadataProducer,
   createControlRunFixture,
   enqueueControlRun,
   holdControlSessionPublication,
@@ -14,10 +15,7 @@ import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-
 import { markSubagentRunTerminated } from "../../agents/subagents/registry/subagent-registry.js";
 import { isSwarmRunActive } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { applySessionEntryExactReplacements } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
-import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
@@ -53,7 +51,12 @@ it.for(["before commit", "after commit"] as const)(
     });
     const { producerScope, nativeHeld, release, state } = held;
     let registryReceipt = false;
-    let producerOutcome: Promise<unknown> | undefined;
+    const producer = controlMetadataProducer(
+      held,
+      { storePath, sessionKey: childKey, sessionId },
+      signal,
+    );
+    let producerStart: Promise<unknown> | undefined;
     const runQueued = vi.mocked(writerQueue.runQueuedStoreWrite).getMockImplementation()!;
     vi.spyOn(writerQueue, "runQueuedStoreWrite").mockImplementation((params) => {
       const relevant = producerScope.getStore() && params.queues === SQLITE_SESSION_WRITER_QUEUES;
@@ -71,43 +74,12 @@ it.for(["before commit", "after commit"] as const)(
       return result;
     });
     const startProducer = () => {
-      producerOutcome ??= runOutsideAsyncWorkScope(() =>
-        runWithGatewayIndependentRootWorkAdmission(
-          () =>
-            producerScope.run(true, () =>
-              applySessionEntryExactReplacements({
-                agentId: "main",
-                storePath,
-                sessionKeys: [childKey],
-                activeSessionKey: childKey,
-                skipMaintenance: true,
-                requireWriteSuccess: true,
-                update(entries) {
-                  const row = entries.find((entry) => entry.sessionKey === childKey);
-                  if (!row || row.entry.sessionId !== sessionId) {
-                    throw new Error("Metadata lost its child");
-                  }
-                  return {
-                    result: undefined,
-                    replacements: [
-                      { sessionKey: childKey, entry: { ...row.entry, label: "metadata survived" } },
-                    ],
-                  };
-                },
-              }),
-            ),
-          "test:completion-pending-metadata",
-          signal,
-        ),
-      ).then(
-        () => ({ ok: true }),
-        (error: unknown) => ({ error }),
-      );
+      producerStart ??= producer.start().catch((error: unknown) => ({ error }));
     };
     const captureResult = lifecycleDelivery.captureSubagentRunResult;
     vi.spyOn(lifecycleDelivery, "captureSubagentRunResult").mockImplementation(async (...args) => {
       const result = await captureResult(...args);
-      if (args[1].runId === runId && boundary === "before commit" && !producerOutcome) {
+      if (args[1].runId === runId && boundary === "before commit" && !producerStart) {
         startProducer();
         await nativeHeld.promise;
       }
@@ -166,7 +138,8 @@ it.for(["before commit", "after commit"] as const)(
       });
       const outcome = await completionDone.promise;
       release();
-      expect(await producerOutcome).toEqual({ ok: true });
+      expect(await producerStart).toBeUndefined();
+      expect(await producer.outcome).toEqual({ ok: true });
       expect(state.holdingResult).toBe(true);
       expect(outcome).toEqual({});
       if (boundary === "before commit") {
@@ -184,7 +157,8 @@ it.for(["before commit", "after commit"] as const)(
       ).toMatchObject({ sessionId, label: "metadata survived" });
     } finally {
       release();
-      await producerOutcome;
+      await producerStart;
+      await producer.outcome;
       held.dispose();
     }
   },
