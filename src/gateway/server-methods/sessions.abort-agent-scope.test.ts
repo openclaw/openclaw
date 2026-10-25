@@ -96,6 +96,15 @@ function expectRespondErrorMessage(respond: RespondFn, message: string): void {
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ message }));
 }
 
+function expectListedSession(respond: RespondFn, row: object) {
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      sessions: [expect.objectContaining(row)],
+    }),
+  );
+}
+
 function mockChatSuccess(payload: Record<string, unknown>): void {
   chatAbortMock.mockImplementationOnce(({ respond }: { respond: RespondFn }) => {
     respond(true, payload);
@@ -221,18 +230,11 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-channel-active" },
     );
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        sessions: [
-          expect.objectContaining({
-            key: "agent:main:openclaw-weixin:direct:user",
-            sessionId: "sess-weixin",
-            hasActiveRun: true,
-          }),
-        ],
-      }),
-    );
+    expectListedSession(respond, {
+      key: sessionKey,
+      sessionId: "sess-weixin",
+      hasActiveRun: true,
+    });
   });
 
   it.each([
@@ -541,83 +543,62 @@ describe("sessions.abort agent scope", () => {
   });
 
   it.each([
-    {
-      name: "selected-agent global session rows active only for their own agent",
-      runAgentId: "main",
-      agentId: "work",
-      hasActiveRun: false,
-    },
-    {
-      name: "unscoped global runs active for the configured default agent",
-      runAgentId: undefined,
-      agentId: "main",
-      hasActiveRun: true,
-    },
-  ])("marks $name", async ({ runAgentId, agentId, hasActiveRun }) => {
-    const context = createContext({
-      activeRuns: [
-        [
-          "run-global",
-          createActiveRun("global", { agentId: runAgentId, sessionId: "sess-main-global" }),
+    ["main", "work", false],
+    [undefined, "main", true],
+  ] as const)(
+    "projects global run owner %s for agent %s as active=%s",
+    async (runAgentId, agentId, hasActiveRun) => {
+      const context = createContext({
+        activeRuns: [
+          [
+            "run-global",
+            createActiveRun("global", { agentId: runAgentId, sessionId: "sess-main-global" }),
+          ],
         ],
-      ],
-      globalScope: true,
-      extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
-    });
-    projectSession(context, { key: "global", agentId, sessionId: `sess-${agentId}-global` });
-    const respond = await callSessions(
-      "sessions.list",
-      { includeGlobal: true, agentId },
-      { context, reqId: "req-list-global" },
-    );
+        globalScope: true,
+        extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
+      });
+      projectSession(context, { key: "global", agentId, sessionId: `sess-${agentId}-global` });
+      const respond = await callSessions(
+        "sessions.list",
+        { includeGlobal: true, agentId },
+        { context, reqId: "req-list-global" },
+      );
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        sessions: [expect.objectContaining({ key: "global", hasActiveRun })],
-      }),
-    );
-  });
+      expectListedSession(respond, { key: "global", hasActiveRun });
+    },
+  );
 
   it.each([
-    {
-      name: "selected-agent global message events on an agent-scoped key",
-      params: { key: "global", agentId: "work" },
-      agents: undefined,
-    },
-    {
-      name: "bare global message events on the configured default agent key",
-      params: { key: "global" },
-      agents: [{ id: "main" }, { id: "work", default: true }],
-    },
-    {
-      name: "selected-agent global message events inferred from agent-prefixed aliases",
-      params: { key: "agent:work:main" },
-      agents: undefined,
-    },
-  ])("subscribes $name", async ({ params, agents }) => {
-    const subscribeSessionMessageEvents = vi.fn();
-    const context = createContext({
-      agents,
-      globalScope: true,
-      extra: { subscribeSessionMessageEvents },
-    });
-    const respond = await callSessions("sessions.messages.subscribe", params, {
-      context,
-      reqId: "req-sub-global",
-      client: { connId: "conn-sub" } as GatewayClient,
-    });
+    [{ key: "global", agentId: "work" }, undefined],
+    [{ key: "global" }, [{ id: "main" }, { id: "work", default: true }]],
+    [{ key: "agent:work:main" }, undefined],
+  ] satisfies Array<[Record<string, string>, { id: string; default?: boolean }[] | undefined]>)(
+    "subscribes global events with %j",
+    async (params, agents) => {
+      const subscribeSessionMessageEvents = vi.fn();
+      const context = createContext({
+        agents,
+        globalScope: true,
+        extra: { subscribeSessionMessageEvents },
+      });
+      const respond = await callSessions("sessions.messages.subscribe", params, {
+        context,
+        reqId: "req-sub-global",
+        client: { connId: "conn-sub" } as GatewayClient,
+      });
 
-    expect(loadSessionEntryMock).not.toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-sub", "agent:work:global", {
-      provisional: true,
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { subscribed: true, key: "global", agentId: "work" },
-      undefined,
-    );
-  });
+      expect(loadSessionEntryMock).not.toHaveBeenCalled();
+      expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-sub", "agent:work:global", {
+        provisional: true,
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        { subscribed: true, key: "global", agentId: "work" },
+        undefined,
+      );
+    },
+  );
 
   it("rejects key-based aborts when key agent does not match agentId", async () => {
     const context = createContext({
