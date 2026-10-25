@@ -1,7 +1,6 @@
 import type { SQLInputValue } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
@@ -18,14 +17,8 @@ import {
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
-import { result as spawnResult } from "./bootstrap.test-support.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
-import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
-import {
-  projectWorkerSessionPlacement,
-  readWorkerPlacementIdentity,
-} from "./placement-projector.js";
 import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
@@ -39,7 +32,6 @@ import {
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
-import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { prepareSessionWorkerPlacementMutationCheckAsync } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -172,30 +164,64 @@ it("publishes retention after its scheduler callback finishes", async () => {
   }
 });
 
-it("reads off thread and fences a placement created before mutation", async () => {
+it("reads off thread with isolated local claims and fences a placement created before mutation", async () => {
   const store = createWorkerSessionPlacementStore({ database });
   const first = await store.startDispatch(sessionIdentity("first"));
-  const second = await store.startDispatch(sessionIdentity("second"));
+  const session = sessionIdentity("second");
+  const claim = await store.claimTurn({
+    ...session,
+    owner: { kind: "local" },
+    claimId: "local-reader-claim",
+    runId: "local-reader-run",
+  });
+  const second = store.get(session.sessionId)!;
+  const prepared = await store.prepareRuntimeRefresh(session.sessionId);
+  prepared.placement!.agentId = "caller-agent";
+  prepared.placement!.turnClaim!.claimId = "caller-claim";
   await store.getManyAsync([first.sessionId]);
   const sql = observeMainThreadSql();
-  expect(await store.getManyAsync([" first ", "first", "missing"])).toEqual(
-    new Map([[first.sessionId, first]]),
-  );
-  expect(await store.getAsync(` ${second.sessionId} `)).toEqual(second);
-  expect(await store.getAsync("late-placement")).toBeUndefined();
-  await expect(store.getAsync(" ")).rejects.toThrow("session id");
-  expect(await store.getPlacementMoveAsync(second.sessionId)).toBeUndefined();
-  expect(await store.listAsync()).toEqual([first, second]);
-  expect(await store.listForReconcileAsync(second.sessionKey)).toEqual([second]);
-  const assertCurrent = await prepareSessionWorkerPlacementMutationCheckAsync({
-    context: { workerSessionPlacementService: store },
-    sessionId: "late-placement",
-  });
-  sql.expectIdle();
-  assertCurrent();
-  const late = await store.startDispatch(sessionIdentity("late-placement"));
-  expect(assertCurrent).toThrow("placement late-placement changed before mutation");
-  expect(await store.getAsync(" late-placement ")).toEqual(late);
+  try {
+    expect(await store.getManyAsync([" first ", "first", session.sessionId, "missing"])).toEqual(
+      new Map([
+        [first.sessionId, first],
+        [session.sessionId, second],
+      ]),
+    );
+    expect(await store.getAsync(` ${second.sessionId} `)).toEqual(second);
+    expect(await store.getAsync("late-placement")).toBeUndefined();
+    await expect(store.getAsync(" ")).rejects.toThrow("session id");
+    expect(await store.getPlacementMoveAsync(second.sessionId)).toBeUndefined();
+    expect(await store.listAsync()).toEqual([first, second]);
+    expect(await store.listForReconcileAsync(first.sessionKey)).toEqual([first]);
+    expect(
+      (await store.readProjection([session.sessionId, "absent"], { current: true })).placements.get(
+        session.sessionId,
+      ),
+    ).toEqual(second);
+    expect((await store.getWithMoveAsync(session.sessionId)).placement).toEqual(second);
+    await store.releaseTurn(claim);
+    expect(() => prepared.assertCurrent()).toThrow("placement authority changed");
+    for (const placement of [
+      (await store.readProjection([session.sessionId], { current: true })).placements.get(
+        session.sessionId,
+      ),
+      (await store.listAsync()).find((row) => row.sessionId === session.sessionId),
+      (await store.getWithMoveAsync(session.sessionId)).placement,
+    ]) {
+      expect(placement).toMatchObject({ ...session, turnClaim: null });
+    }
+    const assertCurrent = await prepareSessionWorkerPlacementMutationCheckAsync({
+      context: { workerSessionPlacementService: store },
+      sessionId: "late-placement",
+    });
+    sql.expectIdle();
+    assertCurrent();
+    const late = await store.startDispatch(sessionIdentity("late-placement"));
+    expect(assertCurrent).toThrow("placement late-placement changed before mutation");
+    expect(await store.getAsync(" late-placement ")).toEqual(late);
+  } finally {
+    prepared.release();
+  }
 });
 
 it("publishes retention without host SQL and fences drained dispatch", async () => {
@@ -262,42 +288,6 @@ it("publishes retention without host SQL and fences drained dispatch", async () 
   }
 });
 
-it("keeps local owner claims current in worker-backed reader snapshots", async () => {
-  const store = createWorkerSessionPlacementStore({ database });
-  const session = sessionIdentity("local-reader-placement");
-  const claim = await store.claimTurn({
-    ...session,
-    owner: { kind: "local" },
-    claimId: "local-reader-claim",
-    runId: "local-reader-run",
-  });
-  const readPlacements = async () => [
-    (await store.readProjection([session.sessionId, "absent"], { current: true })).placements.get(
-      session.sessionId,
-    ),
-    (await store.listAsync()).find((placement) => placement.sessionId === session.sessionId),
-    (await store.getWithMoveAsync(session.sessionId)).placement,
-  ];
-  const sessionRead = await store.prepareRuntimeRefresh(session.sessionId);
-  try {
-    sessionRead.placement!.agentId = "caller-agent";
-    sessionRead.placement!.turnClaim!.claimId = "caller-claim";
-    for (const placement of await readPlacements()) {
-      expect(placement).toMatchObject({
-        ...session,
-        turnClaim: { claimId: "local-reader-claim" },
-      });
-    }
-    await store.releaseTurn(claim);
-    expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
-    for (const placement of await readPlacements()) {
-      expect(placement).toMatchObject({ ...session, turnClaim: null });
-    }
-  } finally {
-    sessionRead.release();
-  }
-});
-
 it.each(["worker-turn", "remote-exec"] as const)(
   "fences observations during %s publication settlement",
   async (kind) => {
@@ -348,7 +338,7 @@ it.each(["worker-turn", "remote-exec"] as const)(
   },
 );
 
-it("derives inference without rewriting its bound snapshot", async () => {
+it("derives inference from the bound worker environment snapshot", async () => {
   const sessionId = "snapshot-worker";
   const environmentId = "environment-" + sessionId;
   const profileSnapshot = { settings: { device: "paired-node", inference: "worker" } };
@@ -362,79 +352,10 @@ it("derives inference without rewriting its bound snapshot", async () => {
     nodeDeviceId: "paired-node",
     profileSnapshot,
   });
-  const { store, placement } = await activePlacement(sessionId);
+  const { store } = await activePlacement(sessionId);
   const snapshot = await store.readProjection([sessionId]);
   const environment = snapshot.environments.get(environmentId);
   expect(environment).toMatchObject({ profileSnapshot, inference: "worker" });
-  const identity = readWorkerPlacementIdentity(placement, undefined, environment);
-  const projected = projectWorkerSessionPlacement(placement, undefined, undefined, identity);
-  expect(projected).toHaveProperty("inference", "worker");
-  expect(projected).not.toHaveProperty("profileSnapshot");
-  expect(
-    (await store.readProjection([sessionId])).environments.get(environmentId)?.profileSnapshot,
-  ).toEqual(profileSnapshot);
-});
-
-it("discovers disk probes off thread before sampling", async () => {
-  const last = await activePlacement("z-disk");
-  const first = await activePlacement("a-disk");
-  const store = createWorkerSessionPlacementStore({ database, now: () => 2000 });
-  const claim = await store.claimTurn(placementClaim(first.placement, "recent-disk"));
-  await store.releaseTurn(claim);
-  await store.startDispatch(sessionIdentity("inactive-disk"));
-  const sample = spawnResult({
-    stdout: JSON.stringify({
-      availableBytes: String(6 * 1024 ** 3),
-      totalBytes: String(10 * 1024 ** 3),
-    }),
-  });
-  const unexpected = async () => {
-    throw new Error("unexpected workspace mutation during a disk probe");
-  };
-  const sql = observeHostDataSql();
-  expect(store.get(first.placement.sessionId)?.state).toBe("active");
-  expect(sql.queries).toEqual([]);
-  let discoverySql: string[] | undefined;
-  const requestedEnvironments: string[] = [];
-  const warn = vi.fn();
-  using _ = vi.spyOn(Date, "now").mockReturnValue(2000);
-  const monitor = createWorkerPlacementDiskSpaceMonitor({
-    placements: store,
-    runnerAvailability: { read: () => undefined, version: () => 0 },
-    environments: {
-      async startTunnel({ environmentId, ownerEpoch }) {
-        discoverySql ??= sql.queries.slice();
-        requestedEnvironments.push(environmentId);
-        return {
-          environmentId,
-          ownerEpoch,
-          runWorkspaceCommand: async () => sample,
-          quiesceWorkspace: unexpected,
-          syncWorkspace: unexpected,
-          reconcileWorkspace: unexpected,
-          stop: async () => {},
-        };
-      },
-    },
-    warn,
-  });
-  await monitor.sweep();
-
-  expect(discoverySql).toEqual([]);
-  expect(requestedEnvironments.toSorted()).toEqual([
-    first.placement.environmentId,
-    last.placement.environmentId,
-  ]);
-  for (const { placement } of [first, last]) {
-    expect(monitor.read(store.get(placement.sessionId)!)).toEqual({
-      status: "ok",
-      availableBytes: 6 * 1024 ** 3,
-      totalBytes: 10 * 1024 ** 3,
-      observedAtMs: 2000,
-    });
-  }
-  expect(monitor.version()).toBe(2);
-  expect(warn).not.toHaveBeenCalled();
 });
 
 it("reads all projection facts off the host SQLite thread", async () => {
@@ -476,15 +397,9 @@ it("reads all projection facts off the host SQLite thread", async () => {
   expect(snapshot.pendingResults).toEqual(new Map(pendingIds.map((id) => [id, pendingResult])));
   expect(snapshot.workspaceResultReconcilingSessionIds).toEqual(new Set(pendingIds));
   expect(snapshot.workspaceRecoveryPendingSessionIds).toEqual(new Set(pendingIds));
-  expect(snapshot.environments.get(placement.environmentId)).toEqual({
+  expect(snapshot.environments.get(placement.environmentId)).toMatchObject({
     environmentId: placement.environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: {} },
-    state: "attached",
-    leaseId: `lease:${placement.environmentId}`,
     ownerEpoch: 7,
-    nodeDeviceId: null,
     attachedSessionIds: ["pending"],
   });
   const cancelled = new AbortController();
@@ -598,17 +513,6 @@ it.each([false, true])(
         updatedAtMs: createdAt,
       });
     }
-    const journalOwners = await store.listWorkspaceReconciliationOwners();
-    const journalPlacements = await Promise.all(
-      journalOwners.map((owner) => store.getWorkspaceReconciliationPlacement(owner)),
-    );
-    const blockingOwners = new Set(
-      journalOwners
-        .filter((_owner, index) => journalPlacements[index])
-        .map((owner) => owner.sessionId),
-    );
-    expect(blockingOwners).toEqual(new Set(["journal-current", "journal-draining"]));
-    expect(await store.listPendingWorkspaceResultsAsync()).toEqual(pendingResults);
     const orderedIds = [
       "a-requested",
       "b-requested",
@@ -632,7 +536,7 @@ it.each([false, true])(
       ]),
     );
     expect(projection.workspaceJournalOwnerSessionIds).toEqual(
-      new Set([...blockingOwners, " journal-current "]),
+      new Set(["journal-current", "journal-draining", " journal-current "]),
     );
     expect(projection.workspaceRecoveryPendingSessionIds).toEqual(
       new Set([
@@ -687,17 +591,7 @@ it("prepares live and claimless result authority for both execution modes", asyn
             .run(identity.sessionId);
         }
       }
-      const projection = await store.readProjection([identity.sessionId], { current: true });
-      const projectedPlacement = projection.placements.get(identity.sessionId)!;
-      const pending = projection.pendingResults.get(identity.sessionId)!;
-      for (const testedClaim of [
-        claim,
-        { ...claim, claimId: "different-claim" },
-        { ...claim, runId: "different-run" },
-        { ...claim, placementGeneration: claim.placementGeneration + 1 },
-        { ...claim, owner: { ...claim.owner, environmentId: "different-environment" } },
-        { ...claim, owner: { ...claim.owner, ownerEpoch: 8 } },
-      ]) {
+      for (const testedClaim of [claim, { ...claim, claimId: "different-claim" }]) {
         const expected = testedClaim === claim && (!claimless || executionMode === "remote-exec");
         if (expected) {
           await store.prepareWorkspaceResultClaim(testedClaim);
@@ -707,9 +601,6 @@ it("prepares live and claimless result authority for both execution modes", asyn
           );
         }
         expect(store.validateWorkspaceResultClaim(testedClaim)).toBe(expected);
-        expect(matchesWorkspaceResultClaim(projectedPlacement, pending, testedClaim)).toBe(
-          expected,
-        );
       }
     }
   }

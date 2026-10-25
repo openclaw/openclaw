@@ -7,6 +7,7 @@ import {
   attachActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { createModelRuntimeChoiceOwnerFixture } from "../../agents/model-runtime-choice.test-support.js";
 import * as preparedModelRuntime from "../../agents/prepared-model-runtime.js";
 import {
   installSessionPlacementAdmissionProvider,
@@ -198,23 +199,8 @@ describe("worker turn launcher local placement", () => {
     expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toBeNull();
   });
 
-  it("leaves no placement row for an auxiliary model run without a session key", async () => {
-    const runLocal = vi.fn(localResult);
-    {
-      using sql = scopedObservation(observeMainThreadSql());
-      await localProvider.executeTurn(
-        { sessionId: fx.SESSION_ID, agentId: "main", runId: "run-model-probe" },
-        { ...fx.turn("run-model-probe"), modelRun: true },
-        runLocal,
-      );
-      sql.expectIdle();
-    }
-    expect(runLocal).toHaveBeenCalledOnce();
-    expect(await fx.placements.listAsync()).toEqual([]);
-  });
-
-  it.each(["cancellation", "placement publication", "run revocation"] as const)(
-    "refuses an auxiliary run after %s during placement preparation",
+  it.each(["current", "cancellation", "placement publication", "run revocation"] as const)(
+    "admits a sessionless model run only while its source and placement stay current (%s)",
     async (change) => {
       const prepared = createDeferred();
       const resume = createDeferred();
@@ -231,6 +217,7 @@ describe("worker turn launcher local placement", () => {
       const refusal = new Error("run revoked during placement preparation");
       let revoked = false;
       const runLocal = vi.fn(localResult);
+      using sql = scopedObservation(observeMainThreadSql());
       const operation = localProvider.executeTurn(
         { sessionId: fx.SESSION_ID, agentId: "main", runId: "run-model-probe" },
         { ...fx.turn("run-model-probe"), modelRun: true, abortSignal: cancellation.signal },
@@ -253,14 +240,21 @@ describe("worker turn launcher local placement", () => {
           await fx.placements.startDispatch(fx.sessionTarget);
         } else if (change === "cancellation") {
           cancellation.abort(refusal);
-        } else {
+        } else if (change === "run revocation") {
           revoked = true;
         }
         resume.resolve();
-        await expect(operation).rejects.toThrow(
-          change === "placement publication" ? "placement authority changed" : refusal.message,
-        );
-        expect(runLocal).not.toHaveBeenCalled();
+        if (change === "current") {
+          await operation;
+          sql.expectIdle();
+          expect(runLocal).toHaveBeenCalledOnce();
+          expect(await fx.placements.listAsync()).toEqual([]);
+        } else {
+          await expect(operation).rejects.toThrow(
+            change === "placement publication" ? "placement authority changed" : refusal.message,
+          );
+          expect(runLocal).not.toHaveBeenCalled();
+        }
       } finally {
         resume.resolve();
         await settled;
@@ -606,21 +600,14 @@ describe("worker turn launcher local placement", () => {
           const metadataSnapshot = createEmptyPluginMetadataSnapshot(input.workspaceDir);
           return {
             snapshot: {
+              ...createModelRuntimeChoiceOwnerFixture(
+                config,
+                () => true,
+                { metadataSnapshot, modelCatalog: { entries: [], routeVariants: [] } },
+                { agentDir: input.agentDir, workspaceDir: input.workspaceDir },
+              ),
               catalogOwner: undefined,
               agentId: input.agentId,
-              agentDir: input.agentDir,
-              workspaceDir: input.workspaceDir,
-              activeProjectKeys: [],
-              config,
-              observationConfig: config,
-              isCurrent: () => true,
-              authModes: {},
-              metadataSnapshot,
-              allowGatewaySubagentBinding: false,
-              modelCatalog: { entries: [], routeVariants: [] },
-              configuredRuntimeModels: [],
-              findConfiguredRuntimeModel: () => undefined,
-              inlineProviderModels: [],
               createStores: () => {
                 throw new Error("unsupported runtime must not create model stores");
               },
