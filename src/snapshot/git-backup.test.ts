@@ -9,6 +9,7 @@ import { backupGitCreateCommand, backupGitLogCommand } from "../commands/backup-
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { clearRuntimeConfigSnapshot } from "../config/config.js";
 import { executeGitCommand, requireGitCommand as requireGit } from "../infra/git-exec.js";
+import * as gitExec from "../infra/git-exec.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { spawnCommand } from "../process/exec-spawn.js";
@@ -35,56 +36,24 @@ import {
   gitBackupRepository,
   withBackupStateEnv,
 } from "./git-backup.test-support.js";
+import * as localRepository from "./local-repository.js";
 import { withDatabase } from "./local-repository.test-support.js";
 
-const mocks = vi.hoisted(() => ({
-  logDiagnostic: undefined as { stdout: string; stderr: string } | undefined,
-  pushDiagnostic: undefined as { stdout: string; stderr: string } | undefined,
-  snapshotRepositoryError: undefined as Error | undefined,
-}));
-
-vi.mock("../infra/git-exec.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/git-exec.js")>();
-  return {
-    ...actual,
-    executeGitCommand: async (
-      ...args: Parameters<typeof actual.executeGitCommand>
-    ): ReturnType<typeof actual.executeGitCommand> => {
-      const diagnostic =
-        args[1][0] === "push"
-          ? mocks.pushDiagnostic
-          : args[1][0] === "log"
-            ? mocks.logDiagnostic
-            : undefined;
-      if (diagnostic) {
-        return {
-          code: 1,
+function failGit(command: "log" | "push", diagnostic: { stdout: string; stderr: string }) {
+  const execute = gitExec.executeGitCommand;
+  vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (...args) =>
+    args[1][0] === command
+      ? {
           ...diagnostic,
+          code: 1,
           signal: null,
           killed: false,
           termination: "exit",
-          timeoutMs: args[2]?.timeoutMs ?? actual.GIT_TIMEOUT_MS,
-        };
-      }
-      return await actual.executeGitCommand(...args);
-    },
-  };
-});
-
-vi.mock("./local-repository.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./local-repository.js")>();
-  return {
-    ...actual,
-    ensurePrivateSnapshotRepositoryRoot: async (
-      ...args: Parameters<typeof actual.ensurePrivateSnapshotRepositoryRoot>
-    ) => {
-      if (mocks.snapshotRepositoryError) {
-        throw mocks.snapshotRepositoryError;
-      }
-      return await actual.ensurePrivateSnapshotRepositoryRoot(...args);
-    },
-  };
-});
+          timeoutMs: args[2]?.timeoutMs ?? gitExec.GIT_TIMEOUT_MS,
+        }
+      : execute(...args),
+  );
+}
 
 const roots = createTempDirTracker();
 const tempRoot = () => roots.make("openclaw-git-backup-test-");
@@ -94,9 +63,6 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   clearRuntimeConfigSnapshot();
-  mocks.logDiagnostic = undefined;
-  mocks.pushDiagnostic = undefined;
-  mocks.snapshotRepositoryError = undefined;
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   roots.cleanup();
@@ -364,8 +330,10 @@ it.skipIf(process.platform === "win32")(
 
 it("gives Windows ACL remediation instead of a POSIX chmod command", async () => {
   const { init } = await repositoryFixture();
-  mocks.snapshotRepositoryError = new Error(
-    "Windows ACL permits untrusted SQLite staging access on repository root: path=C:\\backups principal=S-1-1-0 rights=FullControl.",
+  vi.spyOn(localRepository, "ensurePrivateSnapshotRepositoryRoot").mockRejectedValue(
+    new Error(
+      "Windows ACL permits untrusted SQLite staging access on repository root: path=C:\\backups principal=S-1-1-0 rights=FullControl.",
+    ),
   );
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
@@ -423,10 +391,13 @@ it("uses a commit-scoped fallback identity when Git has no configured email", as
 it("redacts and durably preserves credential-bearing push diagnostics", async () => {
   const { stateDir, init, command, configureIdentity } = await backupFixture("push-repository");
   const remote = authenticatedUrl("repository?access_token");
-  mocks.pushDiagnostic = gitDiagnostic(
-    remote,
-    `stderr-tail-🦞 fatal: unable to access '${remote}'`,
-    `stdout-tail-🐚 remote: rejected '${remote}'`,
+  failGit(
+    "push",
+    gitDiagnostic(
+      remote,
+      `stderr-tail-🦞 fatal: unable to access '${remote}'`,
+      `stdout-tail-🐚 remote: rejected '${remote}'`,
+    ),
   );
   await init(remote);
   await configureIdentity();
@@ -459,10 +430,10 @@ it("redacts and durably preserves credential-bearing push diagnostics", async ()
 it("returns an empty log without matching localized Git diagnostics", async () => {
   const { repositoryPath, root } = await repositoryFixture("empty-repository");
   await requireGit(root, ["init", repositoryPath]);
-  mocks.logDiagnostic = {
+  failGit("log", {
     stdout: "",
     stderr: "fatal: el historial no contiene confirmaciones",
-  };
+  });
   const runtime = createTestRuntime();
 
   await expect(
@@ -488,10 +459,13 @@ it("returns bounded redacted diagnostics from both failed history streams", asyn
     "openclaw backup fixture",
   );
   await git("checkout", "--detach", "HEAD");
-  mocks.logDiagnostic = gitDiagnostic(
-    remote,
-    `${"🦞".repeat(400)}x stderr-tail-🦞 fatal: unable to read '${remote}'`,
-    `stdout-tail-🐚 retry with '${remote}'`,
+  failGit(
+    "log",
+    gitDiagnostic(
+      remote,
+      `${"🦞".repeat(400)}x stderr-tail-🦞 fatal: unable to read '${remote}'`,
+      `stdout-tail-🐚 retry with '${remote}'`,
+    ),
   );
 
   const error = await captureError(
