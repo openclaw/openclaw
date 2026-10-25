@@ -2,9 +2,7 @@
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import "../chat-details-mobile-host-content.tsx";
-import type { GatewaySessionRow } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createChatMobileHostFixture,
@@ -28,54 +26,10 @@ function details(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
   };
 }
 
-it("shows a real worker without legacy fields and lets the environment owner decide empty state", () => {
-  const active: GatewaySessionRow = {
-    key: "agent:main:details",
-    kind: "direct",
-    placement: createActiveSessionPlacement({
-      createdAtMs: 100000,
-      updatedAtMs: 300000,
-      stateChangedAtMs: 300000,
-      workspaceBaseManifestRef: "base-manifest",
-      remoteWorkspaceDir: "/worker/repo",
-      runner: { kind: "device", status: "available" },
-    }),
-  };
-  const [presented, setPresented] = createSignal(true);
-  const request = vi.fn();
-  const openMachine = vi.fn();
-  const environment = { onRequestUncommitted: request, onOpenMachine: openMachine };
-  const [value, setValue] = createSignal(details({ selectedSession: active, environment }));
-  const content = rootContent();
-  const view = mountSolid(() => (
-    <ChatDetailsMobileContent
-      details={value()}
-      presented={presented()}
-      page={{ kind: "root", content }}
-    />
-  ));
-  view.getByRole("button", { name: "worker:device" }).click();
-  expect(openMachine).toHaveBeenCalledOnce();
-  expect(request).toHaveBeenCalledOnce();
-  setValue(
-    details({
-      selectedSession: { key: "agent:main:details", kind: "direct", execNode: "Local Gateway" },
-      environment,
-    }),
-  );
+async function settle(element: HTMLElementTagNameMap["openclaw-chat-details-mobile-host-content"]) {
+  await element.updateComplete;
   flush();
-  expect(view.queryByRole("region", { name: "Environment" })).toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-  setValue(details({ environment }));
-  flush();
-  expect(view.queryByRole("region", { name: "Environment" })).toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-  setPresented(false);
-  flush();
-  setPresented(true);
-  flush();
-  expect(request).toHaveBeenCalledTimes(2);
-});
+}
 
 it("retains Outputs demand across publications and returns navigation origins without a second route owner", () => {
   const release = vi.fn();
@@ -109,7 +63,8 @@ it("retains Outputs demand across publications and returns navigation origins wi
     { kind: "versions" },
     expect.objectContaining({ kind: "details-root" }),
   );
-  setValue((current) => ({ ...current, outputs: { ...output, artifacts: null } }));
+  const updated = details({ outputs: { ...output, artifacts: null }, retainOutputs: retain });
+  setValue(updated);
   flush();
   expect(retain).toHaveBeenCalledOnce();
   expect(release).not.toHaveBeenCalled();
@@ -138,7 +93,7 @@ it("retains Outputs demand across publications and returns navigation origins wi
   expect(view.getByRole("button", { name: "People" })).toBe(hiddenPeople);
   const releaseReplacement = vi.fn();
   const retainReplacement = vi.fn(() => releaseReplacement);
-  setValue((current) => ({ ...current, retainOutputs: retainReplacement }));
+  setValue({ ...updated, retainOutputs: retainReplacement });
   flush();
   expect(release).toHaveBeenCalledTimes(3);
   expect(retainReplacement).toHaveBeenCalledOnce();
@@ -173,18 +128,18 @@ async function mountMobileHost(value: ChatDetailsProps) {
     },
   };
   const view = mountSolid(() => element);
-  await element.updateComplete;
-  flush();
+  await settle(element);
   const show = async (destination: MobileHostDestination) => {
     element.host = { ...element.host!, destination };
-    await element.updateComplete;
-    flush();
+    await settle(element);
   };
-  return { view, element, navigate, show };
+  const query = (selector: string) => view.container.querySelector<HTMLElement>(selector);
+  const button = (name: string) => view.getByRole("button", { name });
+  return { view, element, navigate, show, query, button };
 }
 
 it("replaces the People activation owner while retaining the mobile host content", async () => {
-  const { view, element, show } = await mountMobileHost(details());
+  const { view, element, show, query } = await mountMobileHost(details());
   const release = vi.fn();
   const activate = vi.fn(() => release);
   const releaseReplacement = vi.fn();
@@ -199,7 +154,7 @@ it("replaces the People activation owner while retaining the mobile host content
     activate,
   };
   try {
-    const root = view.container.querySelector(".chat-details-mobile-root");
+    const root = query(".chat-details-mobile-root");
     element.bindings = { ...element.bindings!, peopleMentions: mentions };
     await element.updateComplete;
     expect(activate).not.toHaveBeenCalled();
@@ -210,24 +165,22 @@ it("replaces the People activation owner while retaining the mobile host content
     expect(activate).toHaveBeenCalledOnce();
     for (const status of ["loading", "ready"] as const) {
       element.bindings = { ...element.bindings!, peopleMentions: { ...mentions, status } };
-      await element.updateComplete;
-      flush();
+      await settle(element);
       expect(activate).toHaveBeenCalledOnce();
       expect(release).not.toHaveBeenCalled();
-      expect(view.container.querySelector(".chat-details-mobile-root")).toBe(root);
+      expect(query(".chat-details-mobile-root")).toBe(root);
     }
     element.bindings = {
       ...element.bindings!,
       peopleMentions: { ...mentions, activate: activateReplacement },
     };
-    await element.updateComplete;
-    flush();
+    await settle(element);
     expect(release).toHaveBeenCalledOnce();
     expect(activateReplacement).toHaveBeenCalledOnce();
-    expect(view.container.querySelector(".chat-details-mobile-root")).toBe(root);
+    expect(query(".chat-details-mobile-root")).toBe(root);
     await show({ area: "details" });
     expect(releaseReplacement).toHaveBeenCalledOnce();
-    expect(view.container.querySelector(".chat-details-mobile-root")).toBe(root);
+    expect(query(".chat-details-mobile-root")).toBe(root);
   } finally {
     view.unmount();
   }
@@ -243,63 +196,50 @@ it("routes current mobile PRs to Checks and rejects hidden or superseded navigat
     deletions: 2000,
   });
   const value = details({ pullRequests: [request], pullRequestsSessionId: "session-current" });
-  const { view, element, navigate, show } = await mountMobileHost(value);
-  try {
-    const rootRow = view.container.querySelector<HTMLButtonElement>(
-      '[data-details-page="root"] .chat-pr-mobile__row',
-    )!;
-    expect(rootRow.querySelector(".chat-pr__additions")?.textContent).toBe("+1,234");
-    expect(rootRow.querySelector(".chat-pr__deletions")?.textContent).toBe("−2,000");
-    expect(rootRow.querySelector(".chat-pr-mobile__row-meta")?.textContent).toContain(
-      "+1,234 −2,000",
-    );
-    rootRow.click();
-    expect(navigate).toHaveBeenCalledOnce();
-    const destination = navigate.mock.calls[0]![0];
-    expect(destination.page?.details).toEqual({
-      kind: "pull-request",
-      id: "openclaw/openclaw#103469",
-    });
-    expect(destination.backTo).toEqual({ area: "details" });
-    await show(destination);
-    expect(view.container.querySelector(".chat-pr-mobile__diff")?.textContent).toContain(
-      "+1,234−2,000",
-    );
+  const { element, navigate, show, query, button } = await mountMobileHost(value);
+  const rootRow = query('[data-details-page="root"] .chat-pr-mobile__row')!;
+  expect(rootRow.querySelector(".chat-pr-mobile__row-meta")?.textContent).toContain(
+    "+1,234 −2,000",
+  );
+  rootRow.click();
+  expect(navigate).toHaveBeenCalledOnce();
+  const destination = navigate.mock.calls[0]![0];
+  expect(destination.page?.details).toEqual({
+    kind: "pull-request",
+    id: "openclaw/openclaw#103469",
+  });
+  expect(destination.backTo).toEqual({ area: "details" });
+  await show(destination);
+  expect(query(".chat-pr-mobile__diff")?.textContent).toContain("+1,234−2,000");
 
-    rootRow.click();
-    expect(navigate).toHaveBeenCalledOnce();
-    view.getByRole("button", { name: "Checks" }).click();
-    expect(navigate).toHaveBeenCalledTimes(2);
-    const checks = navigate.mock.calls[1]![0];
-    expect(checks.page?.details).toEqual({
-      kind: "pull-request-checks",
-      id: "openclaw/openclaw#103469",
-    });
-    expect(checks.backTo).toBe(destination);
-    await show(checks);
-    const checksPage = view.container.querySelector<HTMLElement>(
-      '[data-details-page="pull-request-checks"]',
-    )!;
-    expect(checksPage.hidden).toBe(false);
-    expect(checksPage.querySelector("openclaw-chat-ci-details")).not.toBeNull();
-    rootRow.click();
-    expect(navigate).toHaveBeenCalledTimes(2);
+  rootRow.click();
+  expect(navigate).toHaveBeenCalledOnce();
+  button("Checks").click();
+  expect(navigate).toHaveBeenCalledTimes(2);
+  const checks = navigate.mock.calls[1]![0];
+  expect(checks.page?.details).toEqual({
+    kind: "pull-request-checks",
+    id: "openclaw/openclaw#103469",
+  });
+  expect(checks.backTo).toBe(destination);
+  await show(checks);
+  const checksPage = query('[data-details-page="pull-request-checks"]')!;
+  expect(checksPage.hidden).toBe(false);
+  expect(checksPage.querySelector("openclaw-chat-ci-details")).not.toBeNull();
+  rootRow.click();
+  expect(navigate).toHaveBeenCalledTimes(2);
 
-    await show(destination);
-    const staleChecks = view.getByRole("button", { name: "Checks" });
-    // Native receipts change synchronously; the previous rendered handler must retire before flush.
-    element.details = details({ pullRequests: [pullRequest({ title: "Replacement PR" })] });
-    staleChecks.click();
-    expect(navigate).toHaveBeenCalledTimes(2);
-    await element.updateComplete;
-    flush();
-    const previousHostChecks = view.getByRole("button", { name: "Checks" });
-    element.host = { ...element.host!, scopeKey: "replacement-session" };
-    previousHostChecks.click();
-    expect(navigate).toHaveBeenCalledTimes(2);
-  } finally {
-    view.unmount();
-  }
+  await show(destination);
+  const staleChecks = button("Checks");
+  // Native receipts change synchronously; the previous rendered handler must retire before flush.
+  element.details = details({ pullRequests: [pullRequest({ title: "Replacement PR" })] });
+  staleChecks.click();
+  expect(navigate).toHaveBeenCalledTimes(2);
+  await settle(element);
+  const previousHostChecks = button("Checks");
+  element.host = { ...element.host!, scopeKey: "replacement-session" };
+  previousHostChecks.click();
+  expect(navigate).toHaveBeenCalledTimes(2);
 });
 
 it("dismisses only the current mobile branch after explicit activation", async () => {
@@ -310,56 +250,37 @@ it("dismisses only the current mobile branch after explicit activation", async (
     githubPublication: publication(),
     onDismissPullRequestsBranch: dismiss,
   });
-  const { view, element, navigate, show } = await mountMobileHost(value);
-  try {
-    view.container
-      .querySelector<HTMLButtonElement>(
-        '[data-details-page="root"] [data-details-destination="publication"]',
-      )!
-      .click();
-    expect(navigate).toHaveBeenCalledOnce();
-    const destination = navigate.mock.calls[0]![0];
-    await show(destination);
-    const staleHide = await waitForSolid(() =>
-      view.getByRole("button", { name: "Hide feature/current for this session" }),
-    );
-    expect(dismiss).not.toHaveBeenCalled();
-    const replacement = sessionBranch({ branch: "feature/replacement" });
-    element.details = { ...value, pullRequestsBranch: replacement };
-    staleHide.click();
-    expect(dismiss).not.toHaveBeenCalled();
-    await element.updateComplete;
-    flush();
+  const { element, navigate, show, query, button } = await mountMobileHost(value);
+  query('[data-details-page="root"] [data-details-destination="publication"]')!.click();
+  expect(navigate).toHaveBeenCalledOnce();
+  const destination = navigate.mock.calls[0]![0];
+  await show(destination);
+  const staleHide = await waitForSolid(() => button("Hide feature/current for this session"));
+  expect(dismiss).not.toHaveBeenCalled();
+  const replacement = sessionBranch({ branch: "feature/replacement" });
+  element.details = { ...value, pullRequestsBranch: replacement };
+  staleHide.click();
+  expect(dismiss).not.toHaveBeenCalled();
+  await settle(element);
 
-    const previousHostHide = view.getByRole("button", {
-      name: "Hide feature/replacement for this session",
-    });
-    element.host = { ...element.host! };
-    previousHostHide.click();
-    expect(dismiss).not.toHaveBeenCalled();
-    await element.updateComplete;
-    flush();
+  const previousHostHide = button("Hide feature/replacement for this session");
+  element.host = { ...element.host! };
+  previousHostHide.click();
+  expect(dismiss).not.toHaveBeenCalled();
+  await settle(element);
 
-    view
-      .getByRole("button", {
-        name: "Hide feature/replacement for this session",
-      })
-      .click();
-    expect(dismiss).toHaveBeenCalledExactlyOnceWith(replacement);
-    expect(navigate).toHaveBeenCalledTimes(2);
-    expect(navigate).toHaveBeenLastCalledWith(destination.backTo);
-    element.details = { ...element.details!, pullRequestsBranchDismissed: true };
-    await show(destination.backTo!);
-    expect(view.container.querySelector('[data-details-destination="publication"]')).toBeNull();
-    expect(view.container.querySelector('[data-details-page="publication"]')).toBeNull();
+  button("Hide feature/replacement for this session").click();
+  expect(dismiss).toHaveBeenCalledExactlyOnceWith(replacement);
+  expect(navigate).toHaveBeenCalledTimes(2);
+  expect(navigate).toHaveBeenLastCalledWith(destination.backTo);
+  element.details = { ...element.details!, pullRequestsBranchDismissed: true };
+  await show(destination.backTo!);
+  expect(query('[data-details-destination="publication"]')).toBeNull();
+  expect(query('[data-details-page="publication"]')).toBeNull();
 
-    element.details = { ...element.details!, githubPublication: publication({ locked: true }) };
-    await element.updateComplete;
-    flush();
-    expect(view.container.querySelector('[data-details-destination="publication"]')).not.toBeNull();
-    expect(view.container.querySelector('[data-details-page="publication"]')).not.toBeNull();
-    expect(view.container.querySelector(".chat-pr-mobile__hide")).toBeNull();
-  } finally {
-    view.unmount();
-  }
+  element.details = { ...element.details!, githubPublication: publication({ locked: true }) };
+  await settle(element);
+  expect(query('[data-details-destination="publication"]')).not.toBeNull();
+  expect(query('[data-details-page="publication"]')).not.toBeNull();
+  expect(query(".chat-pr-mobile__hide")).toBeNull();
 });

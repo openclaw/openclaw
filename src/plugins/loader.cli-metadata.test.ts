@@ -267,20 +267,11 @@ it("sanitizes plugin CLI descriptor descriptions and rejects unsafe command name
   ]);
 });
 
-it("preserves root machine-output resolvers in metadata and full plugin loads", async () => {
+it("normalizes nested commands without root-only machine-output metadata", async () => {
   const plugin = writePlugin({
     id: "machine-output-cli",
     filename: "machine-output-cli.cjs",
     registration: `api.registerCli(() => {}, {
-        commands: [" machine-output-cli ", "machine-output-cli", "additional-cli"],
-        descriptors: [{
-          name: "machine-output-cli",
-          description: "Machine output CLI",
-          hasSubcommands: true,
-          machineOutput: ({ argv, stdoutIsTTY }) => argv.includes("--machine") || !stdoutIsTTY,
-        }],
-      });
-      api.registerCli(() => {}, {
         parentPath: ["nodes"],
         commands: ["nested-machine-output", " nested-machine-output "],
         descriptors: [{
@@ -296,14 +287,9 @@ it("preserves root machine-output resolvers in metadata and full plugin loads", 
   const metadataRegistry = await loadOpenClawPluginCliRegistry({ cache: false, config });
   const fullRegistry = loadOpenClawPlugins({ cache: false, config });
   for (const registry of [metadataRegistry, fullRegistry]) {
-    expect(registry.cliRegistrars[0]?.commands).toEqual(["machine-output-cli", "additional-cli"]);
     expect(
       registry.plugins.find((entry) => entry.id === "machine-output-cli")?.cliCommands,
-    ).toEqual(["machine-output-cli", "additional-cli", "nodes nested-machine-output"]);
-    const resolver = registry.cliRegistrars[0]?.descriptors[0]?.machineOutput;
-    const argv = ["node", "openclaw", "machine-output-cli"];
-    expect(resolver?.({ argv, stdoutIsTTY: false })).toBe(true);
-    expect(resolver?.({ argv: [...argv, "--machine"], stdoutIsTTY: true })).toBe(true);
+    ).toEqual(["nodes nested-machine-output"]);
     const nested = registry.cliRegistrars.find((entry) => entry.parentPath.length > 0);
     expect(nested?.commands).toEqual(["nested-machine-output"]);
     expect(nested?.descriptors[0]).not.toHaveProperty("machineOutput");

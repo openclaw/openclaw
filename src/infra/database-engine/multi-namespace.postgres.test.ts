@@ -24,12 +24,18 @@ function launch(prefix: string, dsn = connection) {
   for (const name of ["booting", "ready", "holding"]) {
     events.set(name, Promise.withResolvers());
   }
-  const { anchor, worker } = spawnConformanceWorker(multiNamespaceEntrypoint, databasePath, {
-    connection: dsn,
-    prefix,
-    path: databasePath,
-    gates: gates.buffer,
-  });
+  const { anchor, worker } = spawnConformanceWorker(
+    multiNamespaceEntrypoint,
+    databasePath,
+    {
+      connection: dsn,
+      prefix,
+      path: databasePath,
+      gates: gates.buffer,
+    },
+    undefined,
+    { connection: dsn! },
+  );
   worker.on("message", (message: { event: string; result?: unknown; error?: string }) => {
     const pending = events.get(message.event)!;
     if (message.error) {

@@ -49,7 +49,11 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   return metadata;
 }
 
+// Display only: the live catalog and session owners still admit every action.
+export type ChatComposerSnapshot = { id: string; provider: string; name: string };
+
 export type ChatSessionSnapshot = {
+  composer?: ChatComposerSnapshot | null;
   // The board provider validates cached payloads before they can reach a view.
   board?: { snapshot: unknown; receivedAtMs: number } | null;
   widgetHeights?: Record<string, number>;
@@ -311,10 +315,14 @@ export function cacheChatSessionSnapshot(
       ? { ...withProgress, widgetHeights: existing.snapshot.widgetHeights }
       : withProgress;
   // Boards belong to the scoped conversation key, independently of transcript resets.
-  const snapshot =
+  const withBoard =
     withWidgetHeights.board === undefined && existing?.snapshot.board !== undefined
       ? { ...withWidgetHeights, board: existing.snapshot.board }
       : withWidgetHeights;
+  const snapshot =
+    withBoard.composer === undefined && existing?.snapshot.composer !== undefined
+      ? { ...withBoard, composer: existing.snapshot.composer }
+      : withBoard;
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
@@ -325,6 +333,7 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.progressCard === snapshot.progressCard &&
     existing.snapshot.widgetHeights === snapshot.widgetHeights &&
     existing.snapshot.board === snapshot.board &&
+    existing.snapshot.composer === snapshot.composer &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;
@@ -333,6 +342,7 @@ export function cacheChatSessionSnapshot(
     snapshot.messages.length === 0 &&
     snapshot.sessionId === null &&
     snapshot.board === undefined &&
+    snapshot.composer === undefined &&
     !snapshot.pagination.hasMore &&
     (snapshot.pagination.totalMessages ?? 0) === 0 &&
     snapshot.pagination.completeSnapshot !== true

@@ -280,7 +280,7 @@ async function expectReplayCallCounts(
   );
 }
 
-export async function runFeishuLifecycleSequence(
+async function runFeishuLifecycleSequence(
   deliveries: Array<() => Promise<void>>,
   waits: LifecycleAssertion[],
   timeoutMs = FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS,

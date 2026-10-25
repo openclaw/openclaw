@@ -27,14 +27,7 @@ afterEach(async () => {
     socket.destroy();
   }
   sockets.clear();
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        }),
-    ),
-  );
+  await Promise.all(servers.splice(0).map((server) => server[Symbol.asyncDispose]()));
 });
 
 async function startServer(

@@ -39,7 +39,7 @@
 }
 
 .chat-details-subagents__row:is(:hover, :focus-visible) {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .chat-details-subagents__row:focus-visible {

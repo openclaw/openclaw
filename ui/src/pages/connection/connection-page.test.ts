@@ -20,6 +20,7 @@ import "../debug/debug-overlay-content.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DebugOverlayElement } from "../debug/debug-overlay-state.ts";
@@ -285,14 +286,7 @@ it("shares six status reads per minute with a tray mounted between page polls", 
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: query === "(prefers-reduced-motion: reduce)",
   }));
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
+  stubResizeObserver();
   const setVisibility = mockVisibility();
   const request = vi.fn().mockResolvedValue(gatewaySystemInfo);
   const current = source(makeClient(request));

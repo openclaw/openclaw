@@ -277,18 +277,25 @@ export function releaseOpenClawAgentDatabaseLease(
     const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
     const held = executeSqliteQueryTakeFirstSync(
       database,
-      db
-        .selectFrom("agent_database_leases")
-        .select(["path", "agent_id"])
-        .where("lease_id", "=", leaseId),
+      closeOutcome === undefined
+        ? db
+            .selectFrom("agent_database_leases")
+            .select(["path", "agent_id"])
+            .where("lease_id", "=", leaseId)
+        : db
+            .deleteFrom("agent_database_leases")
+            .where("lease_id", "=", leaseId)
+            .returning(["path", "agent_id"]),
     );
-    if (held && !closeOutcome) {
-      clearAgentDatabaseLeaseVerifications(database, held.path);
+    if (closeOutcome === undefined) {
+      if (held) {
+        clearAgentDatabaseLeaseVerifications(database, held.path);
+      }
+      executeSqliteQuerySync(
+        database,
+        db.deleteFrom("agent_database_leases").where("lease_id", "=", leaseId),
+      );
     }
-    executeSqliteQuerySync(
-      database,
-      db.deleteFrom("agent_database_leases").where("lease_id", "=", leaseId),
-    );
     let receipt: string;
     if (!held) {
       receipt = "lease-not-held";

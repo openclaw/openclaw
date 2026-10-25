@@ -14,7 +14,10 @@ import {
 } from "../../failover-error.js";
 import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
-import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
+import {
+  renderRateLimitRecoveryStopped,
+  renderRateLimitRetryExhaustion,
+} from "../../failover/user-copy.js";
 import { isConfigBackedInlineProviderApiKey } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
@@ -439,7 +442,14 @@ export function createEmbeddedRunFailoverRetryController(input: {
       } catch {
         log.warn("transient retry status callback failed; continuing retry");
       }
-      const closeRetryWait = params.onRetryWait?.(Date.now() + delayMs, params.abortSignal);
+      const closeRetryWait = params.onRetryWait?.(
+        Date.now() + delayMs,
+        params.abortSignal,
+        // A watchdog stop during this backoff reports the limit with this copy.
+        rateLimit
+          ? { rateLimitStopMessage: renderRateLimitRecoveryStopped(retryCount) }
+          : undefined,
+      );
       let completed = false;
       try {
         // Provider floors can exceed one native timer; protect the whole wait.

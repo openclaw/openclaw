@@ -7,6 +7,7 @@ import {
   validateUpdateStatusParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { captureSecurityEvents } from "../../../agents/test-helpers/security-events.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
@@ -59,7 +60,6 @@ import {
   cleanupGatewayHarnesses,
   connectTrustedProxyUser,
   createGatewayHarnessGate,
-  captureSecurityEvents,
   createCloseMock,
   createConnectedTestClient,
   createHealthSummary,

@@ -129,7 +129,7 @@ function accountLooksDegraded(account: Record<string, unknown>): boolean {
 }
 
 /** Extract only degraded channel labels from the gateway's existing cached health aggregate. */
-export function systemAgentGreetingChannelHealth(
+function systemAgentGreetingChannelHealth(
   health: HealthSummary | null,
 ): SystemAgentGreetingFacts["channelHealth"] {
   if (!health) {

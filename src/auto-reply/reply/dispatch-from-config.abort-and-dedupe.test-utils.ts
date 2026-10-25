@@ -70,7 +70,7 @@ function createPersistentAcpSessionEntry() {
     sessionKey: "agent:codex-acp:session-1",
     storeSessionKey: "agent:codex-acp:session-1",
     cfg: {},
-    storePath: "/tmp/mock-sessions.json",
+    storePath: sessionStoreMocks.resolveSessionStorePathCore(),
     entry: {},
     acp: {
       backend: "acpx",
@@ -122,7 +122,7 @@ function setupResolvedAcpSessionNotice(params: { bound: boolean; messageThreadId
     sessionKey: "agent:codex-acp:session-1",
     storeSessionKey: "agent:codex-acp:session-1",
     cfg: {},
-    storePath: "/tmp/mock-sessions.json",
+    storePath: sessionStoreMocks.resolveSessionStorePathCore(),
     entry: {},
     acp: runtime.runTurn.mock.calls.length > 0 ? resolvedAcp : pendingAcp,
   }));
@@ -889,8 +889,8 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const sourceSessionKey = "agent:main:discord:C123";
     const boundSessionKey = "agent:opencode:acp:bound-session";
-    const sourceStorePath = "/tmp/main-sessions.json";
-    const targetStorePath = "/tmp/opencode-sessions.json";
+    const sourceStorePath = sessionStoreMocks.resolveSessionStorePathCore();
+    const targetStorePath = sourceStorePath.replace("mock-sessions", "opencode-sessions");
     const sourceEntry = { sessionId: "source-session-id", updatedAt: Date.now() };
     const targetEntry = { sessionId: "target-session-id", updatedAt: Date.now() };
     const stores: Record<string, Record<string, Record<string, unknown>>> = {
@@ -1146,7 +1146,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionKey: "agent:codex-acp:oneshot-1",
       storeSessionKey: "agent:codex-acp:oneshot-1",
       cfg: {},
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       entry: {},
       acp: {
         backend: "acpx",

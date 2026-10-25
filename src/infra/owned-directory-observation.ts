@@ -4,7 +4,8 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { watchDirectory, type DirectoryWatch } from "./directory-watch-host.js";
 import { isPathInside } from "./path-guards.js";
 
-type Listener = (filename?: string) => void;
+// Missing event/filename means recovery or an unclassified notification, not a content write.
+type Listener = (filename?: string, event?: string) => void;
 type Directory = {
   key: string;
   path: string;
@@ -106,10 +107,10 @@ function detach(directory: Directory) {
   }
 }
 
-function notify(directory: Directory, filename?: string) {
+function notify(directory: Directory, filename?: string, event?: string) {
   const listeners = Array.from(directory.listeners);
   for (const listener of listeners) {
-    listener(filename);
+    listener(filename, event);
   }
 }
 
@@ -156,7 +157,7 @@ function attach(directory: Directory) {
                 isPathInside(entry.path, (changedPath ??= path.resolve(candidate, filename))) ||
                 isPathInside(changedPath, entry.path)
               ) {
-                notify(entry, entry.path === candidate ? filename : undefined);
+                notify(entry, entry.path === candidate ? filename : undefined, event);
               }
             }
             // A renamed directory's watcher can remain bound to its retired inode.
@@ -245,7 +246,7 @@ export function observeOwnedDirectory(
     directories.set(key, selected);
     attach(selected);
   }
-  const listener: Listener = (filename) => onChange(filename);
+  const listener: Listener = (filename, event) => onChange(filename, event);
   selected.listeners.add(listener);
   retainEarlierFallback(selected, nextFallback(reconcileIntervalMs));
   scheduleFallback(selected);

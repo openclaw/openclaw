@@ -81,27 +81,6 @@ export type ChannelIngressQueueDeadLetterRecord<
   lastAttemptAt?: number;
 };
 
-type ChannelIngressQueueResubmitResult<
-  TPayload,
-  TMetadata = unknown,
-  TCompletedMetadata = unknown,
-> =
-  | {
-      kind: "resubmitted";
-      record: ChannelIngressQueueRecord<TPayload, TMetadata>;
-      previous: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
-    }
-  | { kind: "not-found" }
-  | {
-      kind: "completed";
-      record: ChannelIngressQueueCompletedRecord<TCompletedMetadata>;
-    }
-  | { kind: "active"; status: "pending" | "claimed" }
-  | {
-      kind: "unrecoverable";
-      record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
-    };
-
 type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
       kind: "accepted";
@@ -234,7 +213,23 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   resubmit?(
     id: string,
     options?: { resubmittedAt?: number },
-  ): Promise<ChannelIngressQueueResubmitResult<TPayload, TMetadata, TCompletedMetadata>>;
+  ): Promise<
+    | {
+        kind: "resubmitted";
+        record: ChannelIngressQueueRecord<TPayload, TMetadata>;
+        previous: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
+      }
+    | { kind: "not-found" }
+    | {
+        kind: "completed";
+        record: ChannelIngressQueueCompletedRecord<TCompletedMetadata>;
+      }
+    | { kind: "active"; status: "pending" | "claimed" }
+    | {
+        kind: "unrecoverable";
+        record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
+      }
+  >;
   delete(
     idOrClaim:
       | string

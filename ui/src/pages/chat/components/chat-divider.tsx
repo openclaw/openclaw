@@ -3,6 +3,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import { ChatRunFailureNotice } from "./chat-run-failure-notice.tsx";
@@ -85,7 +86,7 @@ export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }
 
 type ChatNoticeRecovery = Pick<
   ChatThreadProps,
-  "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun"
+  "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onDismissPendingInput"
 >;
 
 type ChatNoticeProps = {
@@ -183,13 +184,36 @@ function OrdinaryNotice(props: ChatNoticeProps) {
       <Show when={props.item.text}>
         <NoticeBody text={props.item.text} />
       </Show>
+      <Show when={props.item.retiredPendingInput}>
+        {(retired) => (
+          <Show when={props.recovery?.onDismissPendingInput}>
+            {(dismiss) => (
+              <div class="chat-notice__actions">
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  aria-label={t(
+                    retired().status === "interrupted"
+                      ? "chat.pendingInputs.dismissInterrupted"
+                      : "chat.pendingInputs.dismissCancelled",
+                    { preview: retired().preview },
+                  )}
+                  onClick={() => dismiss()(retired().id)}
+                >
+                  {t("chat.pendingInputs.dismiss")}
+                </button>
+              </div>
+            )}
+          </Show>
+        )}
+      </Show>
     </div>
   );
 }
 
 export function ChatNotice(props: ChatNoticeProps) {
   return (
-    <Switch fallback={<OrdinaryNotice item={props.item} />}>
+    <Switch fallback={<OrdinaryNotice item={props.item} recovery={props.recovery} />}>
       <Match when={props.item.runError}>
         <FailureNotice item={props.item} recovery={props.recovery} />
       </Match>

@@ -28,17 +28,15 @@ type ExpectedGatewayAuth =
   | { token: string; deviceToken?: never }
   | { token?: never; deviceToken: string };
 
-async function startGateway(
+export async function startGateway(
   handle: ((ws: WebSocket, frame: Request) => void) | Record<string, unknown>,
   connect?: (frame: Request) => Hello,
   host = "127.0.0.1",
 ) {
-  let connectionCount = 0;
   const calls: string[] = [];
   const wss = new WebSocketServer({ host, port: 0 });
   activeServers.add(wss);
   wss.on("connection", (ws) => {
-    connectionCount += 1;
     sendMinimalGatewayConnectChallenge(ws);
     ws.on("message", (data) => {
       const frame = parseMinimalGatewayRequestFrame(data);
@@ -70,8 +68,9 @@ async function startGateway(
     calls,
     url: "ws://" + host + ":" + port,
     port,
-    get connectionCount() {
-      return connectionCount;
+    close: async () => {
+      await closeMinimalGatewayServer(wss);
+      activeServers.delete(wss);
     },
   };
 }

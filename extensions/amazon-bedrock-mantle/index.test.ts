@@ -79,6 +79,31 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     expect(classify("overloaded_error")).toBe("overloaded");
   });
 
+  it("registers discovered OpenAI GPT models on the Responses route", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        data: [{ id: "openai.gpt-5.6-luna" }, { id: "openai.gpt-oss-120b" }],
+      }),
+    );
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+    const result = await provider.catalog?.run({
+      config: {},
+      env: { ...env, AWS_BEARER_TOKEN_BEDROCK: "test-openai-route-token" },
+    } as never);
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single provider catalog result");
+    }
+    expect(
+      result.provider.models.find((model) => model.id === "openai.gpt-5.6-luna"),
+    ).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+    });
+    const oss = result.provider.models.find((model) => model.id === "openai.gpt-oss-120b");
+    expect(oss?.api ?? result.provider.api).toBe("openai-completions");
+    expect(oss).not.toHaveProperty("baseUrl");
+  });
+
   it("provides a custom stream only for Mantle Anthropic models", async () => {
     const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
 

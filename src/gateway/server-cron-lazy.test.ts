@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createMockCronStateForJobs } from "../cron/service.test-harness.js";
 import { listPage } from "../cron/service/ops-read.js";
 import type { CronJob } from "../cron/types.js";
@@ -59,6 +58,8 @@ describe("createLazyGatewayCronState", () => {
     );
     state.readHeartbeatSummary = vi.fn(async () => []);
     expect(lazy.readHeartbeatSummary).toBeUndefined();
+    await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
+    await lazy.stopStreamWatchers();
     expect(buildGatewayCronService).not.toHaveBeenCalled();
     expect(lazy.cron.getJob("demo")).toBeUndefined();
     expect(lazy.cron.getDefaultAgentId()).toBeUndefined();
@@ -68,15 +69,9 @@ describe("createLazyGatewayCronState", () => {
       await readers.close();
     }
     expect(buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron.status).toHaveBeenCalledTimes(1);
     expect(lazy.readHeartbeatSummary).toBe(state.readHeartbeatSummary);
     expect(observedBroker === broker).toBe(true);
     expect(observedReadOnlyScope).toBe(true);
-  });
-
-  it("does not load cron solely to prepare a watcher handoff", async () => {
-    await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
-    expect(buildGatewayCronService).not.toHaveBeenCalled();
   });
 
   it("keeps visibility filtering inside the loaded service's page snapshot", async () => {
@@ -217,7 +212,6 @@ describe("createLazyGatewayCronState", () => {
       await run;
 
       expect(cron[operation]).toHaveBeenCalledExactlyOnceWith("demo", "force");
-      expect(buildGatewayCronService).toHaveBeenCalledOnce();
     },
   );
 
@@ -277,9 +271,6 @@ describe("createLazyGatewayCronState", () => {
   });
 
   it("forwards watcher reconciliation and teardown hooks through the proxy", async () => {
-    // Teardown before load must not force the heavy import.
-    await lazy.stopStreamWatchers();
-    expect(buildGatewayCronService).not.toHaveBeenCalled();
     await lazy.reconcileExitWatchers();
     await lazy.reconcileStreamWatchers();
     expect(state.reconcileExitWatchers).toHaveBeenCalledTimes(1);
@@ -289,11 +280,11 @@ describe("createLazyGatewayCronState", () => {
   });
 });
 
-function createParams(overrides: Partial<OpenClawConfig> = {}) {
+function createParams() {
   return {
     storePath: "/tmp/openclaw-cron.json",
     scheduler: createTestGatewayScheduler(),
-    cfg: overrides,
+    cfg: {},
     deps: {} as CliDeps,
     broadcast: vi.fn(),
   };

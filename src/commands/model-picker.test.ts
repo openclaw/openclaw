@@ -11,6 +11,7 @@ import {
   promptDefaultModel,
   promptModelAllowlist,
 } from "../flows/model-picker.js";
+import { createEmptyPluginSetupRegistry } from "../plugins/setup-registry.test-support.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
@@ -225,13 +226,7 @@ beforeEach(() => {
   providerAuthEvaluations.clear();
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [],
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
+    resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
   });
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
   setScopedCatalog([]);

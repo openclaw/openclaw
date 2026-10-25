@@ -270,10 +270,6 @@ for await (const line of createInterface({ input: process.stdin })) {
       if (lateDecision) result({ lateDecision });
       continue;
     }
-    if (scenario === "missing-result") {
-      process.stderr.write("PermissionError: fixture cannot read its input\n", () => process.exit(1));
-      continue;
-    }
     if (backgroundAgent) {
       send({ type: "system", subtype: "background_tasks_changed",
         tasks: [{ task_id: "background-agent", task_type: "local_agent" },

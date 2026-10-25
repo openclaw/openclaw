@@ -28,6 +28,7 @@ export type DeferredEmbeddedRunLifecycleOwner = {
   beginRetryWait: (
     deadlineAtMs: number,
     signal: AbortSignal,
+    wait?: { rateLimitStopMessage?: string },
   ) => ((completed?: boolean) => void) | undefined;
   complete: () => Promise<void>;
   discard: () => void | Promise<void>;
@@ -73,7 +74,7 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
         })
       : Promise.resolve();
   return {
-    beginRetryWait: (deadlineAtMs, signal) => {
+    beginRetryWait: (deadlineAtMs, signal, wait) => {
       if (!pending) {
         return undefined;
       }
@@ -83,6 +84,7 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
       const close = beginDiagnosticRetryWait({
         owner: params.diagnosticOwner,
         deadlineAtMs,
+        rateLimitStopMessage: wait?.rateLimitStopMessage,
         signal,
         assertCurrent: () => {
           if (!params.isCurrent()) {
@@ -140,6 +142,7 @@ export type DeferredEmbeddedRunLifecycleManager = {
   beginRetryWait: (
     deadlineAtMs: number,
     signal?: AbortSignal,
+    wait?: { rateLimitStopMessage?: string },
   ) => ((completed?: boolean) => void) | undefined;
   handoffToCli: () => DiagnosticEmbeddedRunOwner;
   complete: () => Promise<void>;
@@ -207,10 +210,11 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
     signal,
     abort,
     adopt: replaceOwner,
-    beginRetryWait: (deadlineAtMs, retrySignal) =>
+    beginRetryWait: (deadlineAtMs, retrySignal, wait) =>
       current?.beginRetryWait(
         deadlineAtMs,
         retrySignal ? AbortSignal.any([signal, retrySignal]) : signal,
+        wait,
       ),
     handoffToCli: () => {
       const diagnosticOwner = createDiagnosticEmbeddedRunOwner({

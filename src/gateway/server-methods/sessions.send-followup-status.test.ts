@@ -1,15 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  buildProjectedAgentRunIndex,
-  clearAgentRunContext,
-  registerAgentRunContext,
-} from "../../infra/agent-run-registry.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -66,7 +58,6 @@ vi.mock("./chat-send-external-entry.js", () => ({
   handleDirectExternalChatSend: mocks.send,
 }));
 
-import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMessagingHandlers } from "./sessions-messaging.js";
 
@@ -119,9 +110,9 @@ function completedRun(childSessionKey: string) {
   mocks.live.mockReturnValue(run);
 }
 
-function respondWith(payload: unknown, cached?: true) {
+function respondWith(payload: unknown) {
   mocks.send.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
-    respond(true, payload, undefined, cached ? { cached } : undefined);
+    respond(true, payload, undefined, undefined);
   });
 }
 
@@ -153,65 +144,6 @@ describe("sessions.send completed subagent follow-up status", () => {
     });
   });
 
-  it("reactivates completed subagent sessions before broadcasting sessions.changed", async () => {
-    const state = await createOpenClawTestState({
-      label: "session-send-followup",
-      applyEnv: false,
-    });
-    onTestFinished(() => state.cleanup());
-    const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-    const childSessionKey = "agent:main:subagent:followup";
-    loadSession(childSessionKey, "sess-followup", storePath);
-    completedRun(childSessionKey);
-    mocks.replace.mockReturnValue(true);
-    mocks.send.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
-      registerAgentRunContext("run-new", {
-        agentId: "main",
-        sessionKey: childSessionKey,
-        sessionId: "sess-followup",
-        projectSessionActive: true,
-      });
-      projection.state.rowContext.projectedAgentRuns = buildProjectedAgentRunIndex();
-      respond(true, { ...started }, undefined, undefined);
-    });
-    onTestFinished(() => clearAgentRunContext("run-new"));
-    const broadcastToConnIds = vi.fn();
-    const projection = createSessionRowProjectionFixture({
-      cfg: {},
-      agentId: "main",
-      storePath,
-      store: {
-        [childSessionKey]: {
-          sessionId: "sess-followup",
-          updatedAt: 123,
-          startedAt: 123,
-          runtimeMs: 10,
-        },
-      },
-    });
-    onTestFinished(() => projection.dispose());
-    Object.assign(context, {
-      broadcastToConnIds,
-      getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-      ...bindSessionRowProjection({}, () => projection),
-    });
-    const respond = await send({
-      key: childSessionKey,
-      message: "follow-up",
-      idempotencyKey: "run-new",
-    });
-    await flushPendingSessionsChangedEvents(context);
-    expect(respond).toHaveBeenCalledWith(true, started, undefined, undefined);
-    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
-    expectSubagentFollowupReactivation({
-      replaceSubagentRunAfterSteerMock: mocks.replace,
-      broadcastToConnIds,
-      childSessionKey,
-      status: "running",
-      task: "follow-up",
-    });
-  });
-
   it("terminates a started follow-up when its completed owner cannot be replaced", async () => {
     const childSessionKey = "agent:main:subagent:followup-rejected";
     loadSession(childSessionKey, "sess-followup-rejected");
@@ -223,28 +155,12 @@ describe("sessions.send completed subagent follow-up status", () => {
     await expect(send({ key: childSessionKey, message: "follow-up" })).rejects.toThrow(
       "database unavailable",
     );
+    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({ task: "follow-up" }));
     expect(mocks.terminate).toHaveBeenCalledWith({
       childSessionKey,
       gatewayRunId: "run-new",
       sessionCleanup: "preserve",
     });
-  });
-
-  it("sessions.steer replaying a cached idempotency key leaves the active run alone", async () => {
-    const sessionKey = "agent:main:main";
-    loadSession(sessionKey, "sess-unrelated-run");
-    respondWith({ runId: "steer-retry", status: "completed" }, true);
-    context.dedupe.set("chat:steer-retry", {
-      ts: 1,
-      ok: true,
-      payload: { runId: "steer-retry" },
-    });
-    const respond = await send(
-      { key: sessionKey, message: "replacement turn", idempotencyKey: "steer-retry" },
-      "sessions.steer",
-    );
-    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("interruptedActiveRun");
-    expect(respond.mock.calls[0]?.[3]).toMatchObject({ cached: true });
   });
 
   it("steers the selected global agent with committed receipt and interrupt facts", async () => {

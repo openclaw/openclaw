@@ -428,6 +428,17 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
+  it("forwards the native output schema to a V2 harness", async () => {
+    const assistant = isolatedAssistant([{ type: "text", text: '{"ok":true}' }]);
+    const dispatch = vi.fn(async (_params: unknown) => ({ assistant }));
+    registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+    const outputSchema = { type: "object" };
+
+    await runIsolatedCompletion({ ...isolatedRequest(), outputSchema });
+
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ outputSchema }));
+  });
+
   it.each([false, true])(
     "captures call-owned choices and authority before admission (retired: %s)",
     async (retired) => {
