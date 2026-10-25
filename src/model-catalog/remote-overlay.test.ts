@@ -42,6 +42,26 @@ const disabledConfig = { models: { catalogRefresh: { enabled: false } } };
 function stageBundle(value: unknown = bundle, source_url = defaultUrl) {
   read.mockReturnValue({ bundle_json: JSON.stringify(value), source_url });
 }
+function recommendationBundle(ids: string[], served: string[], rate: number) {
+  return {
+    schemaVersion: 2,
+    generatedAt: 200,
+    minVersion: "2026.7.0",
+    sourceCommit: "recommendation-test",
+    providers: { anthropic: { recommendedModels: ids } },
+    models: served.map((id) => ({
+      id,
+      provider: "anthropic",
+      pricing: {
+        status: "known",
+        currency: "USD",
+        unit: "million_tokens",
+        input: rate,
+        output: rate * 2,
+      },
+    })),
+  };
+}
 const overlay = (config: OpenClawConfig = {}) =>
   getRemoteModelCatalogProviderOverlay(config, "anthropic");
 const price = () => activeCatalog({})?.pricing?.["openai/gpt-external"];
@@ -77,22 +97,7 @@ describe("remote model catalog overlay", () => {
   it("keeps older hosted recommendations only for currently served rows", async () => {
     builtAt.mockReturnValue(300);
     stageBundle({
-      schemaVersion: 2,
-      generatedAt: 200,
-      minVersion: "2026.7.0",
-      sourceCommit: "recommendation-test",
-      providers: { anthropic: { recommendedModels: ["retired", "current"] } },
-      models: ["retired", "current"].map((id) => ({
-        id,
-        provider: "anthropic",
-        pricing: {
-          status: "known",
-          currency: "USD",
-          unit: "million_tokens",
-          input: 9,
-          output: 18,
-        },
-      })),
+      ...recommendationBundle(["retired", "current"], ["retired", "current"], 9),
       upstreamPricing: { "anthropic/current": { input: 9, output: 18, source: "native" } },
     });
     await prepareStartup();
@@ -136,26 +141,7 @@ describe("remote model catalog overlay", () => {
 
   it("reads stored recommendations even when the catalog is older than the build", async () => {
     builtAt.mockReturnValue(300);
-    stageBundle({
-      schemaVersion: 2,
-      generatedAt: 200,
-      minVersion: "2026.7.0",
-      sourceCommit: "recommendation-test",
-      providers: { anthropic: { recommendedModels: ["first", "second"] } },
-      models: [
-        {
-          id: "first",
-          provider: "anthropic",
-          pricing: {
-            status: "known",
-            currency: "USD",
-            unit: "million_tokens",
-            input: 1,
-            output: 2,
-          },
-        },
-      ],
-    });
+    stageBundle(recommendationBundle(["first", "second"], ["first"], 1));
     expect(await readUpdate({})).toBeUndefined();
     expect(await readRecommendations({}, "anthropic")).toEqual(["first"]);
     expect(await readRecommendations(disabledConfig, "anthropic")).toBeUndefined();

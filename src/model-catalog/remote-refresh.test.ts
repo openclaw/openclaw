@@ -72,6 +72,17 @@ function mockFetch(implementation: typeof fetch) {
 function mockDownload(value: unknown = bundle, init?: ResponseInit) {
   return mockFetch(async () => new Response(JSON.stringify(value), init));
 }
+function corruptDownload(patch: object = {}, invalidUtf8 = false) {
+  const body = Buffer.from(
+    JSON.stringify({ ...bundle, generatedAt: bundle.generatedAt + 1, ...patch }),
+  );
+  if (invalidUtf8) {
+    const offset = body.indexOf("claude-test");
+    expect(offset).toBeGreaterThanOrEqual(0);
+    body[offset + "claude-".length] = 0xff;
+  }
+  return new Response(body);
+}
 
 type StoredCatalog = Parameters<typeof writeCatalog>[0];
 function storedCatalog(value = bundle, overrides: Partial<StoredCatalog> = {}) {
@@ -311,9 +322,11 @@ describe("remote model catalog refresh", () => {
         usdPerMillion: { input: 0, output: 0 },
       },
     };
-    const inference = { chat: false, decision };
-    const models = [{ ...bundle.models[0], inference }];
-    const downloaded = { ...bundle, schemaVersion: 3, models };
+    const downloaded = {
+      ...bundle,
+      schemaVersion: 3,
+      models: [{ ...bundle.models[0], inference: { chat: false, decision } }],
+    };
     const config = mirrorConfig("v3/");
     mockDownload(downloaded);
     await expectRefresh({ status: "updated", models: 1 }, config);
@@ -360,10 +373,7 @@ describe("remote model catalog refresh", () => {
     const newerBundle = { ...bundle, generatedAt: bundle.generatedAt + 100 };
     await storeCatalog(storedCatalog(newerBundle, { etag: '"newer"' }));
     mockDownload();
-    await expectRefresh({
-      status: "unchanged",
-      generatedAt: newerBundle.generatedAt,
-    });
+    await expectRefresh({ status: "unchanged", generatedAt: newerBundle.generatedAt });
     expect(readCatalog(databaseOptions)?.generated_at).toBe(newerBundle.generatedAt);
 
     const mirrorBundle = { ...bundle, generatedAt: newerBundle.generatedAt + 100 };
@@ -385,25 +395,19 @@ describe("remote model catalog refresh", () => {
         throw new DOMException("timed out", "TimeoutError");
       },
     ],
-  ] satisfies Array<[string, typeof fetch]>)(
-    "returns a typed failure for %s",
-    async (_name, fetch) => {
-      mockFetch(fetch);
-      await expectRefresh({ status: "error" });
-    },
-  );
-
-  it.each([
-    ["invalid UTF-8", {}],
-    ["unsupported schema", { schemaVersion: 4 }],
-    ["empty models", { models: [] }],
+    ["invalid UTF-8", async () => corruptDownload({}, true)],
+    ["unsupported schema", async () => corruptDownload({ schemaVersion: 4 })],
+    ["empty models", async () => corruptDownload({ models: [] })],
     [
       "rates on unknown pricing",
-      { models: [{ ...bundle.models[0], pricing: { status: "unknown", input: 0 } }] },
+      async () =>
+        corruptDownload({
+          models: [{ ...bundle.models[0], pricing: { status: "unknown", input: 0 } }],
+        }),
     ],
-  ] as const)(
+  ] satisfies Array<[string, typeof fetch]>)(
     "preserves the previous catalog without a fallback request after %s",
-    async (failure, patch) => {
+    async (_failure, fetch) => {
       const previous = storedCatalog(bundle, {
         etag: '"previous"',
         last_modified: "Wed, 23 Jul 2025 00:00:00 GMT",
@@ -411,16 +415,7 @@ describe("remote model catalog refresh", () => {
       });
       await storeCatalog(previous);
 
-      const corrupt = Buffer.from(
-        JSON.stringify({ ...bundle, generatedAt: bundle.generatedAt + 1, ...patch }),
-      );
-      if (failure === "invalid UTF-8") {
-        const modelIdOffset = corrupt.indexOf("claude-test");
-        expect(modelIdOffset).toBeGreaterThanOrEqual(0);
-        corrupt[modelIdOffset + "claude-".length] = 0xff;
-      }
-
-      const fetchImpl = mockFetch(async () => new Response(corrupt, { status: 200 }));
+      const fetchImpl = mockFetch(fetch);
       await expectRefresh({ status: "error" });
       expect(readCatalog(databaseOptions)).toMatchObject(previous);
       expect(fetchImpl).toHaveBeenCalledOnce();

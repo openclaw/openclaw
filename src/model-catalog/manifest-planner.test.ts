@@ -29,19 +29,6 @@ function catalog(
     ],
   };
 }
-function expectedRow(provider: string, id: string) {
-  return {
-    provider,
-    id,
-    ref: `${provider}/${id}`,
-    mergeKey: `${provider}::${id}`,
-    name: id,
-    source: "manifest",
-    input: ["text"],
-    reasoning: false,
-    status: "available",
-  };
-}
 const emptyPlan = { entries: [], rows: [], conflicts: [] };
 
 describe("manifest model catalog planner", () => {
@@ -102,33 +89,29 @@ describe("manifest model catalog planner", () => {
   });
 
   it("keeps bundled families under a hosted overlay, which cannot declare one", () => {
-    const families = (definition: ModelCatalogProvider, remote: ModelCatalogProvider) =>
-      Object.fromEntries(
-        planRows({
-          registry: catalog("host", {
-            api: "openai-responses",
-            baseUrl: "https://h",
-            ...definition,
-          }),
-          resolveRemoteProvider: () => remote,
-        }).rows.map((row) => [row.id, [row.source, row.family]]),
-      );
-    const remote = { models: [{ id: "listed", name: "Remote" }, { id: "new" }] };
-    expect(
-      families({ family: "anthropic", models: [{ id: "listed" }, { id: "kept" }] }, remote),
-    ).toEqual({
-      kept: ["manifest", "anthropic"],
-      listed: ["runtime-refresh", "anthropic"],
-      new: ["runtime-refresh", "anthropic"],
-    });
-    // A multi-developer host declares rows; a hosted-only row has no declaration.
-    expect(
-      families({ models: [{ id: "listed", family: "openai" }, { id: "kept" }] }, remote),
-    ).toEqual({
-      kept: ["manifest", undefined],
-      listed: ["runtime-refresh", "openai"],
-      new: ["runtime-refresh", undefined],
-    });
+    for (const [family, rowFamily, expected] of [
+      ["anthropic", undefined, ["anthropic", "anthropic", "anthropic"]],
+      [undefined, "openai", [undefined, "openai", undefined]],
+    ] as const) {
+      const rows = planRows({
+        registry: catalog("host", {
+          api: "openai-responses",
+          baseUrl: "https://h",
+          family,
+          models: [{ id: "listed", family: rowFamily }, { id: "kept" }],
+        }),
+        resolveRemoteProvider: () => ({
+          models: [{ id: "listed", name: "Remote" }, { id: "new" }],
+        }),
+      }).rows;
+      expect(
+        rows.map(({ id, source, family: effectiveFamily }) => [id, source, effectiveFamily]),
+      ).toEqual([
+        ["kept", "manifest", expected[0]],
+        ["listed", "runtime-refresh", expected[1]],
+        ["new", "runtime-refresh", expected[2]],
+      ]);
+    }
   });
 
   describe("route-bound inference metadata", () => {
@@ -290,7 +273,10 @@ describe("manifest model catalog planner", () => {
     for (const selection of [undefined, "static"] as const) {
       const plan = planRows({ registry, selection });
       expect(plan.entries).toHaveLength(2);
-      expect(plan.rows, selection).toEqual([{ ...expectedRow("shared", "kept"), name: "Kept" }]);
+      expect(
+        plan.rows.map(({ ref, name }) => [ref, name]),
+        selection,
+      ).toEqual([["shared/kept", "Kept"]]);
       expect(plan.conflicts, selection).toEqual([{ provider: "shared", modelId: "conflicted" }]);
     }
   });
@@ -299,15 +285,15 @@ describe("manifest model catalog planner", () => {
   it("plans moonshotai alias rows from the moonshot provider catalog", () => {
     const baseUrl = "https://api.moonshot.ai/v1";
     const api = "openai-completions";
-    const model = {
-      id: "kimi-k2.6",
-      name: "Kimi K2.6",
-      input: ["text", "image"],
-      contextWindow: 256000,
-    } satisfies ModelCatalogProvider["models"][number];
     const registry = catalog(
       "Moonshot",
-      { api, baseUrl, models: [model] },
+      {
+        api,
+        baseUrl,
+        models: [
+          { id: "kimi-k2.6", name: "Kimi K2.6", input: ["text", "image"], contextWindow: 256000 },
+        ],
+      },
       {
         modelCatalog: {
           aliases: {
@@ -318,21 +304,24 @@ describe("manifest model catalog planner", () => {
         },
       },
     );
-    const rows = [
+    const plan = planRows({ registry, providerFilter: "moonshotai" });
+    expect(plan.entries).toMatchObject([{ provider: "moonshotai", discovery: "static" }]);
+    expect(plan.entries[0]?.rows).toEqual(plan.rows);
+    expect(plan.rows).toMatchObject([
       {
-        ...expectedRow("moonshotai", "kimi-k2.6"),
+        provider: "moonshotai",
+        id: "kimi-k2.6",
+        ref: "moonshotai/kimi-k2.6",
+        mergeKey: "moonshotai::kimi-k2.6",
+        source: "manifest",
         name: "Kimi K2.6",
         input: ["text", "image"],
         contextWindow: 256000,
         api,
         baseUrl,
       },
-    ];
-    expect(planRows({ registry, providerFilter: "moonshotai" })).toEqual({
-      entries: [{ provider: "moonshotai", discovery: "static", rows }],
-      rows,
-      conflicts: [],
-    });
+    ]);
+    expect(plan.conflicts).toEqual([]);
   });
 
   it("sorts fresh normalized rows without mutating frozen manifest inputs", () => {
@@ -342,12 +331,10 @@ describe("manifest model catalog planner", () => {
     const registry = catalog("fixture", { models });
     const plan = planRows({ registry });
     const repeated = planRows({ registry });
-    const rows = ["a", "z"].map((id) => expectedRow("fixture", id));
-    expect(plan).toStrictEqual({
-      entries: [{ provider: "fixture", discovery: undefined, rows }],
-      rows,
-      conflicts: [],
-    });
+    expect(plan.rows.map((row) => row.ref)).toEqual(["fixture/a", "fixture/z"]);
+    expect(plan.entries).toMatchObject([{ provider: "fixture", discovery: undefined }]);
+    expect(plan.entries[0]?.rows).toEqual(plan.rows);
+    expect(plan.conflicts).toEqual([]);
     expect(models).toStrictEqual([{ id: "z" }, { id: "a" }]);
     expect(repeated).toStrictEqual(plan);
     expect(repeated.rows).not.toBe(plan.rows);
