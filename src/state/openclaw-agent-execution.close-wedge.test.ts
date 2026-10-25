@@ -163,6 +163,15 @@ const capture = (env: ReturnType<typeof makeEnv>, agentId = "first") =>
   captureOpenClawAgentDatabaseExecution({ agentId, env });
 const faultState = new Int32Array(fault.enabled);
 
+function initialize(execution: ReturnType<typeof capture>, sessionId: string, key = sessionId) {
+  return execution.runExisting(source, (scope) =>
+    scope.execute({
+      type: "session.transcript.initialize",
+      input: { sessionKey: `agent:first:${key}`, sessionId },
+    }),
+  );
+}
+
 it("recovers after a full agent database write settles", async () => {
   const env = makeEnv();
   const execution = capture(env);
@@ -178,27 +187,17 @@ it("recovers after a full agent database write settles", async () => {
     }).catch((error: unknown) => error);
     expect(sharedFailure).toMatchObject({ code: "outcome-unknown" });
     Atomics.store(faultState, 0, 5);
-    const failure: unknown = await execution
-      .runExisting(source, (scope) =>
-        scope.execute({
-          type: "session.transcript.initialize",
-          input: { sessionKey: "agent:first:full", sessionId: "full".repeat(100_000) },
-        }),
-      )
-      .catch((error: unknown) => error);
+    const failure: unknown = await initialize(execution, "full".repeat(100_000), "full").catch(
+      (error: unknown) => error,
+    );
     Atomics.store(faultState, 0, 0);
     expect(failure).toBeInstanceOf(Error);
     expect(failure).toMatchObject({ code: "outcome-unknown" });
     const recovered = capture(env);
     try {
-      await expect(
-        recovered.runExisting(source, (scope) =>
-          scope.execute({
-            type: "session.transcript.initialize",
-            input: { sessionKey: "agent:first:recovered", sessionId: "recovered" },
-          }),
-        ),
-      ).resolves.toMatchObject({ kind: "session-transcript-initialized" });
+      await expect(initialize(recovered, "recovered")).resolves.toMatchObject({
+        kind: "session-transcript-initialized",
+      });
       expect(Atomics.load(faultState, 3)).toBe(2);
     } finally {
       await recovered.release();
@@ -358,7 +357,7 @@ it("does not fence an actor when its worker stops before command admission", asy
 });
 
 function readEntries(
-  execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution>,
+  execution: ReturnType<typeof capture>,
   key: string | string[],
   request = source,
 ) {

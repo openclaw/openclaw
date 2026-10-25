@@ -94,6 +94,17 @@ function withDatabase<T>(
   return run(database);
 }
 
+function observeWritableOpen(pathname: string, observe: (database: DatabaseSync) => void) {
+  const open = sqlite.openNodeSqliteDatabase;
+  return vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
+    const database = open(location, options);
+    if (location === pathname && options?.readOnly !== true) {
+      observe(database);
+    }
+    return database;
+  });
+}
+
 function readIndexState(pathname: string) {
   return withDatabase(
     pathname,
@@ -273,15 +284,8 @@ describe("asynchronous agent database maintenance admission", () => {
     const prepared = f.prepare();
     const leaseId = prepared.claim();
     const registered = vi.fn();
-    const open = sqlite.openNodeSqliteDatabase;
-    let native: ReturnType<typeof open> | undefined;
-    vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
-      const database = open(pathname, openOptions);
-      if (pathname === f.options.pathname && openOptions?.readOnly !== true) {
-        native = database;
-      }
-      return database;
-    });
+    let native: DatabaseSync | undefined;
+    observeWritableOpen(f.options.pathname, (database) => (native = database));
     try {
       // The Worker receives an admitted claim independently of its native open.
       await withOpenClawStateLease(leaseOptions(f.env), (maintenance) =>
@@ -357,22 +361,17 @@ describe("asynchronous agent database maintenance admission", () => {
     const f = fixture();
     const abort = new AbortController();
     const check = integrityWorker.assertSqliteIntegrityInWorker;
-    const open = sqlite.openNodeSqliteDatabase;
     let completed = false;
     let native: Promise<void> | undefined;
-    vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
-      const database = open(pathname, options);
-      if (pathname === f.options.pathname && options?.readOnly !== true) {
-        const close = database.close.bind(database);
-        database.close = () => {
-          try {
-            expect(completed).toBe(true);
-          } finally {
-            close();
-          }
-        };
-      }
-      return database;
+    observeWritableOpen(f.options.pathname, (database) => {
+      const close = database.close.bind(database);
+      database.close = () => {
+        try {
+          expect(completed).toBe(true);
+        } finally {
+          close();
+        }
+      };
     });
     vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation((...args) => {
       native = check(...args).finally(() => {

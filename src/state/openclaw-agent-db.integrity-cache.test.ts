@@ -66,11 +66,31 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
+function optionsFor(agentId: string) {
+  return { agentId, env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-integrity-") } };
+}
+
+function observeSql(pathname?: string) {
+  const statements: string[] = [];
+  const open = sqlite.openNodeSqliteDatabase;
+  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    const database = open(...args);
+    if (!pathname || args[0] === pathname) {
+      const prepare = database.prepare.bind(database);
+      vi.spyOn(database, "prepare").mockImplementation((sql) => {
+        statements.push(sql);
+        return prepare(sql);
+      });
+    }
+    return database;
+  });
+  return statements;
+}
+
 it("certifies idle handles after grace and borrowed handles only after their final release", async () => {
   vi.useFakeTimers();
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-cleanup-idle-") };
-  const options = { agentId: "idle", env };
-  const heldOptions = { agentId: "held", env };
+  const options = optionsFor("idle");
+  const heldOptions = { ...options, agentId: "held" };
   const idle = openOpenClawAgentDatabase(options);
   const held = openOpenClawAgentDatabase(heldOptions);
   const entered = createDeferredCore();
@@ -130,10 +150,7 @@ it.each([
   "schema-mismatch",
   "policy-mismatch",
 ] as const)("reports the next admission's clean-close proof outcome (%s)", (outcome) => {
-  const options = {
-    agentId: "receipt-agent",
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-seal-reason-") },
-  };
+  const options = optionsFor("receipt-agent");
   const first = openOpenClawAgentDatabase(options);
   first.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{}', 1)");
   closeOpenClawAgentDatabasesForTest();
@@ -182,24 +199,16 @@ it.each([
       ),
     ).toBe(true);
   }
-  const statements: string[] = [];
-  const open = sqlite.openNodeSqliteDatabase;
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const database = open(...args);
-    const prepare = database.prepare.bind(database);
-    vi.spyOn(database, "prepare").mockImplementation((sql) => {
-      statements.push(sql);
-      return prepare(sql);
-    });
-    return database;
-  });
+  const statements = observeSql();
   logger.info.mockClear();
   const reopened = openOpenClawAgentDatabase(options);
   expect(
     reopened.db
       .prepare("SELECT state_key FROM auth_profile_state WHERE state_key='preserved'")
       .get(),
-  ).toEqual({ state_key: "preserved" });
+  ).toEqual({
+    state_key: "preserved",
+  });
   if (
     [
       "unchanged",
@@ -241,27 +250,13 @@ it.each([
 });
 
 it("retains admission through pinned WAL eviction and certifies the final checkpointed close", async () => {
-  const options = {
-    agentId: "main",
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-pinned-") },
-  };
+  const options = optionsFor("main");
   const pathname = resolveOpenClawAgentSqlitePath(options);
-  let checks = 0;
-  const open = sqlite.openNodeSqliteDatabase;
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const database = open(...args);
-    if (args[0] === pathname) {
-      const prepare = database.prepare.bind(database);
-      vi.spyOn(database, "prepare").mockImplementation((sql) => {
-        if (/^PRAGMA integrity_check(?:\('sqlite_schema'\))?;?$/.test(sql)) {
-          checks += 1;
-        }
-        return prepare(sql);
-      });
-    }
-    return database;
-  });
+  const statements = observeSql(pathname);
   const worker = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+  const checks = () =>
+    statements.filter((sql) => /^PRAGMA integrity_check(?:\('sqlite_schema'\))?;?$/.test(sql))
+      .length + worker.mock.calls.length;
   const write = (updatedAt: number) =>
     runOpenClawAgentWriteTransaction(
       (database) =>
@@ -269,7 +264,7 @@ it("retains admission through pinned WAL eviction and certifies the final checkp
       options,
     );
   write(1);
-  const reader = open(pathname, { readOnly: true });
+  const reader = sqlite.openNodeSqliteDatabase(pathname, { readOnly: true });
   try {
     reader.exec("BEGIN");
     reader.prepare("SELECT updated_at FROM session_nodes").all();
@@ -284,40 +279,27 @@ it("retains admission through pinned WAL eviction and certifies the final checkp
         });
       });
     }
-    expect(checks + worker.mock.calls.length).toBe(1);
+    expect(checks()).toBe(1);
   } finally {
     reader.close();
   }
   closeOpenClawAgentDatabasesForTest();
   expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);
   openOpenClawAgentDatabase(options);
-  expect(checks + worker.mock.calls.length).toBe(1);
+  expect(checks()).toBe(1);
 });
 
 it("checks once across writes and physical admitted reopens, including after lifecycle reset", async () => {
-  const options = {
-    agentId: "integrity-cache",
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-cache-") },
-  };
+  const options = optionsFor("integrity-cache");
   const pathname = resolveOpenClawAgentSqlitePath(options);
-  const checks: string[] = [];
-  const open = sqlite.openNodeSqliteDatabase;
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const database = open(...args);
-    if (args[0] === pathname) {
-      const prepare = database.prepare.bind(database);
-      vi.spyOn(database, "prepare").mockImplementation((sql) => {
-        if (/^PRAGMA (integrity_check|foreign_key_check)(?:\('sqlite_schema'\))?;$/.test(sql)) {
-          checks.push(sql);
-        }
-        return prepare(sql);
-      });
-    }
-    return database;
-  });
+  const statements = observeSql(pathname);
+  const checks = () =>
+    statements.filter((sql) =>
+      /^PRAGMA (integrity_check|foreign_key_check)(?:\('sqlite_schema'\))?;$/.test(sql),
+    );
   const worker = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
   const first = openOpenClawAgentDatabase(options);
-  expect(checks).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
+  expect(checks()).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
   first.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"value\":42}', 1)");
   for (let iteration = 0; iteration < 2; iteration += 1) {
     closeOpenClawAgentDatabaseByPath(pathname);
@@ -332,25 +314,22 @@ it("checks once across writes and physical admitted reopens, including after lif
     );
     expect(row).toEqual({ state_json: '{"value":42}' });
   }
-  expect(checks).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
+  expect(checks()).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
   expect(worker).not.toHaveBeenCalled();
 
   closeOpenClawAgentDatabasesForTest();
   openOpenClawAgentDatabase(options);
-  expect(checks).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
+  expect(checks()).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
 });
 
 it("refuses an orphan allocated page before admitting a dirty database", async () => {
   const expected = /never used/iu;
-  const options = {
-    agentId: "integrity-pages",
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-pages-") },
-  };
+  const options = optionsFor("integrity-pages");
   const pathname = openOpenClawAgentDatabase(options).path;
   closeOpenClawAgentDatabasesForTest();
   invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
-  const database = sqlite.openNodeSqliteDatabase(pathname);
-  try {
+  {
+    using database = sqlite.openNodeSqliteDatabase(pathname);
     database.enableDefensive?.(false);
     database.exec(`
       CREATE TABLE page_owner_a (value INTEGER);
@@ -375,8 +354,6 @@ it("refuses an orphan allocated page before admitting a dirty database", async (
     expect(String(database.prepare("PRAGMA integrity_check").get()?.integrity_check)).toMatch(
       expected,
     );
-  } finally {
-    database.close();
   }
 
   const admitted = vi.fn();
@@ -390,10 +367,7 @@ it("refuses an orphan allocated page before admitting a dirty database", async (
 });
 
 it("does not lend remembered integrity to another file at the same path", () => {
-  const options = {
-    agentId: "integrity-cache",
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-replacement-") },
-  };
+  const options = optionsFor("integrity-cache");
   const database = openOpenClawAgentDatabase(options);
   closeOpenClawAgentDatabaseByPath(database.path);
   const replacement = `${database.path}.replacement`;
@@ -406,24 +380,22 @@ it("does not lend remembered integrity to another file at the same path", () => 
 });
 
 it("rechecks the media version guard after a validated handle is replaced by a populated v0 store", () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-media-replacement-") };
-  const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+  const options = optionsFor("worker-1");
+  const databasePath = openOpenClawAgentDatabase(options).path;
   expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
 
   fs.copyFileSync(databasePath, `${databasePath}.replacement`);
   fs.renameSync(`${databasePath}.replacement`, databasePath);
-  const { DatabaseSync } = sqlite.requireNodeSqlite();
-  const downgraded = new DatabaseSync(databasePath);
-  try {
+  {
+    const { DatabaseSync } = sqlite.requireNodeSqlite();
+    using downgraded = new DatabaseSync(databasePath);
     downgraded.exec(`
       PRAGMA user_version = 0;
       UPDATE schema_meta SET schema_version = 0 WHERE meta_key = 'primary';
     `);
-  } finally {
-    downgraded.close();
   }
 
-  expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+  expect(() => openOpenClawAgentDatabase(options)).toThrow(
     "run openclaw doctor --fix to migrate persisted media",
   );
 });
@@ -431,8 +403,8 @@ it("rechecks the media version guard after a validated handle is replaced by a p
 it.each(["invalid seal", "foreign lease"] as const)(
   "retains admitted physical proof despite an %s",
   (change) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-integrity-policy-") };
-    const options = { agentId: "policy", env };
+    const options = optionsFor("policy");
+    const { env } = options;
     const original = openOpenClawAgentDatabase(options);
     original.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
     closeOpenClawAgentDatabaseByPath(original.path);
@@ -480,12 +452,12 @@ it.each(["invalid seal", "foreign lease"] as const)(
 );
 
 it("adopts the released quarantine schema without changing its rows or version", () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-integrity-upgrade-") };
+  const { env } = optionsFor("upgraded");
   const storePath = resolveQuarantineStorePath(env);
   const quarantinedPath = path.join(env.OPENCLAW_STATE_DIR, "retained.sqlite");
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  const previous = sqlite.openNodeSqliteDatabase(storePath);
-  try {
+  {
+    using previous = sqlite.openNodeSqliteDatabase(storePath);
     // The quarantine schema shipped in v2026.9.5 has no integrity-receipt table.
     previous.exec(`
       CREATE TABLE quarantined_databases (
@@ -501,8 +473,6 @@ it("adopts the released quarantine schema without changing its rows or version",
     previous
       .prepare("INSERT INTO quarantined_databases VALUES (?, ?, ?, ?, ?, ?)")
       .run(quarantinedPath, "agent", "retained quarantine", 1, "2026.9.5", null);
-  } finally {
-    previous.close();
   }
 
   const database = openOpenClawAgentDatabase({ agentId: "upgraded", env });
@@ -526,8 +496,7 @@ it("adopts the released quarantine schema without changing its rows or version",
 });
 
 it("refuses the first write when its clean-close seal cannot be removed", () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-integrity-dirty-failure-") };
-  const options = { agentId: "policy", env };
+  const options = optionsFor("policy");
   const agent = openOpenClawAgentDatabase(options);
   closeOpenClawAgentDatabaseByPath(agent.path);
   expect(readSqliteDatabaseCleanClose(agent.path)).toBe(true);
