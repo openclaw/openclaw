@@ -112,14 +112,10 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     let listCalls = 0;
     const gatewayClient = createTestGatewayClient(async (method, params) => {
       if (
-        method !== "sessions.create" &&
-        method !== "sessions.list" &&
-        method !== "sessions.patch"
+        !isRecord(params) ||
+        (method !== "sessions.create" && method !== "sessions.list" && method !== "sessions.patch")
       ) {
         throw new Error(`Unexpected request: ${method}`);
-      }
-      if (!isRecord(params)) {
-        throw new Error(`Expected object parameters for ${method}`);
       }
       const response = await directSessionReq(method, params, requestOptions());
       if (!response.ok) {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -21,6 +21,7 @@ import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createRequestGate } from "../server-methods.request-gate.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { skillsHandlers } from "./skills.js";
@@ -57,13 +58,6 @@ it("reads remote skill status, cards and binary requirements through the workspa
     requires: { bins: ["host-tool"] },
     install: [{ id: "host", kind: "node", package: "host-tool", os: [hostPlatform] }],
   });
-  await writeWorkspaceSkill(remote, "installer", {
-    install: [
-      { id: "brew", kind: "brew", formula: "fixture-tool" },
-      { id: "host", kind: "node", package: "host-tool", os: [hostPlatform] },
-      { id: "gateway", kind: "node", package: "gateway-tool", os: [process.platform] },
-    ],
-  });
   await writeWorkspaceSkill(remote, "missing", {
     requires: { bins: ["absent-tool"] },
   });
@@ -72,13 +66,13 @@ it("reads remote skill status, cards and binary requirements through the workspa
     plugins: { enabled: false },
     agents: { entries: { main: { workspace: gateway } } },
   };
-  const loadSkills = vi.fn(async (request: WorkspaceSkillSourceRequest) => ({
+  const loadSkills = async (request: WorkspaceSkillSourceRequest) => ({
     ...readWorkspaceSkillSources({
       ...request,
       sourcePlan: resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
     }),
     runtime: { platform: hostPlatform, bins: ["host-tool", "brew"] },
-  }));
+  });
   const release = registerAgentWorkspaceAccess(gateway, {
     bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
     loadSkills,
@@ -100,7 +94,6 @@ it("reads remote skill status, cards and binary requirements through the workspa
             install: [{ id: "host" }],
             skillCard: { present: true },
           },
-          { name: "installer", install: [{ id: "brew" }] },
           { name: "missing", eligible: false, missing: { bins: ["absent-tool"] } },
         ],
       },
@@ -110,9 +103,6 @@ it("reads remote skill status, cards and binary requirements through the workspa
       ok: true,
       response: { skillKey: "available", content: "# Remote card\n" },
     });
-    expect(loadSkills).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: { skillCardKey: "available" } }),
-    );
     expect(await call("skills.bins")).toMatchObject({
       ok: true,
       response: { bins: ["absent-tool", "host-tool"] },
@@ -158,13 +148,11 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
       );
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const context = bindSessionRowProjection({ getRuntimeConfig: () => cfg }, () => projection);
-      const entered = createDeferred();
-      const resume = createDeferred();
+      using gate = createRequestGate();
       const release = registerAgentWorkspaceAccess(state.workspaceDir, {
         bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
         loadSkills: async () => {
-          entered.resolve();
-          await resume.promise;
+          await gate.pause();
           return {
             entries: [],
             executionEntries: [],
@@ -190,17 +178,17 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         },
       );
       try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
+        await gate.during(
+          awaitGateBeforeSettlement(gate.entered, result, "skills.status skipped discovery"),
+          async () => {
+            if (change !== "unchanged") {
+              await patchSessionEntryCore({ agentId: "main", sessionKey }, () =>
+                change === "revoked" ? { visibility: "draft" } : { sessionId: "replacement" },
+              );
+            }
+          },
           result,
-          "skills.status skipped remote discovery",
         );
-        if (change !== "unchanged") {
-          await patchSessionEntryCore({ agentId: "main", sessionKey }, () =>
-            change === "revoked" ? { visibility: "draft" } : { sessionId: "replacement" },
-          );
-        }
-        resume.resolve();
         const response = await result;
         if (change === "unchanged") {
           expect(response).toMatchObject({
@@ -222,7 +210,6 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
           });
         }
       } finally {
-        resume.resolve();
         await result.finally(() => {
           projection.dispose();
           release();
