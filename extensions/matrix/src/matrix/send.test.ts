@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
+import { parseBuffer } from "music-metadata";
 // Matrix tests cover send plugin behavior.
 import type * as TableRuntime from "openclaw/plugin-sdk/markdown-table-runtime";
 import type * as ChunkRuntime from "openclaw/plugin-sdk/reply-chunking";
@@ -31,6 +32,7 @@ import {
 } from "./send.js";
 import {
   createEncryptedMediaPayload,
+  makeAacTimingFixture,
   makeClient,
   makeEncryptedMediaClient,
   registerMatrixMediaTests,
@@ -52,6 +54,8 @@ const { resolveTextChunkLimitMock, resolveMarkdownTableModeMock } = vi.hoisted((
 const chunkMarkdownTextWithModeMock = vi.fn<
   (text: string, limit?: number, mode?: unknown) => string[]
 >((text) => (text ? [text] : []));
+
+vi.mock("music-metadata", { spy: true });
 
 vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
@@ -431,38 +435,6 @@ registerMatrixMediaTests({
   },
 });
 
-function makeAacTimingFixture(mediaTicks: number, edits: readonly (number | undefined)[]): Buffer {
-  // Build just the MP4 timing and sample-description boxes read by the metadata parser.
-  const timescale = 48_000;
-  function words(...values: number[]) {
-    const buffer = Buffer.alloc(values.length * 4);
-    values.forEach((value, index) => buffer.writeUInt32BE(value, index * 4));
-    return buffer;
-  }
-  function box(type: string, ...parts: Buffer[]) {
-    const payload = Buffer.concat(parts);
-    return Buffer.concat([words(payload.length + 8), Buffer.from(type), payload]);
-  }
-  const movieTicks = Math.max(...edits.map((ticks) => ticks ?? mediaTicks));
-  const mvhd = box("mvhd", words(0, 0, 0, timescale, movieTicks), Buffer.alloc(80));
-  const tracks = edits.map((ticks, index) => {
-    const tkhd = box("tkhd", words(3, 0, 0, index + 1, 0, ticks ?? mediaTicks), Buffer.alloc(60));
-    const edts =
-      ticks === undefined
-        ? Buffer.alloc(0)
-        : box("edts", box("elst", words(0, 1, ticks, 448, 0x00010000)));
-    const mdhd = box("mdhd", words(0, 0, 0, timescale, mediaTicks, 0));
-    const hdlr = box("hdlr", words(0, 0), Buffer.from("soun"), Buffer.alloc(13));
-    const mp4a = box("mp4a", words(0, 1, 0, 0, 0x00010010, 0, timescale * 65536));
-    const stbl = box("stbl", box("stsd", words(0, 1), mp4a));
-    return box("trak", tkhd, edts, box("mdia", mdhd, hdlr, box("minf", stbl)));
-  });
-  return Buffer.concat([
-    box("ftyp", Buffer.from("isom"), words(0), Buffer.from("isom")),
-    box("moov", mvhd, ...tracks),
-  ]);
-}
-
 describe("sendMessageMatrix media", () => {
   it.each([
     { name: "edited AAC audio", mediaTicks: 26_624, edits: [24_000], voice: false, duration: 500 },
@@ -472,7 +444,7 @@ describe("sendMessageMatrix media", () => {
       mediaTicks: 26_624,
       edits: [24_000, 25_200],
       voice: false,
-      duration: 555,
+      duration: 525,
     },
     { name: "unedited AAC", mediaTicks: 14_336, edits: [undefined], voice: false, duration: 299 },
   ])("reports the duration of $name", async ({ mediaTicks, edits, voice, duration }) => {
@@ -491,6 +463,37 @@ describe("sendMessageMatrix media", () => {
     expect(content).toMatchObject({ msgtype: "m.audio", info: { duration } });
     expect(content["org.matrix.msc1767.audio"]).toEqual(voice ? { duration } : undefined);
   });
+
+  it.each([
+    { docType: "matroska", fileName: "clip.mkv", contentType: "video/x-matroska" },
+    { docType: "webm", fileName: "clip.webm", contentType: "video/webm" },
+  ])(
+    "reports the full presentation duration of $docType video",
+    async ({ docType, fileName, contentType }) => {
+      // The parser's block-derived duration coverage lives in music-metadata.
+      vi.mocked(parseBuffer).mockResolvedValueOnce({
+        format: {
+          container: `EBML/${docType}`,
+          duration: 0.04,
+          containerDuration: 0.1,
+          tagTypes: [],
+          trackInfo: [],
+        },
+        native: {},
+        common: {},
+        quality: { warnings: [] },
+      });
+      loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+        buffer: Buffer.from(docType),
+        fileName,
+        contentType,
+        kind: "video",
+      });
+      mediaKindFromMimeMock.mockReturnValue("video");
+      await send("", { mediaUrl: fileName });
+      expect(sentContent()).toMatchObject({ msgtype: "m.video", info: { duration: 100 } });
+    },
+  );
 
   it.each([false, true])(
     "uses the correct image and thumbnail payload (encrypted=%s)",
