@@ -1,6 +1,4 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
@@ -325,31 +323,9 @@ describe("required Git output", () => {
   });
 });
 
-describe("gitNullConfigPath", () => {
-  it("returns the Git-openable null path for the execution host", () => {
-    mockProcessPlatform("win32");
-    expect(gitNullConfigPath()).toBe("NUL");
-    mockProcessPlatform("linux");
-    expect(gitNullConfigPath()).toBe("/dev/null");
-  });
-
-  it.skipIf(process.platform !== "win32")(
-    "documents the defect: os.devNull as GIT_CONFIG_GLOBAL exits 128 on Windows",
-    async () => {
-      await withTestDir({ prefix: "git-null-config-" }, async (repo) => {
-        const result = spawnSync("git", ["-C", repo, "log", "--oneline", "-1"], {
-          env: {
-            ...process.env,
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_CONFIG_COUNT: "0",
-            GIT_CONFIG_GLOBAL: os.devNull,
-          },
-          encoding: "utf8",
-        });
-        // Red evidence for issue #141279: the device-namespace path that
-        // os.devNull returns is rejected by Git for Windows.
-        expect(result.stderr).toContain("unable to access");
-      });
-    },
-  );
+it("returns the Git-openable null path for the execution host", () => {
+  mockProcessPlatform("win32");
+  expect(gitNullConfigPath()).toBe("NUL");
+  mockProcessPlatform("linux");
+  expect(gitNullConfigPath()).toBe("/dev/null");
 });

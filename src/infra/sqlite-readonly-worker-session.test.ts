@@ -119,8 +119,7 @@ it.each([
     }
     child.emit("error", failure);
     await nextTurn();
-    expect(settled.settled).toBe(false);
-    expect(session.notStarted).toBe(false);
+    expect([settled.settled, session.notStarted]).toEqual([false, false]);
     child.emit("close", -1, null);
     const error = await observed;
     expect(session.notStarted).toBe(!spawned);
@@ -149,17 +148,9 @@ it("does not mark a runnable runtime unavailable after an ordinary worker abort"
   expect(readChildRuntimeViability().available).toBe(true);
 });
 
-it("leaves inspection budgeting to the caller that owns the deadline", async () => {
-  const { session, child, readBudget } = createSession();
-  const result = session.run("/fixture/caller-owned.sqlite", { mode: "staging-create" });
-  reply(child, { ok: true, location: "/fixture/staged" });
-  await expect(result).resolves.toBe("/fixture/staged");
-  expect(readBudget).not.toHaveBeenCalled();
-});
-
 it("reuses its child after a well-formed staging refusal", async () => {
   const mode = "staging-create";
-  const { session, child } = createSession();
+  const { session, child, readBudget } = createSession();
   const first = session.run("/fixture/first.sqlite", { mode });
   const observed = first.catch((error: unknown) => error);
   const firstId = requestId(child);
@@ -176,6 +167,7 @@ it("reuses its child after a well-formed staging refusal", async () => {
   expect(secondId).not.toBe(firstId);
   reply(child, { ok: true, location: "/fixture/staged" });
   await expect(second).resolves.toBe("/fixture/staged");
+  expect(readBudget).not.toHaveBeenCalled();
   expect(mock.spawn).toHaveBeenCalledOnce();
   expect(child.kill).not.toHaveBeenCalled();
 });
@@ -245,35 +237,29 @@ it("refuses a run after close without budgeting or sending another request", asy
 });
 
 it("keeps detached staging budget inside a caller-owned deadline", async () => {
-  const timer = vi.spyOn(globalThis, "setTimeout");
-  try {
-    await withSqliteReadOnlyWorkerScope(
-      async () => {
-        const child = new MockChild();
-        mock.spawn.mockReturnValueOnce(child);
-        const session = createScopedSqliteReadOnlyWorker({
-          env: {},
-          cwd: "/fixture",
-          transport: { kind: "native" },
-          retainLifetime: false,
-          retainOnOperationError: true,
-        });
-        sessions.push({ session, child });
-        timer.mockClear();
-        const result = session.run("/fixture/staging", { mode: "staging-create" });
-        const budgeted = timer.mock.calls.some(
-          ([, delay]) => typeof delay === "number" && delay > 0,
-        );
-        reply(child, { ok: true, location: "/fixture/staged" });
-        await expect(result).resolves.toBe("/fixture/staged");
-        expect(budgeted).toBe(true);
-        expect(child.kill).not.toHaveBeenCalled();
-      },
-      { signal: new AbortController().signal, deadlineOwnedByCaller: true },
-    );
-  } finally {
-    timer.mockRestore();
-  }
+  using timer = vi.spyOn(globalThis, "setTimeout");
+  await withSqliteReadOnlyWorkerScope(
+    async () => {
+      const child = new MockChild();
+      mock.spawn.mockReturnValueOnce(child);
+      const session = createScopedSqliteReadOnlyWorker({
+        env: {},
+        cwd: "/fixture",
+        transport: { kind: "native" },
+        retainLifetime: false,
+        retainOnOperationError: true,
+      });
+      sessions.push({ session, child });
+      timer.mockClear();
+      const result = session.run("/fixture/staging", { mode: "staging-create" });
+      const budgeted = timer.mock.calls.some(([, delay]) => typeof delay === "number" && delay > 0);
+      reply(child, { ok: true, location: "/fixture/staged" });
+      await expect(result).resolves.toBe("/fixture/staged");
+      expect(budgeted).toBe(true);
+      expect(child.kill).not.toHaveBeenCalled();
+    },
+    { signal: new AbortController().signal, deadlineOwnedByCaller: true },
+  );
 });
 
 it("captures only read scope and refuses callbacks after owner retirement", async () => {

@@ -43,13 +43,9 @@ function fixture(encoding = "UTF-8") {
     db.exec(`
       PRAGMA encoding = '${encoding}';
       PRAGMA user_version = 26;
-      CREATE TABLE selected (
-        id INTEGER PRIMARY KEY,
-        label TEXT NOT NULL UNIQUE,
-        amount INTEGER NOT NULL,
-        payload BLOB,
-        doubled INTEGER GENERATED ALWAYS AS (amount * 2) STORED
-      ) STRICT;
+      CREATE TABLE selected (id INTEGER PRIMARY KEY, label TEXT NOT NULL UNIQUE,
+        amount INTEGER NOT NULL, payload BLOB,
+        doubled INTEGER GENERATED ALWAYS AS (amount * 2) STORED) STRICT;
       CREATE INDEX selected_amount ON selected(amount) WHERE amount > 0;
       CREATE TABLE untouched (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES selected(id) ON DELETE CASCADE, value TEXT);
       CREATE TRIGGER selected_update AFTER UPDATE ON selected BEGIN
@@ -69,11 +65,11 @@ function fixture(encoding = "UTF-8") {
   return { sourcePath, backupPath };
 }
 
-async function capture(f: ReturnType<typeof fixture>) {
+async function capture(f: ReturnType<typeof fixture>, scope = tables) {
   await createScopedMigrationSnapshot({
     ...f,
     targetPath: f.backupPath,
-    tables,
+    tables: scope,
     beforePublish: () => {},
   });
 }
@@ -279,14 +275,9 @@ it("reports virtual and shadow table scopes before creating an archive", async (
       ScopedMigrationSnapshotUnsupportedError,
     );
   }
-  await expect(
-    createScopedMigrationSnapshot({
-      ...f,
-      targetPath: f.backupPath,
-      tables: ["search"],
-      beforePublish: () => {},
-    }),
-  ).rejects.toBeInstanceOf(ScopedMigrationSnapshotUnsupportedError);
+  await expect(capture(f, ["search"])).rejects.toBeInstanceOf(
+    ScopedMigrationSnapshotUnsupportedError,
+  );
   expect(fs.existsSync(f.backupPath)).toBe(false);
 });
 
@@ -320,13 +311,10 @@ it.each([
   "preserves current undeclared statistics across scoped restore with $encoding",
   async ({ encoding, malformedStat }) => {
     const f = fixture(encoding);
-    const withoutStatistics = tables.filter((name) => !name.startsWith("sqlite_stat"));
-    await createScopedMigrationSnapshot({
-      ...f,
-      targetPath: f.backupPath,
-      tables: withoutStatistics,
-      beforePublish: () => {},
-    });
+    await capture(
+      f,
+      tables.filter((name) => !name.startsWith("sqlite_stat")),
+    );
     mutate(f);
     const readStatistics = (db: DatabaseSync) => {
       return ["sqlite_stat1", "sqlite_stat4"].flatMap((name) => {
