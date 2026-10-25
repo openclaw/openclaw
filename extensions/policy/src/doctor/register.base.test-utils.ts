@@ -24,7 +24,6 @@ import {
   repairCtx,
   runPolicyChecks,
   runPolicyChecksFixture,
-  runDeniedChannelRepair,
   runPolicyRepairCheck,
   setupPolicyDoctorTest,
   teardownPolicyDoctorTest,
@@ -32,6 +31,7 @@ import {
 } from "./register.test-harness.js";
 
 describe("registerPolicyDoctorChecks", () => {
+  const deniedChannelCheckId = "policy/channels-denied-provider";
   beforeEach(setupPolicyDoctorTest);
 
   afterEach(teardownPolicyDoctorTest);
@@ -1080,7 +1080,7 @@ describe("registerPolicyDoctorChecks", () => {
     } satisfies OpenClawConfig;
     const configPath = await writePolicyFixture(createDeniedTelegramPolicy(), null, 2);
 
-    const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
+    const result = await runPolicyRepairCheck(deniedChannelCheckId, repairCtx(configPath, cfg));
 
     expect(result.changes).toEqual(["Disabled channels.telegram.enabled for policy conformance."]);
     expect(result.remainingFindings).toEqual([]);
@@ -1094,7 +1094,7 @@ describe("registerPolicyDoctorChecks", () => {
     } satisfies OpenClawConfig;
     const configPath = await writePolicyFixture(createDeniedTelegramPolicy(), null, 2);
 
-    const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
+    const result = await runPolicyRepairCheck(deniedChannelCheckId, repairCtx(configPath, cfg));
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
@@ -1118,7 +1118,7 @@ describe("registerPolicyDoctorChecks", () => {
       2,
     );
 
-    const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
+    const result = await runPolicyRepairCheck(deniedChannelCheckId, repairCtx(configPath, cfg));
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toContain(

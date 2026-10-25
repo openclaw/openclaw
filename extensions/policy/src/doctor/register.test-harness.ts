@@ -376,18 +376,6 @@ export async function runGlobalPolicyDoctorFixture(cfg: OpenClawConfig, policy: 
   return runDoctorLintChecks(checkContext);
 }
 
-export async function runDeniedChannelRepair(repairCheckCtx: HealthRepairContext) {
-  const check = registerChecks().find((entry) => entry.id === "policy/channels-denied-provider");
-  if (check?.detect === undefined || check.repair === undefined) {
-    throw new Error("policy channel repair check was not registered");
-  }
-  const findings = await check.detect(repairCheckCtx);
-  const result = await check.repair(repairCheckCtx, findings);
-  const config = result.config ?? repairCheckCtx.cfg;
-  const remainingFindings = await check.detect({ ...repairCheckCtx, cfg: config });
-  return { ...result, config, remainingFindings };
-}
-
 export async function runPolicyRepairCheck(checkId: string, repairCheckCtx: HealthRepairContext) {
   const check = registerChecks().find((entry) => entry.id === checkId);
   if (check?.detect === undefined || check.repair === undefined) {
