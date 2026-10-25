@@ -3,12 +3,13 @@ import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { sessionRequest as sessionRpc } from "./hydration-family.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { sessionRpc, sessionRpcHarness, patchReceipt } from "./session-rpc.test-support.ts";
+import { sessionRpcHarness, patchReceipt } from "./session-rpc.test-support.ts";
 
 const key = "agent:main:unread-contract";
 const sessionId = `${key}:session`;

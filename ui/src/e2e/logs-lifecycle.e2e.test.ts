@@ -12,6 +12,7 @@ import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI logs lifecycle",
@@ -65,16 +66,7 @@ suite.define(() => {
         const state = await createOpenClawTestState({
           label: "control-ui-logs-lifecycle",
           layout: "home",
-          env: {
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
-          },
+          env: { ...deviceGatewayEnv },
         });
         fixture = state;
         signal.throwIfAborted();

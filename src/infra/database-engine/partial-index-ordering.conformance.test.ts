@@ -14,6 +14,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { buildApprovalResolutionRef } from "../approval-resolution-ref.js";
 import { acquireStateDatabaseSchemaLease } from "../gateway-state-owner.js";
+import { createPostgresPoolEndpoints, postgresPoolTransferList } from "../postgres-sync/pool.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
 import { captureSqliteDatabaseAdmissions } from "../sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
@@ -131,6 +132,8 @@ async function readJournalPlans(
     turn: new URL("../../node-host/node-worker-turn-store.kernel.ts", import.meta.url).href,
     connection: new URL("../sql-connection.ts", import.meta.url).href,
   };
+  // The eval worker inherits the host pool instead of self-rooting four I/O services.
+  const postgresPool = createPostgresPoolEndpoints();
   let worker: Worker;
   try {
     worker = new Worker(
@@ -203,11 +206,13 @@ async function readJournalPlans(
           stateContext: captureSqliteWorkerStateContext(context),
           admissions: captureSqliteDatabaseAdmissions(),
           port: admission.port,
+          postgresPool,
         },
-        transferList: [admission.port],
+        transferList: [admission.port, ...postgresPoolTransferList(postgresPool)],
       },
     );
   } catch (error) {
+    postgresPoolTransferList(postgresPool).forEach((port) => port.close());
     admission.finish();
     throw error;
   }

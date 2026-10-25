@@ -11,7 +11,13 @@ import {
   readRepositoryGitHubPublicationFixture,
 } from "./github-publication-store.test-support.js";
 import {
+  BRANCH,
+  NEW_HEAD,
+  OLD_HEAD,
+  WORKSPACE_TREE,
   createTestGitHubPublicationRuntime,
+  commandResult,
+  githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   seedLocalPublication,
 } from "./github-publication.test-support.js";
@@ -21,13 +27,13 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 installGitHubPublicationTestHarness();
 afterEach(() => vi.restoreAllMocks());
 
-function createRecoveryRuntime() {
+function createRecoveryRuntime(warn = vi.fn()) {
   return createTestGitHubPublicationRuntime({
     placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
     loadSessionRuntime: async () => {
       throw new Error("transcript reporting unavailable");
     },
-    warn: vi.fn(),
+    warn,
   });
 }
 
@@ -40,6 +46,128 @@ function createRuntime() {
 }
 
 describe("GitHub publication idle recovery", () => {
+  it("backs off an unconfirmed publication after base materialization fails", async () => {
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    seedLocalPublication(openOpenClawStateDatabase(), {
+      requestId: "base-fetch-unconfirmed",
+      status: "publishing",
+    });
+    const transport = githubPublicationTestMocks().runCommand;
+    const original = transport.getMockImplementation()!;
+    transport.mockImplementation(async (argv: string[], ...args: unknown[]) =>
+      argv.includes("fetch")
+        ? {
+            ...commandResult("", 1),
+            stderr: Buffer.from(
+              "fatal: Could not resolve host: https://fixture-token@example.test/repo",
+            ),
+          }
+        : original(argv, ...args),
+    );
+    const warn = vi.fn();
+    const runtime = createRecoveryRuntime(warn);
+    for (let tick = 0; tick < 8; tick++) {
+      await runtime.reconcilePublications();
+    }
+    const calls = transport.mock.calls.map(([argv]) => argv as string[]);
+    expect(calls.filter((argv) => argv.includes("push") || argv.includes("POST"))).toEqual([]);
+    expect(await runtime.coordinator.readAsync("base-fetch-unconfirmed")).toMatchObject({
+      status: "publishing",
+      message: expect.stringContaining("fatal: Could not resolve host"),
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("fatal: Could not resolve host");
+    expect(
+      JSON.stringify(await runtime.coordinator.readAsync("base-fetch-unconfirmed")),
+    ).not.toContain("fixture-token");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("fixture-token");
+    expect(calls.filter((argv) => argv.includes("fetch"))).toHaveLength(1);
+
+    let attempts = 1;
+    for (const waitMs of [60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000, 1_800_000]) {
+      now += waitMs - 1;
+      await runtime.reconcilePublications();
+      expect(warn).toHaveBeenCalledTimes(attempts);
+      now++;
+      await runtime.reconcilePublications();
+      expect(warn).toHaveBeenCalledTimes(++attempts);
+      expect(warn.mock.calls.at(-1)?.[0]).toContain("fatal: Could not resolve host");
+    }
+    expect(transport.mock.calls.filter(([argv]) => argv.includes("fetch"))).toHaveLength(8);
+    expect(
+      transport.mock.calls.filter(([argv]) => argv.includes("push") || argv.includes("POST")),
+    ).toEqual([]);
+
+    // A restart deliberately resets this interim scheduling policy, not the accepted receipt.
+    await runtime.close();
+    const restarted = createRecoveryRuntime(warn);
+    await restarted.reconcilePublications();
+    expect(warn).toHaveBeenCalledTimes(9);
+    expect(await restarted.coordinator.readAsync("base-fetch-unconfirmed")).toMatchObject({
+      status: "publishing",
+    });
+  });
+
+  it("recovers the original publication after a transient fetch failure without another push or PR", async () => {
+    const requestId = "transient-fetch";
+    seedLocalPublication(openOpenClawStateDatabase(), { requestId, status: "publishing" });
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    let unavailable = true;
+    const transport = githubPublicationTestMocks().runCommand;
+    const original = transport.getMockImplementation()!;
+    const url = "https://github.com/openclaw/openclaw/pull/125200";
+    transport.mockImplementation(async (argv: string[], ...args: unknown[]) => {
+      if (argv.includes("fetch") && unavailable) {
+        return commandResult("", 1);
+      }
+      if (argv.includes("--format=%H%n%T%n%P%n%B")) {
+        return commandResult(
+          `${NEW_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nResume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\nOpenClaw-Publication: ${requestId}\n`,
+        );
+      }
+      if (argv.includes("ls-remote")) {
+        return commandResult(`${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
+      }
+      if (argv.includes("state=all")) {
+        return commandResult(
+          JSON.stringify([
+            {
+              url,
+              userId: 42,
+              state: "open",
+              body: `<!-- openclaw-publication:${requestId} -->`,
+              headSha: NEW_HEAD,
+              headRef: BRANCH,
+              baseRef: "main",
+            },
+          ]),
+        );
+      }
+      return original(argv, ...args);
+    });
+    const runtime = createRecoveryRuntime();
+    await runtime.reconcilePublications();
+    unavailable = false;
+    await runtime.reconcilePublications();
+    expect(await runtime.coordinator.readAsync(requestId)).toMatchObject({ status: "publishing" });
+    now += 60_000;
+    await runtime.reconcilePublications();
+    expect(await runtime.coordinator.readAsync(requestId)).toMatchObject({
+      requestId,
+      status: "published",
+      url,
+      headCommit: NEW_HEAD,
+    });
+    now += 3_600_000;
+    await runtime.reconcilePublications();
+    expect(transport.mock.calls.filter(([argv]) => argv.includes("fetch"))).toHaveLength(2);
+    expect(
+      transport.mock.calls.filter(([argv]) => argv.includes("push") || argv.includes("POST")),
+    ).toEqual([]);
+  });
+
   it("reads pending repository requests once during empty startup and still reads unreported results", async () => {
     const runtime = createRecoveryRuntime();
     const repositoryReads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");

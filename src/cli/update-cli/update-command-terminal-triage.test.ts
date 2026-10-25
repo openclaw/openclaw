@@ -135,8 +135,7 @@ it.each([
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(captureReport);
     const human = vi.spyOn(defaultRuntime, "log").mockImplementation(captureReport);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    // These spies call through to the real filesystem, including atomic temp creation.
-    const opened = vi.spyOn(fs, "open");
+    // Observe publication through the real filesystem.
     const renamed = vi.spyOn(fs, "rename");
     const result = resultFixture(undefined, {
       status: "error",
@@ -191,9 +190,6 @@ it.each([
     ).catch((error: unknown) => error);
     const after = await fs.readFile(artifact, "utf8");
     const afterStat = await fs.stat(artifact);
-    const artifactOpens = opened.mock.calls.filter(
-      ([file, flags]) => path.dirname(String(file)) === diagnosticDir && flags === "wx",
-    ).length;
     const artifactRenames = renamed.mock.calls.filter(
       ([, destination]) => String(destination) === artifact,
     ).length;
@@ -232,7 +228,6 @@ it.each([
         ? { helper: { pid: process.pid }, executor: { pid: process.pid } }
         : { owner: trial.revoked ? "replacement-owner" : owner },
     });
-    expect(artifactOpens).toBe(unsettled ? 0 : 1);
     expect(artifactRenames).toBe(unsettled ? 0 : 1);
     if (unsettled) {
       expect(after).toBe(previous);

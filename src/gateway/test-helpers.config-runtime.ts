@@ -49,11 +49,10 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
     ? (baseConfig.bindings as AgentBinding[])
     : undefined;
 
-  const overrideChannels =
-    testState.channelsConfig && typeof testState.channelsConfig === "object"
-      ? { ...testState.channelsConfig }
-      : {};
-  const mergedChannels = { ...asNonArrayRecord(baseConfig.channels), ...overrideChannels };
+  const mergedChannels = {
+    ...asNonArrayRecord(baseConfig.channels),
+    ...testState.channelsConfig,
+  };
   if (testState.allowFrom !== undefined) {
     mergedChannels.whatsapp = {
       ...asNonArrayRecord(mergedChannels.whatsapp),
@@ -106,12 +105,9 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
 
 export function loadGatewayTestConfig(): OpenClawConfig {
   const configPath = resolveConfigPath();
-  let fileConfig: Record<string, unknown> = {};
+  let fileConfig: Record<string, unknown>;
   try {
-    if (fsSync.existsSync(configPath)) {
-      const raw = fsSync.readFileSync(configPath, "utf-8");
-      fileConfig = JSON.parse(raw) as Record<string, unknown>;
-    }
+    fileConfig = JSON.parse(fsSync.readFileSync(configPath, "utf-8")) as Record<string, unknown>;
   } catch {
     fileConfig = {};
   }
