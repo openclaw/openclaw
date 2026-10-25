@@ -46,7 +46,7 @@ export function createWorkerWorkspaceQuiescence(params: {
         argv: nativeWatchdog
           ? [NODE_WORKSPACE_QUIESCENCE_COMMAND, remoteWorkspaceDir]
           : windowsOnlyAbsolute && operation.action === "acquire"
-            ? legacyWindowsWorkspaceQuiescenceAcquireArgv(remoteWorkspaceDir, operation)
+            ? legacyWindowsWorkspaceQuiescenceAcquireArgv(remoteWorkspaceDir, operation, hostMode)
             : workspaceQuiescenceArgv(remoteWorkspaceDir, operation, hostMode),
         ...(nativeWatchdog ? { quiescence: operation } : { legacyQuiescence: true }),
       });

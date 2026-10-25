@@ -709,11 +709,12 @@ export function workspaceQuiescenceArgv(
 export function legacyWindowsWorkspaceQuiescenceAcquireArgv(
   root: string,
   operation: Extract<NodeWorkerWorkspaceQuiescenceInput, { action: "acquire" }>,
+  hostMode: "shared-host" | "dedicated",
 ): string[] {
   return [
     "node",
     "-e",
     REMOTE_WINDOWS_WORKSPACE_QUIESCE_JS,
-    ...workspaceQuiescenceArguments(root, operation, "shared-host"),
+    ...workspaceQuiescenceArguments(root, operation, hostMode),
   ];
 }

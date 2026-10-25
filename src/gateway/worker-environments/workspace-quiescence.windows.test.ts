@@ -27,8 +27,8 @@ async function fixture() {
     runCommandWithTimeout(
       [
         process.execPath,
-        ...(input.action === "acquire" && mode === "shared-host"
-          ? legacyWindowsWorkspaceQuiescenceAcquireArgv(workspace, input)
+        ...(input.action === "acquire"
+          ? legacyWindowsWorkspaceQuiescenceAcquireArgv(workspace, input, mode)
           : workspaceQuiescenceArgv(workspace, input, mode)
         ).slice(1),
       ],
