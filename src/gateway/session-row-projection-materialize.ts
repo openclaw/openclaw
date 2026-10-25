@@ -9,6 +9,10 @@ import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  recordSessionRowMaterialization,
+  recordSessionRowMaterializationDifference,
+} from "../infra/gateway-work-metrics.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -323,13 +327,24 @@ export function readResidentSessionRow(
       ? new Set(members)
       : row.membership;
   const next = materializeSessionRow(inputs);
-  const materialized =
+  const previous = row.materialized;
+  const deepCompared =
     membership === row.membership &&
-    row.materialized?.source.entry === row.entry &&
-    row.materialized.source.cfg === cfg &&
-    isDeepStrictEqual(row.materialized, next)
-      ? row.materialized
-      : next;
+    previous?.source.entry === row.entry &&
+    previous.source.cfg === cfg;
+  const materialized = deepCompared && isDeepStrictEqual(previous, next) ? previous : next;
+  if (
+    recordSessionRowMaterialization(
+      !previous ? "created" : materialized === previous ? "reused" : "rebuilt",
+      deepCompared,
+    ) &&
+    previous
+  ) {
+    const field = (Object.keys(next.source) as (keyof typeof next.source)[]).find(
+      (key) => !isDeepStrictEqual(previous.source[key], next.source[key]),
+    );
+    recordSessionRowMaterializationDifference(field ?? "row-or-membership");
+  }
   // Row preparation may populate the metadata used by automatic utility policy.
   let activitySummaryEnabled: boolean | undefined;
   if (row.entry.sessionId && !row.entry.initializationPending) {
