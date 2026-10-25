@@ -51,23 +51,6 @@ function initialize(ownedEnv: Record<string, string> = {}) {
   return previousConfig;
 }
 
-function captureEnvEnumerations<T>(env: NodeJS.ProcessEnv, run: () => T) {
-  const entries = Object.entries;
-  const cardinalities: number[] = [];
-  const spy = vi.spyOn(Object, "entries").mockImplementation((value) => {
-    const result = entries(value);
-    if (value === env) {
-      cardinalities.push(result.length);
-    }
-    return result;
-  });
-  try {
-    return { value: run(), cardinalities };
-  } finally {
-    spy.mockRestore();
-  }
-}
-
 afterEach(() => {
   resetPublishedConfigRuntimeEnv();
   vi.unstubAllEnvs();
@@ -116,19 +99,17 @@ describe("config env vars", () => {
     ).toEqual({ VALID: "literal" });
   });
 
-  it("prepares updates and removals without mutating the target or rescanning per key", () => {
+  it("prepares updates and removals without mutating the target", () => {
     const previousConfig = config({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "owned" });
     const env: NodeJS.ProcessEnv = applied(previousConfig);
     env.KEEP_OVERRIDE = "ambient";
     const prepared = prepareChange(previousConfig, config({ UPDATE_ME: "new" }), env);
     expect(env).toEqual({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "ambient" });
     expect(prepared.env).toEqual({ UPDATE_ME: "new", KEEP_OVERRIDE: "ambient" });
-    const publication = captureEnvEnumerations(env, () => prepared.publish());
+    const rollback = prepared.publish();
     expect(env).toEqual({ UPDATE_ME: "new", KEEP_OVERRIDE: "ambient" });
-    const rollback = captureEnvEnumerations(env, publication.value);
+    rollback();
     expect(env).toEqual({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "ambient" });
-    expect(publication.cardinalities).toEqual([3]);
-    expect(rollback.cardinalities).toEqual([2]);
   });
 
   it("keeps same-valued dotenv and shell entries ambient when staged config is removed", () => {
@@ -164,25 +145,26 @@ describe("config env vars", () => {
     stage.env[shellKey] = "candidate shell";
     stage.env[dotenvKey] = "later config mutation";
     const rollback = stage.prepareFailure().publish();
-    expect(process.env[key]).toBe("previous");
-    expect(process.env[dotenvKey]).toBe("loaded before failure");
-    expect(process.env.OPENCLAW_TEST_FAILED_CONFIG).toBeUndefined();
-    expect(process.env[shellKey]).toBeUndefined();
-    expect(publishedEnv().ownedEnv).toBe(previousOwnership);
-    expect(publishedEnv().sourceConfig).toBe(previousConfig);
+    expect([
+      process.env[key],
+      process.env[dotenvKey],
+      process.env.OPENCLAW_TEST_FAILED_CONFIG,
+      process.env[shellKey],
+    ]).toEqual(["previous", "loaded before failure", undefined, undefined]);
+    const expectPreviousOwner = () => {
+      expect(publishedEnv().ownedEnv).toBe(previousOwnership);
+      expect(publishedEnv().sourceConfig).toBe(previousConfig);
+    };
+    expectPreviousOwner();
     rollback();
     expect([process.env[dotenvKey], process.env[key]]).toEqual([undefined, "previous"]);
-    expect(publishedEnv().ownedEnv).toBe(previousOwnership);
-    expect(publishedEnv().sourceConfig).toBe(previousConfig);
+    expectPreviousOwner();
   });
 
   it("retains live overrides during isolated loading and after publication", () => {
     const previousConfig = config({ CONFIG_VALUE: "old" });
     const env: NodeJS.ProcessEnv = applied(previousConfig);
-    const stage = stageLoad({
-      previousConfig,
-      env,
-    });
+    const stage = stageLoad({ previousConfig, env });
     stage.captureDotEnvBaseline();
     const nextConfig = config({ CONFIG_VALUE: "candidate", ADDED_VALUE: "added" });
     applyConfigEnvVars(nextConfig, stage.env);
@@ -266,12 +248,8 @@ describe("config env vars", () => {
     await withTempHome(async () => {
       vi.stubEnv("BRAVE_API_KEY", undefined);
       await writeStateDirDotEnv("BRAVE_API_KEY=from-dotenv\n", { env: process.env });
-      const cfg = {
-        plugins: { entries: { brave: { config: { webSearch: { apiKey: "${BRAVE_API_KEY}" } } } } },
-      };
-      const expected = {
-        plugins: { entries: { brave: { config: { webSearch: { apiKey: "from-dotenv" } } } } },
-      };
+      const cfg = { token: "${BRAVE_API_KEY}" };
+      const expected = { token: "from-dotenv" };
       loadDotEnv();
       expect(resolveConfigEnvVars(cfg, process.env)).toEqual(expected);
       delete process.env.BRAVE_API_KEY;

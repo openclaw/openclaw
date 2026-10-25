@@ -139,9 +139,7 @@ async function rejectedReader(change: string, native: boolean) {
         env[originalKey] = "same";
         expect(env[ownedKey]).toBe("same");
       }
-      let produced:
-        | { key: string | undefined; value: string | undefined; base: string | undefined }
-        | undefined;
+      let produced: (string | undefined)[] | undefined;
       const io = snapshotIO({
         configPath,
         env,
@@ -149,11 +147,11 @@ async function rejectedReader(change: string, native: boolean) {
         measure: async (name, run) => {
           const result = await run();
           if (name === "config.snapshot.read.legacy-issues") {
-            produced = {
-              key: Object.keys(env).find((key) => key.toUpperCase() === ownedKey),
-              value: env[originalKey],
-              base: createConfigRuntimeEnvBase({ env: cfg.env }, env)[ownedKey],
-            };
+            produced = [
+              Object.keys(env).find((key) => key.toUpperCase() === ownedKey),
+              env[originalKey],
+              createConfigRuntimeEnvBase({ env: cfg.env }, env)[ownedKey],
+            ];
             env[native ? addedKey.toLowerCase() : addedKey] = "new-owner";
             delete env[native ? deletedKey.toLowerCase() : deletedKey];
             changeOwned(env, originalKey, change);
@@ -162,10 +160,7 @@ async function rejectedReader(change: string, native: boolean) {
         },
       });
       const { snapshot } = await io.readConfigFileSnapshotForWrite();
-      expect({ valid: snapshot.valid, produced }).toEqual({
-        valid: false,
-        produced: { key: ownedKey, value, base: undefined },
-      });
+      expect([snapshot.valid, produced]).toEqual([false, [ownedKey, value, undefined]]);
       const expected = expectedOwned(change, lower);
       const base = createConfigRuntimeEnvBase({ env: cfg.env }, env);
       expect([env[ownedKey], env[originalKey], base[ownedKey]]).toEqual([
@@ -340,9 +335,7 @@ describe("config read producer receipts", () => {
         },
       });
       expect((await io.readConfigFileSnapshot()).valid).toBe(false);
-      expect(env.FIRST).toBeUndefined();
-      expect(env.BLOCKED).toBeUndefined();
-      expect(env.FOREIGN).toBe("preserved");
+      expect([env.FIRST, env.BLOCKED, env.FOREIGN]).toEqual([undefined, undefined, "preserved"]);
     });
   });
 });

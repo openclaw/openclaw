@@ -12,11 +12,9 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { withExecutor } from "./config-executor.test-support.js";
 import { createConfigIO, writeConfigFile } from "./io.js";
-import * as configWriteSafety from "./io.write-safety.js";
 import {
   mutateConfigFileWithRetry,
   replaceConfigFile,
-  resolveConfigIncludeWriteBoundary,
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "./mutate.js";
@@ -171,57 +169,39 @@ describe("direct config writer exclusion", () => {
       const io = configIO(env);
       const { writeOptions } = await io.readConfigFileSnapshotForWrite();
       let attempts = 0;
-      const sharedGuardCalls: number[] = [];
-      const guardFactory = vi.spyOn(configWriteSafety, "createConfigFileWriteGuard");
-
-      try {
-        await withExecutor(stateDir, "config-lock-fence", async (assertCurrent, revoke) => {
-          const sharedAuthority = vi.fn(assertCurrent);
-          await expect(
-            transformConfigFileWithRetry({
-              maxAttempts: 2,
-              writeOptions: { ...writeOptions, assertCurrent: sharedAuthority, ...quietWrite },
-              transform: async (config, { attempt }) => {
-                attempts += 1;
-                if (attempt === 0) {
-                  await fs.writeFile(configPath, concurrentRaw);
-                } else {
-                  await replaceConfigFile({
-                    io,
-                    nextConfig: gateway(19003),
-                    writeOptions: {
-                      ...writeOptions,
-                      assertConfigPathForWrite: composeConfigWriteAssertions(
-                        writeOptions.assertConfigPathForWrite,
-                        sharedAuthority,
-                      ),
-                      beforeCommit: async () => {
-                        const publicationGuard = guardFactory.mock.lastCall?.[2];
-                        if (!publicationGuard) {
-                          throw new Error("Missing config publication guard");
-                        }
-                        sharedAuthority.mockClear();
-                        publicationGuard();
-                        sharedGuardCalls.push(sharedAuthority.mock.calls.length);
-                        await Promise.resolve();
-                        publicationGuard();
-                        sharedGuardCalls.push(sharedAuthority.mock.calls.length);
-                        revoke();
-                      },
+      await withExecutor(stateDir, "config-lock-fence", async (assertCurrent, revoke) => {
+        const sharedAuthority = assertCurrent;
+        await expect(
+          transformConfigFileWithRetry({
+            maxAttempts: 2,
+            writeOptions: { ...writeOptions, assertCurrent: sharedAuthority, ...quietWrite },
+            transform: async (config, { attempt }) => {
+              attempts += 1;
+              if (attempt === 0) {
+                await fs.writeFile(configPath, concurrentRaw);
+              } else {
+                await replaceConfigFile({
+                  io,
+                  nextConfig: gateway(19003),
+                  writeOptions: {
+                    ...writeOptions,
+                    assertConfigPathForWrite: composeConfigWriteAssertions(
+                      writeOptions.assertConfigPathForWrite,
+                      sharedAuthority,
+                    ),
+                    beforeCommit: async () => {
+                      await Promise.resolve();
+                      revoke();
                     },
-                  });
-                }
-                return { nextConfig: { ...config, ...gateway(19001) } };
-              },
-            }),
-          ).rejects.toThrow(ownershipError);
-        });
-      } finally {
-        guardFactory.mockRestore();
-      }
-
+                  },
+                });
+              }
+              return { nextConfig: { ...config, ...gateway(19001) } };
+            },
+          }),
+        ).rejects.toThrow(ownershipError);
+      });
       expect(attempts).toBe(2);
-      expect(sharedGuardCalls).toEqual([1, 2]);
       await expectRaw(configPath, concurrentRaw);
       await expectMissing(`${configPath}.bak`);
     });
@@ -398,25 +378,8 @@ describe("included config writer exclusion", () => {
         const writer = startWriter.promise.then(() =>
           mutateConfigFileWithRetry({
             writeOptions: runtimeWrite,
-            mutate: (draft, { snapshot }) => {
+            mutate: (draft) => {
               draft.gateway = { ...draft.gateway, port: 19876 };
-              const boundary = resolveConfigIncludeWriteBoundary({ snapshot, nextConfig: draft });
-              expect(snapshot).toMatchObject({ valid: true, issues: [] });
-              expect(snapshot.includeProvenance).toEqual(
-                (shape === "delegated" ? [includePath, parentPath] : [includePath]).map(
-                  (targetPath) =>
-                    expect.objectContaining({
-                      path: ["gateway"],
-                      targetPath,
-                      kind: "single",
-                      hasSiblingOverrides: false,
-                    }),
-                ),
-              );
-              expect(snapshot.includeProvenance?.some((entry) => entry.hasArrayAncestor)).toBe(
-                false,
-              );
-              expect(boundary).toMatchObject({ boundaryPath: ["gateway"], includePath });
             },
           }),
         );

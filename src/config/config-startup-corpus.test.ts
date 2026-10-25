@@ -301,6 +301,21 @@ describe("operator config startup corpus", () => {
 
       for (const agentId of agentIds) {
         const workspaceDir = path.join(home, "workspaces", agentId);
+        if (name === "generic-github-token.json") {
+          await using staticLease = await acquireReadOnlyPreparedModelRuntime(
+            {
+              config,
+              agentId,
+              agentDir: path.join(stateDir, "agents", agentId, "agent"),
+              workspaceDir,
+              env,
+              readOnly: true,
+              skipCredentials: true,
+            },
+            { catalogMode: "static", pluginMetadataSnapshot: startup.pluginMetadataSnapshot },
+          );
+          expect(staticLease.snapshot.modelCatalog.entries).toEqual([]);
+        }
         const lease = await acquireReadOnlyPreparedModelRuntime(
           {
             config,

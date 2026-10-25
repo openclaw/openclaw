@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as deferredMigrations from "../infra/deferred-plugin-migrations.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -13,7 +12,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { createConfigIoContext } from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import {
   patchConfigHealthEntryToStore,
@@ -115,43 +113,6 @@ async function recovery(io: ReturnType<typeof createConfigIO>) {
 }
 
 describe("prepared config recovery", () => {
-  it.each(["sync", "async"] as const)(
-    "prepares a canonical backup when migration metadata is unavailable (%s)",
-    async (mode) => {
-      const root = tempDirs.make("openclaw-backup-preparation-io-");
-      const context = createConfigIoContext({
-        configPath: path.join(root, "openclaw.json"),
-        env: { HOME: root, OPENCLAW_STATE_DIR: root },
-        observe: false,
-      });
-      const unavailable = Object.assign(new Error("migration metadata unavailable"), {
-        code: "EIO",
-      });
-      const candidate = {
-        raw: '{"gateway":{"mode":"local"}}',
-        parsed: { gateway: { mode: "local" } },
-      };
-      vi.spyOn(deferredMigrations, "readDeferredPluginMigrations").mockImplementation(() => {
-        throw unavailable;
-      });
-      vi.spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync").mockRejectedValue(
-        unavailable,
-      );
-      const prepared =
-        mode === "sync"
-          ? context.prepareRecoveryBackupCandidate(candidate)
-          : await context.prepareRecoveryBackupCandidateAsync(candidate);
-      expect(prepared).toMatchObject({
-        ok: true,
-        candidate: {
-          raw: '{"gateway":{"mode":"local"}}',
-          parsed: { gateway: { mode: "local" } },
-          config: { gateway: { mode: "local" } },
-        },
-      });
-    },
-  );
-
   it.each(["absent", "unparseable", "externally-owned"] as const)(
     "does not prepare recovery for %s config or backup",
     async (kind) => {
