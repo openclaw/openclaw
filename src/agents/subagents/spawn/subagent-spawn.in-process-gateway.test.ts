@@ -61,10 +61,7 @@ import { withParentExecutionIdentity } from "./execution-identity-spawn-context.
 import "./subagent-spawn-model.mocks.shared.js";
 import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
-import {
-  createConfigOverride,
-  createThinkingProvenanceCases,
-} from "./subagent-spawn.test-helpers.js";
+import { createConfigOverride } from "./subagent-spawn.test-helpers.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
 vi.mock("../../runtime-plugins.js", () => ({
@@ -122,8 +119,6 @@ function parentAuthority() {
   return { parentToken, operationalRunInstance, authority };
 }
 
-const thinkingCases = createThinkingProvenanceCases();
-
 const waitForAssertion = (assertion: () => void) =>
   vi.waitFor(assertion, { timeout: 2_000, interval: 10 });
 
@@ -176,53 +171,48 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     }
   });
 
-  it.each(thinkingCases)(
-    "%s",
-    async (name, context, saved, expected, thinking, thinkingDefault) => {
-      await writeFile(
-        path.join(stateDir, "openclaw.json"),
-        JSON.stringify(
-          createConfigOverride({
-            agents: {
-              defaults: { workspace: stateDir, ...(thinkingDefault ? { thinkingDefault } : {}) },
-              entries: { main: { workspace: stateDir } },
-            },
-          }),
-        ),
-      );
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      await captureRuntimeConfigAsyncReader()();
-      if (saved !== undefined) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: "agent:main:main" },
-          {
-            sessionId: "thinking-parent",
-            thinkingLevel: saved,
+  it("persists explicit active effort through the in-process Gateway", async () => {
+    // Preference precedence is exhaustively covered in subagent-spawn.thinking-provenance.test.ts.
+    await writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify(
+        createConfigOverride({
+          agents: {
+            defaults: { workspace: stateDir },
+            entries: { main: { workspace: stateDir } },
           },
-        );
-      }
-      subagentSpawnTesting.setDepsForTest({
-        dispatchGatewayMethodInProcess: async <T>(
-          method: string,
-          params: Record<string, unknown>,
-        ) => {
-          expect(method).toBe("agent");
-          return { runId: params.idempotencyKey, status: "accepted" } as T;
-        },
-      });
-      const result = await inGateway(() =>
-        spawnSubagentDirect(
-          { task: `provenance: ${name}`, thinking },
-          { agentSessionKey: "agent:main:main", ...context },
-        ),
-      );
-      expect(result.status).toBe("accepted");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: result.childSessionKey! })?.thinkingLevel,
-      ).toBe(expected);
-    },
-  );
+        }),
+      ),
+    );
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    await captureRuntimeConfigAsyncReader()();
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:main" },
+      { sessionId: "thinking-parent", thinkingLevel: "medium" },
+    );
+    subagentSpawnTesting.setDepsForTest({
+      dispatchGatewayMethodInProcess: async <T>(
+        method: string,
+        params: Record<string, unknown>,
+      ) => {
+        expect(method).toBe("agent");
+        return { runId: params.idempotencyKey, status: "accepted" } as T;
+      },
+    });
+    const context = {
+      agentSessionKey: "agent:main:main",
+      requesterThinkingLevel: "ultra" as const,
+      requesterThinkingExplicit: true,
+    };
+    const result = await inGateway(() =>
+      spawnSubagentDirect({ task: "persist active thinking" }, context),
+    );
+    expect(result.status).toBe("accepted");
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: result.childSessionKey! })?.thinkingLevel,
+    ).toBe("ultra");
+  });
 
   it("launches queued collectors after the parent admission lease is released", async ({
     signal,
