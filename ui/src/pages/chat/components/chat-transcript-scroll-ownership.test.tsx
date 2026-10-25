@@ -14,6 +14,7 @@ import {
   mountTestTranscript,
   numberedContentRows,
   render,
+  renderReadyRows,
 } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript as createTranscript } from "./chat-transcript-controller.ts";
 import {
@@ -166,15 +167,9 @@ it.each(["resize clamp", "native return"] as const)(
       if (updateRequested) {
         updateRequested = false;
         render(
-          transcript.renderSession(`agent:main:composer-reader-${movement}`, (session) => {
-            session.setContentReady(true);
-            return session.render(
-              rows,
-              (row) => (row.kind === "content" ? row.content : null),
-              null,
-              false,
-            );
-          }),
+          transcript.renderSession(`agent:main:composer-reader-${movement}`, (session) =>
+            renderReadyRows(session, rows),
+          ),
           container,
         );
         transcript.update();

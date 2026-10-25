@@ -918,6 +918,31 @@ describe("canonical session message recovery", () => {
 });
 
 describe("chat state render lifecycle", () => {
+  it("publishes activity for stream boundaries without republishing continuing text", () => {
+    const changed = vi.fn();
+    const controller = createChatState<ChatPageHost>({ awaitDomCommit: async () => true }, changed);
+    onTestFinished(controller.dispose);
+    const state = createPageState(
+      createChatPageStateContext(),
+      controller.createRenderLifecycle(),
+      { dispatchEvent: () => true },
+    );
+    controller.attach(state);
+    changed.mockClear();
+    const run = chatRunPresentation(state);
+
+    run.batch(() => (state.chatStream = "First"));
+    expect(changed).toHaveBeenCalledOnce();
+    changed.mockClear();
+
+    run.batch(() => (state.chatStream = "First and second"));
+    expect(state.chatStream).toBe("First and second");
+    expect(changed).not.toHaveBeenCalled();
+
+    run.batch(() => (state.chatStream = null));
+    expect(changed).toHaveBeenCalledOnce();
+  });
+
   it("publishes queued-edit retention without rendering and preserves the edit token", () => {
     const changed = vi.fn();
     const awaitDomCommit = vi.fn(async () => true);

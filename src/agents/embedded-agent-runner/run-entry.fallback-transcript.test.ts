@@ -18,7 +18,7 @@ import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { FailoverError } from "../failover-error.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
-import { resetStickyRateLimitFallbacksForTest } from "../model-fallback-sticky.js";
+import { resetStickyRateLimitFallbacksForTest } from "../model-fallback-sticky.test-support.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 import { createDirectHarness, makeResult } from "./run-entry.test-support.js";
 

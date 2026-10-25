@@ -27,15 +27,25 @@ export function LoadingSkeleton() {
 }
 
 export function ConnectingSplash(props: { status?: string }) {
+  const basePath = document.documentElement.dataset.openclawControlUiBasePath ?? "";
+  const pathname = location.pathname.slice(basePath.length) || "/";
+  // The document's inline boot frame uses this same data-free route selection.
+  const route = /^\/new\/?$/.test(pathname)
+    ? "new"
+    : /^\/(?:settings\/)?sessions\/?$/.test(pathname)
+      ? "sessions"
+      : /^\/(?:automations|cron)\/?$/.test(pathname)
+        ? "cron"
+        : /^\/settings(?:\/|$)/.test(pathname)
+          ? "settings"
+          : /^\/chat(?:\/|$)/.test(pathname) && !new URLSearchParams(location.search).has("catalog")
+            ? "chat"
+            : "other";
   return (
     <main
       class="connect-splash connect-splash--skeleton"
-      data-chat={
-        /\/chat(?:\/|$)/.test(location.pathname) &&
-        !new URLSearchParams(location.search).has("catalog")
-          ? ""
-          : undefined
-      }
+      data-route={route}
+      data-chat={route === "chat" ? "" : undefined}
       role="status"
       aria-live="polite"
       aria-label={props.status ?? t("common.loading")}

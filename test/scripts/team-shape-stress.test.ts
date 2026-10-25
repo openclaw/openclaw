@@ -16,6 +16,47 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const executeFile = promisify(execFile);
 
+it("loads source worker telemetry through built package exports without redirecting built imports", async () => {
+  const root = temporary.make("team-stress-worker-telemetry-");
+  const dist = path.join(root, "dist");
+  fs.mkdirSync(dist);
+  for (const [name, subpath, symbol] of [
+    ["normalization-core", "record-coerce", "isRecord"],
+    ["worker-runtime", "lifecycle", "createRetainedOperation"],
+  ]) {
+    const pkg = path.join(root, "packages", name!);
+    fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkg, "package.json"),
+      JSON.stringify({
+        name: `@openclaw/${name}`,
+        type: "module",
+        exports: { [`./${subpath}`]: `./dist/${subpath}.mjs` },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pkg, "dist", `${subpath}.mjs`),
+      `export function ${symbol}() { throw new Error("No workers should need this operation"); }`,
+    );
+  }
+  const worker = new URL("../../src/infra/worker-cpu.ts", import.meta.url);
+  const loader = new URL("../../scripts/perf/team-shape-stress-loader.mjs", import.meta.url);
+  const entry = path.join(dist, "entry.mjs");
+  fs.writeFileSync(
+    entry,
+    `const {sampleTrackedWorkerMemory} = await import(${JSON.stringify(worker.href)});
+     const builtImport = await import("@openclaw/normalization-core/record-coerce")
+       .then(() => "incorrectly redirected", error => error.code);
+     console.log(JSON.stringify({workers: sampleTrackedWorkerMemory().workerCount, builtImport}));`,
+  );
+  const { stdout } = await executeFile(
+    resolveTestNodeExecPath(),
+    ["--import", loader.href, entry],
+    { cwd: root, timeout: 15_000 },
+  );
+  expect(JSON.parse(stdout)).toEqual({ workers: 0, builtImport: "ERR_MODULE_NOT_FOUND" });
+});
+
 it("loads each built entry's own package exports despite controller source aliases", async () => {
   const root = temporary.make("team-stress-build-roots-");
   fs.writeFileSync(path.join(root, "source.mjs"), 'export default "controller-source";');

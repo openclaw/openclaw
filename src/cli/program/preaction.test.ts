@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { createNonExitingRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import {
@@ -19,13 +20,7 @@ const prepareGatewayMock = vi.fn(async () => true);
 const recheckGatewayMock = vi.fn(async () => true);
 const reloadGatewayEnvMock = vi.fn(async () => true);
 
-const runtimeMock = {
-  log: vi.fn(),
-  error: vi.fn(),
-  writeStdout: vi.fn(),
-  writeJson: vi.fn(),
-  exit: vi.fn(),
-};
+const runtimeMock = vi.mocked(createNonExitingRuntimeEnv());
 
 // mock-isolation: Capture startup effects without changing process-wide logging or terminal output.
 vi.mock("../../globals.js", () => ({ setVerbose: setVerboseMock }));

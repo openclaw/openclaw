@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 272544,
-  "reason": "PR #182993: bounded formatting cadence and no per-delta geometry reads cut standard streaming script CPU 20.8% and burst CPU 16.5% over 20 interleaved base/A-A/head triplets. Coordinator accepted the measured CPU/bytes tradeoff. After merging #183042, same-host builds measure startup 272577 to 272544 B, Chat +702 B (54 B within build variance of the approved +648 B), and New Session +19 B, with unchanged requests and CSS. Ratchet to measured integrated head.",
+  "startupJsGzipBytes": 273752,
+  "reason": "PR #183553 keeps the inline-view contract in the shared boot group, avoiding Chat evaluation on New Session. Original interleaved measurements reduced local script CPU median 8.29% and unused boot JavaScript 55.95%. Against the exact merged main parent db38cc106695, same-host builds measure startup 274248 to 273752 B gzip (-496 B), with seven startup JS requests, one CSS request, and unchanged CSS. Record the measured integrated head.",
   "updatedAt": "2026-10-25"
 }

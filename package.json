@@ -15,8 +15,8 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 32,
-      "agent": 34
+      "state": 33,
+      "agent": 35
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",

@@ -591,20 +591,14 @@ suite.define(() => {
     const createdOrder = [pinnedSessionKey, ...createdSessionKeys];
     // Personal pins lead the list in their Pinned section regardless of sort mode.
     const updatedOrder = [pinnedSessionKey, ...createdSessionKeys.toReversed()];
-    const sessions = {
-      count: createdSessionKeys.length + 1,
-      defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-      path: "",
-      sessions: [
-        sessionRow(pinnedSessionKey, "Pinned Session", 50, { createdAt: 2_000 }),
-        ...createdSessionKeys.map((key, index) =>
-          sessionRow(key, `Session ${key.slice(-1).toUpperCase()}`, (index + 1) * 100, {
-            createdAt: 1_000 - index,
-          }),
-        ),
-      ],
-      ts: Date.now(),
-    };
+    const sessions = chatSessionListResponse([
+      sessionRow(pinnedSessionKey, "Pinned Session", 50, { createdAt: 2_000 }),
+      ...createdSessionKeys.map((key, index) =>
+        sessionRow(key, `Session ${key.slice(-1).toUpperCase()}`, (index + 1) * 100, {
+          createdAt: 1_000 - index,
+        }),
+      ),
+    ]);
     await page.addInitScript(
       ({ storageKey, entry }) => {
         const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");

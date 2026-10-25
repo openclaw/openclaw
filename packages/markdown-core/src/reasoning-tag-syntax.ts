@@ -198,8 +198,6 @@ export function isInsideCode(index: number, spans: Array<[number, number]>): boo
   return false;
 }
 
-type RecoveryMode = "hide" | "visible" | "static-strict" | "static-preserve";
-
 export type ReductionState = {
   depth: number;
   visibleEver: boolean;
@@ -212,21 +210,31 @@ export type ReductionState = {
   };
 };
 
-type ReductionOptions = {
-  final: boolean;
-  recoverUnclosed?: boolean;
-  mode: RecoveryMode;
-  scope: "all" | "leading";
-  start?: number;
+export type ReductionCheckpoint = {
+  boundary: number;
+  rawBefore: boolean;
+  terminalLiteral: boolean;
+  reset: boolean;
+  lastReset: number;
+  holdStart: number;
 };
 
 export function reduceReasoningText(
   text: string,
   codeSpans: Array<[number, number]>,
   state: ReductionState,
-  options: ReductionOptions,
+  options: {
+    final: boolean;
+    recoverUnclosed?: boolean;
+    mode: "hide" | "visible" | "static-strict" | "static-preserve";
+    scope: "all" | "leading";
+    start?: number;
+    checkpoint?: ReductionCheckpoint;
+  },
 ): ReasoningTagTextDelta[] {
   const output: ReasoningTagTextDelta[] = [];
+  const checkpoint = options.checkpoint;
+  let openStart: number | undefined;
   const emit = (kind: ReasoningTagTextDelta["kind"], value: string) => {
     if (!value) {
       return;
@@ -277,8 +285,14 @@ export function reduceReasoningText(
     const beforeTag = text.slice(cursor, tag.index);
     append(beforeTag);
     const tagEnd = tag.index + tag.text.length;
+    if (checkpoint && tag.index < checkpoint.boundary && tagEnd > checkpoint.boundary) {
+      checkpoint.holdStart = Math.min(checkpoint.holdStart, tag.index);
+    }
 
     if (tag.isSelfClosing) {
+      if (checkpoint && state.depth === 0 && options.scope === "leading" && state.visibleEver) {
+        checkpoint.terminalLiteral = true;
+      }
       if (state.depth === 0 && options.scope === "leading" && state.visibleEver) {
         emit("text", text.slice(tag.index));
         cursor = text.length;
@@ -295,11 +309,15 @@ export function reduceReasoningText(
         state.visibleEver &&
         !mustParseRemainder[tagIndex]
       ) {
+        if (checkpoint) {
+          checkpoint.holdStart = Math.min(checkpoint.holdStart, tag.index);
+        }
         emit("text", text.slice(tag.index));
         cursor = text.length;
         break;
       }
       if (state.depth === 0) {
+        openStart = tag.index;
         state.pending = {
           content: "",
           containsPrivate: tag.isPrivate,
@@ -319,6 +337,15 @@ export function reduceReasoningText(
     if (state.depth > 0) {
       state.depth -= 1;
       if (state.depth === 0 && state.pending) {
+        if (
+          checkpoint &&
+          openStart !== undefined &&
+          openStart < checkpoint.boundary &&
+          tagEnd > checkpoint.boundary
+        ) {
+          checkpoint.holdStart = Math.min(checkpoint.holdStart, openStart);
+        }
+        openStart = undefined;
         if (!state.pending.containsPrivate) {
           emit("thinking", state.pending.content);
         }
@@ -334,7 +361,15 @@ export function reduceReasoningText(
       append(tag.text);
     } else {
       const after = text.slice(tagEnd);
-      if (beforeTag.trim() && after.trim()) {
+      const rawBefore = Boolean(beforeTag.trim()) || (cursor === start && checkpoint?.rawBefore);
+      if (checkpoint && rawBefore && !after.trim()) {
+        checkpoint.holdStart = Math.min(checkpoint.holdStart, tag.index);
+      }
+      if (rawBefore && after.trim()) {
+        if (checkpoint) {
+          checkpoint.reset = true;
+          checkpoint.lastReset = tag.index;
+        }
         const thinking = output.filter((delta) => delta.kind === "thinking");
         output.splice(0, output.length, ...thinking);
         state.visibleEver = false;
@@ -344,6 +379,13 @@ export function reduceReasoningText(
   }
 
   append(text.slice(cursor));
+  if (checkpoint) {
+    checkpoint.rawBefore =
+      Boolean(text.slice(cursor).trim()) || (cursor === start && checkpoint.rawBefore);
+    if (openStart !== undefined) {
+      checkpoint.holdStart = Math.min(checkpoint.holdStart, openStart);
+    }
+  }
   if (options.final && state.depth > 0 && state.pending) {
     const pending = state.pending;
     if (!pending.containsPrivate) {
