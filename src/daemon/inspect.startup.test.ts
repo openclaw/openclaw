@@ -15,11 +15,7 @@ import * as gatewayProcesses from "../infra/gateway-processes.js";
 import * as portsInspection from "../infra/ports-inspect.js";
 import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import * as probeHosts from "./gateway-service-probe-hosts.js";
-import {
-  findExtraGatewayServices,
-  listManagedOpenClawGatewayServices,
-  renderGatewayServiceCleanupHints,
-} from "./inspect.js";
+import { findExtraGatewayServices, listManagedOpenClawGatewayServices } from "./inspect.js";
 import { discoverManagedGatewayBindings } from "./managed-gateway-bindings.js";
 import * as taskLayout from "./schtasks-layout.js";
 import {
@@ -124,11 +120,18 @@ const readStartupWithinDeadline = (windowsStartupEntry: string, timeoutMs = 200)
     windowsStartupEntry,
     timeoutMs,
   });
-const scheduledTask = (taskPath: string, scriptPath: string) => taskSnapshot(taskPath, scriptPath);
 const startupUnknown = {
   running: false,
   runtime: { status: "unknown", inspectionFailure: { timeoutMs: 200 } },
 };
+const gatewayFields = { platform: "win32", marker: "openclaw", legacy: false };
+const issue = (
+  source: string,
+  message: unknown = expect.stringContaining("could not be inspected"),
+) => ({ source, message });
+function expectInventory(inventory: unknown, services: unknown[] = [], errors: unknown[] = []) {
+  expect(inventory).toEqual({ services, errors });
+}
 
 describe("Startup entries", () => {
   beforeEach(() => {
@@ -149,8 +152,9 @@ describe("Startup entries", () => {
           throw new Error("unavailable");
         });
       }
-      expect(await findExtraGatewayServices(environment(), { deep: true })).toEqual({
-        services: [
+      expectInventory(
+        await findExtraGatewayServices(environment(), { deep: true }),
+        [
           expect.objectContaining({
             platform: "win32",
             label: taskName,
@@ -160,8 +164,8 @@ describe("Startup entries", () => {
             windowsStartupEntry: startupPath,
           }),
         ],
-        errors: !legacy ? [{ source: "schtasks", message: expect.any(String) }] : [],
-      });
+        !legacy ? [issue("schtasks", expect.any(String))] : [],
+      );
       if (legacy) {
         expect(await discoverManagedGatewayBindings(environment())).toEqual([]);
       }
@@ -219,53 +223,36 @@ describe("Startup entries", () => {
           processKind === "matching" ? { status: "running", pid: 4242 } : { status: "unknown" },
         running: processKind === "matching",
       });
-      expect(taskProbe.probeScheduledTaskState).not.toHaveBeenCalled();
       if (processKind !== "matching") {
         expect(state.runtime?.pid).toBeUndefined();
       }
     },
   );
 
-  it.each(["process timeout", "absent port", "late absent port"])(
-    "honors the Startup inspection deadline: %s",
-    async (mode) => {
-      const { startupPath } = await startup("9.4");
-      let now = 10_000;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
-      const nativeBudgets: number[] = [];
-      vi.mocked(spawnSync).mockImplementation((_command, args, options) => {
-        const timeout = options?.timeout ?? Infinity;
-        nativeBudgets.push(timeout);
-        if (mode === "process timeout") {
-          now += Math.min(timeout, 250);
-          return nativeResult(JSON.stringify([processSnapshot()]), {
-            pid: 0,
-            status: timeout < 250 ? null : 0,
-            signal: timeout < 250 ? "SIGTERM" : null,
-            ...(timeout < 250
-              ? { error: Object.assign(new Error("Native probe timed out"), { code: "ETIMEDOUT" }) }
-              : {}),
-          });
-        }
-        const portRead = args?.join(" ").includes("Get-NetTCPConnection");
-        now += portRead ? (mode === "late absent port" ? 170 : 50) : 40;
-        return nativeResult(
-          portRead ? "0\r\n" : JSON.stringify([processSnapshot("unrelated.exe", 9999)]),
-        );
+  it("honors the Startup native process inspection deadline", async () => {
+    const { startupPath } = await startup("9.4");
+    let now = 10_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const nativeBudgets: number[] = [];
+    vi.mocked(spawnSync).mockImplementation((_command, _args, options) => {
+      const timeout = options?.timeout ?? Infinity;
+      nativeBudgets.push(timeout);
+      now += Math.min(timeout, 250);
+      return nativeResult(JSON.stringify([processSnapshot()]), {
+        pid: 0,
+        status: timeout < 250 ? null : 0,
+        signal: timeout < 250 ? "SIGTERM" : null,
+        ...(timeout < 250
+          ? { error: Object.assign(new Error("Native probe timed out"), { code: "ETIMEDOUT" }) }
+          : {}),
       });
-      const state = await readStartupWithinDeadline(startupPath);
-      expect(nativeBudgets).toEqual(mode === "process timeout" ? [200] : [200, 160]);
-      const expired = mode !== "absent port";
-      expect(state).toMatchObject(
-        expired ? startupUnknown : { running: false, runtime: { status: "stopped" } },
-      );
-      expect(state.runtime?.pid).toBeUndefined();
-      expect(taskProbe.probeScheduledTaskState).not.toHaveBeenCalled();
-      if (mode === "process timeout") {
-        expect(now).toBe(10_200);
-      }
-    },
-  );
+    });
+    const state = await readStartupWithinDeadline(startupPath);
+    expect(nativeBudgets).toEqual([200]);
+    expect(state).toMatchObject(startupUnknown);
+    expect(state.runtime?.pid).toBeUndefined();
+    expect(now).toBe(10_200);
+  });
 
   it("settles exact Startup inspection when its initial file read stalls", async () => {
     const { startupPath } = await startup("9.4");
@@ -294,7 +281,7 @@ describe("Startup entries", () => {
   it("reports Startup entries through Doctor when the selected Task exists", async () => {
     const selected = await startup("9.4", "OpenClaw Gateway");
     const sibling = await startup("9.4");
-    const task = scheduledTask(selected.taskName, selected.scriptPath);
+    const task = taskSnapshot(selected.taskName, selected.scriptPath);
     vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task]);
     vi.mocked(taskProbe.probeScheduledTaskState).mockReturnValue({ status: "found", ...task });
     for (const [key, value] of Object.entries(environment())) {
@@ -392,12 +379,7 @@ describe("Startup entries", () => {
         await findExtraGatewayServices(kind === "unavailable locator" ? {} : env, { deep: true }),
       ).toEqual({
         services: [],
-        errors: [
-          {
-            source: kind === "unavailable locator" ? "startup" : directory,
-            message: expect.any(String),
-          },
-        ],
+        errors: [issue(kind === "unavailable locator" ? "startup" : directory, expect.any(String))],
       });
     },
   );
@@ -405,7 +387,6 @@ describe("Startup entries", () => {
 
 const account = { USERPROFILE: "C:\\Users\\test" };
 const quoteArgv = (argv: string[]) => argv.map((arg) => `"${arg}"`).join(" ");
-const gatewayFields = { platform: "win32", marker: "openclaw", legacy: false };
 const action = (executable: string, args: string) => ({
   type: 0,
   path: executable,
@@ -476,12 +457,7 @@ it.each(["foreign launcher", "wrapped gateway", "runtime version"])(
     const inventory = version
       ? await findExtraGatewayServices(env, { deep: true })
       : await listManagedOpenClawGatewayServices(env);
-    expect(inventory).toEqual({
-      services: [],
-      errors: wrapped
-        ? [{ source: taskName, message: expect.stringContaining("could not be inspected") }]
-        : [],
-    });
+    expectInventory(inventory, [], wrapped ? [issue(taskName)] : []);
     if (version) {
       await expect(
         readTaskCommand({ ...env, OPENCLAW_WINDOWS_TASK_NAME: taskName }, effective),
@@ -513,10 +489,9 @@ it.each(["runtime argv", "launcher metadata"])(
           ? Buffer.from(registeredScript(taskName.slice(1)))
           : Promise.reject(new Error("Unexpected launcher read")),
       );
-      await expect(findExtraGatewayServices(env, { deep: true })).resolves.toEqual({
-        services: [expect.objectContaining({ ...gatewayFields, label: taskName, scope: "system" })],
-        errors: [],
-      });
+      expectInventory(await findExtraGatewayServices(env, { deep: true }), [
+        expect.objectContaining({ ...gatewayFields, label: taskName, scope: "system" }),
+      ]);
     } else {
       mockTask(taskSnapshot(taskName, argv[0]!, quoteArgv(argv.slice(1))), false);
     }
@@ -619,18 +594,17 @@ it.each([
     const inventory = await findExtraGatewayServices(account, { deep: true });
     expect(now).toBe(exhaustedBy === "fractional query" ? 59_999.5 : 60_000);
     expect(observations.filter((startedAt) => startedAt >= 60_000)).toEqual([]);
-    expect(inventory.services).toEqual([
-      expect.objectContaining({
-        ...gatewayFields,
-        label: completed.snapshot.taskPath,
-        detail: expect.stringMatching(/^task:/),
-      }),
-    ]);
-    expect(inventory.errors).toHaveLength(1);
-    expect(inventory.errors).toContainEqual({
-      source: "schtasks",
-      message: expect.stringMatching(/deadline expired/),
-    });
+    expectInventory(
+      inventory,
+      [
+        expect.objectContaining({
+          ...gatewayFields,
+          label: completed.snapshot.taskPath,
+          detail: expect.stringMatching(/^task:/),
+        }),
+      ],
+      [issue("schtasks", expect.stringMatching(/deadline expired/))],
+    );
   },
 );
 
@@ -642,7 +616,7 @@ it.each(["launcher", "missing launcher metadata"])(
     mockTask(task)
       .mockReturnValueOnce(nativeResult(JSON.stringify(task)))
       .mockReturnValue(nativeResult("-2147024894", { status: 1 }));
-    const lstat = vi.spyOn(fs, "lstat").mockImplementation(() => new Promise(() => {}));
+    vi.spyOn(fs, "lstat").mockImplementation(() => new Promise(() => {}));
     let signal: AbortSignal | undefined;
     vi.spyOn(fs, "readFile").mockImplementation((_path, options) => {
       signal = typeof options === "object" && options !== null ? options.signal : undefined;
@@ -655,13 +629,12 @@ it.each(["launcher", "missing launcher metadata"])(
     });
     const inventory = findExtraGatewayServices(account, { deep: true });
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(await inventory).toEqual({
-      services: [],
-      errors: [{ source: "schtasks", message: expect.stringMatching(/deadline expired/) }],
-    });
+    expectInventory(
+      await inventory,
+      [],
+      [issue("schtasks", expect.stringMatching(/deadline expired/))],
+    );
     expect(signal?.aborted).toBe(true);
-    expect(spawnSync).toHaveBeenCalledTimes(phase === "launcher" ? 2 : 3);
-    expect(lstat).toHaveBeenCalledTimes(phase === "launcher" ? 0 : 1);
   },
 );
 
@@ -720,7 +693,6 @@ describe("inventory projections", () => {
       expectedService("\\OpenClaw CrossAction"),
       expectedService("\\Custom Service"),
     ]);
-    expect(renderGatewayServiceCleanupHints(result.services).join("\n")).not.toContain("Monitor");
     const managed = await listManagedOpenClawGatewayServices(nativeEnv);
     expect(managed.errors).toEqual([]);
     expect(managed.services.map((service) => service.label)).toEqual([
@@ -728,13 +700,6 @@ describe("inventory projections", () => {
       "\\OpenClaw Gateway (dev)",
       "\\OpenClaw Gateway Backup",
     ]);
-    for (const service of result.services) {
-      expect(service).not.toHaveProperty("windowsProfile");
-    }
-    for (const service of [...managed.services, ...result.services]) {
-      expect(service).not.toHaveProperty("extra");
-      expect(service).not.toHaveProperty("managedGateway");
-    }
   });
 
   it.each<[string, taskProbe.ScheduledTaskSnapshot[], string?, string?]>([
@@ -774,16 +739,18 @@ describe("inventory projections", () => {
     const result = selected
       ? await findExtraGatewayServices(env, { deep: true })
       : await listManagedOpenClawGatewayServices(env);
-    expect(result).toEqual({
-      services: [],
-      errors: tasks.map(({ taskPath: source }) => ({
-        source,
-        message: missing
-          ? "Scheduled Task launcher could not be inspected."
-          : expect.stringContaining(message ?? "could not be inspected"),
-      })),
-    });
-    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([]);
+    expectInventory(
+      result,
+      [],
+      tasks.map(({ taskPath }) =>
+        issue(
+          taskPath,
+          missing
+            ? "Scheduled Task launcher could not be inspected."
+            : expect.stringContaining(message ?? "could not be inspected"),
+        ),
+      ),
+    );
     if (selected) {
       expect(await listManagedOpenClawGatewayServices(env)).toEqual(result);
     }

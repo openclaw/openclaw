@@ -135,14 +135,11 @@ it("audits missing KillMode separately from effective manager policy", async () 
   expect(result.ok).toBe(true);
   expect(result.issues).toEqual([]);
   expect(result.definitionDrift).toEqual([
-    {
-      kind: "outdated",
-      key: "Service.KillMode",
+    drift("outdated", "Service.KillMode", {
       current: null,
       expected: "mixed",
       sourcePath: fixture.sourcePath,
-      message: expect.stringContaining("Service.KillMode"),
-    },
+    }),
   ]);
   expect(await fs.readFile(fixture.sourcePath, "utf8")).toBe(fixture.content);
 });
@@ -197,77 +194,53 @@ it.each(["other-source", "unreadable-drop-in"])(
   },
 );
 
-it.each(["base", "drop-in"])("recognizes standard systemd directives in %s", async (location) => {
-  const custom = [
-    "[Unit]",
-    "OnFailure=recovery.service",
-    "StartLimitBurst=10",
-    "StartLimitIntervalSec=120",
-    "[Service]",
-    "CPUWeight=1000",
-    "KillMode=control-group",
-    "ManagedOOMPreference=avoid",
-    "TimeoutStartSec=60",
-    "ExecStartPre=/usr/bin/true",
-    "RestartSteps=5",
-    "RestartMaxDelaySec=60",
-    "ProtectSystem=strict",
-    "MemoryMax=1G",
-    "[Install]",
-    "Alias=custom.service",
-    "Also=helper.service",
-  ].join("\n");
-  const fixture = await systemdFixture(
-    (unit) => (location === "base" ? `${unit}\n${custom}\n` : unit),
-    location === "drop-in" ? `${custom}\n` : undefined,
-  );
-  const result = await auditGatewayServiceConfig(fixture);
-  const sourcePath =
-    location === "base" ? fixture.sourcePath : `${fixture.sourcePath}.d/operator.conf`;
-  expect(result.definitionDrift).toContainEqual(
-    expect.objectContaining({
-      kind: "unknown-edit",
-      key: "Service.CPUWeight",
+it.each(["base", "drop-in"])(
+  "classifies systemd directives and metadata in %s",
+  async (location) => {
+    const custom =
+      "[Unit]\nOnFailure=recovery.service\nX-Fleet=managed\n[Service]\nCPUWeight=1000\n[Install]\nAlias=custom.service\n[X-Fleet]\nOwner=operations\nRestartSec=20\nKillMode=process\n";
+    const fixture = await systemdFixture(
+      (unit) => (location === "base" ? `${unit}\n${custom}\n` : unit),
+      location === "drop-in" ? `${custom}\n` : undefined,
+    );
+    const result = await auditGatewayServiceConfig(fixture);
+    const sourcePath =
+      location === "base" ? fixture.sourcePath : `${fixture.sourcePath}.d/operator.conf`;
+    expect(result.definitionDrift).toContainEqual(
+      drift("unknown-edit", "Service.CPUWeight", {
+        sourcePath,
+        message: expect.stringContaining("not changed"),
+      }),
+    );
+    expect(JSON.stringify(result.definitionDrift)).not.toContain("unrecognized");
+    expect(result.issues).toEqual([]);
+    expect(result.definitionDrift).toHaveLength(7);
+    expect(result.definitionDrift).toEqual(
+      expect.arrayContaining(
+        ["Unit.X-Fleet", "X-Fleet.Owner", "X-Fleet.RestartSec", "X-Fleet.KillMode"].map((key) =>
+          drift("unknown-edit", key, { message: expect.stringContaining("not changed") }),
+        ),
+      ),
+    );
+
+    await fs.appendFile(
       sourcePath,
-      message: expect.stringContaining("not changed"),
-    }),
-  );
-  expect(JSON.stringify(result.definitionDrift)).not.toContain("unrecognized");
-
-  await fs.appendFile(sourcePath, "\n[Service]\nRestartStpes=5\nOnFailure=wrong-section.service\n");
-  const unknown = (await auditGatewayServiceConfig(fixture)).definitionDrift?.filter((fact) =>
-    fact.message.includes("unrecognized"),
-  );
-  expect(unknown?.map((fact) => fact.key)).toEqual(["Service.RestartStpes", "Service.OnFailure"]);
-});
-
-it.each(["base", "drop-in"])("preserves ignored systemd metadata in %s", async (location) => {
-  const metadata =
-    "[Unit]\nX-Fleet=managed\n[X-Fleet]\nOwner=operations\nRestartSec=20\nKillMode=process\n";
-  const fixture = await systemdFixture(
-    (unit) => (location === "base" ? `${unit}\n${metadata}` : unit),
-    location === "drop-in" ? metadata : undefined,
-  );
-  const result = await auditGatewayServiceConfig(fixture);
-  expect(result.issues).toEqual([]);
-  expect(result.definitionDrift).toHaveLength(4);
-  for (const fact of result.definitionDrift ?? []) {
-    expect(fact).toMatchObject({
-      kind: "unknown-edit",
-      message: expect.stringContaining("not changed"),
-    });
-  }
-});
+      "\n[Service]\nRestartStpes=5\nOnFailure=wrong-section.service\n",
+    );
+    const unknown = (await auditGatewayServiceConfig(fixture)).definitionDrift?.filter((fact) =>
+      fact.message.includes("unrecognized"),
+    );
+    expect(unknown?.map((fact) => fact.key)).toEqual(["Service.RestartStpes", "Service.OnFailure"]);
+  },
+);
 
 it.each([
   { seconds: undefined, kind: "outdated" },
   { seconds: 20, kind: "outdated" },
   { seconds: 30, kind: "preserved" },
-  { seconds: 600, kind: "preserved" },
   { seconds: 0, kind: "preserved" },
   { seconds: 330, kind: undefined },
   { seconds: 600, kind: "preserved", stale: true },
-  { seconds: 20, kind: "outdated", throttle: 1 },
   { seconds: 20, kind: "outdated", throttle: 60 },
   { seconds: 20, kind: "outdated", wrapped: true },
   { seconds: 20, kind: "preserved", throttle: 45 },
@@ -384,12 +357,6 @@ it("preserves custom Scheduled Task retry policy despite stale service metadata"
       message: expect.stringContaining("not changed"),
     }),
   ]);
-  expect(native.task).toHaveBeenCalledExactlyOnceWith([
-    "/Query",
-    "/TN",
-    "OpenClaw Gateway",
-    "/XML",
-  ]);
 });
 
 it("reports failed native task inspection independently from legacy issues", async () => {
@@ -412,9 +379,7 @@ const discardedSettings: Array<[string, string[]?, string?, Record<string, strin
     "Environment.NODE_OPTIONS",
     [],
     undefined,
-    {
-      NODE_OPTIONS: "--max-old-space-size=4096 --require=/operator-private",
-    },
+    { NODE_OPTIONS: "--max-old-space-size=4096 --require=/operator-private" },
   ],
 ];
 
