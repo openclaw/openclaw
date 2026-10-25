@@ -26,6 +26,7 @@ let uploadDir: string;
 let inboundMediaDir: string;
 const chooser = { method: "POST", path: "/hooks/file-chooser", body: {} };
 const MARKER_CONTENT = "openclaw-browser-proxy-upload-v1\n";
+const markerPath = (directory: string) => path.join(directory, ".openclaw-browser-proxy-upload-v1");
 type StageRequest = Parameters<typeof uploads.stageBrowserProxyUploadRequest>[0];
 const discard = (staged: Parameters<typeof uploads.discardStagedBrowserProxyUpload>[0]) =>
   uploads.discardStagedBrowserProxyUpload(staged);
@@ -91,11 +92,7 @@ async function retainedDirectory(name: string, contents: string, marked = true) 
   const directory = path.join(uploadDir, ".proxy-uploads", `upload-${name}`);
   await fs.mkdir(directory, { recursive: true });
   if (marked) {
-    await fs.writeFile(
-      path.join(directory, ".openclaw-browser-proxy-upload-v1"),
-      MARKER_CONTENT,
-      "utf8",
-    );
+    await fs.writeFile(markerPath(directory), MARKER_CONTENT);
   }
   await fs.writeFile(path.join(directory, "report.txt"), contents, "utf8");
   return directory;
@@ -111,24 +108,6 @@ describe("browser proxy upload transport", () => {
 
     expect(prepared.body).toEqual({});
     expect(prepared.upload?.files).toEqual(uploadFiles("gateway inbound bytes").files);
-  });
-
-  it("stages files under the node upload root with route-valid paths", async () => {
-    const staged = await stage({
-      body: { ref: "e12" },
-      upload: uploadFiles("node copy", "second copy"),
-    });
-    const stagedPaths = (staged.body as { paths: string[] }).paths;
-    expect(stagedPaths.map((filePath) => path.basename(filePath))).toEqual([
-      "report.txt",
-      "report.txt",
-    ]);
-    await expectContents(stagedPaths[0] ?? "", "node copy");
-    await expectContents(stagedPaths[1] ?? "", "second copy");
-    await expectRoutePaths(stagedPaths);
-
-    await discard(staged);
-    await expectMissing(staged.directory ?? "");
   });
 
   it("rejects ambiguous request bodies and invalid encodings before dispatch", async () => {
@@ -150,8 +129,10 @@ describe("browser proxy upload transport", () => {
     );
   });
 
-  it("stages portable bounded filenames that survive upload route validation", async () => {
+  it("stages distinct files with portable bounded names and route-valid paths", async () => {
     const names = [
+      ["report.txt", "report.txt"],
+      ["nested/report.txt", "report.txt"],
       ["CONIN$.txt", "CONIN$_.txt"],
       ["NUL .txt", "NUL _.txt"],
       [`CON${" ".repeat(177)}x`, "CON_"],
@@ -165,28 +146,28 @@ describe("browser proxy upload transport", () => {
     const staged = await stage({
       upload: {
         envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
-        files: names.map(([name]) => ({ name, contentBase64: "aGVsbG8=" })),
+        files: names.map(([name]) => ({
+          name,
+          contentBase64: Buffer.from(name).toString("base64"),
+        })),
       },
     });
-    try {
-      const stagedPaths = (staged.body as { paths: string[] }).paths;
-      expect(stagedPaths.map((filePath) => path.basename(filePath))).toEqual(
-        names.map(([, expected]) => expected),
-      );
-      for (const filePath of stagedPaths) {
-        expect(Buffer.byteLength(path.basename(filePath))).toBeLessThanOrEqual(180);
-        await expectContents(filePath, "hello");
-      }
-      await expectRoutePaths(stagedPaths);
-    } finally {
-      await discard(staged);
+    const stagedPaths = (staged.body as { paths: string[] }).paths;
+    expect(stagedPaths.map((filePath) => path.basename(filePath))).toEqual(
+      names.map(([, expected]) => expected),
+    );
+    for (const [index, filePath] of stagedPaths.entries()) {
+      expect(Buffer.byteLength(path.basename(filePath))).toBeLessThanOrEqual(180);
+      await expectContents(filePath, names[index]![0]);
     }
+    await expectRoutePaths(stagedPaths);
+    await discard(staged);
+    await expectMissing(staged.directory!);
   });
 
   it("keeps staging admission serialized after a queued request is cancelled", async () => {
-    const retainedDirectories: string[] = [];
     for (let index = 0; index < 63; index++) {
-      retainedDirectories.push(await retainedDirectory(`existing-${index}`, "retained"));
+      await retainedDirectory(`existing-${index}`, "retained");
     }
     const stagingRoot = path.join(uploadDir, ".proxy-uploads");
     const request = { upload: uploadFiles("data") };
@@ -252,22 +233,15 @@ describe("browser proxy upload transport", () => {
           await discard(result.value);
         }
       }
-      for (const directory of retainedDirectories) {
-        await discard({ body: {}, directory });
-      }
     }
   });
 
   it("counts the ownership marker against retained-byte admission", async () => {
     const retained = await retainedDirectory("retained", "");
     await addSparsePadding(retained, 256 * 1024 * 1024 - Buffer.byteLength(MARKER_CONTENT) - 4);
-    try {
-      await expect(stage({ upload: uploadFiles("data") })).rejects.toThrow(
-        "browser proxy upload staging limit reached",
-      );
-    } finally {
-      await discard({ body: {}, directory: retained });
-    }
+    await expect(stage({ upload: uploadFiles("data") })).rejects.toThrow(
+      "browser proxy upload staging limit reached",
+    );
   });
 
   it.each([true, false])(
@@ -350,9 +324,7 @@ describe("browser proxy upload activity", () => {
 
   it.skipIf(chmodFaultUnavailable)("retries cached recovery on the next upload", async () => {
     const stagingRoot = path.join(uploadDir, ".proxy-uploads");
-    const expired = path.join(stagingRoot, "upload-expired");
-    await fs.mkdir(expired, { recursive: true });
-    await fs.writeFile(path.join(expired, ".openclaw-browser-proxy-upload-v1"), MARKER_CONTENT);
+    const expired = await retainedDirectory("expired", "");
     const past = new Date(Date.now() - 25 * HOUR_MS);
     await fs.utimes(expired, past, past);
     await restrictPermissions(stagingRoot, 0o000);
@@ -374,7 +346,7 @@ describe("browser proxy upload activity", () => {
     const child = path.join(directory, "0");
     await restrictPermissions(child, 0o500);
     await expectBusyUntilDone(discard(staged));
-    await expectContents(path.join(directory, ".openclaw-browser-proxy-upload-v1"), MARKER_CONTENT);
+    await expectContents(markerPath(directory), MARKER_CONTENT);
     await expectContents(path.join(child, "report.txt"), "report");
     await fs.chmod(child, 0o700);
     await discard(staged);

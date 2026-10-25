@@ -113,13 +113,9 @@ it("warns while legacy Browser Relay Authentication remains enabled", async () =
 it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
   ["custom default Chrome MCP", withProfile(mcpProfile, "work", { defaultProfile: "work" }), "mcp"],
   ["explicit Chrome MCP endpoint", withProfile(remoteMcp), false],
+  ["MCP auto-connect override", withProfile({ ...remoteMcp, mcpArgs: ["--autoConnect"] }), "mcp"],
   [
-    "explicit Chrome MCP auto-connect override",
-    withProfile({ ...remoteMcp, mcpArgs: ["--autoConnect"] }),
-    "mcp",
-  ],
-  [
-    "explicit managed override of user",
+    "managed user override",
     withProfile({ driver: "openclaw", cdpPort: 18801 }, "user", { defaultProfile: "user" }),
     "managed",
   ],
@@ -131,7 +127,7 @@ it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
   ["remote CDP", withProfile({ cdpUrl: "https://browser.example" }), false],
   ["profile attach-only", withProfile({ cdpPort: 18801, attachOnly: true }), false],
   [
-    "explicit managed override of inherited attach-only",
+    "attach-only override",
     withProfile({ cdpPort: 18801, attachOnly: false }, "work", { attachOnly: true }),
     "managed",
   ],
@@ -244,35 +240,27 @@ async function protectedProfiles(platform: NodeJS.Platform, installed: boolean) 
       await fsp.writeFile(path.join(profileDir, filename), "{}", { mode: 0o600 });
     }
   }
-  const accesses: string[] = [];
-  const denyProfileRead = (target: unknown) => {
-    const filename = path.basename(String(target));
-    if (["Local State", "Preferences", "Secure Preferences", "Cookies"].includes(filename)) {
-      accesses.push(String(target));
-      throw Object.assign(new Error("synthetic browser profile access denied"), { code: "EACCES" });
-    }
-  };
-  const readSync = fs.readFileSync;
-  vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
-    denyProfileRead(args[0]);
-    return readSync(...args);
-  });
-  const read = fsp.readFile;
-  vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
-    denyProfileRead(args[0]);
-    return await read(...args);
-  });
-  const roots = new Set(install.chromeProductRoots(value.deps).map((root) => root.userDataDir));
-  const rootReads = [vi.spyOn(fsp, "lstat"), vi.spyOn(fsp, "readdir")];
+  const roots = install.chromeProductRoots(value.deps).map((root) => root.userDataDir);
+  const reads = [
+    vi.spyOn(fs, "readFileSync"),
+    vi.spyOn(fsp, "readFile"),
+    vi.spyOn(fsp, "lstat"),
+    vi.spyOn(fsp, "readdir"),
+  ];
   Object.entries(value.deps.env).forEach(([key, entry]) => vi.stubEnv(key, entry));
   vi.stubEnv("OPENCLAW_STATE_DIR", value.stateDir);
   const configHome = path.join(value.homeDir, ".config");
   ["CHROME_CONFIG_HOME", "XDG_CONFIG_HOME"].forEach((key) => vi.stubEnv(key, configHome));
-  const rootAccesses = () =>
-    rootReads
+  const accesses = () =>
+    reads
       .flatMap((spy) => spy.mock.calls.map(([target]) => String(target)))
-      .filter((target) => roots.has(target));
-  return { ...value, accesses: () => [...accesses, ...rootAccesses()] };
+      .filter(
+        (target) =>
+          ["Local State", "Preferences", "Secure Preferences", "Cookies"].includes(
+            path.basename(target),
+          ) || roots.some((root) => target === root || target.startsWith(`${root}${path.sep}`)),
+      );
+  return { ...value, accesses };
 }
 
 it.each([
