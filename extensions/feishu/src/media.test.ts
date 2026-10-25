@@ -115,6 +115,12 @@ function mockCallArgs<T extends unknown[]>(mock: { mock: { calls: T[] } }, callI
   return call;
 }
 
+function expectNotCalled(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
 function expectMediaLoad(url: string, localRoots: readonly string[], extra = {}) {
   const [loadedUrl, options] = mockCallArgs(loadWebMediaMock);
   expect(loadedUrl).toBe(url);
@@ -172,7 +178,6 @@ describe("sendMediaFeishu msg_type routing", () => {
   beforeEach(() => {
     normalizeFeishuTargetMock.mockReturnValue("ou_target");
     resolveReceiveIdTypeMock.mockReturnValue("open_id");
-
     createFeishuClientMock.mockReturnValue({
       im: {
         file: { create: fileCreateMock },
@@ -181,14 +186,11 @@ describe("sendMediaFeishu msg_type routing", () => {
         messageResource: { get: messageResourceGetMock },
       },
     });
-
     fileCreateMock.mockResolvedValue({ code: 0, data: { file_key: "file_key_1" } });
     imageCreateMock.mockResolvedValue({ code: 0, data: { image_key: "image_key_1" } });
     messageCreateMock.mockResolvedValue({ code: 0, data: { message_id: "msg_1" } });
     messageReplyMock.mockResolvedValue({ code: 0, data: { message_id: "reply_1" } });
-
     loadWebMediaMock.mockResolvedValue(webMedia("remote.opus", "audio/ogg", "remote-audio"));
-
     messageResourceGetMock.mockImplementation(async () => resourceResponse("resource-bytes"));
     transcodeAudioMock.mockResolvedValue(Buffer.from("opus-output"));
     runFfprobeMock.mockResolvedValue("1.234\n");
@@ -220,8 +222,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     await expect(
       sendMedia({ mediaBuffer: oversizedImage, fileName: "oversized.png" }),
     ).rejects.toThrow("Feishu image exceeds its 10485760-byte upload limit");
-    expect(imageCreateMock).not.toHaveBeenCalled();
-    expect(messageCreateMock).not.toHaveBeenCalled();
+    expectNotCalled(imageCreateMock, messageCreateMock);
   });
 
   it("rejects oversized voice inputs before starting transcoding", async () => {
@@ -236,8 +237,7 @@ describe("sendMediaFeishu msg_type routing", () => {
         audioAsVoice: true,
       }),
     ).rejects.toThrow("Feishu file exceeds its 1-byte upload limit");
-    expect(transcodeAudioMock).not.toHaveBeenCalled();
-    expect(fileCreateMock).not.toHaveBeenCalled();
+    expectNotCalled(transcodeAudioMock, fileCreateMock);
   });
 
   it("retains accepted image visibility when its platform identifier is missing", async () => {
@@ -259,8 +259,7 @@ describe("sendMediaFeishu msg_type routing", () => {
         "Feishu attachments cannot be empty",
       );
     }
-    expect(imageCreateMock).not.toHaveBeenCalled();
-    expect(fileCreateMock).not.toHaveBeenCalled();
+    expectNotCalled(imageCreateMock, fileCreateMock);
   });
   it("respects ttsSupplement.visibleTextAlreadyDelivered over audioAsVoice", () => {
     for (const visibleTextAlreadyDelivered of [undefined, true]) {
@@ -428,11 +427,7 @@ describe("sendMediaFeishu msg_type routing", () => {
         mediaAccess: { readFile, workspaceDir: "/unapproved/workspace" },
       }),
     ).rejects.toThrow("Host media read requires explicit localRoots");
-    expect(loadWebMediaMock).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
-    expect(fileCreateMock).not.toHaveBeenCalled();
-    expect(imageCreateMock).not.toHaveBeenCalled();
-    expect(messageCreateMock).not.toHaveBeenCalled();
+    expectNotCalled(loadWebMediaMock, readFile, fileCreateMock, imageCreateMock, messageCreateMock);
   });
 
   it("fails closed when media URL fetch is blocked", async () => {
@@ -444,9 +439,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       /private\/internal/i,
     );
 
-    for (const mock of [fileCreateMock, messageCreateMock, messageReplyMock]) {
-      expect(mock).not.toHaveBeenCalled();
-    }
+    expectNotCalled(fileCreateMock, messageCreateMock, messageReplyMock);
   });
 
   it("rejects oversized message resource streams before saving the rest", async () => {

@@ -12,15 +12,15 @@ import {
   getFeishuThreadBindingManager,
 } from "./thread-bindings.js";
 
-const baseCfg = {
-  session: { mainKey: "main", scope: "per-sender" },
-} satisfies OpenClawConfig;
+const baseCfg = { session: { mainKey: "main", scope: "per-sender" } } satisfies OpenClawConfig;
 
 type FeishuThreadBindingManager = ReturnType<typeof createFeishuThreadBindingManagerImpl>;
 const trackedManagers: FeishuThreadBindingManager[] = [];
 const account = { channel: "feishu", accountId: "default" };
 const service = getSessionBindingService();
 const startedAt = 1_700_000_000_000;
+const child = "agent:main:subagent:child";
+const hookCfg = { ...baseCfg, channels: { feishu: {} } };
 
 function conversationRef(conversationId: string, parentConversationId?: string) {
   return { ...account, conversationId, ...(parentConversationId ? { parentConversationId } : {}) };
@@ -70,7 +70,7 @@ describe("Feishu thread bindings", () => {
   });
 
   it("binds and resolves a Feishu topic conversation", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    vi.spyOn(Date, "now").mockReturnValue(startedAt);
     createManager({ ...baseCfg, agents: { entries: { main: {}, codex: {} } } });
 
     const conversation = conversationRef("oc_group_chat:topic:om_topic_root", "oc_group_chat");
@@ -85,15 +85,15 @@ describe("Feishu thread bindings", () => {
       targetKind: "session",
       conversation,
       status: "active",
-      boundAt: 1_700_000_000_000,
-      expiresAt: 1_700_086_400_000,
+      boundAt: startedAt,
+      expiresAt: startedAt + 86_400_000,
       metadata: {
         agentId: "codex",
         label: "codex-main",
         boundBy: undefined,
         deliveryTo: undefined,
         deliveryThreadId: undefined,
-        lastActivityAt: 1_700_000_000_000,
+        lastActivityAt: startedAt,
         idleTimeoutMs: 86_400_000,
         maxAgeMs: 0,
       },
@@ -186,11 +186,7 @@ describe("Feishu thread bindings", () => {
 
     createManager();
     const conversation = conversationRef("oc_group_chat:topic:om_restarted");
-    const replacement = await service.bind({
-      conversation,
-      targetSessionKey: "agent:codex:acp:replacement",
-      targetKind: "session",
-    });
+    const replacement = await bindTo(conversation, "agent:codex:acp:replacement");
 
     manager.stop();
 
@@ -206,8 +202,7 @@ describe("Feishu thread bindings", () => {
       const manager = createManager();
       const conversationId = "oc_group_chat:topic:om_topic_root:sender:ou_sender_1";
       const conversation = conversationRef(conversationId, "oc_group_chat");
-      const targetSessionKey =
-        change === "session" ? "agent:main:subagent:replacement" : "agent:main:subagent:child";
+      const targetSessionKey = change === "session" ? "agent:main:subagent:replacement" : child;
       const targetKind = change === "kind" ? "session" : "subagent";
       const pluginMetadata = {
         pluginBindingOwner: "plugin",
@@ -220,7 +215,7 @@ describe("Feishu thread bindings", () => {
         conversationId: conversation.conversationId,
         parentConversationId: conversation.parentConversationId,
         targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
+        targetSessionKey: child,
         metadata: {
           agentId: "previous-agent",
           label: "child",
@@ -268,36 +263,30 @@ function origin(to: string, threadId?: string) {
 }
 
 type FeishuOrigin = ReturnType<typeof origin>;
-const child = "agent:main:subagent:child";
-
-function deliveryEvent(params: {
-  childSessionKey: string;
-  requesterOrigin?: FeishuOrigin;
-  requesterSessionKey?: string;
-}) {
+function deliveryEvent(
+  childSessionKey = child,
+  requesterOrigin: FeishuOrigin = origin("user:ou_sender_1"),
+  requesterSessionKey = "agent:main:main",
+) {
   return {
-    childSessionKey: params.childSessionKey,
-    requesterSessionKey: params.requesterSessionKey ?? "agent:main:main",
-    requesterOrigin: params.requesterOrigin ?? origin("user:ou_sender_1"),
+    childSessionKey,
+    requesterSessionKey,
+    requesterOrigin,
     expectsCompletionMessage: true,
   };
 }
 
 function managedHookFixture() {
   const handlers = registerHookHandlersForTest<OpenClawPluginApi>({
-    config: { ...baseCfg, channels: { feishu: {} } },
+    config: hookCfg,
     register: registerFeishuSubagentHooks,
   });
-  const manager = createManager({ ...baseCfg, channels: { feishu: {} } }, "work");
+  const manager = createManager(hookCfg, "work");
   const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
   return {
     deliveryHandler,
-    deliver: (
-      childSessionKey: string,
-      requesterOrigin?: FeishuOrigin,
-      requesterSessionKey?: string,
-    ) =>
-      deliveryHandler(deliveryEvent({ childSessionKey, requesterOrigin, requesterSessionKey }), {}),
+    deliver: (...args: Parameters<typeof deliveryEvent>) =>
+      deliveryHandler(deliveryEvent(...args), {}),
     endedHandler: getRequiredHookHandler(handlers, "subagent_ended"),
     manager,
     bind: (
@@ -421,11 +410,7 @@ describe("feishu subagent hook handlers", () => {
         parentConversationId: chat,
       });
     }
-    const event = deliveryEvent({
-      childSessionKey: child,
-      requesterSessionKey,
-      requesterOrigin: origin("chat:oc_group", "om_topic"),
-    });
+    const event = deliveryEvent(child, origin("chat:oc_group", "om_topic"), requesterSessionKey);
 
     await expect(deliveryHandler(event, {})).resolves.toBeUndefined();
 
@@ -451,13 +436,13 @@ describe("feishu subagent hook handlers", () => {
       {},
     );
 
-    await expect(deliver(child)).resolves.toBeUndefined();
+    await expect(deliver()).resolves.toBeUndefined();
   });
 
   it("leaves disabled completion, unrelated channels and missing managers unchanged", async () => {
     const { deliveryHandler, manager, bind } = managedHookFixture();
     bind("ou_sender_1");
-    const event = deliveryEvent({ childSessionKey: child });
+    const event = deliveryEvent();
 
     await expect(
       deliveryHandler({ ...event, expectsCompletionMessage: false }, {}),

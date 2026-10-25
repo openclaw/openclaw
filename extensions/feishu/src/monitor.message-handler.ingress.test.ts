@@ -88,8 +88,7 @@ function createHarness(params: {
   adoptTurn: boolean;
   accountId?: string;
 }) {
-  let onFlush: DebouncerOptions["onFlush"] | undefined;
-  let onError: DebouncerOptions["onError"] | undefined;
+  let debouncer: DebouncerOptions | undefined;
   const entries: DebounceEntry[] = [];
   const runtimeError = vi.fn();
   const channelRuntime = {
@@ -97,8 +96,7 @@ function createHarness(params: {
     debounce: {
       resolveInboundDebounceMs: () => 25,
       createInboundDebouncer: vi.fn((options: DebouncerOptions) => {
-        onFlush = options.onFlush;
-        onError = options.onError;
+        debouncer = options;
         return {
           enqueue: async (entry: DebounceEntry) => {
             entries.push(entry);
@@ -144,16 +142,16 @@ function createHarness(params: {
     handleMessage,
     hasProcessedMessage,
     flush: async () => {
-      if (!onFlush) {
+      if (!debouncer) {
         throw new Error("debouncer flush callback missing");
       }
-      await onFlush(entries.splice(0), createTestInboundDebounceFlush).completion;
+      await debouncer.onFlush(entries.splice(0), createTestInboundDebounceFlush).completion;
     },
     failFlush: (err: unknown) => {
-      if (!onError) {
+      if (!debouncer?.onError) {
         throw new Error("debouncer error callback missing");
       }
-      onError(err, entries);
+      debouncer.onError(err, entries);
     },
     runtimeError,
   };

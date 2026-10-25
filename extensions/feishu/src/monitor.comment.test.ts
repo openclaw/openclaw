@@ -69,6 +69,9 @@ type Reply = {
     }>;
   };
 };
+function textElement(text: string, encoding: "content" | "text" = "text") {
+  return { type: "text_run", text_run: { [encoding]: text } };
+}
 function reply(
   id: string,
   text: string,
@@ -78,7 +81,7 @@ function reply(
   return {
     reply_id: id,
     ...fields,
-    content: { elements: [{ type: "text_run", text_run: { [encoding]: text } }] },
+    content: { elements: [textElement(text, encoding)] },
   };
 }
 const rootReply = reply(ROOT_REPLY_ID, ROOT_TEXT);
@@ -112,11 +115,7 @@ function makeOpenApiClient(
       if (request.url === "/open-apis/drive/v1/metas/batch_query") {
         data = {
           metas: [
-            {
-              doc_token: TEST_DOC_TOKEN,
-              title: "Comment event handling request",
-              url: docUrl,
-            },
+            { doc_token: TEST_DOC_TOKEN, title: "Comment event handling request", url: docUrl },
           ],
         };
       } else if (request.url.includes("/comments/batch_query")) {
@@ -135,15 +134,9 @@ function makeOpenApiClient(
           ],
         };
       } else if (request.url.includes("/comments?file_type=docx&is_whole=true")) {
-        data = {
-          has_more: false,
-          items: params.wholeComments ?? [],
-        };
+        data = { has_more: false, items: params.wholeComments ?? [] };
       } else if (request.url.includes("/replies")) {
-        data = {
-          has_more: false,
-          items: remaining.shift() ?? [rootReply, targetReply],
-        };
+        data = { has_more: false, items: remaining.shift() ?? [rootReply, targetReply] };
       } else {
         throw new Error(`unexpected request: ${request.method} ${request.url}`);
       }
@@ -179,13 +172,15 @@ function commentHandler(
     ...params,
   });
 }
-function expectPrompt(
-  turn: Awaited<ReturnType<typeof resolveCommentTurn>>,
-  ...fragments: string[]
-) {
+type CommentTurn = Awaited<ReturnType<typeof resolveCommentTurn>>;
+function expectPrompt(turn: CommentTurn, ...fragments: string[]) {
   for (const fragment of fragments) {
     expect(turn?.prompt).toContain(fragment);
   }
+}
+function timeline(turn: CommentTurn, kind: "reply" | "comment") {
+  const prefix = kind === "reply" ? /^- \[\d+\] author=/ : /^- \[\d+\] create_time=/;
+  return turn?.prompt.split("\n").filter((line) => prefix.test(line));
 }
 function replyRequests(client: ReturnType<typeof makeOpenApiClient>) {
   return client.request.mock.calls.filter(
@@ -211,18 +206,12 @@ describe("resolveDriveCommentEventTurn", () => {
           ...reply(ROOT_REPLY_ID, "", { user_id: USER_ID }),
           content: {
             elements: [
-              { type: "text_run", text_run: { text: "请 " } },
+              textElement("请 "),
               { type: "person", person: { user_id: "ou_bot" } },
-              { type: "text_run", text_run: { text: " 总结下 " } },
-              {
-                type: "docs_link",
-                docs_link: { url: docUrl },
-              },
-              { type: "text_run", text_run: { text: " 和 " } },
-              {
-                type: "docs_link",
-                docs_link: { url: wikiUrl },
-              },
+              textElement(" 总结下 "),
+              { type: "docs_link", docs_link: { url: docUrl } },
+              textElement(" 和 "),
+              { type: "docs_link", docs_link: { url: wikiUrl } },
             ],
           },
         },
@@ -234,10 +223,12 @@ describe("resolveDriveCommentEventTurn", () => {
       data: { node: { obj_type: "docx", obj_token: "doc_ref_1" } },
     });
     const turn = await resolveCommentTurn({ client, botOpenId: null });
-    expect(turn?.senderId).toBe(USER_ID);
-    expect(turn?.senderUserId).toBe("on_comment_user_1");
-    expect(turn?.messageId).toBe("drive-comment:10d9d60b990db39f96a4c2fd357fb877");
-    expect(turn?.targetReplyText).toBe(`请 总结下 ${docUrl} 和 ${wikiUrl}`);
+    expect(turn).toMatchObject({
+      senderId: USER_ID,
+      senderUserId: "on_comment_user_1",
+      messageId: "drive-comment:10d9d60b990db39f96a4c2fd357fb877",
+      targetReplyText: `请 总结下 ${docUrl} 和 ${wikiUrl}`,
+    });
     expectPrompt(
       turn,
       "Bot routing mention detected in the current user comment.",
@@ -290,13 +281,13 @@ describe("resolveDriveCommentEventTurn", () => {
       client: makeOpenApiClient({ batchReplies: replies }),
       event: makeDriveCommentEvent({ reply_id: "reply-15" }),
     });
-    const timeline = turn?.prompt.split("\n").filter((line) => /^- \[\d+\] author=/.test(line));
-    expect(timeline?.map((line) => line.match(/reply_id=(\S+)/)?.[1])).toEqual(
+    const lines = timeline(turn, "reply");
+    expect(lines?.map((line) => line.match(/reply_id=(\S+)/)?.[1])).toEqual(
       [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 29].map(
         (index) => `reply-${index}`,
       ),
     );
-    expect(timeline?.filter((line) => line.includes("current_event=yes"))).toEqual([
+    expect(lines?.filter((line) => line.includes("current_event=yes"))).toEqual([
       expect.stringContaining("reply_id=reply-15 current_event=yes"),
     ]);
   });
@@ -323,13 +314,11 @@ describe("resolveDriveCommentEventTurn", () => {
       }),
       event: makeDriveCommentEvent({ comment_id: currentCommentId }),
     });
-    const timeline = turn?.prompt
-      .split("\n")
-      .filter((line) => /^- \[\d+\] create_time=/.test(line));
-    expect(timeline?.map((line) => line.match(/comment_id=(\S+)/)?.[1])).toEqual(
+    const lines = timeline(turn, "comment");
+    expect(lines?.map((line) => line.match(/comment_id=(\S+)/)?.[1])).toEqual(
       selected.map((index) => `comment-${index}`),
     );
-    expect(timeline?.filter((line) => line.includes("current_comment=yes"))).toEqual(
+    expect(lines?.filter((line) => line.includes("current_comment=yes"))).toEqual(
       currentCommentId === "missing"
         ? []
         : [expect.stringContaining("comment_id=comment-8 author=user")],

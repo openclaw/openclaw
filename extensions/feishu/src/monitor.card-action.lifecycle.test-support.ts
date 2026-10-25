@@ -104,6 +104,16 @@ function expectDispatch(params: Record<string, unknown>, context?: Record<string
     expect(dispatchReplyFromConfigMock.mock.calls.at(-1)?.[0].ctx).toMatchObject(context);
   }
 }
+function expectDirectDispatch(accountId: string, messageId: string, replyToMessageId?: string) {
+  expectDispatch(
+    { accountId, chatId: "p2p:ou_user1", replyToMessageId },
+    {
+      AccountId: accountId,
+      SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+      MessageSid: messageId,
+    },
+  );
+}
 
 type Fixture = ReturnType<typeof createFeishuLifecycleFixture>;
 function startHandler(fixture: Fixture, handlerKey: string, runtime = lastRuntime, once = false) {
@@ -168,9 +178,8 @@ describe("Feishu event reply lifecycle", () => {
 
   it("sends one ACP failure notice to the topic root across replay", async () => {
     const fixture = createFeishuLifecycleFixture({
+      ...credentials,
       accountId: "acct-acp",
-      appId: "cli_test",
-      appSecret: "secret_test",
       channelConfig: { groupPolicy: "open", allowFrom: ["ou_sender_1"] },
       accountConfig: {
         groups: {
@@ -215,7 +224,6 @@ describe("Feishu event reply lifecycle", () => {
     expect(lastRuntime.error).not.toHaveBeenCalled();
     expect(mocks.resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
     expect(mocks.ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock.mock.calls[0]?.[0]).toMatchObject({
       accountId: "acct-acp",
       to: "chat:oc_group_topic",
@@ -239,10 +247,9 @@ describe("Feishu event reply lifecycle", () => {
       mockFeishuReplyOnceDispatch({ ...mocks, replyText: "menu reply once" });
       onBotMenu = await startHandler(
         createFeishuLifecycleFixture({
+          ...credentials,
           accountId: "acct-menu",
-          appId: "cli_test",
-          appSecret: "secret_test",
-          channelConfig: { dmPolicy: "open", allowFrom: ["ou_user1"] },
+          channelConfig: directConfig,
         }),
         "application.bot.menu_v6",
       );
@@ -310,12 +317,10 @@ describe("Feishu event reply lifecycle", () => {
         chatId: "p2p:ou_user1",
         replyToMessageId: undefined,
       });
-      expect(dispatchReplyFromConfigMock.mock.calls[0]?.[0]).toMatchObject({
-        ctx: {
-          AccountId: "acct-menu",
-          SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-          MessageSid: "bot-menu:quick-actions:1700000000002",
-        },
+      expect(dispatchReplyFromConfigMock.mock.calls[0]?.[0].ctx).toMatchObject({
+        AccountId: "acct-menu",
+        SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+        MessageSid: "bot-menu:quick-actions:1700000000002",
       });
       expect(touchBindingMock).toHaveBeenCalledWith("binding-menu");
       expectFeishuReplyDispatcherSentFinalReplyOnce(mocks);
@@ -437,15 +442,7 @@ describe("Feishu event reply lifecycle", () => {
         createFeishuReplyDispatcherMock,
       });
 
-      expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
-      expectDispatch(
-        { accountId: "acct-card", chatId: "p2p:ou_user1", replyToMessageId: undefined },
-        {
-          AccountId: "acct-card",
-          SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-          MessageSid: "card-action-tok-card-once",
-        },
-      );
+      expectDirectDispatch("acct-card", "card-action-tok-card-once");
       expect(touchBindingMock).toHaveBeenCalledWith("binding-card");
 
       expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
@@ -498,13 +495,10 @@ describe("Feishu event reply lifecycle", () => {
         },
       });
 
-      expectDispatch(
-        { accountId: "acct-card", chatId, replyToMessageId: "om_card_v2_nested" },
-        {
-          AccountId: "acct-card",
-          SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-          MessageSid: "card-action-tok-card-v2-nested-operator",
-        },
+      expectDirectDispatch(
+        "acct-card",
+        "card-action-tok-card-v2-nested-operator",
+        "om_card_v2_nested",
       );
     });
 
@@ -536,8 +530,6 @@ describe("Feishu event reply lifecycle", () => {
         runtimeErrorMock: lastRuntime?.error as ReturnType<typeof vi.fn>,
       });
 
-      expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
-      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
       expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
     });
 

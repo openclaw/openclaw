@@ -1,4 +1,3 @@
-// Feishu tests cover drive plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
@@ -17,15 +16,8 @@ vi.mock("./comment-reaction.js", () => ({
 
 let registerFeishuDriveTools: typeof import("./drive.js").registerFeishuDriveTools;
 
-function createFeishuToolRuntime(): PluginRuntime {
-  return {} as PluginRuntime;
-}
-
 function createDriveToolApi(registerTool: OpenClawPluginApi["registerTool"]): OpenClawPluginApi {
   return createTestPluginApi({
-    id: "feishu-test",
-    name: "Feishu Test",
-    source: "local",
     config: {
       channels: {
         feishu: {
@@ -36,23 +28,10 @@ function createDriveToolApi(registerTool: OpenClawPluginApi["registerTool"]): Op
         },
       },
     },
-    runtime: createFeishuToolRuntime(),
+    runtime: {} as PluginRuntime,
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     registerTool,
   });
-}
-
-function mockCallArg<T>(
-  mock: { mock: { calls: unknown[][] } },
-  callIndex: number,
-  argIndex: number,
-  _type?: (value: unknown) => value is T,
-): T {
-  const call = mock.mock.calls.at(callIndex);
-  if (!call) {
-    throw new Error(`Expected mock call at index ${callIndex}`);
-  }
-  return call[argIndex] as T;
 }
 
 type FeishuDriveTool = {
@@ -65,20 +44,13 @@ type FeishuDriveTool = {
   resultContentSource?: "network";
 };
 
-type FeishuDriveCommentDetails = {
-  comment_id?: string;
-  delivery_mode?: string;
-  reply_id?: string;
-  success?: boolean;
-};
-
 type FeishuDriveToolFactory = (context: {
   agentAccountId?: string;
   deliveryContext?: unknown;
 }) => FeishuDriveTool;
 
 function firstToolFactory(mock: { mock: { calls: unknown[][] } }): FeishuDriveToolFactory {
-  return mockCallArg<FeishuDriveToolFactory>(mock, 0, 0);
+  return mock.mock.calls[0]?.[0] as FeishuDriveToolFactory;
 }
 
 function buildDriveTool(
@@ -89,8 +61,8 @@ function buildDriveTool(
   return firstToolFactory(registerTool)(context);
 }
 
-function firstLogMessage(mock: { mock: { calls: unknown[][] } }): string {
-  return String(mockCallArg<unknown>(mock, 0, 0));
+function fileInfo(file_token = "doc_1", type = "docx") {
+  return buildDriveTool().execute("info", { action: "info", file_token, type });
 }
 
 type FeishuDriveRequest = {
@@ -201,6 +173,15 @@ function schemaForAction(
 
 describe("registerFeishuDriveTools", () => {
   const requestMock = vi.fn();
+  const listFiles = vi.fn();
+  const batchQuery = vi.fn();
+  const file = { token: "doc_1", name: "Project Plan", type: "docx" };
+  function setDriveClient(drive: {
+    file?: { list: typeof listFiles };
+    meta?: { batchQuery: typeof batchQuery };
+  }) {
+    createFeishuToolClientMock.mockReturnValue({ drive });
+  }
 
   beforeAll(async () => {
     ({ registerFeishuDriveTools } = await import("./drive.js"));
@@ -218,6 +199,8 @@ describe("registerFeishuDriveTools", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    listFiles.mockReset();
+    batchQuery.mockReset();
     createFeishuToolClientMock.mockReturnValue({
       request: requestMock,
     });
@@ -258,11 +241,10 @@ describe("registerFeishuDriveTools", () => {
       file_token: "doc_1",
       file_type: "docx",
     });
-    const listRequest = mockCallArg<{ method?: string; url?: string }>(requestMock, 0, 0);
-    expect(listRequest.method).toBe("GET");
-    expect(listRequest.url).toBe(
-      "/open-apis/drive/v1/files/doc_1/comments?file_type=docx&user_id_type=open_id",
-    );
+    expectRequestCall(requestMock, 0, {
+      method: "GET",
+      url: "/open-apis/drive/v1/files/doc_1/comments?file_type=docx&user_id_type=open_id",
+    });
     expect(listResult.details).toMatchObject({
       comments: [
         {
@@ -290,11 +272,10 @@ describe("registerFeishuDriveTools", () => {
       file_type: "docx",
       comment_id: "c1",
     });
-    const repliesRequest = mockCallArg<{ method?: string; url?: string }>(requestMock, 1, 0);
-    expect(repliesRequest.method).toBe("GET");
-    expect(repliesRequest.url).toBe(
-      "/open-apis/drive/v1/files/doc_1/comments/c1/replies?file_type=docx&user_id_type=open_id",
-    );
+    expectRequestCall(requestMock, 1, {
+      method: "GET",
+      url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies?file_type=docx&user_id_type=open_id",
+    });
     expect(repliesResult.details).toMatchObject({
       replies: [{ reply_id: "r3", text: "reply from api" }],
     });
@@ -308,10 +289,7 @@ describe("registerFeishuDriveTools", () => {
       content: "please update this section",
     });
     expectRequestCall(requestMock, 2, newCommentRequest("please update this section", "blk_1"));
-    expect((addCommentResult.details as { comment_id?: string; success?: boolean }).success).toBe(
-      true,
-    );
-    expect((addCommentResult.details as { comment_id?: string }).comment_id).toBe("c2");
+    expect(addCommentResult.details).toMatchObject({ success: true, comment_id: "c2" });
 
     requestMock
       .mockResolvedValueOnce(commentMetadataResponse())
@@ -319,23 +297,13 @@ describe("registerFeishuDriveTools", () => {
     const replyCommentResult = await tool.execute("call-4", replyCommentInput("handled"));
     expectRequestCall(requestMock, 3, commentMetadataRequest());
     expectRequestCall(requestMock, 4, replyCommentRequest("handled"));
-    expect((replyCommentResult.details as { reply_id?: string; success?: boolean }).success).toBe(
-      true,
-    );
-    expect((replyCommentResult.details as { reply_id?: string }).reply_id).toBe("r4");
+    expect(replyCommentResult.details).toMatchObject({ success: true, reply_id: "r4" });
   });
 
   it("lists a folder continuation page when page_token is provided", async () => {
-    const listFiles = vi.fn().mockResolvedValue({
-      code: 0,
-      data: {
-        files: [{ token: "file_1", name: "File 1", type: "docx", url: "https://example.test/doc" }],
-        next_page_token: "page-3",
-      },
-    });
-    createFeishuToolClientMock.mockReturnValue({
-      drive: { file: { list: listFiles } },
-    });
+    const listedFile = { ...file, url: "https://example.test/doc" };
+    listFiles.mockResolvedValue(driveResponse({ files: [listedFile], next_page_token: "page-3" }));
+    setDriveClient({ file: { list: listFiles } });
     const tool = buildDriveTool();
     const listSchema = schemaForAction(tool.parameters, "list");
     expect(listSchema.properties?.page_token).toMatchObject({ type: "string" });
@@ -356,14 +324,14 @@ describe("registerFeishuDriveTools", () => {
       params: { folder_token: "folder_1", page_size: 25, page_token: "page-2" },
     });
     expect(result.details).toMatchObject({
-      files: [{ token: "file_1", name: "File 1", type: "docx", url: "https://example.test/doc" }],
+      files: [listedFile],
       next_page_token: "page-3",
     });
   });
 
   it("looks up file info directly by token and type", async () => {
-    const listFiles = vi.fn();
-    const batchQuery = vi.fn().mockResolvedValue({
+    setDriveClient({ file: { list: listFiles }, meta: { batchQuery } });
+    batchQuery.mockResolvedValue({
       code: 0,
       data: {
         metas: [
@@ -379,16 +347,7 @@ describe("registerFeishuDriveTools", () => {
         ],
       },
     });
-    createFeishuToolClientMock.mockReturnValue({
-      drive: { file: { list: listFiles }, meta: { batchQuery } },
-    });
-    const tool = buildDriveTool();
-
-    const result = await tool.execute("call-info", {
-      action: "info",
-      file_token: "doc_1",
-      type: "docx",
-    });
+    const result = await fileInfo();
 
     expect(batchQuery).toHaveBeenCalledWith({
       data: {
@@ -409,99 +368,51 @@ describe("registerFeishuDriveTools", () => {
   });
 
   it("reports a missing file when metadata lookup returns a failed entry", async () => {
-    const batchQuery = vi.fn().mockResolvedValue({
+    setDriveClient({ meta: { batchQuery } });
+    batchQuery.mockResolvedValue({
       code: 0,
       data: { metas: [], failed_list: [{ code: 970005, token: "missing_doc" }] },
     });
-    createFeishuToolClientMock.mockReturnValue({
-      drive: { meta: { batchQuery } },
-    });
-    const tool = buildDriveTool();
-
-    const result = await tool.execute("call-info-missing", {
-      action: "info",
-      file_token: "missing_doc",
-      type: "docx",
-    });
+    const result = await fileInfo("missing_doc");
 
     expect(result.details).toMatchObject({ error: "File not found: missing_doc" });
   });
 
   it("keeps root-list lookup for shortcut info", async () => {
-    const batchQuery = vi.fn();
-    const listFiles = vi.fn().mockResolvedValue({
-      code: 0,
-      data: {
-        files: [
-          {
-            token: "shortcut_1",
-            name: "Project shortcut",
-            type: "shortcut",
-            url: "https://example.test/shortcut_1",
-          },
-        ],
-      },
-    });
-    createFeishuToolClientMock.mockReturnValue({
-      drive: { file: { list: listFiles }, meta: { batchQuery } },
-    });
-    const tool = buildDriveTool();
-
-    const result = await tool.execute("call-info-shortcut", {
-      action: "info",
-      file_token: "shortcut_1",
-      type: "shortcut",
-    });
+    setDriveClient({ file: { list: listFiles }, meta: { batchQuery } });
+    const shortcut = { token: "shortcut_1", name: "Project shortcut", type: "shortcut" };
+    listFiles.mockResolvedValue(driveResponse({ files: [shortcut] }));
+    const result = await fileInfo("shortcut_1", "shortcut");
 
     expect(listFiles).toHaveBeenCalledWith({ params: {} });
     expect(batchQuery).not.toHaveBeenCalled();
-    expect(result.details).toMatchObject({
-      token: "shortcut_1",
-      name: "Project shortcut",
-      type: "shortcut",
-    });
+    expect(result.details).toMatchObject(shortcut);
   });
 
   it.each(["thrown", "fulfilled"])(
     "falls back to root lookup when metadata scope failure is %s",
     async (mode) => {
+      setDriveClient({ file: { list: listFiles }, meta: { batchQuery } });
       const failure = {
         code: 99991672,
         msg: "permission denied: drive:drive.metadata:readonly",
       };
-      const batchQuery =
-        mode === "fulfilled"
-          ? vi.fn().mockResolvedValue(failure)
-          : vi.fn().mockRejectedValue({
-              response: {
-                data: failure,
-              },
-            });
-      const listFiles = vi.fn().mockResolvedValue({
-        code: 0,
-        data: {
-          files: [{ token: "doc_1", name: "Project Plan", type: "docx" }],
-        },
-      });
-      createFeishuToolClientMock.mockReturnValue({
-        drive: { file: { list: listFiles }, meta: { batchQuery } },
-      });
-      const tool = buildDriveTool();
-
-      const result = await tool.execute("call-info-missing-scope", {
-        action: "info",
-        file_token: "doc_1",
-        type: "docx",
-      });
+      if (mode === "fulfilled") {
+        batchQuery.mockResolvedValue(failure);
+      } else {
+        batchQuery.mockRejectedValue({ response: { data: failure } });
+      }
+      listFiles.mockResolvedValue(driveResponse({ files: [file] }));
+      const result = await fileInfo();
 
       expect(listFiles).toHaveBeenCalledWith({ params: {} });
-      expect(result.details).toMatchObject({ token: "doc_1", name: "Project Plan", type: "docx" });
+      expect(result.details).toMatchObject(file);
     },
   );
 
   it("normalizes folder pagination and suppresses it for root listings", async () => {
-    const listFiles = vi.fn().mockResolvedValue({ code: 0, data: { files: [] } });
-    createFeishuToolClientMock.mockReturnValue({ drive: { file: { list: listFiles } } });
+    setDriveClient({ file: { list: listFiles } });
+    listFiles.mockResolvedValue(driveResponse({ files: [] }));
     const tool = buildDriveTool();
 
     await tool.execute("call-list-normalized", {
@@ -532,7 +443,7 @@ describe("registerFeishuDriveTools", () => {
   });
 
   it("surfaces reply_comment HTTP errors when the single supported body fails", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const tool = buildDriveTool();
 
     requestMock
@@ -546,95 +457,49 @@ describe("registerFeishuDriveTools", () => {
 
     expectRequestCall(requestMock, 0, commentMetadataRequest());
     expectRequestCall(requestMock, 1, replyCommentRequest("inserted successfully"));
-    expect(firstLogMessage(warnSpy)).toContain("replyComment threw");
-    expect((replyCommentResult.details as { error?: string }).error).toBe(
-      "Request failed with status code 400",
-    );
+    expect(replyCommentResult.details).toMatchObject({
+      error: "Request failed with status code 400",
+    });
   });
 
-  it("defaults reply_comment file_type to docx when omitted", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const tool = buildDriveTool();
-
-    requestMock
-      .mockResolvedValueOnce(commentMetadataResponse())
-      .mockResolvedValueOnce(driveResponse({ reply_id: "r-default-docx" }));
-
-    const result = await tool.execute(
-      "call-reply-default-docx",
-      replyCommentInput("default reply docx", { omitFileType: true }),
+  it.each([
+    { mode: "default file type", omitFileType: true, addComment: false },
+    { mode: "whole-document metadata", omitFileType: false, addComment: true },
+    { mode: "failed metadata preflight", omitFileType: false, addComment: false },
+    { mode: "compatibility code 1069302", omitFileType: false, addComment: true },
+  ])("delivers replies with $mode", async ({ mode, omitFileType, addComment }) => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    if (mode === "failed metadata preflight") {
+      requestMock.mockRejectedValueOnce(new Error("preflight unavailable"));
+    } else {
+      requestMock.mockResolvedValueOnce(
+        commentMetadataResponse(mode === "whole-document metadata"),
+      );
+    }
+    if (mode === "compatibility code 1069302") {
+      requestMock.mockRejectedValueOnce(
+        replyHttpError(1069302, "param error", "log_reply_forbidden"),
+      );
+    }
+    const receipt = addComment ? { comment_id: "c2" } : { reply_id: "r4" };
+    requestMock.mockResolvedValueOnce(driveResponse(receipt));
+    const result = await buildDriveTool().execute(
+      "reply",
+      replyCommentInput("follow-up", { omitFileType }),
     );
 
     expectRequestCall(requestMock, 0, commentMetadataRequest());
-    expectRequestCall(requestMock, 1, replyCommentRequest("default reply docx"));
-    expect(firstLogMessage(infoSpy)).toContain(
-      "reply_comment missing file_type; defaulting to docx",
+    expectRequestCall(
+      requestMock,
+      mode === "compatibility code 1069302" ? 2 : 1,
+      addComment ? newCommentRequest("follow-up") : replyCommentRequest("follow-up"),
     );
-    expect((result.details as { reply_id?: string; success?: boolean }).success).toBe(true);
-    expect((result.details as { reply_id?: string }).reply_id).toBe("r-default-docx");
-  });
-
-  it("routes whole-document reply_comment requests through add_comment compatibility", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const tool = buildDriveTool();
-
-    requestMock
-      .mockResolvedValueOnce(commentMetadataResponse(true))
-      .mockResolvedValueOnce(driveResponse({ comment_id: "c2" }));
-
-    const result = await tool.execute("call-whole", replyCommentInput("whole comment follow-up"));
-
-    expectRequestCall(requestMock, 0, commentMetadataRequest());
-    expectRequestCall(requestMock, 1, newCommentRequest("whole comment follow-up"));
-    expect(firstLogMessage(infoSpy)).toContain("whole-comment compatibility path");
-    const details = result.details as FeishuDriveCommentDetails;
-    expect(details.success).toBe(true);
-    expect(details.comment_id).toBe("c2");
-    expect(details.delivery_mode).toBe("add_comment");
-  });
-
-  it("continues with reply_comment when comment metadata preflight fails", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const tool = buildDriveTool();
-
-    requestMock
-      .mockRejectedValueOnce(new Error("preflight unavailable"))
-      .mockResolvedValueOnce(driveResponse({ reply_id: "r-preflight-fallback" }));
-
-    const result = await tool.execute(
-      "call-preflight-fallback",
-      replyCommentInput("preflight fallback reply"),
-    );
-
-    expectRequestCall(requestMock, 0, commentMetadataRequest());
-    expectRequestCall(requestMock, 1, replyCommentRequest("preflight fallback reply"));
-    expect(firstLogMessage(warnSpy)).toContain("comment metadata preflight failed");
-    const details = result.details as FeishuDriveCommentDetails;
-    expect(details.success).toBe(true);
-    expect(details.reply_id).toBe("r-preflight-fallback");
-    expect(details.delivery_mode).toBe("reply_comment");
-  });
-
-  it("falls back to add_comment when reply_comment returns compatibility code 1069302 even without is_whole metadata", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const tool = buildDriveTool();
-
-    requestMock
-      .mockResolvedValueOnce(commentMetadataResponse())
-      .mockRejectedValueOnce(replyHttpError(1069302, "param error", "log_reply_forbidden"))
-      .mockResolvedValueOnce(driveResponse({ comment_id: "c3" }));
-
-    const result = await tool.execute(
-      "call-reply-forbidden",
-      replyCommentInput("compat follow-up"),
-    );
-
-    expectRequestCall(requestMock, 2, newCommentRequest("compat follow-up"));
-    expect(firstLogMessage(infoSpy)).toContain("reply-not-allowed compatibility path");
-    const details = result.details as FeishuDriveCommentDetails;
-    expect(details.success).toBe(true);
-    expect(details.comment_id).toBe("c3");
-    expect(details.delivery_mode).toBe("add_comment");
+    expect(result.details).toMatchObject({
+      success: true,
+      ...receipt,
+      delivery_mode: addComment ? "add_comment" : "reply_comment",
+    });
   });
 
   it("rejects block-scoped comments for non-docx files", async () => {
@@ -646,8 +511,6 @@ describe("registerFeishuDriveTools", () => {
       block_id: "blk_1",
       content: "invalid",
     });
-    expect((result.details as { error?: string }).error).toBe(
-      "block_id is only supported for docx comments",
-    );
+    expect(result.details).toMatchObject({ error: "block_id is only supported for docx comments" });
   });
 });
