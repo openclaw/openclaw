@@ -254,3 +254,49 @@ Worked `models.providers` configurations. For what each field means, see [Custom
 
   </Accordion>
 </AccordionGroup>
+
+## Separate routes for interactive and background work
+
+A shared OpenAI-compatible gateway can expose different routes for interactive
+and background requests while serving the same model. OpenClaw can select those
+routes through its existing provider and subagent model configuration.
+
+1. Keep the interactive provider's `baseUrl` on the gateway's normal route, for
+   example `http://127.0.0.1:18100/v1`.
+2. Copy that provider under a new ID, such as `local-background`, and change only
+   its `baseUrl` to the gateway's background route, for example
+   `http://127.0.0.1:18100/background/v1`. Retain its authentication, model IDs,
+   model metadata, capabilities and transport settings. These route names are
+   gateway conventions, not an OpenClaw API.
+3. Copy any per-model generation settings from
+   `agents.defaults.models["local/YOUR_EXISTING_MODEL_ID"]` to the new exact
+   `local-background/YOUR_EXISTING_MODEL_ID` reference. Keep the original
+   settings; do not duplicate a picker alias across both references.
+4. Set the default subagent route while retaining the intended thinking and
+   fallback policy:
+
+```json5 validate=false
+{
+  agents: {
+    defaults: {
+      model: { primary: "local/YOUR_EXISTING_MODEL_ID" },
+      subagents: {
+        model: { primary: "local-background/YOUR_EXISTING_MODEL_ID" },
+      },
+    },
+  },
+}
+```
+
+This is a partial configuration fragment. Merge it with existing settings rather
+than replacing them. Per-agent subagent settings and explicit spawn model choices
+can override this global default. Existing agent `models.json` base URLs and
+model allowlists also remain authoritative; review those before switching routes.
+An explicit model selection affects fallback precedence, so retain the intended
+fallback lists instead of assuming the main route's chain is inherited.
+
+Scheduled jobs can select the background provider with their explicit
+[`--model` option](/automation/cron-jobs/payloads#param-model). This setup does not
+classify prompt text or change tool permissions. The gateway owns scheduling;
+using a background URL alone does not prove priority, preemption or faster
+completion.
