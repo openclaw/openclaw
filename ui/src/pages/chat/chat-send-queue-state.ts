@@ -36,6 +36,7 @@ import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import { isActiveLeafChangedError } from "./chat-send-ack.ts";
 import { restoreRejectedChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { reconnectSafeQueuedSendState } from "./chat-send-eligibility.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
   chatSendHoldReason,
@@ -54,14 +55,6 @@ import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 registerChatMessageMetadataEnglish();
-
-export function reconnectSafeQueuedSendState(
-  host: Pick<ChatHost, "client" | "connected" | "gatewayWorkPaused">,
-): "waiting-idle" | "waiting-reconnect" {
-  return host.connected && host.client && !host.gatewayWorkPaused
-    ? "waiting-idle"
-    : "waiting-reconnect";
-}
 
 export function resolveQueuedChatLeaf(
   host: ChatHost,
@@ -199,25 +192,6 @@ export function finishChatDeliveryAdmission(
     return "pending";
   }
   return current;
-}
-
-export function canSendVolatileQueueItem(
-  host: ChatHost,
-  item: ChatQueueItem,
-  routingSessionKey = item.sessionKey ?? host.sessionKey,
-): boolean {
-  return (
-    host.connected &&
-    !host.gatewayWorkPaused &&
-    Boolean(host.client) &&
-    !host.chatLoading &&
-    !isInitialChatHistoryUnavailable(host) &&
-    !isExpiredIncognitoSession(host, routingSessionKey) &&
-    !isChatBusy(host) &&
-    !getPendingChatPickerPatch(host, routingSessionKey, item.agentId) &&
-    visibleSessionMatches(host, routingSessionKey, item.agentId) &&
-    host.chatQueue[0]?.id === item.id
-  );
 }
 
 export function finishScopedChatSending(host: ChatHost, scope: StoredChatOutboxScope): void {
@@ -417,22 +391,6 @@ export async function settleDeliverySettings(
     return "failed";
   }
   return deliver(current);
-}
-
-export async function waitForPendingChatSettings(
-  host: ChatHost,
-  sessionKey: string,
-  initialPending: Promise<boolean>,
-): Promise<boolean> {
-  let pending = initialPending;
-  while (await pending) {
-    const nextPending = getPendingChatPickerPatch(host, sessionKey);
-    if (!nextPending || nextPending === pending) {
-      return true;
-    }
-    pending = nextPending;
-  }
-  return false;
 }
 
 export async function prepareQueuedChatPayload(

@@ -61,6 +61,7 @@ describe("config state model", () => {
       const initialLoad = runtimeConfig.ensureLoaded();
       const refresh = runtimeConfig.refresh({ background: true });
       expect(runtimeConfig.state.configLoading).toBe(true);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
       latest.reject(new Error("Current refresh failed"));
       await refresh;
       expect(runtimeConfig.state.configLoading).toBe(false);
@@ -186,6 +187,8 @@ describe("config state model", () => {
 
     const staleConfigLoad = runtimeConfig.ensureLoaded();
     const staleSchemaLoad = runtimeConfig.ensureSchemaLoaded();
+    // Exercise in-flight RPC retirement after the cold editor module activates.
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     publish(false);
     publish(true);
     const currentConfigLoad = runtimeConfig.ensureLoaded();

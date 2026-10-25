@@ -438,6 +438,7 @@ export function ChannelsPage() {
   onSettled(() => {
     // Gateway receipts retire plugin operations and pairing prompts synchronously.
     connection.connect();
+    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     const applyChannels = () => {
       pluginPresentation.details.sync();
       reconcilePairingFilter(context.channels.state.pairingSnapshot);
