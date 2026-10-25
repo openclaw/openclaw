@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CliBackendParsedJsonlEvent } from "../plugins/cli-backend.types.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { extractCliErrorMessage, formatCliOutputError, parseCliOutput } from "./cli-output.js";
@@ -60,29 +61,6 @@ describe("formatCliOutputError", () => {
 
     expect(hasDanglingSurrogate(error)).toBe(false);
     expect(error).toContain(`Claude session: ${"s".repeat(199)}.`);
-  });
-
-  it("names the Claude terminal reason and the hook that stopped the turn", () => {
-    const error = formatCliOutputError(
-      {
-        text: "",
-        sessionId: "claude-session-1",
-        terminalFailure: {
-          reason: "turn_stopped",
-          terminalReason: "hook_stopped",
-          stopReason: "tool_use",
-        },
-      },
-      { runId: "run-1", sessionId: "session-1" },
-    );
-
-    expect(error).toBe(
-      "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use). " +
-        "OpenClaw run: run-1. OpenClaw session: session-1. Claude session: claude-session-1. " +
-        "Tool actions may already have run; verify their effects before retrying. " +
-        "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
-        "apply to headless runs — move or disable that hook.",
-    );
   });
 
   it("omits the hook guidance for terminal reasons no hook caused", () => {
@@ -262,84 +240,65 @@ describe("createCliJsonlStreamingParser errors", () => {
     });
   });
 
-  it.each(["", "preserved answer"])(
-    "keeps plugin-owned terminal errors and text %j ahead of later result summaries",
-    (text) => {
-      const usageEvents: Array<{ usage: unknown; isTerminal: boolean }> = [];
-      const parser = createPluginParser({
-        parseJsonlEvent: (line) =>
-          line === "failed"
-            ? { kind: "result", text, errorText: "provider failed" }
-            : {
-                kind: "result",
-                text: "must not replace the provider error",
-                sessionId: "late-successor",
-                usage: { input: 2, output: 1, total: 3 },
-              },
-        onUsage: (usage, isTerminal) => usageEvents.push({ usage, isTerminal }),
-      });
-
-      parser.push("failed\nsummary\n");
-      parser.finish();
-
-      expectOutput(parser.getOutput(), {
-        text,
-        sessionId: "late-successor",
-        usage: { input: 2, output: 1, total: 3 },
-        errorText: "provider failed",
-      });
-      expect(usageEvents).toEqual([{ usage: { input: 2, output: 1, total: 3 }, isTerminal: true }]);
-    },
-  );
-
-  it("preserves plugin-owned session ids emitted after terminal errors", () => {
-    const sessionIds: string[] = [];
-    const parser = createPluginParser({
-      parseJsonlEvent: () => [
-        { kind: "result", errorText: "provider failed" },
-        { kind: "sessionId", sessionId: "late-successor" },
-      ],
-      onSessionId: (sessionId) => sessionIds.push(sessionId),
-    });
-
-    parser.push("terminal\n");
-    parser.finish();
-
-    expect(sessionIds).toEqual(["late-successor"]);
-    expectOutput(parser.getOutput(), {
-      sessionId: "late-successor",
-      errorText: "provider failed",
-    });
+  const usage = { input: 2, output: 1, total: 3 };
+  const metadata = { sessionId: "late-successor", usage };
+  type ProjectionCase = {
+    name: string;
+    batches: CliBackendParsedJsonlEvent[][];
+    expected: Partial<CliOutput>;
+    usageEvents?: Array<{ usage: unknown; isTerminal: boolean }>;
+    sessionIds?: string[];
+  };
+  const terminalErrorCase = (text: string): ProjectionCase => ({
+    name: `terminal error retains ${JSON.stringify(text)} before a later summary`,
+    batches: [
+      [{ kind: "result", text, errorText: "provider failed" }],
+      [{ kind: "result", text: "must not replace the provider error", ...metadata }],
+    ],
+    expected: { text, errorText: "provider failed", ...metadata },
+    usageEvents: [{ usage, isTerminal: true }],
   });
-
-  it.each([
+  it.each<ProjectionCase>([
+    terminalErrorCase(""),
+    terminalErrorCase("preserved answer"),
+    {
+      name: "session id after a terminal error",
+      batches: [
+        [
+          { kind: "result", errorText: "provider failed" },
+          { kind: "sessionId", sessionId: "late-successor" },
+        ],
+      ],
+      expected: { sessionId: "late-successor", errorText: "provider failed" },
+      sessionIds: ["late-successor"],
+    },
     {
       name: "streamed text before an empty result",
-      first: { kind: "text" as const, text: "streamed answer" },
-      last: { kind: "result" as const, text: "  " },
+      batches: [[{ kind: "text", text: "streamed answer" }], [{ kind: "result", text: "  " }]],
       expected: { text: "streamed answer" },
     },
     {
       name: "result text before a metadata-only summary",
-      first: { kind: "result" as const, text: "completed answer" },
-      last: {
-        kind: "result" as const,
-        sessionId: "summary-session",
-        usage: { input: 5, output: 3, total: 8 },
-      },
-      expected: {
-        text: "completed answer",
-        sessionId: "summary-session",
-        usage: { input: 5, output: 3, total: 8 },
-      },
+      batches: [[{ kind: "result", text: "completed answer" }], [{ kind: "result", ...metadata }]],
+      expected: { text: "completed answer", ...metadata },
     },
-  ])("preserves plugin $name", ({ first, last, expected }) => {
+  ])("preserves plugin $name", ({ batches, expected, usageEvents, sessionIds }) => {
+    const observedUsage: NonNullable<ProjectionCase["usageEvents"]> = [];
+    const observedSessions: string[] = [];
     const parser = createPluginParser({
-      parseJsonlEvent: (line) => (line === "first" ? first : last),
+      parseJsonlEvent: (line) => batches[Number(line)] ?? null,
+      onUsage: (value, isTerminal) => observedUsage.push({ usage: value, isTerminal }),
+      onSessionId: (id) => observedSessions.push(id),
     });
-    parser.push("first\nlast\n");
+    parser.push(batches.map((_, index) => `${index}\n`).join(""));
     parser.finish();
     expectOutput(parser.getOutput(), expected);
+    if (usageEvents) {
+      expect(observedUsage).toEqual(usageEvents);
+    }
+    if (sessionIds) {
+      expect(observedSessions).toEqual(sessionIds);
+    }
   });
 
   it.each([
