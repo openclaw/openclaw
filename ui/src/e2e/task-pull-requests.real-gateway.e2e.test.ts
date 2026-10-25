@@ -187,11 +187,10 @@ suite.define(() => {
     };
     gitOperationChannel.subscribe(recordGitOperation);
     test.onTestFinished(() => gitOperationChannel.unsubscribe(recordGitOperation));
-    const diagnostics = recordTaskPrDiagnostics(
-      [parentKey, ...numbers.map((_, index) => "agent:main:subagent:task-pr-child-" + index)],
-      numbers,
-      branch,
-    );
+    const diagnostics = recordTaskPrDiagnostics([
+      parentKey,
+      ...numbers.map((_, index) => "agent:main:subagent:task-pr-child-" + index),
+    ]);
     test.onTestFinished(diagnostics.stop);
     await suite.runScenario(test, {
       retainedState: () => state?.root,
@@ -470,7 +469,7 @@ suite.define(() => {
                   ).toBe(1);
                 }
               } catch (error) {
-                await diagnostics.capture(page, stage);
+                diagnostics.capture(page, stage);
                 const hydratedCount = (snapshot: Record<string, unknown> | undefined) =>
                   Array.isArray(snapshot?.taskPullRequests)
                     ? snapshot.taskPullRequests.filter(

@@ -7,11 +7,7 @@ import {
 } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 
 // The scenario owns full PR snapshots. This recorder adds only bounded, content-free ordering.
-export function recordTaskPrDiagnostics(
-  sessionKeys: string[],
-  _numbers: number[],
-  _branch: string,
-) {
+export function recordTaskPrDiagnostics(sessionKeys: string[]) {
   const limit = 128;
   const events: Record<string, ControlUiE2eFailureFact>[] = [];
   let dropped = 0;

@@ -68,7 +68,7 @@ describe("qa-channel gateway", () => {
   async function busWithMessages(...texts: string[]) {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
-    onTestFinished(bus.stop);
+    onTestFinished(() => bus.stop());
     const messages = texts.map((text) =>
       state.addInboundMessage({
         accountId: "default",
