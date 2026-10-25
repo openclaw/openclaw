@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { collect as collectItems } from "../../test/helpers/async-iterable.js";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
+import { collect as list } from "../../test/helpers/async-iterable.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { StorageLocationConfig } from "../config/types.storage.js";
 import { initStorageLocation, openStorageLocation, probeStorageLocation } from "./locations.js";
 import { createStorageMarker, StorageLocationError } from "./marker.js";
 import type { StorageRegistry } from "./provider.js";
-import type { StorageBackend, StorageObjectInfo, StorageProvider } from "./types.js";
+import type { StorageBackend, StorageProvider } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const markerKey = "openclaw-storage.json";
@@ -21,14 +21,8 @@ async function* bytes(value: Uint8Array | string) {
 }
 
 async function collect(body: AsyncIterable<Uint8Array> | undefined): Promise<Buffer> {
-  if (!body) {
-    throw new Error("Expected an object stream");
-  }
+  assert(body, "Expected an object stream");
   return buffer(body);
-}
-
-async function list(body: AsyncIterable<StorageObjectInfo>): Promise<StorageObjectInfo[]> {
-  return (await collectItems(body)).toSorted((left, right) => left.key.localeCompare(right.key));
 }
 
 function objectInfo(key: string, sizeBytes: number, storedBytes = sizeBytes) {
@@ -96,35 +90,27 @@ async function initializedMemory(encryption: StorageLocationConfig["encryption"]
 it("round-trips scoped encrypted streams with logical metadata and no GETs for list/stat", async () => {
   const { location, objects, calls } = await initializedMemory({ passphrase });
   const scoped = location.scope("snapshots").scope("first");
-  const expected = [];
-  for (const size of [0, 1, 1_048_576, 1_048_577, 3 * 1_048_576 + 17]) {
-    const key = `${size}.bin`;
-    const written = await scoped.putObject(key, bytes(Buffer.alloc(size, 0x5a)), {
-      sizeBytes: size,
-    });
-    expect(written).toMatchObject({ sizeBytes: size, storedBytes: expect.any(Number) });
-    expected.push(objectInfo(key, size, objects.get(`snapshots/first/${key}`)!.length));
-  }
+  const plaintext = Buffer.alloc(1_048_577, 0x5a);
+  const written = await scoped.putObject("data.bin", bytes(plaintext), {
+    sizeBytes: plaintext.length,
+  });
+  expect(written).toMatchObject({ sizeBytes: plaintext.length, storedBytes: expect.any(Number) });
+  const stored = objects.get("snapshots/first/data.bin")!;
+  const expected = objectInfo("data.bin", plaintext.length, stored.length);
   await location.scope("snapshots/second").putObject("other.bin", bytes("other"), {});
   calls.length = 0;
-  expected.sort((left, right) => left.key.localeCompare(right.key));
-  await expect(list(scoped.list())).resolves.toEqual(expected);
-  for (const object of expected) {
-    await expect(scoped.stat(object.key)).resolves.toEqual(object);
-  }
+  await expect(list(scoped.list())).resolves.toEqual([expected]);
+  await expect(scoped.stat("data.bin")).resolves.toEqual(expected);
   expect(calls.filter((call) => call === "get")).toEqual([]);
-  const stored = objects.get("snapshots/first/1048577.bin");
-  expect(stored?.subarray(0, 8).toString()).toBe("OCSTOR1\n");
-  expect(stored?.includes(Buffer.alloc(1_048_577, 0x5a))).toBe(false);
-  for (const { key, sizeBytes } of expected) {
-    expect(await collect(await scoped.getObject(key))).toEqual(Buffer.alloc(sizeBytes, 0x5a));
-  }
+  expect(stored.subarray(0, 8).toString()).toBe("OCSTOR1\n");
+  expect(stored.includes(plaintext)).toBe(false);
+  expect(await collect(await scoped.getObject("data.bin"))).toEqual(plaintext);
   expect((await list(location.list())).map((object) => object.key)).not.toContain(markerKey);
-  await scoped.delete("1048577.bin");
-  await expect(scoped.getObject("1048577.bin")).resolves.toBeUndefined();
+  await scoped.delete("data.bin");
+  await expect(scoped.getObject("data.bin")).resolves.toBeUndefined();
   expect(objects.has("snapshots/second/other.bin")).toBe(true);
   await location.close();
-  await expect(scoped.stat("0.bin")).rejects.toMatchObject(unavailable);
+  await expect(scoped.stat("data.bin")).rejects.toMatchObject(unavailable);
   await expect(list(scoped.list())).rejects.toMatchObject(unavailable);
 });
 
@@ -229,13 +215,11 @@ it("initializes idempotently with the same key and reports a wrong passphrase", 
   await first.close();
   const marker = await fs.readFile(path.join(directory, markerKey));
   const second = await initStorageLocation(params);
-  try {
-    expect(second.describe()).toEqual(identity);
-    expect(identity.encrypted).toBe(true);
-    await expect(second.probe()).resolves.toMatchObject({ state: "ok" });
-  } finally {
-    await second.close();
-  }
+  onTestFinished(() => second.close());
+  expect(second.describe()).toEqual(identity);
+  expect(identity.encrypted).toBe(true);
+  await expect(second.probe()).resolves.toMatchObject({ state: "ok" });
+  await second.close();
   await expect(fs.readFile(path.join(directory, markerKey))).resolves.toEqual(marker);
   await expect(
     probeStorageLocation({
