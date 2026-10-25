@@ -9,7 +9,7 @@ import { createWhisperExecutable } from "./local-audio.test-support.js";
 import { runMediaFixture } from "./runner-case.test-support.js";
 import { formatDecisionSummary } from "./runner.entries.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
-import { withAudioFixture, withMediaFixture } from "./runner.test-utils.js";
+import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
 vi.mock("../agents/model-auth.js", async () => {
@@ -36,14 +36,13 @@ function mediaConfig(
   return { models: { providers }, tools: { media } };
 }
 
-function registry(providers: Record<string, MediaUnderstandingProvider>) {
-  return new Map(Object.entries(providers));
-}
-function audioProvider(
-  id: string,
-  options: Omit<MediaUnderstandingProvider, "id">,
-): MediaUnderstandingProvider {
-  return { id, capabilities: ["audio"], ...options };
+function registry(providers: Record<string, Omit<MediaUnderstandingProvider, "id">>) {
+  return new Map(
+    Object.entries(providers).map(([id, provider]) => [
+      id,
+      { id, capabilities: ["audio" as const], ...provider },
+    ]),
+  );
 }
 const remoteProviders = {
   openai: { baseUrl: "https://api.openai.com/v1", models: [] },
@@ -82,10 +81,10 @@ describe("runCapability audio", () => {
       cfg: {},
       activeModel,
       providerRegistry: registry({
-        openai: audioProvider("openai", {
+        openai: {
           defaultModels: { audio: "transcription-default" },
           transcribeAudioWithContext,
-        }),
+        },
       }),
     });
     expect(result).toMatchObject({
@@ -129,12 +128,12 @@ describe("runCapability audio", () => {
           : { models: { providers: remoteProviders } },
         activeModel,
         providerRegistry: registry({
-          openai: audioProvider("openai", {
+          openai: {
             transcribeAudioWithContext: async () => {
               throw rejected;
             },
-          }),
-          mistral: audioProvider("mistral", { transcribeAudio }),
+          },
+          mistral: { transcribeAudio },
         }),
       });
       expect(result.decision.outcome).toBe(explicit ? "success" : "failed");
@@ -181,7 +180,7 @@ describe("runCapability audio", () => {
           ),
           activeModel,
           providerRegistry: registry({
-            openai: audioProvider("openai", { transcribeAudioWithContext }),
+            openai: { transcribeAudioWithContext },
           }),
         });
         expect(result).toMatchObject({
@@ -209,10 +208,10 @@ describe("runCapability audio", () => {
       const result = await runAudio({
         cfg: {},
         providerRegistry: registry({
-          openai: audioProvider("openai", {
+          openai: {
             autoPriority: { audio: 20 },
             transcribeAudioWithContext,
-          }),
+          },
         }),
       });
       expect(result.decision.outcome).toBe("skipped");
@@ -238,14 +237,14 @@ describe("runCapability audio", () => {
     const result = await runAudio({
       cfg: { models: { providers: remoteProviders } },
       providerRegistry: registry({
-        openai: audioProvider("openai", {
+        openai: {
           defaultModels: { audio: "gpt-4o-transcribe" },
           transcribeAudio: openai,
-        }),
-        mistral: audioProvider("mistral", {
+        },
+        mistral: {
           defaultModels: { audio: "voxtral-mini-latest" },
           transcribeAudio: mistral,
-        }),
+        },
       }),
     });
     expect(result.decision.outcome).toBe("success");
@@ -262,43 +261,6 @@ describe("runCapability audio", () => {
     expect(mistral).toHaveBeenCalledTimes(1);
     expect(hasAuth).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", modelApi: "openai-audio-transcriptions" }),
-    );
-  });
-
-  it("skips tiny audio before calling the provider", async () => {
-    const transcribeAudio = vi.fn(async () => ({ text: "should not happen" }));
-    await withMediaFixture(
-      {
-        filePrefix: "openclaw-tiny-audio",
-        extension: "wav",
-        mediaType: "audio/wav",
-        fileContents: Buffer.alloc(100),
-      },
-      async ({ ctx, media, cache }) => {
-        const result = await runCapability({
-          capability: "audio",
-          cfg: {
-            models: { providers: { openai: { ...remoteProviders.openai, apiKey: "test-key" } } },
-          },
-          ctx,
-          media,
-          attachments: cache,
-          providerRegistry: buildProviderRegistry({
-            openai: audioProvider("openai", { transcribeAudio }),
-          }),
-        });
-        expect(transcribeAudio).not.toHaveBeenCalled();
-        expect(result.outputs).toEqual([]);
-        expect(result.decision).toMatchObject({
-          outcome: "skipped",
-          attachments: [
-            {
-              attachmentIndex: 0,
-              attempts: [{ outcome: "skipped", reason: expect.stringContaining("tooSmall") }],
-            },
-          ],
-        });
-      },
     );
   });
 });

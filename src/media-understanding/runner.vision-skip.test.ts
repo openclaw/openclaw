@@ -190,9 +190,12 @@ function expectImageOutput(
 }
 
 const activeVisionModel = { provider: "openai", model: "gpt-4.1" };
-const explicitImageConfig = imageConfig([
-  { provider: "openrouter", model: "google/gemini-2.5-flash", capabilities: ["image"] },
-]);
+const explicitImageModel = {
+  provider: "openrouter",
+  model: "google/gemini-2.5-flash",
+  capabilities: ["image" as const],
+};
+const explicitImageConfig = imageConfig([explicitImageModel]);
 
 beforeEach(() => {
   imagePolicy.mockReset().mockResolvedValue({});
@@ -365,21 +368,41 @@ it("records native handoff and remote failures for selected and dropped images",
   });
 });
 
-it("runs explicit image models untouched by native-vision probe failure", async () => {
-  await unavailableCatalog(async () => {
-    const ctx = await applyImage({
-      cfg: explicitImageConfig,
-      providers: { openrouter: imageProvider("openrouter") },
-      activeModel: activeVisionModel,
-    });
-    expect(ctx.Body).toContain(plantedVisionSentinel);
-    expect(findImageDecision(ctx)).toMatchObject({
-      outcome: "success",
-      attachmentDispositions: { 0: { kind: "handled" } },
-    });
-    expect(findImageDecision(ctx)).not.toHaveProperty("nativeVisionActive");
-  });
-});
+it.each([false, true])(
+  "runs explicit image models despite native probe failure: %s",
+  async (fails) => {
+    const describeImage = describeSentinel();
+    const check = async () => {
+      const ctx = await applyImage(
+        {
+          cfg: explicitImageConfig,
+          providers: { openrouter: imageProvider("openrouter", describeImage) },
+          activeModel: activeVisionModel,
+        },
+        4,
+      );
+      const decision = findImageDecision(ctx);
+      expect(decision).toMatchObject({
+        outcome: "success",
+        attachmentDispositions: {
+          0: { kind: "handled" },
+          1: { kind: "not-selected" },
+          2: { kind: "not-selected" },
+          3: { kind: "not-selected" },
+        },
+      });
+      if (fails) {
+        expect(decision).not.toHaveProperty("nativeVisionActive");
+      } else {
+        expect(decision?.nativeVisionActive).toBe(true);
+      }
+      expect(describeImage).toHaveBeenCalledOnce();
+      expect(ctx.Body).toContain(plantedVisionSentinel);
+      expect(ctx.Body).not.toContain("attachment limit reached");
+    };
+    await (fails ? unavailableCatalog(check) : check());
+  },
+);
 
 it("keeps disabled outcomes precise and suppresses markers when the vision probe fails", async () => {
   const ctx: MsgContext = {
@@ -401,41 +424,10 @@ it("keeps disabled outcomes precise and suppresses markers when the vision probe
   });
 });
 
-it("uses explicit image models even when the active model supports vision", async () => {
-  const describeImage = describeSentinel();
-  const ctx = await applyImage(
-    {
-      cfg: explicitImageConfig,
-      providers: { openrouter: imageProvider("openrouter", describeImage) },
-      activeModel: activeVisionModel,
-    },
-    4,
-  );
-  expect(findImageDecision(ctx)).toMatchObject({
-    outcome: "success",
-    nativeVisionActive: true,
-    attachmentDispositions: {
-      1: { kind: "not-selected" },
-      2: { kind: "not-selected" },
-      3: { kind: "not-selected" },
-    },
-  });
-  expect(describeImage).toHaveBeenCalledOnce();
-  expect(ctx.Body).toContain(plantedVisionSentinel);
-  expect(ctx.Body).not.toContain("attachment limit reached");
-});
-
 it("lets per-request image prompts override entry prompts", async () => {
   let seenPrompt: string | undefined;
   const result = await runImage({
-    cfg: imageConfig([
-      {
-        provider: "openrouter",
-        model: "google/gemini-2.5-flash",
-        prompt: "entry prompt",
-        capabilities: ["image"],
-      },
-    ]),
+    cfg: imageConfig([{ ...explicitImageModel, prompt: "entry prompt" }]),
     providerRegistry: imageRegistry(
       imageProvider("openrouter", async ({ prompt, model }) => {
         seenPrompt = prompt;
@@ -476,19 +468,9 @@ it("skips malformed image defaults and runs providerless fallbacks on their conf
     ),
   });
   expectImageOutput(result, "ollama", "qwen2.5vl:7b", "ok qwen2.5vl:7b");
-  expect(result.decision.attachments[0]?.attempts).toEqual([
-    expect.objectContaining({
-      type: "provider",
-      provider: "ollama",
-      model: "moondream",
-      outcome: "failed",
-    }),
-    expect.objectContaining({
-      type: "provider",
-      provider: "ollama",
-      model: "qwen2.5vl:7b",
-      outcome: "success",
-    }),
+  expect(result.decision.attachments[0]?.attempts).toMatchObject([
+    { type: "provider", provider: "ollama", model: "moondream", outcome: "failed" },
+    { type: "provider", provider: "ollama", model: "qwen2.5vl:7b", outcome: "success" },
   ]);
 });
 
@@ -519,15 +501,13 @@ it("routes legacy MiniMax chat models through VLM despite catalog image input", 
 });
 
 it("passes workspace and agent context to auth and writable catalog reads", async () => {
-  const { hasAvailableAuthForProvider: checkAuth } = await import("../agents/model-auth.js");
-  const hasAvailableAuthForProvider = vi.mocked(checkAuth);
-  hasAvailableAuthForProvider.mockClear();
+  selectionAuth.mockClear();
   const scope = {
     agentId: "vision-agent",
     agentDir: "/tmp/openclaw-agent",
     workspaceDir: "/tmp/openclaw-workspace",
   };
-  await hasAvailableAuthForProvider.withImplementation(
+  await selectionAuth.withImplementation(
     async (params) => params.workspaceDir === "/tmp/openclaw-workspace",
     async () => {
       const result = await runImage({
@@ -537,7 +517,7 @@ it("passes workspace and agent context to auth and writable catalog reads", asyn
         activeModel: { provider: "workspace-vision", model: "vision-v1" },
       });
       expectImageOutput(result, "workspace-vision", "vision-v1");
-      expect(hasAvailableAuthForProvider).toHaveBeenCalledWith(
+      expect(selectionAuth).toHaveBeenCalledWith(
         expect.objectContaining({
           provider: "workspace-vision",
           agentDir: "/tmp/openclaw-agent",
@@ -551,18 +531,15 @@ it("passes workspace and agent context to auth and writable catalog reads", asyn
 });
 
 it("auto-selects configured OpenRouter image providers with a resolved model", async () => {
-  let seenModel: string | undefined;
   const result = await runImage({
     cfg: configuredProvider("openrouter", "https://openrouter.ai/api/v1", "test-openrouter-key"),
     providerRegistry: imageRegistry(
       imageProvider("openrouter", async ({ model }) => {
-        seenModel = model;
         return { text: "openrouter ok", model };
       }),
     ),
   });
   expectImageOutput(result, "openrouter", "auto", "openrouter ok");
-  expect(seenModel).toBe("auto");
 });
 
 it("skips configured image providers without an auto-resolvable model", async () => {
