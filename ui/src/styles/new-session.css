@@ -631,7 +631,6 @@ span.new-session-page__select {
 .session-group-defaults__mode-dropdown > .session-group-defaults__mode-menu {
   width: min(100cqw, calc(100vw - 48px));
   padding: var(--menu-padding);
-  border: 1px solid var(--floating-panel-border, var(--border-strong));
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);

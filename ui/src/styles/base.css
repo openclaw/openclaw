@@ -279,8 +279,6 @@
      panels and dialogs keep their independent elevation hierarchy. */
   --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
   --overlay-shadow: 0 1px 2px rgb(0 0 0 / 0.18), 0 8px 24px rgb(0 0 0 / 0.24);
-  --hovercard-shadow: var(--overlay-shadow);
-  --floating-panel-border: var(--overlay-border);
   --overlay-modal-backdrop: color-mix(in oklab, black 60%, transparent);
   --overlay-palette-backdrop: color-mix(in oklab, black 12%, transparent);
   --overlay-modal-radius: 0.75rem;

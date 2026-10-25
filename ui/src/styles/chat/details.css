@@ -103,7 +103,7 @@ openclaw-chat-details[mobile] {
   inset-inline: auto 0;
   width: var(--chat-details-space);
   height: 100%;
-  border: 1px solid var(--floating-panel-border, var(--border-strong));
+  border: 1px solid var(--overlay-border, var(--border-strong));
   border-radius: 16px;
   background: var(--panel-strong);
   box-shadow: var(--shadow-md);
@@ -114,7 +114,7 @@ openclaw-chat-details[mobile] {
 .chat-details[data-desktop] {
   --details-surface: var(--panel-strong);
   inset: auto;
-  border-color: var(--floating-panel-border, var(--border-strong));
+  border-color: var(--overlay-border, var(--border-strong));
   background: var(--details-surface);
   box-shadow: var(--shadow-md);
   max-width: 300px;

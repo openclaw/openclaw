@@ -458,7 +458,6 @@
   width: min(300px, calc(100vw - 24px));
   margin-inline: 12px;
   padding: 8px;
-  border-color: var(--floating-panel-border, var(--border-strong));
   border-radius: 12px;
 }
 

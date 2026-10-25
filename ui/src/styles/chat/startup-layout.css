@@ -504,7 +504,6 @@
 
     min-width: 180px;
     padding: var(--menu-padding);
-    border-color: var(--floating-panel-border, var(--border-strong));
     font-size: calc(12px * var(--control-ui-text-scale));
     line-height: calc(18px * var(--control-ui-text-scale));
   }

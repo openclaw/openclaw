@@ -1408,7 +1408,7 @@ openclaw-session-progress-hovercard-provider {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--session-hovercard-surface);
-  box-shadow: var(--hovercard-shadow, var(--shadow-lg));
+  box-shadow: var(--overlay-shadow, var(--shadow-lg));
   color: var(--text);
   pointer-events: none;
   opacity: 0;
