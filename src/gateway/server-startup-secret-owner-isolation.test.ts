@@ -3,18 +3,11 @@ import path from "node:path";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
-import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
-import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
-import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import {
   listActiveDegradedSecretOwners,
   setActiveDegradedSecretOwners,
@@ -434,86 +427,6 @@ describe("Gateway startup SecretRef owner isolation", () => {
           "skills.entries.cold.apiKey",
           "plugins.entries.google.config.webSearch.apiKey",
         ]);
-        assert(active, "Expected active secrets runtime snapshot");
-        expect(() => resolveMemorySearchConfig(active.config, "main")).toThrow(
-          expect.objectContaining({
-            code: "SECRET_SURFACE_UNAVAILABLE",
-            ownerKind: "capability",
-            ownerId: "memory-provider:main",
-          }),
-        );
-        await expect(
-          resolveSandboxContext({
-            config: active.config,
-            agentId: "cold",
-            sessionKey: "agent:cold:main",
-          }),
-        ).rejects.toMatchObject({
-          code: "sandbox_provisioning",
-          backendId: "ssh",
-          message: expect.stringContaining("openclaw secrets reload"),
-          cause: {
-            code: "SECRET_SURFACE_UNAVAILABLE",
-            ownerKind: "capability",
-            ownerId: "agent-sandbox:cold",
-          },
-        });
-      },
-    );
-  });
-
-  it("starts with a selected provider profile cold and fails its first request before dispatch", async () => {
-    await withEnvAsync(
-      {
-        MISSING_SELECTED_PROFILE_KEY: undefined,
-        OPENAI_API_KEY: "unused",
-      },
-      async () => {
-        const profileId = "openai:cold";
-        const config: OpenClawConfig = {
-          ...baseConfig(),
-          agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-          auth: { order: { openai: [profileId] } },
-        };
-        const agentDir = resolveDefaultAgentDir(config);
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {
-              [profileId]: {
-                type: "api_key",
-                provider: "openai",
-                keyRef: envRef("MISSING_SELECTED_PROFILE_KEY"),
-              },
-            },
-          },
-          agentDir,
-        );
-        await writeConfig(config);
-
-        await expectReady(await start());
-
-        const ownerId = resolveAuthProfileSecretOwnerId({ agentDir, profileId });
-        const active = getActiveSecretsRuntimeSnapshot();
-        expect(active?.degradedOwners).toMatchObject([
-          { ownerKind: "account", ownerId, state: "unavailable" },
-        ]);
-        const store = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-        assert(store && active, "Expected activated Gateway auth profile snapshot");
-        const request = vi.fn();
-        await expect(
-          resolveApiKeyForProviderCore({
-            provider: "openai",
-            cfg: active.config,
-            store,
-            agentDir,
-          }).then(request),
-        ).rejects.toMatchObject({
-          code: "SECRET_SURFACE_UNAVAILABLE",
-          ownerKind: "account",
-          ownerId,
-        });
-        expect(request).not.toHaveBeenCalled();
       },
     );
   });

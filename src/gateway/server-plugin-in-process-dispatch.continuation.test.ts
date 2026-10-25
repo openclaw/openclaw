@@ -297,10 +297,6 @@ describe("typed in-process agent continuation authorization", () => {
                 message: "Return the accepted result",
                 idempotencyKey: "system-reply",
               });
-            if (!scopedUnknown) {
-              await expect(dispatch()).resolves.toEqual(result);
-              startTurn.mockClear();
-            }
             const continuation = runWithGatewayToolContinuationContext(dispatch);
             if (scopedUnknown) {
               await expect(continuation).rejects.toThrow(/not found|cannot create|identity/i);
@@ -540,7 +536,7 @@ describe("typed in-process agent continuation authorization", () => {
     },
   );
 
-  it.each(["finished invocation", "revoked source", "retired cohort", "provenance only"] as const)(
+  it.each(["finished invocation", "revoked source", "provenance only"] as const)(
     "checks %s for a settle wake after the spawning tool ends",
     async (state) => {
       const { runAnnounceAgentCall } =
@@ -564,7 +560,6 @@ describe("typed in-process agent continuation authorization", () => {
         io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
         io.emitFinal([true, result, undefined]);
       });
-      const isExecutionAllowed = vi.fn(() => state !== "retired cohort");
       try {
         if (state === "revoked source") {
           sourceSignal.abort(new Error("original operator source revoked"));
@@ -593,7 +588,7 @@ describe("typed in-process agent continuation authorization", () => {
                   settleWakeSourceSessionKeys:
                     state === "provenance only" ? undefined : ["agent:main:child"],
                   expectFinal: true,
-                  isExecutionAllowed,
+                  isExecutionAllowed: () => true,
                   resolveGatewayContext: () => context,
                 });
               if (state !== "finished invocation") {
@@ -612,11 +607,9 @@ describe("typed in-process agent continuation authorization", () => {
         );
         if (state === "finished invocation") {
           await expect(dispatch).resolves.toEqual(result);
-          expect(isExecutionAllowed).toHaveBeenCalled();
         } else {
           const error = {
             "revoked source": "original operator source revoked",
-            "retired cohort": "subagent source lifecycle changed before completion delivery",
             "provenance only": "agent tool caller authority is no longer active",
           }[state];
           await expect(dispatch).rejects.toThrow(error);

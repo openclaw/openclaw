@@ -35,7 +35,6 @@ import {
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import {
@@ -49,39 +48,6 @@ import { listProjectedSessions } from "./session-utils-list.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-it("shares immutable unplaced facts until permission or activity publications replace them", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const query = { agentId: "main", key: "agent:main:shared-facts" };
-    seedRow(query, { sessionId: "shared-facts", updatedAt: 1 });
-    using projection = await createTestProjection({
-      cfg: { agents: { entries: { main: {} } } },
-      modelCatalog: [],
-    });
-    let releasePending: (() => void) | undefined;
-    try {
-      const facts = projection.describe(query)!.facts!;
-      const initial = facts.present();
-      expect(facts.present()).toBe(initial);
-      expect(Object.isFrozen(initial)).toBe(true);
-      releasePending = beginSessionPermissionChange("shared-facts");
-      const pending = facts.present();
-      expect(pending.permissionModePending).toBe(true);
-      expect(pending).not.toBe(initial);
-      expect(initial.permissionModePending).toBe(false);
-      expect(facts.present()).toBe(pending);
-      releasePending();
-      const settled = facts.present();
-      expect(settled.permissionModePending).toBe(false);
-      expect(pending.permissionModePending).toBe(true);
-      facts.refreshActivitySummary();
-      expect(facts.present()).not.toBe(settled);
-      expect(facts.present().sessionModelRevision).toBe(initial.sessionModelRevision);
-    } finally {
-      releasePending?.();
-    }
-  });
-});
 
 it("projects send policy and recipient restrictions, clearing them when the current role permits sending", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {

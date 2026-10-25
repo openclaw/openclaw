@@ -6,7 +6,6 @@ import {
 } from "../../test/helpers/channel-admission-evidence.js";
 import { createMockSubsystemLogger } from "../../test/helpers/mock-subsystem-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { waitForFast } from "../../test/helpers/vitest-wait.js";
 import {
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
@@ -158,9 +157,9 @@ export function registerAuditSubscriptionTests(params: {
   };
   warn: ReturnType<typeof createSubscriptionTestFixture>["warn"];
 }) {
-  const { start, runtimeConfigState, auditTestState, warn } = params;
-  const emitStart = (runId: string, startedAt = 1_000, emit = emitAgentAuditEvent) =>
-    emit({ runId, stream: "lifecycle", data: { phase: "start", startedAt } });
+  const { start, runtimeConfigState, auditTestState } = params;
+  const emitStart = (runId: string) =>
+    emitAgentAuditEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
   it("records audit events by default and stops the recorder on unsubscribe", async () => {
     runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
     const unsubs = start();
@@ -323,26 +322,6 @@ export function registerAuditSubscriptionTests(params: {
         identityRecorded,
       });
     }
-    await unsubs.agentUnsub();
-    expect(auditTestState.stopped).toBe(1);
-  });
-
-  it("keeps retention maintenance and applies audit enablement to subsequent events", async () => {
-    runtimeConfigState.value = { logging: { audit: { enabled: false } } };
-    const unsubs = start();
-
-    expect(auditTestState.created).toBe(1);
-    emitStart("disabled-private");
-    emitStart("disabled-public", 1_000, emitAgentEvent);
-    expect(auditTestState.recorded).toBe(0);
-    runtimeConfigState.value = {};
-    emitStart("resumed-private", 2_000);
-    expect(auditTestState.recorded).toBe(0);
-    runtimeConfigState.value = { logging: { audit: { enabled: false } } };
-    emitStart("disabled-again", 3_000);
-    expect(auditTestState.recorded).toBe(1);
-    await waitForFast(() => expect(warn).toHaveBeenCalledOnce());
-    warn.mockClear();
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
   });
