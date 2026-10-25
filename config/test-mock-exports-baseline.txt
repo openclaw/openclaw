@@ -6662,7 +6662,6 @@
 ["src/state/openclaw-state-lease-heartbeat.lifetime.test.ts","./openclaw-state-worker-error.js","2458fff33c32ea9564a4397a77042ff4552c454c35579279f0371a31fc10a26c",1]
 ["src/state/openclaw-state-lease-native-admission.test.ts","../infra/node-sqlite.js","f25478c85f5ecb79cd10421c3261720a1185a36b7d703ed435d54dab5d8780cf",1]
 ["src/state/openclaw-state-lease-native-admission.test.ts","./openclaw-state-lease-heartbeat.js","9c93b816b7d8cb6d5db0c776db43628015116e98a7a8f9d9898509a172730a39",1]
-["src/state/openclaw-state-lease-native-admission.test.ts","./openclaw-state-lease-worker-storage.js","afafa2a382b65486d21ea7f870411e70a54f7add3da6ed04ffd03ed536c4e805",1]
 ["src/state/openclaw-state-lease-worker-group.test.ts","./openclaw-state-worker-store.js","501cbd2d0b0dcb4fec98bb888b9beb5e5ed2718c75ccb65583e5c9f5aa5cffd6",1]
 ["src/state/openclaw-state-lease-worker-owner.test.ts","../infra/node-sqlite.js","eeb4961eb05d9a0d1061af2f7a145e9d299fa7e79ba41fc9092e60e37736d34a",1]
 ["src/state/openclaw-state-lease-worker.transaction-group.test.ts","../infra/sqlite-worker-operation-admission.js","cd8e3b27effac736acce6b08c525516eeca3cd2d39ba4651895d6b407921883a",1]

@@ -30,6 +30,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: fixture.forbiddenSqlite,
 }));
+// mock-isolation: native admission controls must not open real worker storage or SQLite.
 vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
   createOpenClawStateLeaseWorkerStorage: fixture.createStorage,
