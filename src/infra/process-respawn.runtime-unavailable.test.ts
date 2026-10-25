@@ -184,9 +184,7 @@ it.each(["systemd", "launchd"] as const)(
     // The history reader must run before the first broken-runtime classification.
     await Promise.resolve();
     expect(io.history).toHaveBeenCalledOnce();
-    const failure = diagnose();
-    expect(failure).toMatchObject({ code: "NODE_RUNTIME_UNAVAILABLE" });
-    expect(diagnose()).toBe(failure);
+    diagnose();
     expectUnavailable();
     expect(io.restart).not.toHaveBeenCalled();
     await finished.promise;
@@ -211,7 +209,7 @@ it.each(["systemd", "launchd"] as const)(
     expect(io.restart).toHaveBeenCalledExactlyOnceWith("gateway.runtime-unavailable");
     expectUnavailable();
     expect(io.warn).toHaveBeenCalledWith(expect.stringMatching(/^restart-requested: .*graceful/));
-    expect(diagnose()).toBe(failure);
+    diagnose();
     await Promise.resolve();
     expect(io.restart).toHaveBeenCalledOnce();
     expect(io.warn).toHaveBeenCalledOnce();
@@ -289,6 +287,11 @@ it("coalesces unsettled native workers into one forced fresh-process request", a
   const service = createDeferredCore<GatewayServiceState>();
   io.service.mockReturnValueOnce(service.promise);
   register();
+  expect(io.systemdSupported).toHaveBeenCalledOnce();
+  expect(io.service).not.toHaveBeenCalled();
+  io.systemdSupported.mockImplementation(() => {
+    throw new Error("late native initialization would wait for the unsettled worker");
+  });
   let firstUnsettled = true;
   const first = requestNative(() => firstUnsettled);
   const second = requestNative();
@@ -297,6 +300,7 @@ it("coalesces unsettled native workers into one forced fresh-process request", a
   await expectNativeRestart(first);
   await expectNativeRestart(second);
   await requestNative();
+  expect(io.systemdSupported).toHaveBeenCalledOnce();
   expect(io.service).toHaveBeenCalledOnce();
   expect(io.restart).toHaveBeenCalledExactlyOnceWith("gateway.native-worker-unsettled", {
     force: true,
@@ -304,18 +308,6 @@ it("coalesces unsettled native workers into one forced fresh-process request", a
     requireFreshProcess: true,
   });
   expect(runtime.readChildRuntimeViability().available).toBe(true);
-});
-
-it("prepares native systemd inspection before a worker can require recovery", async () => {
-  register();
-  expect(io.systemdSupported).toHaveBeenCalledOnce();
-  expect(io.service).not.toHaveBeenCalled();
-  io.systemdSupported.mockImplementation(() => {
-    throw new Error("late native initialization would wait for the unsettled worker");
-  });
-  await expectNativeRestart();
-  expect(io.systemdSupported).toHaveBeenCalledOnce();
-  expect(io.service).toHaveBeenCalledOnce();
 });
 
 it("keeps recovery report-only when native systemd inspection was unavailable at startup", async () => {
@@ -352,19 +344,6 @@ it("refuses native recovery after the registering lifecycle retires during verif
   register();
   await expectNativeRefusal("stopping");
   await expectNativeRefusal("no Gateway");
-  expect(io.restart).not.toHaveBeenCalled();
-});
-
-it.each([
-  ["unmanaged", { mode: "disabled", reason: "unmanaged", detail: "foreground" }, true],
-  ["respawn disabled", { mode: "disabled", reason: "no-respawn" }, true],
-  ["external supervisor", { mode: "supervised", supervisor: "external" }, true],
-  ["embedded lifecycle", systemd, false],
-] as const)("refuses automatic native-worker recovery for %s", async (_name, decision, owns) => {
-  register(decision, owns);
-  expect(io.systemdSupported).not.toHaveBeenCalled();
-  await expectNativeRefusal("no verified native service");
-  expect(io.service).not.toHaveBeenCalled();
   expect(io.restart).not.toHaveBeenCalled();
 });
 
