@@ -353,6 +353,8 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         expect(fallback.input).toMatchObject({ runId: steerRunId, state: "queued", queued: true });
         expect(runtime.execute).toHaveBeenCalledOnce();
         expectUnconsumed();
+        // Let the queued input finish its debounce before releasing the active run.
+        clock += 500;
         expectDefined(operation, "initial run owner").complete();
         releaseRun.resolve();
         await withinTest(followupStarted.promise, signal);
