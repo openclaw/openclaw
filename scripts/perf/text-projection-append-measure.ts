@@ -69,6 +69,9 @@ if (values.workload === "reasoning") {
       source.slice(index * chunkSize, (index + 1) * chunkSize),
     );
     assert(chunks.length >= 200, "reasoning workload requires at least 200 deltas");
+    const chunkWindows = Array.from({ length: 4 }, (_, window) =>
+      chunks.slice(window * 50, (window + 1) * 50),
+    );
     const oracle = chunks.map((_, index) =>
       sanitizeAssistantVisibleStreamText(source.slice(0, (index + 1) * chunkSize), "final_answer"),
     );
@@ -89,7 +92,7 @@ if (values.workload === "reasoning") {
     }
     for (let turn = 0; turn < turns; turn++) {
       const projection = createAssistantVisibleStreamText("final_answer");
-      for (let window = 0; window < 4; window++) {
+      for (const [window, windowChunks] of chunkWindows.entries()) {
         if (values.mode === "allocation") {
           await inspector.post("HeapProfiler.startSampling", {
             samplingInterval: 4096,
@@ -99,8 +102,8 @@ if (values.workload === "reasoning") {
         }
         const cpu = process.cpuUsage();
         const started = performance.now();
-        for (let delta = window * 50; delta < (window + 1) * 50; delta++) {
-          projection.append(chunks[delta]);
+        for (const chunk of windowChunks) {
+          projection.append(chunk);
         }
         const elapsedMs = performance.now() - started;
         const used = process.cpuUsage(cpu);
