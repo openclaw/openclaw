@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
   getGatewayToolCallerIdentity as getToolCaller,
@@ -324,17 +324,7 @@ describe("MCP HTTP keepalive", () => {
     }
   });
 
-  async function within<T>(promise: Promise<T>): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error("HTTP idle timeout")), 500);
-    });
-    try {
-      return await Promise.race([promise, timeout]);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
+  const within = <T>(promise: Promise<T>) => withTestTimeout(promise, 500, "HTTP idle timeout");
 
   const toolCall = mcp.toolCall("wait_probe");
   const heartbeatResult = { content: [{ type: "text", text: "completed once" }] };

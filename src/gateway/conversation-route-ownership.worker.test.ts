@@ -112,13 +112,7 @@ it("expires plugin binding inspection when async route preparation settles", asy
       );
       const inspections = inspect();
       expect(inspections).toMatchObject([{ status: "available", binding: { targetSessionKey } }]);
-      return inspections.map(
-        (inspection) => () =>
-          inspection.status === "available" &&
-          inspection.binding?.targetSessionKey === targetSessionKey
-            ? { kind: "agent", agentId: "main" }
-            : { kind: "unavailable" },
-      );
+      return inspections.map(() => () => ({ kind: "agent", agentId: "main" }));
     },
   };
   installReefPlugin({

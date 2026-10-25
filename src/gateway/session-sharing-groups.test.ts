@@ -310,24 +310,7 @@ describe("session sharing group mutations", () => {
       });
     },
   );
-  it("refuses restricted group drops at put admission while allowing retained groups", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = rolePolicyConfig();
-      setRuntimeConfigSnapshot(cfg);
-      await putSessionGroups({ cfg: {}, names: ["Projects"] });
-      await restrictedMember("restricted-put-member", "Projects");
-      const viewer = roleClient("none", "put-viewer");
-      const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
-
-      await prepareMembership(context);
-      expect(groupAuthorization(context, viewer, "put", { names: [] }).error).not.toBeNull();
-      expect(
-        groupAuthorization(context, viewer, "put", { names: [" Projects "] }).error,
-      ).toBeNull();
-    });
-  });
-
-  it("rechecks late group members before committing a put drop", async () => {
+  it("refuses restricted group drops at admission and rechecks late members before commit", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
       setRuntimeConfigSnapshot(cfg);
@@ -350,6 +333,9 @@ describe("session sharing group mutations", () => {
         } as never),
       ).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
       expect(readSessionGroupCatalog().groups).toEqual(groups);
+      await prepareMembership(context);
+      expect(groupAuthorization(context, viewer, "put", { names: [] }).error).not.toBeNull();
+      expect(groupAuthorization(context, viewer, "put", { names: [" Race "] }).error).toBeNull();
     });
   });
 
